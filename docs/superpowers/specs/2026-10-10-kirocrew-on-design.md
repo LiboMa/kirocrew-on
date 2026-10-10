@@ -31,7 +31,7 @@
 |---|---|
 | D01 | `kirocrew-on/` 新仓库，迁入新旧两版资产；原目录与运行数据不动 |
 | D02 | 总体 Design 覆盖全部阶段；详细实施计划先写 M1 |
-| D03 | M1 的 Linux 开发与验收直接在 EC2 上进行（实例创建需单独授权） |
+| D03 | ~~M1 的 Linux 开发与验收直接在 EC2 上进行~~（2026-10-11 由 D12 取代；EC2 实例创建仍需单独授权） |
 | D04 | EC2 使用 Amazon Linux 2023 x86_64 |
 | D05 | 先等价迁入并建立回归基线，再在测试保护下分步重构 |
 | D06 | 六项核心功能：Session 共享（个人 / Team / 公司）；Skills 对接；自动拆分与 Agent 映射（可在 Prompt 指定）；Branch + 报告跟踪 Feature；代码优先；请求全程托管与监控 |
@@ -40,6 +40,8 @@
 | D09 | Session 监控与管理以灵活、易用为目的，以查看和搜索为主，不以编辑为主 |
 | D10 | 稳定性、自主编排、自动重试是核心；先保证完成，其次提升质量 |
 | D11 | 与 Claude Code / Codex / Kiro CLI / Kiro IDE 直连，本地与远端智能联动，纳入 MVP |
+| D12 | 先在本地（macOS）用本仓库代码以真实 ACP 跑通完整链路，再部署到远端 EC2（2026-10-11） |
+| D13 | 自动生成任务（Pipeline 生成）参考旧版 `kirocrew-app-poc` 的实现：意图生成、Pipeline 规划阶段、确定性门禁与模板（2026-10-11） |
 
 ## 2．设计原则
 
@@ -233,6 +235,7 @@ Request 与 Session 一对多：同一 Request 被重新规划或用户显式重
 2. **规则匹配**：现有 15 个模板与有权运行的 Workflow 按关键词评分（新版 `intent.ranked`），结果标注为“规则”。
 3. **Kiro 生成**：规则不足以确定或用户要求时，后台 Kiro 生成任务基于需求与只读源码检查产出阶段、
    各阶段提示词、验收条件与角色（新版 `designs.py`，并入旧版 `start_design` 的意图生成逻辑）。
+   设计与实现参考旧版 `kirocrew-app-poc` 的生成链路（D13），分析见 `docs/handover/GENERATION-REFERENCE.md`。
 
 生成结果**不直接执行**：一律经过代码规范化，再按准入策略决定是等待确认还是直接运行。
 
@@ -507,7 +510,7 @@ Python 解释器、KiroCrew 安装位置、各工具与 ACP 适配器路径、�
 
 | 里程碑 | 范围 | 完成条件 |
 |---|---|---|
-| **M1 运行底座** | 迁入两版资产与回归基线；运行时配置；composition 包；依赖解耦；schema 迁移；按 Session 并发的 Engine 与 Worker / Gateway 不可用退避；无桌面服务与 systemd；EC2 单边界部署；备份恢复；运维手册 | EC2 上 Kiro、Claude Code、Codex 真实最小研发与返工跑通；Gateway / Worker / API 重启后自动恢复；OpenCode 单独核实并如实记录 |
+| **M1 运行底座** | 迁入两版资产与回归基线；运行时配置；composition 包；依赖解耦；schema 迁移；按 Session 并发的 Engine 与 Worker / Gateway 不可用退避；无桌面服务与 systemd；EC2 单边界部署；备份恢复；运维手册 | 先在本机 macOS、再在 EC2 上，Kiro、Claude Code、Codex 真实最小研发与返工跑通；Gateway / Worker / API 重启后自动恢复；OpenCode 单独核实并如实记录 |
 | **M2 核心闭环** | Request；Pipeline schema 2、生成、规范化、门禁目录；映射策略与回退链；准入；完整恢复阶梯（L0–L4）与看门狗；批准代理；候选 commit、Feature 分支推送；报告；Claude Code 基础 Skill 用于验收 | 从 Claude Code 一句话提交到远端 Feature 分支与报告；故障注入在预算内恢复完成 |
 | **M3 客户端直连与控制台** | 四个客户端 connect / Skill / MCP；pull / sync / 会话关联 / watch；控制台列表、搜索、详情与少量操作 | 四个客户端完成提交、查询、拉回、续作；控制台搜索与详情覆盖第 10 节 |
 | **M4 共享与组织** | 组织层；Worker Token 移出数据库；Session 共享给个人 / Team / 公司（viewer / collaborator）；权限变化对查询、SSE、导出、运行的影响；Team 执行隔离；排队与配额；HTTPS 入口 | 越权测试通过；授权协作路径完整；隔离在真实独立身份 / 容器 / 主机上验收 |

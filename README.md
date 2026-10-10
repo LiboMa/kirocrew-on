@@ -124,7 +124,7 @@ Python 包名保持 `octopus`，以兼容 `python -m octopus`、`/v1` API 和现
 
 | 里程碑 | 范围 | 状态 |
 |---|---|---|
-| **M1 运行底座** | 两版资产迁入与回归基线；运行时配置；composition；schema 迁移；按 Session 并发的 Engine 与不可用退避；systemd；EC2 单边界部署；备份恢复 | 设计中 |
+| **M1 运行底座** | 先本地 macOS 跑通，再部署 EC2；两版资产迁入与回归基线；运行时配置；composition；schema 迁移；按 Session 并发的 Engine 与不可用退避；systemd；EC2 单边界部署；备份恢复 | 实现中 |
 | **M2 核心闭环** | Request；Pipeline 生成、规范化与门禁；映射与回退链；准入；完整恢复阶梯与看门狗；批准代理；Feature 分支推送与报告 | 未开始 |
 | **M3 客户端直连与控制台** | Claude Code / Codex / Kiro CLI / Kiro IDE 接入；pull / sync / watch / 会话关联；控制台搜索与详情 | 未开始 |
 | **M4 共享与组织** | 组织层；Session 共享给个人 / Team / 公司；Team 执行隔离；排队与配额；HTTPS | 未开始 |
