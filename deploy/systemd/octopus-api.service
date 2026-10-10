@@ -1,0 +1,25 @@
+[Unit]
+Description=KiroCrew ON platform API, console and Engine
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=octopus
+Group=octopus
+WorkingDirectory=/opt/kirocrew-on/current
+Environment=PYTHONPATH=/opt/kirocrew-on/current
+ExecStart=/opt/kirocrew-on/venv/bin/python -m octopus --config /etc/kirocrew-on/platform.toml serve
+ExecStartPost=/opt/kirocrew-on/venv/bin/python -m octopus --config /etc/kirocrew-on/platform.toml wait-ready --api --timeout 60
+KillSignal=SIGTERM
+TimeoutStopSec=45
+Restart=on-failure
+RestartSec=5
+UMask=0077
+NoNewPrivileges=yes
+PrivateTmp=yes
+ProtectSystem=strict
+ReadWritePaths=/var/lib/octopus/platform /var/log/kirocrew-on
+
+[Install]
+WantedBy=multi-user.target

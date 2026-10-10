@@ -1,0 +1,24 @@
+[Unit]
+Description=KiroCrew ON Worker for boundary %i
+After=octopus-gateway@%i.service
+Wants=octopus-gateway@%i.service
+
+[Service]
+Type=simple
+User=crew-%i
+Group=crew-%i
+WorkingDirectory=/var/lib/octopus/boundaries/%i
+Environment=PYTHONPATH=/opt/kirocrew-on/current
+Environment=HOME=/var/lib/octopus/boundaries/%i/home
+ExecStart=/opt/kirocrew-on/venv/bin/python -m octopus --config /etc/kirocrew-on/boundary-%i.toml worker
+ExecStartPost=/opt/kirocrew-on/venv/bin/python -m octopus --config /etc/kirocrew-on/boundary-%i.toml wait-ready --worker --timeout 60
+KillSignal=SIGTERM
+TimeoutStopSec=45
+Restart=on-failure
+RestartSec=5
+UMask=0077
+PrivateTmp=yes
+ReadWritePaths=/var/lib/octopus/boundaries/%i
+
+[Install]
+WantedBy=multi-user.target

@@ -5,6 +5,8 @@ import json
 import os
 from pathlib import Path
 import secrets
+import signal
+import threading
 
 from .client import Client
 from .config import load
@@ -43,6 +45,11 @@ def build_parser(settings, environ=None):
     worker.add_argument("--crew-home", default=str(settings.crew_home))
     worker.add_argument("--routing-log", default=str(settings.routing_log))
     worker.add_argument("--isolation", choices=["dedicated", "trusted-local"], default=settings.worker_isolation)
+    ready = sub.add_parser("wait-ready", help="等待服务就绪（供 systemd ExecStartPost 使用）")
+    ready.add_argument("--api", action="store_true")
+    ready.add_argument("--worker", action="store_true")
+    ready.add_argument("--gateway", action="store_true")
+    ready.add_argument("--timeout", type=float, default=60)
     backup_cmd = sub.add_parser("backup", help="平台数据库一致性备份")
     backup_cmd.add_argument("--dest", required=True)
     archive = sub.add_parser("archive", help="目录归档（Worker 数据、执行边界）")
@@ -83,13 +90,16 @@ def main(argv=None):
         from .engine import Engine
         from .server import server
         db = Database(args.data)
-        engine = Engine(db)
+        engine = Engine(db, workers=settings.engine_workers, retry_unavailable=settings.retry_unavailable)
+        httpd = server(db, args.port, args.host, allowed_hosts=settings.allowed_hosts)
+        signal.signal(signal.SIGTERM, lambda *_: threading.Thread(target=httpd.shutdown, daemon=True).start())
         engine.start()
-        print(f"KiroCrew ON API: http://{args.host}:{args.port}", flush=True)
+        print(f"KiroCrew ON API: http://{args.host}:{httpd.server_address[1]}", flush=True)
         try:
-            server(db, args.port, args.host).serve_forever()
+            httpd.serve_forever()
         finally:
-            engine.stopping.set()
+            engine.drain(30)
+            httpd.server_close()
     elif args.command == "worker":
         from .worker import Worker, serve
         token_path = Path(args.token_file)
@@ -99,8 +109,29 @@ def main(argv=None):
             os.chmod(token_path, 0o600)
         node = Worker(args.data, token_path.read_text().strip(), args.gateway_port, args.crew_home,
                       args.isolation, args.routing_log, args.crew_url)
-        print(f"KiroCrew ON Worker: http://{args.host}:{args.port} ({args.isolation})", flush=True)
-        serve(node, args.port, args.host).serve_forever()
+        httpd = serve(node, args.port, args.host)
+        signal.signal(signal.SIGTERM, lambda *_: threading.Thread(target=httpd.shutdown, daemon=True).start())
+        print(f"KiroCrew ON Worker: http://{args.host}:{httpd.server_address[1]} ({args.isolation})", flush=True)
+        try:
+            httpd.serve_forever()
+        finally:
+            httpd.server_close()
+    elif args.command == "wait-ready":
+        from .ops import runtime_marker_ok, wait_ready
+        checks = []
+        if args.api:
+            checks.append((f"http://{settings.api_host}:{settings.api_port}/health", {}))
+        if args.worker:
+            token = settings.worker_token_file.read_text().strip()
+            checks.append((f"http://{settings.worker_host}:{settings.worker_port}/health", {"Authorization": "Bearer " + token}))
+        if args.gateway:
+            checks.append((f"http://127.0.0.1:{settings.gateway_port}/api/ready", {}))
+        pending = wait_ready(checks, args.timeout)
+        if args.gateway and not pending and not runtime_marker_ok(settings.gateway_runtime_file):
+            pending.append(f"{settings.gateway_runtime_file}（未加载 PocProviderRegistry 组合）")
+        if pending:
+            raise SystemExit("未就绪：" + "；".join(pending))
+        print("ready")
     elif args.command == "backup":
         from .backup import backup_database
         print(dumps(backup_database(settings.data_dir / "octopus.sqlite3", Path(args.dest))))
