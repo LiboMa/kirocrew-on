@@ -43,6 +43,16 @@ def build_parser(settings, environ=None):
     worker.add_argument("--crew-home", default=str(settings.crew_home))
     worker.add_argument("--routing-log", default=str(settings.routing_log))
     worker.add_argument("--isolation", choices=["dedicated", "trusted-local"], default=settings.worker_isolation)
+    backup_cmd = sub.add_parser("backup", help="平台数据库一致性备份")
+    backup_cmd.add_argument("--dest", required=True)
+    archive = sub.add_parser("archive", help="目录归档（Worker 数据、执行边界）")
+    archive.add_argument("source")
+    archive.add_argument("--dest", required=True)
+    archive.add_argument("--name", required=True)
+    archive.add_argument("--exclude", action="append", default=[])
+    verify = sub.add_parser("restore-verify", help="在独立目录恢复并校验备份")
+    verify.add_argument("manifest")
+    verify.add_argument("--into", required=True)
     default_url = environ.get("OCTOPUS_URL", f"http://{settings.api_host}:{settings.api_port}")
     for command in ("request", "events", "mcp"):
         p = sub.add_parser(command)
@@ -91,6 +101,15 @@ def main(argv=None):
                       args.isolation, args.routing_log, args.crew_url)
         print(f"KiroCrew ON Worker: http://{args.host}:{args.port} ({args.isolation})", flush=True)
         serve(node, args.port, args.host).serve_forever()
+    elif args.command == "backup":
+        from .backup import backup_database
+        print(dumps(backup_database(settings.data_dir / "octopus.sqlite3", Path(args.dest))))
+    elif args.command == "archive":
+        from .backup import archive_directory
+        print(dumps(archive_directory(Path(args.source), Path(args.dest), args.name, tuple(args.exclude))))
+    elif args.command == "restore-verify":
+        from .backup import restore_verify
+        print(dumps(restore_verify(Path(args.manifest), Path(args.into))))
     else:
         client = Client(args.url, os.environ.get("OCTOPUS_API_TOKEN", ""))
         if args.command == "request":

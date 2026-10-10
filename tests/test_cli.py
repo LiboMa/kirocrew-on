@@ -46,5 +46,30 @@ class CliTests(unittest.TestCase):
         self.assertEqual(rest, ["serve"])
 
 
+
+class BackupCommandTests(unittest.TestCase):
+    def test_backup_and_restore_verify_commands(self):
+        import contextlib
+        import io
+        import json
+        from octopus.__main__ import main
+        from octopus.db import Database
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            config = root / "c.toml"
+            config.write_text(f'data_dir = "{root}/platform"\n')
+            Database(root / "platform")
+            out = io.StringIO()
+            with contextlib.redirect_stdout(out):
+                main(["--config", str(config), "backup", "--dest", str(root / "backups")])
+            manifest = json.loads(out.getvalue())
+            self.assertEqual(manifest["integrity"], "ok")
+            out = io.StringIO()
+            with contextlib.redirect_stdout(out):
+                main(["--config", str(config), "restore-verify",
+                      str(root / "backups" / (Path(manifest["file"]).stem + ".json")), "--into", str(root / "restore")])
+            self.assertTrue(json.loads(out.getvalue())["ok"])
+
+
 if __name__ == "__main__":
     unittest.main()
