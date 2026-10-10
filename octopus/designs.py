@@ -31,7 +31,7 @@ def create(service, actor, body):
 def parse_recommendation(content):
     # Reuse workflow_library.design_status's parser, without its global Gateway
     # identity or file-backed generation state.
-    from workflow_files import parse_document
+    from .documents import parse_document
     value = parse_document(content.strip(), "json" if content.strip().startswith("{") else "markdown")
     require(isinstance(value, dict) and set(value) <= {"schema", "id", "revision", "name", "steps"},
             "生成的工作流字段无效")
@@ -60,7 +60,7 @@ def status(service, actor, rid):
 
 
 def instructions(intent, design, directory, models):
-    from development_prompts import intent_prompt
+    from .prompts import intent_prompt
     example = {"name": "针对本次需求的工作流", "steps": [
         {"id": "task-1", "name": "任务名称", "tool": "kiro", "model": "auto", "effort": "",
          "prompt": "本任务的具体目标、输入、实施要求、交付物与验证方法"}]}

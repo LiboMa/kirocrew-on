@@ -269,7 +269,7 @@ class Service:
             require(isinstance(source, dict) and set(source) <= {"type", "url", "ref"}
                     and source.get("type") in {"new", "git"}, "源码配置无效")
             if source["type"] == "git":
-                from workflow_workspace import normalize_source
+                from .sources import normalize_source
                 try:
                     url, kind = normalize_source(text(source.get("url"), "仓库地址", 2000))
                 except ValueError as exc:

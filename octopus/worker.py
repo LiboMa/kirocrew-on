@@ -13,8 +13,8 @@ import threading
 import time
 from urllib.parse import quote
 
-import api as crew_api
-import workflow_workspace as workspace
+from . import gateway_client as crew_api
+from . import sources as workspace
 from .db import dumps
 from .domain import steps
 from .security import Error, require

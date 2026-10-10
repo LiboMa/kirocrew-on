@@ -1,0 +1,390 @@
+[
+  {
+    "id": "kiro-quickstart",
+    "name": "Kiro 最小闭环",
+    "category": "quick",
+    "description": "只用一个 Agent，把小想法变成可打开的页面。",
+    "prerequisite": "空工作目录；浏览器",
+    "output": "web/index.html、操作与验证说明",
+    "input": "做一个蓝白色的会议议程生成器：输入会议主题与三项议题，点击按钮生成议程预览；主题为空时提示填写。使用本地 HTML/CSS/JavaScript，全部资源本地化，不安装依赖，不调用网络服务。交付 web/index.html，记录已验证和未验证的操作。",
+    "steps": [
+      {
+        "id": "prototype",
+        "name": "实现与验证",
+        "tool": "kiro",
+        "model": "auto",
+        "effort": "",
+        "prompt": "根据目标实现最小可交互原型，保存为 web/index.html。验证输入与输出；浏览器工具不可用时明确记录哪些操作尚未验证，并给出手动验证步骤。"
+      }
+    ]
+  },
+  {
+    "id": "coding-smoke",
+    "name": "编码与审查最小验证",
+    "category": "quick",
+    "description": "用一个小函数验证 Claude 编码、Codex 审查的交接。",
+    "prerequisite": "空工作目录；Node.js 18 或更高版本",
+    "output": "proof.mjs、node:test 测试、真实 diff 与审查记录",
+    "input": "实现 proof.mjs 中的 add(a,b)，只接受有限数字，非法输入抛出 TypeError。使用 node:test 验证正数、负数、零及非法输入，不安装依赖。Claude Code 编码与自测，Codex 读取真实文件、diff 并独立运行测试，记录 node --test 的实际结果。",
+    "steps": [
+      {
+        "id": "code",
+        "name": "最小编码与自测",
+        "tool": "claude",
+        "model": "auto",
+        "effort": "",
+        "prompt": "按目标创建 proof.mjs 和 tests/proof.test.mjs，运行 node --test，保存真实输出与 candidate.diff；没有 Git 基线时使用文件差异工具，不编造结果。"
+      },
+      {
+        "id": "review",
+        "name": "独立测试与审查",
+        "tool": "codex",
+        "model": "auto",
+        "effort": "",
+        "prompt": "读取实际实现、真实 diff 和前序交接，独立运行可用测试，核对验收目标、输入边界及回归。只记录已执行的结果；未解决的阻塞问题明确报告 BLOCKED，不擅自修改被审查实现。"
+      }
+    ]
+  },
+  {
+    "id": "idea-validation",
+    "name": "想法与验收清单",
+    "category": "quick",
+    "description": "先收敛产品想法，验证是否值得进入编码。",
+    "prerequisite": "空工作目录；只需要 Kiro CLI",
+    "output": "idea.md、acceptance.md、后续实现建议",
+    "input": "把“面向小团队的每日站会摘要工具”整理为最小产品方案。描述目标用户、核心场景、首版功能、不做的内容与逐项验收条件。首版使用用户手动粘贴的文本，不依赖聊天平台集成。只交付文档，不开始编码，不声称完成真实用户调研。",
+    "steps": [
+      {
+        "id": "plan",
+        "name": "产品范围与验收",
+        "tool": "kiro",
+        "model": "auto",
+        "effort": "",
+        "prompt": "产出 idea.md 与 acceptance.md。将未知信息标为假设，为下一轮 Coding 给出简洁且可操作的任务建议。"
+      }
+    ]
+  },
+  {
+    "id": "product-landing",
+    "name": "产品落地页原型",
+    "category": "web",
+    "description": "快速制作一个可以展示产品想法的单页。",
+    "prerequisite": "空工作目录；浏览器",
+    "output": "响应式 web/index.html、演示说明",
+    "input": "为“个人阅读清单”制作蓝白色产品落地页，包含介绍、三项功能、常见问题与可交互的演示表单。表单仅在本地展示输入结果，不发送或收集信息。页面适配手机和桌面，使用原生 HTML/CSS/JavaScript，不加载外部字体、图片或依赖。",
+    "steps": [
+      {
+        "id": "code",
+        "name": "页面实现与自测",
+        "tool": "claude",
+        "model": "auto",
+        "effort": "",
+        "prompt": "实现 web/index.html 和必要本地资源，验证导航、输入提示与演示表单，记录真实验证方法及限制，保存代码 diff。"
+      },
+      {
+        "id": "deliver",
+        "name": "预览与交付说明",
+        "tool": "opencode",
+        "model": "auto",
+        "effort": "",
+        "prompt": "核对前序实现和审查结果，确认网页位于 web/index.html，整理启动方式、已验证结果和限制。交付阶段不修改已审查业务代码；需要修改或仍有阻塞时报告 BLOCKED，由用户安排修复和重新审查。"
+      }
+    ]
+  },
+  {
+    "id": "team-kanban",
+    "name": "团队任务看板",
+    "category": "web",
+    "description": "用四工具顺序交付一个可操作的任务管理原型。",
+    "prerequisite": "空工作目录；浏览器；测试可用 Node.js",
+    "output": "web/index.html、任务筛选、本地保存与测试",
+    "input": "实现一个蓝白色团队任务看板，包含待办、进行中、已完成三列；支持添加任务、切换状态、按关键词筛选，并用 localStorage 保存。输入内容作为纯文本展示，拒绝空标题。无需登录、后端或第三方依赖。为纯逻辑添加 node:test 测试，交付 web/index.html，标明这是单浏览器原型。",
+    "steps": [
+      {
+        "id": "plan",
+        "name": "范围与验收",
+        "tool": "kiro",
+        "model": "auto",
+        "effort": "",
+        "prompt": "阅读本次开发目标，拆分最小范围和可验证的验收标准，写入 plan.md。不要扩大功能或引入未要求的外部服务。"
+      },
+      {
+        "id": "code",
+        "name": "看板实现与自测",
+        "tool": "claude",
+        "model": "auto",
+        "effort": "",
+        "prompt": "根据计划实现本地任务看板，将可测试的状态和筛选逻辑单独组织，测试重复操作、空输入及坏数据恢复。保存真实测试输出与 diff。"
+      },
+      {
+        "id": "review",
+        "name": "独立测试与审查",
+        "tool": "codex",
+        "model": "auto",
+        "effort": "",
+        "prompt": "读取实际实现、真实 diff 和前序交接，独立运行可用测试，核对验收目标、输入边界及回归。只记录已执行的结果；未解决的阻塞问题明确报告 BLOCKED，不擅自修改被审查实现。"
+      },
+      {
+        "id": "deliver",
+        "name": "预览与交付说明",
+        "tool": "opencode",
+        "model": "auto",
+        "effort": "",
+        "prompt": "核对前序实现和审查结果，确认网页位于 web/index.html，整理启动方式、已验证结果和限制。交付阶段不修改已审查业务代码；需要修改或仍有阻塞时报告 BLOCKED，由用户安排修复和重新审查。"
+      }
+    ]
+  },
+  {
+    "id": "csv-insights",
+    "name": "CSV 数据概览",
+    "category": "web",
+    "description": "从一份本地样例数据生成可筛选的可视化页面。",
+    "prerequisite": "空工作目录；浏览器；测试可用 Node.js",
+    "output": "样例 CSV、数据表格、汇总图与验证记录",
+    "input": "实现本地 CSV 数据概览页，使用自建 samples/sales.csv 样例，字段为 date、category、amount。用户通过文件选择器导入，页面显示表格、分类汇总与柱状图，支持分类筛选。仅支持无引号、无字段内逗号的简单 CSV；不支持的格式明确报错，拒绝非法金额。使用原生 HTML/CSS/JavaScript，不上传文件，不安装依赖；交付 web/index.html。",
+    "steps": [
+      {
+        "id": "code",
+        "name": "数据页面与测试",
+        "tool": "claude",
+        "model": "auto",
+        "effort": "",
+        "prompt": "创建合成样例和本地 CSV 概览页，显式校验约定格式。测试空数据、坏表头、非法数值及不支持的引号格式，保留真实 diff 和输出。"
+      },
+      {
+        "id": "review",
+        "name": "独立测试与审查",
+        "tool": "codex",
+        "model": "auto",
+        "effort": "",
+        "prompt": "读取实际实现、真实 diff 和前序交接，独立运行可用测试，核对验收目标、输入边界及回归。只记录已执行的结果；未解决的阻塞问题明确报告 BLOCKED，不擅自修改被审查实现。"
+      },
+      {
+        "id": "deliver",
+        "name": "预览与交付说明",
+        "tool": "opencode",
+        "model": "auto",
+        "effort": "",
+        "prompt": "核对前序实现和审查结果，确认网页位于 web/index.html，整理启动方式、已验证结果和限制。交付阶段不修改已审查业务代码；需要修改或仍有阻塞时报告 BLOCKED，由用户安排修复和重新审查。"
+      }
+    ]
+  },
+  {
+    "id": "python-cli",
+    "name": "Python 命令行工具",
+    "category": "engineering",
+    "description": "先验证业务规则，避免被界面和部署分散精力。",
+    "prerequisite": "空工作目录；Python 3",
+    "output": "summarize.py、unittest 测试、README",
+    "input": "使用 Python 标准库实现 summarize.py，读取 UTF-8 文本文件，输出字符数、行数、非空行数和最长行长度，支持 --json 输出。定义空文件、末尾换行及中文字符的统计规则；缺少文件或非法编码时给出清晰错误和非零退出码。用 unittest 验证，不安装依赖。",
+    "steps": [
+      {
+        "id": "code",
+        "name": "CLI 实现与测试",
+        "tool": "claude",
+        "model": "auto",
+        "effort": "",
+        "prompt": "实现命令行工具、README 和 unittest；覆盖空文件、中文、末尾换行与异常路径。实际运行测试，记录输出和真实 diff。"
+      },
+      {
+        "id": "review",
+        "name": "独立测试与审查",
+        "tool": "codex",
+        "model": "auto",
+        "effort": "",
+        "prompt": "读取实际实现、真实 diff 和前序交接，独立运行可用测试，核对验收目标、输入边界及回归。只记录已执行的结果；未解决的阻塞问题明确报告 BLOCKED，不擅自修改被审查实现。"
+      }
+    ]
+  },
+  {
+    "id": "node-api",
+    "name": "Node.js API 原型",
+    "category": "engineering",
+    "description": "使用标准库验证接口契约与自动测试。",
+    "prerequisite": "空工作目录；Node.js 18 或更高版本",
+    "output": "内存任务 API、node:test 测试、调用示例",
+    "input": "用 Node.js 标准库实现内存任务 API：GET /tasks、POST /tasks、PATCH /tasks/:id。校验标题与状态，返回一致的 JSON 错误；限制请求体大小，处理非法 JSON 和不存在的任务。测试监听随机本地端口并在结束后关闭，不安装依赖。交付 README、真实测试结果与 diff；不宣称提供生产认证或持久化。",
+    "steps": [
+      {
+        "id": "plan",
+        "name": "范围与验收",
+        "tool": "kiro",
+        "model": "auto",
+        "effort": "",
+        "prompt": "阅读本次开发目标，拆分最小范围和可验证的验收标准，写入 plan.md。不要扩大功能或引入未要求的外部服务。"
+      },
+      {
+        "id": "code",
+        "name": "API 实现与契约测试",
+        "tool": "claude",
+        "model": "auto",
+        "effort": "",
+        "prompt": "根据计划用标准库实现 API，提供可启动与关闭的服务接口。使用 node:test 实际验证正常请求、错误响应和请求大小限制，保存真实 diff 与运行输出。"
+      },
+      {
+        "id": "review",
+        "name": "独立测试与审查",
+        "tool": "codex",
+        "model": "auto",
+        "effort": "",
+        "prompt": "读取实际实现、真实 diff 和前序交接，独立运行可用测试，核对验收目标、输入边界及回归。只记录已执行的结果；未解决的阻塞问题明确报告 BLOCKED，不擅自修改被审查实现。"
+      }
+    ]
+  },
+  {
+    "id": "web-delivery",
+    "name": "Web 应用 · 四工具交付",
+    "description": "按项目技术栈完成需求、实现、审查与可运行交付。",
+    "input": "做一个蓝白色发布说明工作台，支持按功能、修复和优化分类，实时预览并导出 Markdown。已有项目沿用其技术栈、接口和脚本；新项目选择适合需求的方案。为主要功能和异常输入提供真实测试，交付可运行页面及启动说明。",
+    "steps": [
+      {
+        "id": "plan",
+        "name": "分析与规划",
+        "tool": "kiro",
+        "model": "auto",
+        "effort": "",
+        "prompt": "先核实本次项目目录、源码基线、技术栈、依赖和接口，再根据目标定义验收标准与实现计划；已有工程不能用空目录或静态假数据替代。"
+      },
+      {
+        "id": "code",
+        "name": "实现与自测",
+        "tool": "claude",
+        "model": "auto",
+        "effort": "",
+        "prompt": "按项目计划与接口契约实现功能，按锁文件准备依赖，执行已有构建、检查和测试脚本，保存真实 diff 与验证结果。"
+      },
+      {
+        "id": "review",
+        "name": "安全与测试审查",
+        "tool": "codex",
+        "model": "auto",
+        "effort": "",
+        "prompt": "读取实际文件和 diff，检查安全、边界条件及回归，实际运行测试。发现阻塞问题时明确报告 BLOCKED，不把未运行的测试说成通过。"
+      },
+      {
+        "id": "deliver",
+        "name": "前端交付",
+        "tool": "opencode",
+        "model": "auto",
+        "effort": "",
+        "prompt": "核对实现与审查，整理可运行前端、接口联通结果、启动方式和 Release 说明。按用户已有授权完成交付动作；更改已审查实现时要求重新验证。"
+      }
+    ],
+    "category": "web",
+    "prerequisite": "新项目或明确的目标仓库；所选技术栈的运行环境",
+    "output": "可运行应用、Markdown 导出、测试证据和交付说明"
+  },
+  {
+    "id": "bugfix",
+    "name": "Bug 修复 · 回归验证",
+    "description": "先复现问题，再修复并独立检查。",
+    "input": "在本次工作目录中复现并修复计数器在连续快速点击时丢失计数的问题。补充回归测试，保留修复前后的证据，并生成一页修复报告。",
+    "steps": [
+      {
+        "id": "reproduce",
+        "name": "复现与定位",
+        "tool": "kiro",
+        "model": "auto",
+        "effort": "",
+        "prompt": "读取需求和现有代码，复现问题，记录最小复现步骤及预期行为。没有真实复现证据时说明限制。"
+      },
+      {
+        "id": "fix",
+        "name": "修复与回归",
+        "tool": "claude",
+        "model": "auto",
+        "effort": "",
+        "prompt": "依据复现证据实现最小修复，添加必要回归测试，运行并保存结果与真实 diff。"
+      },
+      {
+        "id": "review",
+        "name": "独立验证",
+        "tool": "codex",
+        "model": "auto",
+        "effort": "",
+        "prompt": "独立检查修复 diff 和回归结果，实际验证边界条件；报告剩余问题。"
+      },
+      {
+        "id": "report",
+        "name": "修复报告",
+        "tool": "opencode",
+        "model": "auto",
+        "effort": "",
+        "prompt": "将问题、修复、验证和限制整理为本地 HTML 报告，链接真实产物。 将 HTML 报告保存到 web/index.html。"
+      }
+    ],
+    "category": "existing",
+    "prerequisite": "先将含缺陷的代码及复现步骤放入本次工作目录",
+    "output": "最小修复、回归证据、web/index.html 修复报告"
+  },
+  {
+    "id": "review",
+    "name": "代码审查 · 双工具复核",
+    "description": "围绕现有代码，形成可核查的审查报告。",
+    "input": "审查本次工作目录中的代码，重点检查输入校验、敏感信息暴露、异常处理和测试覆盖。每条问题给出文件位置、影响与复现依据，输出本地 HTML 报告。",
+    "steps": [
+      {
+        "id": "review",
+        "name": "安全与测试审查",
+        "tool": "codex",
+        "model": "auto",
+        "effort": "",
+        "prompt": "读取实际代码和 diff，运行适用测试，报告真实问题、文件位置和验证依据。没有代码时明确 BLOCKED。"
+      },
+      {
+        "id": "verify",
+        "name": "复核与报告",
+        "tool": "claude",
+        "model": "auto",
+        "effort": "",
+        "prompt": "逐条复核前序问题，区分已验证问题与推测，生成本地 HTML 审查报告；未经用户要求不修改被审查代码。 将 HTML 报告保存到 web/index.html。"
+      }
+    ],
+    "category": "existing",
+    "prerequisite": "先将待审查代码 / diff 和测试放入本次工作目录",
+    "output": "问题清单、独立复核、web/index.html 审查报告"
+  },
+  {
+    "id": "go-web",
+    "name": "Go API · Web 工作台",
+    "description": "后端接口、独立测试和前端交付。",
+    "input": "用 Go 标准库构建一个任务管理 API，支持任务列表、新建任务与状态切换，并提供蓝白色 Web 页面。数据可先保存在内存；测试包含正常请求与无效输入，不安装第三方依赖。",
+    "steps": [
+      {
+        "id": "plan",
+        "name": "接口与验收设计",
+        "tool": "kiro",
+        "model": "auto",
+        "effort": "",
+        "prompt": "定义 Go API 的请求响应、数据模型、验收标准及测试清单，说明前后端交接约定。"
+      },
+      {
+        "id": "code",
+        "name": "Go 实现与测试",
+        "tool": "claude",
+        "model": "auto",
+        "effort": "",
+        "prompt": "使用 Go 标准库实现 API 和必要测试，验证输入与错误处理；缺少项目运行环境时按授权准备或报告准确的缺失条件。"
+      },
+      {
+        "id": "review",
+        "name": "安全与回归审查",
+        "tool": "codex",
+        "model": "auto",
+        "effort": "",
+        "prompt": "读取真实实现与 diff，实际运行可用测试，检查输入校验、状态变更和并发风险。"
+      },
+      {
+        "id": "deliver",
+        "name": "Web 前端与交付",
+        "tool": "opencode",
+        "model": "auto",
+        "effort": "",
+        "prompt": "基于已实现 API 制作蓝白色 Web 页面及启动说明，保存到 web/index.html。明确区分静态预览和实际 API 联通结果。"
+      }
+    ],
+    "category": "engineering",
+    "prerequisite": "空工作目录；本机已安装 Go",
+    "output": "Go API、自动测试、Web 页面和启动说明"
+  }
+]

@@ -24,7 +24,7 @@ CORE = [
 ]
 
 # Reuse the existing template library, including examples and task contracts.
-LEGACY = Path(__file__).resolve().parent.parent / "ui" / "workflow-templates.json"
+LEGACY = Path(__file__).resolve().parent / "templates" / "workflow-templates.json"
 SIGNALS = {
     "bugfix": ["bug", "修复", "缺陷", "报错", "崩溃", "闪退", "debug", "fix"],
     "review": ["审查", "审计", "review", "audit", "安全检查"],
