@@ -19,8 +19,9 @@ from .schema import openapi
 UI = Path(__file__).parent / "ui"
 
 
-def server(database, port=8918, host="127.0.0.1"):
+def server(database, port=8918, host="127.0.0.1", allowed_hosts=()):
     service = Service(database)
+    hosts = set()
     failures, limiter_lock = {}, threading.Lock()
 
     class Handler(BaseHTTPRequestHandler):
@@ -59,6 +60,8 @@ def server(database, port=8918, host="127.0.0.1"):
 
         def dispatch(self, method):
             try:
+                require(self.headers.get("Host", "") in hosts, "Host 不在允许列表；隧道或代理地址需写入 allowed_hosts",
+                        421, "host_not_allowed")
                 url = urlsplit(self.path)
                 path, query = url.path, parse_qs(url.query)
                 body = {}
@@ -291,4 +294,7 @@ def server(database, port=8918, host="127.0.0.1"):
                 self.wfile.flush()
                 time.sleep(1)
 
-    return ThreadingHTTPServer((host, port), Handler)
+    httpd = ThreadingHTTPServer((host, port), Handler)
+    bound = httpd.server_address[1]
+    hosts.update({f"127.0.0.1:{bound}", f"localhost:{bound}", f"[::1]:{bound}", *allowed_hosts})
+    return httpd
