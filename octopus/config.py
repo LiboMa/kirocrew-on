@@ -113,11 +113,14 @@ def _layer(values, base):
 
 
 def _environment(environ):
+    # Only known settings are read: the OCTOPUS_ namespace is shared with secrets passed by name
+    # (e.g. `init --password-env OCTOPUS_ADMIN_PASSWORD`). Unknown keys are still errors in files.
+    known = PATHS | set(INTS) | set(FLOATS) | STRINGS | {"allowed_hosts", "path_prepend"}
     values, tools = {}, {}
     for key, value in environ.items():
         if key.startswith("OCTOPUS_TOOL_"):
             tools[key.removeprefix("OCTOPUS_TOOL_").lower()] = value
-        elif key.startswith("OCTOPUS_") and key not in {"OCTOPUS_CONFIG", "OCTOPUS_URL", "OCTOPUS_API_TOKEN"}:
+        elif key.startswith("OCTOPUS_") and key.removeprefix("OCTOPUS_").lower() in known:
             values[key.removeprefix("OCTOPUS_").lower()] = value
     if tools:
         values["tools"] = tools

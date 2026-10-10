@@ -70,5 +70,12 @@ class ConfigTests(unittest.TestCase):
                 load(self.write(text), environ=self.env, cwd=self.cwd)
 
 
+    def test_unrelated_octopus_environment_variables_are_ignored(self):
+        env = {**self.env, "OCTOPUS_ADMIN_PASSWORD": "secret-value-123", "OCTOPUS_SOMETHING_ELSE": "x",
+               "OCTOPUS_API_PORT": "9300"}
+        s = load(environ=env, cwd=self.cwd)
+        self.assertEqual(s.api_port, 9300)
+        self.assertNotIn("secret-value-123", repr(s))
+
 if __name__ == "__main__":
     unittest.main()
