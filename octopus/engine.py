@@ -1,4 +1,5 @@
 """Durable stage progression. Native task execution stays with KiroCrew."""
+from concurrent.futures import ThreadPoolExecutor, wait as wait_futures
 import fcntl
 import json
 import logging
@@ -13,9 +14,12 @@ from .security import Error
 
 
 class Engine:
-    def __init__(self, database, request=worker_request):
+    def __init__(self, database, request=worker_request, workers=1, retry_unavailable=0.0, clock=time.monotonic):
         self.db, self.request = database, request
         self.stopping = threading.Event()
+        self.pool = ThreadPoolExecutor(max_workers=workers, thread_name_prefix="octopus-session")
+        self.inflight, self.futures, self.guard = set(), set(), threading.Lock()
+        self.retry_unavailable, self.clock, self.backoff = retry_unavailable, clock, {}
 
     def start(self):
         self.lease = (self.db.root / "engine.lock").open("a")
@@ -27,11 +31,18 @@ class Engine:
     def loop(self):
         while not self.stopping.is_set():
             try:
-                self.tick()
+                self.tick(wait=False)
             except Exception as exc:
                 # Error class only: exception messages may contain transport secrets.
                 logging.error("Octopus observer cycle failed (%s)", type(exc).__name__)
             self.stopping.wait(1)
+
+    def drain(self, timeout):
+        self.stopping.set()
+        with self.guard:
+            pending = set(self.futures)
+        done, not_done = wait_futures(pending, timeout=timeout)
+        return not not_done
 
     def update(self, rid, status, error=None, **extra):
         with self.db.transaction() as db:
@@ -51,7 +62,7 @@ class Engine:
             if status != run["status"] or error != run["error"]:
                 self.db.event(db, rid, "run.state", {"status": status, "error": error})
 
-    def tick(self):
+    def tick(self, wait=True):
         recovery.reconcile(self.db)
         with self.db.read() as db:
             active = [dict(r) for r in db.execute(
@@ -59,33 +70,68 @@ class Engine:
                 "JOIN workers w ON w.id=r.worker_id WHERE r.lifecycle!='deleted' AND "
                 "r.status IN ('preparing','ready','running','waiting_approval','dispatch_unknown','stopping','reopening','diagnosing') "
                 "ORDER BY r.created")]
+        now, submitted = self.clock(), []
         for run in active:
-            try:
-                self.advance(run)
-            except Exception as exc:
-                # Error codes are stable; do not publish transport credentials/tracebacks.
-                message = str(exc) if hasattr(exc, "code") else "后台操作失败，请检查 Worker 与原生状态"
-                with self.db.read() as db:
-                    current = db.execute(
-                        "SELECT a.* FROM attempts a JOIN tasks t ON t.current_attempt=a.id "
-                        "WHERE a.run_id=? AND a.status IN ('dispatching','running','dispatch_unknown','waiting_approval') "
-                        "ORDER BY t.ordinal LIMIT 1", (run["id"],)).fetchone()
-                if current and current["status"] == "dispatching":
-                    if getattr(exc, "code", "") in {"model_unavailable", "model_transport_unsupported", "invalid_request", "not_prepared"}:
-                        with self.db.transaction() as db:
-                            db.execute("UPDATE attempts SET status='blocked',error=?,updated=? WHERE id=?",
-                                       (message, time.time(), current["id"]))
-                            db.execute("UPDATE tasks SET status='blocked' WHERE current_attempt=?", (current["id"],))
-                        self.update(run["id"], "blocked", message)
-                    else:
-                        # Worker HTTP acknowledgment may be lost after native spawn.
-                        # Reuse this Attempt on recovery; never permit a new retry yet.
-                        self.update(run["id"], "dispatch_unknown", message)
+            if self.backoff.get(run["id"], (0, 0.0))[1] > now:
+                continue
+            with self.guard:
+                if run["id"] in self.inflight:
                     continue
-                if run["status"] in {"running", "dispatch_unknown", "waiting_approval", "stopping", "reopening", "diagnosing"}:
-                    self.update(run["id"], run["status"], message)
-                else:
-                    self.update(run["id"], "blocked", message)
+                self.inflight.add(run["id"])
+                future = self.pool.submit(self._advance_guarded, run)
+                self.futures.add(future)
+            future.add_done_callback(self._forget)
+            submitted.append(future)
+        if wait:
+            for future in submitted:
+                future.result()
+        return submitted
+
+    def _forget(self, future):
+        with self.guard:
+            self.futures.discard(future)
+
+    def _advance_guarded(self, run):
+        try:
+            self.advance(run)
+            self.backoff.pop(run["id"], None)
+        except Exception as exc:
+            self._failed(run, exc)
+        finally:
+            with self.guard:
+                self.inflight.discard(run["id"])
+
+    def _failed(self, run, exc):
+        unavailable = bool(self.retry_unavailable) and getattr(exc, "code", "") == "worker_unavailable"
+        if unavailable:
+            failures = self.backoff.get(run["id"], (0, 0.0))[0] + 1
+            self.backoff[run["id"]] = (failures, self.clock() + min(60.0, self.retry_unavailable * 2 ** (failures - 1)))
+        # Error codes are stable; do not publish transport credentials/tracebacks.
+        message = str(exc) if hasattr(exc, "code") else "后台操作失败，请检查 Worker 与原生状态"
+        with self.db.read() as db:
+            current = db.execute(
+                "SELECT a.* FROM attempts a JOIN tasks t ON t.current_attempt=a.id "
+                "WHERE a.run_id=? AND a.status IN ('dispatching','running','dispatch_unknown','waiting_approval') "
+                "ORDER BY t.ordinal LIMIT 1", (run["id"],)).fetchone()
+        if current and current["status"] == "dispatching":
+            if getattr(exc, "code", "") in {"model_unavailable", "model_transport_unsupported", "invalid_request", "not_prepared"}:
+                with self.db.transaction() as db:
+                    db.execute("UPDATE attempts SET status='blocked',error=?,updated=? WHERE id=?",
+                               (message, time.time(), current["id"]))
+                    db.execute("UPDATE tasks SET status='blocked' WHERE current_attempt=?", (current["id"],))
+                self.update(run["id"], "blocked", message)
+            else:
+                # Worker HTTP acknowledgment may be lost after native spawn.
+                # Reuse this Attempt on recovery; never permit a new retry yet.
+                self.update(run["id"], "dispatch_unknown", message)
+            return
+        if unavailable:
+            # Keep the current status: the Worker may come back; the next attempt reconciles first.
+            return self.update(run["id"], run["status"], message)
+        if run["status"] in {"running", "dispatch_unknown", "waiting_approval", "stopping", "reopening", "diagnosing"}:
+            self.update(run["id"], run["status"], message)
+        else:
+            self.update(run["id"], "blocked", message)
 
     def advance(self, run):
         rid, config = run["id"], json.loads(run["worker_config"])
