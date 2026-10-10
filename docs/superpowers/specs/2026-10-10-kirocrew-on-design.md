@@ -94,7 +94,7 @@
 | Gate | 旧版 `gates/<stage>.json` 文件；新版散落在 Engine 验收逻辑 | 新表 `gates` + Worker 证据文件（M2） |
 | Recovery | `recoveries` | 保留；action 增加 `fallback`、`replan`（M2） |
 | 策略 | 只有 `recovery` 配置写在 Run 快照里 | 新表 `policies`：映射、准入、恢复预算，按个人 / Team 作用域（M2） |
-| 执行边界 | `workers` | 保留；Worker Token 改为哈希存储（M1） |
+| 执行边界 | `workers` | 保留；Worker Token 移出数据库，库内只留指纹与凭据引用（M4） |
 | Session 授权 | 无 | 新表 `session_grants`（M4） |
 
 ## 4．组件与模块
@@ -470,7 +470,7 @@ Python 解释器、KiroCrew 安装位置、各工具与 ACP 适配器路径、�
 
 ## 13．安全与边界
 
-- 用户 Token：哈希存储、可撤销、带作用域（现有）。Worker Token：改为哈希存储，平台只保留校验所需信息。
+- 用户 Token：哈希存储、可撤销、带作用域（现有）。Worker Token：平台调用 Worker 时必须出示，不能只存哈希；M4 起改为数据库之外的 0600 凭据文件（或加密存储），数据库只保留指纹与引用。M1–M3 维持现状：数据库文件 0600、目录 0700。
 - 原生浏览器登录覆盖整个 Gateway（K03）：原生入口只对执行边界所有者开放；共享 Session 不开放原生入口。
 - 仓库写凭据只存在于执行边界内，以 0600 文件或凭据助手提供给 Worker 的 git 进程，不进入 Workspace 与 Agent 上下文。
 - 同一宿主账号上的多个 Team 不构成多租户隔离；Team 隔离在 M4 以容器或独立主机实现后再验收。
@@ -507,10 +507,10 @@ Python 解释器、KiroCrew 安装位置、各工具与 ACP 适配器路径、�
 
 | 里程碑 | 范围 | 完成条件 |
 |---|---|---|
-| **M1 运行底座** | 迁入两版资产与回归基线；运行时配置；composition 包；依赖解耦；schema 迁移；Worker Token 哈希；按 Session 并发的 Engine 与 L0 瞬时重试；无桌面服务与 systemd；EC2 单边界部署；备份恢复；运维手册 | EC2 上 Kiro、Claude Code、Codex 真实最小研发与返工跑通；Gateway / Worker / API 重启后自动恢复；OpenCode 单独核实并如实记录 |
-| **M2 核心闭环** | Request；Pipeline schema 2、生成、规范化、门禁目录；映射策略与回退链；准入；完整恢复阶梯与看门狗；批准代理；候选 commit、Feature 分支推送；报告；Claude Code 基础 Skill 用于验收 | 从 Claude Code 一句话提交到远端 Feature 分支与报告；故障注入在预算内恢复完成 |
+| **M1 运行底座** | 迁入两版资产与回归基线；运行时配置；composition 包；依赖解耦；schema 迁移；按 Session 并发的 Engine 与 Worker / Gateway 不可用退避；无桌面服务与 systemd；EC2 单边界部署；备份恢复；运维手册 | EC2 上 Kiro、Claude Code、Codex 真实最小研发与返工跑通；Gateway / Worker / API 重启后自动恢复；OpenCode 单独核实并如实记录 |
+| **M2 核心闭环** | Request；Pipeline schema 2、生成、规范化、门禁目录；映射策略与回退链；准入；完整恢复阶梯（L0–L4）与看门狗；批准代理；候选 commit、Feature 分支推送；报告；Claude Code 基础 Skill 用于验收 | 从 Claude Code 一句话提交到远端 Feature 分支与报告；故障注入在预算内恢复完成 |
 | **M3 客户端直连与控制台** | 四个客户端 connect / Skill / MCP；pull / sync / 会话关联 / watch；控制台列表、搜索、详情与少量操作 | 四个客户端完成提交、查询、拉回、续作；控制台搜索与详情覆盖第 10 节 |
-| **M4 共享与组织** | 组织层；Session 共享给个人 / Team / 公司（viewer / collaborator）；权限变化对查询、SSE、导出、运行的影响；Team 执行隔离；排队与配额；HTTPS 入口 | 越权测试通过；授权协作路径完整；隔离在真实独立身份 / 容器 / 主机上验收 |
+| **M4 共享与组织** | 组织层；Worker Token 移出数据库；Session 共享给个人 / Team / 公司（viewer / collaborator）；权限变化对查询、SSE、导出、运行的影响；Team 执行隔离；排队与配额；HTTPS 入口 | 越权测试通过；授权协作路径完整；隔离在真实独立身份 / 容器 / 主机上验收 |
 | **M5 仓库闭环** | Draft PR / MR；Webhook / Issue 输入；写回去重与冲突；检查状态同步 | 需求进入 → 自动研发 → 复审 → 获授权写回 → 状态可追踪；重放不产生重复 Run 或 PR / MR |
 
 ## 17．风险与待验证事项

@@ -95,9 +95,9 @@ M4（共享与组织）、M5（仓库闭环）在 MVP 之后分别立项，各�
 3. **运行时配置**：解释器、KiroCrew 安装、工具路径、端口、数据根、HOME、公开 URL 与允许 Host、日志目录统一配置；保留 macOS 路径兼容。
 4. **依赖解耦**：平台侧代码不再依赖 Worker 侧模块与旧 UI 文件。
 5. **组合启动**：`composition` 包加载 `PocProviderRegistry`，提供 `--check`；健康检查报告组合特性。
-6. **Engine 可靠性底座**：按 Session 并发推进、同一 Workspace 写入互斥、L0 瞬时重试（核对后重派）。
+6. **Engine 可靠性底座**：按 Session 并发推进、同一 Session 串行（同一 Workspace 写入互斥）、Worker / Gateway 不可用时退避重连而不阻断；派发回执不明仍显示 `dispatch_unknown`。L0–L4 恢复阶梯在 M2 实现。
 7. **无桌面启动与服务生命周期**：API、Worker、Gateway 独立服务入口；systemd unit、就绪检查、优雅重启、日志、重启恢复。
-8. **持久数据**：代码、平台数据、Worker 数据、原生 Crew 数据分离；schema 迁移且迁移前自动备份；Worker Token 哈希存储。
+8. **持久数据**：代码、平台数据、Worker 数据、原生 Crew 数据分离；schema 迁移且迁移前自动备份。（Worker Token 移出数据库放到 M4：平台调用 Worker 必须持有可用的 Token，不能只存哈希。）
 9. **凭据与环境**：各工具在执行用户下初始化认证；平台只保存必要引用。
 10. **网络入口**：Host 白名单与 Origin 校验支持 SSM 隧道；验证 SSE 与原生跳转。
 11. **版本与回滚**：固定 KiroCrew、Coding 工具、ACP 适配器、Node / Python 版本；记录迁移与回退步骤。
@@ -193,7 +193,7 @@ M4（共享与组织）、M5（仓库闭环）在 MVP 之后分别立项，各�
 | K07 | 原生 continue 不读取 `reasoning_effort`；原生 spawn 没有 HTTP 幂等键 | M1 |
 | K08 | Coordinator “不派生任务”的限制来自提示词，不是工具级隔离；其诊断可能有误 | M2 |
 | K09 | Engine 单线程串行推进，慢 Run 会阻塞其他 Run | M1 |
-| K10 | SQLite 没有 schema 迁移机制；Worker Token 以明文存放 | M1 |
+| K10 | SQLite 没有 schema 迁移机制（M1）；Worker Token 以明文存放在数据库 `workers.config` 中（M4 移出数据库） | M1 / M4 |
 | K11 | 组合逻辑只存在于单个进程内；任何 re-exec 都会丢失 `PocProviderRegistry` | M1 |
 | K12 | Linux 沙箱依赖非特权 user namespace；不经官方 launcher 启动时需单独核实（AL2023 未实测） | M1 |
 | K13 | 现有启动器与路径依赖 macOS：`/Applications/...`、App 内置 Python、zsh、Electron、`lsof`、Homebrew 路径 | M1 |
