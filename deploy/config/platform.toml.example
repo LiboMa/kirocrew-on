@@ -1,0 +1,9 @@
+# /etc/kirocrew-on/platform.toml —— 平台（OS 用户 octopus）
+data_dir = "/var/lib/octopus/platform"
+log_dir = "/var/log/kirocrew-on"
+api_host = "127.0.0.1"
+api_port = 8918
+# SSM 端口转发后浏览器使用的 Host；按实际转发端口填写
+allowed_hosts = ["localhost:18918"]
+engine_workers = 4
+retry_unavailable = 2.0

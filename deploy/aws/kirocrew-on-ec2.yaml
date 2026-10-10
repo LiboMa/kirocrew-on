@@ -1,0 +1,68 @@
+AWSTemplateFormatVersion: "2010-09-09"
+Description: >-
+  KiroCrew ON single-host M1 environment. SSM-only access (no inbound rules), encrypted gp3 root volume,
+  IMDSv2. Capacity parameters have no defaults on purpose: they come from the target environment.
+Parameters:
+  InstanceType:
+    Type: String
+    Description: 由目标环境给出；不是经过验证的最低配置
+  VpcId:
+    Type: AWS::EC2::VPC::Id
+  SubnetId:
+    Type: AWS::EC2::Subnet::Id
+    Description: 需能经 NAT 或 VPC 端点访问 SSM 与软件源
+  VolumeSizeGiB:
+    Type: Number
+    MinValue: 20
+  ImageId:
+    Type: AWS::SSM::Parameter::Value<AWS::EC2::Image::Id>
+    Default: /aws/service/ami-amazon-linux-latest/al2023-ami-kernel-default-x86_64
+Resources:
+  HostSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: KiroCrew ON host - no inbound; access through SSM Session Manager only
+      VpcId: !Ref VpcId
+      SecurityGroupEgress:
+        - IpProtocol: "-1"
+          CidrIp: 0.0.0.0/0
+          Description: Outbound for SSM, package sources and model services; restrict per environment
+  HostRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal: {Service: ec2.amazonaws.com}
+            Action: sts:AssumeRole
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/AmazonSSMManagedInstanceCore
+  HostProfile:
+    Type: AWS::IAM::InstanceProfile
+    Properties:
+      Roles: [!Ref HostRole]
+  Host:
+    Type: AWS::EC2::Instance
+    Properties:
+      ImageId: !Ref ImageId
+      InstanceType: !Ref InstanceType
+      SubnetId: !Ref SubnetId
+      IamInstanceProfile: !Ref HostProfile
+      SecurityGroupIds: [!Ref HostSecurityGroup]
+      MetadataOptions:
+        HttpTokens: required
+        HttpEndpoint: enabled
+      BlockDeviceMappings:
+        - DeviceName: /dev/xvda
+          Ebs:
+            VolumeType: gp3
+            VolumeSize: !Ref VolumeSizeGiB
+            Encrypted: true
+            DeleteOnTermination: false
+      Tags:
+        - {Key: Name, Value: kirocrew-on-m1}
+        - {Key: Project, Value: kirocrew-on}
+Outputs:
+  InstanceId:
+    Value: !Ref Host

@@ -1,0 +1,23 @@
+# /etc/kirocrew-on/boundary-<边界>.toml —— 执行边界（OS 用户 crew-<边界>）；把 personal 替换为边界名
+worker_data_dir = "/var/lib/octopus/boundaries/personal/worker"
+worker_token_file = "/var/lib/octopus/boundaries/personal/worker.token"
+crew_home = "/var/lib/octopus/boundaries/personal/crew"
+kiro_home = "/var/lib/octopus/boundaries/personal/kiro"
+routing_log = "/var/lib/octopus/boundaries/personal/provider-routing.jsonl"
+gateway_runtime_file = "/var/lib/octopus/boundaries/personal/gateway-runtime.json"
+log_dir = "/var/lib/octopus/boundaries/personal/logs"
+worker_host = "127.0.0.1"
+worker_port = 8928
+worker_isolation = "trusted-local"
+gateway_port = 5476
+# 原生入口经 SSM 转发后的浏览器 origin
+crew_url = "http://localhost:15476"
+kirocrew_python = "/opt/kirocrew/current/venv/bin/python"
+adapters_dir = "/opt/kirocrew-on/current/node_modules/.bin"
+path_prepend = ["/opt/kirocrew-tools/bin"]
+
+[tools]
+kiro_cli = "/opt/kirocrew-tools/bin/kiro-cli"
+claude = "/opt/kirocrew-tools/bin/claude"
+codex = "/opt/kirocrew-tools/bin/codex"
+opencode = "/opt/kirocrew-tools/bin/opencode"
