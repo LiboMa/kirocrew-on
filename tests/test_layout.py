@@ -44,5 +44,14 @@ class LayoutTests(unittest.TestCase):
         self.assertNotIn("/Applications", (ROOT / "octopus" / "documents.py").read_text())
 
 
+    def test_no_mac_paths_outside_compat_layer(self):
+        for path in [*(ROOT / "octopus").rglob("*.py"), *(ROOT / "composition").rglob("*.py")]:
+            text = path.read_text()
+            if path.name == "config.py":
+                text = text.replace("/Applications/KiroCrew.app", "")  # documented macOS default only
+            with self.subTest(path=path.name):
+                self.assertNotIn("/Applications", text)
+                self.assertNotIn("/opt/homebrew", text)
+
 if __name__ == "__main__":
     unittest.main()
