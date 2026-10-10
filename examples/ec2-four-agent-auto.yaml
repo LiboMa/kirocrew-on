@@ -1,0 +1,41 @@
+# Portable workflow input. EC2 hosting still requires the EC2-001 implementation.
+# Auto selects the configured default for each actual harness; it does not make
+# the different tools use the same model.
+schema: 1
+id: ec2-four-agent-auto
+name: EC2 实验 · 四工具最小闭环
+revision: 0
+steps:
+  - id: plan
+    name: 最小契约
+    tool: kiro
+    model: auto
+    effort: ''
+    prompt: >-
+      为用户需求写简短计划与验收标准。首轮只实现 proof.mjs 导出的 add(a,b)，
+      用 Node 内置测试验证 add(23,19) 等于 42。只操作本次工作区，不安装依赖。
+  - id: code
+    name: 编码与测试
+    tool: claude
+    model: auto
+    effort: ''
+    prompt: >-
+      读取计划，实现 proof.mjs 和 tests/proof.test.mjs，实际运行 node --test。
+      保存实现前后的真实 candidate.diff 和测试输出；不要编造运行结果。
+  - id: review
+    name: 安全与测试审查
+    tool: codex
+    model: auto
+    effort: ''
+    prompt: >-
+      读取真实代码与 candidate.diff，实际运行测试，写 review.md。
+      明确给出 PASS 或 BLOCKED、检查范围和证据；不修改实现，不发布或提交。
+  - id: deliver
+    name: Web 状态报告
+    tool: opencode
+    model: auto
+    effort: ''
+    prompt: >-
+      读取计划、测试和 review.md。若没有明确 PASS，报告 BLOCKED 并停止。
+      生成零外部依赖的 web/index.html，展示需求、阶段结果和验证限制。
+      不修改已审查核心与测试；工具身份以原生看板证据为准，不伪造。

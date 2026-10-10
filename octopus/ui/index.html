@@ -1,0 +1,89 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Octopus · Team 开发工作台</title>
+  <link rel="stylesheet" href="/style.css">
+  <script src="/crew.js" defer></script>
+  <script src="/recovery-ui.js" defer></script>
+  <script src="/app.js" defer></script>
+  <script src="/launch.js" defer></script>
+  <script src="/recommend.js" defer></script>
+</head>
+<body>
+  <div id="login" class="login-page">
+    <section class="login-story">
+      <div class="brand"><span class="brand-mark">O</span> OCTOPUS <small>MVP 1.0.0</small></div>
+      <p class="eyebrow">TEAM DEVELOPMENT WORKSPACE</p>
+      <h1>一个需求。<br>多种 Coding Agent。<br>同一条开发脉络。</h1>
+      <p>把规划、编码和审查连在一起。保留源码、交接与执行证据，让下一次开发从这里继续。</p>
+      <div class="agent-chain"><span>Kiro</span><b>→</b><span>Claude Code</span><b>→</b><span>Codex</span><b>→</b><span>OpenCode</span></div>
+      <div class="login-foot">POWERED BY KIROCREW ACP · SQLITE · TEAM API</div>
+    </section>
+    <form id="login-form" class="login-form">
+      <p class="eyebrow">WELCOME BACK</p><h2>进入开发空间</h2>
+      <p class="muted">使用平台账户登录。工作流默认仅自己可见。</p>
+      <label>用户名<input name="username" autocomplete="username" required placeholder="your.name"></label>
+      <label>密码<input name="password" type="password" autocomplete="current-password" required></label>
+      <button class="primary" type="submit">登录工作台 <span>→</span></button>
+      <p id="login-error" class="error" role="alert"></p>
+      <p class="hint">首次使用：由管理员初始化账户。原有 KiroCrew 对话与本版账户分别管理。</p>
+      <a href="http://127.0.0.1:8917/" target="_blank" rel="noopener">打开旧版 Workflow Studio ↗</a>
+    </form>
+  </div>
+  <div id="app" hidden>
+    <header class="topbar">
+      <div class="brand"><span class="brand-mark">O</span> OCTOPUS <small>1.0.0</small></div>
+      <span class="top-caption">TEAM DEVELOPMENT</span>
+      <a class="legacy-entry" id="legacy-entry" href="http://127.0.0.1:8917/" target="_blank" rel="noopener">旧版工作台 ↗</a>
+      <button id="team-manage" class="quiet">团队与成员</button>
+      <button id="api-settings" class="quiet">API 接入</button>
+      <button id="worker-settings" class="quiet">执行环境</button>
+      <button id="account" class="avatar" title="账户与退出"></button>
+    </header>
+    <div class="layout">
+      <aside class="sidebar">
+        <label class="space-label">开发空间<select id="space"></select></label>
+        <button id="new-run" class="primary">＋ 发起开发任务</button>
+        <div class="nav-heading"><span>SESSIONS</span><span id="session-count"></span></div>
+        <div id="session-list" class="session-list"></div>
+        <div class="nav-heading"><span>工作流库</span><button id="new-flow" class="icon-button" title="构建工作流">＋</button></div>
+        <div id="flow-list" class="flow-list"></div>
+        <div class="sidebar-note"><i class="live-dot"></i> 配置有版本，执行有记录<br><span>共享工作流不会公开私人运行。</span></div>
+      </aside>
+      <main id="workspace">
+        <section id="empty" class="empty-workspace">
+          <p class="eyebrow">FROM INTENT TO DELIVERY</p>
+          <h1>下一项研发，从这里开始。</h1>
+          <p>先描述需求，自动匹配工作流与任务；也可以手动指定，再逐项配置 Agent。</p>
+          <button id="intent-start" class="primary">输入需求，匹配工作流 →</button>
+          <div class="start-options">
+            <button id="quick-chain"><span class="option-number">01</span><strong>完整研发链</strong><span>Kiro 规划 → Claude 编码 → Codex 审查 → OpenCode 交付</span><b>使用模板 ↗</b></button>
+            <button id="quick-proof"><span class="option-number">02</span><strong>快速验证想法</strong><span>先做最小实现，再独立检查真实代码和测试。</span><b>使用模板 ↗</b></button>
+          </div>
+          <div class="empty-bottom"><span>私有或团队空间</span><span>Task 独立配置工具与模型</span><span>API / Web / MCP 同一入口</span></div>
+        </section>
+        <section id="run-view" hidden>
+          <div class="run-heading"><div><p class="eyebrow" id="run-kicker"></p><h1 id="run-title"></h1><p id="run-id" class="mono muted"></p></div><span id="run-status" class="badge"></span></div>
+          <p id="run-goal" class="muted" hidden></p>
+          <div class="progress-strip"><div><strong id="progress-number"></strong><span>任务交接完成</span></div><progress id="overall-progress" max="100" value="0"></progress><span id="stream-status" class="muted">连接状态流…</span></div>
+          <div class="run-toolbar"><button id="run-continue" class="primary">配置并原地重跑</button><button id="run-recover">诊断并修复</button><button id="run-open-crew">在 KiroCrew 中打开 ↗</button><button id="run-stop">停止</button><button id="run-close">关闭</button><button id="run-export">导出记录</button><button id="run-delete" class="danger quiet">删除会话</button></div>
+          <p id="crew-entry-hint" class="hint" hidden></p>
+          <p id="recovery-policy" class="hint"></p>
+          <section id="run-attention" class="attention-card" role="status" hidden><h2 id="attention-title"></h2><p id="attention-detail"></p><p id="attention-action"></p></section>
+          <details id="recovery-history" class="recovery-history" hidden><summary id="recovery-summary"></summary><div id="recovery-records"></div></details>
+          <div id="run-error" class="notice error" hidden></div>
+          <div id="worker-notice" class="notice" hidden></div>
+          <div class="development-grid">
+            <div><div class="section-heading"><h2>开发任务</h2><button id="task-workflow" class="quiet">按此任务列表发起新开发</button></div><div id="task-list"></div></div>
+            <aside class="detail-rail"><div class="section-heading"><h2>执行轨迹</h2><span id="event-count"></span></div><div id="event-list" class="events"></div><details><summary>Workspace 与原生会话</summary><div id="native-details" class="meta"></div></details></aside>
+          </div>
+        </section>
+      </main>
+    </div>
+  </div>
+  <dialog id="modal"><form id="modal-form"><header class="modal-heading"><div><p id="modal-kicker" class="eyebrow"></p><h2 id="modal-title"></h2></div><button type="button" id="modal-close" class="icon-button" aria-label="关闭对话框">×</button></header><div id="modal-body"></div><p id="modal-error" class="error" role="alert"></p><footer class="modal-footer"><span id="modal-note"></span><button type="button" id="modal-cancel">取消</button><button type="submit" id="modal-submit" class="primary">保存</button></footer></form></dialog>
+  <div id="toast" role="status" hidden></div>
+</body>
+</html>

@@ -1,0 +1,32 @@
+{
+  "schema": 1,
+  "id": "ui-optimize-three-stage",
+  "name": "UI 增强 · Kiro → Codex → Claude",
+  "revision": 1,
+  "steps": [
+    {
+      "id": "analyze",
+      "name": "需求分析与现状核实",
+      "tool": "kiro",
+      "model": "auto",
+      "effort": "",
+      "prompt": "完整阅读用户需求和实际检出的源码、项目规范及基线。核实 UI 和后端归属，写出可量化验收标准、接口契约、影响文件和未核实条件；保留原始需求，交接给 Codex 开发。"
+    },
+    {
+      "id": "develop",
+      "name": "开发实现与自测",
+      "tool": "codex",
+      "model": "auto",
+      "effort": "",
+      "prompt": "按前序规格在本次实际检出中实现需求。遵循原技术栈和依赖约束，实际运行针对性测试，更新相关文档并保存真实 diff、命令退出结果和交接说明；不以静态演示或假接口替代要求的功能。"
+    },
+    {
+      "id": "verify",
+      "name": "测试验证",
+      "tool": "claude",
+      "model": "auto",
+      "effort": "",
+      "prompt": "读取规格、开发交接和实际候选 diff，独立运行测试并验证 UI 与后端行为。结论绑定实际源码哈希，明确验证范围、未解决问题和证据；发现缺陷交回协调者安排原属主修复，候选变化必须复验。用户模型偏好为 Fabel 5.1（原文，原生 ID 和可用性未核实），当前明确使用 auto 和默认 Effort；不得宣称实际使用了该偏好模型。"
+    }
+  ]
+}

@@ -1,0 +1,107 @@
+"""Discoverable HTTP inputs for coding clients."""
+from . import __version__
+
+
+def openapi():
+    def obj(properties, required=()):
+        return {"type": "object", "properties": properties, "required": list(required), "additionalProperties": False}
+    def ref(name):
+        return {"$ref": "#/components/schemas/" + name}
+    text, integer = {"type": "string"}, {"type": "integer", "minimum": 1}
+    execution = {"tool": {"enum": ["kiro", "claude", "codex", "opencode"]},
+                 "model": {"type": "string", "default": "auto"},
+                 "effort": {"enum": ["", "low", "medium", "high", "xhigh", "max"]}, "prompt": text}
+    command = {"request_id": {"type": "string", "minLength": 8, "maxLength": 100}, "expected_version": integer}
+    step_list = {"type": "array", "items": ref("Step"), "minItems": 1, "maxItems": 8}
+    schemas = {
+        "Step": obj({"id": text, "name": text, **execution}, ["id", "name", "tool", "prompt"]),
+        "Execution": obj({"name": text, **execution}),
+        "Source": obj({"type": {"enum": ["new", "git"]}, "url": text, "ref": text}, ["type"]),
+        "Login": obj({"username": text, "password": {"type": "string", "format": "password"}}, ["username", "password"]),
+        "User": obj({"username": text, "password": {"type": "string", "format": "password"}, "admin": {"type": "boolean"}},
+                    ["username", "password"]),
+        "Team": obj({"name": text}, ["name"]),
+        "Member": obj({"username": text, "role": {"enum": ["owner", "member"]}}, ["username"]),
+        "Workflow": obj({"name": text, "steps": step_list, "expected_version": integer}, ["name", "steps"]),
+        "Grant": obj({"kind": {"enum": ["user", "team"]}, "principal": text,
+                     "role": {"enum": ["viewer", "runner", "editor"]}}, ["kind", "principal"]),
+        "Archive": obj({"expected_version": integer, "archived": {"type": "boolean"}}, ["expected_version"]),
+        "Worker": obj({"name": text, "owner_id": text, "team_id": text,
+                       "connection": obj({"url": text, "token": {"type": "string", "format": "password"}}, ["url", "token"])},
+                      ["name", "connection"]),
+        "Enabled": obj({"enabled": {"type": "boolean"}}, ["enabled"]),
+        "Token": obj({"label": text, "ttl": integer, "scopes": {"type": "array", "minItems": 1,
+                       "items": {"enum": ["read", "execute", "manage"]}}}),
+        "Resolve": obj({"input": text, "name": text, "workflow_id": text, "workflow_version": integer,
+                        "template_id": text, "steps": step_list, "team_id": text}, ["input"]),
+        "Design": obj({"request_id": command["request_id"], "input": text, "worker_id": text,
+                       "workflow_id": text, "workflow_version": integer, "template_id": text,
+                                  "steps": step_list, "team_id": text}, ["request_id", "input", "worker_id"]),
+        "RecoveryPolicy": obj({"enabled": {"type": "boolean", "default": True},
+                               "max_cycles": {"type": "integer", "minimum": 1, "maximum": 5, "default": 2}}),
+        "Start": obj({"request_id": command["request_id"], "input": text, "name": text, "workflow_id": text,
+                      "template_id": text,
+                      "workflow_version": integer, "steps": step_list, "team_id": text, "worker_id": text,
+                       "source": ref("Source"), "recovery": ref("RecoveryPolicy")}, ["request_id", "input", "source"]),
+        "Continue": obj({**command, "task_id": text, "input": text, "execution": ref("Execution"),
+                         "recovery": ref("RecoveryPolicy")},
+                        ["request_id", "expected_version", "task_id"]),
+        "Control": obj({**command, "confirmation": text}, ["request_id", "expected_version"]),
+        "AssignWorker": obj({**command, "worker_id": text}, ["request_id", "expected_version", "worker_id"]),
+        "Empty": obj({}), "Error": obj({"error": text, "code": text}, ["error", "code"]),
+    }
+    schemas["Resolve"]["description"] = "Read-only preview. Explicit workflow_id, template_id or steps wins. If omitted, match permitted workflows/templates using explainable rules. No native tasks or workspace are created."
+    schemas["Design"]["description"] = "Execute scope. Starts a real Kiro workflow-design task via the chosen Worker and native ACP. Only recommends; does not run or save the recommended workflow. Poll /designs/{id}, then adopt and edit config.steps."
+    schemas["Start"]["description"] = "Optionally specify exactly one of workflow_id, template_id or custom steps; otherwise match the input. Preview via workflows/resolve and pin its selection/version before submit. Team runs are shared with current members. Without worker_id the run waits for assignment."
+    schemas["Continue"]["description"] = "Retains Session and Workspace. Creates immutable Attempts; selected Task and downstream Tasks rerun. Earlier tasks must be accepted."
+    schemas["Worker"]["description"] = "Administrator only. Exactly one owner_id/team_id. Team requires a dedicated OS boundary; a declaration is not a sandbox."
+    routes = {
+        "/v1/login": {"post": "Login"}, "/v1/logout": {"post": "Empty"}, "/v1/me": {"get": None},
+        "/v1/users": {"get": None, "post": "User"}, "/v1/teams": {"get": None, "post": "Team"},
+        "/v1/teams/{id}/members": {"post": "Member", "delete": "Member"},
+        "/v1/workflows": {"get": None, "post": "Workflow"},
+        "/v1/workflow-templates": {"get": None}, "/v1/workflows/resolve": {"post": "Resolve"},
+        "/v1/designs": {"post": "Design"}, "/v1/designs/{id}": {"get": None},
+        "/v1/workflows/{id}/versions": {"post": "Workflow"},
+        "/v1/workflows/{id}/shares": {"post": "Grant", "delete": "Grant"},
+        "/v1/workflows/{id}/archive": {"post": "Archive"},
+        "/v1/workers": {"get": None, "post": "Worker"},
+        "/v1/workers/{id}/enabled": {"post": "Enabled"},
+        "/v1/workers/{id}/capabilities": {"get": None},
+        "/v1/tokens": {"get": None, "post": "Token"}, "/v1/tokens/{id}": {"delete": "Empty"},
+        "/v1/runs": {"get": None, "post": "Start"}, "/v1/runs/{id}": {"get": None},
+        "/v1/runs/{id}/events": {"get": None}, "/v1/runs/{id}/export": {"get": None},
+        "/v1/runs/{id}/crew-entry": {"post": "Empty"},
+        "/v1/runs/{id}/recover": {"post": "Control"},
+        "/v1/runs/{id}/continue": {"post": "Continue"}, "/v1/runs/{id}/assign-worker": {"post": "AssignWorker"},
+        **{"/v1/runs/{id}/" + action: {"post": "Control"} for action in ["stop", "close", "reopen", "delete"]},
+    }
+    paths = {}
+    for path, methods in routes.items():
+        paths[path] = {}
+        for method, schema in methods.items():
+            op = {"operationId": method + "_" + path.strip("/").replace("/", "_").replace("{id}", "id"),
+                  "responses": {"200": {"description": "Result. Accepted is not execution completion.",
+                                       "content": {"application/json": {"schema": {}}}},
+                                "201": {"description": "Created"},
+                  **{str(code): {"description": label, "content": {"application/json": {"schema": ref("Error")}}}
+                     for code, label in [(400, "Invalid input"), (401, "Unauthorized"), (403, "Forbidden"),
+                                         (404, "Inaccessible"), (409, "Conflict"), (429, "Rate limited"), (503, "Unavailable")]}}}
+            if "{id}" in path:
+                op["parameters"] = [{"in": "path", "name": "id", "required": True, "schema": text}]
+            if schema:
+                op["requestBody"] = {"required": True, "content": {"application/json": {"schema": ref(schema)}}}
+            if path == "/v1/login":
+                op["security"] = []
+            if path.endswith("/crew-entry"):
+                op["description"] = "Execute scope. Opens the existing native parent Session through its authorized Worker. On-demand sensitive login URL; no-store. Does not create, resume, mutate or dispatch a Run. Native login covers the Worker's Gateway boundary, not a single run."
+            if path.endswith("/events"):
+                op["description"] = "SSE connections last up to 30 seconds. Reconnect with last event ID; access rechecked each batch."
+                op["parameters"] += [{"in": "query", "name": "after", "schema": {"type": "integer", "minimum": 0}},
+                                     {"in": "query", "name": "stream", "schema": {"enum": ["1"]}},
+                                     {"in": "header", "name": "Last-Event-ID", "schema": text}]
+                op["responses"]["200"]["content"]["text/event-stream"] = {"schema": text}
+            paths[path][method] = op
+    return {"openapi": "3.1.0", "info": {"title": "Octopus Team API", "version": __version__},
+            "security": [{"bearer": []}], "servers": [{"url": "/"}], "paths": paths,
+            "components": {"securitySchemes": {"bearer": {"type": "http", "scheme": "bearer"}}, "schemas": schemas}}
