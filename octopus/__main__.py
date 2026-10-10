@@ -7,6 +7,7 @@ from pathlib import Path
 import secrets
 import signal
 import threading
+import time
 
 from .client import Client
 from .config import load
@@ -117,16 +118,20 @@ def main(argv=None):
         finally:
             httpd.server_close()
     elif args.command == "wait-ready":
-        from .ops import runtime_marker_ok, wait_ready
+        from .ops import runtime_marker_ok, wait_for_file, wait_ready
+        deadline = time.monotonic() + args.timeout
         checks = []
         if args.api:
             checks.append((f"http://{settings.api_host}:{settings.api_port}/health", {}))
         if args.worker:
+            # The Worker writes its token on first start; ExecStartPost may run before that.
+            if not wait_for_file(settings.worker_token_file, args.timeout):
+                raise SystemExit(f"未就绪：Worker Token 文件尚未生成（{settings.worker_token_file}）")
             token = settings.worker_token_file.read_text().strip()
             checks.append((f"http://{settings.worker_host}:{settings.worker_port}/health", {"Authorization": "Bearer " + token}))
         if args.gateway:
             checks.append((f"http://127.0.0.1:{settings.gateway_port}/api/ready", {}))
-        pending = wait_ready(checks, args.timeout)
+        pending = wait_ready(checks, max(0.0, deadline - time.monotonic()))
         if args.gateway and not pending and not runtime_marker_ok(settings.gateway_runtime_file):
             pending.append(f"{settings.gateway_runtime_file}（未加载 PocProviderRegistry 组合）")
         if pending:

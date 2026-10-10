@@ -97,5 +97,51 @@ class UnitFileTests(unittest.TestCase):
         self.assertEqual(names["octopus-gateway@.service"], "crew-%i")
 
 
+class WaitReadyCommandTests(unittest.TestCase):
+    """The Worker writes its token on first start; readiness must wait for it, not crash."""
+
+    def boundary(self, root, port):
+        config = root / "boundary.toml"
+        config.write_text(f'worker_token_file = "{root}/worker.token"\nworker_port = {port}\n')
+        return config
+
+    def test_missing_token_reports_not_ready_instead_of_crashing(self):
+        from octopus.__main__ import main
+        with tempfile.TemporaryDirectory() as temporary:
+            config = self.boundary(Path(temporary), 9)
+            with self.assertRaises(SystemExit) as raised:
+                main(["--config", str(config), "wait-ready", "--worker", "--timeout", "0.3"])
+            self.assertIn("worker.token", str(raised.exception.code))
+
+    def test_token_written_after_start_is_awaited(self):
+        import http.server
+        import threading
+        from octopus.__main__ import main
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+
+            class Health(http.server.BaseHTTPRequestHandler):
+                def log_message(self, *_):
+                    pass
+
+                def do_GET(self):
+                    token = (root / "worker.token").read_text().strip()
+                    ok = self.headers.get("Authorization") == "Bearer " + token
+                    self.send_response(200 if ok else 401)
+                    self.send_header("Content-Length", "0")
+                    self.end_headers()
+
+            httpd = http.server.ThreadingHTTPServer(("127.0.0.1", 0), Health)
+            threading.Thread(target=httpd.serve_forever, daemon=True).start()
+            timer = threading.Timer(0.3, lambda: (root / "worker.token").write_text("t" * 40))
+            timer.start()
+            try:
+                config = self.boundary(root, httpd.server_address[1])
+                main(["--config", str(config), "wait-ready", "--worker", "--timeout", "5"])
+            finally:
+                timer.cancel()
+                httpd.shutdown()
+                httpd.server_close()
+
 if __name__ == "__main__":
     unittest.main()

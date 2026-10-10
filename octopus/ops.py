@@ -25,6 +25,15 @@ def wait_ready(checks, timeout, interval=0.5, opener=urllib.request.urlopen):
     return [url for url, _ in pending]
 
 
+def wait_for_file(path, timeout, interval=0.2):
+    deadline = time.monotonic() + timeout
+    while not Path(path).is_file():
+        if time.monotonic() >= deadline:
+            return False
+        time.sleep(interval)
+    return True
+
+
 def runtime_marker_ok(path):
     try:
         marker = json.loads(Path(path).read_text())
