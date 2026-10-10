@@ -154,3 +154,7 @@ Python 包名保持 `octopus`，以兼容 `python -m octopus`、`/v1` API 和现
 |---|---|
 | [总体设计](docs/superpowers/specs/2026-10-10-kirocrew-on-design.md) | 领域模型、组件、主流程、Pipeline 生成与门禁、映射、恢复阶梯、客户端联动、控制台、部署、安全、迁移、测试、里程碑 |
 | [MVP Release 计划与状态](docs/MVP-RELEASE.md) | MVP 范围、已确定决策、默认值、各里程碑验收、继承的已知问题、发布记录 |
+| [M1 实施计划](docs/superpowers/plans/2026-10-10-m1-runtime-foundation.md) | M1 运行底座：本机代码、本地端到端、EC2 部署的分任务计划 |
+| [运维手册](docs/OPERATIONS.md) | 目录与端口、启动、访问、升级回滚、日志、认证、备份恢复、本地端到端 |
+| [接手材料](docs/handover/) | 功能对照、事实清单、调用链、已知故障、旧版生成参考 |
+| [迁入来源](docs/PROVENANCE.md) | 迁入文件的来源路径、sha256 与来源 git 状态 |
