@@ -1,0 +1,20 @@
+# 运行数据、证据与凭据只留在部署环境
+state/
+evidence/
+backups/
+*.sqlite3
+*.sqlite3-*
+*.log
+.env
+*.token
+bootstrap.json
+
+# 依赖与构建产物
+node_modules/
+.venv/
+__pycache__/
+*.pyc
+dist/
+build/
+
+.DS_Store
