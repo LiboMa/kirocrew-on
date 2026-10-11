@@ -24,16 +24,23 @@
 | 8928 | `octopus-worker@personal` | 127.0.0.1 |
 | 5476 | `octopus-gateway@personal`（KiroCrew Gateway + composition） | 127.0.0.1 |
 
-所有服务只监听回环；访问通过 SSM 端口转发：`localhost:18918 → 8918`（控制台与 API）、`localhost:15476 → 5476`（原生入口）。
+控制台与 API 经 CloudFront 访问：`https://<分发域名>/`（`deploy/aws/deploy.sh status` 显示）。API 监听 `0.0.0.0:8918`，
+安全组只允许 CloudFront 源站地址访问，平台另外校验 `X-Origin-Verify`；Worker（8928）与 Gateway（5476）只监听回环，
+原生入口经 SSM 端口转发：`deploy/aws/deploy.sh tunnel`（`localhost:15476 → 5476`）。
 
-## 2．首次启动（待 Task 16–19 实测）
+## 2．首次部署（Shell + CloudFormation，待 Task 15–19 实测）
+
+在本机 kirocrew-on 检出中执行（需要 us-east-1 的 AWS 凭据；`deploy/aws/stack.env` 中的规格为候选值）：
 
 ```bash
-sudo deploy/install/al2023.sh personal                       # 用户、目录、代码、KiroCrew、工具、配置、systemd 单元
-sudo -iu crew-personal                                        # 以执行用户为各工具登录（方式见 Task 16 记录）
-sudo systemctl start octopus-gateway@personal octopus-worker@personal octopus-api
-sudo -u octopus /opt/kirocrew-on/venv/bin/python -m octopus --config /etc/kirocrew-on/platform.toml init --username admin
+deploy/aws/deploy.sh up            # 校验模板；查询 CloudFront 前缀列表与可用区；在 SSM 生成源站密钥与管理员密码；部署栈
+deploy/aws/deploy.sh push          # 发布已提交的 HEAD：S3 → SSM Run Command → al2023.sh（安装、原生契约检查、启用服务、注册 Worker）
+deploy/aws/deploy.sh kiro-login    # 一次性：以 crew-personal 完成 kiro-cli 设备码登录（Claude Code / Codex 经实例角色用 Bedrock）
+deploy/aws/deploy.sh status        # 栈输出、SSM 在线状态、https://<分发域名>/health
+deploy/aws/deploy.sh admin-password  # 读取管理员密码（SSM SecureString），登录控制台
 ```
+
+`al2023.sh` 可重复执行；KiroCrew 按 `deploy/versions.env` 锁定的 commit 从官方源码构建，版本不在已验证集合时须原生契约检查通过才会被接受。
 
 注册 Worker（管理员 token 登录后）：`POST /v1/workers`，body 为
 `{"name":"personal","owner_id":"<用户 ID>","connection":{"url":"http://127.0.0.1:8928","token":"<worker.token 内容>"}}`。

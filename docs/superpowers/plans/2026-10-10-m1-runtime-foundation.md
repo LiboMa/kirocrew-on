@@ -3424,50 +3424,42 @@ git commit -m "docs: M1 本地端到端验收记录（真实 ACP）"
 Part B 在 Part A′ 本地验收完成后开始；每个任务开始前**必须**获得负责人对该任务的明确授权，并确认所需外部输入（`docs/MVP-RELEASE.md` §12）。
 证据保存在实例 `/var/lib/octopus/evidence/m1/`（不进仓库）；仓库只提交脱敏摘要。
 
-### Task 15: 创建实例与环境探测
+### Task 15: 部署 IaC 与本地校验（已完成，2026-10-11）
 
-**授权关口**：创建云资源。需要负责人提供 InstanceType、VpcId、SubnetId、VolumeSizeGiB，并确认费用与 region（当前 CLI 默认 `us-east-1`）。
+D15–D18 确定后实现：`deploy/aws/kirocrew-on-ec2.yaml`（CloudFront → 安全组前缀列表 → EC2，us-east-1）、`deploy/aws/deploy.sh`、
+`deploy/aws/stack.env`、`deploy/install/al2023.sh`（KiroCrew 官方源码锁定 commit、kiro-cli 官方清单校验、Bedrock 环境、原生契约后接受版本、
+管理员与 Worker 引导）、平台源站认证与 viewer 地址限流、`octopus bootstrap-worker`、`tests/native` 原生契约。
+验证：`tests/test_deploy_assets.py`、`tests/test_cloudfront_origin.py`、`tests/test_bootstrap.py` 通过；cfn-lint 与 `validate-template` 通过；
+KiroCrew 0.10.0 本机原生契约 6/6、真实冒烟与 Claude→Codex 通过。
 
-- [ ] **Step 1: 校验模板（只读 API）**：`aws cloudformation validate-template --template-body file://deploy/aws/kirocrew-on-ec2.yaml`，Expected：返回参数列表，无错误。
-- [ ] **Step 2: 创建堆栈**：`aws cloudformation create-stack --stack-name kirocrew-on-m1 --template-body file://deploy/aws/kirocrew-on-ec2.yaml --capabilities CAPABILITY_IAM --parameters ParameterKey=InstanceType,ParameterValue=<提供值> ParameterKey=VpcId,ParameterValue=<提供值> ParameterKey=SubnetId,ParameterValue=<提供值> ParameterKey=VolumeSizeGiB,ParameterValue=<提供值>`；`aws cloudformation wait stack-create-complete --stack-name kirocrew-on-m1`。
-- [ ] **Step 3: SSM 连通**：`aws ssm start-session --target <InstanceId>`，Expected：获得 shell。
-- [ ] **Step 4: 探测并记录**（写入 `/var/lib/octopus/evidence/m1/probe.txt`）：`cat /etc/os-release; uname -r; ldd --version | head -1; sysctl user.max_user_namespaces; unshare -Ur true && echo userns-ok; dnf list --available python3.12 nodejs22 2>&1 | tail -5; nproc; free -g; df -h /`。
-- [ ] **Step 5: 结论**：在 `docs/handover/KNOWN-ISSUES.md` 更新 K12（user namespace 实测结果）；若 `python3.12` / `nodejs22` 包不可用，记录替代来源并更新 `deploy/versions.env` 的 `PYTHON_PACKAGE` / `NODE_PACKAGE`。
+### Task 16: 创建栈（授权关口）
 
-### Task 16: 安装与工具认证
+**授权关口**：创建云资源（费用估算见执行报告）。确认 `deploy/aws/stack.env` 的候选规格与可选告警邮箱。
 
-**授权关口**：确认各工具在 `crew-personal` 下的认证方式（device flow / API key / 其他），并由负责人在需要交互登录时在场。
+- [ ] `deploy/aws/deploy.sh up`；Expected：栈 `CREATE_COMPLETE`，输出 InstanceId、CloudFrontDomain、ConsoleUrl、ArtifactBucket。
+- [ ] `deploy/aws/deploy.sh status`；Expected：SSM `Online`（`/health` 此时尚未就绪）。
+- [ ] 记录：AMI、实例规格、可用区、前缀列表 ID、`sysctl user.max_user_namespaces`、`unshare -Ur true`（经 SSM 会话执行）。
 
-- [ ] **Step 1: 确定 KiroCrew 与 Kiro CLI 的 Linux 安装来源**：依据 KiroCrew 官方安装文档（`docs/guides/install.md`）确定 0.8.0（或负责人指定版本）的 Linux 安装包地址与 sha256，填写 `deploy/versions.env`；Kiro CLI 同理。记录文档来源与日期。
-- [ ] **Step 2: 运行安装脚本**：把仓库检出到实例（`git clone` 本仓库的 bundle 或经 SSM 传输），`sudo deploy/install/al2023.sh personal`，Expected：最后一行提示下一步认证。
-- [ ] **Step 3: 工具认证**：`sudo -iu crew-personal`，依次完成 Kiro CLI、Claude Code、Codex、OpenCode 的登录（按 Step 1 记录的方式）；每个工具执行一次只读版本 / 状态命令确认，不在终端输出 token。
-- [ ] **Step 4: 组合检查**：`sudo -u crew-personal env HOME=/var/lib/octopus/boundaries/personal/home PYTHONPATH=/opt/kirocrew-on/current /opt/kirocrew/current/venv/bin/python -m composition.gateway --config /etc/kirocrew-on/boundary-personal.toml --check`，Expected：5 行 `poc-* <ProviderType> <backend>`，backend 依次为 `kiro kiro claude codex opencode`。
-- [ ] **Step 5: 沙箱与 systemd 加固兼容性**：启动 `octopus-gateway@personal`，运行一次 Task 18 的最小 Kiro 任务；若沙箱因加固项失败，记录错误并决定 Gateway / Worker 单元的加固项（结论写入 `docs/OPERATIONS.md`）。
-- [ ] **Step 6: 更新版本记录**：把实际安装的所有版本写回 `deploy/versions.env` 并注明“EC2 AL2023 实测 <日期>”。
+### Task 17: 发布与安装
 
-### Task 17: 服务启动、注册与隧道验证
+- [ ] `deploy/aws/deploy.sh push`；Expected：SSM 命令 `Success`；输出含 KiroCrew 版本、原生契约 6/6、三个服务启用、Worker 注册结果。
+  失败时按输出定位（Python / Node 包名、npm 构建、沙箱），修复后提交再 push；不在实例上手工改代码。
+- [ ] `deploy/aws/deploy.sh kiro-login`：负责人完成设备码登录。
+- [ ] `deploy/aws/deploy.sh status`：`https://<分发域名>/health` 返回 200。
 
-- [ ] **Step 1**：`sudo systemctl start octopus-gateway@personal octopus-worker@personal octopus-api`；`systemctl status` 三个服务均 active，`wait-ready` 成功。
-- [ ] **Step 2**：初始化管理员（`init`），创建普通用户，用普通用户注册个人 Worker（`POST /v1/workers`，`owner_id` 为该用户）；Expected：注册成功（执行用户与平台用户不同，`host_principal` 不同）。
-- [ ] **Step 3**：本机 SSM 端口转发 8918→18918，浏览器打开 `http://localhost:18918/` 登录；SSE 事件流可持续收到 keepalive。
-- [ ] **Step 4**：转发 5476→15476，在一个已准备的 Session 上点击“在 KiroCrew 中打开”，Expected：进入绑定的父会话，URL 中的 token 不出现在平台日志。
-- [ ] **Step 5**：Host 白名单：用未配置的 Host 访问返回 421。
+### Task 18: 经 CloudFront 的真实研发与返工
 
-### Task 18: 真实最小研发与返工
-
-**授权关口**：确认测试仓库（新建的独立小型仓库，或负责人提供的获授权仓库），不使用任何历史 Session。
-
-- [ ] **Step 1: 最小研发**：通过 Web 或 `octopus request POST /v1/runs` 提交 code（claude）→ review（codex）两阶段任务，目标为在测试仓库实现一个带 `node --test` 测试的函数。Expected：两个阶段 accepted；证据含 `actual_backend`、原生 ID、源码基线 SHA、diff 与测试输出。
-- [ ] **Step 2: 返工**：提交故意含错误验收条件的需求（如要求测试覆盖边界值，而编码提示不提及），Expected：Codex `changes_requested` → Kiro Coordinator `rework` → Claude 在同一 Workspace 修复 → Codex 复审 pass；同一 Run、父会话、Workspace。
-- [ ] **Step 3: Kiro 规划阶段**：在 Step 1 的流程前加 plan（kiro）阶段，Expected：Kiro 阶段 accepted，路由日志 `actual_backend=kiro`。
-- [ ] **Step 4: OpenCode 单独核实**：单阶段 deliver（opencode），分别用 `auto` 与一个已公布模型；记录成功或失败的原始现象；失败时在报告中给出用户可见的替换配置（deliver 改用 claude）。
-- [ ] **Step 5: 证据摘要**：脱敏摘要写入 `docs/handover/M1-EC2-EVIDENCE.md`（运行 ID、阶段、实际后端、模型请求值 / 实际值、测试结果、未通过项）。
+- [ ] 浏览器打开 ConsoleUrl，以管理员登录；SSE 事件流持续更新（经 CloudFront）。
+- [ ] 经 `OCTOPUS_URL=https://<分发域名>` 的 CLI 提交：Kiro 冒烟、Claude→Codex、审查返工、Kiro 规划三阶段；OpenCode 单独核实。
+  Expected：与本地验收相同的结论；证据含实际后端、原生 ID、diff 与测试输出。
+- [ ] 安全核对：直接访问 `http://<EIP>:8918/health` 超时（安全组）；伪造请求缺少 `X-Origin-Verify` 时返回 403；未登记 Host 返回 421。
+- [ ] `deploy/aws/deploy.sh tunnel`：原生入口经 SSM 可打开绑定的父会话。
 
 ### Task 19: 重启恢复与备份恢复
 
-- [ ] **Step 1**：在一个运行中的 Session（编码阶段进行中）依次 `systemctl restart octopus-api`、`octopus-worker@personal`、`octopus-gateway@personal`；Expected：每次重启后 Session 状态在合理时间内恢复推进或进入有明确原因的状态，不产生重复派发（检查 Attempt 数与原生任务数）。
-- [ ] **Step 2**：并发验证：同时提交两个 Session，其中一个仓库较大或任务较慢，Expected：另一个 Session 不被阻塞（`engine_workers=4`）。
-- [ ] **Step 3**：`octopus backup`、`octopus archive` 边界目录、`octopus restore-verify --into /tmp/restore-m1`，Expected：`ok: true`；源数据库与 Session 保持不变。
+- [ ] 编码运行中依次重启 `octopus-api`、`octopus-worker@personal`、`octopus-gateway@personal`；Expected：自动恢复、无重复派发。
+- [ ] 实例重启（`aws ec2 reboot-instances`）后服务自动启动，Session 继续。
+- [ ] `octopus backup` / `archive` / `restore-verify`；DLM 快照在次日出现。
 
 ### Task 20: 验收记录
 

@@ -43,6 +43,10 @@
 | D12 | 先在本地（macOS）用本仓库代码以真实 ACP 跑通完整链路，再部署到远端 EC2（2026-10-11） |
 | D13 | 自动生成任务（Pipeline 生成）参考旧版 `kirocrew-app-poc` 的实现：意图生成、Pipeline 规划阶段、确定性门禁与模板（2026-10-11） |
 | D14 | 无人值守的执行边界使用 KiroCrew 原生 auto 批准，**仅限平台派发的 spawn**：边界配置 `approval_mode = "auto"` 时 Worker 以 owner 认证请求原生 `approval_mode=auto`；边界的全局工具批准（`KIROCREW_HOME/config.json`）保持 `interactive`，owner 与父会话的原生聊天仍需人工批准；诊断任务使用不能派生子任务的 `poc-diagnose` 模板；约束来自执行边界（独立 OS 用户 / HOME、原生沙箱、cwd 限定 Worker 数据目录）（2026-10-11，经本地真实运行收窄） |
+| D15 | EC2 部署使用 Shell + CloudFormation，IaC 代码留存在 `deploy/aws/`（`kirocrew-on-ec2.yaml`、`deploy.sh`、`stack.env`）与 `deploy/install/al2023.sh`（2026-10-11） |
+| D16 | 对外入口为 CloudFront → 安全组 → EC2：IaC 新建专用 VPC 公有子网，EC2 经 EIP 提供稳定源站名，安全组只允许 CloudFront origin-facing 托管前缀列表访问 API 端口；平台只服务携带 CloudFront 注入的 `X-Origin-Verify` 头的请求；使用默认 `*.cloudfront.net` 证书；不加 WAF；原生 KiroCrew 入口不经 CloudFront，只经 SSM 端口转发（2026-10-11） |
+| D17 | 部署 Region 为 us-east-1（2026-10-11） |
+| D18 | KiroCrew 使用 `https://github.com/kirodotdev/KiroCrew.git` 最新源码安装：部署时锁定到具体 commit（`deploy/versions.env`），已验证集合之外的版本须原生契约检查通过后才在边界配置 `kirocrew_versions` 中接受（2026-10-11；当前锁定 0.10.0 `57df464…`，本机已验证） |
 
 ## 2．设计原则
 
@@ -464,10 +468,21 @@ Python 解释器、KiroCrew 安装位置、各工具与 ACP 适配器路径、�
 
 ### 12.5 网络入口
 
-- 所有服务监听回环；M1–M3 通过 SSM 端口转发访问 API / 控制台，原生入口按需单独转发。
-- Host 白名单与 Origin 校验支持隧道端口和后续反向代理；SSE 在隧道与代理下验证。
-- 基础设施以 CloudFormation 模板描述（实例、卷、IAM 角色、安全组无入站规则）；region、实例规格、子网等参数由目标环境给出，
-  候选值不等于已验证最低配置；只在获得明确授权后创建。
+按 D15–D17（us-east-1，Shell + CloudFormation）：
+
+```text
+浏览器 / Coding 客户端 ──HTTPS──▶ CloudFront（*.cloudfront.net 默认证书，禁用缓存，转发 Host / Authorization / Origin / CloudFront-Viewer-Address，注入 X-Origin-Verify）
+        ──HTTP :8918──▶ 安全组（入站仅 CloudFront origin-facing 托管前缀列表）──▶ EC2（专用 VPC 公有子网，EIP）
+                         octopus-api 监听 0.0.0.0:8918，只服务带正确 X-Origin-Verify 的请求（本机回环运维除外）
+                         Worker 127.0.0.1:8928、KiroCrew Gateway 127.0.0.1:5476 不对外
+运维 ──SSM Session Manager──▶ EC2（无 SSH；原生入口经 SSM 端口转发 15476 → 5476）
+```
+
+- Host 白名单写入 CloudFront 分发域名；写请求的 Origin 必须与 Host 一致；登录限流按 `CloudFront-Viewer-Address`（仅在源站认证通过时采信）。
+- SSE 经 CloudFront：禁用缓存与压缩，源站读超时 60 s，平台每秒发送 keepalive。
+- 已知风险：CloudFront 到 EC2 这一段为 HTTP（无源站证书，按 D16 不使用 VPC Origin）；不加 WAF，控制台登录页对公网可见，
+  依赖平台登录、Token 与登录限流。需要端到端加密时改用 VPC Origin 或自定义域名证书。
+- 容量参数（实例规格、卷大小）是候选值，不等于已验证最低配置；只在获得明确授权后创建资源。
 
 ### 12.6 备份恢复
 

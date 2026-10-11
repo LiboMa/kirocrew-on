@@ -46,6 +46,10 @@ M4（共享与组织）、M5（仓库闭环）在 MVP 之后分别立项，各�
 | D12 | 先在本地（macOS）用本仓库代码以真实 ACP 跑通完整链路，再部署到远端 EC2（2026-10-11） |
 | D13 | 自动生成任务（Pipeline 生成）参考旧版 `kirocrew-app-poc` 的实现：意图生成、Pipeline 规划阶段、确定性门禁与模板（2026-10-11） |
 | D14 | 无人值守的执行边界使用 KiroCrew 原生 auto 批准，**仅限平台派发的 spawn**：边界配置 `approval_mode = "auto"` 时 Worker 以 owner 认证请求原生 `approval_mode=auto`；边界的全局工具批准（`KIROCREW_HOME/config.json`）保持 `interactive`，owner 与父会话的原生聊天仍需人工批准；诊断任务使用不能派生子任务的 `poc-diagnose` 模板；约束来自执行边界（独立 OS 用户 / HOME、原生沙箱、cwd 限定 Worker 数据目录）（2026-10-11，经本地真实运行收窄） |
+| D15 | EC2 部署使用 Shell + CloudFormation，IaC 代码留存在 `deploy/aws/`（`kirocrew-on-ec2.yaml`、`deploy.sh`、`stack.env`）与 `deploy/install/al2023.sh`（2026-10-11） |
+| D16 | 对外入口为 CloudFront → 安全组 → EC2：IaC 新建专用 VPC 公有子网，EC2 经 EIP 提供稳定源站名，安全组只允许 CloudFront origin-facing 托管前缀列表访问 API 端口；平台只服务携带 CloudFront 注入的 `X-Origin-Verify` 头的请求；使用默认 `*.cloudfront.net` 证书；不加 WAF；原生 KiroCrew 入口不经 CloudFront，只经 SSM 端口转发（2026-10-11） |
+| D17 | 部署 Region 为 us-east-1（2026-10-11） |
+| D18 | KiroCrew 使用 `https://github.com/kirodotdev/KiroCrew.git` 最新源码安装：部署时锁定到具体 commit（`deploy/versions.env`），已验证集合之外的版本须原生契约检查通过后才在边界配置 `kirocrew_versions` 中接受（2026-10-11；当前锁定 0.10.0 `57df464…`，本机已验证） |
 
 ## 3．设计默认值（已提出，待确认）
 
@@ -58,7 +62,7 @@ M4（共享与组织）、M5（仓库闭环）在 MVP 之后分别立项，各�
 | P03 | 新应用使用独立数据根，不改动现有 `octopus.sqlite3` | 保留历史数据；如需导入旧数据另做显式只读导入工具 |
 | P04 | 前端继续使用无构建的原生 JS | 复用现有 UI，不以重写前端为默认方案 |
 | P05 | 平台（API / Engine）与执行（Worker / Gateway）分属不同 OS 用户 | 平台身份与执行身份从第一天起分离 |
-| P06 | M1–M3 远程访问使用 SSM 端口转发，不开放公网端口 | 符合“初期管理隧道”；M4 再上 HTTPS 入口 |
+| ~~P06~~ | ~~M1–M3 远程访问使用 SSM 端口转发，不开放公网端口~~ | 2026-10-11 由 D16 取代：控制台 / API 经 CloudFront 对外；原生入口仍只经 SSM |
 | P07 | 一个部署对应一个组织；“共享给公司”= 组织内全部在册用户 | 首个云端实现为单公司部署 |
 | P08 | Session 共享角色：`viewer`（查看）与 `collaborator`（可续作、提交修订；执行仍使用 Session 所属执行边界的身份与凭据） | 共享 Session 不等于共享凭据 |
 | P09 | 共享 Session 不开放原生 KiroCrew 入口 | 原生浏览器登录覆盖整个 Gateway，平台撤权不会使其失效 |
@@ -233,9 +237,9 @@ M4（共享与组织）、M5（仓库闭环）在 MVP 之后分别立项，各�
 
 | 输入 | 用于 |
 |---|---|
-| EC2 实例创建授权、实例规格、VPC / 子网、IAM 与 SSM 配置 | M1 部署 |
-| 各工具在 EC2 执行用户下的认证方式（Kiro CLI、Claude Code、Codex、OpenCode） | M1 真实研发 |
-| KiroCrew 固定版本（当前本机为 0.8.0） | M1 版本固定 |
+| 执行 `deploy.sh up` 创建云资源的明确授权；确认候选规格（`deploy/aws/stack.env`：m7i.xlarge、100 GiB）与可选告警邮箱 | M1 部署 |
+| Kiro CLI 在 EC2 执行用户下的一次性设备码登录（IAM Identity Center）；Claude Code 与 Codex 经实例角色使用 Bedrock，无需登录 | M1 真实研发 |
+| ~~KiroCrew 固定版本~~（已由 D18 确定：官方最新源码锁定 commit） | — |
 | 获授权的测试仓库（GitHub 或 GitLab）及其写凭据形式 | M2 闭环与分支推送 |
 | 报告模板的具体章节要求（如有指定格式） | M2 Feature 报告 |
 
