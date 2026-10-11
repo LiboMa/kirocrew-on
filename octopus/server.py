@@ -45,29 +45,43 @@ TYPES = {".html": "text/html; charset=utf-8", ".js": "text/javascript; charset=u
 
 
 # Preview links carry their own short-lived capability: an iframe or new tab cannot send the console's bearer token.
-PREVIEW_KEY = secrets.token_bytes(32)
+# The signing key is kept in the platform data directory, so links stay valid across API restarts and deploys.
 PREVIEW_TTL = 3600
 PREVIEW_POLICY = ("sandbox allow-scripts allow-forms allow-popups allow-modals allow-downloads; "
                   "default-src * data: blob: 'unsafe-inline' 'unsafe-eval'; frame-ancestors 'self'")
 
 
-def preview_ticket(rid, now=None):
-    expires = int((now or time.time()) + PREVIEW_TTL)
-    payload = f"{rid}.{expires}"
-    signature = base64.urlsafe_b64encode(hmac.new(PREVIEW_KEY, payload.encode(), hashlib.sha256).digest()[:18]).decode()
-    return f"{payload}.{signature}"
+def preview_key(root):
+    """The preview signing key in <root>/preview.key (0600), created on first use. A damaged file is replaced, which
+    only invalidates links already issued."""
+    path = Path(root) / "preview.key"
+    key = path.read_bytes() if path.is_file() else b""
+    if len(key) != 32:
+        key = secrets.token_bytes(32)
+        with os.fdopen(os.open(path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600), "wb") as file:
+            file.write(key)
+        os.chmod(path, 0o600)
+    return key
 
 
-def preview_run(ticket, now=None):
-    """The run a preview ticket grants, or None when it is forged or expired."""
-    try:
-        rid, expires, signature = ticket.split(".")
-        expected = base64.urlsafe_b64encode(hmac.new(PREVIEW_KEY, f"{rid}.{expires}".encode(), hashlib.sha256).digest()[:18]).decode()
-        if hmac.compare_digest(signature, expected) and int(expires) >= (now or time.time()):
-            return rid
-    except ValueError:
-        pass
-    return None
+def preview_signature(key, payload):
+    return base64.urlsafe_b64encode(hmac.new(key, payload.encode(), hashlib.sha256).digest()[:18]).decode()
+
+
+def preview_ticket(rid, key, now=None):
+    payload = f"{rid}.{int((now or time.time()) + PREVIEW_TTL)}"
+    return f"{payload}.{preview_signature(key, payload)}"
+
+
+def preview_run(ticket, key, now=None):
+    """The run a preview ticket grants; 403 preview_invalid when it is forged or signed by another key, 403
+    preview_expired when it is genuine but late."""
+    parts = ticket.split(".")
+    require(len(parts) == 3 and parts[1].isdigit() and hmac.compare_digest(
+        parts[2].encode(), preview_signature(key, f"{parts[0]}.{parts[1]}").encode()),
+        "预览链接无效，请在控制台重新打开预览", 403, "preview_invalid")
+    require(int(parts[1]) >= (now or time.time()), "预览链接已过期（1 小时有效），请在控制台重新打开预览", 403, "preview_expired")
+    return parts[0]
 
 
 def console_file(path):
@@ -93,6 +107,7 @@ def server(database, port=8918, host="127.0.0.1", allowed_hosts=(), origin_secre
         # An empty or truncated secret file must fail closed instead of turning origin enforcement off.
         raise ValueError("源站密钥为空或过短（至少 32 个字符）；检查 origin_secret_file")
     service = Service(database)
+    signing_key = preview_key(database.root)
     hosts, local_hosts = set(), set()
     failures, limiter_lock = {}, threading.Lock()
 
@@ -172,8 +187,7 @@ def server(database, port=8918, host="127.0.0.1", allowed_hosts=(), origin_secre
                 require(not path.startswith("/assets/"), "Not found", 404, "not_found")
                 if method == "GET" and path.startswith("/preview/"):
                     ticket, _, relative = path[len("/preview/"):].partition("/")
-                    rid = preview_run(ticket)
-                    require(rid is not None, "预览链接无效或已过期，请在控制台重新打开预览", 403, "preview_expired")
+                    rid = preview_run(ticket, signing_key)
                     relative = unquote(relative) or "index.html"
                     data = service.preview_file(rid, relative)
                     kind = TYPES.get(Path(relative).suffix.lower()) or {
@@ -253,7 +267,7 @@ def server(database, port=8918, host="127.0.0.1", allowed_hosts=(), origin_secre
                     return self.respond(service.resolve_workflow(actor, body))
                 if len(segments) == 4 and segments[:2] == ["v1", "runs"] and segments[3] == "preview" and method == "POST":
                     entry = service.preview_entry(actor, segments[2])
-                    return self.respond({"url": "/preview/" + preview_ticket(segments[2]) + "/" + entry,
+                    return self.respond({"url": "/preview/" + preview_ticket(segments[2], signing_key) + "/" + entry,
                                          "entry": entry, "expires_in": PREVIEW_TTL})
                 if path == "/v1/workflows/parse":
                     require(method == "POST", "Method not allowed", 405)
