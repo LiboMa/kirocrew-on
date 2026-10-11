@@ -135,6 +135,10 @@ class ScriptTests(unittest.TestCase):
         self.assertIn("-c 'import kiro_crew'", text)
         self.assertIn('touch "$KC/.installed"', text)
         self.assertNotIn('mv "$STAGE"', text)
+        # Observed on EC2: without the stage step the package has no native dashboard ("Dashboard HTML not found").
+        self.assertLess(text.index("npm run build)"), text.index("-m kiro_crew.frontend stage ."))
+        self.assertLess(text.index("-m kiro_crew.frontend stage ."), text.index('-m pip install -q "$SRC"'))
+        self.assertIn("DASHBOARD_CHECK=", text)
 
     def test_contract_check_runs_after_templates_are_seeded(self):
         # Observed on EC2: a fresh KIRO_HOME has no poc-* templates until the composition seeds them, so the

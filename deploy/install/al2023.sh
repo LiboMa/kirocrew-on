@@ -99,11 +99,22 @@ if [ ! -f "$KC/.installed" ] || ! "$KC/venv/bin/python" -c 'import kiro_crew' 2>
   git -C "$SRC" checkout -q "$KIROCREW_GIT_REF"
   # Dashboard SPA for the native entry; setup.py stages it into the package (electron is not needed on servers).
   (cd "$SRC/website" && npm ci --no-audit --no-fund && npm run build)
+  # setup.py packages the dashboard only after it is staged into src/kiro_crew/static/dist.
+  (cd "$SRC" && PYTHONPATH=src "$PYTHON" -m kiro_crew.frontend stage .)
   "$PYTHON" -m venv "$KC/venv"
   "$KC/venv/bin/python" -m pip install -q "$SRC"
   "$KC/venv/bin/python" -c 'import kiro_crew'
   touch "$KC/.installed"
   trap cleanup EXIT
+fi
+DASHBOARD_CHECK='import kiro_crew, pathlib, sys; sys.exit(not (pathlib.Path(kiro_crew.__file__).parent / "static/dist/index.html").is_file())'
+if ! "$KC/venv/bin/python" -c "$DASHBOARD_CHECK"; then
+  # Installs made before the stage step lack the native dashboard: stage and reinstall in place (no rebuild of the venv).
+  log "补齐 KiroCrew dashboard 前端"
+  [ -f "$KC/src/website/dist/index.html" ] || (cd "$KC/src/website" && npm ci --no-audit --no-fund && npm run build)
+  (cd "$KC/src" && PYTHONPATH=src "$KC/venv/bin/python" -m kiro_crew.frontend stage .)
+  "$KC/venv/bin/python" -m pip install -q --no-deps --force-reinstall "$KC/src"
+  "$KC/venv/bin/python" -c "$DASHBOARD_CHECK"
 fi
 KIROCREW_VERSION="$("$KC/venv/bin/python" -c 'import kiro_crew; print(kiro_crew.__version__)')"
 log "KiroCrew $KIROCREW_VERSION"
