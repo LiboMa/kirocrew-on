@@ -24,3 +24,6 @@ build/
 
 # 从远端 Worker 工作区拉回本地运行的应用（每个子目录对应一个 run），不提交
 remote-kiro-spaces/
+
+# Playwright MCP 的截图与页面快照输出
+.playwright-mcp/

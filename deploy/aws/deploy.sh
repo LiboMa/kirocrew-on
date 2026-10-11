@@ -132,7 +132,7 @@ script = (f"set -euo pipefail; mkdir -p {d}; aws s3 cp s3://{bucket}/releases/{s
           f"--region {region} --only-show-errors; rm -rf {d}/kirocrew-on-{sha}; tar -xzf {d}/{sha}.tar.gz -C {d}; "
           f"KIROCREW_ON_RELEASE={sha} CF_DOMAIN={domain} NATIVE_DOMAIN={native} NATIVE_PORT={native_port} "
           f"ORIGIN_SECRET_PARAM={params}/origin-secret "
-          f"ADMIN_PASSWORD_PARAM={params}/admin-password AWS_REGION={region} "
+          f"AWS_REGION={region} "
           f"bash {d}/kirocrew-on-{sha}/deploy/install/al2023.sh {boundary}")
 print(json.dumps({"commands": [script], "executionTimeout": ["3600"]}))
 PY
@@ -285,7 +285,7 @@ admin_password() {  # generated on the host at first install, root-only; never k
       "$REGION" "$instance"
     return
   fi
-  remote "$instance" "cat /etc/kirocrew-on/admin-password"
+  remote "$instance" "cat /etc/kirocrew-on/admin-password 2>/dev/null || { echo '主机上还没有 /etc/kirocrew-on/admin-password：按 docs/OPERATIONS.md「更新栈与管理员密码」完成迁移' >&2; exit 1; }"
 }
 
 down() {

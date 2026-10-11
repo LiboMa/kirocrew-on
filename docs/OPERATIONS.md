@@ -33,11 +33,11 @@
 在本机 kirocrew-on 检出中执行（需要 us-east-1 的 AWS 凭据；`deploy/aws/stack.env` 中的规格为候选值）：
 
 ```bash
-deploy/aws/deploy.sh up            # 校验模板；查询 CloudFront 前缀列表与可用区；在 SSM 生成源站密钥与管理员密码；部署栈
+deploy/aws/deploy.sh up            # 校验模板；查询前缀列表；在 SSM 生成源站密钥；创建变更集，含资源替换时拒绝，否则执行
 deploy/aws/deploy.sh push          # 发布已提交的 HEAD：S3 → SSM Run Command → al2023.sh（安装、原生契约检查、启用服务、注册 Worker）
 deploy/aws/deploy.sh kiro-login    # 一次性：经 SSM 以 crew-personal 运行 kiro-cli 设备码登录，打印验证地址与设备码，完成后 whoami 确认
 deploy/aws/deploy.sh status        # 栈输出、SSM 在线状态、https://<分发域名>/health
-deploy/aws/deploy.sh admin-password  # 读取管理员密码（SSM SecureString），登录控制台
+deploy/aws/deploy.sh admin-password  # 经 SSM 读取主机上的 /etc/kirocrew-on/admin-password（root 0600），登录控制台
 ```
 
 `al2023.sh` 可重复执行；KiroCrew 按 `deploy/versions.env` 锁定的 commit 从官方源码构建，版本不在已验证集合时须原生契约检查通过才会被接受。
