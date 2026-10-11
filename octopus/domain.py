@@ -340,6 +340,26 @@ class Service:
                 "Worker 不属于本次执行空间", 403, "forbidden")
         return dict(row)
 
+    def preview_entry(self, actor, rid):
+        """The file the preview opens first (e.g. index.html), asked from the run's Worker."""
+        with self.db.read() as db:
+            run = run_access(db, actor["id"], rid)
+            require(run["worker_id"], "此 Session 尚未分配 Worker，没有可预览的产出", 409, "no_preview")
+            worker = db.execute("SELECT config FROM workers WHERE id=?", (run["worker_id"],)).fetchone()
+        from .transport import worker_request
+        return worker_request(json.loads(worker["config"]), "/files", {"run_id": rid, "path": ""})["entry"]
+
+    def preview_file(self, rid, relative):
+        """One project file of a run, for a holder of a valid preview ticket (checked by the server)."""
+        import base64
+        with self.db.read() as db:
+            run = db.execute("SELECT worker_id FROM runs WHERE id=?", (rid,)).fetchone()
+            require(run is not None and run["worker_id"], "预览不可用", 404, "not_found")
+            worker = db.execute("SELECT config FROM workers WHERE id=?", (run["worker_id"],)).fetchone()
+        from .transport import worker_request
+        result = worker_request(json.loads(worker["config"]), "/files", {"run_id": rid, "path": relative})
+        return base64.b64decode(result["content"])
+
     def runs(self, actor):
         with self.db.read() as db:
             result = []

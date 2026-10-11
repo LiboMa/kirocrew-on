@@ -1,6 +1,7 @@
 import {
-  CircleStop, Download, ExternalLink, ListRestart, MoreHorizontal, Power, RotateCcw, Stethoscope, Trash2, UserCog,
+  CircleStop, Copy, Download, Eye, ExternalLink, ListRestart, MoreHorizontal, Power, RotateCcw, Stethoscope, Trash2, UserCog,
 } from "lucide-react";
+import { toast } from "sonner";
 import { useRun, useRunEvents } from "@/api/hooks";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
@@ -85,6 +86,9 @@ export function SessionView({ id }: { id: string }) {
             </TooltipTrigger>
             <TooltipContent>{crewReason || "在新标签页打开此 Session 对应的 KiroCrew 原生父会话"}</TooltipContent>
           </Tooltip>
+          <Button size="sm" variant="outline" onClick={actions.preview} disabled={!run.worker_id} id="run-preview">
+            <Eye /> 预览产出
+          </Button>
           <Button size="sm" variant="outline" onClick={actions.stop} disabled={!canStop(run) || !!actions.busy} id="run-stop">
             <CircleStop /> 停止
           </Button>
@@ -176,6 +180,13 @@ export function SessionView({ id }: { id: string }) {
               <div><dt className="text-muted-foreground">来源</dt><dd className="font-mono break-all">{run.source.url ? `${run.source.url}${run.source.ref ? " @ " + run.source.ref : ""}` : "新建项目"}</dd></div>
             </dl>
             <p className="text-muted-foreground">运行与源码由此空间的 Worker 保管。</p>
+            <div className="space-y-1 border-t pt-2">
+              <p className="text-muted-foreground">需要开发服务器的项目，在本机仓库目录运行后打开 localhost:&lt;远端端口+10000&gt;：</p>
+              <button type="button" className="flex w-full items-center gap-2 rounded-md bg-muted px-2 py-1.5 text-left font-mono text-[11px] hover:bg-accent"
+                onClick={() => navigator.clipboard?.writeText(`deploy/aws/deploy.sh space ${run.id}`).then(() => toast.success("已复制本地预览命令"))}>
+                <span className="min-w-0 flex-1 break-all">deploy/aws/deploy.sh space {run.id}</span><Copy className="size-3.5 shrink-0" />
+              </button>
+            </div>
           </section>
         </aside>
       </div>

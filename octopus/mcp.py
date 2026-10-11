@@ -31,6 +31,10 @@ TOOLS = [
      "inputSchema": object_schema({"id": STRING}, ["id"]), "annotations": {"readOnlyHint": True}},
     {"name": "octopus_runs", "description": "列出当前用户有权读取的开发 Sessions", "inputSchema": object_schema()},
     {"name": "octopus_status", "description": "查询真实任务状态、执行配置及最近事件", "inputSchema": object_schema({"run_id": STRING}, ["run_id"])},
+    {"name": "octopus_preview",
+     "description": "返回某个 Session 产出的 Web 预览链接（Workspace 中的 index.html 等静态页面，1 小时有效，在隔离环境中运行）；"
+                    "需要开发服务器的项目请用 deploy/aws/deploy.sh space <run_id> 在本机预览。",
+     "inputSchema": object_schema({"run_id": STRING}, ["run_id"]), "annotations": {"readOnlyHint": True}},
     {"name": "octopus_parse_workflow",
      "description": "校验并规范化一个由 Agent 预先生成的工作流（JSON / YAML / 含一个代码块的 Markdown；新版导出或旧版 schema 1），返回 name、steps 与规范化说明；仅预览，不执行。",
      "inputSchema": object_schema({"content": STRING, "format": {"type": "string", "enum": ["json", "yaml", "markdown"]}},
@@ -74,6 +78,9 @@ def call(client, name, args):
         return client.request("GET", "/v1/" + name.removeprefix("octopus_"))
     if name == "octopus_match_workflow":
         return client.request("POST", "/v1/workflows/resolve", args)
+    if name == "octopus_preview":
+        result = client.request("POST", "/v1/runs/" + args["run_id"] + "/preview", {})
+        return {**result, "url": client.url + result["url"]}
     if name == "octopus_parse_workflow":
         return client.request("POST", "/v1/workflows/parse", args)
     if name == "octopus_recommend_workflow":
@@ -85,6 +92,14 @@ def call(client, name, args):
         return {"session": client.request("GET", "/v1/runs/" + rid),
                 "events": client.request("GET", "/v1/runs/" + rid + "/events")}
     if name == "octopus_start":
+        if not args.get("worker_id"):
+            # Coding agents rarely know Worker ids: use the space's only enabled Worker, if there is exactly one.
+            me = client.request("GET", "/v1/me")
+            team = args.get("team_id")
+            usable = [w for w in client.request("GET", "/v1/workers")
+                      if w.get("enabled") and (w.get("team_id") == team if team else w.get("owner_id") == me["id"])]
+            if len(usable) == 1:
+                args["worker_id"] = usable[0]["id"]
         return client.request("POST", "/v1/runs", args)
     if name in {"octopus_continue", "octopus_recover", "octopus_control"}:
         rid = args.pop("run_id")

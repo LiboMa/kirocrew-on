@@ -67,6 +67,28 @@ class Worker:
         require(not path.is_symlink(), "Workspace 路径不可为符号链接")
         return path
 
+    PREVIEW_ENTRIES = ("index.html", "dist/index.html", "build/index.html", "public/index.html", "web/index.html",
+                       "out/index.html", "site/index.html")
+
+    def files(self, body):
+        """Read-only project files for the console preview: never outside the project, never hidden files (.env, .git)."""
+        project = workspace.project_dir(self.path(body.get("run_id"))).resolve()
+        relative = body.get("path") or ""
+        require(isinstance(relative, str) and len(relative) <= 500 and "\x00" not in relative, "路径无效")
+        if not relative:
+            entry = next((e for e in self.PREVIEW_ENTRIES if (project / e).is_file()), None)
+            entry = entry or next((p.name for p in sorted(project.glob("*.html"))), None)
+            require(entry is not None, "未找到可预览的 index.html；需要开发服务器的项目请在本机执行 "
+                    "deploy/aws/deploy.sh space " + body["run_id"], 404, "no_preview")
+            return {"entry": entry}
+        target = (project / relative).resolve()
+        require(target.is_relative_to(project) and target.is_file(), "文件不存在", 404, "not_found")
+        require(not any(part.startswith(".") for part in target.relative_to(project).parts), "文件不存在", 404, "not_found")
+        size = target.stat().st_size
+        require(size <= 5_000_000, "文件超过 5 MB，不在浏览器中预览", 413, "too_large")
+        import base64
+        return {"content": base64.b64encode(target.read_bytes()).decode(), "size": size}
+
     def health(self):
         # Descriptive boundary, not cryptographic proof of OS isolation.
         boundary = f"{socket.gethostname()}:{os.getuid()}:{self.home}"
@@ -457,7 +479,7 @@ def serve(worker, port=8928, host="127.0.0.1"):
                     body = json.loads(self.rfile.read(size))
                     methods = {"/prepare": worker.prepare, "/dispatch": worker.dispatch,
                                "/inspect": worker.inspect, "/control": worker.control,
-                               "/crew-entry": worker.crew_entry}
+                               "/crew-entry": worker.crew_entry, "/files": worker.files}
                     require(self.path in methods and self.command == "POST", "接口不存在", 404, "not_found")
                     result = methods[self.path](body)
                 status = 200

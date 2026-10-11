@@ -9,7 +9,9 @@ from pathlib import Path
 import socket
 import threading
 import time
-from urllib.parse import parse_qs, urlsplit
+import base64
+import secrets
+from urllib.parse import parse_qs, unquote, urlsplit
 
 from . import __version__
 from .db import dumps, uid
@@ -40,6 +42,32 @@ CLASSIC = {"/app.js": "app.js", "/launch.js": "launch.js", "/recommend.js": "rec
            "/crew.js": "crew.js", "/crew-entry.html": "crew-entry.html", "/recovery-ui.js": "recovery-ui.js"}
 TYPES = {".html": "text/html; charset=utf-8", ".js": "text/javascript; charset=utf-8", ".css": "text/css; charset=utf-8",
          ".svg": "image/svg+xml", ".png": "image/png", ".woff2": "font/woff2", ".ico": "image/x-icon"}
+
+
+# Preview links carry their own short-lived capability: an iframe or new tab cannot send the console's bearer token.
+PREVIEW_KEY = secrets.token_bytes(32)
+PREVIEW_TTL = 3600
+PREVIEW_POLICY = ("sandbox allow-scripts allow-forms allow-popups allow-modals allow-downloads; "
+                  "default-src * data: blob: 'unsafe-inline' 'unsafe-eval'; frame-ancestors 'self'")
+
+
+def preview_ticket(rid, now=None):
+    expires = int((now or time.time()) + PREVIEW_TTL)
+    payload = f"{rid}.{expires}"
+    signature = base64.urlsafe_b64encode(hmac.new(PREVIEW_KEY, payload.encode(), hashlib.sha256).digest()[:18]).decode()
+    return f"{payload}.{signature}"
+
+
+def preview_run(ticket, now=None):
+    """The run a preview ticket grants, or None when it is forged or expired."""
+    try:
+        rid, expires, signature = ticket.split(".")
+        expected = base64.urlsafe_b64encode(hmac.new(PREVIEW_KEY, f"{rid}.{expires}".encode(), hashlib.sha256).digest()[:18]).decode()
+        if hmac.compare_digest(signature, expected) and int(expires) >= (now or time.time()):
+            return rid
+    except ValueError:
+        pass
+    return None
 
 
 def console_file(path):
@@ -88,6 +116,20 @@ def server(database, port=8918, host="127.0.0.1", allowed_hosts=(), origin_secre
             self.end_headers()
             self.wfile.write(data)
 
+        def respond_preview(self, data, kind, status=200):
+            # The previewed app runs sandboxed in an opaque origin: it cannot read the console's storage or call its API
+            # as the user. Module scripts from that origin are cross-origin requests, hence the CORS header.
+            self.send_response(status)
+            self.send_header("Content-Type", kind)
+            self.send_header("Content-Length", str(len(data)))
+            self.send_header("Cache-Control", "no-store")
+            self.send_header("X-Content-Type-Options", "nosniff")
+            self.send_header("Referrer-Policy", "no-referrer")
+            self.send_header("Access-Control-Allow-Origin", "*")
+            self.send_header("Content-Security-Policy", PREVIEW_POLICY)
+            self.end_headers()
+            self.wfile.write(data)
+
         def identity(self):
             header = self.headers.get("Authorization", "")
             with database.read() as db:
@@ -128,6 +170,19 @@ def server(database, port=8918, host="127.0.0.1", allowed_hosts=(), origin_secre
                     file, kind = static
                     return self.respond(file.read_bytes(), kind=kind)
                 require(not path.startswith("/assets/"), "Not found", 404, "not_found")
+                if method == "GET" and path.startswith("/preview/"):
+                    ticket, _, relative = path[len("/preview/"):].partition("/")
+                    rid = preview_run(ticket)
+                    require(rid is not None, "预览链接无效或已过期，请在控制台重新打开预览", 403, "preview_expired")
+                    relative = unquote(relative) or "index.html"
+                    data = service.preview_file(rid, relative)
+                    kind = TYPES.get(Path(relative).suffix.lower()) or {
+                        ".json": "application/json", ".jpg": "image/jpeg", ".jpeg": "image/jpeg", ".gif": "image/gif",
+                        ".webp": "image/webp", ".mjs": "text/javascript; charset=utf-8", ".txt": "text/plain; charset=utf-8",
+                        ".md": "text/plain; charset=utf-8", ".wasm": "application/wasm", ".woff": "font/woff",
+                        ".ttf": "font/ttf", ".glb": "model/gltf-binary", ".gltf": "model/gltf+json",
+                    }.get(Path(relative).suffix.lower(), "application/octet-stream")
+                    return self.respond_preview(data, kind)
                 if method == "GET" and path == "/health":
                     return self.respond({"version": __version__, "service": "octopus-team", "stage": "MVP development"})
                 if method == "GET" and path == "/v1/openapi.json":
@@ -153,7 +208,8 @@ def server(database, port=8918, host="127.0.0.1", allowed_hosts=(), origin_secre
                     with database.transaction() as db:
                         db.execute("DELETE FROM tokens WHERE id=? AND user_id=?", (actor["token_id"], actor["id"]))
                     return self.respond({"ok": True})
-                scope(actor, "read" if method == "GET" or path in {"/v1/workflows/resolve", "/v1/workflows/parse"} else (
+                scope(actor, "read" if method == "GET" or path in {"/v1/workflows/resolve", "/v1/workflows/parse"}
+                      or path.endswith("/preview") else (
                     "execute" if path.startswith(("/v1/runs", "/v1/designs")) else "manage"))
                 segments = path.strip("/").split("/")
                 if path == "/v1/me":
@@ -195,6 +251,10 @@ def server(database, port=8918, host="127.0.0.1", allowed_hosts=(), origin_secre
                 if path == "/v1/workflows/resolve":
                     require(method == "POST", "Method not allowed", 405)
                     return self.respond(service.resolve_workflow(actor, body))
+                if len(segments) == 4 and segments[:2] == ["v1", "runs"] and segments[3] == "preview" and method == "POST":
+                    entry = service.preview_entry(actor, segments[2])
+                    return self.respond({"url": "/preview/" + preview_ticket(segments[2]) + "/" + entry,
+                                         "entry": entry, "expires_in": PREVIEW_TTL})
                 if path == "/v1/workflows/parse":
                     require(method == "POST", "Method not allowed", 405)
                     from .workflow_import import import_workflow

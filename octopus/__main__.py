@@ -53,6 +53,15 @@ def build_parser(settings, environ=None):
     worker.add_argument("--routing-log", default=str(settings.routing_log))
     worker.add_argument("--isolation", choices=["dedicated", "trusted-local"], default=settings.worker_isolation)
     worker.add_argument("--approval-mode", choices=["", "auto", "interactive"], default=settings.approval_mode)
+    link = sub.add_parser("connect", help="让 Claude Code / Kiro CLI 经 MCP 连接 KiroCrew ON（写入 MCP 配置与使用说明）")
+    link.add_argument("client", choices=["claude", "kiro"])
+    link.add_argument("--url", required=True, help="平台地址，如 https://<分发>.cloudfront.net 或 http://127.0.0.1:8918")
+    link.add_argument("--token", help="已有 API Token；省略时用 --username 登录并创建一枚 30 天 Token")
+    link.add_argument("--username", default="admin")
+    link.add_argument("--password-env", default="OCTOPUS_PASSWORD", help="读取密码的环境变量；未设置时交互输入")
+    link.add_argument("--scope", help="claude: user/project/local（默认 user）；kiro: workspace/global（默认 workspace）")
+    link.add_argument("--project", help="kiro workspace 范围的项目目录（默认当前目录）")
+    link.add_argument("--dry-run", action="store_true")
     ready = sub.add_parser("wait-ready", help="等待服务就绪（供 systemd ExecStartPost 使用）")
     ready.add_argument("--api", action="store_true")
     ready.add_argument("--worker", action="store_true")
@@ -166,6 +175,20 @@ def main(argv=None):
     elif args.command == "archive":
         from .backup import archive_directory
         print(dumps(archive_directory(Path(args.source), Path(args.dest), args.name, tuple(args.exclude))))
+    elif args.command == "connect":
+        from .connect import connect
+        token = args.token
+        if not token and not args.dry_run:
+            password = os.environ.get(args.password_env) or getpass.getpass(f"{args.username} 的密码：")
+            session = Client(args.url, "")
+            login = session.request("POST", "/v1/login", {"username": args.username, "password": password})
+            issued = Client(args.url, login["token"]).request("POST", "/v1/tokens", {
+                "label": f"{args.client} MCP", "scopes": ["read", "execute"], "ttl": 30 * 86400})
+            token = issued["token"]
+        for action in connect(args.client, args.url, token or "dry-run-token", scope=args.scope, project=args.project,
+                              dry_run=args.dry_run):
+            print(action)
+        print("完成：重新打开客户端后可用 kirocrew-on 的 MCP 工具；Token 30 天有效，可在控制台撤销。" if not args.dry_run else "（dry-run，未写入）")
     elif args.command == "restore-verify":
         from .backup import restore_verify
         print(dumps(restore_verify(Path(args.manifest), Path(args.into))))
