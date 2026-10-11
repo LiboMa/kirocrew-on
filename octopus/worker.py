@@ -39,7 +39,7 @@ def write(path, value):
 
 class Worker:
     def __init__(self, root, token, gateway_port=5476, crew_home=None, isolation="trusted-local", routing_log=None,
-                 crew_url=None, approval_mode=""):
+                 crew_url=None, approval_mode="", crew_entry_ttl="8h"):
         self.root = Path(root).resolve()
         self.root.mkdir(parents=True, exist_ok=True, mode=0o700)
         self.token, self.port = token, gateway_port
@@ -48,6 +48,9 @@ class Worker:
         self.routing_log = Path(routing_log).resolve() if routing_log else None
         from .crew_entry import browser_origin
         self.crew_origin = browser_origin(crew_url or f"http://localhost:{gateway_port}")
+        from .config import ENTRY_TTL
+        require(isinstance(crew_entry_ttl, str) and ENTRY_TTL.fullmatch(crew_entry_ttl), "crew_entry_ttl 只能是 1–480m 或 1–8h")
+        self.crew_entry_ttl = crew_entry_ttl
         self.lock = threading.RLock()
         require(len(token) >= 32, "Worker Token 至少 32 字符")
         require(isolation in {"dedicated", "trusted-local"}, "Worker 隔离模式无效")
@@ -153,7 +156,8 @@ class Worker:
         require(native.get("key", native.get("slot")) == slot,
                 "Gateway 返回的 Session 与绑定不一致", 409, "entry_mismatch")
         return {"native_parent": slot,
-                "url": crew_api.chat_entry_url(slot, self.port, home=self.home, origin=self.crew_origin)}
+                "url": crew_api.chat_entry_url(slot, self.port, home=self.home, origin=self.crew_origin,
+                                               ttl=self.crew_entry_ttl)}
 
     def dispatch(self, body):
         run, parent = self.binding(body["run_id"])

@@ -14,8 +14,11 @@ approval_mode = "auto"
 # 安装后经原生契约检查确认的 KiroCrew 版本（D18）
 kirocrew_versions = []
 gateway_port = 5476
-# 原生入口只经 SSM 端口转发访问（不经 CloudFront）
+# 控制台“在 KiroCrew 中打开”的浏览器入口：部署时 al2023.sh 改为第二个 CloudFront 分发 https://<NativeDomain>；
+# 本地端口（如 SSM 隧道 localhost:15476）同样可用，Gateway 会信任该来源（composition/environment.py）
 crew_url = "http://localhost:15476"
+# 原生登录有效期（K03：该登录覆盖整个 Gateway；经公网入口时保持较短）
+crew_entry_ttl = "1h"
 kirocrew_python = "/opt/kirocrew/current/venv/bin/python"
 adapters_dir = "/opt/kirocrew-on/current/node_modules/.bin"
 path_prepend = ["/opt/kirocrew-tools/bin", "/opt/kirocrew-node/bin"]

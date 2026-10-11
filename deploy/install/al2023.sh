@@ -19,8 +19,22 @@ cleanup() { rm -rf "$SCRATCH"; }
 trap cleanup EXIT
 
 log "系统依赖"
-dnf install -y -q git tar gzip xz jq unzip make gcc gcc-c++ "$PYTHON_PACKAGE" "$PYTHON_PACKAGE-pip" "$PYTHON_PACKAGE-devel"
+dnf install -y -q git tar gzip xz jq unzip make gcc gcc-c++ nginx "$PYTHON_PACKAGE" "$PYTHON_PACKAGE-pip" "$PYTHON_PACKAGE-devel"
 PYTHON="$(command -v "$PYTHON_PACKAGE")"
+toml_set() {  # top-level TOML key: replace its line, or insert it before the first table so it never lands in [tools]
+  "$PYTHON" - "$1" "$2" "$3" <<'PY'
+import re, sys
+path, key, value = sys.argv[1:]
+text, line = open(path).read(), f"{key} = {value}"
+pattern = re.compile(rf"(?m)^{re.escape(key)}[ \t]*=.*$")
+if pattern.search(text):
+    text = pattern.sub(lambda _: line, text, count=1)
+else:
+    table = re.search(r"(?m)^\[", text)
+    text = text[:table.start()] + line + "\n" + text[table.start():] if table else text.rstrip("\n") + "\n" + line + "\n"
+open(path, "w").write(text)
+PY
+}
 
 log "Node.js（$NODE_DIST，按 SHASUMS256.txt 校验）"
 NODE_ROOT=/opt/kirocrew-node
@@ -138,6 +152,37 @@ if [ ! -f "$BOUNDARY_TOML" ]; then
     /opt/kirocrew-on/current/deploy/config/boundary.toml.example > "$BOUNDARY_TOML"
   chown "root:$CREW" "$BOUNDARY_TOML"
   chmod 0640 "$BOUNDARY_TOML"
+fi
+
+if [ -n "${NATIVE_DOMAIN:-}" ]; then
+  log "原生对话入口 https://$NATIVE_DOMAIN/（CloudFront → nginx 校验源站密钥 → 回环 Gateway）"
+  NATIVE_PORT="${NATIVE_PORT:-8919}"
+  toml_set "$BOUNDARY_TOML" crew_url "\"https://$NATIVE_DOMAIN\""
+  toml_set "$BOUNDARY_TOML" crew_entry_ttl '"1h"'
+  GATEWAY_PORT="$(grep -E '^gateway_port' "$BOUNDARY_TOML" | grep -oE '[0-9]+')"
+  # Rendered from files only: the origin secret never appears on a command line.
+  umask 027
+  "$PYTHON" - "$TARGET/deploy/nginx/kirocrew-native.conf" /etc/kirocrew-on/origin-secret "$NATIVE_PORT" "$GATEWAY_PORT" \
+    > /etc/nginx/conf.d/kirocrew-native.conf.new <<'PY'
+import re, sys
+template, secret_file, native_port, gateway_port = sys.argv[1:]
+secret = open(secret_file).read().strip()
+if not re.fullmatch(r"[A-Za-z0-9_-]{32,}", secret):
+    sys.exit("源站密钥缺失或格式不符")
+print(open(template).read().replace("__ORIGIN_SECRET__", secret).replace("__NATIVE_PORT__", native_port)
+      .replace("__GATEWAY_PORT__", gateway_port), end="")
+PY
+  umask 022
+  chown root:nginx /etc/nginx/conf.d/kirocrew-native.conf.new
+  chmod 0640 /etc/nginx/conf.d/kirocrew-native.conf.new
+  mv -f /etc/nginx/conf.d/kirocrew-native.conf.new /etc/nginx/conf.d/kirocrew-native.conf
+  if command -v getenforce >/dev/null 2>&1 && [ "$(getenforce)" = Enforcing ]; then
+    setsebool -P httpd_can_network_connect 1
+    semanage port -a -t http_port_t -p tcp "$NATIVE_PORT" 2>/dev/null || semanage port -m -t http_port_t -p tcp "$NATIVE_PORT"
+  fi
+  nginx -t -q
+  systemctl enable nginx >/dev/null
+  systemctl reload-or-restart nginx
 fi
 
 log "原生契约检查（以 $CREW 身份，隔离边界配置）"

@@ -57,10 +57,10 @@ def token(port=5476, home=None, *, ttl=None):
     return json.load(urllib.request.urlopen(req, timeout=20))["token"]
 
 
-def chat_entry_url(slot, port=5476, *, home=None, origin=None):
+def chat_entry_url(slot, port=5476, *, home=None, origin=None, ttl="8h"):
     """Use Crew's native local bootstrap and one-use URL-to-cookie exchange."""
     # Never cache this URL in reports, manifests, markup or log output.
-    credential = token(port, home, ttl="8h") if home is not None else token(port, ttl="8h")
+    credential = token(port, home, ttl=ttl) if home is not None else token(port, ttl=ttl)
     return (origin or f"http://localhost:{port}").rstrip("/") + "/chat?" + urlencode({
         # Native tokens distinguish the short link window (at most 5 minutes)
         # from the browser session lifetime. A 60s TTL would log the user out.

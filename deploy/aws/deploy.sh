@@ -58,25 +58,27 @@ up() {
   run cloudformation deploy --stack-name "$STACK_NAME" --template-file "$TEMPLATE" --capabilities CAPABILITY_IAM \
     --no-fail-on-empty-changeset --tags Project=kirocrew-on \
     --parameter-overrides "InstanceType=$INSTANCE_TYPE" "VolumeSizeGiB=$VOLUME_SIZE_GIB" "AvailabilityZone=$zone" \
-    "CloudFrontPrefixListId=$prefix_list" "OriginSecret=$origin" "ApiPort=$API_PORT" "AlarmEmail=$ALARM_EMAIL"
+    "CloudFrontPrefixListId=$prefix_list" "OriginSecret=$origin" "ApiPort=$API_PORT" "NativePort=$NATIVE_PORT" "AlarmEmail=$ALARM_EMAIL"
   [ -n "$DRY" ] || run cloudformation describe-stacks --stack-name "$STACK_NAME" --query 'Stacks[0].Outputs' --output table
 }
 
 push() {
   [ -z "$(git status --porcelain)" ] || { echo "工作区有未提交改动；push 只发布已提交的 commit" >&2; exit 2; }
-  local sha bucket instance domain archive command_id status
+  local sha bucket instance domain native archive command_id status
   sha="$(git rev-parse HEAD)"
   bucket="$(output ArtifactBucket)"; instance="$(output InstanceId)"; domain="$(output CloudFrontDomain)"
+  native="$(output NativeDomain)"
   archive="$WORK/kirocrew-on-$sha.tar.gz"
   git archive --format=tar.gz --prefix="kirocrew-on-$sha/" -o "$archive" HEAD
   run s3 cp "$archive" "s3://$bucket/releases/$sha.tar.gz" --only-show-errors
-  python3 - "$sha" "$bucket" "$domain" "$PARAMS" "$REGION" "$BOUNDARY" > "$WORK/commands.json" <<'PY'
+  python3 - "$sha" "$bucket" "$domain" "$PARAMS" "$REGION" "$BOUNDARY" "$native" "$NATIVE_PORT" > "$WORK/commands.json" <<'PY'
 import json, sys
-sha, bucket, domain, params, region, boundary = sys.argv[1:]
+sha, bucket, domain, params, region, boundary, native, native_port = sys.argv[1:]
 d = "/opt/kirocrew-on/incoming"
 script = (f"set -euo pipefail; mkdir -p {d}; aws s3 cp s3://{bucket}/releases/{sha}.tar.gz {d}/{sha}.tar.gz "
           f"--region {region} --only-show-errors; rm -rf {d}/kirocrew-on-{sha}; tar -xzf {d}/{sha}.tar.gz -C {d}; "
-          f"KIROCREW_ON_RELEASE={sha} CF_DOMAIN={domain} ORIGIN_SECRET_PARAM={params}/origin-secret "
+          f"KIROCREW_ON_RELEASE={sha} CF_DOMAIN={domain} NATIVE_DOMAIN={native} NATIVE_PORT={native_port} "
+          f"ORIGIN_SECRET_PARAM={params}/origin-secret "
           f"ADMIN_PASSWORD_PARAM={params}/admin-password AWS_REGION={region} "
           f"bash {d}/kirocrew-on-{sha}/deploy/install/al2023.sh {boundary}")
 print(json.dumps({"commands": [script], "executionTimeout": ["3600"]}))

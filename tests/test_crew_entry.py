@@ -194,7 +194,7 @@ class CrewEntryTests(unittest.TestCase):
         body = {"run_id": self.rid, "native_parent": self.parent}
         with patch("api.chat_entry_url", return_value="test-url") as mint:
             result = node.crew_entry(body)
-            mint.assert_called_once_with(self.parent, 5678, home=node.home, origin="https://crew.example.test")
+            mint.assert_called_once_with(self.parent, 5678, home=node.home, origin="https://crew.example.test", ttl="8h")
             self.assertEqual(result["native_parent"], self.parent)
             self.assertEqual(calls, [("/api/chat/slots/"+self.parent, None, None)])
             mint.reset_mock()
@@ -204,6 +204,19 @@ class CrewEntryTests(unittest.TestCase):
             with self.assertRaises(Error):
                 node.crew_entry(body)
             mint.assert_not_called()
+
+    def test_public_entry_uses_the_configured_shorter_login_lifetime(self):
+        # K03: the native link logs the browser into the whole Gateway; behind CloudFront it is kept short.
+        node = Worker(Path(self.tmp.name)/"worker", "x"*40, 5678, Path(self.tmp.name)/"crew",
+                      crew_url="https://dnative.cloudfront.net", crew_entry_ttl="1h")
+        write(node.path(self.rid)/"parent.json", {"slot": self.parent, "parent": "dashboard:"+self.parent})
+        node.native = lambda path, body=None, method=None: {"key": self.parent}
+        with patch("api.chat_entry_url", return_value="test-url") as mint:
+            node.crew_entry({"run_id": self.rid, "native_parent": self.parent})
+            self.assertEqual(mint.call_args.kwargs["ttl"], "1h")
+        for invalid in ("9h", "1d", "0h", "", "1h; x"):
+            with self.subTest(ttl=invalid), self.assertRaises(Error):
+                Worker(Path(self.tmp.name)/"worker2", "x"*40, 5678, Path(self.tmp.name)/"crew", crew_entry_ttl=invalid)
 
     def test_native_url_helper_preserves_legacy_default_and_encodes_identity(self):
         self.assertEqual(crew_entry.browser_origin("https://CREW.example.test:443/"), "https://crew.example.test")

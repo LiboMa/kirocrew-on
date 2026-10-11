@@ -83,6 +83,13 @@ class ConfigTests(unittest.TestCase):
         with self.assertRaises(ConfigError):
             load(self.write('approval_mode = "yolo"\n'), environ=self.env, cwd=self.cwd)
 
+    def test_native_entry_lifetime_defaults_to_eight_hours_and_is_validated(self):
+        self.assertEqual(load(environ=self.env, cwd=self.cwd).crew_entry_ttl, "8h")
+        self.assertEqual(load(self.write('crew_entry_ttl = "1h"\n'), environ=self.env, cwd=self.cwd).crew_entry_ttl, "1h")
+        for invalid in ('"9h"', '"1d"', '"0m"'):
+            with self.subTest(value=invalid), self.assertRaises(ConfigError):
+                load(self.write(f"crew_entry_ttl = {invalid}\n"), environ=self.env, cwd=self.cwd)
+
     def test_accepted_kirocrew_versions(self):
         s = load(self.write('kirocrew_versions = ["0.10.0"]\n'), environ=self.env, cwd=self.cwd)
         self.assertEqual(s.kirocrew_versions, ("0.10.0",))

@@ -21,8 +21,10 @@ PATHS = {"data_dir", "worker_data_dir", "worker_token_file", "crew_home", "kiro_
          "log_dir", "gateway_runtime_file", "kirocrew_python", "adapters_dir", "origin_secret_file"}
 INTS = {"api_port": (1, 65535), "worker_port": (1, 65535), "gateway_port": (1, 65535), "engine_workers": (1, 32)}
 FLOATS = {"retry_unavailable": (0.0, 600.0), "shutdown_grace": (0.0, 300.0)}
-STRINGS = {"api_host", "worker_host", "public_url", "crew_url", "worker_isolation", "approval_mode"}
+STRINGS = {"api_host", "worker_host", "public_url", "crew_url", "worker_isolation", "approval_mode", "crew_entry_ttl"}
 APPROVAL = ("", "auto", "interactive")
+# Lifetime of the native browser login minted for "open in KiroCrew": 1–480 minutes or 1–8 hours (K03).
+ENTRY_TTL = re.compile(r"(?:[1-9]|[1-9][0-9]|[1-3][0-9]{2}|4[0-7][0-9]|480)m|[1-8]h")
 HOST = re.compile(r"^[A-Za-z0-9.\-]+(:\d{1,5})?$|^\[[0-9A-Fa-f:]+\](:\d{1,5})?$")
 
 
@@ -54,6 +56,7 @@ class Settings:
     crew_url: str = ""
     # KiroCrew native tool/spawn approval for this boundary; "" keeps the legacy seed default.
     approval_mode: str = ""
+    crew_entry_ttl: str = "8h"
     kirocrew_python: Path | None = None
     adapters_dir: Path | None = None
     # Secret CloudFront adds as X-Origin-Verify; when set, only verified (or host-local) requests are served.
@@ -123,6 +126,8 @@ def _layer(values, base):
                 raise ConfigError("worker_isolation 只能是 trusted-local 或 dedicated")
             if key == "approval_mode" and value not in APPROVAL:
                 raise ConfigError("approval_mode 只能是 auto 或 interactive（留空表示不指定）")
+            if key == "crew_entry_ttl" and not ENTRY_TTL.fullmatch(value):
+                raise ConfigError("crew_entry_ttl 只能是 1–480m 或 1–8h")
             result[key] = value
     return result
 

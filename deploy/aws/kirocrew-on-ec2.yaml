@@ -30,6 +30,12 @@ Parameters:
     Default: 8918
     MinValue: 1024
     MaxValue: 65535
+  NativePort:
+    Type: Number
+    Default: 8919
+    MinValue: 1024
+    MaxValue: 65535
+    Description: 主机 nginx 端口；第二个 CloudFront 分发经此端口（校验源站密钥）转发到回环上的原生 KiroCrew Gateway
   VpcCidr:
     Type: String
     Default: 10.42.0.0/16
@@ -100,7 +106,7 @@ Resources:
   HostSecurityGroup:
     Type: AWS::EC2::SecurityGroup
     Properties:
-      GroupDescription: KiroCrew ON API - inbound only from CloudFront origin-facing addresses; admin via SSM
+      GroupDescription: KiroCrew ON API and native chat - inbound only from CloudFront origin-facing addresses; admin via SSM
       VpcId: !Ref Vpc
       SecurityGroupIngress:
         - IpProtocol: tcp
@@ -108,6 +114,11 @@ Resources:
           ToPort: !Ref ApiPort
           SourcePrefixListId: !Ref CloudFrontPrefixListId
           Description: CloudFront origin fetches to the KiroCrew ON API
+        - IpProtocol: tcp
+          FromPort: !Ref NativePort
+          ToPort: !Ref NativePort
+          SourcePrefixListId: !Ref CloudFrontPrefixListId
+          Description: CloudFront origin fetches to the native KiroCrew chat (nginx, origin secret)
       SecurityGroupEgress:
         - IpProtocol: "-1"
           CidrIp: 0.0.0.0/0
@@ -264,6 +275,41 @@ Resources:
           CloudFrontDefaultCertificate: true
       Tags: [{Key: Project, Value: kirocrew-on}]
 
+  NativeDistribution:
+    Type: AWS::CloudFront::Distribution
+    Properties:
+      DistributionConfig:
+        Enabled: true
+        Comment: !Sub "KiroCrew ON native chat (${AWS::StackName})"
+        HttpVersion: http2and3
+        IPV6Enabled: true
+        PriceClass: PriceClass_100
+        Origins:
+          - Id: kirocrew-native-origin
+            DomainName: !If
+              - IsUsEast1
+              - !Join ["", ["ec2-", !Join ["-", !Split [".", !Ref HostAddress]], ".compute-1.amazonaws.com"]]
+              - !Join ["", ["ec2-", !Join ["-", !Split [".", !Ref HostAddress]], !Sub ".${AWS::Region}.compute.amazonaws.com"]]
+            CustomOriginConfig:
+              HTTPPort: !Ref NativePort
+              OriginProtocolPolicy: http-only
+              OriginReadTimeout: 60
+              OriginKeepaliveTimeout: 5
+            OriginCustomHeaders:
+              - HeaderName: X-Origin-Verify
+                HeaderValue: !Ref OriginSecret
+        DefaultCacheBehavior:
+          TargetOriginId: kirocrew-native-origin
+          ViewerProtocolPolicy: redirect-to-https
+          AllowedMethods: [GET, HEAD, OPTIONS, PUT, PATCH, POST, DELETE]
+          CachedMethods: [GET, HEAD]
+          CachePolicyId: 4135ea2d-6df8-44a3-9df3-4b5a84be39ad        # Managed-CachingDisabled
+          OriginRequestPolicyId: 33f36d7e-f396-46d9-90e0-52428a34d9dc # Managed-AllViewerAndCloudFrontHeaders-2022-06
+          Compress: false
+        ViewerCertificate:
+          CloudFrontDefaultCertificate: true
+      Tags: [{Key: Project, Value: kirocrew-on}]
+
   SnapshotRole:
     Type: AWS::IAM::Role
     Properties:
@@ -329,6 +375,10 @@ Outputs:
     Value: !GetAtt Distribution.DomainName
   ConsoleUrl:
     Value: !Sub "https://${Distribution.DomainName}/"
+  NativeDomain:
+    Value: !GetAtt NativeDistribution.DomainName
+  NativeUrl:
+    Value: !Sub "https://${NativeDistribution.DomainName}/"
   ArtifactBucket:
     Value: !Ref ArtifactBucket
   ApiPort:

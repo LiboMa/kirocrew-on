@@ -42,13 +42,16 @@ class TemplateTests(unittest.TestCase):
         self.assertTrue(p["OriginSecret"]["NoEcho"])
         self.assertEqual(p["ImageId"]["Default"], "/aws/service/ami-amazon-linux-latest/al2023-ami-kernel-default-x86_64")
 
-    def test_host_is_only_reachable_from_cloudfront_on_the_api_port(self):
+    def test_host_is_only_reachable_from_cloudfront_on_the_api_and_native_ports(self):
         group = of_type(self.r, "AWS::EC2::SecurityGroup")[0]["Properties"]
         ingress = group["SecurityGroupIngress"]
-        self.assertEqual(len(ingress), 1)
-        self.assertEqual(ingress[0]["SourcePrefixListId"], {"Ref": "CloudFrontPrefixListId"})
-        self.assertEqual(ingress[0]["FromPort"], {"Ref": "ApiPort"})
-        self.assertNotIn("CidrIp", ingress[0])
+        self.assertEqual({json.dumps(rule["FromPort"]) for rule in ingress},
+                         {json.dumps({"Ref": "ApiPort"}), json.dumps({"Ref": "NativePort"})})
+        for rule in ingress:
+            self.assertEqual(rule["SourcePrefixListId"], {"Ref": "CloudFrontPrefixListId"})
+            self.assertEqual(rule["FromPort"], rule["ToPort"])
+            self.assertNotIn("CidrIp", rule)
+            self.assertNotIn("CidrIpv6", rule)
 
     def test_instance_hardening(self):
         host = of_type(self.r, "AWS::EC2::Instance")[0]["Properties"]
@@ -58,8 +61,27 @@ class TemplateTests(unittest.TestCase):
         self.assertTrue(host["PropagateTagsToVolumeOnCreation"])
         self.assertTrue(of_type(self.r, "AWS::EC2::EIP"), "stable origin name across stop/start")
 
+    def distribution(self, port):
+        return next(d["Properties"]["DistributionConfig"] for d in of_type(self.r, "AWS::CloudFront::Distribution")
+                    if d["Properties"]["DistributionConfig"]["Origins"][0]["CustomOriginConfig"]["HTTPPort"] == {"Ref": port})
+
+    def test_native_chat_has_its_own_distribution_behind_the_origin_secret(self):
+        # The native KiroCrew dashboard owns /, /api and /api/ws, so it cannot share the console's domain.
+        self.assertEqual(len(of_type(self.r, "AWS::CloudFront::Distribution")), 2)
+        native, api = self.distribution("NativePort"), self.distribution("ApiPort")
+        self.assertEqual(native["Origins"][0]["DomainName"], api["Origins"][0]["DomainName"])
+        self.assertEqual(native["Origins"][0]["OriginCustomHeaders"],
+                         [{"HeaderName": "X-Origin-Verify", "HeaderValue": {"Ref": "OriginSecret"}}])
+        behavior = native["DefaultCacheBehavior"]
+        self.assertEqual(behavior["CachePolicyId"], CACHING_DISABLED)
+        self.assertEqual(behavior["OriginRequestPolicyId"], ALL_VIEWER_AND_CLOUDFRONT_HEADERS)
+        self.assertEqual(behavior["ViewerProtocolPolicy"], "redirect-to-https")
+        self.assertFalse(behavior["Compress"])
+        self.assertIn("NativeUrl", self.t["Outputs"])
+        self.assertIn("NativeDomain", self.t["Outputs"])
+
     def test_cloudfront_forwards_to_the_origin_with_secret_and_no_cache(self):
-        config = of_type(self.r, "AWS::CloudFront::Distribution")[0]["Properties"]["DistributionConfig"]
+        config = self.distribution("ApiPort")
         origin = config["Origins"][0]
         self.assertEqual(origin["CustomOriginConfig"]["OriginProtocolPolicy"], "http-only")
         self.assertEqual(origin["OriginCustomHeaders"], [{"HeaderName": "X-Origin-Verify", "HeaderValue": {"Ref": "OriginSecret"}}])
@@ -128,6 +150,33 @@ class ScriptTests(unittest.TestCase):
         self.assertIn("-m composition.gateway --config", text)
         self.assertLess(text.index("-m composition.gateway --config"), text.index("-m unittest discover"))
 
+    def test_native_proxy_checks_the_origin_secret_and_keeps_websockets(self):
+        conf = (ROOT / "deploy/nginx/kirocrew-native.conf").read_text()
+        self.assertIn("listen __NATIVE_PORT__", conf)
+        self.assertIn('"__ORIGIN_SECRET__" 1;', conf)
+        self.assertIn("return 403;", conf)
+        self.assertIn("proxy_pass http://127.0.0.1:__GATEWAY_PORT__;", conf)
+        for line in ("proxy_set_header Upgrade $http_upgrade;", "proxy_set_header Connection $connection_upgrade;",
+                     "proxy_set_header X-Forwarded-Proto https;", 'proxy_set_header X-Origin-Verify "";',
+                     "proxy_set_header Host $host;", "proxy_buffering off;"):
+            self.assertIn(line, conf)
+        # The entry link carries the native login token in its query string; access logs record the path only.
+        self.assertIn("kirocrew-native.access.log kirocrew_native;", conf)
+        self.assertNotIn("$request ", conf.replace("$request_method", "").replace("$request_time", ""))
+        self.assertNotIn("$args", conf)
+        self.assertNotIn("$request_uri", conf)
+
+    def test_installer_publishes_the_native_entry_through_nginx(self):
+        text = (ROOT / "deploy/install/al2023.sh").read_text()
+        self.assertIn("deploy/nginx/kirocrew-native.conf", text)
+        self.assertIn("/etc/nginx/conf.d/kirocrew-native.conf", text)
+        self.assertIn("nginx -t", text)
+        self.assertIn(r'crew_url "\"https://$NATIVE_DOMAIN\""', text)
+        self.assertNotIn("$(cat /etc/kirocrew-on/origin-secret)", text, "the secret must not reach a command line")
+        deploy = (ROOT / "deploy/aws/deploy.sh").read_text()
+        self.assertIn("NATIVE_DOMAIN=", deploy)
+        self.assertIn("NativeDomain", deploy)
+
     def test_versions_file_declares_every_pin(self):
         values = dict(line.split("=", 1) for line in (ROOT / "deploy/versions.env").read_text().splitlines()
                       if line and not line.startswith("#"))
@@ -169,6 +218,7 @@ class ScriptTests(unittest.TestCase):
         boundary = load(ROOT / "deploy/config/boundary.toml.example", environ={"HOME": "/tmp"}, cwd="/tmp")
         self.assertEqual(boundary.worker_data_dir, Path("/var/lib/octopus/boundaries/personal/worker"))
         self.assertEqual(boundary.approval_mode, "auto")
+        self.assertEqual(boundary.crew_entry_ttl, "1h")
         self.assertEqual(set(boundary.tools), {"kiro_cli", "claude", "codex", "opencode"})
 
 

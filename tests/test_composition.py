@@ -1,4 +1,5 @@
 """Composition routes poc-* templates to native factories; all paths come from Settings."""
+import dataclasses
 import copy
 import json
 from pathlib import Path
@@ -115,6 +116,19 @@ class EnvironmentTests(unittest.TestCase):
         self.assertNotIn("/Applications", json.dumps(env))
         self.assertNotIn("/opt/homebrew", env["PATH"])
         self.assertTrue(self.settings.crew_home.is_dir())
+
+    def test_browser_entry_origin_is_trusted_by_the_gateway(self):
+        # The console opens the native chat at crew_url: behind CloudFront that origin must pass KiroCrew's Host and
+        # CSRF checks; through an SSM tunnel the local port must be an explicitly trusted loopback port.
+        cases = {"https://dnative.cloudfront.net": ("https://dnative.cloudfront.net", None),
+                 "http://localhost:15476": (None, "15476"), "": (None, None)}
+        for crew_url, (origins, ports) in cases.items():
+            with self.subTest(crew_url=crew_url):
+                settings = dataclasses.replace(self.settings, crew_url=crew_url)
+                env = {"PATH": "/usr/bin"}
+                environment.prepare(settings, env, which=lambda name: None)
+                self.assertEqual(env.get("KIROCREW_CORS_ORIGINS"), origins)
+                self.assertEqual(env.get("KIROCREW_ALLOWED_LOOPBACK_PORTS"), ports)
 
     def test_missing_adapter_is_reported(self):
         (self.adapters / "codex-acp").unlink()
