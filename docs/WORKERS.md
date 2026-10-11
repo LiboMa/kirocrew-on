@@ -110,6 +110,38 @@ sequenceDiagram
 - 个人与 Team 之间共享会话不需要共用 Gateway。原生入口登录覆盖整个 Gateway（K03），共享的会话不开放原生入口（总体设计 §安全）。
 - 多个空间共用一个 Gateway（逻辑隔离）只在平台层成立：同一 Gateway 内所有会话的 Agent 是同一 OS 用户，能读取彼此的源码、工具登录、Worker Token 与 Gateway 密钥；仓库内容的提示注入可以借此读取并外传其他空间的代码；kiro-cli 账号与计费归属也合为一个。它只适用于互相信任的空间。
 
+### 记忆：分层与共享
+
+记忆全部存放在执行边界内，因此**按边界（即按 Team）隔离**，不同 Team 之间、个人与 Team 之间不共享。
+依据 KiroCrew 0.10.0（`57df464`）源码与 EC2 上 personal 边界的实际文件：
+
+| 层 | 范围 | 位置（边界内） | 写入者 | 同一边界内跨会话延续 |
+|---|---|---|---|---|
+| KiroCrew 全局记忆（偏好、项目、历史、语义 / 情景记忆、lessons） | 未选定成员的所有会话 | `crew/workspace/memory/`、`crew/memory.db`、`crew/memory_index.db` | Gateway（Agent 经 `learn_add` / `memory_recall`；空闲或满 30 条消息后自动整理） | 是 |
+| KiroCrew 成员记忆 | 单个成员 | `crew/memory_stores/member-*/memory.db` | Gateway | 是 |
+| KiroCrew 知识库 | 整个 Gateway，按 namespace | `crew/workspace/knowledge/knowledge.db` | Gateway | 是 |
+| 仓库内的说明（`AGENTS.md`、`.kiro/steering/` 等） | 随仓库 | 工作区 | 人或 Agent | 随代码 |
+| Codex 记忆 | 整个 HOME | `home/.codex/` | Codex | 是 |
+| Claude Code 项目记忆 | 按项目路径 | `home/.claude/projects/<路径>/memory` | Claude Code | 否：每个会话的工作区路径不同 |
+
+KiroCrew 的相关事实：
+- 同一边界内的记忆分隔只是路由，不是保密边界（`memory_stores.py:14-15`）；Agent 能读到其他成员的记忆与 HOME 下各工具的记忆。所以有保密要求的 Team 必须使用专属环境（D28）。
+- 没有在线共享或多租户机制；只有所有者发起的单向复制：同一安装内按条目 seed（≤ 50 条）、成员记忆打包导出 / 导入、整体可移植包、从其他 Agent 导入。快照中的记忆不脱敏；记忆不加密，可能含粘贴进来的密钥。
+- 会话有记忆模式：`persistent`、`incognito`（只读不写）、`temporary`（不读不写）（`execution_context.py:18`）。
+- 防投毒只有正则筛查与置信度门限；lessons 以「必须遵循」的方式注入，跨 Team 共享会让一个 Team 被污染的 lesson 影响另一个 Team。
+
+### 会话共享时记忆如何处理
+
+会话不随共享移动；共享方式决定在哪里执行、用谁的记忆：
+
+| 方式 | 执行位置 | 记忆 | 适用 |
+|---|---|---|---|
+| 只看（viewer） | 不执行 | 不涉及；看平台记录（需求、规划、证据、返工、报告、预览） | 汇报、评审、跨 Team 参考 |
+| 同一会话继续（collaborator） | 原会话所在边界 | 沿用原边界记忆；协作者的输入写入原边界记忆，并使用原边界的工具登录 | Team 内部；或所有者明确信任的人。跨边界时应以 `incognito` 运行，避免写入所有者的记忆 |
+| 派生到自己的空间（fork） | 接收方的边界 | 不复制记忆库；传递会话上下文包：需求、规划、决策与诊断、报告、某个 commit 的代码，以及所有者审核后的少量 lessons（在接收方边界经 `learn_add` 写入，经过 KiroCrew 的投毒筛查） | 个人交给 Team、跨 Team 接力 |
+
+派生时的代码可复用 Connector 设计中的 bundle 发件目录（源边界导出，平台转交目标边界导入），或经 Git 仓库推送（M5）。
+
 ## 6．`deploy/install/al2023.sh` 做了什么
 
 用法 `al2023.sh <边界名>`；可重复执行。
@@ -137,10 +169,12 @@ sequenceDiagram
 
 ## 8．建议（未实施）
 
-已确定（D28）：Team 执行环境采用严格隔离，每个 Team 一个执行边界，不与其他空间共用 Gateway。以下为实现建议：
+已确定（D28，修订）：创建 Team 时必须选择执行环境——共享环境（MVP 默认）或专属环境（独立边界，MVP 之后）。设计见 `docs/superpowers/specs/2026-10-11-team-execution-environments-design.md`。以下为专属环境与后续的建议：
 
 1. **拆分安装**：主机层与边界层分开；边界层支持 `--team <team-id>`：按边界分配不冲突的端口，Team 边界写入 `dedicated`，`bootstrap-worker` 登记到指定 Team 而不是管理员个人空间。
 2. `deploy.sh kiro-login [<边界>]` 与 `space` 支持指定边界。
 3. 原生对话入口先只服务 personal；Team 边界的入口另行设计（按边界的路径或分发）。
 4. Team 隔离强度分级并写入运维手册：同主机不同 OS 用户（当前可行，共享实例角色）→ 独立 EC2 或容器（每个 Team 独立实例角色）。
-5. `waiting_worker` 时给出 `attention`：空间内没有 Worker 时说明 Team 需要管理员登记专属 Worker 或改在个人空间提交；有多个 Worker 时提示选择。
+5. ~~`waiting_worker` 时给出 `attention`~~（已实现，`81394f9`）。
+6. **M4 会话共享**按 §5「会话共享时记忆如何处理」设计：默认 viewer；跨边界继续开发用 fork；跨边界 collaborator 只在所有者明确同意时开放，并以 `incognito` 记忆模式运行（Gateway 在创建会话时支持 `memory_mode`，KiroCrew `dashboard/chat_handlers.py:810-817`；对已建会话收紧模式需核实）。
+7. **个人空间**：MVP 中用户的个人空间可以共用共享环境，不必每人一个 Worker（D28 修订）；共享时按空间使用各自的 KiroCrew 成员分开积累记忆，但 HOME 下的工具记忆（Codex 等）仍共用。
