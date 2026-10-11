@@ -132,10 +132,10 @@ class TemplateTests(unittest.TestCase):
     def tearDown(self):
         self.temporary.cleanup()
 
-    def seed(self, legacy=False, approval_mode=""):
+    def seed(self, legacy=False):
         with patch.dict("sys.modules", {"kiro_crew.agent": self.stub}):
             return templates.seed(crew_home=self.crew, kiro_home=self.kiro, allowed_roots=[self.runs], port=6000,
-                                  legacy_pipeline=legacy, approval_mode=approval_mode)
+                                  legacy_pipeline=legacy)
 
     def test_fresh_config_allows_only_worker_roots(self):
         self.seed()
@@ -168,25 +168,19 @@ class TemplateTests(unittest.TestCase):
 
 
 class ApprovalModeTests(unittest.TestCase):
-    def test_seed_writes_requested_approval_mode_and_keeps_legacy_default(self):
-        stub = SimpleNamespace(managed_mcp_spec_entry=lambda name: {"command": "x"})
-        for mode, expected in (("auto", "auto"), ("", "interactive")):
-            with self.subTest(mode=mode), tempfile.TemporaryDirectory() as temporary:
-                root = Path(temporary)
-                with patch.dict("sys.modules", {"kiro_crew.agent": stub}):
-                    templates.seed(crew_home=root / "crew", kiro_home=root / "kiro", allowed_roots=[root / "w"],
-                                   port=6000, legacy_pipeline=False, approval_mode=mode)
-                config = json.loads((root / "crew/config.json").read_text())
-                self.assertEqual(config["agent"]["approval_mode"], expected)
+    """D14 (narrowed after the local run): only platform-dispatched spawns get native auto approval.
+    The boundary's global KiroCrew tool approval stays interactive, so owner and parent chats keep prompting."""
 
-    def test_gateway_refuses_mismatched_approval_mode(self):
-        from composition.gateway import check_approval_mode
-        cfg = SimpleNamespace(agent=SimpleNamespace(approval_mode="interactive"))
-        check_approval_mode(cfg, "")
-        check_approval_mode(cfg, "interactive")
-        with self.assertRaises(SystemExit) as raised:
-            check_approval_mode(cfg, "auto")
-        self.assertIn("approval_mode", str(raised.exception.code))
+    def test_seed_keeps_global_tool_approval_interactive(self):
+        stub = SimpleNamespace(managed_mcp_spec_entry=lambda name: {"command": "x"})
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            with patch.dict("sys.modules", {"kiro_crew.agent": stub}):
+                templates.seed(crew_home=root / "crew", kiro_home=root / "kiro", allowed_roots=[root / "w"],
+                               port=6000, legacy_pipeline=False)
+            config = json.loads((root / "crew/config.json").read_text())
+            self.assertEqual(config["agent"]["approval_mode"], "interactive")
+
 
 class CompositionMarkerTests(unittest.TestCase):
     """I4: only the process that actually serves with the composed registry can mark itself ready."""
@@ -220,7 +214,7 @@ class DiagnosisTemplateTests(unittest.TestCase):
             root = Path(temporary)
             with patch.dict("sys.modules", {"kiro_crew.agent": stub}):
                 templates.seed(crew_home=root / "crew", kiro_home=root / "kiro", allowed_roots=[root / "w"],
-                               port=6000, legacy_pipeline=False, approval_mode="auto")
+                               port=6000, legacy_pipeline=False)
             spec = json.loads((root / "kiro/agents/poc-diagnose.json").read_text())
         self.assertEqual(spec["tools"], ["read", "write", "shell"])
         self.assertEqual(spec["mcpServers"], {})
