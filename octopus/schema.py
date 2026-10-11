@@ -39,8 +39,9 @@ def openapi():
                                   "steps": step_list, "team_id": text}, ["request_id", "input", "worker_id"]),
         "RecoveryPolicy": obj({"enabled": {"type": "boolean", "default": True},
                                "max_cycles": {"type": "integer", "minimum": 1, "maximum": 5, "default": 2}}),
+        "WorkflowDocument": obj({"content": text, "format": {"enum": ["json", "yaml", "markdown"]}}, ["content"]),
         "Start": obj({"request_id": command["request_id"], "input": text, "name": text, "workflow_id": text,
-                      "template_id": text,
+                      "template_id": text, "document": ref("WorkflowDocument"),
                       "workflow_version": integer, "steps": step_list, "team_id": text, "worker_id": text,
                        "source": ref("Source"), "recovery": ref("RecoveryPolicy")}, ["request_id", "input", "source"]),
         "Continue": obj({**command, "task_id": text, "input": text, "execution": ref("Execution"),
@@ -52,7 +53,8 @@ def openapi():
     }
     schemas["Resolve"]["description"] = "Read-only preview. Explicit workflow_id, template_id or steps wins. If omitted, match permitted workflows/templates using explainable rules. No native tasks or workspace are created."
     schemas["Design"]["description"] = "Execute scope. Starts a real Kiro workflow-design task via the chosen Worker and native ACP. Only recommends; does not run or save the recommended workflow. Poll /designs/{id}, then adopt and edit config.steps."
-    schemas["Start"]["description"] = "Optionally specify exactly one of workflow_id, template_id or custom steps; otherwise match the input. Preview via workflows/resolve and pin its selection/version before submit. Team runs are shared with current members. Without worker_id the run waits for assignment."
+    schemas["WorkflowDocument"]["description"] = "A workflow generated ahead of time (console export, legacy schema 1 or a bare step list) as JSON, YAML or Markdown with one code block. Parsed and normalized by code; /workflows/parse previews the result and its notes."
+    schemas["Start"]["description"] = "Optionally specify exactly one of workflow_id, template_id, custom steps or a workflow document (runs as submitted); otherwise match the input. Preview via workflows/resolve and pin its selection/version before submit. Team runs are shared with current members. Without worker_id the run waits for assignment."
     schemas["Continue"]["description"] = "Retains Session and Workspace. Creates immutable Attempts; selected Task and downstream Tasks rerun. Earlier tasks must be accepted."
     schemas["Worker"]["description"] = "Administrator only. Exactly one owner_id/team_id. Team requires a dedicated OS boundary; a declaration is not a sandbox."
     routes = {
@@ -61,6 +63,7 @@ def openapi():
         "/v1/teams/{id}/members": {"post": "Member", "delete": "Member"},
         "/v1/workflows": {"get": None, "post": "Workflow"},
         "/v1/workflow-templates": {"get": None}, "/v1/workflows/resolve": {"post": "Resolve"},
+        "/v1/workflows/parse": {"post": "WorkflowDocument"},
         "/v1/designs": {"post": "Design"}, "/v1/designs/{id}": {"get": None},
         "/v1/workflows/{id}/versions": {"post": "Workflow"},
         "/v1/workflows/{id}/shares": {"post": "Grant", "delete": "Grant"},

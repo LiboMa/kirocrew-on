@@ -31,11 +31,19 @@ TOOLS = [
      "inputSchema": object_schema({"id": STRING}, ["id"]), "annotations": {"readOnlyHint": True}},
     {"name": "octopus_runs", "description": "列出当前用户有权读取的开发 Sessions", "inputSchema": object_schema()},
     {"name": "octopus_status", "description": "查询真实任务状态、执行配置及最近事件", "inputSchema": object_schema({"run_id": STRING}, ["run_id"])},
-    {"name": "octopus_start", "description": "提交开发需求；优先使用用户指定的工作流、模板或定制 steps，未指定时自动匹配。建议先 octopus_match_workflow 查看任务并固定版本。返回登记回执，不代表执行完成。",
+    {"name": "octopus_parse_workflow",
+     "description": "校验并规范化一个由 Agent 预先生成的工作流（JSON / YAML / 含一个代码块的 Markdown；新版导出或旧版 schema 1），返回 name、steps 与规范化说明；仅预览，不执行。",
+     "inputSchema": object_schema({"content": STRING, "format": {"type": "string", "enum": ["json", "yaml", "markdown"]}},
+                                  ["content"]),
+     "annotations": {"readOnlyHint": True}},
+    {"name": "octopus_start", "description": "提交开发需求；优先使用用户指定的工作流、模板、定制 steps 或 Agent 预先生成的工作流文档 document（按提交内容直接运行），未指定时自动匹配。建议先 octopus_match_workflow / octopus_parse_workflow 查看任务。返回登记回执，不代表执行完成。",
      "inputSchema": object_schema({
          "request_id": STRING, "input": STRING, "name": STRING, "template_id": STRING,
          "workflow_id": STRING, "workflow_version": {"type": "integer"},
-         "steps": {"type": "array", "items": {"type": "object"}}, "source": {"type": "object"},
+         "steps": {"type": "array", "items": {"type": "object"}},
+         "document": object_schema({"content": STRING, "format": {"type": "string", "enum": ["json", "yaml", "markdown"]}},
+                                   ["content"]),
+         "source": {"type": "object"},
          "team_id": STRING, "worker_id": STRING, "recovery": RECOVERY}, ["request_id", "input", "source"])},
     {"name": "octopus_continue", "description": "原 Session 修订并重跑 Task；保留 Workspace；可覆盖模型/Effort/工具。",
      "inputSchema": object_schema({"run_id": STRING, "request_id": STRING, "expected_version": {"type": "integer"},
@@ -65,6 +73,8 @@ def call(client, name, args):
         return client.request("GET", "/v1/" + name.removeprefix("octopus_"))
     if name == "octopus_match_workflow":
         return client.request("POST", "/v1/workflows/resolve", args)
+    if name == "octopus_parse_workflow":
+        return client.request("POST", "/v1/workflows/parse", args)
     if name == "octopus_recommend_workflow":
         return client.request("POST", "/v1/designs", args)
     if name == "octopus_workflow_recommendation":

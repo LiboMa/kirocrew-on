@@ -138,7 +138,7 @@ def server(database, port=8918, host="127.0.0.1", allowed_hosts=(), origin_secre
                     with database.transaction() as db:
                         db.execute("DELETE FROM tokens WHERE id=? AND user_id=?", (actor["token_id"], actor["id"]))
                     return self.respond({"ok": True})
-                scope(actor, "read" if method == "GET" or path == "/v1/workflows/resolve" else (
+                scope(actor, "read" if method == "GET" or path in {"/v1/workflows/resolve", "/v1/workflows/parse"} else (
                     "execute" if path.startswith(("/v1/runs", "/v1/designs")) else "manage"))
                 segments = path.strip("/").split("/")
                 if path == "/v1/me":
@@ -180,6 +180,10 @@ def server(database, port=8918, host="127.0.0.1", allowed_hosts=(), origin_secre
                 if path == "/v1/workflows/resolve":
                     require(method == "POST", "Method not allowed", 405)
                     return self.respond(service.resolve_workflow(actor, body))
+                if path == "/v1/workflows/parse":
+                    require(method == "POST", "Method not allowed", 405)
+                    from .workflow_import import import_workflow
+                    return self.respond(import_workflow(body.get("content"), body.get("format")))
                 if path == "/v1/designs" and method == "POST":
                     from .designs import create
                     return self.respond(create(service, actor, body), 201)

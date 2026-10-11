@@ -168,8 +168,15 @@ class Service:
         """Preview only: no Session, source checkout or Coding task is created."""
         from .intent import catalog, preset_steps, ranked, selection, title_from
         goal = text(body.get("input"), "开发需求", minimum=3)
-        choices = [key for key in ("workflow_id", "template_id", "steps") if body.get(key) is not None]
-        require(len(choices) <= 1, "只指定 workflow_id、template_id 或 steps 中的一项")
+        choices = [key for key in ("workflow_id", "template_id", "steps", "document") if body.get(key) is not None]
+        require(len(choices) <= 1, "只指定 workflow_id、template_id、steps 或 document 中的一项")
+        if choices == ["document"]:
+            # A workflow generated ahead of time by an Agent runs as submitted, after code normalization.
+            from .workflow_import import import_workflow
+            document = body["document"]
+            require(isinstance(document, dict) and set(document) <= {"content", "format"}, "document 需要 content 与可选 format")
+            body, choices = {**body, "steps": import_workflow(document.get("content"), document.get("format"))["steps"]}, ["steps"]
+            del body["document"]
         require("workflow_version" not in body or "workflow_id" in choices, "版本必须对应 workflow_id")
         with self.db.read() as db:
             if body.get("team_id"):
