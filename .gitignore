@@ -27,3 +27,6 @@ remote-kiro-spaces/
 
 # Playwright MCP 的截图与页面快照输出
 .playwright-mcp/
+
+# 本地 git worktree（并行开发的隔离工作区），不提交
+.worktrees/
