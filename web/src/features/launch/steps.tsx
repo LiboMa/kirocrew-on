@@ -1,8 +1,9 @@
 import { useMemo, useRef, useState } from "react";
-import { ArrowUp, ChevronDown, FileUp, Plus, Trash2 } from "lucide-react";
+import { ChevronDown, FileUp } from "lucide-react";
 import { api } from "@/api/client";
 import type { ParsedWorkflow, Step, Template, Workflow } from "@/api/types";
 import { AgentFields } from "@/components/AgentFields";
+import { TaskEditor } from "@/components/TaskEditor";
 import { NativeSelect } from "@/components/NativeSelect";
 import { RecoveryFields } from "@/components/RecoveryFields";
 import { Button } from "@/components/ui/button";
@@ -12,7 +13,7 @@ import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
 import { spaceWorkers, useConsole } from "@/features/console/context";
 import { generationActive, type MatchStatus } from "@/features/launch/hooks";
-import { PLAN_METHODS, editTasks, fingerprint, nameFrom, newTask, type Draft } from "@/features/launch/state";
+import { PLAN_METHODS, editTasks, fingerprint, nameFrom, type Draft } from "@/features/launch/state";
 import { STATES, TOOLS } from "@/lib/labels";
 import { cn } from "@/lib/utils";
 
@@ -337,52 +338,11 @@ function ImportPanel({ draft, update, onImported }: PlanProps) {
 }
 
 export function TasksStep({ draft, update, origin, models }: { draft: Draft; update: Update; origin: string; models?: Parameters<typeof AgentFields>[0]["models"] }) {
-  const change = (index: number, patch: Partial<Step>) => update((d) => editTasks(d, d.tasks.map((t, i) => i === index ? { ...t, ...patch } : t)));
-  const move = (index: number) => update((d) => {
-    const tasks = [...d.tasks];
-    [tasks[index - 1], tasks[index]] = [tasks[index], tasks[index - 1]];
-    return editTasks(d, tasks);
-  });
   return (
     <div className="space-y-3">
-      <div className="flex items-center justify-between">
-        <h3 className="text-sm font-semibold">本次任务列表 <span className="font-normal text-muted-foreground">· {draft.tasks.length} Tasks</span></h3>
-        <Button type="button" size="sm" variant="outline" id="launch-add" disabled={draft.tasks.length >= 8}
-          onClick={() => update((d) => editTasks(d, [...d.tasks, newTask()]))}><Plus /> 添加任务</Button>
-      </div>
-      <p id="launch-origin" className="text-xs text-muted-foreground">{origin}</p>
-      <ol id="launch-tasks" className="space-y-2.5" aria-label="本次任务列表">
-        {draft.tasks.map((task, index) => (
-          <li key={task.id}>
-            <Collapsible defaultOpen={draft.tasks.length === 1} className="rounded-xl border bg-card">
-              <div className="flex items-center gap-3 px-4 py-3">
-                <span className="grid size-6 shrink-0 place-items-center rounded bg-muted font-mono text-[11px]">{index + 1}</span>
-                <CollapsibleTrigger className="group flex min-w-0 flex-1 items-center gap-2 text-left">
-                  <strong className="truncate text-sm">{task.name || "未命名任务"}</strong>
-                  <small className="shrink-0 text-xs text-muted-foreground">{TOOLS[task.tool] ?? task.tool} · {task.model || "auto"}</small>
-                  <ChevronDown className="ml-auto size-4 shrink-0 text-muted-foreground group-data-[state=open]:rotate-180" />
-                </CollapsibleTrigger>
-                <Button type="button" size="icon-sm" variant="ghost" aria-label="上移" disabled={index === 0} onClick={() => move(index)}><ArrowUp /></Button>
-                <Button type="button" size="icon-sm" variant="ghost" aria-label="移除" disabled={draft.tasks.length === 1}
-                  onClick={() => update((d) => editTasks(d, d.tasks.filter((_, i) => i !== index)))}><Trash2 /></Button>
-              </div>
-              <CollapsibleContent className="space-y-3 border-t px-4 py-4">
-                <p className="font-mono text-[11px] text-muted-foreground">Task ID · {task.id}</p>
-                <div className="space-y-1.5">
-                  <Label htmlFor={`launch-${index}-name`}>任务名称</Label>
-                  <Input id={`launch-${index}-name`} value={task.name} maxLength={80} onChange={(e) => change(index, { name: e.target.value })} />
-                </div>
-                <div className="space-y-1.5">
-                  <Label htmlFor={`launch-${index}-prompt`}>Agent 提示词 / 任务说明</Label>
-                  <Textarea id={`launch-${index}-prompt`} rows={5} value={task.prompt} onChange={(e) => change(index, { prompt: e.target.value })} />
-                </div>
-                <AgentFields idPrefix={`launch-${index}`} models={models} value={task}
-                  onChange={(agent) => change(index, { ...agent, effort: agent.tool === "opencode" ? "" : agent.effort })} />
-              </CollapsibleContent>
-            </Collapsible>
-          </li>
-        ))}
-      </ol>
+      <TaskEditor tasks={draft.tasks} models={models} idPrefix="launch" title="本次任务列表"
+        hint={<p id="launch-origin" className="text-xs text-muted-foreground">{origin}</p>}
+        onChange={(tasks) => update((d) => editTasks(d, tasks))} />
     </div>
   );
 }

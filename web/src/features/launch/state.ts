@@ -126,8 +126,4 @@ export function editTasks(draft: Draft, tasks: Step[]): Draft {
   return { ...draft, tasks, choice: "custom", resolution: null };
 }
 
-export function newTask(): Step {
-  return { id: "task-" + crypto.randomUUID().slice(0, 8), name: "新任务", tool: "claude", model: "auto", effort: "", prompt: "" };
-}
-
 export const fingerprint = (input: string, steps: Step[], team = "") => JSON.stringify({ input: input.trim(), steps, team_id: team });

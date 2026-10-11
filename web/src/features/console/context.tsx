@@ -18,7 +18,6 @@ export type Dialog =
   | { kind: "team" }
   | { kind: "tokens" }
   | { kind: "workers" }
-  | { kind: "account" }
   | { kind: "continue"; taskId?: string }
   | { kind: "assign" }
   | { kind: "control"; action: "close" | "reopen" | "delete" };
