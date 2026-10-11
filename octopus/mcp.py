@@ -30,9 +30,13 @@ TOOLS = [
     {"name": "octopus_workflow_recommendation", "description": "读取 KiroCrew 工作流建议状态、已校验的草稿及真实 ACP 证据。",
      "inputSchema": object_schema({"id": STRING}, ["id"]), "annotations": {"readOnlyHint": True}},
     {"name": "octopus_runs", "description": "列出当前用户有权读取的开发 Sessions", "inputSchema": object_schema()},
-    {"name": "octopus_status", "description": "查询真实任务状态、执行配置及最近事件", "inputSchema": object_schema({"run_id": STRING}, ["run_id"])},
+    {"name": "octopus_status",
+     "description": "查询真实任务状态。默认返回精简视图：Session 状态、version、attention、规划、最近一次纠错决定、各任务最近一次尝试的结论"
+                    "（decision、summary、findings、交接文件）和最近 10 条事件；detail=true 返回完整记录（含各次尝试的原始输出与证据，可能很大）。",
+     "inputSchema": object_schema({"run_id": STRING, "detail": {"type": "boolean"}}, ["run_id"])},
     {"name": "octopus_preview",
-     "description": "返回某个 Session 产出的 Web 预览链接（Workspace 中的 index.html 等静态页面，1 小时有效，在隔离环境中运行）；"
+     "description": "返回某个 Session 产出的 Web 预览链接（Workspace 中的 index.html 等静态页面，1 小时有效，在隔离环境中运行，"
+                    "页面内 localStorage、sessionStorage、IndexedDB 与 Cookie 不可用）；"
                     "需要开发服务器的项目请用 deploy/aws/deploy.sh space <run_id> 在本机预览。",
      "inputSchema": object_schema({"run_id": STRING}, ["run_id"]), "annotations": {"readOnlyHint": True}},
     {"name": "octopus_parse_workflow",
@@ -72,6 +76,41 @@ TOOLS = [
 ]
 
 
+SESSION_FIELDS = ("id", "name", "status", "desired", "lifecycle", "version", "error", "attention", "progress", "input",
+                  "planning", "team_id", "worker_id", "workflow_name", "match_mode", "created", "updated")
+
+
+def compact_status(session, events):
+    """What a Coding Agent reports and acts on. Raw agent output, prompts, routing and recovery context are left out:
+    a finished session is otherwise far beyond MCP clients' output limits (detail=true returns everything)."""
+    def latest(attempts):
+        if not attempts:
+            return None
+        attempt = max(attempts, key=lambda a: a.get("number") or 0)
+        evidence = attempt.get("evidence") or {}
+        outcome = evidence.get("outcome") or {}
+        return {"number": attempt.get("number"), "status": attempt.get("status"), "error": attempt.get("error"),
+                "backend": evidence.get("actual_backend"), "model": evidence.get("actual_model"),
+                "decision": outcome.get("decision"), "summary": outcome.get("summary"),
+                "findings": outcome.get("findings") or [], "handoff": evidence.get("handoff_path")}
+
+    view = {key: session[key] for key in SESSION_FIELDS if key in session}
+    if session.get("recovery"):
+        recovery, last = session["recovery"], session["recovery"].get("latest") or {}
+        decision = last.get("decision") or {}
+        view["recovery"] = {"used": recovery.get("used"), "policy": recovery.get("policy"), "latest": {
+            "number": last.get("number"), "status": last.get("status"), "failed_task_id": last.get("failed_task_id"),
+            "action": decision.get("action"), "target_task_id": decision.get("target_task_id"),
+            "reason": decision.get("reason")} if last else None}
+    view["tasks"] = [{"id": task["id"], "name": task["spec"].get("name"), "status": task["status"],
+                      "tool": task["spec"].get("tool"), "model": task["spec"].get("model"),
+                      "attempts": len(task.get("attempts") or []), "latest": latest(task.get("attempts"))}
+                     for task in session.get("tasks", [])]
+    recent = [{**event, "payload": {k: v for k, v in event["payload"].items() if k not in ("evidence", "context")}}
+              for event in events[-10:]]
+    return {"session": view, "events": recent}
+
+
 def call(client, name, args):
     args = dict(args)
     if name in {"octopus_workflows", "octopus_teams", "octopus_runs"}:
@@ -89,8 +128,8 @@ def call(client, name, args):
         return client.request("GET", "/v1/designs/" + args["id"])
     if name == "octopus_status":
         rid = args["run_id"]
-        return {"session": client.request("GET", "/v1/runs/" + rid),
-                "events": client.request("GET", "/v1/runs/" + rid + "/events")}
+        session, events = client.request("GET", "/v1/runs/" + rid), client.request("GET", "/v1/runs/" + rid + "/events")
+        return {"session": session, "events": events} if args.get("detail") else compact_status(session, events)
     if name == "octopus_start":
         if not args.get("worker_id"):
             # Coding agents rarely know Worker ids: use the space's only enabled Worker, if there is exactly one.

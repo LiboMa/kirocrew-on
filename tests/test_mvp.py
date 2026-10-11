@@ -540,7 +540,7 @@ class MVPTests(unittest.TestCase):
                 return {"method": method, "path": path, "body": body}
         output = io.StringIO()
         mcp.serve(Client(), io.StringIO(dumps({"jsonrpc":"2.0", "id":1, "method":"tools/call",
-                                              "params":{"name":"octopus_status", "arguments":{"run_id":"run-example"}}}) + "\n"), output)
+                                              "params":{"name":"octopus_status", "arguments":{"run_id":"run-example", "detail":True}}}) + "\n"), output)
         response = json.loads(output.getvalue())
         self.assertEqual(response["result"]["structuredContent"]["session"]["path"], "/v1/runs/run-example")
         self.assertNotIn("Bearer", output.getvalue())

@@ -50,7 +50,9 @@ KiroCrew ON 在远端执行开发任务：KiroCrew 的 Kiro Agent 先识别意�
 
 ## 3．查看进度：`octopus_status`
 
-- 传 `run_id`，读取 `session.status`、各任务 `status`、`planning`（意图与补全后的需求）、`attention`（暂停原因与下一步）和最近事件。
+- 传 `run_id`，默认返回精简视图：`session.status`、`session.version`、`attention`（暂停原因与下一步）、`planning`（意图与补全后的需求）、
+  `recovery.latest`（最近一次纠错决定）、各任务 `status` 与最近一次尝试 `latest`（`decision`、`summary`、`findings`、交接文件），以及最近 10 条事件。
+- 需要某次尝试的原始输出或完整证据时才传 `detail: true`；完整记录可能有十几万字符，超出客户端的输出上限。
 - 任务通常需要几分钟到几十分钟；每 30–60 秒查询一次，向用户汇报真实状态。状态不是 `completed` 时不要宣称完成。
 - `octopus_runs` 列出用户可见的全部会话。
 
@@ -73,6 +75,9 @@ KiroCrew ON 在远端执行开发任务：KiroCrew 的 Kiro Agent 先识别意�
 ## 5．预览产出
 
 - `octopus_preview`（传 `run_id`）返回 Web 预览链接，静态页面可在浏览器中直接打开。
+- 链接 1 小时有效；返回 403（`preview_expired` / `preview_invalid`）时重新调用 `octopus_preview` 取新链接。
+- 预览在与控制台隔离的沙箱中运行：页面里的 `localStorage`、`sessionStorage`、IndexedDB 与 Cookie 都不可用。
+  依赖它们的功能（如保存设置、计数）在预览中失效不代表产出有缺陷；要验证这类功能，把文件下载到本机打开，或用下面的开发服务器方式。
 - 需要运行开发服务器的项目：在 kirocrew-on 仓库执行 `deploy/aws/deploy.sh space <run_id>`，
   在本机 `localhost:<远端端口+10000>` 预览。
 
