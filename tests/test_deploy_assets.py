@@ -77,7 +77,9 @@ class TemplateTests(unittest.TestCase):
         props = host_role["Properties"]
         self.assertIn("arn:aws:iam::aws:policy/AmazonSSMManagedInstanceCore", props["ManagedPolicyArns"])
         actions = json.dumps(props["Policies"])
-        for action in ("bedrock:InvokeModel", "bedrock:InvokeModelWithResponseStream", "s3:GetObject", "ssm:GetParameter"):
+        # Codex's amazon-bedrock provider uses bedrock-mantle:CreateInference (observed on EC2), not bedrock:InvokeModel.
+        for action in ("bedrock:InvokeModel", "bedrock:InvokeModelWithResponseStream", "bedrock-mantle:CreateInference",
+                       "s3:GetObject", "ssm:GetParameter"):
             self.assertIn(action, actions)
         self.assertNotIn('"s3:*"', actions)
 
