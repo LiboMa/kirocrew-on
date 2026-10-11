@@ -1,8 +1,8 @@
 # KiroCrew ON 运维手册
 
 适用范围：M1 单机部署（EC2 Amazon Linux 2023 x86_64，一个个人执行边界 `personal`）与本机 macOS 端到端环境。
-标注“待 Task 16–19 实测”的命令来自部署材料，尚未在 EC2 上运行；实测后以结果替换。
-本地端到端（macOS）的步骤见 §13。
+§2–§8、§12 的 EC2 命令已于 2026-10-11 在 us-east-1 实测，结果见 `docs/handover/M1-EC2-EVIDENCE.md`。
+本地端到端（macOS）的步骤见 §14。
 
 ## 1．目录与端口
 
@@ -28,14 +28,14 @@
 安全组只允许 CloudFront 源站地址访问，平台另外校验 `X-Origin-Verify`；Worker（8928）与 Gateway（5476）只监听回环，
 原生入口经 SSM 端口转发：`deploy/aws/deploy.sh tunnel`（`localhost:15476 → 5476`）。
 
-## 2．首次部署（Shell + CloudFormation，待 Task 15–19 实测）
+## 2．首次部署（Shell + CloudFormation，2026-10-11 EC2 实测）
 
 在本机 kirocrew-on 检出中执行（需要 us-east-1 的 AWS 凭据；`deploy/aws/stack.env` 中的规格为候选值）：
 
 ```bash
 deploy/aws/deploy.sh up            # 校验模板；查询 CloudFront 前缀列表与可用区；在 SSM 生成源站密钥与管理员密码；部署栈
 deploy/aws/deploy.sh push          # 发布已提交的 HEAD：S3 → SSM Run Command → al2023.sh（安装、原生契约检查、启用服务、注册 Worker）
-deploy/aws/deploy.sh kiro-login    # 一次性：以 crew-personal 完成 kiro-cli 设备码登录（Claude Code / Codex 经实例角色用 Bedrock）
+deploy/aws/deploy.sh kiro-login    # 一次性：经 SSM 以 crew-personal 运行 kiro-cli 设备码登录，打印验证地址与设备码，完成后 whoami 确认
 deploy/aws/deploy.sh status        # 栈输出、SSM 在线状态、https://<分发域名>/health
 deploy/aws/deploy.sh admin-password  # 读取管理员密码（SSM SecureString），登录控制台
 ```
@@ -82,6 +82,8 @@ sudo systemctl restart octopus-api octopus-worker@personal octopus-gateway@perso
 - `sudo systemctl stop|restart <服务>` 发送 SIGTERM：API 停止接收请求、取消尚未开始的推进，在 `shutdown_grace`（默认 30 s）内等待在途推进收尾；超时则以 0 退出，在途结果由重启后的核对处理。
 - 禁止 `pkill` 全局结束进程；只操作本部署的 systemd 单元。
 - 重启后 Engine 从 SQLite 与 Worker 落盘记录恢复；派发回执不明的 Attempt 显示为 `dispatch_unknown`，按 Attempt 标记核对后再决定是否重派。
+- EC2 实测：编码中分别重启 API 与 Worker、重启 Gateway、整机重启（`aws ec2 reboot-instances`），Session 均自动完成且无重复派发。重启 Gateway 会让原生取消运行中的任务，平台把该 Attempt 判为 blocked，自动诊断后重试；整机重启后约 30 s 服务恢复。
+- 源站重启期间 CloudFront 返回 502 / 504，CLI 与 MCP 报告 `504 Gateway Timeout: API 暂不可用，稍后重试`；稍后重试即可。
 
 ## 7．日志
 
@@ -96,7 +98,7 @@ API 访问日志不记录 token、请求体或查询串；Engine 只记录异常
 ## 8．认证与过期
 
 - Claude Code 与 Codex 经实例角色使用 Bedrock：实例角色需要 `bedrock:InvokeModel*`（Claude）与 `bedrock-mantle:CreateInference`（Codex 的 amazon-bedrock 提供方）。
-- Kiro CLI：`deploy/aws/deploy.sh kiro-login` 在 SSM 会话中以 crew-personal 完成设备码登录（需要本机安装 session-manager-plugin）。
+- Kiro CLI：`deploy/aws/deploy.sh kiro-login` 经 SSM Run Command 在主机上以 crew-personal 运行 `kiro-cli login --use-device-flow`（带 `stack.env` 中的 `KIRO_LICENSE`、`KIRO_IDC_START_URL`、`KIRO_IDC_REGION`）。kiro-cli 即使给齐参数仍有交互提示、无终端时失败，因此在 `script(1)` 伪终端中运行并自动回车；脚本打印验证地址与设备码，在浏览器完成授权后自动确认（设备码 15 分钟内有效，过期重新执行）。日志：`/var/lib/octopus/boundaries/personal/logs/kiro-login.log`。不需要本机安装 session-manager-plugin。
 
 ### 过期处理
 

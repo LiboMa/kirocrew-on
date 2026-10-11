@@ -1,6 +1,6 @@
 # MVP Release 计划与状态
 
-更新日期：2026-10-10　·　当前阶段：**设计中（M1 开始实施）**　·　本仓库可运行代码：**无**　·　已发布版本：**无**
+更新日期：2026-10-11　·　当前阶段：**M1 待验收（实现与本地 / EC2 验收完成，待负责人确认）**　·　本仓库可运行代码：**M1 运行底座（分支 `feat/m1-runtime-foundation`，未合并）**　·　已发布版本：**无**
 
 本文记录 KiroCrew ON 首个可用 MVP 的范围、已确定决策、各里程碑交付与验收条件。
 “已确定”“默认值（待确认）”“未开始 / 待验收”分别标注；不要把本文中的目标当作已上线功能。
@@ -20,7 +20,7 @@ M4（共享与组织）、M5（仓库闭环）在 MVP 之后分别立项，各�
 
 | 里程碑 | 状态 |
 |---|---|
-| M1 运行底座 | 待验收：本地（macOS）与 EC2 主体验收已完成；Kiro 相关场景待 kiro-cli 登录（见 `docs/handover/M1-EC2-EVIDENCE.md`） |
+| M1 运行底座 | 待验收（负责人确认）：本地（macOS）与 EC2 验收条件全部完成；OpenCode 核实结论为未通过（K01），替换配置可用。证据见 `docs/handover/M1-LOCAL-EVIDENCE.md`、`docs/handover/M1-EC2-EVIDENCE.md` |
 | M2 核心闭环 | 未开始 |
 | M3 客户端直连与控制台 | 未开始 |
 | M4 共享与组织 | 未开始 |
@@ -117,10 +117,10 @@ M4（共享与组织）、M5（仓库闭环）在 MVP 之后分别立项，各�
 - [x] 新仓库内迁入的回归测试与 UI 检查全部通过：旧版 92 项、新版 66 项（42 + 16 + 8）、迁入工具 3 项，Python 3.12.13 / 3.13（2026-10-11，`tools/regress.sh`，提交 `3a84485`）。
 - [x] 本机 macOS 以本仓库代码、独立端口与数据目录拉起三服务，以真实 ACP 跑通 Kiro、Claude Code、Codex 的最小研发、审查返工、三阶段流水线、API / Worker / Gateway 中途重启恢复、并发与备份恢复（2026-10-11，见 `docs/handover/M1-LOCAL-EVIDENCE.md`）。OpenCode 本地核实**未通过**（K01 复现），替换配置 deliver→claude 通过。
 - [x] EC2（AL2023 x86_64）上 KiroCrew Gateway（0.10.0，官方源码）以组合方式无桌面启动，`--check` 6 条路由正确，原生契约 6/6（2026-10-11）。
-- [ ] Kiro、Claude Code、Codex 的真实最小研发与返工在 EC2 上跑通，证据包含实际后端、原生 ID、源码基线、diff 与测试结果。
-- [ ] OpenCode 单独核实；失败如实记录，并提供用户可见的替换配置。
-- [ ] API / Worker / Gateway 分别重启后状态自动恢复，原生执行身份与持久化记录一致。（EC2：API 与 Worker 已通过；Gateway 待 Kiro 登录后验证）
-- [ ] 一个慢 Session 不阻塞其他 Session 推进。
+- [x] Kiro、Claude Code、Codex 的真实最小研发与返工在 EC2 上跑通，证据包含实际后端、原生 ID、源码基线、diff 与测试结果（2026-10-11，经 CloudFront：Kiro 冒烟、Claude→Codex、Kiro 规划三阶段、确定性审查返工 `run-317da209…`；见 `docs/handover/M1-EC2-EVIDENCE.md` #5、#9–#11）。
+- [x] OpenCode 单独核实；失败如实记录，并提供用户可见的替换配置。核实结论：**未通过**（本地与 EC2 均复现 K01；EC2 上 shell 写文件被 KiroCrew 工具门禁拒绝），替换配置 deliver→claude 通过。恢复条件：M2 回退链，并查明命中的门禁层。
+- [x] API / Worker / Gateway 分别重启后状态自动恢复，原生执行身份与持久化记录一致（本地与 EC2，2026-10-11；EC2 另测整机重启：约 30 s 恢复服务，Session 自动完成；10 个 Attempt 在原生侧各恰好 1 个子 Agent，无重复派发）。
+- [x] 一个慢 Session 不阻塞其他 Session 推进（`tests/test_engine_concurrency.py`；本地两个 Session 3 对 Attempt 区间重叠；EC2 两个 Session 并行执行）。
 - [x] 备份在独立目录恢复成功，源数据保留（本地与 EC2，2026-10-11；EC2 备份另存 S3）。
 
 ## 6．M2 核心闭环
@@ -192,7 +192,7 @@ M4（共享与组织）、M5（仓库闭环）在 MVP 之后分别立项，各�
 
 | # | 问题 | 影响的里程碑 |
 |---|---|---|
-| K01 | OpenCode 执行曾返回空结果或不完整交付，需原生续接补齐 | M1 / M2 |
+| K01 | OpenCode 执行曾返回空结果或不完整交付，需原生续接补齐（M1 本地与 EC2 均复现；EC2 上 shell 写文件被 KiroCrew 工具门禁拒绝） | M2 |
 | K02 | 含 `/`、`:`、`[]` 的模型 ID 被原生 spawn 格式拒绝（影响 OpenCode `provider/model` 与部分 Codex 模型 ID） | M1 |
 | K03 | 原生浏览器登录覆盖整个 Gateway，不是单 Session 票据；平台撤权不会使其失效 | M1 / M4 |
 | K04 | 新版 Web 未代理原生权限批准；存在待批准项时停止可能挂起 | M2 |
@@ -203,12 +203,13 @@ M4（共享与组织）、M5（仓库闭环）在 MVP 之后分别立项，各�
 | K09 | Engine 单线程串行推进，慢 Run 会阻塞其他 Run | M1 |
 | K10 | SQLite 没有 schema 迁移机制（M1）；Worker Token 以明文存放在数据库 `workers.config` 中（M4 移出数据库） | M1 / M4 |
 | K11 | 组合逻辑只存在于单个进程内；任何 re-exec 都会丢失 `PocProviderRegistry` | M1 |
-| K12 | Linux 沙箱依赖非特权 user namespace；不经官方 launcher 启动时需单独核实（AL2023 未实测） | M1 |
+| K12 | Linux 沙箱依赖非特权 user namespace；不经官方 launcher 启动时需单独核实（AL2023 已实测：`unshare -Ur true` 成功） | M1 |
 | K13 | 现有启动器与路径依赖 macOS：`/Applications/...`、App 内置 Python、zsh、Electron、`lsof`、Homebrew 路径 | M1 |
 | K14 | 旧版 Host 校验固定为 `127.0.0.1:<port>`，隧道或反向代理下会失败 | M1 |
-| K15 | Gateway 重启后不再列出已结束的内存任务；`/context` 背景在重启后丢失（本地实测：运行中任务被标为 `Orphaned: cancelled`，经自动诊断重试后完成） | M1 / M2 |
+| K15 | Gateway 重启后不再列出已结束的内存任务；`/context` 背景在重启后丢失（本地与 EC2 实测：运行中任务被原生取消，经自动诊断重试后完成，含整机重启） | M1 / M2 |
 | K19 | 原生 `/api/spawn` 的 `approval_mode` 在 0.8.0 中对 owner 认证请求生效，但原生文档字符串称其只对内部调用方生效；升级 KiroCrew 时必须复核，失效时改用 `hooks.auto_approve_subagent_spawn` | 每次升级 |
 | K20 | 父会话（原生聊天）在子任务进行时会被唤醒并尝试执行工具（额外 token 消耗）；全局 interactive 下这些请求 600 s 后被原生拒绝，不影响平台任务 | M2 排查 note / 完成事件触发机制 |
+| K21 | kiro-cli 没有非交互登录；`deploy.sh kiro-login` 以伪终端运行设备码登录（EC2 实测通过） | 上游提供非交互参数后移除 |
 
 ## 10．历史验证基线（来源记录，非本仓库复跑）
 
@@ -237,8 +238,8 @@ M4（共享与组织）、M5（仓库闭环）在 MVP 之后分别立项，各�
 
 | 输入 | 用于 |
 |---|---|
-| 执行 `deploy.sh up` 创建云资源的明确授权；确认候选规格（`deploy/aws/stack.env`：m7i.xlarge、100 GiB）与可选告警邮箱 | M1 部署 |
-| Kiro CLI 在 EC2 执行用户下的一次性设备码登录（IAM Identity Center）；Claude Code 与 Codex 经实例角色使用 Bedrock，无需登录 | M1 真实研发 |
+| ~~执行 `deploy.sh up` 创建云资源的明确授权；确认候选规格~~（2026-10-11 已授权，按 m7i.xlarge、100 GiB 创建；告警邮箱未设置） | M1 部署 |
+| ~~Kiro CLI 在 EC2 执行用户下的一次性设备码登录~~（2026-10-11 已完成，IAM Identity Center，Pro） | M1 真实研发 |
 | ~~KiroCrew 固定版本~~（已由 D18 确定：官方最新源码锁定 commit） | — |
 | 获授权的测试仓库（GitHub 或 GitLab）及其写凭据形式 | M2 闭环与分支推送 |
 | 报告模板的具体章节要求（如有指定格式） | M2 Feature 报告 |
