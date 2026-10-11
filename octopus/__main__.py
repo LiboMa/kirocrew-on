@@ -56,12 +56,17 @@ def build_parser(settings, environ=None):
     link = sub.add_parser("connect", help="让 Claude Code / Kiro CLI 经 MCP 连接 KiroCrew ON（写入 MCP 配置与使用说明）")
     link.add_argument("client", choices=["claude", "kiro"])
     link.add_argument("--url", required=True, help="平台地址，如 https://<分发>.cloudfront.net 或 http://127.0.0.1:8918")
-    link.add_argument("--token", help="已有 API Token；省略时用 --username 登录并创建一枚 30 天 Token")
+    link.add_argument("--token", help="已有 API Token（也可用环境变量 OCTOPUS_API_TOKEN）；都没有时用 --username 登录并创建一枚 30 天 Token")
     link.add_argument("--username", default="admin")
     link.add_argument("--password-env", default="OCTOPUS_PASSWORD", help="读取密码的环境变量；未设置时交互输入")
     link.add_argument("--scope", help="claude: user/project/local（默认 user）；kiro: workspace/global（默认 workspace）")
     link.add_argument("--project", help="kiro workspace 范围的项目目录（默认当前目录）")
     link.add_argument("--dry-run", action="store_true")
+    skill_cmd = sub.add_parser("skill", help="渲染 kirocrew-on Skill：写入指定 skills 目录，或省略 --dest 时输出到标准输出")
+    skill_cmd.add_argument("--url", required=True, help="平台地址（写入 Skill）")
+    skill_cmd.add_argument("--dest", action="append", default=[],
+                           help="skills 目录，可重复，如 ~/.agents/skills、~/.codex/skills；写入 <dest>/kirocrew-on/SKILL.md")
+    skill_cmd.add_argument("--dry-run", action="store_true")
     ready = sub.add_parser("wait-ready", help="等待服务就绪（供 systemd ExecStartPost 使用）")
     ready.add_argument("--api", action="store_true")
     ready.add_argument("--worker", action="store_true")
@@ -177,7 +182,9 @@ def main(argv=None):
         print(dumps(archive_directory(Path(args.source), Path(args.dest), args.name, tuple(args.exclude))))
     elif args.command == "connect":
         from .connect import connect
-        token = args.token
+        token = args.token or os.environ.get("OCTOPUS_API_TOKEN")
+        if token and not args.token:
+            print("使用环境变量 OCTOPUS_API_TOKEN 中的 Token")
         if not token and not args.dry_run:
             password = os.environ.get(args.password_env) or getpass.getpass(f"{args.username} 的密码：")
             session = Client(args.url, "")
@@ -189,6 +196,13 @@ def main(argv=None):
                               dry_run=args.dry_run):
             print(action)
         print("完成：重新打开客户端后可用 kirocrew-on 的 MCP 工具；Token 30 天有效，可在控制台撤销。" if not args.dry_run else "（dry-run，未写入）")
+    elif args.command == "skill":
+        from .connect import install_skill, skill
+        if not args.dest:
+            print(skill(args.url), end="")
+        for dest in args.dest:
+            for action in install_skill(args.url, dest, args.dry_run):
+                print(action)
     elif args.command == "restore-verify":
         from .backup import restore_verify
         print(dumps(restore_verify(Path(args.manifest), Path(args.into))))
