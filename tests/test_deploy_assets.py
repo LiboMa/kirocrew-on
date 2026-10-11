@@ -68,5 +68,15 @@ class DeployAssetTests(unittest.TestCase):
         self.assertEqual(boundary.approval_mode, "auto")
 
 
+    def test_failed_kirocrew_install_is_retried_not_kept(self):
+        text = (ROOT / "deploy/install/al2023.sh").read_text()
+        # Installed means verified-importable with a sentinel; a failed attempt is removed so the next run retries.
+        # The venv is built at its final path (pip console-script shebangs embed it), never moved.
+        self.assertIn("-c 'import kiro_crew'", text)
+        self.assertIn('touch "$KC/.installed"', text)
+        self.assertIn("trap 'rm -rf \"$KC\"' EXIT", text)
+        self.assertNotIn('[ ! -x "$KC/venv/bin/python" ]', text)
+        self.assertNotIn('mv "$STAGE"', text)
+
 if __name__ == "__main__":
     unittest.main()

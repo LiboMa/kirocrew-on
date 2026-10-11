@@ -37,12 +37,20 @@ ln -sfn "/opt/kirocrew-on/releases/$RELEASE" /opt/kirocrew-on/current
 (cd /opt/kirocrew-on/current && npm ci --omit=dev)
 
 KC="/opt/kirocrew/$KIROCREW_VERSION"
-if [ ! -x "$KC/venv/bin/python" ]; then
+if [ ! -f "$KC/.installed" ] || ! "$KC/venv/bin/python" -c 'import kiro_crew' 2>/dev/null; then
+  # Build at the final path (pip console-script shebangs embed it) and mark success with a sentinel;
+  # a failed download or pip run removes the partial install so the next invocation retries.
+  rm -rf "$KC"
+  trap 'rm -rf "$KC"' EXIT
   "$PYTHON" -m venv "$KC/venv"
   WHEEL="$(mktemp -d)/kirocrew-$KIROCREW_VERSION.whl"
   curl -fsSL "$KIROCREW_WHEEL_URL" -o "$WHEEL"
   echo "$KIROCREW_WHEEL_SHA256  $WHEEL" | sha256sum -c -
   "$KC/venv/bin/python" -m pip install "$WHEEL"
+  "$KC/venv/bin/python" -c 'import kiro_crew'
+  rm -rf "$(dirname "$WHEEL")"
+  touch "$KC/.installed"
+  trap - EXIT
 fi
 ln -sfn "$KC" /opt/kirocrew/current
 
