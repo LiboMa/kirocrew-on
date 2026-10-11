@@ -201,5 +201,34 @@ class FinalReviewEngineTests(unittest.TestCase):
         time.sleep(0.3)
         self.assertEqual(calls, ["run-a"])
 
+class FairnessTests(unittest.TestCase):
+    """Focused review C1: long-lived older Sessions must not starve newer ones under non-blocking ticks."""
+
+    def test_newer_session_is_advanced_while_older_ones_stay_active(self):
+        temporary = tempfile.TemporaryDirectory()
+        self.addCleanup(temporary.cleanup)
+        db = Database(Path(temporary.name))
+        seed(db, "run-a", "run-b")
+        with db.transaction() as c:
+            c.execute("UPDATE runs SET status='stopping', desired='stop' WHERE id IN ('run-a','run-b')")
+        time.sleep(0.01)
+        seed_more = time.time()
+        with db.transaction() as c:
+            c.execute("INSERT INTO runs(id,owner_id,worker_id,snapshot,input,source,status,created,updated) "
+                      "VALUES('run-c','u','w','{}','goal',?,'preparing',?,?)", (dumps({"type": "new"}), seed_more, seed_more))
+        advanced = []
+
+        def request(config, path, body=None, timeout=35):
+            advanced.append(body["run_id"])
+            if path == "/control":
+                return {"status": "stopping"}  # never finishes stopping
+            return {"native_parent": "x", "workspace": "/w"}
+
+        engine = Engine(db, request=request, workers=1)
+        for _ in range(6):
+            for future in engine.tick(wait=False):
+                future.result()
+        self.assertIn("run-c", advanced)
+
 if __name__ == "__main__":
     unittest.main()

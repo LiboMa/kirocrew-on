@@ -21,6 +21,7 @@ class Engine:
         self.pool = ThreadPoolExecutor(max_workers=workers, thread_name_prefix="octopus-session")
         self.inflight, self.futures, self.guard = set(), set(), threading.Lock()
         self.retry_unavailable, self.clock, self.backoff = retry_unavailable, clock, {}
+        self.turns, self.turn = {}, 0  # last submission order per Session, for round-robin fairness
     def start(self):
         self.lease = (self.db.root / "engine.lock").open("a")
         fcntl.flock(self.lease, fcntl.LOCK_EX | fcntl.LOCK_NB)
@@ -77,6 +78,8 @@ class Engine:
                 "ORDER BY r.created")]
         now = self.clock()
         pending = [rid for rid in ids if self.backoff.get(rid, (0, 0.0))[1] <= now]
+        # Least recently advanced first (stable by creation order): long-lived Sessions cannot starve newer ones.
+        pending.sort(key=lambda rid: self.turns.get(rid, 0))
         submitted = []
         while pending and not self.stopping.is_set():
             batch = []
@@ -89,6 +92,8 @@ class Engine:
                     if rid in self.inflight:
                         continue
                     self.inflight.add(rid)
+                    self.turn += 1
+                    self.turns[rid] = self.turn
                     free -= 1
                     future = self.pool.submit(self._advance_guarded, rid)
                     self.futures.add(future)
