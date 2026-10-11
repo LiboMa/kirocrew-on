@@ -116,5 +116,90 @@ class ConcurrencyTests(unittest.TestCase):
         self.assertEqual(status(self.db, "run-a"), "blocked")
 
 
+class FinalReviewEngineTests(unittest.TestCase):
+    """I1: reconcile must not act on in-flight Sessions. I2: bounded submission, fresh rows, cancellable drain."""
+
+    def setUp(self):
+        self.temporary = tempfile.TemporaryDirectory()
+        self.db = Database(Path(self.temporary.name))
+        self.release = threading.Event()
+
+    def tearDown(self):
+        self.release.set()
+        self.temporary.cleanup()
+
+    def test_reconcile_skips_sessions_that_are_being_advanced(self):
+        from octopus import recovery
+        seed(self.db, "run-x")
+        now = time.time()
+        with self.db.transaction() as c:
+            c.execute("UPDATE runs SET status='running', native_parent='p', snapshot=? WHERE id='run-x'",
+                      (dumps({"recovery": {"enabled": True, "max_cycles": 2}}),))
+            c.execute("INSERT INTO tasks(run_id,id,ordinal,spec,status,current_attempt) VALUES('run-x','code',0,'{}','blocked','a1')")
+            c.execute("INSERT INTO attempts(id,run_id,task_id,number,spec,status,evidence,error,created,updated) "
+                      "VALUES('a1','run-x','code',1,'{}','blocked',?,'boom',?,?)", (dumps({"failure_type": "tests"}), now, now))
+        recovery.reconcile(self.db, skip={"run-x"})
+        with self.db.read() as c:
+            self.assertEqual(c.execute("SELECT count(*) FROM recoveries").fetchone()[0], 0)
+        recovery.reconcile(self.db)
+        with self.db.read() as c:
+            self.assertEqual(c.execute("SELECT count(*) FROM recoveries").fetchone()[0], 1)
+
+    def test_tick_passes_in_flight_sessions_to_reconcile(self):
+        from unittest.mock import patch
+        seed(self.db, "run-slow")
+        engine = Engine(self.db, request=lambda c, p, b=None, timeout=35: (self.release.wait(10), {"native_parent": "x", "workspace": "/w"})[1], workers=2)
+        engine.tick(wait=False)
+        time.sleep(0.2)
+        seen = []
+        with patch("octopus.recovery.reconcile", side_effect=lambda db, skip=frozenset(): seen.append(set(skip))):
+            engine.tick(wait=False)
+        self.release.set()
+        self.assertTrue(engine.drain(5))
+        self.assertEqual(seen, [{"run-slow"}])
+
+    def test_non_blocking_tick_submits_only_free_workers(self):
+        seed(self.db, "run-a", "run-b", "run-c")
+        engine = Engine(self.db, request=lambda c, p, b=None, timeout=35: (self.release.wait(10), {"native_parent": "x", "workspace": "/w"})[1], workers=1)
+        self.assertEqual(len(engine.tick(wait=False)), 1)
+        self.assertEqual(engine.tick(wait=False), [])
+        self.release.set()
+        self.assertTrue(engine.drain(5))
+
+    def test_queued_session_sees_a_stop_requested_while_waiting(self):
+        seed(self.db, "run-a", "run-b")
+        calls = []
+
+        def request(config, path, body=None, timeout=35):
+            calls.append((body["run_id"], path))
+            if body["run_id"] == "run-a" and path == "/prepare":
+                with self.db.transaction() as c:  # the user stops run-b while run-a is being prepared
+                    c.execute("UPDATE runs SET desired='stop' WHERE id='run-b'")
+                return {"native_parent": "x", "workspace": "/w"}
+            if path == "/control":
+                return {"status": "stopped", "lifecycle": "open"}
+            return {"native_parent": "x", "workspace": "/w"}
+
+        Engine(self.db, request=request, workers=1).tick()
+        self.assertIn(("run-b", "/control"), calls)
+        self.assertNotIn(("run-b", "/prepare"), calls)
+
+    def test_drain_cancels_and_never_starts_waiting_work(self):
+        seed(self.db, "run-a", "run-b")
+        calls = []
+
+        def request(config, path, body=None, timeout=35):
+            calls.append(body["run_id"])
+            self.release.wait(10)
+            return {"native_parent": "x", "workspace": "/w"}
+
+        engine = Engine(self.db, request=request, workers=1)
+        engine.tick(wait=False)
+        time.sleep(0.1)
+        self.assertFalse(engine.drain(0.2))
+        self.release.set()
+        time.sleep(0.3)
+        self.assertEqual(calls, ["run-a"])
+
 if __name__ == "__main__":
     unittest.main()

@@ -143,5 +143,53 @@ class WaitReadyCommandTests(unittest.TestCase):
                 httpd.shutdown()
                 httpd.server_close()
 
+class BoundedShutdownTests(unittest.TestCase):
+    """I2: SIGTERM with a Worker call still in flight exits 0 within the configured grace period."""
+
+    def test_sigterm_with_slow_inflight_worker_call_exits_within_grace(self):
+        import http.server
+        import threading
+        from octopus.db import Database, dumps
+        received = threading.Event()
+
+        class Slow(http.server.BaseHTTPRequestHandler):
+            def log_message(self, *_):
+                pass
+
+            def do_POST(self):
+                received.set()
+                time.sleep(30)
+
+        stub = http.server.ThreadingHTTPServer(("127.0.0.1", 0), Slow)
+        stub.daemon_threads = True
+        threading.Thread(target=stub.serve_forever, daemon=True).start()
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            config = root / "octopus.toml"
+            config.write_text(f'data_dir = "{root}/platform"\nshutdown_grace = 1.0\nengine_workers = 1\n')
+            db = Database(root / "platform")
+            now = time.time()
+            with db.transaction() as c:
+                c.execute("INSERT INTO users(id,username,password,admin,active,created) VALUES('u','u','x',1,1,?)", (now,))
+                c.execute("INSERT INTO workers(id,name,owner_id,config) VALUES('w','w','u',?)",
+                          (dumps({"url": f"http://127.0.0.1:{stub.server_address[1]}", "token": "t" * 40}),))
+                c.execute("INSERT INTO runs(id,owner_id,worker_id,snapshot,input,source,status,created,updated) "
+                          "VALUES('run-slow','u','w','{}','goal',?,'preparing',?,?)", (dumps({"type": "new"}), now, now))
+            process = subprocess.Popen([sys.executable, "-m", "octopus", "--config", str(config), "serve", "--port", "0"],
+                                       cwd=ROOT, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
+            try:
+                process.stdout.readline()
+                self.assertTrue(received.wait(10), "Engine never called the Worker")
+                started = time.monotonic()
+                process.send_signal(signal.SIGTERM)
+                self.assertEqual(process.wait(timeout=15), 0)
+                self.assertLess(time.monotonic() - started, 8)
+            finally:
+                if process.poll() is None:
+                    process.kill()
+                process.stdout.close()
+                stub.shutdown()
+                stub.server_close()
+
 if __name__ == "__main__":
     unittest.main()

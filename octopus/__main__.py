@@ -100,8 +100,12 @@ def main(argv=None):
         try:
             httpd.serve_forever()
         finally:
-            engine.drain(30)
+            drained = engine.drain(settings.shutdown_grace)
             httpd.server_close()
+            if not drained:
+                # Worker calls can block for minutes; their outcome is reconciled from durable state on restart.
+                print("KiroCrew ON API: 在途推进未在宽限期内结束；状态已持久化，重启后核对", flush=True)
+                os._exit(0)
     elif args.command == "worker":
         from .worker import Worker, serve
         token_path = Path(args.token_file)

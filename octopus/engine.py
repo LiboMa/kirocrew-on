@@ -17,10 +17,10 @@ class Engine:
     def __init__(self, database, request=worker_request, workers=1, retry_unavailable=0.0, clock=time.monotonic):
         self.db, self.request = database, request
         self.stopping = threading.Event()
+        self.workers = workers
         self.pool = ThreadPoolExecutor(max_workers=workers, thread_name_prefix="octopus-session")
         self.inflight, self.futures, self.guard = set(), set(), threading.Lock()
         self.retry_unavailable, self.clock, self.backoff = retry_unavailable, clock, {}
-
     def start(self):
         self.lease = (self.db.root / "engine.lock").open("a")
         fcntl.flock(self.lease, fcntl.LOCK_EX | fcntl.LOCK_NB)
@@ -38,12 +38,13 @@ class Engine:
             self.stopping.wait(1)
 
     def drain(self, timeout):
+        """Stop admitting work, cancel anything not yet started, wait up to ``timeout`` for in-flight advances."""
         self.stopping.set()
+        self.pool.shutdown(wait=False, cancel_futures=True)
         with self.guard:
-            pending = set(self.futures)
-        done, not_done = wait_futures(pending, timeout=timeout)
+            pending = {future for future in self.futures if not future.cancelled()}
+        _, not_done = wait_futures(pending, timeout=timeout)
         return not not_done
-
     def update(self, rid, status, error=None, **extra):
         with self.db.transaction() as db:
             run = db.execute("SELECT * FROM runs WHERE id=?", (rid,)).fetchone()
@@ -63,46 +64,73 @@ class Engine:
                 self.db.event(db, rid, "run.state", {"status": status, "error": error})
 
     def tick(self, wait=True):
-        recovery.reconcile(self.db)
+        with self.guard:
+            busy = frozenset(self.inflight)
+        # Only this thread submits advances, and only after reconcile returns: in-flight Sessions are the
+        # only ones an advance could be writing concurrently, so reconcile leaves them to their own advance.
+        recovery.reconcile(self.db, skip=busy)
         with self.db.read() as db:
-            active = [dict(r) for r in db.execute(
-                "SELECT r.*,w.config worker_config,w.enabled worker_enabled FROM runs r "
+            ids = [r["id"] for r in db.execute(
+                "SELECT r.id FROM runs r "
                 "JOIN workers w ON w.id=r.worker_id WHERE r.lifecycle!='deleted' AND "
                 "r.status IN ('preparing','ready','running','waiting_approval','dispatch_unknown','stopping','reopening','diagnosing') "
                 "ORDER BY r.created")]
-        now, submitted = self.clock(), []
-        for run in active:
-            if self.backoff.get(run["id"], (0, 0.0))[1] > now:
-                continue
+        now = self.clock()
+        pending = [rid for rid in ids if self.backoff.get(rid, (0, 0.0))[1] <= now]
+        submitted = []
+        while pending and not self.stopping.is_set():
+            batch = []
             with self.guard:
-                if run["id"] in self.inflight:
-                    continue
-                self.inflight.add(run["id"])
-                future = self.pool.submit(self._advance_guarded, run)
-                self.futures.add(future)
-            future.add_done_callback(self._forget)
-            submitted.append(future)
-        if wait:
-            for future in submitted:
+                # Submit no more than free workers: nothing queues behind a slow Session, and a
+                # Session is read fresh when its advance actually starts.
+                free = self.workers - len(self.inflight)
+                while pending and free > 0:
+                    rid = pending.pop(0)
+                    if rid in self.inflight:
+                        continue
+                    self.inflight.add(rid)
+                    free -= 1
+                    future = self.pool.submit(self._advance_guarded, rid)
+                    self.futures.add(future)
+                    batch.append(future)
+            for future in batch:
+                future.add_done_callback(self._forget)
+            submitted += batch
+            if not wait or not batch:
+                break
+            for future in batch:
                 future.result()
         return submitted
-
     def _forget(self, future):
         with self.guard:
             self.futures.discard(future)
 
-    def _advance_guarded(self, run):
+    def _advance_guarded(self, rid):
+        run = None
         try:
+            run = self._active(rid)
+            if run is None:
+                return
             self.advance(run)
-            self.backoff.pop(run["id"], None)
+            self.backoff.pop(rid, None)
         except Exception as exc:
+            if run is None:
+                raise
             self._failed(run, exc)
         finally:
             with self.guard:
-                self.inflight.discard(run["id"])
+                self.inflight.discard(rid)
 
+    def _active(self, rid):
+        with self.db.read() as db:
+            row = db.execute(
+                "SELECT r.*,w.config worker_config,w.enabled worker_enabled FROM runs r "
+                "JOIN workers w ON w.id=r.worker_id WHERE r.id=? AND r.lifecycle!='deleted' AND "
+                "r.status IN ('preparing','ready','running','waiting_approval','dispatch_unknown','stopping','reopening','diagnosing')",
+                (rid,)).fetchone()
+        return dict(row) if row else None
     def _failed(self, run, exc):
-        unavailable = bool(self.retry_unavailable) and getattr(exc, "code", "") == "worker_unavailable"
+        unavailable = bool(self.retry_unavailable) and getattr(exc, "code", "") in {"worker_unavailable", "native_unavailable"}
         if unavailable:
             failures = self.backoff.get(run["id"], (0, 0.0))[0] + 1
             self.backoff[run["id"]] = (failures, self.clock() + min(60.0, self.retry_unavailable * 2 ** (failures - 1)))

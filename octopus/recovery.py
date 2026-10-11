@@ -138,14 +138,19 @@ def automatic(database, rid, aid):
         schedule(db, database, run, task, attempt)
 
 
-def reconcile(database):
-    """Recover a crash between persisting task failure and scheduling diagnosis."""
+def reconcile(database, skip=frozenset()):
+    """Recover a crash between persisting task failure and scheduling diagnosis.
+
+    ``skip``: Sessions currently being advanced; their own advance schedules diagnosis.
+    """
     with database.transaction() as db:
         rows = list(db.execute(
             "SELECT DISTINCT r.id FROM runs r JOIN tasks t ON t.run_id=r.id "
             "WHERE r.desired='active' AND r.lifecycle='open' AND r.status IN ('running','ready','blocked') "
             "AND t.status='blocked' AND t.current_attempt IS NOT NULL"))
         for row in rows:
+            if row["id"] in skip:
+                continue
             run = dict(db.execute("SELECT * FROM runs WHERE id=?", (row["id"],)).fetchone())
             task = db.execute("SELECT * FROM tasks WHERE run_id=? AND status!='accepted' ORDER BY ordinal LIMIT 1",
                               (run["id"],)).fetchone()

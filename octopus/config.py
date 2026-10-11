@@ -20,7 +20,7 @@ MAC_KIROCREW_PYTHON = Path("/Applications/KiroCrew.app/Contents/Resources/backen
 PATHS = {"data_dir", "worker_data_dir", "worker_token_file", "crew_home", "kiro_home", "routing_log",
          "log_dir", "gateway_runtime_file", "kirocrew_python", "adapters_dir"}
 INTS = {"api_port": (1, 65535), "worker_port": (1, 65535), "gateway_port": (1, 65535), "engine_workers": (1, 32)}
-FLOATS = {"retry_unavailable": (0.0, 600.0)}
+FLOATS = {"retry_unavailable": (0.0, 600.0), "shutdown_grace": (0.0, 300.0)}
 STRINGS = {"api_host", "worker_host", "public_url", "crew_url", "worker_isolation", "approval_mode"}
 APPROVAL = ("", "auto", "interactive")
 HOST = re.compile(r"^[A-Za-z0-9.\-]+(:\d{1,5})?$|^\[[0-9A-Fa-f:]+\](:\d{1,5})?$")
@@ -46,6 +46,7 @@ class Settings:
     public_url: str = ""
     engine_workers: int = 4
     retry_unavailable: float = 2.0
+    shutdown_grace: float = 30.0
     worker_host: str = "127.0.0.1"
     worker_port: int = 8928
     worker_isolation: str = "trusted-local"
