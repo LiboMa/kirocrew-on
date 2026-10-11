@@ -46,6 +46,7 @@ def build_parser(settings, environ=None):
     worker.add_argument("--crew-home", default=str(settings.crew_home))
     worker.add_argument("--routing-log", default=str(settings.routing_log))
     worker.add_argument("--isolation", choices=["dedicated", "trusted-local"], default=settings.worker_isolation)
+    worker.add_argument("--approval-mode", choices=["", "auto", "interactive"], default=settings.approval_mode)
     ready = sub.add_parser("wait-ready", help="等待服务就绪（供 systemd ExecStartPost 使用）")
     ready.add_argument("--api", action="store_true")
     ready.add_argument("--worker", action="store_true")
@@ -109,7 +110,7 @@ def main(argv=None):
             token_path.write_text(secrets.token_urlsafe(40))
             os.chmod(token_path, 0o600)
         node = Worker(args.data, token_path.read_text().strip(), args.gateway_port, args.crew_home,
-                      args.isolation, args.routing_log, args.crew_url)
+                      args.isolation, args.routing_log, args.crew_url, args.approval_mode)
         httpd = serve(node, args.port, args.host)
         signal.signal(signal.SIGTERM, lambda *_: threading.Thread(target=httpd.shutdown, daemon=True).start())
         print(f"KiroCrew ON Worker: http://{args.host}:{httpd.server_address[1]} ({args.isolation})", flush=True)

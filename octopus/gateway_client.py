@@ -68,13 +68,19 @@ def chat_entry_url(slot, port=5476, *, home=None, origin=None):
     })
 
 
-def request(path, body=None, method=None, *, port=5476, home=None):
+def request(path, body=None, method=None, *, port=5476, home=None, internal=False):
+    # internal=True: loopback process credential (X-Internal-Secret), the native contract for
+    # transport-layer spawn parameters such as approval_mode; never sent anywhere but 127.0.0.1.
+    if internal:
+        secret = ((home or Path.home() / ".kiro/crew") / ".local_secret").read_text().strip()
+        credential = {"X-Internal-Secret": secret}
+    else:
+        credential = {"Cookie": f"mc_token_{port}={token(port, home)}"}
     req = urllib.request.Request(
         f"http://127.0.0.1:{port}{path}",
         data=json.dumps(body).encode() if body is not None else None,
         method=method,
-        headers={"Cookie": f"mc_token_{port}={token(port, home)}", "Content-Type": "application/json",
-                 "Origin": f"http://127.0.0.1:{port}"},
+        headers={**credential, "Content-Type": "application/json", "Origin": f"http://127.0.0.1:{port}"},
     )
     try:
         with urllib.request.urlopen(req, timeout=30) as response:

@@ -38,7 +38,7 @@ def write(path, value):
 
 class Worker:
     def __init__(self, root, token, gateway_port=5476, crew_home=None, isolation="trusted-local", routing_log=None,
-                 crew_url=None):
+                 crew_url=None, approval_mode=""):
         self.root = Path(root).resolve()
         self.root.mkdir(parents=True, exist_ok=True, mode=0o700)
         self.token, self.port = token, gateway_port
@@ -50,9 +50,12 @@ class Worker:
         self.lock = threading.RLock()
         require(len(token) >= 32, "Worker Token 至少 32 字符")
         require(isolation in {"dedicated", "trusted-local"}, "Worker 隔离模式无效")
+        require(approval_mode in {"", "auto", "interactive"}, "Worker 批准模式无效")
+        # "auto": this unattended boundary asks KiroCrew for native auto approval on platform spawns (D14).
+        self.approval_mode = approval_mode
 
-    def native(self, path, body=None, method=None):
-        return crew_api.request(path, body, method, port=self.port, home=self.home)
+    def native(self, path, body=None, method=None, internal=False):
+        return crew_api.request(path, body, method, port=self.port, home=self.home, internal=internal)
 
     def path(self, rid):
         require(isinstance(rid, str) and re.fullmatch(r"run-[a-f0-9]{32}", rid), "Run ID 无效")
@@ -68,6 +71,7 @@ class Worker:
         namespace = {"kiro": "acp", "claude": "claude_code", "codex": "codex", "opencode": "opencode"}
         advertised = {tool: [m for m in models.get(ns, []) if isinstance(m, str)] for tool, ns in namespace.items()}
         return {"version": "1.0.0", "isolation": self.isolation, "workflow_design": True,
+                "spawn_approval": "auto" if self.approval_mode == "auto" else "interactive",
                 "crew_entry": True, "crew_origin": self.crew_origin,
                 "coordinator_recovery": True, "quality_outcome": True,
                 "boundary": hashlib.sha256(boundary.encode()).hexdigest(),
@@ -215,7 +219,7 @@ class Worker:
                      "status": "dispatching", "attempt_id": attempt, "context_hash": context_hash}
             write(record, value)  # Persist before the native side effect.
             try:
-                result = self.native("/api/spawn", {
+                spawn = {
                     "task": prompt, "parent_session": parent["parent"],
                     "agent": "poc-coordinator" if body.get("coordination") else "poc-" + spec["tool"],
                     "model": spec["model"], "reasoning_effort": spec["effort"],
@@ -223,7 +227,11 @@ class Worker:
                     "include_lessons": False, "include_project": False,
                     "solo_reason": "user_requested",
                     "solo_details": "用户通过 Octopus API 选择此任务、工具与执行配置。",
-                    "silent": True})
+                    "silent": True}
+                if self.approval_mode == "auto":
+                    result = self.native("/api/spawn", {**spawn, "approval_mode": "auto"}, internal=True)
+                else:
+                    result = self.native("/api/spawn", spawn)
                 require(re.fullmatch(r"[a-f0-9]{8,64}", str(result.get("id", ""))), "原生 Task ID 无效")
                 value.update(status="running", native_id=result["id"], receipt=result)
             except crew_api.GatewayError as exc:
