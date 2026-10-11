@@ -14,7 +14,7 @@
 | ACP 适配器 | claude-agent-acp 0.84.0、codex-acp 1.11.0（codex-cli 0.153.4），由本仓库 `npm ci` 安装 |
 | 工具 | kiro-cli 2.29.0、Claude Code 2.1.296、OpenCode 1.18.30（版本为本机观测值） |
 | 隔离 | 独立端口 Gateway 6476 / Worker 8938 / API 8948；独立 `KIROCREW_HOME`、`KIRO_HOME` 在 `state/local-e2e/`；`~/.kiro/agents` 与 `~/.kiro/crew/config.json` 前后校验和不变 |
-| 执行边界 | `trusted-local`，`approval_mode = auto`（D14） |
+| 执行边界 | `trusted-local`，`approval_mode = auto`（D14：仅平台派发的 spawn；全局工具批准保持 interactive） |
 | 平台 | `engine_workers = 4`，`retry_unavailable = 2.0`，`shutdown_grace = 30` |
 
 ## 验收结果
@@ -33,6 +33,8 @@
 | 9 | 编码中重启 Gateway | `run-84677cb5…` | 通过（自动恢复） | 原生将运行中任务标为 `Orphaned: cancelled` → code#1 blocked → Coordinator 自动诊断 → code#2 accepted → review accepted → completed |
 | 10 | 并发 | `run-0b4a73ce…` × `run-93a3e5fa…` | 通过 | 两个 Session 的 Attempt 有 3 对时间区间重叠，互不阻塞 |
 | 11 | 备份与独立目录恢复 | — | 通过 | 数据库备份 integrity ok（11 Run、24 Attempt）；Worker 数据归档 258 个文件；`restore-verify` 在新目录恢复，行数一致；文件 0600 |
+| 12 | 聚焦审查修复后复验：全局 interactive + 平台派发 auto + `poc-diagnose` 诊断 | `run-a9715ef6…` | 通过 | review#1 `changes_requested` → `poc-diagnose` 诊断 → code#2 → review#2 被原生取消（Codex 运行了无脚本的 `node` REPL）→ 自动诊断重试 → review#3 pass |
+| 13 | 最终配置冒烟 | `run-bb5f374f…` | 通过 | kiro，outcome pass |
 
 ## 本地端到端发现并修复的问题
 
@@ -44,6 +46,8 @@
 | L4 | `agent.approval_mode=auto` 后 spawn 仍被拒 | 该项只管工具调用，不放行 spawn | 平台派发的 spawn 请求原生 `approval_mode=auto` |
 | L5 | 用内部密钥派发被拒（`member_identity_unavailable`） | 0.8.0 要求内部调用方带已验证的执行身份 | 改为 owner 认证的 `/api/spawn`（契约风险 K19） |
 | L6 | Coordinator 正确诊断却被阻断 | `retry` 标签指向上游 Task | 规范化为 `rework` 并记录 `normalized_from` |
+| L7 | 自动批准可能扩散到诊断 Agent 的嵌套 spawn（聚焦审查 I1） | `poc-coordinator` 模板带 kirocrew-core | 诊断改用仅 read / write / shell 的 `poc-diagnose` |
+| L8 | 长期活跃的老 Session 饿死新 Session（聚焦审查 C1） | 每轮总从最早创建的 Session 开始提交 | 按最久未推进优先轮转 |
 
 同期修复的全分支审查问题：I1 reconcile 与在途推进交错、I2 停机不受限、I3 Gateway 不可用被判 blocked、I4 re-exec 无法检测、I5 安装失败不可重试。
 

@@ -130,9 +130,10 @@ $P restore-verify /var/lib/octopus/platform/backups/octopus-<时间>.json --into
 
 ## 13．批准模式
 
-无人值守的执行边界在 `boundary-<边界>.toml` 中设置 `approval_mode = "auto"`（D14）。Gateway 启动时核对
-`KIROCREW_HOME/config.json` 的 `agent.approval_mode` 与之一致，不一致直接拒绝启动；Worker 对平台派发的 spawn 请求原生
-`approval_mode=auto`。升级 KiroCrew 后先用一个冒烟任务确认 spawn 未被拒绝（K19）。
+无人值守的执行边界在 `boundary-<边界>.toml` 中设置 `approval_mode = "auto"`（D14）：Worker 只对平台派发的 spawn 请求原生
+`approval_mode=auto`；`KIROCREW_HOME/config.json` 的全局工具批准保持 `interactive`，owner 与父会话的原生聊天仍需人工批准
+（无人处理时 600 s 后被原生拒绝）。诊断使用不能派生子任务的 `poc-diagnose` 模板。升级 KiroCrew 后先用一个冒烟任务确认
+spawn 未被拒绝（K19）。
 
 ## 14．本地端到端（macOS）
 

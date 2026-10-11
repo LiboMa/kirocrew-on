@@ -45,7 +45,7 @@ M4（共享与组织）、M5（仓库闭环）在 MVP 之后分别立项，各�
 | D11 | 与 Claude Code / Codex / Kiro CLI / Kiro IDE 直连，本地与远端智能联动，纳入 MVP |
 | D12 | 先在本地（macOS）用本仓库代码以真实 ACP 跑通完整链路，再部署到远端 EC2（2026-10-11） |
 | D13 | 自动生成任务（Pipeline 生成）参考旧版 `kirocrew-app-poc` 的实现：意图生成、Pipeline 规划阶段、确定性门禁与模板（2026-10-11） |
-| D14 | 无人值守的执行边界使用 KiroCrew 原生 auto 批准：边界配置 `approval_mode = "auto"`，平台派发的 spawn 以 owner 认证请求原生 `approval_mode=auto`；约束来自执行边界（独立 OS 用户 / HOME、原生沙箱、cwd 限定 Worker 数据目录）（2026-10-11） |
+| D14 | 无人值守的执行边界使用 KiroCrew 原生 auto 批准，**仅限平台派发的 spawn**：边界配置 `approval_mode = "auto"` 时 Worker 以 owner 认证请求原生 `approval_mode=auto`；边界的全局工具批准（`KIROCREW_HOME/config.json`）保持 `interactive`，owner 与父会话的原生聊天仍需人工批准；诊断任务使用不能派生子任务的 `poc-diagnose` 模板；约束来自执行边界（独立 OS 用户 / HOME、原生沙箱、cwd 限定 Worker 数据目录）（2026-10-11，经本地真实运行收窄） |
 
 ## 3．设计默认值（已提出，待确认）
 
@@ -204,6 +204,7 @@ M4（共享与组织）、M5（仓库闭环）在 MVP 之后分别立项，各�
 | K14 | 旧版 Host 校验固定为 `127.0.0.1:<port>`，隧道或反向代理下会失败 | M1 |
 | K15 | Gateway 重启后不再列出已结束的内存任务；`/context` 背景在重启后丢失（本地实测：运行中任务被标为 `Orphaned: cancelled`，经自动诊断重试后完成） | M1 / M2 |
 | K19 | 原生 `/api/spawn` 的 `approval_mode` 在 0.8.0 中对 owner 认证请求生效，但原生文档字符串称其只对内部调用方生效；升级 KiroCrew 时必须复核，失效时改用 `hooks.auto_approve_subagent_spawn` | 每次升级 |
+| K20 | 父会话（原生聊天）在子任务进行时会被唤醒并尝试执行工具（额外 token 消耗）；全局 interactive 下这些请求 600 s 后被原生拒绝，不影响平台任务 | M2 排查 note / 完成事件触发机制 |
 
 ## 10．历史验证基线（来源记录，非本仓库复跑）
 

@@ -24,3 +24,4 @@
 | K17 | 原生 token 每次调用现取（一次 inspect 2–3 次 `/api/token/local`） | — | 无功能影响 | M2 视负载评估缓存 |
 | K18 | 旧版意图生成的派生状态不回写 `job.json`，迟到结果无后端保护 | 旧版运行目录 14 个设计 job 全部停在 `submitted` | 前端 scope / id 守卫 | M2 生成任务改由 Engine 执行并存 SQLite |
 | K19 | 原生 `/api/spawn` 的 `approval_mode` 在 0.8.0 中对 owner 认证请求生效，文档字符串却称仅限内部调用方；内部密钥调用要求已验证的执行身份（`member_identity_unavailable`） | 本地端到端 L4 / L5 | 平台派发经 owner 认证请求 `approval_mode=auto` | 每次升级 KiroCrew 复核；失效时改用 `hooks.auto_approve_subagent_spawn` |
+| K20 | 父会话（原生聊天）在子任务进行时被唤醒并尝试执行工具，产生额外 token 消耗；全局 interactive 下请求 600 s 后被原生拒绝 | 本地返工复验 `run-a9715ef6…` 的 Gateway 日志（`chat_runner` 批准请求超时） | 不影响平台任务 | M2 排查 note / 完成事件是否触发父会话 turn |
