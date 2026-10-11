@@ -86,6 +86,17 @@ class UnitFileTests(unittest.TestCase):
             parser.read(path)
             yield path.name, parser
 
+    def test_crew_units_share_the_host_user_and_mount_namespaces(self):
+        # Observed on EC2 with KiroCrew 0.10.0: /api/token/local refuses callers whose user+mount namespaces differ
+        # from the Gateway's (member_owner_token_refused). PrivateTmp/Protect*/PrivateDevices create a new mount
+        # namespace per unit, so neither the Gateway nor the Worker may use them.
+        forbidden = ("PrivateTmp", "ProtectSystem", "ProtectHome", "PrivateDevices", "PrivateUsers", "PrivateMounts")
+        for name, unit in self.units():
+            if name.startswith(("octopus-gateway@", "octopus-worker@")):
+                with self.subTest(unit=name):
+                    for option in forbidden:
+                        self.assertNotIn(option, unit["Service"], option)
+
     def test_units_use_existing_commands_and_separate_users(self):
         names = {}
         subcommands = build_parser(load(environ={"HOME": "/tmp"}, cwd="/tmp"))._subparsers._group_actions[0].choices
@@ -99,7 +110,9 @@ class UnitFileTests(unittest.TestCase):
                 self.assertIn("-m composition.gateway", command)
                 self.assertTrue((ROOT / "composition/gateway.py").is_file())
             self.assertEqual(service["KillSignal"], "SIGTERM")
-            self.assertIn("ReadWritePaths", service)
+            if name == "octopus-api.service":
+                self.assertEqual(service["ProtectSystem"], "strict")
+                self.assertIn("ReadWritePaths", service)
         self.assertEqual(names["octopus-api.service"], "octopus")
         self.assertEqual(names["octopus-worker@.service"], "crew-%i")
         self.assertEqual(names["octopus-gateway@.service"], "crew-%i")

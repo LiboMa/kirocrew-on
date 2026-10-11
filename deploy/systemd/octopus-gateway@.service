@@ -19,8 +19,8 @@ TimeoutStopSec=60
 Restart=on-failure
 RestartSec=10
 UMask=0077
-PrivateTmp=yes
-ReadWritePaths=/var/lib/octopus/boundaries/%i
+# No PrivateTmp/Protect*: KiroCrew's owner-token bootstrap requires the host user+mount namespaces (Linux);
+# agent isolation comes from KiroCrew's own sandbox and the dedicated OS user.
 
 [Install]
 WantedBy=multi-user.target
