@@ -12,6 +12,9 @@ from .security import Error, require
 from .workflow_import import import_workflow
 
 PLAN_ID = "plan"
+# Tools the planner may propose but that have not passed acceptance on the execution boundary yet (K01: OpenCode's shell
+# writes are refused by KiroCrew's tool gate). Code reassigns them so a generated plan does not end on a known failure.
+REASSIGN = {"opencode": "claude"}
 EXAMPLE = {"intent": "一句话：用户真正要完成什么、属于哪类工作（新功能 / 缺陷修复 / 审查 / 原型 / 其他）",
            "summary": "补全后的需求（Markdown）：目标、范围与不做什么、可验证的验收标准、关键假设与待确认问题",
            "name": "针对本次需求的简短名称",
@@ -58,6 +61,10 @@ def expand(db, rid, text, models=None):
         if step["id"] != base:
             notes.append(f"任务 ID {base} 与已有任务重复，改为 {step['id']}")
         taken.add(step["id"])
+        if step["tool"] in REASSIGN:
+            replacement = REASSIGN[step["tool"]]
+            notes.append(f"{step['name']}：{step['tool']} 尚未通过执行边界验收（K01），改由 {replacement} 执行")
+            step.update(tool=replacement, model="auto", effort="")
         if step["model"] not in {"auto", "default"} and step["model"] not in (published.get(step["tool"]) or []):
             notes.append(f"{step['name']}：模型 {step['model']} 不在执行环境公布的列表中，改为 auto")
             step["model"] = "auto"

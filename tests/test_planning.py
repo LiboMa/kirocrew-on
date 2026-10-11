@@ -15,7 +15,8 @@ PLAN = """规划如下：
 {"intent": "为订单退款增加幂等保护（缺陷修复）", "summary": "## 目标\\n重复退款请求只生效一次。\\n## 验收\\n- 并发重复请求只退款一次",
  "name": "退款幂等", "steps": [
   {"id": "plan", "name": "实现幂等", "tool": "claude", "model": "made-up-model", "prompt": "实现幂等键并补充测试"},
-  {"name": "独立审查", "tool": "codex", "prompt": "独立审查并复跑测试"}]}
+  {"name": "独立审查", "tool": "codex", "prompt": "独立审查并复跑测试"},
+  {"name": "整理交付", "tool": "opencode", "prompt": "整理交付说明"}]}
 ```
 """
 
@@ -48,8 +49,9 @@ class PlanningTests(unittest.TestCase):
         with self.database.transaction() as db:
             applied = planning.expand(db, rid, PLAN, {"claude": ["auto", "sonnet"]})
         run = self.service.run(self.actor, rid)
-        self.assertEqual([t["id"] for t in run["tasks"]], ["plan", "plan-2", "task-2"])
-        self.assertEqual([t["spec"]["tool"] for t in run["tasks"]], ["kiro", "claude", "codex"])
+        self.assertEqual([t["id"] for t in run["tasks"]], ["plan", "plan-2", "task-2", "task-3"])
+        self.assertEqual([t["spec"]["tool"] for t in run["tasks"]], ["kiro", "claude", "codex", "claude"])
+        self.assertTrue(any("K01" in note for note in applied["notes"]))
         self.assertEqual(run["tasks"][1]["spec"]["model"], "auto")
         self.assertEqual(run["version"], 2)
         self.assertTrue(run["planning"]["applied"])
