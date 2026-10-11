@@ -2,6 +2,7 @@
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 import json
 import hashlib
+import hmac
 import os
 from pathlib import Path
 import socket
@@ -17,11 +18,18 @@ from .transport import validate_worker, worker_request
 from .schema import openapi
 
 UI = Path(__file__).parent / "ui"
+LOOPBACK = {"127.0.0.1", "::1"}
 
 
-def server(database, port=8918, host="127.0.0.1", allowed_hosts=()):
+def client_ip(handler, verified):
+    """Viewer address for rate limits: CloudFront's header is trusted only on a verified origin request."""
+    viewer = handler.headers.get("CloudFront-Viewer-Address", "") if verified else ""
+    return viewer.rsplit(":", 1)[0] if ":" in viewer else handler.client_address[0]
+
+
+def server(database, port=8918, host="127.0.0.1", allowed_hosts=(), origin_secret=None):
     service = Service(database)
-    hosts = set()
+    hosts, local_hosts = set(), set()
     failures, limiter_lock = {}, threading.Lock()
 
     class Handler(BaseHTTPRequestHandler):
@@ -62,6 +70,13 @@ def server(database, port=8918, host="127.0.0.1", allowed_hosts=()):
             try:
                 require(self.headers.get("Host", "") in hosts, "Host 不在允许列表；隧道或代理地址需写入 allowed_hosts",
                         421, "host_not_allowed")
+                supplied = self.headers.get("X-Origin-Verify", "")
+                self.origin_verified = bool(origin_secret) and hmac.compare_digest(supplied, origin_secret)
+                # Behind CloudFront only requests carrying the origin secret are served; local operations on the
+                # host itself (loopback peer AND loopback Host) are exempt.
+                local = self.client_address[0] in LOOPBACK and self.headers.get("Host", "") in local_hosts
+                require(not origin_secret or self.origin_verified or local, "请求未经 CloudFront 源站认证",
+                        403, "origin_unverified")
                 url = urlsplit(self.path)
                 path, query = url.path, parse_qs(url.query)
                 body = {}
@@ -92,7 +107,7 @@ def server(database, port=8918, host="127.0.0.1", allowed_hosts=()):
                 if method == "GET" and path == "/v1/openapi.json":
                     return self.respond(openapi())
                 if method == "POST" and path == "/v1/login":
-                    address = self.client_address[0]
+                    address = client_ip(self, self.origin_verified)
                     with limiter_lock:
                         recent = [t for t in failures.get(address, []) if time.time() - t < 60]
                         require(len(recent) < 15, "登录尝试过多，稍后重试", 429, "rate_limited")
@@ -296,5 +311,6 @@ def server(database, port=8918, host="127.0.0.1", allowed_hosts=()):
 
     httpd = ThreadingHTTPServer((host, port), Handler)
     bound = httpd.server_address[1]
-    hosts.update({f"127.0.0.1:{bound}", f"localhost:{bound}", f"[::1]:{bound}", *allowed_hosts})
+    local_hosts.update({f"127.0.0.1:{bound}", f"localhost:{bound}", f"[::1]:{bound}"})
+    hosts.update({*local_hosts, *allowed_hosts})
     return httpd

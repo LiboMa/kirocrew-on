@@ -15,6 +15,11 @@ from .db import Database, dumps
 from .security import create_user
 
 
+def probe_host(host):
+    """Readiness probes go to loopback when the API listens on a wildcard address."""
+    return "127.0.0.1" if host in {"0.0.0.0", "::", ""} else host
+
+
 def settings_from_argv(argv, environ=None):
     pre = argparse.ArgumentParser(add_help=False)
     pre.add_argument("--config")
@@ -93,7 +98,8 @@ def main(argv=None):
         from .server import server
         db = Database(args.data)
         engine = Engine(db, workers=settings.engine_workers, retry_unavailable=settings.retry_unavailable)
-        httpd = server(db, args.port, args.host, allowed_hosts=settings.allowed_hosts)
+        secret = settings.origin_secret_file.read_text().strip() if settings.origin_secret_file else None
+        httpd = server(db, args.port, args.host, allowed_hosts=settings.allowed_hosts, origin_secret=secret)
         signal.signal(signal.SIGTERM, lambda *_: threading.Thread(target=httpd.shutdown, daemon=True).start())
         engine.start()
         print(f"KiroCrew ON API: http://{args.host}:{httpd.server_address[1]}", flush=True)
@@ -127,7 +133,7 @@ def main(argv=None):
         deadline = time.monotonic() + args.timeout
         checks = []
         if args.api:
-            checks.append((f"http://{settings.api_host}:{settings.api_port}/health", {}))
+            checks.append((f"http://{probe_host(settings.api_host)}:{settings.api_port}/health", {}))
         if args.worker:
             # The Worker writes its token on first start; ExecStartPost may run before that.
             if not wait_for_file(settings.worker_token_file, args.timeout):

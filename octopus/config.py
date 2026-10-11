@@ -18,7 +18,7 @@ ISOLATION = ("trusted-local", "dedicated")
 MAC_KIROCREW_PYTHON = Path("/Applications/KiroCrew.app/Contents/Resources/backend-dist/"
                            "kirocrew-backend-arm64/bin/python3.12")
 PATHS = {"data_dir", "worker_data_dir", "worker_token_file", "crew_home", "kiro_home", "routing_log",
-         "log_dir", "gateway_runtime_file", "kirocrew_python", "adapters_dir"}
+         "log_dir", "gateway_runtime_file", "kirocrew_python", "adapters_dir", "origin_secret_file"}
 INTS = {"api_port": (1, 65535), "worker_port": (1, 65535), "gateway_port": (1, 65535), "engine_workers": (1, 32)}
 FLOATS = {"retry_unavailable": (0.0, 600.0), "shutdown_grace": (0.0, 300.0)}
 STRINGS = {"api_host", "worker_host", "public_url", "crew_url", "worker_isolation", "approval_mode"}
@@ -56,6 +56,8 @@ class Settings:
     approval_mode: str = ""
     kirocrew_python: Path | None = None
     adapters_dir: Path | None = None
+    # Secret CloudFront adds as X-Origin-Verify; when set, only verified (or host-local) requests are served.
+    origin_secret_file: Path | None = None
     path_prepend: tuple[Path, ...] = ()
     # KiroCrew releases accepted beyond the verified set, only after their contract check passed.
     kirocrew_versions: tuple[str, ...] = ()
