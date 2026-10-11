@@ -172,3 +172,17 @@ tools/local_stack.sh stop               # 逆序 SIGTERM，只结束本栈的进
 ```
 
 日志在 `state/local-e2e/logs/`；控制台 `http://127.0.0.1:8948/`。
+
+### 控制台（React）
+
+`/` 为 React 控制台（`web/` 构建到 `octopus/ui/dist/`）；未构建时 `/` 回退到旧版。旧版控制台保留在 `/classic/`，两者共用登录。
+
+```bash
+npm --prefix web ci                     # 前端依赖（lockfile 固定版本）
+npm --prefix web run build              # 构建到 octopus/ui/dist（主机安装时由 al2023.sh 执行）
+npm --prefix web run dev                # 开发服务器 http://localhost:5173，代理 /v1 到 OCTOPUS_DEV_API（默认 8921 临时数据服务）
+npm --prefix web test                   # 前端单元与组件测试（Vitest）
+npm --prefix web run test:browser       # 浏览器回归：React 与 /classic/ 共 7 个文件，每个文件独立的 8921 临时数据服务
+```
+
+浏览器回归只使用 `tests/mvp_browser_fixture.py` 的临时 HTTP/SQLite 数据，不连接 Worker、不调用 Coding 工具。

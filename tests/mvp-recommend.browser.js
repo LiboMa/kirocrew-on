@@ -29,7 +29,7 @@ async page => {
       const id=route.request().url().split("/").pop(),job=jobs.get(id);
       return route.fulfill({json:{...job,...(job.status!=="ready"?{config:undefined}:{})}});
     });
-    await p.goto("http://127.0.0.1:8921/");
+    await p.goto("http://127.0.0.1:8921/classic/");
     await p.getByLabel("用户名",{exact:true}).fill("fixture-owner");
     await p.getByLabel("密码",{exact:true}).fill("Fixture-password-123!");
     await p.getByRole("button",{name:"登录工作台"}).click();

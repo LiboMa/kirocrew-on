@@ -1,6 +1,6 @@
 # MVP Release 计划与状态
 
-更新日期：2026-10-11　·　当前阶段：**M1 待验收（实现与本地 / EC2 验收完成，待负责人确认）**　·　本仓库可运行代码：**M1 运行底座（分支 `feat/m1-runtime-foundation`，未合并）**　·　已发布版本：**无**
+更新日期：2026-10-11　·　当前阶段：**M1 待验收；M2/M3 功能开发中（React 控制台、发起向导、预生成工作流提交、原生对话公网入口）**　·　本仓库可运行代码：**分支 `feat/m1-runtime-foundation`，未合并**　·　已发布版本：**无**
 
 本文记录 KiroCrew ON 首个可用 MVP 的范围、已确定决策、各里程碑交付与验收条件。
 “已确定”“默认值（待确认）”“未开始 / 待验收”分别标注；不要把本文中的目标当作已上线功能。
@@ -50,6 +50,12 @@ M4（共享与组织）、M5（仓库闭环）在 MVP 之后分别立项，各�
 | D16 | 对外入口为 CloudFront → 安全组 → EC2：IaC 新建专用 VPC 公有子网，EC2 经 EIP 提供稳定源站名，安全组只允许 CloudFront origin-facing 托管前缀列表访问 API 端口；平台只服务携带 CloudFront 注入的 `X-Origin-Verify` 头的请求；使用默认 `*.cloudfront.net` 证书；不加 WAF；原生 KiroCrew 入口不经 CloudFront，只经 SSM 端口转发（2026-10-11） |
 | D17 | 部署 Region 为 us-east-1（2026-10-11） |
 | D18 | KiroCrew 使用 `https://github.com/kirodotdev/KiroCrew.git` 最新源码安装：部署时锁定到具体 commit（`deploy/versions.env`），已验证集合之外的版本须原生契约检查通过后才在边界配置 `kirocrew_versions` 中接受（2026-10-11；当前锁定 0.10.0 `57df464…`，本机已验证） |
+| D19 | 控制台用 React 框架性重写，Python 后端与 `/v1` API 不变；后端只调整静态文件服务（2026-10-11） |
+| D20 | 前端技术栈：Vite + React + TypeScript，Tailwind CSS 4 + shadcn/ui（Radix），TanStack Query；源码在 `web/`（2026-10-11） |
+| D21 | 新版控制台在 `/`，旧版原生 JS 控制台暂留 `/classic/`，功能对齐并经负责人确认后再移除（2026-10-11） |
+| D22 | 前端在主机安装时构建（`npm ci && npm run build` → `octopus/ui/dist`，不入库）；离线回归包含前端单测与构建（2026-10-11） |
+| D23 | 发起开发采用向导：需求 → 编排方式 → 任务与 Agent → 确认；编排方式提供参考模板、KiroCrew Agent 推荐（匹配每个 Task 的 Prompt）、直接提交 Agent 预先生成的工作流（UI 导入或经 API / MCP `document` 提交，由代码解析与规范化）；不删除既有能力（2026-10-11） |
+| D24 | 服务端原生 KiroCrew 对话经第二个 CloudFront 分发 → 主机 nginx（校验源站密钥、WebSocket）→ 回环 Gateway；入口登录 1 h（K03）；代码与 IaC 已完成，部署前需负责人确认（2026-10-11） |
 
 ## 3．设计默认值（已提出，待确认）
 

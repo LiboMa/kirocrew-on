@@ -7,7 +7,7 @@ async page => {
   const check=(condition,message)=>{if(!condition)throw Error(message);checks.push(message);};
   const close=()=>p.locator("#modal-close").click();
   try{
-    await p.goto("http://127.0.0.1:8921/");
+    await p.goto("http://127.0.0.1:8921/classic/");
     await p.getByLabel("用户名",{exact:true}).fill("fixture-owner");
     await p.getByLabel("密码",{exact:true}).fill("Fixture-password-123!");
     await p.getByRole("button",{name:"登录工作台"}).click();
@@ -56,7 +56,7 @@ async page => {
     check((await p.locator("#modal-body").innerText()).includes("fixture-reader"),"Web 添加指定用户授权");
     await close();
     const reader=await context.newPage();
-    await reader.goto("http://127.0.0.1:8921/");
+    await reader.goto("http://127.0.0.1:8921/classic/");
     await reader.getByLabel("用户名",{exact:true}).fill("fixture-reader");
     await reader.getByLabel("密码",{exact:true}).fill("Fixture-password-123!");
     await reader.getByRole("button",{name:"登录工作台"}).click();

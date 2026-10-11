@@ -1,3 +1,17 @@
+# 控制台浏览器回归（React 与 /classic/）
+
+`react-console.browser.js` 与 `mvp-*.browser.js` 是 Playwright run-code 函数，针对 `tests/mvp_browser_fixture.py`
+（8921，临时 HTTP/SQLite，不连接 Worker、不调用 Coding 工具）。`/` 是 React 控制台，旧版测试访问 `/classic/`。
+
+```bash
+npm --prefix web run build
+npm --prefix web run test:browser                         # 全部 7 个文件，每个文件独立的临时数据服务
+npm --prefix web run test:browser -- tests/react-console.browser.js
+```
+
+运行器 `web/scripts/browser-tests.mjs` 使用 `playwright-core` 与本机 Chrome（不下载浏览器）；也可经 Playwright MCP
+的 `browser_run_code_unsafe` 加载同一个文件（需先启动 `PYTHONPATH=. .venv/bin/python tests/mvp_browser_fixture.py`）。
+
 # 任务向导浏览器回归
 
 `workflow-wizard.browser.js` 是 Playwright `run-code` 入口函数，使用独立的无界面

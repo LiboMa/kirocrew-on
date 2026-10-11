@@ -10,7 +10,7 @@ async page => {
   const close=()=>p.locator("#modal-close").click();
   const title=async text=>p.waitForFunction(value=>document.querySelector("#match-name")?.textContent.includes(value),text);
   const login=async(page,user)=>{
-    await page.goto("http://127.0.0.1:8921/");
+    await page.goto("http://127.0.0.1:8921/classic/");
     await page.getByLabel("用户名",{exact:true}).fill(user);
     await page.getByLabel("密码",{exact:true}).fill("Fixture-password-123!");
     await page.getByRole("button",{name:"登录工作台"}).click();

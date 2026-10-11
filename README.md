@@ -110,6 +110,7 @@ kirocrew-on/
 │   ├── connect/          四个客户端的 Skill 与 MCP 配置写入
 │   └── ui/               监控控制台（原生 JS，无构建）
 ├── composition/          ← poc.py：registry、poc-* 模板、Gateway 入口、--check
+├── web/                  React 控制台（Vite + TS + Tailwind + shadcn/ui），构建到 octopus/ui/dist
 ├── skills/octopus/       四个客户端共用的 SKILL.md
 ├── deploy/               AL2023 安装、systemd、CloudFormation、备份恢复
 ├── tests/                基线回归 + 原生契约 + 浏览器 + 客户端联动 + EC2 验收

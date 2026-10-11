@@ -30,7 +30,7 @@ async page => {
       await route.fulfill({json:{native_parent:parent,origin,
         url:origin+"/chat?"+new URLSearchParams({sid:parent,token:"fixture-browser-link"})}});
     });
-    await p.goto("http://127.0.0.1:8921/");
+    await p.goto("http://127.0.0.1:8921/classic/");
     await p.getByLabel("用户名",{exact:true}).fill("fixture-owner");
     await p.getByLabel("密码",{exact:true}).fill("Fixture-password-123!");
     await p.getByRole("button",{name:"登录工作台"}).click();
