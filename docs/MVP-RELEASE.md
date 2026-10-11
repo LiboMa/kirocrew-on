@@ -59,6 +59,7 @@ M4（共享与组织）、M5（仓库闭环）在 MVP 之后分别立项，各�
 | D25 | 最小 MVP = Coding Agent 连接后台 → 提交任务 → 查看任务 → 更新优化应用；分支开发相关的 M2 / M3 内容后排（`docs/BACKLOG.md`）（2026-10-11） |
 | D26 | 意图识别与需求补全必须由 KiroCrew Agent 生成：未指定任务时 Session 第 1 个任务由 Kiro Agent 规划（intent、summary、1–7 个任务与 Agent 映射），代码校验后追加到同一 Session；规则匹配仅在 `plan=match` 时使用；K01 修复前 OpenCode 任务由代码改派 Claude Code（2026-10-11） |
 | D27 | Coding Agent 接入：`octopus connect claude|kiro` 写入 MCP 服务器 `kirocrew-on` 与使用说明（Claude Skill / Kiro steering）；产出经 `/preview` 在隔离来源中预览，开发服务器类项目用 `deploy.sh space <run-id>` 转发到本机（2026-10-11） |
+| D28 | Team 执行环境采用严格隔离：每个 Team 使用自己的执行边界（独立 OS 用户及其 Gateway、Worker），不与其他空间共用 Gateway；同一主机上新增 Team 边界应只需一条命令，保密要求高的 Team 使用独立主机或容器；会话共享属于平台授权，不共享执行环境（`docs/WORKERS.md`）（2026-10-11） |
 
 ## 3．设计默认值（已提出，待确认）
 
