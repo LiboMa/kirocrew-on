@@ -11,6 +11,7 @@ import re
 import socket
 import threading
 import time
+import urllib.error
 from urllib.parse import quote
 
 from . import gateway_client as crew_api
@@ -460,6 +461,11 @@ def serve(worker, port=8928, host="127.0.0.1"):
                 status = getattr(exc, "status", 400)
                 message = str(exc) if isinstance(exc, Error) else f"Worker 操作未完成 ({type(exc).__name__})"
                 result = {"error": message, "code": getattr(exc, "code", "worker_error")}
+                if isinstance(exc, (urllib.error.URLError, ConnectionError, TimeoutError)) \
+                        and not isinstance(exc, urllib.error.HTTPError):
+                    # The Gateway is restarting or not yet up: temporary, so the platform waits and retries.
+                    status = 503
+                    result = {"error": "KiroCrew Gateway 暂不可用，稍后自动重试", "code": "native_unavailable"}
             data = dumps(result).encode()
             self.send_response(status)
             self.send_header("Content-Type", "application/json; charset=utf-8")
