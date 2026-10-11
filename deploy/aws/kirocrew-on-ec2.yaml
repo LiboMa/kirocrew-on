@@ -47,8 +47,10 @@ Parameters:
     Default: ""
     Description: 可选；实例恢复等告警的通知邮箱
   ImageId:
-    Type: AWS::SSM::Parameter::Value<AWS::EC2::Image::Id>
-    Default: /aws/service/ami-amazon-linux-latest/al2023-ami-kernel-default-x86_64
+    Type: AWS::EC2::Image::Id
+    Description: >-
+      固定的 AMI（stack.env 的 IMAGE_ID）。不使用 SSM 别名：别名每次更新都会重新解析，新 AMI 会替换主机并让数据留在旧卷上。
+      deploy.sh 首次创建时解析 AL2023 最新 AMI，已有栈沿用运行中的 AMI；替换实例的变更集会被拒绝
 
 Conditions:
   HasAlarmEmail: !Not [!Equals [!Ref AlarmEmail, ""]]
@@ -191,10 +193,11 @@ Resources:
                 Effect: Allow
                 Action: [s3:ListBucket]
                 Resource: !GetAtt ArtifactBucket.Arn
-              - Sid: ReadOwnParameters
+              - Sid: ReadOriginSecret
+                # Only the origin secret: every process on the host (the execution user included) can use this role.
                 Effect: Allow
                 Action: [ssm:GetParameter]
-                Resource: !Sub "arn:${AWS::Partition}:ssm:${AWS::Region}:${AWS::AccountId}:parameter/kirocrew-on/${AWS::StackName}/*"
+                Resource: !Sub "arn:${AWS::Partition}:ssm:${AWS::Region}:${AWS::AccountId}:parameter/kirocrew-on/${AWS::StackName}/origin-secret"
 
   HostProfile:
     Type: AWS::IAM::InstanceProfile
@@ -338,9 +341,10 @@ Resources:
             CopyTags: true
 
   AlertTopic:
+    # Not encrypted with the AWS-managed aws/sns key: CloudWatch alarms cannot publish to such a topic.
     Type: AWS::SNS::Topic
     Properties:
-      KmsMasterKeyId: alias/aws/sns
+      DisplayName: !Sub "KiroCrew ON ${AWS::StackName}"
 
   AlertSubscription:
     Type: AWS::SNS::Subscription

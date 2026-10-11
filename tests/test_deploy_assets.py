@@ -40,7 +40,7 @@ class TemplateTests(unittest.TestCase):
         for name in ("InstanceType", "VolumeSizeGiB", "AvailabilityZone", "CloudFrontPrefixListId", "OriginSecret"):
             self.assertNotIn("Default", p[name], name)
         self.assertTrue(p["OriginSecret"]["NoEcho"])
-        self.assertEqual(p["ImageId"]["Default"], "/aws/service/ami-amazon-linux-latest/al2023-ami-kernel-default-x86_64")
+        self.assertEqual(p["ImageId"]["Type"], "AWS::EC2::Image::Id")  # pinned; see tests/test_deploy_safety.py
 
     def test_host_is_only_reachable_from_cloudfront_on_the_api_and_native_ports(self):
         group = of_type(self.r, "AWS::EC2::SecurityGroup")[0]["Properties"]
@@ -201,7 +201,7 @@ class ScriptTests(unittest.TestCase):
                                 capture_output=True, text=True)
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertIn("--region us-east-1", result.stdout)
-        self.assertIn("cloudformation deploy", result.stdout)
+        self.assertIn("cloudformation create-change-set", result.stdout)
         self.assertNotIn("x" * 48, result.stdout + result.stderr)
 
     def test_kiro_login_passes_identity_center_settings_under_a_pseudo_terminal(self):
@@ -213,7 +213,8 @@ class ScriptTests(unittest.TestCase):
         self.assertEqual(result.returncode, 0, result.stderr)
         printed = result.stdout + result.stderr
         for part in ("--license pro", "--identity-provider https://d-9067e1d68a.awsapps.com/start",
-                     "--region us-east-1", "--use-device-flow", "sudo -iu crew-personal script -q -f -c",
+                     "--region us-east-1", "--use-device-flow", "sudo -iu crew-personal bash -c", "script -q -f -c", "< <(",
+                     "kiro-login-",
                      "ssm send-command", "AWS-RunShellScript"):
             self.assertIn(part, printed)
         self.assertNotIn("AWS-StartInteractiveCommand", printed)

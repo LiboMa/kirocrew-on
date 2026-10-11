@@ -21,6 +21,18 @@ trap cleanup EXIT
 log "系统依赖"
 dnf install -y -q git tar gzip xz jq unzip make gcc gcc-c++ nginx "$PYTHON_PACKAGE" "$PYTHON_PACKAGE-pip" "$PYTHON_PACKAGE-devel"
 PYTHON="$(command -v "$PYTHON_PACKAGE")"
+merge_hosts() {  # add hosts to platform.toml allowed_hosts, keeping the entries already there
+  "$PYTHON" - "$@" <<'PY'
+import re, sys, tomllib
+path, *required = sys.argv[1:]
+text = open(path).read()
+hosts = tomllib.loads(text).get("allowed_hosts", [])
+line = "allowed_hosts = [" + ", ".join('"%s"' % h for h in hosts + [h for h in required if h not in hosts]) + "]"
+text = re.sub(r"(?m)^allowed_hosts[ \t]*=.*$", lambda _: line, text, count=1) if re.search(r"(?m)^allowed_hosts", text) \
+    else line + "\n" + text
+open(path, "w").write(text)
+PY
+}
 toml_set() {  # top-level TOML key: replace its line, or insert it before the first table so it never lands in [tools]
   "$PYTHON" - "$1" "$2" "$3" <<'PY'
 import re, sys
@@ -73,9 +85,8 @@ if [ ! -f "$TARGET/.installed" ]; then
   (cd "$TARGET/web" && npm ci --no-audit --no-fund && npm run build)
   touch "$TARGET/.installed"
 fi
-ln -sfn "$TARGET" /opt/kirocrew-on/current
 [ -x /opt/kirocrew-on/venv/bin/python ] || "$PYTHON" -m venv /opt/kirocrew-on/venv
-/opt/kirocrew-on/venv/bin/python -m pip install -q -r /opt/kirocrew-on/current/requirements-workflow.txt
+/opt/kirocrew-on/venv/bin/python -m pip install -q -r "$TARGET/requirements-workflow.txt"
 
 log "KiroCrew 源码 $KIROCREW_GIT_URL @ $KIROCREW_GIT_REF"
 KC="/opt/kirocrew/$KIROCREW_GIT_REF"
@@ -94,7 +105,6 @@ if [ ! -f "$KC/.installed" ] || ! "$KC/venv/bin/python" -c 'import kiro_crew' 2>
   touch "$KC/.installed"
   trap cleanup EXIT
 fi
-ln -sfn "$KC" /opt/kirocrew/current
 KIROCREW_VERSION="$("$KC/venv/bin/python" -c 'import kiro_crew; print(kiro_crew.__version__)')"
 log "KiroCrew $KIROCREW_VERSION"
 
@@ -135,23 +145,27 @@ fi
 
 log "平台与边界配置"
 if [ -n "${ORIGIN_SECRET_PARAM:-}" ]; then
+  # Fetched beside the live file: a failed or empty fetch must never leave the API without its secret.
   umask 027
   aws ssm get-parameter --region "$REGION" --with-decryption --name "$ORIGIN_SECRET_PARAM" \
-    --query Parameter.Value --output text > /etc/kirocrew-on/origin-secret
+    --query Parameter.Value --output text > /etc/kirocrew-on/origin-secret.new
   umask 022
-  chown root:octopus /etc/kirocrew-on/origin-secret
-  chmod 0640 /etc/kirocrew-on/origin-secret
+  [ "$(tr -d '[:space:]' < /etc/kirocrew-on/origin-secret.new | wc -c)" -ge 32 ] || {
+    rm -f /etc/kirocrew-on/origin-secret.new; echo "源站密钥为空或过短" >&2; exit 4; }
+  chown root:octopus /etc/kirocrew-on/origin-secret.new
+  chmod 0640 /etc/kirocrew-on/origin-secret.new
+  mv -f /etc/kirocrew-on/origin-secret.new /etc/kirocrew-on/origin-secret
 fi
 if [ ! -f /etc/kirocrew-on/platform.toml ]; then
-  install -m 0640 -o root -g octopus /opt/kirocrew-on/current/deploy/config/platform.toml.example /etc/kirocrew-on/platform.toml
+  install -m 0640 -o root -g octopus "$TARGET/deploy/config/platform.toml.example" /etc/kirocrew-on/platform.toml
 fi
 if [ -n "${CF_DOMAIN:-}" ]; then
-  sed -i "s#^allowed_hosts = .*#allowed_hosts = [\"$CF_DOMAIN\"]#" /etc/kirocrew-on/platform.toml
+  merge_hosts /etc/kirocrew-on/platform.toml "$CF_DOMAIN" localhost:18918
 fi
 BOUNDARY_TOML="/etc/kirocrew-on/boundary-$BOUNDARY.toml"
 if [ ! -f "$BOUNDARY_TOML" ]; then
   sed "s#/boundaries/personal/#/boundaries/$BOUNDARY/#g" \
-    /opt/kirocrew-on/current/deploy/config/boundary.toml.example > "$BOUNDARY_TOML"
+    "$TARGET/deploy/config/boundary.toml.example" > "$BOUNDARY_TOML"
   chown "root:$CREW" "$BOUNDARY_TOML"
   chmod 0640 "$BOUNDARY_TOML"
 fi
@@ -189,25 +203,45 @@ fi
 
 log "原生契约检查（以 $CREW 身份，隔离边界配置）"
 CREW_ENV=(env HOME="$BASE/home" PATH="/opt/kirocrew-tools/bin:$NODE_ROOT/bin:/usr/local/bin:/usr/bin:/bin"
-          PYTHONPATH=/opt/kirocrew-on/current)
+          PYTHONPATH="$TARGET")
 # --check seeds the poc-* templates into KIRO_HOME and verifies every route before the native tests read them.
-runuser -u "$CREW" -- "${CREW_ENV[@]}" /opt/kirocrew/current/venv/bin/python -s \
+runuser -u "$CREW" -- "${CREW_ENV[@]}" "$KC/venv/bin/python" -s \
   -m composition.gateway --config "$BOUNDARY_TOML" --check
 runuser -u "$CREW" -- "${CREW_ENV[@]}" OCTOPUS_CONFIG="$BOUNDARY_TOML" \
-  /opt/kirocrew/current/venv/bin/python -s -m unittest discover -s /opt/kirocrew-on/current/tests/native
+  "$KC/venv/bin/python" -s -m unittest discover -s "$TARGET/tests/native"
 if [ "$KIROCREW_VERSION" = "$KIROCREW_ACCEPTED_VERSION" ]; then
   sed -i "s#^kirocrew_versions = .*#kirocrew_versions = [\"$KIROCREW_VERSION\"]#" "$BOUNDARY_TOML"
 fi
+log "切换到已通过检查的发布 $RELEASE 与 KiroCrew $KIROCREW_VERSION"
+ln -sfn "$TARGET" /opt/kirocrew-on/current
+ln -sfn "$KC" /opt/kirocrew/current
 
 OCTO=(/opt/kirocrew-on/venv/bin/python -m octopus --config /etc/kirocrew-on/platform.toml)
-if [ -n "${ADMIN_PASSWORD_PARAM:-}" ]; then
-  log "平台管理员（首次初始化；已有用户时跳过）"
-  ADMIN_PASSWORD="$(aws ssm get-parameter --region "$REGION" --with-decryption --name "$ADMIN_PASSWORD_PARAM" \
-    --query Parameter.Value --output text)"
-  if ! INIT_OUT="$(cd /opt/kirocrew-on/current && runuser -u octopus -- env PYTHONPATH=/opt/kirocrew-on/current \
-      OCTOPUS_ADMIN_PASSWORD="$ADMIN_PASSWORD" "${OCTO[@]}" init --username admin --password-env OCTOPUS_ADMIN_PASSWORD 2>&1)"; then
-    case "$INIT_OUT" in *已有用户*) log "管理员已存在" ;; *) echo "$INIT_OUT" >&2; exit 4 ;; esac
-  fi
+log "平台管理员（首次初始化；已有用户时跳过）"
+# Generated here and readable by root only: the instance role (usable by every process on the host, the execution
+# user included) has no access to it. Read it with deploy/aws/deploy.sh admin-password.
+ADMIN_FILE=/etc/kirocrew-on/admin-password
+NEW_ADMIN=""
+if [ ! -s "$ADMIN_FILE" ]; then
+  ( umask 077; "$PYTHON" -c 'import secrets; print(secrets.token_urlsafe(24))' > "$ADMIN_FILE.new" )
+  mv -f "$ADMIN_FILE.new" "$ADMIN_FILE"
+  NEW_ADMIN=1
+fi
+chown root:root "$ADMIN_FILE"
+chmod 0600 "$ADMIN_FILE"
+ADMIN_PASSWORD="$(cat "$ADMIN_FILE")"
+if ! INIT_OUT="$(cd /opt/kirocrew-on/current && runuser -u octopus -- env PYTHONPATH=/opt/kirocrew-on/current \
+    OCTOPUS_ADMIN_PASSWORD="$ADMIN_PASSWORD" "${OCTO[@]}" init --username admin --password-env OCTOPUS_ADMIN_PASSWORD 2>&1)"; then
+  case "$INIT_OUT" in
+    *已有用户*)
+      if [ -n "$NEW_ADMIN" ]; then
+        rm -f "$ADMIN_FILE"
+        echo "平台已有管理员，但 $ADMIN_FILE 不存在：按 docs/OPERATIONS.md「管理员密码」写入现有密码后重新发布" >&2
+        exit 4
+      fi
+      log "管理员已存在" ;;
+    *) echo "$INIT_OUT" >&2; exit 4 ;;
+  esac
 fi
 
 log "systemd"
@@ -217,11 +251,9 @@ systemctl enable "octopus-gateway@$BOUNDARY" "octopus-worker@$BOUNDARY" octopus-
 systemctl restart "octopus-gateway@$BOUNDARY"
 systemctl restart "octopus-worker@$BOUNDARY"
 systemctl restart octopus-api
-if [ -n "${ADMIN_PASSWORD_PARAM:-}" ]; then
-  log "注册执行边界 Worker（已注册时跳过）"
-  WORKER_PORT="$(grep -E '^worker_port' "$BOUNDARY_TOML" | grep -oE '[0-9]+')"
-  (cd /opt/kirocrew-on/current && env PYTHONPATH=/opt/kirocrew-on/current OCTOPUS_ADMIN_PASSWORD="$ADMIN_PASSWORD" \
-    "${OCTO[@]}" bootstrap-worker --worker-url "http://127.0.0.1:$WORKER_PORT" \
-    --token-file "$BASE/worker.token" --name "$BOUNDARY")
-fi
+log "注册执行边界 Worker（已注册时跳过）"
+WORKER_PORT="$(grep -E '^worker_port' "$BOUNDARY_TOML" | grep -oE '[0-9]+')"
+(cd /opt/kirocrew-on/current && env PYTHONPATH=/opt/kirocrew-on/current OCTOPUS_ADMIN_PASSWORD="$ADMIN_PASSWORD" \
+  "${OCTO[@]}" bootstrap-worker --worker-url "http://127.0.0.1:$WORKER_PORT" \
+  --token-file "$BASE/worker.token" --name "$BOUNDARY")
 log "完成：KiroCrew ON $RELEASE，KiroCrew $KIROCREW_VERSION；kiro-cli 首次使用前需以 $CREW 登录（docs/OPERATIONS.md）"

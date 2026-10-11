@@ -28,16 +28,21 @@ query() {  # read-only lookups also print in dry-run mode, then return a placeho
   if [ -n "$DRY" ]; then printf 'aws --region %s %s\n' "$REGION" "${*:2}" >&2; echo "$1"; else aws --region "$REGION" "${@:2}"; fi
 }
 
-secret() {  # SecureString under /kirocrew-on/<stack>/<name>; created with a random value when absent
+secret() {  # SecureString under /kirocrew-on/<stack>/<name>; created with a random value only when it does not exist
   local name="$PARAMS/$1" value
   if [ -n "$DRY" ]; then printf '%s' "${ORIGIN_SECRET:-dry-run-$1-000000000000000000000000}"; return; fi
-  if ! value="$(aws --region "$REGION" ssm get-parameter --with-decryption --name "$name" \
-      --query Parameter.Value --output text 2>/dev/null)"; then
-    value="$(python3 -c 'import secrets; print(secrets.token_urlsafe(36))')"
-    (umask 077; printf '%s' "$value" > "$WORK/secret")
-    aws --region "$REGION" ssm put-parameter --type SecureString --name "$name" --value "file://$WORK/secret" >/dev/null
-    rm -f "$WORK/secret"
+  if value="$(aws --region "$REGION" ssm get-parameter --with-decryption --name "$name" \
+      --query Parameter.Value --output text 2>"$WORK/ssm.err")"; then
+    printf '%s' "$value"
+    return
   fi
+  # Throttling, KMS or access errors stop here: a fresh value would give CloudFront and the host different secrets.
+  grep -q ParameterNotFound "$WORK/ssm.err" || { cat "$WORK/ssm.err" >&2; return 1; }
+  value="$(python3 -c 'import secrets; print(secrets.token_urlsafe(36))')"
+  (umask 077; printf '%s' "$value" > "$WORK/secret")
+  aws --region "$REGION" ssm put-parameter --type SecureString --name "$name" --value "file://$WORK/secret" >/dev/null \
+    || { rm -f "$WORK/secret"; return 1; }
+  rm -f "$WORK/secret"
   printf '%s' "$value"
 }
 
@@ -48,20 +53,66 @@ output() {
 
 up() {
   run cloudformation validate-template --template-body "file://$TEMPLATE" >/dev/null
-  local prefix_list zone origin
+  local status prefix_list zone="${AVAILABILITY_ZONE:-}" image="${IMAGE_ID:-}" current origin change type replaced reason
+  status="$(query "" cloudformation describe-stacks --stack-name "$STACK_NAME" --query 'Stacks[0].StackStatus' \
+    --output text 2>/dev/null || true)"
   prefix_list="$(query pl-dryrun ec2 describe-managed-prefix-lists \
     --filters Name=prefix-list-name,Values=com.amazonaws.global.cloudfront.origin-facing \
     --query 'PrefixLists[0].PrefixListId' --output text)"
-  zone="$(query us-east-1a ec2 describe-instance-type-offerings --location-type availability-zone \
+  if [ -n "$status" ] && { [ -z "$zone" ] || [ -z "$image" ]; }; then
+    # An existing host keeps its image and zone: a different ImageId or subnet zone would replace it.
+    current="$(query "ami-dryrun us-east-1a" ec2 describe-instances --instance-ids "$(output InstanceId)" \
+      --query 'Reservations[0].Instances[0].[ImageId,Placement.AvailabilityZone]' --output text)"
+    [ -n "$image" ] || image="$(awk '{print $1}' <<<"$current")"
+    [ -n "$zone" ] || zone="$(awk '{print $2}' <<<"$current")"
+  fi
+  [ -n "$zone" ] || zone="$(query us-east-1a ec2 describe-instance-type-offerings --location-type availability-zone \
     --filters "Name=instance-type,Values=$INSTANCE_TYPE" --query 'sort(InstanceTypeOfferings[].Location)[0]' --output text)"
   [ -n "$zone" ] && [ "$zone" != "None" ] || { echo "$REGION 没有提供 $INSTANCE_TYPE 的可用区" >&2; exit 2; }
+  [ -n "$image" ] || image="$(query ami-dryrun ssm get-parameter \
+    --name /aws/service/ami-amazon-linux-latest/al2023-ami-kernel-default-x86_64 --query Parameter.Value --output text)"
+  [ -n "$status" ] || echo "首次创建：可用区 ${zone}，AMI ${image}；创建后写入 deploy/aws/stack.env 的 AVAILABILITY_ZONE 与 IMAGE_ID" >&2
   origin="$(secret origin-secret)"
-  secret admin-password >/dev/null
-  run cloudformation deploy --stack-name "$STACK_NAME" --template-file "$TEMPLATE" --capabilities CAPABILITY_IAM \
-    --no-fail-on-empty-changeset --tags Project=kirocrew-on \
-    --parameter-overrides "InstanceType=$INSTANCE_TYPE" "VolumeSizeGiB=$VOLUME_SIZE_GIB" "AvailabilityZone=$zone" \
-    "CloudFrontPrefixListId=$prefix_list" "OriginSecret=$origin" "ApiPort=$API_PORT" "NativePort=$NATIVE_PORT" "AlarmEmail=$ALARM_EMAIL"
-  [ -n "$DRY" ] || run cloudformation describe-stacks --stack-name "$STACK_NAME" --query 'Stacks[0].Outputs' --output table
+  # Parameters go through a 0600 file: the origin secret never appears on a command line.
+  (umask 077; ORIGIN_VALUE="$origin" python3 - "$INSTANCE_TYPE" "$VOLUME_SIZE_GIB" "$zone" "$image" "$prefix_list" \
+    "$API_PORT" "$NATIVE_PORT" "$ALARM_EMAIL" > "$WORK/parameters.json" <<'PY'
+import json, os, sys
+keys = ["InstanceType", "VolumeSizeGiB", "AvailabilityZone", "ImageId", "CloudFrontPrefixListId", "ApiPort", "NativePort", "AlarmEmail"]
+values = dict(zip(keys, sys.argv[1:]), OriginSecret=os.environ["ORIGIN_VALUE"])
+print(json.dumps([{"ParameterKey": k, "ParameterValue": v} for k, v in values.items()]))
+PY
+  )
+  change="kirocrew-on-$(date -u +%Y%m%d%H%M%S)"
+  type=UPDATE
+  [ -n "$status" ] || type=CREATE
+  run cloudformation create-change-set --stack-name "$STACK_NAME" --change-set-name "$change" --change-set-type "$type" \
+    --template-body "file://$TEMPLATE" --capabilities CAPABILITY_IAM --tags Key=Project,Value=kirocrew-on \
+    --parameters "file://$WORK/parameters.json" >/dev/null
+  [ -n "$DRY" ] && return
+  if ! aws --region "$REGION" cloudformation wait change-set-create-complete --stack-name "$STACK_NAME" \
+      --change-set-name "$change" 2>/dev/null; then
+    reason="$(aws --region "$REGION" cloudformation describe-change-set --stack-name "$STACK_NAME" --change-set-name "$change" \
+      --query StatusReason --output text)"
+    aws --region "$REGION" cloudformation delete-change-set --stack-name "$STACK_NAME" --change-set-name "$change" || true
+    case "$reason" in
+      *"didn't contain changes"*|*"No updates are to be performed"*) echo "栈没有需要更新的内容"; return ;;
+    esac
+    echo "变更集创建失败：${reason}" >&2
+    exit 1
+  fi
+  # Replacing the host (or anything it depends on) would strand the platform data on a detached volume.
+  replaced="$(aws --region "$REGION" cloudformation describe-change-set --stack-name "$STACK_NAME" --change-set-name "$change" \
+    --query "Changes[?ResourceChange.Replacement=='True' || ResourceChange.Replacement=='Conditional'].ResourceChange.LogicalResourceId" \
+    --output text)"
+  if [ -n "$replaced" ] && [ "$replaced" != "None" ] && [ -z "${ALLOW_REPLACEMENT:-}" ]; then
+    aws --region "$REGION" cloudformation delete-change-set --stack-name "$STACK_NAME" --change-set-name "$change"
+    echo "变更会替换资源：${replaced}。替换 Host 会让平台数据留在旧卷上；确认迁移方案后以 ALLOW_REPLACEMENT=1 重新执行" >&2
+    exit 3
+  fi
+  aws --region "$REGION" cloudformation execute-change-set --stack-name "$STACK_NAME" --change-set-name "$change"
+  aws --region "$REGION" cloudformation wait "stack-$([ "$type" = CREATE ] && echo create || echo update)-complete" \
+    --stack-name "$STACK_NAME"
+  run cloudformation describe-stacks --stack-name "$STACK_NAME" --query 'Stacks[0].Outputs' --output table
 }
 
 push() {
@@ -190,18 +241,20 @@ spaces() {
 
 kiro_login() {
   # kiro-cli still prompts with every flag set and fails without a terminal (observed on EC2), so the device flow runs
-  # under script(1) on the host; two carriage returns accept the remaining prompts. The device code is read from its log.
+  # under script(1) on the host; two carriage returns accept the remaining prompts. The feeder is a process substitution,
+  # so the result is recorded as soon as kiro-cli exits, and every attempt writes its own log.
   local login="kiro-cli login --use-device-flow" instance shown="" finished=""
-  local log="/var/lib/octopus/boundaries/$BOUNDARY/logs/kiro-login.log"
+  local log
+  log="/var/lib/octopus/boundaries/$BOUNDARY/logs/kiro-login-$(date -u +%Y%m%dT%H%M%SZ).log"
   [ -z "${KIRO_LICENSE:-}" ] || login="$login --license $KIRO_LICENSE"
   [ -z "${KIRO_IDC_START_URL:-}" ] || login="$login --identity-provider $KIRO_IDC_START_URL --region ${KIRO_IDC_REGION:-$REGION}"
   instance="$(output InstanceId)"
   python3 - "crew-$BOUNDARY" "$login" "$log" > "$WORK/login.json" <<'PY'
-import json, sys
+import json, shlex, sys
 user, login, log = sys.argv[1:]
-script = (f"pkill -u {user} -f 'kiro-cli login' || true; rm -f {log}; cd /tmp; "
-          f"(sleep 3; printf '\\r'; sleep 2; printf '\\r'; sleep 900) | sudo -iu {user} script -q -f -c '{login}' {log}; "
-          f"echo exit=$? >> {log}")
+inner = (f"script -q -f -c {shlex.quote(login)} {shlex.quote(log)} "
+         f"< <(sleep 3; printf '\\r'; sleep 2; printf '\\r'; sleep 900); echo exit=$? >> {shlex.quote(log)}")
+script = f"pkill -u {shlex.quote(user)} -f 'kiro-cli login' || true; cd /tmp; sudo -iu {shlex.quote(user)} bash -c {shlex.quote(inner)}"
 print(json.dumps({"commands": [script], "executionTimeout": ["960"]}))
 PY
   [ -z "$DRY" ] || cat "$WORK/login.json"
@@ -210,7 +263,7 @@ PY
   [ -n "$DRY" ] && return
   for _ in $(seq 1 12); do
     sleep 5
-    shown="$(remote "$instance" "grep -aE 'Code:|https://' $log | sed 's/\x1b\[[0-9;?]*[a-zA-Z]//g' | tr -d '\r' || true")"
+    shown="$(remote "$instance" "grep -aE 'Code:|https://' $log 2>/dev/null | sed 's/\x1b\[[0-9;?]*[a-zA-Z]//g' | tr -d '\r' || true")"
     [ -z "$shown" ] || break
   done
   [ -n "$shown" ] || { echo "未在 $log 中看到设备码" >&2; exit 1; }
@@ -222,6 +275,17 @@ PY
   done
   remote "$instance" "sudo -iu crew-$BOUNDARY kiro-cli whoami 2>&1 | head -1"
   [ "$finished" = "exit=0" ] || { echo "kiro-cli login 结束状态：${finished:-超时}" >&2; exit 1; }
+}
+
+admin_password() {  # generated on the host at first install, root-only; never kept in SSM Parameter Store
+  local instance
+  instance="$(output InstanceId)"
+  if [ -n "$DRY" ]; then
+    printf 'aws --region %s ssm send-command --instance-ids %s --document-name AWS-RunShellScript (cat /etc/kirocrew-on/admin-password)\n' \
+      "$REGION" "$instance"
+    return
+  fi
+  remote "$instance" "cat /etc/kirocrew-on/admin-password"
 }
 
 down() {
@@ -238,7 +302,7 @@ case "${1:-}" in
   kiro-login) kiro_login ;;
   space) space "${2:-}" "${3:-}" ;;
   spaces) spaces ;;
-  admin-password) secret admin-password; echo ;;
+  admin-password) admin_password ;;
   down) down "${2:-}" ;;
   *) sed -n '2,12p' "$0"; exit 2 ;;
 esac
