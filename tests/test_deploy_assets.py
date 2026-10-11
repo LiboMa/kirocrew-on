@@ -146,6 +146,15 @@ class ScriptTests(unittest.TestCase):
         self.assertIn("cloudformation deploy", result.stdout)
         self.assertNotIn("x" * 48, result.stdout + result.stderr)
 
+    def test_kiro_login_passes_identity_center_settings(self):
+        env = {**os.environ, "DEPLOY_DRY_RUN": "1"}
+        result = subprocess.run(["bash", str(ROOT / "deploy/aws/deploy.sh"), "kiro-login"], cwd=ROOT, env=env,
+                                capture_output=True, text=True)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        for part in ("--license pro", "--identity-provider https://d-9067e1d68a.awsapps.com/start",
+                     "--region us-east-1", "--use-device-flow", "sudo -iu crew-personal"):
+            self.assertIn(part, result.stdout)
+
     def test_config_examples_load(self):
         from octopus.config import load
         platform = load(ROOT / "deploy/config/platform.toml.example", environ={"HOME": "/tmp"}, cwd="/tmp")

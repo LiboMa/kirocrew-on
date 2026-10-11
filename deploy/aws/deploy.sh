@@ -111,8 +111,11 @@ tunnel() {
 }
 
 kiro_login() {
+  local login="kiro-cli login --use-device-flow"
+  [ -z "${KIRO_LICENSE:-}" ] || login="$login --license $KIRO_LICENSE"
+  [ -z "${KIRO_IDC_START_URL:-}" ] || login="$login --identity-provider $KIRO_IDC_START_URL --region ${KIRO_IDC_REGION:-$REGION}"
   run ssm start-session --target "$(output InstanceId)" --document-name AWS-StartInteractiveCommand \
-    --parameters "{\"command\":[\"sudo -iu crew-$BOUNDARY kiro-cli login --use-device-flow\"]}"
+    --parameters "{\"command\":[\"sudo -iu crew-$BOUNDARY $login\"]}"
 }
 
 down() {
