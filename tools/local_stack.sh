@@ -28,6 +28,7 @@ log_dir = "$LOGS"
 worker_port = 8938
 gateway_port = 6476
 worker_isolation = "trusted-local"
+approval_mode = "auto"
 crew_url = "http://localhost:6476"
 kirocrew_python = "$KC_PY"
 adapters_dir = "$ROOT/node_modules/.bin"

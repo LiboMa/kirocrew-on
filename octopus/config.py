@@ -21,7 +21,8 @@ PATHS = {"data_dir", "worker_data_dir", "worker_token_file", "crew_home", "kiro_
          "log_dir", "gateway_runtime_file", "kirocrew_python", "adapters_dir"}
 INTS = {"api_port": (1, 65535), "worker_port": (1, 65535), "gateway_port": (1, 65535), "engine_workers": (1, 32)}
 FLOATS = {"retry_unavailable": (0.0, 600.0)}
-STRINGS = {"api_host", "worker_host", "public_url", "crew_url", "worker_isolation"}
+STRINGS = {"api_host", "worker_host", "public_url", "crew_url", "worker_isolation", "approval_mode"}
+APPROVAL = ("", "auto", "interactive")
 HOST = re.compile(r"^[A-Za-z0-9.\-]+(:\d{1,5})?$|^\[[0-9A-Fa-f:]+\](:\d{1,5})?$")
 
 
@@ -50,6 +51,8 @@ class Settings:
     worker_isolation: str = "trusted-local"
     gateway_port: int = 5476
     crew_url: str = ""
+    # KiroCrew native tool/spawn approval for this boundary; "" keeps the legacy seed default.
+    approval_mode: str = ""
     kirocrew_python: Path | None = None
     adapters_dir: Path | None = None
     path_prepend: tuple[Path, ...] = ()
@@ -108,6 +111,8 @@ def _layer(values, base):
                 raise ConfigError(f"{key} 必须为字符串")
             if key == "worker_isolation" and value not in ISOLATION:
                 raise ConfigError("worker_isolation 只能是 trusted-local 或 dedicated")
+            if key == "approval_mode" and value not in APPROVAL:
+                raise ConfigError("approval_mode 只能是 auto 或 interactive（留空表示不指定）")
             result[key] = value
     return result
 

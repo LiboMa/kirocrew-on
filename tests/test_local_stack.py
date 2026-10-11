@@ -28,6 +28,7 @@ class LocalStackTests(unittest.TestCase):
             self.assertEqual(boundary.kiro_home, base / "kiro")
             self.assertEqual(boundary.worker_data_dir, base / "worker")
             self.assertEqual(platform.data_dir, base / "platform")
+            self.assertEqual(boundary.approval_mode, "auto")
             for path in (boundary.crew_home, boundary.kiro_home):
                 self.assertFalse(str(path).startswith(str(Path.home() / ".kiro")))
 

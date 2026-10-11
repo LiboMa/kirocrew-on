@@ -12,6 +12,13 @@ from . import environment, templates
 from .registry import BACKENDS, FEATURES, SUPPORTED_VERSIONS, PocProviderRegistry
 
 
+def check_approval_mode(cfg, expected):
+    """A headless boundary that expects auto approval must not silently run with interactive prompts."""
+    if expected and cfg.agent.approval_mode != expected:
+        raise SystemExit(f"边界配置要求 approval_mode={expected}，但 KIROCREW_HOME/config.json 为 "
+                         f"{cfg.agent.approval_mode}；无人值守时原生会拒绝派发。请修正 config.json 后重启")
+
+
 def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--config")
@@ -29,10 +36,11 @@ def main(argv=None):
         raise SystemExit(f"不支持的 KiroCrew 版本 {__version__}；先完成契约检查再扩展支持")
     templates.seed(crew_home=settings.crew_home, kiro_home=settings.kiro_home,
                    allowed_roots=[settings.worker_data_dir], port=settings.gateway_port,
-                   legacy_pipeline=args.legacy_pipeline)
+                   legacy_pipeline=args.legacy_pipeline, approval_mode=settings.approval_mode)
     cfg = KiroCrewConfig.load()
     if cfg.agent.session_sharing or cfg.session.pool_size:
         raise SystemExit("组合要求 session_sharing=false 且 pool_size=0；请检查 KIROCREW_HOME/config.json")
+    check_approval_mode(cfg, settings.approval_mode)
     ctx = boot_platform(cfg)
     composed = dataclasses.replace(ctx, providers=PocProviderRegistry(ctx.providers, settings.routing_log))
     assert_security_floor(composed.security)

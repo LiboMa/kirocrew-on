@@ -9,6 +9,8 @@ log_dir = "/var/lib/octopus/boundaries/personal/logs"
 worker_host = "127.0.0.1"
 worker_port = 8928
 worker_isolation = "trusted-local"
+# 无人值守边界使用 KiroCrew 原生 auto 批准（D14）；约束来自执行边界与原生沙箱
+approval_mode = "auto"
 gateway_port = 5476
 # 原生入口经 SSM 转发后的浏览器 origin
 crew_url = "http://localhost:15476"

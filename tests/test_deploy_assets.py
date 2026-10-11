@@ -65,6 +65,7 @@ class DeployAssetTests(unittest.TestCase):
         self.assertEqual(boundary.worker_data_dir, Path("/var/lib/octopus/boundaries/personal/worker"))
         self.assertEqual(boundary.crew_home, Path("/var/lib/octopus/boundaries/personal/crew"))
         self.assertEqual(set(boundary.tools), {"kiro_cli", "claude", "codex", "opencode"})
+        self.assertEqual(boundary.approval_mode, "auto")
 
 
 if __name__ == "__main__":

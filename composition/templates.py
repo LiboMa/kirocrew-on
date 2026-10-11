@@ -9,14 +9,14 @@ LEGACY_COMMON = ("这是用户授权的本地多 ACP PoC。只操作明确指定
                  "不读取凭据，不联网安装依赖，不发布、不提交。报告实际执行结果，不编造。")
 
 
-def seed(*, crew_home, kiro_home, allowed_roots, port, legacy_pipeline):
+def seed(*, crew_home, kiro_home, allowed_roots, port, legacy_pipeline, approval_mode=""):
     from kiro_crew.agent import managed_mcp_spec_entry
     crew_home.mkdir(parents=True, exist_ok=True)
     (kiro_home / "agents").mkdir(parents=True, exist_ok=True)
     config = {
         "agent": {
             "provider": "acp", "acp_backend": "", "default_agent": "poc-coordinator",
-            "model": "auto", "sandbox": "auto", "approval_mode": "interactive",
+            "model": "auto", "sandbox": "auto", "approval_mode": approval_mode or "interactive",
             "session_sharing": False, "max_subagents": 3, "log_level": "INFO",
             "subagent_cwd_allowed_roots": [str(root) for root in allowed_roots],
             "subagent_result_ttl_secs": 86400,

@@ -132,10 +132,10 @@ class TemplateTests(unittest.TestCase):
     def tearDown(self):
         self.temporary.cleanup()
 
-    def seed(self, legacy=False):
+    def seed(self, legacy=False, approval_mode=""):
         with patch.dict("sys.modules", {"kiro_crew.agent": self.stub}):
             return templates.seed(crew_home=self.crew, kiro_home=self.kiro, allowed_roots=[self.runs], port=6000,
-                                  legacy_pipeline=legacy)
+                                  legacy_pipeline=legacy, approval_mode=approval_mode)
 
     def test_fresh_config_allows_only_worker_roots(self):
         self.seed()
@@ -166,6 +166,27 @@ class TemplateTests(unittest.TestCase):
         legacy = json.loads((self.kiro / "agents/poc-pipeline-code.json").read_text())
         self.assertEqual(legacy["description"], "App PoC / claude worker")
 
+
+class ApprovalModeTests(unittest.TestCase):
+    def test_seed_writes_requested_approval_mode_and_keeps_legacy_default(self):
+        stub = SimpleNamespace(managed_mcp_spec_entry=lambda name: {"command": "x"})
+        for mode, expected in (("auto", "auto"), ("", "interactive")):
+            with self.subTest(mode=mode), tempfile.TemporaryDirectory() as temporary:
+                root = Path(temporary)
+                with patch.dict("sys.modules", {"kiro_crew.agent": stub}):
+                    templates.seed(crew_home=root / "crew", kiro_home=root / "kiro", allowed_roots=[root / "w"],
+                                   port=6000, legacy_pipeline=False, approval_mode=mode)
+                config = json.loads((root / "crew/config.json").read_text())
+                self.assertEqual(config["agent"]["approval_mode"], expected)
+
+    def test_gateway_refuses_mismatched_approval_mode(self):
+        from composition.gateway import check_approval_mode
+        cfg = SimpleNamespace(agent=SimpleNamespace(approval_mode="interactive"))
+        check_approval_mode(cfg, "")
+        check_approval_mode(cfg, "interactive")
+        with self.assertRaises(SystemExit) as raised:
+            check_approval_mode(cfg, "auto")
+        self.assertIn("approval_mode", str(raised.exception.code))
 
 if __name__ == "__main__":
     unittest.main()
