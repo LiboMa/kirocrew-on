@@ -57,6 +57,12 @@ def build_parser(settings, environ=None):
     ready.add_argument("--worker", action="store_true")
     ready.add_argument("--gateway", action="store_true")
     ready.add_argument("--timeout", type=float, default=60)
+    boot = sub.add_parser("bootstrap-worker", help="部署引导：以管理员登录并注册执行边界 Worker（可重复执行）")
+    boot.add_argument("--username", default="admin")
+    boot.add_argument("--password-env", default="OCTOPUS_ADMIN_PASSWORD")
+    boot.add_argument("--worker-url", required=True)
+    boot.add_argument("--token-file", required=True)
+    boot.add_argument("--name", required=True)
     backup_cmd = sub.add_parser("backup", help="平台数据库一致性备份")
     backup_cmd.add_argument("--dest", required=True)
     archive = sub.add_parser("archive", help="目录归档（Worker 数据、执行边界）")
@@ -148,6 +154,11 @@ def main(argv=None):
         if pending:
             raise SystemExit("未就绪：" + "；".join(pending))
         print("ready")
+    elif args.command == "bootstrap-worker":
+        from .bootstrap import register_boundary_worker
+        url = f"http://{probe_host(settings.api_host)}:{settings.api_port}"
+        print(dumps(register_boundary_worker(url, args.username, os.environ[args.password_env], args.worker_url,
+                                             Path(args.token_file).read_text().strip(), args.name)))
     elif args.command == "backup":
         from .backup import backup_database
         print(dumps(backup_database(settings.data_dir / "octopus.sqlite3", Path(args.dest))))

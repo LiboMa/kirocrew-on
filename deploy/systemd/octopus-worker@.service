@@ -10,6 +10,8 @@ Group=crew-%i
 WorkingDirectory=/var/lib/octopus/boundaries/%i
 Environment=PYTHONPATH=/opt/kirocrew-on/current
 Environment=HOME=/var/lib/octopus/boundaries/%i/home
+# Bedrock provider settings for Claude Code / Codex (instance role credentials)
+EnvironmentFile=-/etc/kirocrew-on/boundary-%i.env
 ExecStart=/opt/kirocrew-on/venv/bin/python -m octopus --config /etc/kirocrew-on/boundary-%i.toml worker
 ExecStartPost=/opt/kirocrew-on/venv/bin/python -m octopus --config /etc/kirocrew-on/boundary-%i.toml wait-ready --worker --timeout 60
 KillSignal=SIGTERM
