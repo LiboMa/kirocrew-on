@@ -40,8 +40,8 @@
 
 ### 3.1 数据（迁移 2）
 
-- 重建 `workers` 表，增加 `scope`：`dedicated`（现有行，`owner_id` 与 `team_id` 恰有一个）、`shared`（两者皆空）、`spare`（第二期，两者皆空）；约束随 `scope` 校验。
-- 新表 `worker_spaces(worker_id, team_id, user_id, native_member)`：共享 Worker 服务的空间，`team_id` 与 `user_id` 恰有一个，(worker_id, team_id)、(worker_id, user_id) 唯一；`native_member` 记录该空间在 Gateway 中的成员 ID（T7）。
+- `workers` 增加列 `scope`（`dedicated` / `shared` / `spare`，默认 `dedicated`，现有行即为 `dedicated`）。不重建表（`runs.worker_id` 引用它）；现有约束「`owner_id` 与 `team_id` 恰有一个」保留：`shared` 与 `spare` 的 `owner_id` 记录登记或管理它的管理员，不表示服务范围。
+- 新表 `worker_spaces(worker_id, team_id, user_id)`：共享 Worker 服务的空间，`team_id` 与 `user_id` 恰有一个，(worker_id, team_id)、(worker_id, user_id) 唯一；`team_id` 另设部分唯一索引，一个 Team 只出现在一个共享环境中（T6）。
 - 迁移前按现有机制自动备份。总体设计中 M2（schema 2）与 M4（schema 3）的迁移编号顺延一位。
 
 ### 3.2 归属与选择规则
@@ -64,9 +64,8 @@
 
 ### 3.4 记忆分隔（T7）
 
-- Gateway 创建会话时支持 `memory_mode` 与成员模式（KiroCrew `dashboard/chat_handlers.py:810-876`）。
-- 共享环境中，空间的会话由 Worker 以该空间的成员创建原生父会话；成员在首次使用时创建，ID 写入 `worker_spaces.native_member`。
-- 实施第一步核实：成员创建接口、平台派生的子任务是否继承父会话的成员记忆。不满足时按 T7 回退。
+- 核实结果（2026-10-11，KiroCrew 0.10.0）：Gateway 创建会话时支持 `memory_mode`（`dashboard/chat_handlers.py:810-817`）；绑定成员的会话只能经 `POST /api/members/<slug>/thread` 为**已配置**的成员开启（`member-*` 键保留），路由中没有创建成员的接口，平台派生的子任务是否继承成员记忆也无法确认。
+- 因此第一期按 T7 回退：共享环境不做记忆分隔，控制台的共享说明注明「记忆未分隔」。KiroCrew 提供稳定的成员创建与继承接口后另行实现。
 
 ### 3.5 控制台
 
@@ -82,8 +81,17 @@
 ## 4．第二期：专属环境（主机层）
 
 专属环境有两种形态：
-- **同一主机上的新 OS 用户**（§4.1–4.3）：开通快，但与其他边界共享实例角色与内核。
-- **第二台主机**：独立 EC2（独立实例角色与内核）运行 Gateway 与 Worker。平台经网络访问其 Worker，而现有规则要求非本机 Worker 使用 HTTPS（`transport.py:33-34`），因此需另行设计证书与网络（VPC 内访问、安全组只放行平台主机）。第二期立项时在两种形态间选择或同时支持。
+- **独立 Worker 主机**（2026-10-11 确定先实现，§4.0）：独立 EC2（独立实例角色与内核）运行 Gateway 与 Worker。
+- **同一主机上的新 OS 用户**（§4.1–4.3）：开通快，但与其他边界共享实例角色与内核；后续按需实现。
+
+### 4.0 独立 Worker 主机
+
+- **规模**：先开 1 台 m7i.xlarge 跑通全链路，再扩到 3 台；上线后登记为空闲专属环境，由管理员在控制台分配（第一台先分配给「Web应用软件研发组」验收）。
+- **栈**：每台一个 CloudFormation 栈 `<平台栈>-worker-<名称>`（`deploy/aws/kirocrew-on-worker.yaml`），位于平台的 VPC 与公有子网（出站用公有 IP，无入站公网访问）；安全组只允许平台主机安全组访问 Worker 的 TLS 端口；实例角色为 SSM、Bedrock 与读取发布包。平台栈增加输出 `VpcId`、`SubnetId`、`HostSecurityGroupId`、`ImageId`（只加输出，不替换资源）。
+- **安装**：`al2023.sh` 增加 Worker 主机模式：安装 KiroCrew、kiro-cli、Coding 工具与一个执行边界（`dedicated`），不安装平台 API、管理员与原生对话入口；nginx 在 TLS 端口终结 TLS 并转发到回环 Worker。
+- **TLS**：平台主机持有私有 CA（私钥 root 0600）；Worker 主机生成私钥与 CSR，私钥不离开主机；平台主机签发证书（SAN 为 Worker 主机私网 IP）；平台以 `worker_ca_file` 只信任该 CA。保持「非本机 Worker 必须 HTTPS」（`transport.py:33-34`）。
+- **登记**：Worker 主机启动时生成 Worker Token；`deploy.sh` 经 SSM 取得 Token，在平台主机上以 `bootstrap-worker --spare` 登记为空闲专属环境（Token 会留在 SSM 命令历史中，与管理员密码读取的取舍相同）。
+- **kiro-cli**：每台 Worker 主机需单独完成一次设备码登录（`deploy.sh kiro-login` 支持指定 Worker 主机）。
 
 ### 4.1 命令（`deploy/aws/deploy.sh`）
 
