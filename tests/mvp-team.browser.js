@@ -81,9 +81,9 @@ async page => {
     await p.locator("#new-flow").click();
     check(await p.locator("#modal").evaluate(n=>n.scrollWidth<=n.clientWidth+1),"移动端工作流向导没有横向溢出");
     check(await p.locator("[data-template]").count()===3,"提供三种工作流模板");
-    await p.screenshot({path:"/Users/malibo/MyDev/Kiro-Family-Spaces/kirocrew-octopus/evidence/mvp-1.0.0/browser-mobile.png",fullPage:false});
+    await p.screenshot({path:"/Users/malibo/MyDev/Kiro-Family-Spaces/experiments/kirocrew-on/state/browser/browser-mobile.png",fullPage:false});
     await close();await p.setViewportSize({width:1480,height:1050});
-    await p.screenshot({path:"/Users/malibo/MyDev/Kiro-Family-Spaces/kirocrew-octopus/evidence/mvp-1.0.0/browser-desktop.png",fullPage:false});
+    await p.screenshot({path:"/Users/malibo/MyDev/Kiro-Family-Spaces/experiments/kirocrew-on/state/browser/browser-desktop.png",fullPage:false});
     check(errors.length===0,"无浏览器脚本错误");
     return {ok:true,checks,nativeCalls:0,mode:"ephemeral HTTP/SQLite browser fixture"};
   }finally{await context.close();await browser.close();}

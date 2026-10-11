@@ -4,6 +4,8 @@ async page => {
   const context=await browser.newContext({viewport:{width:1480,height:1050},reducedMotion:"reduce"});
   const p=await context.newPage(),checks=[],errors=[],requests=[];
   const check=(yes,message)=>{if(!yes)throw Error(message);checks.push(message);};
+  const step=async(n,page=p)=>{await page.locator(`#modal [data-goto="${n}"]`).click();await page.waitForSelector(`#modal .wizard-page[data-page="${n}"]:not([hidden])`);};
+  const method=async(value,page=p)=>page.locator(`#modal label.plan-method:has(input[value="${value}"])`).click();
   let status="blocked",selected,closing=false;
   p.on("pageerror",e=>errors.push(e.message));
   try {
@@ -54,26 +56,32 @@ async page => {
     await p.setViewportSize({width:390,height:844});
     check(await p.evaluate(()=>document.documentElement.scrollWidth<=innerWidth+1),"窄屏旧入口与状态卡不造成页面横向溢出");
     await p.setViewportSize({width:1480,height:1050});
-    await p.screenshot({path:"/Users/malibo/MyDev/Kiro-Family-Spaces/kirocrew-octopus/evidence/mvp-1.0.0/recovery-ui.png"});
+    await p.screenshot({path:"/Users/malibo/MyDev/Kiro-Family-Spaces/experiments/kirocrew-on/state/browser/recovery-ui.png"});
 
     await p.locator("#new-run").click();
-    check(await p.locator("#plan-mode").inputValue()==="recommend","新需求默认引导 Agent 推荐、审阅和采用");
+    check(await p.locator('#modal input[name="plan-method"]:checked').inputValue()==="recommend","新需求默认引导 Agent 推荐、审阅和采用");
     check(await p.locator("#new-source").inputValue()==="","不默认使用空项目，必须确认代码来源");
     await p.locator("#new-input").fill("快速验证一个加法小函数");
     await p.waitForSelector("#launch-0-prompt",{state:"attached"});
+    await p.locator("#wizard-next").click();
+    await p.waitForFunction(()=>document.querySelector("#modal-error").textContent.includes("Git 仓库"));
+    check(await p.locator('#modal .wizard-page[data-page="0"]').isVisible(),"未确认代码来源不能进入下一步");
     await p.locator("#new-source").selectOption("new");
-    await p.locator("#modal-submit").click();
+    await p.locator("#wizard-next").click();
+    await p.locator("#wizard-next").click();
     await p.waitForFunction(()=>document.querySelector("#modal-error").textContent.includes("采用"));
-    check(await p.locator("#modal").evaluate(n=>n.open),"Agent 编排必须采用后才能提交，不能静默退回预设");
-    await p.locator("#plan-mode").selectOption("manual");
+    check(await p.locator('#modal .wizard-page[data-page="1"]').isVisible(),"Agent 编排必须采用后才能继续，不能静默退回预设");
+    await method("template");
+    await step(0);
     await p.locator("#new-source").selectOption("");
     await p.locator("#new-input").fill("修复 https://github.com/example/project.git 的登录 Bug");
     await p.waitForFunction(()=>document.querySelector("#new-source").value==="git");
     check(await p.locator("#new-url").inputValue()==="https://github.com/example/project.git","需求中的明确 Git URL 自动填入可编辑的代码来源");
     await p.locator("#new-source").selectOption("new");
-    await p.locator("#launch-recovery-limit").selectOption("3");
     await p.locator("#new-name").fill("手动编排与源码确认测试");
     await p.waitForFunction(()=>document.querySelector("#match-name").textContent.includes("Bug 修复"));
+    await step(3);
+    await p.locator("#launch-recovery-limit").selectOption("3");
     await p.locator("#modal-submit").click();
     await p.waitForFunction(()=>!document.querySelector("#modal").open);
     await p.waitForFunction(()=>document.querySelector("#run-title").textContent==="手动编排与源码确认测试");

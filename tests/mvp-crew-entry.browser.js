@@ -5,6 +5,8 @@ async page => {
   const p=await context.newPage(),checks=[],errors=[],calls=[],bindings=new Map();
   let delayed=false,release,fail=false;
   const check=(ok,message)=>{if(!ok)throw Error(message);checks.push(message);};
+  const step=async(n,page=p)=>{await page.locator(`#modal [data-goto="${n}"]`).click();await page.waitForSelector(`#modal .wizard-page[data-page="${n}"]:not([hidden])`);};
+  const method=async(value,page=p)=>page.locator(`#modal label.plan-method:has(input[value="${value}"])`).click();
   p.on("pageerror",e=>errors.push(e.message));
   const origin="http://localhost:5678";
   try {
@@ -96,8 +98,11 @@ async page => {
     await p.route("**/v1/designs/*",route=>route.fulfill({json:job}));
     await p.locator("#new-run").click();
     await p.locator("#new-input").fill(job.input);
+    await p.locator("#new-source").selectOption("new");
+    await step(1);await method("template");
     await p.locator("#new-workflow").selectOption("template:proof");
     await p.waitForFunction(()=>document.querySelector("#launch-0-prompt")?.value.includes("验证工作流"));
+    await method("recommend");
     await p.locator("#recommend-start").click();
     await p.waitForSelector("#recommend-open:not([hidden])");
     const designPopup=context.waitForEvent("page");
