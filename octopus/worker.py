@@ -54,8 +54,8 @@ class Worker:
         # "auto": this unattended boundary asks KiroCrew for native auto approval on platform spawns (D14).
         self.approval_mode = approval_mode
 
-    def native(self, path, body=None, method=None, internal=False):
-        return crew_api.request(path, body, method, port=self.port, home=self.home, internal=internal)
+    def native(self, path, body=None, method=None):
+        return crew_api.request(path, body, method, port=self.port, home=self.home)
 
     def path(self, rid):
         require(isinstance(rid, str) and re.fullmatch(r"run-[a-f0-9]{32}", rid), "Run ID 无效")
@@ -229,9 +229,9 @@ class Worker:
                     "solo_details": "用户通过 Octopus API 选择此任务、工具与执行配置。",
                     "silent": True}
                 if self.approval_mode == "auto":
-                    result = self.native("/api/spawn", {**spawn, "approval_mode": "auto"}, internal=True)
-                else:
-                    result = self.native("/api/spawn", spawn)
+                    # Owner-authenticated request for native per-spawn auto approval (D14, K19).
+                    spawn["approval_mode"] = "auto"
+                result = self.native("/api/spawn", spawn)
                 require(re.fullmatch(r"[a-f0-9]{8,64}", str(result.get("id", ""))), "原生 Task ID 无效")
                 value.update(status="running", native_id=result["id"], receipt=result)
             except crew_api.GatewayError as exc:

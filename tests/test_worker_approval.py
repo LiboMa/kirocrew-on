@@ -1,10 +1,7 @@
-"""Unattended boundaries ask KiroCrew for native auto approval per platform spawn, over internal auth only."""
-import io
-import json
+"""Unattended boundaries ask KiroCrew (owner-authenticated) for native auto approval on platform spawns."""
 from pathlib import Path
 import tempfile
 import unittest
-from unittest.mock import patch
 
 from octopus import gateway_client
 from octopus.security import Error
@@ -36,20 +33,19 @@ class WorkerApprovalTests(unittest.TestCase):
         node.prepare({"run_id": rid, "source": {"type": "new"}})
         return node, {"run_id": rid, "attempt_id": "attempt-" + "2" * 32, "input": "需求", "spec": SPEC, "upstream": []}
 
-    def test_auto_boundary_spawns_with_native_auto_approval_over_internal_auth(self):
+    def test_auto_boundary_requests_native_auto_approval_on_platform_spawn(self):
         node, body = self.worker("auto")
         calls = []
 
-        def native(path, payload=None, method=None, internal=False):
-            calls.append((path, payload, internal))
+        def native(path, payload=None, method=None):
+            calls.append((path, payload))
             return {"id": "aabb1234"}
 
         node.native = native
         self.assertEqual(node.dispatch(body)["status"], "running")
-        path, payload, internal = calls[0]
+        path, payload = calls[0]
         self.assertEqual(path, "/api/spawn")
         self.assertEqual(payload["approval_mode"], "auto")
-        self.assertTrue(internal)
 
     def test_default_boundary_keeps_native_interactive_spawn(self):
         node, body = self.worker("")
@@ -71,27 +67,6 @@ class WorkerApprovalTests(unittest.TestCase):
     def test_unknown_mode_is_rejected(self):
         with self.assertRaises(Error):
             Worker(self.root / "w3", "x" * 40, crew_home=self.root / "crew", approval_mode="yolo")
-
-
-class InternalAuthTests(unittest.TestCase):
-    def test_internal_request_uses_local_secret_header_and_mints_no_token(self):
-        with tempfile.TemporaryDirectory() as temporary:
-            home = Path(temporary)
-            (home / ".local_secret").write_text("local-secret-value\n")
-            seen = []
-
-            def urlopen(request, timeout=30):
-                seen.append(request)
-                return io.BytesIO(json.dumps({"id": "aabb1234"}).encode())
-
-            with patch("urllib.request.urlopen", side_effect=urlopen), \
-                    patch.object(gateway_client, "token", side_effect=AssertionError("no token minting")):
-                result = gateway_client.request("/api/spawn", {"task": "x"}, "POST", port=6476, home=home, internal=True)
-            self.assertEqual(result, {"id": "aabb1234"})
-            headers = {k.lower(): v for k, v in seen[0].header_items()}
-            self.assertEqual(headers["x-internal-secret"], "local-secret-value")
-            self.assertNotIn("cookie", headers)
-            self.assertEqual(seen[0].full_url, "http://127.0.0.1:6476/api/spawn")
 
 
 if __name__ == "__main__":
