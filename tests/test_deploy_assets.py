@@ -43,8 +43,11 @@ class TemplateTests(unittest.TestCase):
         self.assertEqual(p["ImageId"]["Type"], "AWS::EC2::Image::Id")  # pinned; see tests/test_deploy_safety.py
 
     def test_host_is_only_reachable_from_cloudfront_on_the_api_and_native_ports(self):
-        group = of_type(self.r, "AWS::EC2::SecurityGroup")[0]["Properties"]
-        ingress = group["SecurityGroupIngress"]
+        # One prefix-list reference per group: each counts as the list's maximum entries against the rule quota.
+        groups = of_type(self.r, "AWS::EC2::SecurityGroup")
+        ingress = [rule for g in groups for rule in g["Properties"]["SecurityGroupIngress"]]
+        self.assertTrue(all(len(g["Properties"]["SecurityGroupIngress"]) == 1 for g in groups))
+        self.assertEqual(self.r["Host"]["Properties"]["SecurityGroupIds"], [{"Ref": "HostSecurityGroup"}, {"Ref": "NativeSecurityGroup"}])
         self.assertEqual({json.dumps(rule["FromPort"]) for rule in ingress},
                          {json.dumps({"Ref": "ApiPort"}), json.dumps({"Ref": "NativePort"})})
         for rule in ingress:

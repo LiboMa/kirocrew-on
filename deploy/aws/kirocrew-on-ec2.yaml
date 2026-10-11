@@ -116,6 +116,20 @@ Resources:
           ToPort: !Ref ApiPort
           SourcePrefixListId: !Ref CloudFrontPrefixListId
           Description: CloudFront origin fetches to the KiroCrew ON API
+      SecurityGroupEgress:
+        - IpProtocol: "-1"
+          CidrIp: 0.0.0.0/0
+          Description: Outbound for SSM, Bedrock, package sources and git
+      Tags: [{Key: Name, Value: !Sub "${AWS::StackName}-host"}]
+
+  # A prefix-list reference counts as the list's maximum entries against the per-group rule quota, so the native chat
+  # port gets its own group instead of a second reference in HostSecurityGroup.
+  NativeSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: KiroCrew ON native chat - inbound only from CloudFront origin-facing addresses
+      VpcId: !Ref Vpc
+      SecurityGroupIngress:
         - IpProtocol: tcp
           FromPort: !Ref NativePort
           ToPort: !Ref NativePort
@@ -124,8 +138,8 @@ Resources:
       SecurityGroupEgress:
         - IpProtocol: "-1"
           CidrIp: 0.0.0.0/0
-          Description: Outbound for SSM, Bedrock, package sources and git
-      Tags: [{Key: Name, Value: !Sub "${AWS::StackName}-host"}]
+          Description: Default outbound
+      Tags: [{Key: Name, Value: !Sub "${AWS::StackName}-native"}]
 
   ArtifactBucket:
     Type: AWS::S3::Bucket
@@ -212,7 +226,7 @@ Resources:
       InstanceType: !Ref InstanceType
       SubnetId: !Ref PublicSubnet
       IamInstanceProfile: !Ref HostProfile
-      SecurityGroupIds: [!Ref HostSecurityGroup]
+      SecurityGroupIds: [!Ref HostSecurityGroup, !Ref NativeSecurityGroup]
       MetadataOptions:
         HttpTokens: required
         HttpEndpoint: enabled
