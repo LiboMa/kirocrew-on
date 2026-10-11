@@ -83,5 +83,12 @@ class ConfigTests(unittest.TestCase):
         with self.assertRaises(ConfigError):
             load(self.write('approval_mode = "yolo"\n'), environ=self.env, cwd=self.cwd)
 
+    def test_accepted_kirocrew_versions(self):
+        s = load(self.write('kirocrew_versions = ["0.10.0"]\n'), environ=self.env, cwd=self.cwd)
+        self.assertEqual(s.kirocrew_versions, ("0.10.0",))
+        self.assertEqual(load(environ=self.env, cwd=self.cwd).kirocrew_versions, ())
+        with self.assertRaises(ConfigError):
+            load(self.write('kirocrew_versions = ["0.10 bad"]\n'), environ=self.env, cwd=self.cwd)
+
 if __name__ == "__main__":
     unittest.main()

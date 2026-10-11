@@ -12,6 +12,10 @@ from . import environment, templates
 from .registry import BACKENDS, FEATURES, SUPPORTED_VERSIONS, PocProviderRegistry
 
 
+def version_accepted(version, extra):
+    return version in SUPPORTED_VERSIONS or version in extra
+
+
 def check_no_reexec(crew_home):
     """KiroCrew re-execs into a live target when this file exists, which would drop the composition."""
     if (crew_home / "live_target.json").exists():
@@ -35,8 +39,11 @@ def main(argv=None):
     from kiro_crew import __version__
     from kiro_crew.config import KiroCrewConfig
     from kiro_crew.platform import assert_security_floor, boot_platform, set_context
-    if __version__ not in SUPPORTED_VERSIONS:
-        raise SystemExit(f"不支持的 KiroCrew 版本 {__version__}；先完成契约检查再扩展支持")
+    if not version_accepted(__version__, settings.kirocrew_versions):
+        if not args.check:
+            raise SystemExit(f"KiroCrew {__version__} 不在已验证集合中；先运行 --check 与原生契约测试，"
+                             f"通过后在边界配置 kirocrew_versions 中显式接受")
+        print(f"注意：KiroCrew {__version__} 尚未验证，本次仅做契约检查", file=sys.stderr)
     templates.seed(crew_home=settings.crew_home, kiro_home=settings.kiro_home,
                    allowed_roots=[settings.worker_data_dir], port=settings.gateway_port,
                    legacy_pipeline=args.legacy_pipeline)

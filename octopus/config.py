@@ -57,6 +57,8 @@ class Settings:
     kirocrew_python: Path | None = None
     adapters_dir: Path | None = None
     path_prepend: tuple[Path, ...] = ()
+    # KiroCrew releases accepted beyond the verified set, only after their contract check passed.
+    kirocrew_versions: tuple[str, ...] = ()
     tools: dict = field(default_factory=dict)
 
 
@@ -67,7 +69,7 @@ def _path(value, base):
 
 def _layer(values, base):
     """Validate one layer's raw values and resolve its relative paths against ``base``."""
-    known = PATHS | set(INTS) | set(FLOATS) | STRINGS | {"allowed_hosts", "path_prepend", "tools"}
+    known = PATHS | set(INTS) | set(FLOATS) | STRINGS | {"allowed_hosts", "path_prepend", "tools", "kirocrew_versions"}
     unknown = set(values) - known
     if unknown:
         raise ConfigError("未知配置项：" + ", ".join(sorted(unknown)))
@@ -100,6 +102,11 @@ def _layer(values, base):
             if not all(HOST.match(h) for h in hosts):
                 raise ConfigError("allowed_hosts 只能包含 host[:port]")
             result[key] = hosts
+        elif key == "kirocrew_versions":
+            versions = tuple(v.strip() for v in (value.split(",") if isinstance(value, str) else value) if str(v).strip())
+            if not all(re.fullmatch(r"[0-9][0-9A-Za-z.+-]*", v) for v in versions):
+                raise ConfigError("kirocrew_versions 只能包含版本号")
+            result[key] = versions
         elif key == "path_prepend":
             parts = value.split(os.pathsep) if isinstance(value, str) else value
             result[key] = tuple(_path(p, base) for p in parts if str(p).strip())
@@ -121,7 +128,7 @@ def _layer(values, base):
 def _environment(environ):
     # Only known settings are read: the OCTOPUS_ namespace is shared with secrets passed by name
     # (e.g. `init --password-env OCTOPUS_ADMIN_PASSWORD`). Unknown keys are still errors in files.
-    known = PATHS | set(INTS) | set(FLOATS) | STRINGS | {"allowed_hosts", "path_prepend"}
+    known = PATHS | set(INTS) | set(FLOATS) | STRINGS | {"allowed_hosts", "path_prepend", "kirocrew_versions"}
     values, tools = {}, {}
     for key, value in environ.items():
         if key.startswith("OCTOPUS_TOOL_"):

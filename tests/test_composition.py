@@ -221,5 +221,14 @@ class DiagnosisTemplateTests(unittest.TestCase):
         self.assertNotIn("availableAgents", spec)
         self.assertNotIn("@kirocrew-core", json.dumps(spec))
 
+class VersionGateTests(unittest.TestCase):
+    """A KiroCrew release outside the verified set serves only after its contract check is accepted in config."""
+
+    def test_verified_and_explicitly_accepted_versions(self):
+        from composition.gateway import version_accepted
+        self.assertTrue(version_accepted("0.8.0", ()))
+        self.assertFalse(version_accepted("0.10.0", ()))
+        self.assertTrue(version_accepted("0.10.0", ("0.10.0",)))
+
 if __name__ == "__main__":
     unittest.main()
