@@ -1,6 +1,6 @@
 # MVP Release 计划与状态
 
-更新日期：2026-10-11　·　当前阶段：**M1 待验收；M2/M3 功能开发中（React 控制台、发起向导、预生成工作流提交、原生对话公网入口）**　·　本仓库可运行代码：**分支 `feat/m1-runtime-foundation`，未合并**　·　已发布版本：**无**
+更新日期：2026-10-11　·　当前阶段：**最小 MVP 已在 EC2 跑通（Coding Agent → 提交 → KiroCrew 规划 → 执行与返工 → 查看 → 迭代 → 预览）**　·　本仓库可运行代码：**分支 `feat/m1-runtime-foundation`，未合并、未推送**　·　已发布版本：**无**
 
 本文记录 KiroCrew ON 首个可用 MVP 的范围、已确定决策、各里程碑交付与验收条件。
 “已确定”“默认值（待确认）”“未开始 / 待验收”分别标注；不要把本文中的目标当作已上线功能。
@@ -56,6 +56,9 @@ M4（共享与组织）、M5（仓库闭环）在 MVP 之后分别立项，各�
 | D22 | 前端在主机安装时构建（`npm ci && npm run build` → `octopus/ui/dist`，不入库）；离线回归包含前端单测与构建（2026-10-11） |
 | D23 | 发起开发采用向导：需求 → 编排方式 → 任务与 Agent → 确认；编排方式提供参考模板、KiroCrew Agent 推荐（匹配每个 Task 的 Prompt）、直接提交 Agent 预先生成的工作流（UI 导入或经 API / MCP `document` 提交，由代码解析与规范化）；不删除既有能力（2026-10-11） |
 | D24 | 服务端原生 KiroCrew 对话经第二个 CloudFront 分发 → 主机 nginx（校验源站密钥、WebSocket）→ 回环 Gateway；入口登录 1 h（K03）；代码与 IaC 已完成，部署前需负责人确认（2026-10-11） |
+| D25 | 最小 MVP = Coding Agent 连接后台 → 提交任务 → 查看任务 → 更新优化应用；分支开发相关的 M2 / M3 内容后排（`docs/BACKLOG.md`）（2026-10-11） |
+| D26 | 意图识别与需求补全必须由 KiroCrew Agent 生成：未指定任务时 Session 第 1 个任务由 Kiro Agent 规划（intent、summary、1–7 个任务与 Agent 映射），代码校验后追加到同一 Session；规则匹配仅在 `plan=match` 时使用；K01 修复前 OpenCode 任务由代码改派 Claude Code（2026-10-11） |
+| D27 | Coding Agent 接入：`octopus connect claude|kiro` 写入 MCP 服务器 `kirocrew-on` 与使用说明（Claude Skill / Kiro steering）；产出经 `/preview` 在隔离来源中预览，开发服务器类项目用 `deploy.sh space <run-id>` 转发到本机（2026-10-11） |
 
 ## 3．设计默认值（已提出，待确认）
 
