@@ -110,12 +110,50 @@ tunnel() {
     --parameters '{"portNumber":["5476"],"localPortNumber":["15476"]}'
 }
 
+remote() {  # run a short shell command on the host through SSM and print its stdout
+  local id
+  id="$(aws --region "$REGION" ssm send-command --instance-ids "$1" --document-name AWS-RunShellScript \
+    --parameters "$(python3 -c 'import json, sys; print(json.dumps({"commands": [sys.argv[1]]}))' "$2")" \
+    --query Command.CommandId --output text)"
+  aws --region "$REGION" ssm wait command-executed --command-id "$id" --instance-id "$1" 2>/dev/null || true
+  aws --region "$REGION" ssm get-command-invocation --command-id "$id" --instance-id "$1" \
+    --query StandardOutputContent --output text
+}
+
 kiro_login() {
-  local login="kiro-cli login --use-device-flow"
+  # kiro-cli still prompts with every flag set and fails without a terminal (observed on EC2), so the device flow runs
+  # under script(1) on the host; two carriage returns accept the remaining prompts. The device code is read from its log.
+  local login="kiro-cli login --use-device-flow" instance shown="" finished=""
+  local log="/var/lib/octopus/boundaries/$BOUNDARY/logs/kiro-login.log"
   [ -z "${KIRO_LICENSE:-}" ] || login="$login --license $KIRO_LICENSE"
   [ -z "${KIRO_IDC_START_URL:-}" ] || login="$login --identity-provider $KIRO_IDC_START_URL --region ${KIRO_IDC_REGION:-$REGION}"
-  run ssm start-session --target "$(output InstanceId)" --document-name AWS-StartInteractiveCommand \
-    --parameters "{\"command\":[\"sudo -iu crew-$BOUNDARY $login\"]}"
+  instance="$(output InstanceId)"
+  python3 - "crew-$BOUNDARY" "$login" "$log" > "$WORK/login.json" <<'PY'
+import json, sys
+user, login, log = sys.argv[1:]
+script = (f"pkill -u {user} -f 'kiro-cli login' || true; rm -f {log}; cd /tmp; "
+          f"(sleep 3; printf '\\r'; sleep 2; printf '\\r'; sleep 900) | sudo -iu {user} script -q -f -c '{login}' {log}; "
+          f"echo exit=$? >> {log}")
+print(json.dumps({"commands": [script], "executionTimeout": ["960"]}))
+PY
+  [ -z "$DRY" ] || cat "$WORK/login.json"
+  query cmd-dryrun ssm send-command --instance-ids "$instance" --document-name AWS-RunShellScript \
+    --comment "kiro-cli device login" --parameters "file://$WORK/login.json" --query Command.CommandId --output text >/dev/null
+  [ -n "$DRY" ] && return
+  for _ in $(seq 1 12); do
+    sleep 5
+    shown="$(remote "$instance" "grep -aE 'Code:|https://' $log | sed 's/\x1b\[[0-9;?]*[a-zA-Z]//g' | tr -d '\r' || true")"
+    [ -z "$shown" ] || break
+  done
+  [ -n "$shown" ] || { echo "未在 $log 中看到设备码" >&2; exit 1; }
+  printf '%s\n在浏览器中打开上述地址并输入设备码（15 分钟内有效）；完成后这里自动确认\n' "$shown"
+  for _ in $(seq 1 90); do
+    sleep 10
+    finished="$(remote "$instance" "grep -ao 'exit=[0-9]*' $log || true")"
+    [ -z "$finished" ] || break
+  done
+  remote "$instance" "sudo -iu crew-$BOUNDARY kiro-cli whoami 2>&1 | head -1"
+  [ "$finished" = "exit=0" ] || { echo "kiro-cli login 结束状态：${finished:-超时}" >&2; exit 1; }
 }
 
 down() {

@@ -146,14 +146,19 @@ class ScriptTests(unittest.TestCase):
         self.assertIn("cloudformation deploy", result.stdout)
         self.assertNotIn("x" * 48, result.stdout + result.stderr)
 
-    def test_kiro_login_passes_identity_center_settings(self):
+    def test_kiro_login_passes_identity_center_settings_under_a_pseudo_terminal(self):
+        # Observed on EC2: kiro-cli still prompts with every flag set and fails without a terminal, so the device flow
+        # runs under script(1) through SSM Run Command instead of an interactive Session Manager session.
         env = {**os.environ, "DEPLOY_DRY_RUN": "1"}
         result = subprocess.run(["bash", str(ROOT / "deploy/aws/deploy.sh"), "kiro-login"], cwd=ROOT, env=env,
                                 capture_output=True, text=True)
         self.assertEqual(result.returncode, 0, result.stderr)
+        printed = result.stdout + result.stderr
         for part in ("--license pro", "--identity-provider https://d-9067e1d68a.awsapps.com/start",
-                     "--region us-east-1", "--use-device-flow", "sudo -iu crew-personal"):
-            self.assertIn(part, result.stdout)
+                     "--region us-east-1", "--use-device-flow", "sudo -iu crew-personal script -q -f -c",
+                     "ssm send-command", "AWS-RunShellScript"):
+            self.assertIn(part, printed)
+        self.assertNotIn("AWS-StartInteractiveCommand", printed)
 
     def test_config_examples_load(self):
         from octopus.config import load

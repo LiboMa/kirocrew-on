@@ -26,7 +26,12 @@ class Client:
                 return json.load(response)
         except urllib.error.HTTPError as exc:
             with exc:
-                result = json.load(exc)
+                raw = exc.read()
+            try:
+                result = json.loads(raw)
+            except ValueError:
+                # A proxy (CloudFront) answered for an unavailable origin with a non-JSON page.
+                raise RuntimeError(f"{exc.code} {exc.reason}: API 暂不可用，稍后重试") from None
             raise RuntimeError(f"{exc.code} {result.get('code')}: {result.get('error')}") from None
 
     def events(self, run_id, after=0):
