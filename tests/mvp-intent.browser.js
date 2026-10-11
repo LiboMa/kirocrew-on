@@ -19,6 +19,9 @@ async page => {
   };
   try {
     await login(p,"fixture-owner");
+    await p.locator("#space").selectOption({index:1});
+    check(new URL(p.url()).pathname==="/classic/","在经典控制台切换开发空间不会跳到新版控制台");
+    await p.locator("#space").selectOption("");
     const ids=await p.locator("#session-list [data-run]").evaluateAll(nodes=>nodes.map(n=>n.dataset.run));
     await p.locator(`[data-run="${ids[0]}"]`).click();
     await p.waitForSelector("#run-view:not([hidden])");

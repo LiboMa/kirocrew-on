@@ -15,7 +15,7 @@ import { useRefreshRun } from "@/features/sessions/useSessionActions";
 export function ContinueDialog({ run, taskId }: { run: Run; taskId?: string }) {
   const { close, workers } = useConsole();
   const refresh = useRefreshRun();
-  const task = run.tasks.find((t) => t.id === taskId) ?? run.tasks.find((t) => t.status !== "accepted") ?? run.tasks[0];
+  const [task] = useState(() => run.tasks.find((t) => t.id === taskId) ?? run.tasks.find((t) => t.status !== "accepted") ?? run.tasks[0]);
   const [input, setInput] = useState(run.input);
   const [name, setName] = useState(task.spec.name);
   const [prompt, setPrompt] = useState(task.spec.prompt);

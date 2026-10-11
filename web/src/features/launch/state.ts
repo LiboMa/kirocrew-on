@@ -36,6 +36,8 @@ export interface Draft {
   importContent: string;
   generation: Generation | null;
   recovery: RecoveryPolicy;
+  /** The seed a workflow-mode draft was started from; a different workflow or task list starts fresh. */
+  baseKey?: string;
 }
 
 export function draftKey(user: string, space: string, selected: string | null, seed: LaunchSeed): string {
@@ -55,6 +57,22 @@ export function initialDraft(seed: LaunchSeed, { worker, space = "" }: { worker:
     tasks: structuredClone(seed.steps ?? []), resolution: null, imported: null, importContent: "", generation: null,
     recovery: { enabled: true, max_cycles: 2 },
   };
+}
+
+export const baseKeyOf = (seed: LaunchSeed) =>
+  JSON.stringify({ workflow: seed.workflow ?? null, name: seed.name ?? null, steps: seed.steps ?? null });
+
+const REQUIREMENT: (keyof Draft)[] = ["input", "name", "nameTouched", "source", "url", "ref", "space", "worker", "recovery", "generation", "importContent"];
+
+/** Reopening the wizard: like the classic console, a workflow-mode draft resumes only for the same workflow and starting
+ *  tasks; an explicit selection replaces the plan but keeps the requirement and any generation in flight. */
+export function restoreDraft(seed: LaunchSeed, saved: Partial<Draft> | null, base: Draft): Draft {
+  const fresh = { ...base, baseKey: baseKeyOf(seed) };
+  if (!saved) return fresh;
+  if (seed.mode === "workflow") return saved.baseKey === fresh.baseKey && saved.tasks?.length ? { ...fresh, ...saved } : fresh;
+  if (!(seed.workflow_id || seed.template_id || seed.steps)) return { ...fresh, ...saved, baseKey: fresh.baseKey };
+  const kept = Object.fromEntries(REQUIREMENT.filter((field) => saved[field] !== undefined).map((field) => [field, saved[field]]));
+  return { ...fresh, ...kept };
 }
 
 export function loadDraft(key: string): Partial<Draft> | null {

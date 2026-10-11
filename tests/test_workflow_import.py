@@ -59,6 +59,9 @@ class ImportWorkflowTests(unittest.TestCase):
     def test_invalid_documents_explain_why(self):
         cases = [
             ("", "非空"),
+            ("name: 流程\nsteps: [\n  {name: a", "YAML 第"),
+            ("a: b: c", "YAML 第"),
+            ("x: !!python/object:os.system ls", "YAML"),
             (json.dumps([{"name": "x", "tool": "gpt", "prompt": "p"}]), "Coding 工具"),
             (json.dumps({"steps": [{"name": f"t{i}", "tool": "claude", "prompt": "p"} for i in range(9)]}), "1–8"),
             ("```json\n[]\n```\n```json\n[]\n```", "一个完整"),

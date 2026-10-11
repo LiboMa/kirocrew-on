@@ -1,5 +1,4 @@
-import { useRun } from "@/api/hooks";
-import { useConsole, type Dialog } from "@/features/console/context";
+import type { Dialog } from "@/features/console/context";
 import { LaunchWizard } from "@/features/launch/LaunchWizard";
 import { AssignWorkerDialog, ContinueDialog, ControlDialog } from "@/features/sessions/dialogs";
 import { TeamDialog } from "@/features/settings/TeamDialog";
@@ -8,10 +7,8 @@ import { WorkersDialog } from "@/features/settings/WorkersDialog";
 import { ShareDialog } from "@/features/workflows/ShareDialog";
 import { WorkflowEditor } from "@/features/workflows/WorkflowEditor";
 
-/** Renders the dialog requested through the console context. Session dialogs act on the selected Session. */
+/** Renders the dialog requested through the console context. */
 export function DialogHost({ dialog }: { dialog: Dialog | null }) {
-  const { selected } = useConsole();
-  const run = useRun(selected).data;
   if (!dialog) return null;
   switch (dialog.kind) {
     case "launch":
@@ -27,11 +24,11 @@ export function DialogHost({ dialog }: { dialog: Dialog | null }) {
     case "workers":
       return <WorkersDialog />;
     case "continue":
-      return run ? <ContinueDialog key={run.id} run={run} taskId={dialog.taskId} /> : null;
+      return <ContinueDialog run={dialog.run} taskId={dialog.taskId} />;
     case "assign":
-      return run ? <AssignWorkerDialog run={run} /> : null;
+      return <AssignWorkerDialog run={dialog.run} />;
     case "control":
-      return run ? <ControlDialog run={run} action={dialog.action} /> : null;
+      return <ControlDialog run={dialog.run} action={dialog.action} />;
     default:
       return null;
   }

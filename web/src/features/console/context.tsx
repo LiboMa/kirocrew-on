@@ -18,9 +18,11 @@ export type Dialog =
   | { kind: "team" }
   | { kind: "tokens" }
   | { kind: "workers" }
-  | { kind: "continue"; taskId?: string }
-  | { kind: "assign" }
-  | { kind: "control"; action: "close" | "reopen" | "delete" };
+  // Session dialogs carry the Session as it was when they opened: commands then send that expected_version, and a
+  // concurrent change is rejected by the server instead of silently retargeting the dialog.
+  | { kind: "continue"; run: Run; taskId?: string }
+  | { kind: "assign"; run: Run }
+  | { kind: "control"; run: Run; action: "close" | "reopen" | "delete" };
 
 export interface ConsoleState {
   me: Me;

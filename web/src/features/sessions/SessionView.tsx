@@ -67,7 +67,7 @@ export function SessionView({ id }: { id: string }) {
           </div>
         </div>
         <div className="flex flex-wrap items-center gap-2" role="toolbar" aria-label="会话操作">
-          <Button size="sm" onClick={() => open({ kind: "continue" })} disabled={!canContinue(run)} id="run-continue">
+          <Button size="sm" onClick={() => open({ kind: "continue", run })} disabled={!canContinue(run)} id="run-continue">
             <ListRestart /> 续作
           </Button>
           {!design && (
@@ -93,7 +93,7 @@ export function SessionView({ id }: { id: string }) {
               <Button size="sm" variant="ghost" aria-label="更多操作"><MoreHorizontal /></Button>
             </DropdownMenuTrigger>
             <DropdownMenuContent align="end" className="w-52">
-              <DropdownMenuItem disabled={close.disabled} onSelect={() => open({ kind: "control", action: close.action })}>
+              <DropdownMenuItem disabled={close.disabled} onSelect={() => open({ kind: "control", run, action: close.action })}>
                 {close.action === "close" ? <Power /> : <RotateCcw />} {close.label}
               </DropdownMenuItem>
               {!design && (
@@ -103,7 +103,7 @@ export function SessionView({ id }: { id: string }) {
               )}
               <DropdownMenuItem onSelect={actions.exportRun}><Download /> 导出 JSON</DropdownMenuItem>
               <DropdownMenuSeparator />
-              <DropdownMenuItem variant="destructive" disabled={!canDelete(run)} onSelect={() => open({ kind: "control", action: "delete" })}>
+              <DropdownMenuItem variant="destructive" disabled={!canDelete(run)} onSelect={() => open({ kind: "control", run, action: "delete" })}>
                 <Trash2 /> 删除会话
               </DropdownMenuItem>
             </DropdownMenuContent>
@@ -130,7 +130,7 @@ export function SessionView({ id }: { id: string }) {
         <Alert id="worker-notice" className="border-warning/30 bg-warning/5">
           <AlertDescription className="flex flex-wrap items-center gap-3">
             需求已保存。请选择此开发空间的 Worker 后开始执行。
-            <Button size="sm" variant="outline" onClick={() => open({ kind: "assign" })} id="assign-worker"><UserCog /> 分配 Worker</Button>
+            <Button size="sm" variant="outline" onClick={() => open({ kind: "assign", run })} id="assign-worker"><UserCog /> 分配 Worker</Button>
           </AlertDescription>
         </Alert>
       )}
@@ -144,7 +144,7 @@ export function SessionView({ id }: { id: string }) {
       <div className="grid gap-5 lg:grid-cols-[minmax(0,1fr)_22rem]">
         <section className="space-y-3">
           <h2 className="text-sm font-semibold">开发任务</h2>
-          <TaskList run={run} onContinue={(taskId) => open({ kind: "continue", taskId })} />
+          <TaskList run={run} onContinue={(taskId) => open({ kind: "continue", run, taskId })} />
         </section>
         <aside className="space-y-4">
           <EventTimeline events={events} stream={stream} />

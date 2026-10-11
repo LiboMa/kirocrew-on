@@ -64,6 +64,7 @@ async page => {
     check(imported.tasks.map(t=>t.spec.tool).join(",")==="kiro,claude,codex","导入的工作流按提交内容创建 Session（真实 API）");
     check((await p.locator("#worker-notice").innerText()).includes("请选择此开发空间的 Worker"),"无 Worker 时只登记需求，提示分配");
 
+    const importedId=new URL(p.url()).searchParams.get("run");
     await p.getByRole("button",{name:/新建开发/}).click();
     await dialog().getByLabel("这次要完成什么？").fill("快速验证一个小函数");
     await dialog().getByLabel("代码来源").selectOption("new");
@@ -74,6 +75,7 @@ async page => {
     await next();await next();
     await dialog().getByRole("button",{name:"确认任务并提交"}).click();
     await p.waitForFunction(()=>!document.querySelector("#launch-wizard"));
+    await p.waitForFunction(previous=>{const id=new URLSearchParams(location.search).get("run");return id&&id!==previous;},importedId);
     const fromTemplate=await api("/runs/"+new URL(p.url()).searchParams.get("run"));
     check(fromTemplate.selection?.template_id==="proof"||fromTemplate.tasks.length===2,"参考模板按所选模板创建 Session");
 

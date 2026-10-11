@@ -9,7 +9,7 @@ import { Button } from "@/components/ui/button";
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { spaceWorkers, useConsole, type LaunchSeed } from "@/features/console/context";
 import { useDraft, useMatch, useRecommendation } from "@/features/launch/hooks";
-import { STEPS, draftKey, initialDraft, loadDraft, submitBody, validateStep, type Draft } from "@/features/launch/state";
+import { STEPS, draftKey, initialDraft, loadDraft, restoreDraft, submitBody, validateStep } from "@/features/launch/state";
 import { ConfirmStep, NeedStep, PlanStep, TasksStep } from "@/features/launch/steps";
 import { openCrewSession } from "@/lib/crew";
 import { cn } from "@/lib/utils";
@@ -21,11 +21,7 @@ export function LaunchWizard({ seed }: { seed: LaunchSeed }) {
   const key = draftKey(me.id, space, selected, seed);
   const { draft, ref, update, storageError } = useDraft(key, () => {
     const eligible = spaceWorkers(workers, space, me);
-    const base = initialDraft(seed, { worker: eligible.length === 1 ? eligible[0].id : "", space });
-    const saved = loadDraft(key);
-    // A seeded selection (template, workflow, task list) starts fresh; otherwise the saved draft resumes.
-    const explicit = !!(seed.workflow_id || seed.template_id || seed.steps);
-    return saved && !explicit ? { ...base, ...saved } as Draft : base;
+    return restoreDraft(seed, loadDraft(key), initialDraft(seed, { worker: eligible.length === 1 ? eligible[0].id : "", space }));
   });
   const { status: matchStatus, schedule, settle, describe } = useMatch(ref, update, { templates, workflows });
   const recommendation = useRecommendation(ref, update);

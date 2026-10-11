@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, test, vi } from "vitest";
 import { render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
+import { QueryClient } from "@tanstack/react-query";
 import { App } from "@/App";
 import { setToken } from "@/api/client";
 import type { Run } from "@/api/types";
@@ -93,5 +94,28 @@ describe("session detail", () => {
     const dialog = await screen.findByRole("dialog");
     await userEvent.click(within(dialog).getByRole("button", { name: "开始执行" }));
     await waitFor(() => expect(calls.find((c) => c.path === "/v1/runs/run-w/assign-worker")?.body).toMatchObject({ worker_id: "w1", expected_version: 1 }));
+  });
+});
+
+describe("session dialogs act on the Session as it was when they opened", () => {
+  test("a concurrent change makes the server reject instead of retargeting the continue", async () => {
+    setToken("oct_fixture");
+    window.history.replaceState(null, "", "/?run=run-a");
+    let current: Run = blocked;
+    const routes = workspaceRoutes([blocked], { "POST /runs/run-a/continue": { id: "run-a", version: 5 } });
+    const calls = mockApi({ ...routes, "GET /runs/run-a": () => current });
+    const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    render(<App client={client} />);
+    await userEvent.click(await screen.findByRole("button", { name: "续作" }));
+    const dialog = await screen.findByRole("dialog");
+    expect(within(dialog).getByLabelText("任务名称")).toHaveValue("实现与测试");
+    // A teammate's continue finishes meanwhile: task 1 is accepted, task 2 is now the first unfinished one.
+    current = { ...blocked, version: 9, tasks: [{ ...blocked.tasks[0], status: "accepted" }, { ...blocked.tasks[1], status: "blocked" }] };
+    await client.invalidateQueries({ queryKey: ["run", "run-a"] });
+    await waitFor(() => expect((client.getQueryData(["run", "run-a"]) as Run).version).toBe(9));
+    await userEvent.click(within(dialog).getByRole("button", { name: "保存并续作" }));
+    await waitFor(() => expect(calls.some((c) => c.path === "/v1/runs/run-a/continue")).toBe(true));
+    const body = calls.find((c) => c.path === "/v1/runs/run-a/continue")?.body as Record<string, unknown>;
+    expect(body).toMatchObject({ expected_version: 4, task_id: "code", execution: { name: "实现与测试" } });
   });
 });

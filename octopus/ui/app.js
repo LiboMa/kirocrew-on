@@ -226,7 +226,7 @@ $("login-form").onsubmit=async e=>{e.preventDefault();const button=e.submitter;b
 $("modal-form").onsubmit=async e=>{e.preventDefault();if(!modalHandler||modalWorking)return;modalWorking=true;const controls=[...$("modal-form").querySelectorAll("input,textarea,select,button")].map(node=>[node,node.disabled]);controls.forEach(([node])=>node.disabled=true);$("modal-error").textContent="";try{await modalHandler();}catch(error){$("modal-error").textContent=error.message;}finally{modalWorking=false;controls.forEach(([node,disabled])=>{if(node.isConnected)node.disabled=disabled;});}};
 $("modal-close").onclick=$("modal-cancel").onclick=()=>{if(!modalWorking)closeModal();};
 $("modal").addEventListener("cancel",e=>{e.preventDefault();if(!modalWorking)closeModal();});
-$("space").onchange=()=>{state.space=$("space").value;state.selected=null;state.run=null;state.stream?.abort();streamSequence++;history.replaceState(null,"","/");renderNav();renderRun();};
+$("space").onchange=()=>{state.space=$("space").value;state.selected=null;state.run=null;state.stream?.abort();streamSequence++;history.replaceState(null,"",location.pathname);renderNav();renderRun();};
 $("session-list").onclick=e=>{const b=e.target.closest("[data-run]");if(b)selectRun(b.dataset.run).catch(e=>toast(e.message));};
 $("flow-list").onclick=e=>{const b=e.target.closest("[data-flow]");if(b)flowEditor(state.flows.find(f=>f.id===b.dataset.flow));};
 $("new-flow").onclick=()=>flowEditor();$("new-run").onclick=()=>newRun();

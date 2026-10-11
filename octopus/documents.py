@@ -56,7 +56,13 @@ def parse_document(content, format):
             return result
 
         Loader.add_constructor(yaml.resolver.BaseResolver.DEFAULT_MAPPING_TAG, mapping)
-        return yaml.load(content, Loader=Loader)
+        try:
+            return yaml.load(content, Loader=Loader)
+        except yaml.YAMLError as exc:
+            # A malformed document is the author's input error (400), never a server failure.
+            mark = getattr(exc, "problem_mark", None)
+            where = f"第 {mark.line + 1} 行第 {mark.column + 1} 列" if mark else ""
+            raise ValueError(f"YAML {where}格式错误：{getattr(exc, 'problem', None) or exc}") from None
     except (RecursionError, TypeError) as exc:
         raise ValueError("文件结构无效或嵌套过深。") from exc
 

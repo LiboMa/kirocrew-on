@@ -11,7 +11,12 @@ export function mockApi(routes: Record<string, Handler | unknown>) {
     const method = init.method ?? "GET";
     const body = init.body ? JSON.parse(init.body as string) : undefined;
     calls.push({ method, path: url.pathname, body });
-    if (url.pathname.endsWith("/events") && url.searchParams.get("stream")) return new Promise<Response>(() => {});
+    if (url.pathname.endsWith("/events") && url.searchParams.get("stream")) {
+      // A "STREAM /runs/<id>/events" route answers the first connection; later reconnects stay pending.
+      const stream = routes[`STREAM ${url.pathname.replace(/^\/v1/, "")}`] as (() => Response) | undefined;
+      if (stream && url.searchParams.get("after") === "0") return stream();
+      return new Promise<Response>(() => {});
+    }
     const key = `${method} ${url.pathname.replace(/^\/v1/, "")}`;
     if (!(key in routes)) return new Response(JSON.stringify({ error: "unmocked " + key, code: "test" }), { status: 599 });
     const route = routes[key];

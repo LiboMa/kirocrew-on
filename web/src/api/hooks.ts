@@ -59,16 +59,28 @@ export function useRunEvents(id: string | null) {
     setEvents([]);
     if (!id) return;
     const controller = new AbortController();
+    // Opening a long Session replays its history: refresh once per burst of events, not once per event.
+    let refresh: ReturnType<typeof setTimeout> | undefined;
+    const scheduleRefresh = () => {
+      if (refresh) return;
+      refresh = setTimeout(() => {
+        refresh = undefined;
+        void client.invalidateQueries({ queryKey: keys.run(id) });
+        void client.invalidateQueries({ queryKey: keys.runs });
+      }, 300);
+    };
     void followRunEvents(id, {
       signal: controller.signal,
       onState: setStream,
       onEvent: (event) => {
         setEvents((current) => (current.some((e) => e.id === event.id) ? current : [...current, event]));
-        void client.invalidateQueries({ queryKey: keys.run(id) });
-        void client.invalidateQueries({ queryKey: keys.runs });
+        scheduleRefresh();
       },
     });
-    return () => controller.abort();
+    return () => {
+      controller.abort();
+      clearTimeout(refresh);
+    };
   }, [id, client]);
   return { events, stream };
 }
