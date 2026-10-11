@@ -49,6 +49,11 @@ class TemplateSafetyTests(unittest.TestCase):
         self.assertEqual(len(ssm), 1)
         self.assertTrue(json.dumps(ssm[0]["Resource"]).endswith('/origin-secret"}'), ssm[0]["Resource"])
 
+    def test_the_security_group_description_is_unchanged(self):
+        # GroupDescription is immutable in CloudFormation: editing it replaces the group and, through it, the host.
+        group = template()["Resources"]["HostSecurityGroup"]["Properties"]
+        self.assertEqual(group["GroupDescription"], "KiroCrew ON API - inbound only from CloudFront origin-facing addresses; admin via SSM")
+
     def test_alarm_notifications_can_reach_the_topic(self):
         # CloudWatch alarms cannot publish to a topic encrypted with the AWS-managed aws/sns key.
         topic = template()["Resources"]["AlertTopic"]["Properties"]

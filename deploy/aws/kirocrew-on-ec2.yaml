@@ -108,7 +108,7 @@ Resources:
   HostSecurityGroup:
     Type: AWS::EC2::SecurityGroup
     Properties:
-      GroupDescription: KiroCrew ON API and native chat - inbound only from CloudFront origin-facing addresses; admin via SSM
+      GroupDescription: KiroCrew ON API - inbound only from CloudFront origin-facing addresses; admin via SSM
       VpcId: !Ref Vpc
       SecurityGroupIngress:
         - IpProtocol: tcp
