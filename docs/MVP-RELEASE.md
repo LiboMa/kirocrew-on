@@ -20,7 +20,7 @@ M4（共享与组织）、M5（仓库闭环）在 MVP 之后分别立项，各�
 
 | 里程碑 | 状态 |
 |---|---|
-| M1 运行底座 | 实现中：Part A 与本地端到端（macOS，真实 ACP）已完成；EC2（Part B）待授权 |
+| M1 运行底座 | 待验收：本地（macOS）与 EC2 主体验收已完成；Kiro 相关场景待 kiro-cli 登录（见 `docs/handover/M1-EC2-EVIDENCE.md`） |
 | M2 核心闭环 | 未开始 |
 | M3 客户端直连与控制台 | 未开始 |
 | M4 共享与组织 | 未开始 |
@@ -116,12 +116,12 @@ M4（共享与组织）、M5（仓库闭环）在 MVP 之后分别立项，各�
 
 - [x] 新仓库内迁入的回归测试与 UI 检查全部通过：旧版 92 项、新版 66 项（42 + 16 + 8）、迁入工具 3 项，Python 3.12.13 / 3.13（2026-10-11，`tools/regress.sh`，提交 `3a84485`）。
 - [x] 本机 macOS 以本仓库代码、独立端口与数据目录拉起三服务，以真实 ACP 跑通 Kiro、Claude Code、Codex 的最小研发、审查返工、三阶段流水线、API / Worker / Gateway 中途重启恢复、并发与备份恢复（2026-10-11，见 `docs/handover/M1-LOCAL-EVIDENCE.md`）。OpenCode 本地核实**未通过**（K01 复现），替换配置 deliver→claude 通过。
-- [ ] EC2（AL2023 x86_64）上 KiroCrew Gateway 以组合方式无桌面启动，`--check` 证明各后端路由正确。
+- [x] EC2（AL2023 x86_64）上 KiroCrew Gateway（0.10.0，官方源码）以组合方式无桌面启动，`--check` 6 条路由正确，原生契约 6/6（2026-10-11）。
 - [ ] Kiro、Claude Code、Codex 的真实最小研发与返工在 EC2 上跑通，证据包含实际后端、原生 ID、源码基线、diff 与测试结果。
 - [ ] OpenCode 单独核实；失败如实记录，并提供用户可见的替换配置。
-- [ ] API / Worker / Gateway 分别重启后状态自动恢复，原生执行身份与持久化记录一致。
+- [ ] API / Worker / Gateway 分别重启后状态自动恢复，原生执行身份与持久化记录一致。（EC2：API 与 Worker 已通过；Gateway 待 Kiro 登录后验证）
 - [ ] 一个慢 Session 不阻塞其他 Session 推进。
-- [ ] 备份在独立目录恢复成功，源数据保留。
+- [x] 备份在独立目录恢复成功，源数据保留（本地与 EC2，2026-10-11；EC2 备份另存 S3）。
 
 ## 6．M2 核心闭环
 

@@ -93,7 +93,12 @@ cat /var/lib/octopus/boundaries/personal/gateway-runtime.json                   
 
 API 访问日志不记录 token、请求体或查询串；Engine 只记录异常类名。
 
-## 8．认证过期
+## 8．认证与过期
+
+- Claude Code 与 Codex 经实例角色使用 Bedrock：实例角色需要 `bedrock:InvokeModel*`（Claude）与 `bedrock-mantle:CreateInference`（Codex 的 amazon-bedrock 提供方）。
+- Kiro CLI：`deploy/aws/deploy.sh kiro-login` 在 SSM 会话中以 crew-personal 完成设备码登录（需要本机安装 session-manager-plugin）。
+
+### 过期处理
 
 现象：Attempt 失败类型为 `auth`，Session 进入等待并说明具体工具。
 处理：`sudo -iu crew-personal` 重新登录对应工具；不需要重启平台，Session 在条件满足后继续（M2 起自动恢复）。
