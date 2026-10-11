@@ -5,7 +5,7 @@
 
 | # | 问题 | 复现方式 | 现有缓解 | 处理任务 |
 |---|---|---|---|---|
-| K01 | OpenCode 执行曾返回空结果或不完整交付 | 单阶段 deliver（opencode，`model=auto`） | 新版判为 blocked，不宣称完成；旧版靠原生续接补齐 | M1 Task 14 / 18 复现；M2 回退链 |
+| K01 | OpenCode 执行曾返回空结果或不完整交付（2026-10-11 本地复现：`opencode/big-pickle` 两次未写 handoff、一次空结果） | 单阶段 deliver（opencode，`model=auto`） | 新版判为 blocked，不宣称完成；替换配置 deliver→claude 已验证 | M2 回退链 |
 | K02 | 含 `/`、`:`、`[]` 的模型 ID 被原生 spawn 格式拒绝 | 指定 `provider/model` 形式的 OpenCode 模型 | Worker 公布能力时过滤，返回 `model_transport_unsupported` | M1 Task 14 / 18 记录；上游最小方案另行提交 |
 | K03 | 原生浏览器登录覆盖整个 Gateway，平台撤权不使其失效 | 生成 crew-entry 链接后撤销成员 | 仅对执行边界所有者开放 | M4 |
 | K04 | 新版 Web 未代理原生权限批准；待批准时停止可能挂起 | 触发需要批准的工具调用 | 回 KiroCrew 原生页面处理 | M2 批准代理 |
@@ -23,3 +23,4 @@
 | K16 | 路由日志路径不一致风险：配置默认 `state/provider-routing.jsonl`，旧版 `poc.py` 写 `evidence/provider-routing.jsonl`；若旧版 Gateway 与新 Worker 混用，Worker 读不到路由证据，所有任务被拦为“实际 ACP 后端未核实” | 用 `poc.py` 起 Gateway、用默认配置起 Worker | 新栈的 Gateway 与 Worker 读同一份边界配置（`routing_log` 一致）；`poc.py` 兼容层显式传 `evidence/` 路径 | M1 Task 5（composition 使用 `settings.routing_log`）；运维手册写明 |
 | K17 | 原生 token 每次调用现取（一次 inspect 2–3 次 `/api/token/local`） | — | 无功能影响 | M2 视负载评估缓存 |
 | K18 | 旧版意图生成的派生状态不回写 `job.json`，迟到结果无后端保护 | 旧版运行目录 14 个设计 job 全部停在 `submitted` | 前端 scope / id 守卫 | M2 生成任务改由 Engine 执行并存 SQLite |
+| K19 | 原生 `/api/spawn` 的 `approval_mode` 在 0.8.0 中对 owner 认证请求生效，文档字符串却称仅限内部调用方；内部密钥调用要求已验证的执行身份（`member_identity_unavailable`） | 本地端到端 L4 / L5 | 平台派发经 owner 认证请求 `approval_mode=auto` | 每次升级 KiroCrew 复核；失效时改用 `hooks.auto_approve_subagent_spawn` |

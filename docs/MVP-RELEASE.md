@@ -20,7 +20,7 @@ M4（共享与组织）、M5（仓库闭环）在 MVP 之后分别立项，各�
 
 | 里程碑 | 状态 |
 |---|---|
-| M1 运行底座 | 实现中（Task 1 等价迁入与回归基线已完成） |
+| M1 运行底座 | 实现中：Part A 与本地端到端（macOS，真实 ACP）已完成；EC2（Part B）待授权 |
 | M2 核心闭环 | 未开始 |
 | M3 客户端直连与控制台 | 未开始 |
 | M4 共享与组织 | 未开始 |
@@ -45,6 +45,7 @@ M4（共享与组织）、M5（仓库闭环）在 MVP 之后分别立项，各�
 | D11 | 与 Claude Code / Codex / Kiro CLI / Kiro IDE 直连，本地与远端智能联动，纳入 MVP |
 | D12 | 先在本地（macOS）用本仓库代码以真实 ACP 跑通完整链路，再部署到远端 EC2（2026-10-11） |
 | D13 | 自动生成任务（Pipeline 生成）参考旧版 `kirocrew-app-poc` 的实现：意图生成、Pipeline 规划阶段、确定性门禁与模板（2026-10-11） |
+| D14 | 无人值守的执行边界使用 KiroCrew 原生 auto 批准：边界配置 `approval_mode = "auto"`，平台派发的 spawn 以 owner 认证请求原生 `approval_mode=auto`；约束来自执行边界（独立 OS 用户 / HOME、原生沙箱、cwd 限定 Worker 数据目录）（2026-10-11） |
 
 ## 3．设计默认值（已提出，待确认）
 
@@ -110,7 +111,7 @@ M4（共享与组织）、M5（仓库闭环）在 MVP 之后分别立项，各�
 ### 验收条件
 
 - [x] 新仓库内迁入的回归测试与 UI 检查全部通过：旧版 92 项、新版 66 项（42 + 16 + 8）、迁入工具 3 项，Python 3.12.13 / 3.13（2026-10-11，`tools/regress.sh`，提交 `3a84485`）。
-- [ ] 本机 macOS 以本仓库代码、独立端口与数据目录拉起三服务，以真实 ACP 跑通 Kiro、Claude Code、Codex 的最小研发与返工、重启恢复与备份恢复（Part A′）。
+- [x] 本机 macOS 以本仓库代码、独立端口与数据目录拉起三服务，以真实 ACP 跑通 Kiro、Claude Code、Codex 的最小研发、审查返工、三阶段流水线、API / Worker / Gateway 中途重启恢复、并发与备份恢复（2026-10-11，见 `docs/handover/M1-LOCAL-EVIDENCE.md`）。OpenCode 本地核实**未通过**（K01 复现），替换配置 deliver→claude 通过。
 - [ ] EC2（AL2023 x86_64）上 KiroCrew Gateway 以组合方式无桌面启动，`--check` 证明各后端路由正确。
 - [ ] Kiro、Claude Code、Codex 的真实最小研发与返工在 EC2 上跑通，证据包含实际后端、原生 ID、源码基线、diff 与测试结果。
 - [ ] OpenCode 单独核实；失败如实记录，并提供用户可见的替换配置。
@@ -201,7 +202,8 @@ M4（共享与组织）、M5（仓库闭环）在 MVP 之后分别立项，各�
 | K12 | Linux 沙箱依赖非特权 user namespace；不经官方 launcher 启动时需单独核实（AL2023 未实测） | M1 |
 | K13 | 现有启动器与路径依赖 macOS：`/Applications/...`、App 内置 Python、zsh、Electron、`lsof`、Homebrew 路径 | M1 |
 | K14 | 旧版 Host 校验固定为 `127.0.0.1:<port>`，隧道或反向代理下会失败 | M1 |
-| K15 | Gateway 重启后不再列出已结束的内存任务；`/context` 背景在重启后丢失 | M1 / M2 |
+| K15 | Gateway 重启后不再列出已结束的内存任务；`/context` 背景在重启后丢失（本地实测：运行中任务被标为 `Orphaned: cancelled`，经自动诊断重试后完成） | M1 / M2 |
+| K19 | 原生 `/api/spawn` 的 `approval_mode` 在 0.8.0 中对 owner 认证请求生效，但原生文档字符串称其只对内部调用方生效；升级 KiroCrew 时必须复核，失效时改用 `hooks.auto_approve_subagent_spawn` | 每次升级 |
 
 ## 10．历史验证基线（来源记录，非本仓库复跑）
 

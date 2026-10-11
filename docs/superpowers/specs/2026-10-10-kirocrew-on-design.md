@@ -42,6 +42,7 @@
 | D11 | 与 Claude Code / Codex / Kiro CLI / Kiro IDE 直连，本地与远端智能联动，纳入 MVP |
 | D12 | 先在本地（macOS）用本仓库代码以真实 ACP 跑通完整链路，再部署到远端 EC2（2026-10-11） |
 | D13 | 自动生成任务（Pipeline 生成）参考旧版 `kirocrew-app-poc` 的实现：意图生成、Pipeline 规划阶段、确定性门禁与模板（2026-10-11） |
+| D14 | 无人值守的执行边界使用 KiroCrew 原生 auto 批准：边界配置 `approval_mode = "auto"`，平台派发的 spawn 以 owner 认证请求原生 `approval_mode=auto`；约束来自执行边界（独立 OS 用户 / HOME、原生沙箱、cwd 限定 Worker 数据目录）（2026-10-11） |
 
 ## 2．设计原则
 
@@ -349,9 +350,10 @@ checks:                       # 仓库检查命令；来源记录为 request / w
 - **重启核对**：API / Worker / Gateway 任一重启后，先从 SQLite 与 Worker 落盘记录恢复，再核对原生状态；
   原生已遗忘的内存任务按落盘证据处理，不假定完成。保留现有 `dispatch_unknown` 与 Attempt 标记核对机制。
 - **幂等**：所有命令带 `request_id`；同内容返回原回执，不同内容冲突；修改带 `expected_version`。
-- **权限批准**：后台研发不能因原生批准请求无人处理而静默卡住。批准请求在控制台、CLI 与 MCP 中可见并可处理
-  （代理到原生批准接口），并计入 L4 等待原因。各边界使用 KiroCrew 原生批准策略；不关闭沙箱，不默认全部自动批准。
-  原生批准接口的写操作契约待验证。
+- **权限批准**：后台研发不能因原生批准请求无人处理而静默卡住。无人值守边界按 D14 使用原生 auto 批准
+  （边界 `approval_mode = "auto"`，平台派发的 spawn 请求原生 `approval_mode=auto`；Gateway 启动时核对边界配置与
+  `KIROCREW_HOME/config.json` 一致）；需要人工确认的策略在 M2 通过控制台、CLI 与 MCP 的批准代理处理，并计入 L4 等待原因。
+  不关闭原生沙箱。原生 `approval_mode` 参数的认证契约在升级时复核（K19）。
 
 ## 9．客户端直连与本地 / 远端联动
 

@@ -72,7 +72,7 @@ sudo systemctl restart octopus-api octopus-worker@personal octopus-gateway@perso
 ## 6．重启与停止
 
 - 先确认没有在途派发：控制台查看 Session 状态，或 `GET /v1/runs`。
-- `sudo systemctl stop|restart <服务>` 发送 SIGTERM：API 停止接收请求，Engine 最多等待 30 s 让在途推进收尾，然后退出。
+- `sudo systemctl stop|restart <服务>` 发送 SIGTERM：API 停止接收请求、取消尚未开始的推进，在 `shutdown_grace`（默认 30 s）内等待在途推进收尾；超时则以 0 退出，在途结果由重启后的核对处理。
 - 禁止 `pkill` 全局结束进程；只操作本部署的 systemd 单元。
 - 重启后 Engine 从 SQLite 与 Worker 落盘记录恢复；派发回执不明的 Attempt 显示为 `dispatch_unknown`，按 Attempt 标记核对后再决定是否重派。
 
@@ -128,7 +128,13 @@ $P restore-verify /var/lib/octopus/platform/backups/octopus-<时间>.json --into
 `restore-verify` 只接受空的独立目录，校验 sha256、完整性与各表行数。
 未覆盖：各 Coding 工具私有会话目录的语义一致性、远端仓库状态、原生 Gateway 内存中的任务。
 
-## 13．本地端到端（macOS）
+## 13．批准模式
+
+无人值守的执行边界在 `boundary-<边界>.toml` 中设置 `approval_mode = "auto"`（D14）。Gateway 启动时核对
+`KIROCREW_HOME/config.json` 的 `agent.approval_mode` 与之一致，不一致直接拒绝启动；Worker 对平台派发的 spawn 请求原生
+`approval_mode=auto`。升级 KiroCrew 后先用一个冒烟任务确认 spawn 未被拒绝（K19）。
+
+## 14．本地端到端（macOS）
 
 用于“先在本地跑通，再部署远端”。使用本仓库代码、独立端口与 `state/local-e2e/` 数据目录（含独立 `KIROCREW_HOME`、`KIRO_HOME`），不读写 `~/.kiro`。
 
