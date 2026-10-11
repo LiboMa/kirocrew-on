@@ -115,7 +115,7 @@ class Worker:
                     require(present.get("key", present.get("slot")) == slot, "原生父 Session 身份不一致")
                 self.native("/api/chat/slots/" + slot + "/context", {
                     "content": "你是此 Octopus 研发运行的用户交互协调者，负责解释计划、进度、错误与修复决定。"
-                               "平台 Engine 统一派发已采纳的任务；失败诊断也通过原生 poc-coordinator 子任务执行。"
+                               "平台 Engine 统一派发已采纳的任务；失败诊断通过原生 poc-diagnose 子任务执行（不能再派生任务）。"
                                "保持同一 Session 与工作区，使用平台给出的真实交接和纠错记录。"
                                "不要额外自行派发重复子任务、执行旧 next/accept 或修改平台数据库。"
                                "需要用户补充项目来源或权限时具体说明；不要把未知原因说成已解决。",
@@ -222,7 +222,7 @@ class Worker:
             try:
                 spawn = {
                     "task": prompt, "parent_session": parent["parent"],
-                    "agent": "poc-coordinator" if body.get("coordination") else "poc-" + spec["tool"],
+                    "agent": "poc-diagnose" if body.get("coordination") else "poc-" + spec["tool"],
                     "model": spec["model"], "reasoning_effort": spec["effort"],
                     "cwd": str(workspace.project_dir(run)), "keep": True, "include_memory": False,
                     "include_lessons": False, "include_project": False,

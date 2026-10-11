@@ -196,7 +196,7 @@ class MVPTests(unittest.TestCase):
         first = node.dispatch(body)
         self.assertEqual(first, node.dispatch(body))
         self.assertEqual(len(calls),1)
-        self.assertEqual(calls[0][1]["agent"],"poc-coordinator")
+        self.assertEqual(calls[0][1]["agent"],"poc-diagnose")  # non-delegating diagnosis template (review I1)
         self.assertEqual(calls[0][1]["parent_session"],"dashboard:octopus-"+body["run_id"])
         folder = node.path(body["run_id"])/"attempts"/body["attempt_id"]
         context = json.loads((folder/"context.json").read_text())

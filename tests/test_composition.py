@@ -210,5 +210,22 @@ class CompositionMarkerTests(unittest.TestCase):
                 check_no_reexec(home)
             self.assertIn("live_target.json", str(raised.exception.code))
 
+class DiagnosisTemplateTests(unittest.TestCase):
+    """Focused review I1: diagnosis runs with native auto approval, so it must not be able to delegate."""
+
+    def test_diagnosis_template_has_no_spawn_capability_and_routes_to_kiro(self):
+        self.assertEqual(registry.BACKENDS["poc-diagnose"], "")
+        stub = SimpleNamespace(managed_mcp_spec_entry=lambda name: {"command": "x"})
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            with patch.dict("sys.modules", {"kiro_crew.agent": stub}):
+                templates.seed(crew_home=root / "crew", kiro_home=root / "kiro", allowed_roots=[root / "w"],
+                               port=6000, legacy_pipeline=False, approval_mode="auto")
+            spec = json.loads((root / "kiro/agents/poc-diagnose.json").read_text())
+        self.assertEqual(spec["tools"], ["read", "write", "shell"])
+        self.assertEqual(spec["mcpServers"], {})
+        self.assertNotIn("availableAgents", spec)
+        self.assertNotIn("@kirocrew-core", json.dumps(spec))
+
 if __name__ == "__main__":
     unittest.main()

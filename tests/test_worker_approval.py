@@ -69,5 +69,19 @@ class WorkerApprovalTests(unittest.TestCase):
             Worker(self.root / "w3", "x" * 40, crew_home=self.root / "crew", approval_mode="yolo")
 
 
+class DiagnosisDispatchTests(WorkerApprovalTests):
+    def test_coordination_dispatch_uses_the_non_delegating_diagnosis_template(self):
+        node, body = self.worker("auto")
+        calls = []
+
+        def native(path, payload=None, method=None):
+            calls.append(payload)
+            return {"id": "aabb1234"}
+
+        node.native = native
+        node.dispatch({**body, "spec": {**body["spec"], "tool": "kiro"}, "coordination": {"input": "x", "failure": {}}})
+        self.assertEqual(calls[0]["agent"], "poc-diagnose")
+        self.assertEqual(calls[0]["approval_mode"], "auto")
+
 if __name__ == "__main__":
     unittest.main()

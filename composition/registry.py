@@ -9,6 +9,8 @@ SUPPORTED_VERSIONS = {"0.7.1", "0.7.2", "0.8.0"}
 FEATURES = ["codex_effort_pair_v1"]
 BACKENDS = {
     "poc-coordinator": "", "poc-kiro": "", "poc-claude": "claude", "poc-codex": "codex", "poc-opencode": "opencode",
+    # Diagnosis runs with native auto approval, so it gets a template that cannot delegate (no kirocrew-core).
+    "poc-diagnose": "",
 }
 LEGACY_BACKENDS = {
     "poc-pipeline-coordinator": "", "poc-pipeline-plan": "", "poc-pipeline-code": "claude",

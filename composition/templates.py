@@ -45,6 +45,8 @@ def seed(*, crew_home, kiro_home, allowed_roots, port, legacy_pipeline, approval
             "mcpServers": {"kirocrew-core": managed_mcp_spec_entry("kirocrew-core")} if coordinator else {},
             "includeMcpJson": False, "includeCrewContext": True,
         }
+        if name == "poc-diagnose":
+            spec["description"] = "Octopus diagnosis / Kiro CLI worker (no delegation)"
         if coordinator:
             spec["availableAgents"] = (
                 [n for n in LEGACY_BACKENDS if n != name] if name == "poc-pipeline-coordinator"
