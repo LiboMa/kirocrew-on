@@ -194,15 +194,21 @@ class CompositionMarkerTests(unittest.TestCase):
             self.assertEqual(value["pid"], os.getpid())
             self.assertIn("built_at", value)
 
-    def test_live_target_reexec_is_refused(self):
-        from composition.gateway import check_no_reexec
-        with tempfile.TemporaryDirectory() as temporary:
-            home = Path(temporary)
-            check_no_reexec(home)
-            (home / "live_target.json").write_text("{}")
-            with self.assertRaises(SystemExit) as raised:
-                check_no_reexec(home)
-            self.assertIn("live_target.json", str(raised.exception.code))
+    def test_live_target_reexec_is_disabled_with_the_native_marker(self):
+        # Observed on EC2 (0.10.0): the Gateway itself writes live_target.json ({"checkout": null}) at startup, so the
+        # file's presence is not a re-exec. The composition instead sets KiroCrew's own exec-chain marker, which makes
+        # maybe_reexec() return before any execve could drop PocProviderRegistry.
+        from composition.gateway import disable_live_target_reexec
+        stub = SimpleNamespace(EXEC_MARKER="KIROCREW_LIVE_EXECED")
+        env = {}
+        with patch.dict("sys.modules", {"kiro_crew.service.live_target": stub}):
+            self.assertTrue(disable_live_target_reexec(env))
+        self.assertEqual(env, {"KIROCREW_LIVE_EXECED": "1"})
+        env = {}
+        with patch.dict("sys.modules", {"kiro_crew.service.live_target": None}):
+            self.assertFalse(disable_live_target_reexec(env))
+        self.assertEqual(env, {})
+
 
 class DiagnosisTemplateTests(unittest.TestCase):
     """Focused review I1: diagnosis runs with native auto approval, so it must not be able to delegate."""

@@ -16,11 +16,14 @@ def version_accepted(version, extra):
     return version in SUPPORTED_VERSIONS or version in extra
 
 
-def check_no_reexec(crew_home):
-    """KiroCrew re-execs into a live target when this file exists, which would drop the composition."""
-    if (crew_home / "live_target.json").exists():
-        raise SystemExit(f"{crew_home / 'live_target.json'} 存在：原生会 re-exec 到其他目标并丢失 PocProviderRegistry 组合；"
-                         "请移除该文件或改用独立的 KIROCREW_HOME")
+def disable_live_target_reexec(environ):
+    """Set KiroCrew's own exec-chain marker so a live-target pointer can never execve away the composition."""
+    try:
+        from kiro_crew.service.live_target import EXEC_MARKER
+    except ImportError:
+        return False
+    environ[EXEC_MARKER] = "1"
+    return True
 
 
 def main(argv=None):
@@ -31,9 +34,10 @@ def main(argv=None):
     args = parser.parse_args(argv)
     settings = load(args.config)
     environment.prepare(settings, os.environ)
-    check_no_reexec(settings.crew_home)
     factory_marker = settings.gateway_runtime_file.with_name("gateway-factory.json")
     factory_marker.unlink(missing_ok=True)
+    if not disable_live_target_reexec(os.environ):
+        print("注意：此 KiroCrew 版本没有 live-target 机制", file=sys.stderr)
     from kiro_crew._ssl_compat import _ensure_ssl_certs
     _ensure_ssl_certs()
     from kiro_crew import __version__
