@@ -83,7 +83,7 @@ def server(database, port=8918, host="127.0.0.1", allowed_hosts=(), origin_secre
             self.send_header("X-Content-Type-Options", "nosniff")
             self.send_header("Referrer-Policy", "no-referrer")
             self.send_header("Content-Security-Policy",
-                             "default-src 'self'; script-src 'self'; style-src 'self'; connect-src 'self'; "
+                             "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; connect-src 'self'; "
                              "object-src 'none'; frame-ancestors 'none'; base-uri 'none'")
             self.end_headers()
             self.wfile.write(data)

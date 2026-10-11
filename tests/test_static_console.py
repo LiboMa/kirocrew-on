@@ -45,7 +45,11 @@ class StaticConsoleTests(unittest.TestCase):
         status, headers, body = self.get("/")
         self.assertEqual((status, body), (200, b"<title>react</title>"))
         self.assertTrue(headers["Content-Type"].startswith("text/html"))
-        self.assertIn("script-src 'self'", headers["Content-Security-Policy"])
+        policy = dict(part.strip().split(" ", 1) for part in headers["Content-Security-Policy"].split(";") if part.strip())
+        # Radix overlays (shadcn/ui) inject a small <style> for scroll locking: inline styles only, never inline scripts.
+        self.assertEqual(policy["script-src"], "'self'")
+        self.assertEqual(policy["style-src"], "'self' 'unsafe-inline'")
+        self.assertEqual(policy["frame-ancestors"], "'none'")
 
     def test_root_falls_back_to_the_classic_console_without_a_build(self):
         (self.ui / "dist" / "index.html").unlink()
