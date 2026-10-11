@@ -9,7 +9,7 @@ import time
 
 from .db import dumps, uid
 from .transport import worker_request
-from . import recovery
+from . import planning, recovery
 from .security import Error
 
 
@@ -285,6 +285,18 @@ class Engine:
                        (state, dumps(evidence), native.get("result"), error, time.time(), attempt["id"]))
             # Old observations cannot complete a newly retried task.
             active = db.execute("SELECT desired FROM runs WHERE id=?", (rid,)).fetchone()[0] == "active"
+            if state == "accepted" and current["current_attempt"] == attempt["id"] and active and task["id"] == planning.PLAN_ID:
+                fresh = json.loads(db.execute("SELECT snapshot FROM runs WHERE id=?", (rid,)).fetchone()["snapshot"])
+                if planning.pending(fresh):
+                    try:
+                        applied = planning.expand(db, rid, native.get("result") or "", config.get("capabilities", {}).get("models"))
+                        self.db.event(db, rid, "plan.applied", {"tasks": applied["tasks"], "intent": applied["intent"],
+                                                                 "notes": applied["notes"]})
+                    except (Error, ValueError, TypeError) as exc:
+                        state, error = "blocked", "KiroCrew 规划结果未通过校验：" + str(exc)
+                        evidence["failure_type"] = "contract"
+                        db.execute("UPDATE attempts SET status=?,evidence=?,error=? WHERE id=?",
+                                   (state, dumps(evidence), error, attempt["id"]))
             if current["current_attempt"] == attempt["id"] and active:
                 db.execute("UPDATE tasks SET status=? WHERE run_id=? AND id=?", (state, rid, task["id"]))
             if old["status"] != state or old["evidence"] != dumps(evidence):

@@ -295,7 +295,7 @@ class MVPTests(unittest.TestCase):
         self.assertEqual(run["input"], preview["input"])
 
     def test_start_from_intent_without_precreating_workflow(self):
-        body = {"request_id": "intent-no-workflow", "input": "快速验证一个最小想法", "source": {"type": "new"}}
+        body = {"request_id": "intent-no-workflow", "input": "快速验证一个最小想法", "source": {"type": "new"}, "plan": "match"}
         started = self.service.start(self.b, body)
         self.assertEqual(started, self.service.start(self.b, body))
         run = self.service.run(self.b, started["id"])

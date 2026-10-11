@@ -62,7 +62,7 @@ export function LaunchWizard({ seed }: { seed: LaunchSeed }) {
   async function go(target: number) {
     setError("");
     if (target <= step) { setStep(target); return; }
-    if (target > 1) await settle();
+    if (target > 1 && ref.current.method !== "agent") await settle();
     for (let index = step; index < target; index++) {
       const problem = validateStep(index, ref.current, { workflowMode });
       if (problem) {
@@ -75,7 +75,7 @@ export function LaunchWizard({ seed }: { seed: LaunchSeed }) {
   }
 
   async function submit() {
-    await settle();
+    if (ref.current.method !== "agent") await settle();
     for (let index = 0; index < STEPS.length - 1; index++) {
       const problem = validateStep(index, ref.current, { workflowMode });
       if (problem) { setStep(index); throw new Error(problem); }

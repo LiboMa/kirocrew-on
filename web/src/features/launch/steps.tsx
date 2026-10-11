@@ -116,7 +116,7 @@ export function PlanStep(props: PlanProps) {
   const { draft, update } = props;
   return (
     <div className="space-y-5">
-      <div className="grid gap-3 sm:grid-cols-3" role="radiogroup" aria-label="编排方式">
+      <div className="grid gap-3 sm:grid-cols-2" role="radiogroup" aria-label="编排方式">
         {PLAN_METHODS.map(([value, title, detail]) => (
           <label key={value} data-method={value}
             className={cn("relative flex cursor-pointer flex-col gap-1.5 rounded-xl border bg-card p-4 transition-colors has-[:focus-visible]:ring-2 has-[:focus-visible]:ring-ring",
@@ -128,6 +128,14 @@ export function PlanStep(props: PlanProps) {
           </label>
         ))}
       </div>
+      {draft.method === "agent" && (
+        <section className="space-y-2 rounded-xl border border-primary/20 bg-primary/5 p-5 text-sm leading-7">
+          <h3 className="font-semibold">由 KiroCrew 的 Kiro Agent 规划</h3>
+          <p>提交后，Session 的第 1 个任务“需求分析与任务规划”由 Kiro Agent 完成：识别意图、补全需求（目标、范围、验收标准、待确认问题），
+            拆分为 1–7 个任务并为每个任务分配 Coding 工具与 Prompt。规划经代码校验后自动追加到同一个 Session 并开始执行。</p>
+          <p className="text-xs text-muted-foreground">规划结果、补全后的需求与每个任务都可在会话详情中查看；不满意时可对任意任务续作迭代。</p>
+        </section>
+      )}
       {draft.method === "template" && <TemplatePanel {...props} />}
       {draft.method === "recommend" && <RecommendPanel {...props} />}
       {draft.method === "import" && <ImportPanel {...props} />}
@@ -338,6 +346,13 @@ function ImportPanel({ draft, update, onImported }: PlanProps) {
 }
 
 export function TasksStep({ draft, update, origin, models }: { draft: Draft; update: Update; origin: string; models?: Parameters<typeof AgentFields>[0]["models"] }) {
+  if (draft.method === "agent") {
+    return (
+      <p className="rounded-xl border bg-card p-5 text-sm leading-7 text-muted-foreground">
+        任务将由 KiroCrew 规划后自动生成，无需在这里编排。提交后可在会话详情中查看规划结果与每个任务的 Agent。
+      </p>
+    );
+  }
   return (
     <div className="space-y-3">
       <TaskEditor tasks={draft.tasks} models={models} idPrefix="launch" title="本次任务列表"
@@ -366,10 +381,11 @@ export function ConfirmStep({ draft, update, workflowMode }: { draft: Draft; upd
             <dd className="break-words whitespace-pre-wrap">{value}</dd>
           </div>
         ))}
-        <dt className="text-muted-foreground">任务（{draft.tasks.length}）</dt>
+        <dt className="text-muted-foreground">任务（{draft.method === "agent" ? "由 KiroCrew 规划" : draft.tasks.length}）</dt>
         <dd>
+          {draft.method === "agent" && <span className="text-muted-foreground">第 1 个任务：需求分析与任务规划（Kiro）；其余任务规划后自动生成</span>}
           <ol className="list-decimal space-y-1 pl-4">
-            {draft.tasks.map((t) => (
+            {draft.method !== "agent" && draft.tasks.map((t) => (
               <li key={t.id}><strong>{t.name}</strong> · {TOOLS[t.tool] ?? t.tool} · {t.model || "auto"}{t.effort ? " · Effort " + t.effort : ""}</li>
             ))}
           </ol>

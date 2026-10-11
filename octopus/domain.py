@@ -255,7 +255,20 @@ class Service:
 
     def start(self, actor, body, *, design=None):
         from .recovery import policy
-        resolved = self.resolve_workflow(actor, body)
+        selected = any(body.get(key) is not None for key in ("workflow_id", "template_id", "steps", "document"))
+        require(body.get("plan") in (None, "agent", "match"), "plan 只能是 agent 或 match")
+        require(not (selected and body.get("plan") == "agent"), "plan=agent 时不要同时指定工作流、模板、steps 或 document")
+        planning = design is None and (body.get("plan") == "agent" or (not selected and body.get("plan") != "match"))
+        if planning:
+            # A real KiroCrew Agent recognises the intent, enriches the requirement and plans the tasks (planning.py).
+            from .planning import plan_step
+            models = {}
+            if body.get("worker_id"):
+                with self.db.read() as db:
+                    row = db.execute("SELECT config FROM workers WHERE id=?", (body["worker_id"],)).fetchone()
+                models = json.loads(row["config"]).get("capabilities", {}).get("models", {}) if row else {}
+            body = {**{k: v for k, v in body.items() if k != "plan"}, "steps": [plan_step(models)]}
+        resolved = self.resolve_workflow(actor, {k: v for k, v in body.items() if k != "plan"})
         with self.db.transaction() as db:
             wid = resolved["selection"].get("workflow_id")
             team = body.get("team_id") or None
@@ -302,6 +315,9 @@ class Service:
                                 execution_contract=2 if design is None else 1)
                 if design is not None:
                     snapshot.update(purpose="workflow_design", design=design)
+                if planning:
+                    snapshot.update(planning={"mode": "agent", "applied": False}, workflow_name="KiroCrew 规划",
+                                    match_mode="agent", match_reason="由 KiroCrew Agent 识别意图、补全需求并拆分任务")
                 db.execute("INSERT INTO runs(id,owner_id,team_id,worker_id,workflow_id,snapshot,input,source,status,created,updated) "
                            "VALUES(?,?,?,?,?,?,?,?,?,?,?)",
                            (rid, actor["id"], team, worker, wid, dumps(snapshot), goal, dumps(source),
@@ -343,7 +359,7 @@ class Service:
         value = {k: v for k, v in run.items() if k != "snapshot"}
         snapshot = json.loads(run["snapshot"])
         value.update({key: snapshot.get(key) for key in ("name", "workflow_name", "workflow_version",
-                                                       "selection", "match_mode", "match_reason", "purpose")})
+                                                       "selection", "match_mode", "match_reason", "purpose", "planning")})
         value["source"] = json.loads(value["source"])
         value["session_id"] = run["id"]
         value["tasks"] = []

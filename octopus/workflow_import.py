@@ -10,7 +10,7 @@ from .documents import parse_document
 from .domain import TOOLS, steps
 from .security import Error, require
 
-DOCUMENT_KEYS = {"name", "steps", "schema", "id", "revision", "description"}
+DOCUMENT_KEYS = {"name", "steps", "schema", "id", "revision", "description", "intent", "summary"}
 FIELD_ALIASES = {"tool": ("tool", "agent", "backend"), "prompt": ("prompt", "instructions", "description", "task"),
                  "name": ("name", "title")}
 TOOL_ALIASES = {"kiro": "kiro", "kirocli": "kiro", "claude": "claude", "claudecode": "claude",
@@ -85,4 +85,7 @@ def import_workflow(content, format=None):
         title, raw = None, document
     normalized = steps(normalize(raw, notes))
     name = title if isinstance(title, str) and title.strip() else "导入的工作流"
-    return {"name": " ".join(name.split())[:80], "steps": normalized, "notes": notes}
+    result = {"name": " ".join(name.split())[:80], "steps": normalized, "notes": notes}
+    if isinstance(document, dict):
+        result.update({key: document[key] for key in ("intent", "summary") if isinstance(document.get(key), str)})
+    return result

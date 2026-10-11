@@ -174,6 +174,8 @@ export interface Run {
   updated: number;
   attention?: Attention | null;
   recovery?: Recovery | null;
+  /** KiroCrew Agent planning: intent recognition, requirement enrichment and the generated tasks. */
+  planning?: { mode: "agent"; applied: boolean; intent?: string; summary?: string; name?: string; tasks?: string[]; notes?: string[] } | null;
 }
 
 export interface RunEvent {

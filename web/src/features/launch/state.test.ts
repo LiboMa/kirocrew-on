@@ -7,7 +7,7 @@ const resolved = (input: string): Resolution => ({ input, name: "修复登录", 
   selection: { template_id: "bugfix" } });
 
 const draft = (overrides: Partial<Draft> = {}): Draft => ({
-  ...initialDraft({}, { worker: "" }), input: "修复登录失败的 Bug", name: "修复登录", source: "new", ...overrides,
+  ...initialDraft({}, { worker: "" }), method: "template", input: "修复登录失败的 Bug", name: "修复登录", source: "new", ...overrides,
 });
 
 describe("launch draft", () => {
@@ -17,8 +17,8 @@ describe("launch draft", () => {
       .toBe("octopus.react.launch.u1/team-1/run-a/workflow/flow-1");
   });
 
-  test("a new requirement defaults to the KiroCrew recommendation; a seeded selection starts from templates", () => {
-    expect(initialDraft({}, { worker: "" }).method).toBe("recommend");
+  test("a new requirement defaults to KiroCrew planning; a seeded selection starts from templates", () => {
+    expect(initialDraft({}, { worker: "" }).method).toBe("agent");
     expect(initialDraft({ template_id: "proof" }, { worker: "" })).toMatchObject({ method: "template", choice: "template:proof" });
     expect(initialDraft({ steps }, { worker: "" })).toMatchObject({ method: "template", choice: "custom", tasks: steps });
     expect(initialDraft({ mode: "workflow", steps }, { worker: "" }).method).toBe("recommend");
@@ -54,6 +54,13 @@ describe("wizard validation", () => {
 });
 
 describe("submission", () => {
+  test("KiroCrew planning submits the requirement with plan=agent and no tasks", () => {
+    const body = submitBody(draft({ method: "agent", tasks: [] }));
+    expect(body).toMatchObject({ plan: "agent", input: "修复登录失败的 Bug" });
+    expect("steps" in body).toBe(false);
+    expect(validateStep(1, draft({ method: "agent", tasks: [] }), { workflowMode: false })).toBe("");
+  });
+
   test("a matched template is submitted by its selection; edited tasks are submitted as steps", () => {
     expect(selectionOf(draft({ choice: "auto", resolution: resolved("修复登录失败的 Bug"), tasks: steps }))).toEqual({ template_id: "bugfix" });
     expect(selectionOf(draft({ choice: "custom", tasks: steps }))).toEqual({ steps });

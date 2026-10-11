@@ -134,6 +134,26 @@ export function SessionView({ id }: { id: string }) {
           </AlertDescription>
         </Alert>
       )}
+      {run.planning && (
+        <section id="planning" className="space-y-2 rounded-xl border border-primary/20 bg-primary/5 p-5">
+          <h2 className="text-sm font-semibold">KiroCrew 规划</h2>
+          {run.planning.applied ? (
+            <>
+              {run.planning.intent && <p className="text-sm"><span className="text-muted-foreground">意图：</span>{run.planning.intent}</p>}
+              {run.planning.summary && (
+                <details open className="text-sm">
+                  <summary className="cursor-pointer text-xs font-medium text-primary">补全后的需求</summary>
+                  <pre className="mt-2 font-sans text-sm leading-6 whitespace-pre-wrap">{run.planning.summary}</pre>
+                </details>
+              )}
+              <p className="text-xs text-muted-foreground">生成 {run.planning.tasks?.length ?? 0} 个任务，已追加到本 Session。</p>
+              {!!run.planning.notes?.length && (
+                <ul className="list-disc pl-5 text-xs text-warning">{run.planning.notes.map((note) => <li key={note}>{note}</li>)}</ul>
+              )}
+            </>
+          ) : <p className="text-sm text-muted-foreground">Kiro Agent 正在识别意图、补全需求并拆分任务；规划完成后任务会自动出现在下方。</p>}
+        </section>
+      )}
       {run.recovery && (
         <p id="recovery-policy" className="text-xs text-muted-foreground">
           {run.recovery.policy.enabled ? `自动纠错已开启 · 最多 ${run.recovery.policy.max_cycles} 轮` : "自动纠错未开启 · 可手动诊断"}

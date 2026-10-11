@@ -2,13 +2,14 @@
 import type { DesignJob, RecoveryPolicy, Resolution, Step } from "@/api/types";
 import type { LaunchSeed } from "@/features/console/context";
 
-export type PlanMethod = "template" | "recommend" | "import";
+export type PlanMethod = "agent" | "template" | "recommend" | "import";
 
 export const STEPS = ["需求", "编排方式", "任务与 Agent", "确认"] as const;
 
 export const PLAN_METHODS: [PlanMethod, string, string][] = [
+  ["agent", "KiroCrew 自动规划", "Kiro Agent 识别意图、补全需求、拆分任务并分配 Agent，直接开始执行"],
   ["template", "参考模板", "按需求自动匹配，或选择模板 / 我的工作流"],
-  ["recommend", "KiroCrew 推荐", "由 Kiro Agent 设计工作流，并为每个 Task 匹配 Prompt"],
+  ["recommend", "KiroCrew 推荐（先审阅）", "由 Kiro Agent 设计工作流与 Prompt，审阅并采用后再提交"],
   ["import", "导入已生成的工作流", "粘贴或上传 Agent 预先生成的工作流，按提交内容运行"],
 ];
 
@@ -52,7 +53,7 @@ export function initialDraft(seed: LaunchSeed, { worker, space = "" }: { worker:
   return {
     input: seed.input ?? "", name: seed.name ?? "", nameTouched: !!seed.workflow?.id, space, worker,
     source: workflowMode ? "new" : "", url: "", ref: "",
-    method: explicit && !workflowMode ? "template" : "recommend",
+    method: explicit && !workflowMode ? "template" : workflowMode ? "recommend" : "agent",
     choice: seed.workflow_id ? "workflow:" + seed.workflow_id : seed.template_id ? "template:" + seed.template_id : seed.steps ? "custom" : "auto",
     tasks: structuredClone(seed.steps ?? []), resolution: null, imported: null, importContent: "", generation: null,
     recovery: { enabled: true, max_cycles: 2 },
@@ -107,6 +108,7 @@ export function validateStep(step: number, draft: Draft, { workflowMode }: { wor
     if (!workflowMode && draft.source === "git" && !draft.url.trim()) return "请填写 Git URL。";
     return "";
   }
+  if (draft.method === "agent" && (step === 1 || step === 2)) return workflowMode ? "保存工作流需要任务列表，请选择其他编排方式。" : "";
   if (step === 1) {
     if (draft.method === "recommend" && !draft.generation?.applied)
       return "请先让 KiroCrew 推荐并采用方案；也可以改用参考模板或导入已生成的工作流。";
@@ -130,11 +132,12 @@ export function selectionOf(draft: Draft) {
 }
 
 export function submitBody(draft: Draft) {
+  const plan = draft.method === "agent" ? { plan: "agent" as const } : selectionOf(draft);
   const source = draft.source === "git"
     ? { type: "git" as const, url: draft.url.trim(), ...(draft.ref.trim() ? { ref: draft.ref.trim() } : {}) }
     : { type: "new" as const };
   return {
-    ...selectionOf(draft), input: draft.input.trim(), name: draft.name, source, recovery: draft.recovery,
+    ...plan, input: draft.input.trim(), name: draft.name, source, recovery: draft.recovery,
     ...(draft.space ? { team_id: draft.space } : {}), ...(draft.worker ? { worker_id: draft.worker } : {}),
   };
 }

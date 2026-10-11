@@ -70,9 +70,25 @@ describe("launch wizard", () => {
     expect(within(dialog).getByRole("alert")).toHaveTextContent("Git 仓库");
     await userEvent.selectOptions(within(dialog).getByLabelText("代码来源"), "new");
     await next(dialog);
-    expect(within(dialog).getByRole("radio", { name: /KiroCrew 推荐/ })).toBeChecked();
+    expect(within(dialog).getByRole("radio", { name: /KiroCrew 自动规划/ })).toBeChecked();
+    await userEvent.click(within(dialog).getByRole("radio", { name: /KiroCrew 推荐/ }));
     await next(dialog);
     expect(within(dialog).getByRole("alert")).toHaveTextContent("采用");
+  });
+
+  test("KiroCrew planning: the requirement is submitted for the Kiro Agent to plan", async () => {
+    const calls = start();
+    const dialog = await openWizard();
+    await fillNeed(dialog);
+    await next(dialog);
+    await next(dialog);
+    expect(within(dialog).getByText(/任务将由 KiroCrew 规划后自动生成/)).toBeInTheDocument();
+    await next(dialog);
+    await userEvent.click(within(dialog).getByRole("button", { name: "确认任务并提交" }));
+    await waitFor(() => expect(calls.some((c) => c.method === "POST" && c.path === "/v1/runs")).toBe(true));
+    const body = calls.find((c) => c.method === "POST" && c.path === "/v1/runs")?.body as Record<string, unknown>;
+    expect(body).toMatchObject({ plan: "agent", input: "修复登录失败的 Bug，并补充回归测试。", source: { type: "new" } });
+    expect(body.steps).toBeUndefined();
   });
 
   test("reference template: a picked card is submitted as that template", async () => {
@@ -138,6 +154,7 @@ describe("launch wizard", () => {
     const dialog = await openWizard();
     await fillNeed(dialog);
     await next(dialog);
+    await userEvent.click(within(dialog).getByRole("radio", { name: /KiroCrew 推荐/ }));
     await waitFor(() => expect(within(dialog).getByRole("button", { name: "让 KiroCrew 推荐" })).toBeEnabled());
     await waitFor(() => expect(calls.some((c) => c.path === "/v1/workflows/resolve")).toBe(true));
     await userEvent.click(within(dialog).getByRole("button", { name: "让 KiroCrew 推荐" }));
