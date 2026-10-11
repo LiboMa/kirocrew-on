@@ -188,5 +188,27 @@ class ApprovalModeTests(unittest.TestCase):
             check_approval_mode(cfg, "auto")
         self.assertIn("approval_mode", str(raised.exception.code))
 
+class CompositionMarkerTests(unittest.TestCase):
+    """I4: only the process that actually serves with the composed registry can mark itself ready."""
+
+    def test_factory_marker_is_written_by_the_composed_registry(self):
+        import os
+        with tempfile.TemporaryDirectory() as temporary:
+            marker = Path(temporary) / "gateway-factory.json"
+            registry.PocProviderRegistry(FakeOriginal(), factory_marker=marker).create_factory(FakeConfig())
+            value = json.loads(marker.read_text())
+            self.assertEqual(value["pid"], os.getpid())
+            self.assertIn("built_at", value)
+
+    def test_live_target_reexec_is_refused(self):
+        from composition.gateway import check_no_reexec
+        with tempfile.TemporaryDirectory() as temporary:
+            home = Path(temporary)
+            check_no_reexec(home)
+            (home / "live_target.json").write_text("{}")
+            with self.assertRaises(SystemExit) as raised:
+                check_no_reexec(home)
+            self.assertIn("live_target.json", str(raised.exception.code))
+
 if __name__ == "__main__":
     unittest.main()

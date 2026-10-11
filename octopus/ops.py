@@ -35,9 +35,13 @@ def wait_for_file(path, timeout, interval=0.2):
 
 
 def runtime_marker_ok(path):
+    """The Gateway started with the composition AND its serving process built the composed factory."""
     try:
         marker = json.loads(Path(path).read_text())
+        factory = json.loads(Path(path).with_name("gateway-factory.json").read_text())
         os.kill(int(marker["pid"]), 0)
+        built_by_server = int(factory["pid"]) == int(marker["pid"]) and float(factory["built_at"]) >= float(marker["started_at"])
     except (OSError, ValueError, KeyError, TypeError):
         return False
-    return marker.get("composition") == "PocProviderRegistry" and "codex_effort_pair_v1" in marker.get("composition_features", [])
+    return (built_by_server and marker.get("composition") == "PocProviderRegistry"
+            and "codex_effort_pair_v1" in marker.get("composition_features", []))

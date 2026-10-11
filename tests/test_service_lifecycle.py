@@ -42,11 +42,19 @@ class ReadinessTests(unittest.TestCase):
     def test_runtime_marker_requires_composition(self):
         with tempfile.TemporaryDirectory() as temporary:
             marker = Path(temporary) / "gateway-runtime.json"
+            factory = Path(temporary) / "gateway-factory.json"
+            started = time.time()
             self.assertFalse(ops.runtime_marker_ok(marker))
             marker.write_text(json.dumps({"pid": os.getpid(), "composition": "PocProviderRegistry",
-                                          "composition_features": ["codex_effort_pair_v1"]}))
+                                          "composition_features": ["codex_effort_pair_v1"], "started_at": started}))
+            self.assertFalse(ops.runtime_marker_ok(marker), "no factory built by the serving process yet")
+            factory.write_text(json.dumps({"pid": os.getpid(), "built_at": started + 1}))
             self.assertTrue(ops.runtime_marker_ok(marker))
-            marker.write_text(json.dumps({"pid": os.getpid(), "composition": "default"}))
+            factory.write_text(json.dumps({"pid": os.getpid() + 1, "built_at": started + 1}))
+            self.assertFalse(ops.runtime_marker_ok(marker), "factory built by another process")
+            factory.write_text(json.dumps({"pid": os.getpid(), "built_at": started - 10}))
+            self.assertFalse(ops.runtime_marker_ok(marker), "stale factory marker from before this start")
+            marker.write_text(json.dumps({"pid": os.getpid(), "composition": "default", "started_at": started}))
             self.assertFalse(ops.runtime_marker_ok(marker))
 
 

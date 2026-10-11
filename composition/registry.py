@@ -18,9 +18,10 @@ ROUTES = {**BACKENDS, **LEGACY_BACKENDS}
 
 
 class PocProviderRegistry:
-    def __init__(self, original, routing_log=None):
+    def __init__(self, original, routing_log=None, factory_marker=None):
         self.original = original
         self.routing_log = Path(routing_log) if routing_log else None
+        self.factory_marker = Path(factory_marker) if factory_marker else None
 
     def register_acp_backends(self):
         return self.original.register_acp_backends()
@@ -35,6 +36,11 @@ class PocProviderRegistry:
             scoped.agent.member_acp_backend = backend
             factories[backend] = scoped.create_provider_factory()
         ordinary = self.original.create_factory(cfg)
+        if self.factory_marker:
+            # Written from inside the serving process: a re-exec'd Gateway runs without this registry
+            # and never refreshes it, so readiness can tell composition was lost.
+            self.factory_marker.parent.mkdir(parents=True, exist_ok=True)
+            self.factory_marker.write_text(json.dumps({"pid": os.getpid(), "built_at": time.time()}) + "\n")
 
         def create(session_key=None, agent=None, **kwargs):
             if agent not in ROUTES:
