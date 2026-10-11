@@ -146,7 +146,8 @@ class ScriptTests(unittest.TestCase):
     def test_native_proxy_checks_the_origin_secret_and_keeps_websockets(self):
         conf = (ROOT / "deploy/nginx/kirocrew-native.conf").read_text()
         self.assertIn("listen __NATIVE_PORT__", conf)
-        self.assertIn('"__ORIGIN_SECRET__" 1;', conf)
+        self.assertIn('if ($http_x_origin_verify != "__ORIGIN_SECRET__") {', conf)
+        self.assertNotIn("map $http_x_origin_verify", conf)
         self.assertIn("return 403;", conf)
         self.assertIn("proxy_pass http://127.0.0.1:__GATEWAY_PORT__;", conf)
         for line in ("proxy_set_header Upgrade $http_upgrade;", "proxy_set_header Connection $connection_upgrade;",
