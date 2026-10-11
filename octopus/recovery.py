@@ -247,6 +247,10 @@ class Coordinator:
             if decision and decision["action"] != "wait_for_user":
                 target = db.execute("SELECT * FROM tasks WHERE run_id=? AND id=?",
                                     (run["id"], decision.get("target_task_id"))).fetchone()
+                if decision["action"] == "retry" and target and target["ordinal"] < failed["ordinal"]:
+                    # "retry" of an upstream Task has exactly rework's effect (target and downstream rerun with
+                    # the repair instructions); normalize the label instead of blocking a correct diagnosis.
+                    decision = {**decision, "action": "rework", "normalized_from": "retry"}
                 if (not target or target["ordinal"] > failed["ordinal"] or
                         decision["action"] == "retry" and target["id"] != failed["id"]):
                     error = "协调者返工目标必须是失败 Task 或其上游；retry 必须重试当前 Task"

@@ -151,6 +151,18 @@ class RecoveryTests(unittest.TestCase):
         self.assertIn("测试账号", result["error"])
         self.assertEqual(self.rounds, {"code": 1, "review": 1})
 
+    def test_retry_naming_an_upstream_task_is_applied_as_rework_and_recorded(self):
+        # Observed in a real local run: the Coordinator diagnosed correctly but labelled an upstream rerun "retry".
+        # Both labels rerun the target and everything downstream, so the Engine normalizes instead of blocking.
+        self.decision["action"] = "retry"
+        result = self.tick()
+        self.assertEqual(result["status"], "completed")
+        self.assertEqual(self.rounds, {"code": 2, "review": 2})
+        applied = result["recovery"]["latest"]
+        self.assertEqual(applied["status"], "applied")
+        self.assertEqual(applied["decision"]["action"], "rework")
+        self.assertEqual(applied["decision"]["normalized_from"], "retry")
+
     def test_invalid_rework_target_cannot_skip_tasks_or_cross_run(self):
         self.decision["target_task_id"] = "other-run-task"
         result = self.tick()
