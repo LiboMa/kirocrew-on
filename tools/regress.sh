@@ -13,5 +13,8 @@ node --test tests/workflow-editor-store.test.js
 for script in ui/workflow.js ui/workflow-progress.js ui/workflow-view.js ui/crew-entry.js ui/live.js octopus/ui/*.js; do
   node --check "$script"
 done
+[ -d web/node_modules ] || npm --prefix web ci --no-audit --no-fund
+npm --prefix web test
+npm --prefix web run build
 "$PY" -m unittest discover -s tests -p 'test_*.py' -q
 echo "regress: OK"

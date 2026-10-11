@@ -4,6 +4,7 @@ import json
 import hashlib
 import hmac
 import os
+import re
 from pathlib import Path
 import socket
 import threading
@@ -33,6 +34,30 @@ def loopback_host(value):
         return urlsplit("//" + value).hostname in {"127.0.0.1", "localhost", "::1"}
     except ValueError:
         return False
+
+
+CLASSIC = {"/app.js": "app.js", "/launch.js": "launch.js", "/recommend.js": "recommend.js", "/style.css": "style.css",
+           "/crew.js": "crew.js", "/crew-entry.html": "crew-entry.html", "/recovery-ui.js": "recovery-ui.js"}
+TYPES = {".html": "text/html; charset=utf-8", ".js": "text/javascript; charset=utf-8", ".css": "text/css; charset=utf-8",
+         ".svg": "image/svg+xml", ".png": "image/png", ".woff2": "font/woff2", ".ico": "image/x-icon"}
+
+
+def console_file(path):
+    """Static console files: the React build (ui/dist) at / and /assets/*, the classic console at /classic/ and its
+    original root paths. Returns (file, content type) or None; asset names are flat, so nothing escapes ui/dist/assets."""
+    react = UI / "dist" / "index.html"
+    if path == "/":
+        file = react if react.is_file() else UI / "index.html"
+    elif path in {"/classic", "/classic/"}:
+        file = UI / "index.html"
+    elif path in CLASSIC:
+        file = UI / CLASSIC[path]
+    elif path.startswith("/assets/") and re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._-]*", path[8:] or "-") \
+            and ".." not in path and Path(path).suffix in TYPES:
+        file = UI / "dist" / "assets" / path[8:]
+    else:
+        return None
+    return (file, TYPES[file.suffix]) if file.is_file() else None
 
 
 def server(database, port=8918, host="127.0.0.1", allowed_hosts=(), origin_secret=None):
@@ -99,20 +124,10 @@ def server(database, port=8918, host="127.0.0.1", allowed_hosts=(), origin_secre
                     require(0 < size <= 1_000_000, "请求体过大或为空")
                     body = json.loads(self.rfile.read(size))
                     require(isinstance(body, dict), "请求体必须是对象")
-                if method == "GET" and path in {"/", "/app.js", "/launch.js", "/recommend.js", "/style.css",
-                                               "/crew.js", "/crew-entry.html", "/recovery-ui.js"}:
-                    file = {"/": "index.html", "/app.js": "app.js", "/launch.js": "launch.js",
-                             "/recommend.js": "recommend.js", "/style.css": "style.css",
-                             "/crew.js": "crew.js", "/crew-entry.html": "crew-entry.html",
-                             "/recovery-ui.js": "recovery-ui.js"}[path]
-                    kind = {"/": "text/html; charset=utf-8", "/app.js": "text/javascript; charset=utf-8",
-                            "/launch.js": "text/javascript; charset=utf-8",
-                             "/recommend.js": "text/javascript; charset=utf-8",
-                             "/crew.js": "text/javascript; charset=utf-8",
-                             "/crew-entry.html": "text/html; charset=utf-8",
-                             "/recovery-ui.js": "text/javascript; charset=utf-8",
-                            "/style.css": "text/css; charset=utf-8"}[path]
-                    return self.respond((UI / file).read_bytes(), kind=kind)
+                if method == "GET" and (static := console_file(path)):
+                    file, kind = static
+                    return self.respond(file.read_bytes(), kind=kind)
+                require(not path.startswith("/assets/"), "Not found", 404, "not_found")
                 if method == "GET" and path == "/health":
                     return self.respond({"version": __version__, "service": "octopus-team", "stage": "MVP development"})
                 if method == "GET" and path == "/v1/openapi.json":

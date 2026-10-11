@@ -69,6 +69,8 @@ if [ ! -f "$TARGET/.installed" ]; then
   rm -rf "$TARGET"
   cp -a "$SOURCE" "$TARGET"
   (cd "$TARGET" && npm ci --omit=dev --no-audit --no-fund)
+  # React console: built on the host into octopus/ui/dist (the repository carries sources and the lockfile only).
+  (cd "$TARGET/web" && npm ci --no-audit --no-fund && npm run build)
   touch "$TARGET/.installed"
 fi
 ln -sfn "$TARGET" /opt/kirocrew-on/current

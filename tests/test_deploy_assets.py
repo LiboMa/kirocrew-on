@@ -177,6 +177,15 @@ class ScriptTests(unittest.TestCase):
         self.assertIn("NATIVE_DOMAIN=", deploy)
         self.assertIn("NativeDomain", deploy)
 
+    def test_react_console_is_built_on_the_host_before_the_release_is_marked_installed(self):
+        text = (ROOT / "deploy/install/al2023.sh").read_text()
+        build = text.index('(cd "$TARGET/web" && npm ci --no-audit --no-fund && npm run build)')
+        self.assertLess(build, text.index('touch "$TARGET/.installed"'))
+        regress = (ROOT / "tools/regress.sh").read_text()
+        self.assertIn("npm --prefix web test", regress)
+        self.assertIn("npm --prefix web run build", regress)
+        self.assertTrue((ROOT / "web/package-lock.json").is_file(), "the console build is pinned by its lockfile")
+
     def test_versions_file_declares_every_pin(self):
         values = dict(line.split("=", 1) for line in (ROOT / "deploy/versions.env").read_text().splitlines()
                       if line and not line.startswith("#"))
