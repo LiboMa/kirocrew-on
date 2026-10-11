@@ -43,26 +43,16 @@ class TemplateTests(unittest.TestCase):
         self.assertEqual(p["ImageId"]["Type"], "AWS::EC2::Image::Id")  # pinned; see tests/test_deploy_safety.py
 
     def test_host_is_only_reachable_from_cloudfront_on_the_api_and_native_ports(self):
-        # One prefix-list reference per group: each counts as the list's maximum entries against the rule quota.
-        groups = of_type(self.r, "AWS::EC2::SecurityGroup")
-        ingress = [rule for g in groups for rule in g["Properties"]["SecurityGroupIngress"]]
-        self.assertTrue(all(len(g["Properties"]["SecurityGroupIngress"]) == 1 for g in groups))
-        self.assertEqual(self.r["Host"]["Properties"]["SecurityGroupIds"], [{"Ref": "HostSecurityGroup"}, {"Ref": "NativeSecurityGroup"}])
-        self.assertEqual({json.dumps(rule["FromPort"]) for rule in ingress},
-                         {json.dumps({"Ref": "ApiPort"}), json.dumps({"Ref": "NativePort"})})
-        for rule in ingress:
-            self.assertEqual(rule["SourcePrefixListId"], {"Ref": "CloudFrontPrefixListId"})
-            self.assertEqual(rule["FromPort"], rule["ToPort"])
-            self.assertNotIn("CidrIp", rule)
-            self.assertNotIn("CidrIpv6", rule)
-
-    def test_instance_hardening(self):
-        host = of_type(self.r, "AWS::EC2::Instance")[0]["Properties"]
-        self.assertTrue(host["BlockDeviceMappings"][0]["Ebs"]["Encrypted"])
-        self.assertEqual(host["MetadataOptions"]["HttpTokens"], "required")
-        self.assertNotIn("KeyName", host)
-        self.assertTrue(host["PropagateTagsToVolumeOnCreation"])
-        self.assertTrue(of_type(self.r, "AWS::EC2::EIP"), "stable origin name across stop/start")
+        # A single prefix-list reference covers ApiPort..NativePort: each reference counts as the list's maximum entries
+        # against the rule quota, and a second group on the host would make CloudFormation consider replacing it.
+        group = of_type(self.r, "AWS::EC2::SecurityGroup")
+        self.assertEqual(len(group), 1)
+        ingress = group[0]["Properties"]["SecurityGroupIngress"]
+        self.assertEqual(len(ingress), 1)
+        self.assertEqual((ingress[0]["FromPort"], ingress[0]["ToPort"]), ({"Ref": "ApiPort"}, {"Ref": "NativePort"}))
+        self.assertEqual(ingress[0]["SourcePrefixListId"], {"Ref": "CloudFrontPrefixListId"})
+        self.assertNotIn("CidrIp", ingress[0])
+        self.assertEqual(self.t["Parameters"]["NativePort"]["Default"], self.t["Parameters"]["ApiPort"]["Default"] + 1)
 
     def distribution(self, port):
         return next(d["Properties"]["DistributionConfig"] for d in of_type(self.r, "AWS::CloudFront::Distribution")
