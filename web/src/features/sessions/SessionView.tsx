@@ -116,7 +116,7 @@ export function SessionView({ id }: { id: string }) {
         {crewReason && <p id="crew-entry-hint" className="text-xs text-muted-foreground">{crewReason}</p>}
       </header>
 
-      {run.attention && (
+      {run.attention && run.status !== "waiting_worker" && (
         <Alert variant="destructive" id="run-attention" className="border-destructive/30 bg-destructive/5">
           <AlertTitle id="attention-title">{run.attention.title}</AlertTitle>
           <AlertDescription className="space-y-1">
@@ -132,9 +132,14 @@ export function SessionView({ id }: { id: string }) {
       )}
       {run.status === "waiting_worker" && (
         <Alert id="worker-notice" className="border-warning/30 bg-warning/5">
+          {run.attention && <AlertTitle id="worker-notice-title">{run.attention.title}</AlertTitle>}
           <AlertDescription className="flex flex-wrap items-center gap-3">
-            需求已保存。请选择此开发空间的 Worker 后开始执行。
-            <Button size="sm" variant="outline" onClick={() => open({ kind: "assign", run })} id="assign-worker"><UserCog /> 分配 Worker</Button>
+            {run.attention
+              ? <span id="worker-notice-detail">{[run.attention.detail, run.attention.action].filter(Boolean).join(" ")}</span>
+              : "需求已保存。请选择此开发空间的 Worker 后开始执行。"}
+            {run.attention?.workers !== 0 && (
+              <Button size="sm" variant="outline" onClick={() => open({ kind: "assign", run })} id="assign-worker"><UserCog /> 分配 Worker</Button>
+            )}
           </AlertDescription>
         </Alert>
       )}

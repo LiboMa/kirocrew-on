@@ -120,6 +120,8 @@ export interface Attention {
   action?: string;
   task_id?: string;
   task_name?: string;
+  /** waiting_worker only: enabled Workers in the Session's space. */
+  workers?: number;
 }
 
 export interface RecoveryRecord {

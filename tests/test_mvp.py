@@ -306,6 +306,30 @@ class MVPTests(unittest.TestCase):
         self.assertEqual(self.service.workflows(self.b), [])
         self.assertIsNone(run["workspace"])
 
+    def test_waiting_worker_attention_explains_a_team_without_a_worker(self):
+        team = self.team()
+        run = self.service.run(self.b, self.start(team_id=team["id"])["id"])
+        self.assertEqual(run["status"], "waiting_worker")
+        attention = run["attention"]
+        self.assertEqual(attention["title"], "Team「研发 Team」没有可用 Worker")
+        self.assertEqual(attention["workers"], 0)
+        self.assertIn("管理员", attention["action"])
+        self.assertIn("个人空间重新提交", attention["action"])
+
+    def test_waiting_worker_attention_for_a_personal_space(self):
+        run = self.service.run(self.b, self.start(self.b, workflow_id=None, template_id="proof")["id"])
+        self.assertEqual(run["attention"]["title"], "个人空间没有可用 Worker")
+        self.assertEqual(run["attention"]["workers"], 0)
+        with self.db.transaction() as db:
+            for wid in ("w1", "w2"):
+                db.execute("INSERT INTO workers(id,name,owner_id,config) VALUES(?,?,?,?)", (wid, wid, self.a["id"], dumps({})))
+            db.execute("INSERT INTO workers(id,name,owner_id,config,enabled) VALUES('w3','w3',?,?,0)", (self.a["id"], dumps({})))
+        run = self.service.run(self.a, self.start()["id"])
+        self.assertEqual(run["status"], "waiting_worker")
+        self.assertEqual(run["attention"]["workers"], 2)
+        self.assertEqual(run["attention"]["title"], "需求已保存，等待选择 Worker")
+        self.assertIn("2 个可用 Worker", run["attention"]["detail"])
+
     def test_intent_http_preview_uses_read_scope_and_mcp_same_api(self):
         with self.db.transaction() as db:
             self.tokens["read"] = issue_token(db, self.b["id"], ["read"])["token"]

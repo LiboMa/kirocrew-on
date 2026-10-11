@@ -95,6 +95,17 @@ describe("session detail", () => {
     await userEvent.click(within(dialog).getByRole("button", { name: "开始执行" }));
     await waitFor(() => expect(calls.find((c) => c.path === "/v1/runs/run-w/assign-worker")?.body).toMatchObject({ worker_id: "w1", expected_version: 1 }));
   });
+
+  test("a Team Session without any Worker explains why instead of offering an empty assignment", async () => {
+    const waiting = makeRun({ id: "run-t", status: "waiting_worker", version: 1, team_id: "t1", attention: {
+      title: "Team「Web 组」没有可用 Worker", detail: "该 Team 尚未分配执行环境。", workers: 0,
+      action: "请平台管理员在控制台为该 Team 分配执行环境后分配 Worker；也可以改在个人空间重新提交。" } });
+    open(waiting);
+    const notice = await screen.findByText("Team「Web 组」没有可用 Worker", { selector: "#worker-notice *" });
+    expect(notice.closest("#worker-notice")).toHaveTextContent("也可以改在个人空间重新提交");
+    expect(screen.queryByRole("button", { name: "分配 Worker" })).not.toBeInTheDocument();
+    expect(document.querySelector("#run-attention")).toBeNull();
+  });
 });
 
 describe("session dialogs act on the Session as it was when they opened", () => {

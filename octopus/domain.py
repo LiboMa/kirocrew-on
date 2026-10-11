@@ -400,13 +400,37 @@ class Service:
         if detail:
             from .recovery import summary
             value["recovery"] = summary(db, run)
-            value["attention"] = self._attention(value)
+            value["attention"] = self._attention(value, self._space(db, run) if run["status"] == "waiting_worker" else None)
         return value
 
     @staticmethod
-    def _attention(run):
+    def _space(db, run):
+        """The run's space for the waiting_worker hint: Team name (None for a personal space) and enabled Workers."""
+        if run["team_id"]:
+            team = db.execute("SELECT name FROM teams WHERE id=?", (run["team_id"],)).fetchone()
+            workers = db.execute("SELECT COUNT(*) FROM workers WHERE enabled=1 AND team_id=?", (run["team_id"],))
+            return {"team": team["name"] if team else run["team_id"], "workers": workers.fetchone()[0]}
+        workers = db.execute("SELECT COUNT(*) FROM workers WHERE enabled=1 AND owner_id=?", (run["owner_id"],))
+        return {"team": None, "workers": workers.fetchone()[0]}
+
+    @staticmethod
+    def _attention(run, space=None):
         task = next((t for t in run["tasks"] if t["status"] not in {"accepted", "pending"}), None)
         latest = run["recovery"]["latest"]
+        if run["status"] == "waiting_worker":
+            space = space or {"team": None, "workers": 0}
+            where = f"Team「{space['team']}」" if space["team"] else "个人空间"
+            if space["workers"]:
+                title, detail = "需求已保存，等待选择 Worker", f"{where}有 {space['workers']} 个可用 Worker，提交时未指定。"
+                action = "选择 Worker 后开始执行。"
+            elif space["team"]:
+                title = f"{where}没有可用 Worker"
+                detail = "Team 的会话需要该 Team 专属的执行环境（独立的 OS 用户、主机或容器），该 Team 尚未分配。"
+                action = "请平台管理员在控制台为该 Team 分配执行环境后分配 Worker；也可以改在个人空间重新提交。"
+            else:
+                title, detail = f"{where}没有可用 Worker", "尚未为你登记执行环境。"
+                action = "请平台管理员为你登记执行环境后分配 Worker。"
+            return {"title": title, "detail": detail, "action": action, "workers": space["workers"], "task_id": None}
         if run["status"] == "diagnosing":
             return {"title": "协调者正在诊断与安排修复", "detail": run["error"] or "正在读取失败证据，等待原生诊断结果。",
                     "action": "等待诊断结果；也可停止本 Session", "task_id": task["id"] if task else None}
