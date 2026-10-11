@@ -5,6 +5,8 @@
 #   deploy/aws/deploy.sh status        # stack outputs, SSM ping, https://<cloudfront>/health
 #   deploy/aws/deploy.sh tunnel        # SSM port forwarding to the native KiroCrew entry (localhost:15476)
 #   deploy/aws/deploy.sh kiro-login    # one-time kiro-cli device-flow login as crew-<boundary>
+#   deploy/aws/deploy.sh space <run-id> [stop]  # run a worker run's project on the host and forward it (local = remote + 10000)
+#   deploy/aws/deploy.sh spaces        # list the run projects running on the host
 #   deploy/aws/deploy.sh admin-password
 #   deploy/aws/deploy.sh down --yes    # delete the stack (artifact bucket and data volume are retained)
 # DEPLOY_DRY_RUN=1 prints the AWS calls instead of running them (secrets masked).
@@ -112,14 +114,78 @@ tunnel() {
     --parameters '{"portNumber":["5476"],"localPortNumber":["15476"]}'
 }
 
-remote() {  # run a short shell command on the host through SSM and print its stdout
-  local id
+remote() {  # run a shell command on the host through SSM; print its stdout, or its stderr and fail when it fails
+  local id status
   id="$(aws --region "$REGION" ssm send-command --instance-ids "$1" --document-name AWS-RunShellScript \
     --parameters "$(python3 -c 'import json, sys; print(json.dumps({"commands": [sys.argv[1]]}))' "$2")" \
     --query Command.CommandId --output text)"
-  aws --region "$REGION" ssm wait command-executed --command-id "$id" --instance-id "$1" 2>/dev/null || true
+  while :; do
+    status="$(aws --region "$REGION" ssm get-command-invocation --command-id "$id" --instance-id "$1" \
+      --query Status --output text 2>/dev/null || echo Pending)"
+    case "$status" in Pending|InProgress|Delayed) sleep 2 ;; *) break ;; esac
+  done
   aws --region "$REGION" ssm get-command-invocation --command-id "$id" --instance-id "$1" \
     --query StandardOutputContent --output text
+  [ "$status" = Success ] || { aws --region "$REGION" ssm get-command-invocation --command-id "$id" \
+    --instance-id "$1" --query StandardErrorContent --output text >&2; return 1; }
+}
+
+# Runs as root on the host. A worker run's project is started with `npm run dev` as the boundary's OS user in a transient
+# systemd unit, on the first free loopback port from 5173 (Vite gets --host/--port; other dev servers get HOST/PORT).
+# A unit that is already active is reused. Prints PORT=<port> once the port listens.
+read -r -d '' SPACE_START <<'SH' || true
+set -euo pipefail
+[ -f "$DIR/package.json" ] || { echo "$DIR 下没有 package.json" >&2; exit 3; }
+grep -Eq '"dev"[[:space:]]*:' "$DIR/package.json" || { echo "$DIR/package.json 没有 dev 脚本" >&2; exit 3; }
+as_crew=(--quiet --uid="$CREW" --gid="$CREW" -p WorkingDirectory="$DIR" -p UMask=0077)
+if ! systemctl is-active --quiet "$UNIT"; then
+  systemctl reset-failed "$UNIT" 2>/dev/null || true
+  PORT=5173
+  while ss -Hltn "sport = :$PORT" | grep -q .; do PORT=$((PORT + 1)); done
+  as_crew+=(--setenv=HOME="$CREW_HOME" --setenv=PATH="$NODE_BIN:/usr/local/bin:/usr/bin:/bin"
+            --setenv=HOST=127.0.0.1 --setenv=PORT="$PORT")
+  [ -d "$DIR/node_modules" ] || systemd-run --wait --pipe "${as_crew[@]}" "$NODE_BIN/npm" ci --no-audit --no-fund >&2
+  args=()
+  if grep -Eq '"dev"[[:space:]]*:[[:space:]]*"vite' "$DIR/package.json"; then
+    args=(-- --host 127.0.0.1 --port "$PORT" --strictPort)
+  fi
+  systemd-run --unit="$UNIT" "${as_crew[@]}" "$NODE_BIN/npm" run dev "${args[@]}"
+fi
+PORT="$(systemctl show -p Environment --value "$UNIT" | tr ' ' '\n' | sed -n 's/^PORT=//p')"
+for _ in $(seq 1 60); do
+  if ss -Hltn "sport = :$PORT" | grep -q .; then echo "PORT=$PORT"; exit 0; fi
+  sleep 1
+done
+journalctl -u "$UNIT" -n 40 --no-pager >&2
+exit 1
+SH
+
+space() {
+  local run="${1:-}" action="${2:-start}" instance script port
+  [[ "$run" =~ ^run-[0-9a-f]{32}$ ]] && [[ "$action" =~ ^(start|stop)$ ]] || {
+    echo "用法：deploy.sh space <run-id> [stop]；run-id 形如 run-<32 位十六进制>" >&2; exit 2; }
+  local unit="kirocrew-space-$run"
+  instance="$(output InstanceId)"
+  if [ "$action" = stop ]; then
+    script="systemctl stop $unit 2>/dev/null || true; systemctl reset-failed $unit 2>/dev/null || true; echo 已停止 $unit"
+    if [ -n "$DRY" ]; then printf '%s\n' "$script"; else remote "$instance" "$script"; fi
+    return
+  fi
+  script="DIR=/var/lib/octopus/boundaries/$BOUNDARY/worker/$run/workspace/project UNIT=$unit CREW=crew-$BOUNDARY"
+  script="$script CREW_HOME=/var/lib/octopus/boundaries/$BOUNDARY/home NODE_BIN=/opt/kirocrew-node/bin"$'\n'"$SPACE_START"
+  if [ -n "$DRY" ]; then printf '%s\n' "$script"; port=5173
+  else port="$(remote "$instance" "$script" | sed -n 's/^PORT=//p')"; fi
+  echo "远端 $unit 监听 127.0.0.1:${port}；本机打开 http://localhost:$((port + 10000))/"
+  echo "Ctrl-C 只结束转发，远端应用继续运行；停止：deploy/aws/deploy.sh space $run stop"
+  run ssm start-session --target "$instance" --document-name AWS-StartPortForwardingSession \
+    --parameters "{\"portNumber\":[\"$port\"],\"localPortNumber\":[\"$((port + 10000))\"]}"
+}
+
+spaces() {
+  local script='for u in $(systemctl list-units --plain --no-legend "kirocrew-space-*" | cut -d" " -f1); do
+  p="$(systemctl show -p Environment --value "$u" | tr " " "\n" | sed -n "s/^PORT=//p")"; r="${u%.service}"
+  echo "${r#kirocrew-space-} 127.0.0.1:$p -> localhost:$((p + 10000))"; done'
+  if [ -n "$DRY" ]; then printf '%s\n' "$script"; else remote "$(output InstanceId)" "$script"; fi
 }
 
 kiro_login() {
@@ -170,7 +236,9 @@ case "${1:-}" in
   status) status ;;
   tunnel) tunnel ;;
   kiro-login) kiro_login ;;
+  space) space "${2:-}" "${3:-}" ;;
+  spaces) spaces ;;
   admin-password) secret admin-password; echo ;;
   down) down "${2:-}" ;;
-  *) sed -n '2,10p' "$0"; exit 2 ;;
+  *) sed -n '2,12p' "$0"; exit 2 ;;
 esac

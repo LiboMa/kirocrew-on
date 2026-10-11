@@ -21,3 +21,6 @@ build/
 
 # 执行台账与本地脚本
 .superpowers/
+
+# 从远端 Worker 工作区拉回本地运行的应用（每个子目录对应一个 run），不提交
+remote-kiro-spaces/

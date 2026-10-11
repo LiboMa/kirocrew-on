@@ -58,6 +58,19 @@ aws ssm start-session --target <实例 ID> --document-name AWS-StartPortForwardi
 浏览器打开 `http://localhost:18918/`。`platform.toml` 的 `allowed_hosts` 必须包含 `localhost:18918`；
 未登记的 Host 返回 `421 host_not_allowed`。Coding 客户端使用 `OCTOPUS_URL=http://localhost:18918` 与用户 Token。
 
+### Worker 产出的应用（按 run-id 在主机上运行并转发）
+
+```bash
+deploy/aws/deploy.sh space <run-id>        # 运行并转发；Ctrl-C 只结束转发，再次执行复用已运行的应用
+deploy/aws/deploy.sh space <run-id> stop   # 停止
+deploy/aws/deploy.sh spaces                # 列出正在运行的应用与端口
+```
+
+经 SSM 以 crew-personal 在临时 systemd 单元 `kirocrew-space-<run-id>` 中运行 `worker/<run-id>/workspace/project` 的
+`npm run dev`（缺少 `node_modules` 时先 `npm ci`；Vite 项目带 `--host 127.0.0.1 --port --strictPort`，其他项目读 `HOST`/`PORT`）。
+远端从 5173 起取第一个空闲回环端口，本机端口为其加 10000（如 `http://localhost:15173/`）。需要本机安装 session-manager-plugin。
+dev server 只在工作区写 `node_modules/.vite`；不需要把工作区拉回本机。
+
 ### 原生 KiroCrew 对话（第二个 CloudFront 分发）
 
 控制台“在 KiroCrew 中打开”经 `https://<NativeDomain>/`（栈输出 `NativeUrl`）打开：CloudFront → 安全组（仅 CloudFront

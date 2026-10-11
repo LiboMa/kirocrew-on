@@ -218,6 +218,28 @@ class ScriptTests(unittest.TestCase):
             self.assertIn(part, printed)
         self.assertNotIn("AWS-StartInteractiveCommand", printed)
 
+    def test_space_runs_a_worker_project_on_the_host_and_forwards_it_to_localhost(self):
+        run = "run-" + "0123456789abcdef" * 2
+        env = {**os.environ, "DEPLOY_DRY_RUN": "1"}
+        space = lambda *args: subprocess.run(["bash", str(ROOT / "deploy/aws/deploy.sh"), *args], cwd=ROOT, env=env,
+                                             capture_output=True, text=True)
+        result = space("space", run)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        printed = result.stdout + result.stderr
+        for part in (f"DIR=/var/lib/octopus/boundaries/personal/worker/{run}/workspace/project",
+                     f"UNIT=kirocrew-space-{run}", "CREW=crew-personal", "NODE_BIN=/opt/kirocrew-node/bin",
+                     '"$NODE_BIN/npm" run dev', "systemd-run",
+                     "--strictPort", "ssm start-session", "AWS-StartPortForwardingSession",
+                     '"portNumber":["5173"]', '"localPortNumber":["15173"]'):
+            self.assertIn(part, printed)
+        stop = space("space", run, "stop")
+        self.assertEqual(stop.returncode, 0, stop.stderr)
+        self.assertIn(f"systemctl stop kirocrew-space-{run}", stop.stdout)
+        self.assertNotIn("start-session", stop.stdout)
+        # the run ID becomes part of a root shell command on the host, so anything but run-<32 hex> is refused
+        self.assertEqual(space("space", "run-1; reboot").returncode, 2)
+        self.assertEqual(space("space").returncode, 2)
+
     def test_config_examples_load(self):
         from octopus.config import load
         platform = load(ROOT / "deploy/config/platform.toml.example", environ={"HOME": "/tmp"}, cwd="/tmp")
