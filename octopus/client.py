@@ -7,6 +7,20 @@ from urllib.parse import urlencode, urlsplit
 from .db import dumps
 
 
+def http_error(exc):
+    """A readable error for an API error response, including non-JSON pages from a proxy (CloudFront)."""
+    with exc:
+        raw = exc.read()
+    try:
+        result = json.loads(raw)
+    except ValueError:
+        hint = ": API 暂不可用，稍后重试" if exc.code >= 500 else ""
+        return RuntimeError(f"{exc.code} {exc.reason}{hint}")
+    if not isinstance(result, dict):
+        return RuntimeError(f"{exc.code} {exc.reason}")
+    return RuntimeError(f"{exc.code} {result.get('code')}: {result.get('error')}")
+
+
 class Client:
     def __init__(self, url="http://127.0.0.1:8918", token=""):
         parts = urlsplit(url)
@@ -25,20 +39,17 @@ class Client:
             with urllib.request.urlopen(req, timeout=40) as response:
                 return json.load(response)
         except urllib.error.HTTPError as exc:
-            with exc:
-                raw = exc.read()
-            try:
-                result = json.loads(raw)
-            except ValueError:
-                # A proxy (CloudFront) answered for an unavailable origin with a non-JSON page.
-                raise RuntimeError(f"{exc.code} {exc.reason}: API 暂不可用，稍后重试") from None
-            raise RuntimeError(f"{exc.code} {result.get('code')}: {result.get('error')}") from None
+            raise http_error(exc) from None
 
     def events(self, run_id, after=0):
         """One bounded SSE connection; resume using the last yielded event id."""
         path = "/v1/runs/" + run_id + "/events?" + urlencode({"stream": 1, "after": after})
         req = urllib.request.Request(self.url + path, headers={"Authorization": "Bearer " + self.token})
-        with urllib.request.urlopen(req, timeout=45) as stream:
+        try:
+            stream = urllib.request.urlopen(req, timeout=45)
+        except urllib.error.HTTPError as exc:
+            raise http_error(exc) from None
+        with stream:
             event_type = ""
             for raw in stream:
                 line = raw.decode().strip()

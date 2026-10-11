@@ -6,6 +6,7 @@ import os
 from pathlib import Path
 import secrets
 import signal
+import sys
 import threading
 import time
 
@@ -169,25 +170,33 @@ def main(argv=None):
         from .backup import restore_verify
         print(dumps(restore_verify(Path(args.manifest), Path(args.into))))
     else:
-        client = Client(args.url, os.environ.get("OCTOPUS_API_TOKEN", ""))
-        if args.command == "request":
-            body = json.loads(Path(args.body_file).read_text()) if args.body_file else None
-            print(json.dumps(client.request(args.method, args.path, body), ensure_ascii=False, indent=2))
-        elif args.command == "events":
-            after = args.after
-            try:
-                while True:
-                    for event in client.events(args.run_id, after):
-                        after = event["id"]
-                        print(dumps(event), flush=True)
-                    if args.once:
-                        break
-            except KeyboardInterrupt:
-                pass
-        else:
-            from .mcp import serve
-            serve(client)
+        try:
+            run_client(args)
+        except (RuntimeError, ValueError, OSError) as exc:
+            # API, proxy and connection errors are reported as one line; the exit code tells scripts it failed.
+            print(f"错误：{exc}", file=sys.stderr)
+            raise SystemExit(1) from None
 
+
+def run_client(args):
+    client = Client(args.url, os.environ.get("OCTOPUS_API_TOKEN", ""))
+    if args.command == "request":
+        body = json.loads(Path(args.body_file).read_text()) if args.body_file else None
+        print(json.dumps(client.request(args.method, args.path, body), ensure_ascii=False, indent=2))
+    elif args.command == "events":
+        after = args.after
+        try:
+            while True:
+                for event in client.events(args.run_id, after):
+                    after = event["id"]
+                    print(dumps(event), flush=True)
+                if args.once:
+                    break
+        except KeyboardInterrupt:
+            pass
+    else:
+        from .mcp import serve
+        serve(client)
 
 if __name__ == "__main__":
     main()

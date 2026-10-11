@@ -31,7 +31,7 @@ class OriginSecretTests(unittest.TestCase):
     def setUp(self):
         self.temporary = tempfile.TemporaryDirectory()
         self.httpd = server(Database(Path(self.temporary.name)), 0, host="127.0.0.1",
-                            allowed_hosts=("d111.cloudfront.net",), origin_secret=SECRET)
+                            allowed_hosts=("d111.cloudfront.net", "localhost:18918"), origin_secret=SECRET)
         self.port = self.httpd.server_address[1]
         threading.Thread(target=self.httpd.serve_forever, daemon=True).start()
 
@@ -58,6 +58,12 @@ class OriginSecretTests(unittest.TestCase):
     def test_loopback_host_for_local_operations_needs_no_secret(self):
         self.assertEqual(self.call({"Host": f"127.0.0.1:{self.port}"})[0], 200)
 
+    def test_ssm_tunnel_host_needs_no_secret(self):
+        # SSM port forwarding arrives from a loopback peer with the operator's local Host (review finding 4).
+        self.assertEqual(self.call({"Host": "localhost:18918"})[0], 200)
+        self.assertEqual(self.call({"Host": "localhost:19999"})[0], 421)
+
+
     def test_login_attempts_are_counted_per_viewer(self):
         base = {"Host": "d111.cloudfront.net", "X-Origin-Verify": SECRET, "Content-Type": "application/json",
                 "Origin": "https://d111.cloudfront.net"}
@@ -70,6 +76,15 @@ class OriginSecretTests(unittest.TestCase):
                           {"username": "x", "password": "y" * 12})[0]
         self.assertEqual(limited, 429)
         self.assertEqual(other, 401)
+
+
+class OriginSecretValidationTests(unittest.TestCase):
+    def test_empty_or_short_secret_refuses_to_serve(self):
+        # An empty secret file must not silently turn origin enforcement off (review finding 3).
+        with tempfile.TemporaryDirectory() as directory:
+            for secret in ("", "short"):
+                with self.assertRaisesRegex(ValueError, "源站密钥"):
+                    server(Database(Path(directory)), 0, host="127.0.0.1", origin_secret=secret)
 
 
 class WaitReadyAddressTests(unittest.TestCase):

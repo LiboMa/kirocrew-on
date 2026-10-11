@@ -27,7 +27,18 @@ def client_ip(handler, verified):
     return viewer.rsplit(":", 1)[0] if ":" in viewer else handler.client_address[0]
 
 
+def loopback_host(value):
+    """True for a Host naming this machine (any port): local operations and SSM port-forwarding tunnels."""
+    try:
+        return urlsplit("//" + value).hostname in {"127.0.0.1", "localhost", "::1"}
+    except ValueError:
+        return False
+
+
 def server(database, port=8918, host="127.0.0.1", allowed_hosts=(), origin_secret=None):
+    if origin_secret is not None and len(origin_secret) < 32:
+        # An empty or truncated secret file must fail closed instead of turning origin enforcement off.
+        raise ValueError("源站密钥为空或过短（至少 32 个字符）；检查 origin_secret_file")
     service = Service(database)
     hosts, local_hosts = set(), set()
     failures, limiter_lock = {}, threading.Lock()
@@ -72,9 +83,9 @@ def server(database, port=8918, host="127.0.0.1", allowed_hosts=(), origin_secre
                         421, "host_not_allowed")
                 supplied = self.headers.get("X-Origin-Verify", "")
                 self.origin_verified = bool(origin_secret) and hmac.compare_digest(supplied, origin_secret)
-                # Behind CloudFront only requests carrying the origin secret are served; local operations on the
-                # host itself (loopback peer AND loopback Host) are exempt.
-                local = self.client_address[0] in LOOPBACK and self.headers.get("Host", "") in local_hosts
+                # Behind CloudFront only requests carrying the origin secret are served; local operations and SSM
+                # tunnels (loopback peer AND an allowed Host naming this machine) are exempt.
+                local = self.client_address[0] in LOOPBACK and loopback_host(self.headers.get("Host", ""))
                 require(not origin_secret or self.origin_verified or local, "请求未经 CloudFront 源站认证",
                         403, "origin_unverified")
                 url = urlsplit(self.path)
