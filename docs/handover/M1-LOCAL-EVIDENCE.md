@@ -57,6 +57,17 @@
 - Kiro 不报告实际模型（K05），证据中显示为空。
 - 本地 macOS 不提供 cgroup v2 资源上限（原生日志 SECURITY 警告）；EC2 Linux 上复核。
 
+## KiroCrew 最新源码（0.10.0）本地验证
+
+| 项 | 结果 |
+|---|---|
+| 来源 | `https://github.com/kirodotdev/KiroCrew.git` `main` @ `57df464b2b4ce3fe4e71d108281ff6c3ad22c40f`，版本 0.10.0，`pip install` 到隔离 venv（未构建 dashboard 前端） |
+| 静态核对 | composition 依赖的扩展点均在（`managed_mcp_spec_entry` 移至 `agent_materialization` 但 `kiro_crew.agent` 仍导出；`/api/spawn` 处理迁到 `dashboard/messaging_api/spawn.py`，`approval_mode` 行为不变） |
+| 原生契约 `tests/native` | 6/6 通过（0.8.0 同样 6/6）。差异：0.10.0 的 `spawn_run` 接受单个 `[qualifier]` 模型后缀；`provider/model` 与冒号形式仍被拒绝（K02 部分放宽） |
+| 版本接受 | 边界配置 `kirocrew_versions = ["0.10.0"]` 后服务模式启动；组合标记 `PocProviderRegistry` |
+| 真实冒烟 | `run-a5c51726…` kiro pass |
+| Claude → Codex | `run-9bc4f459…` claude（`global.anthropic.claude-sonnet-4-6`）pass → codex（`openai.gpt-6-astra[xhigh]`）pass；平台派发 spawn 的原生 auto 批准在 0.10.0 上仍有效（K19） |
+
 ## 未覆盖
 
 - EC2 / Linux（Task 15–20）。
