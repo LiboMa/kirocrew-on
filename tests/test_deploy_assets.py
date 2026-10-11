@@ -119,6 +119,13 @@ class ScriptTests(unittest.TestCase):
         self.assertIn('touch "$KC/.installed"', text)
         self.assertNotIn('mv "$STAGE"', text)
 
+    def test_contract_check_runs_after_templates_are_seeded(self):
+        # Observed on EC2: a fresh KIRO_HOME has no poc-* templates until the composition seeds them, so the
+        # coordinator control-plane mount was empty. --check seeds and verifies routing before the native tests.
+        text = (ROOT / "deploy/install/al2023.sh").read_text()
+        self.assertIn("-m composition.gateway --config", text)
+        self.assertLess(text.index("-m composition.gateway --config"), text.index("-m unittest discover"))
+
     def test_versions_file_declares_every_pin(self):
         values = dict(line.split("=", 1) for line in (ROOT / "deploy/versions.env").read_text().splitlines()
                       if line and not line.startswith("#"))
