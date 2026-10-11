@@ -87,7 +87,7 @@ PY
   [ -n "$status" ] || type=CREATE
   run cloudformation create-change-set --stack-name "$STACK_NAME" --change-set-name "$change" --change-set-type "$type" \
     --template-body "file://$TEMPLATE" --capabilities CAPABILITY_IAM --tags Key=Project,Value=kirocrew-on \
-    --parameters "file://$WORK/parameters.json" >/dev/null
+    --parameters "file://$WORK/parameters.json"
   [ -n "$DRY" ] && return
   if ! aws --region "$REGION" cloudformation wait change-set-create-complete --stack-name "$STACK_NAME" \
       --change-set-name "$change" 2>/dev/null; then
