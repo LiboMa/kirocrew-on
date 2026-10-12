@@ -104,5 +104,42 @@ class TeamRenameArchiveTests(TeamsWorkersCase):
             self.assertEqual(call("POST", "/v1/teams/team-p/archive", self.tokens["alice"], {"archived": True})[0], 200)
 
 
+class MembershipTests(TeamsWorkersCase):
+    def test_admin_hosts_members_without_being_one(self):
+        self.service.membership(self.a, "team-p", {"username": "eve", "role": "owner"})
+        roles = {m["username"]: m["role"] for m in {t["id"]: t for t in self.service.teams(self.a)}["team-p"]["members"]}
+        self.assertEqual(roles["eve"], "owner")
+        self.assertEqual(json.loads(self.audits("team.member.set")[0]["detail"]), {"user": self.e["id"], "role": "owner"})
+
+    def test_admin_without_admin_scope_is_not_a_host(self):
+        plain = {**self.a, "scopes": ["read", "execute", "manage"]}
+        self.assertEqual(self.code(self.service.membership, plain, "team-p", {"username": "eve"}), (404, "not_found"))
+
+    def test_member_leaves_and_loses_access_to_team_sessions(self):
+        run = self.start(self.b, team_id="team-p")
+        self.service.membership(self.b, "team-p", {"username": "bob"}, remove=True)
+        self.assertEqual(self.audits("team.member.leave")[0]["actor_id"], self.b["id"])
+        self.assertEqual(self.code(self.service.run, self.b, run["id"]), (404, "not_found"))
+        self.assertEqual(self.service.run(self.c, run["id"])["status"], "preparing")   # the Team's Session runs on
+
+    def test_member_cannot_remove_others_or_promote_themselves(self):
+        self.assertEqual(self.code(self.service.membership, self.b, "team-p", {"username": "carol"}, remove=True),
+                         (403, "forbidden"))
+        self.assertEqual(self.code(self.service.membership, self.b, "team-p", {"username": "bob", "role": "owner"}),
+                         (403, "forbidden"))
+
+    def test_the_last_active_owner_cannot_leave(self):
+        self.assertEqual(self.code(self.service.membership, self.c, "team-p", {"username": "carol"}, remove=True),
+                         (409, "conflict"))
+
+    def test_owner_removal_is_audited(self):
+        self.service.membership(self.c, "team-p", {"username": "bob"}, remove=True)
+        self.assertEqual(json.loads(self.audits("team.member.remove")[0]["detail"]), {"user": self.b["id"]})
+
+    def test_member_leaves_over_http(self):
+        with self.http() as call:
+            self.assertEqual(call("DELETE", "/v1/teams/team-p/members", self.tokens["bob"], {"username": "bob"})[0], 200)
+
+
 if __name__ == "__main__":
     unittest.main()

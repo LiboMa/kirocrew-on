@@ -381,12 +381,15 @@ class Service:
         return {"id": tid, "archived": body["archived"]}
 
     def membership(self, actor, tid, body, remove=False):
+        """Owners and admins (elevated, members or not) add, remove and re-role members; a member may remove only
+        themselves (leave). The last active owner stays (B4)."""
         with self.db.transaction() as db:
-            member(db, actor["id"], tid, owner=True)
+            username = text(body.get("username"), "用户名", 64).lower()
+            leaving = remove and username == actor["username"]
+            self._team(db, actor, tid, owner=not leaving)
             if not remove:
                 active_team(db, tid)
-            target = db.execute("SELECT id FROM users WHERE username=? AND active=1",
-                                (text(body.get("username"), "用户名", 64).lower(),)).fetchone()
+            target = db.execute("SELECT id FROM users WHERE username=? AND active=1", (username,)).fetchone()
             require(target is not None, "用户不存在", 404, "not_found")
             role = body.get("role", "member")
             require(role in {"owner", "member"}, "角色无效")
@@ -398,10 +401,14 @@ class Service:
                                    "AND m.role='owner' AND u.active=1 AND m.user_id!=?", (tid, target["id"])).fetchone()[0] > 0,
                         "不能移除最后一位有效的 Team Owner", 409, "conflict")
             if remove:
+                require(current is not None, "该用户不是 Team 成员", 404, "not_found")
                 db.execute("DELETE FROM members WHERE team_id=? AND user_id=?", (tid, target["id"]))
+                audit(db, actor, "team.member.leave" if leaving else "team.member.remove", "team", tid,
+                      None if leaving else {"user": target["id"]})
             else:
                 db.execute("INSERT INTO members VALUES(?,?,?) ON CONFLICT(team_id,user_id) DO UPDATE SET role=excluded.role",
                            (tid, target["id"], role))
+                audit(db, actor, "team.member.set", "team", tid, {"user": target["id"], "role": role})
         return {"ok": True}
 
     def workflows(self, actor):

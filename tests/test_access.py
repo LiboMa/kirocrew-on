@@ -534,8 +534,7 @@ class PermissionMatrixTests(AccessCase):
             ("GET", "/v1/admin/users", None, (200, 403, 403, 403, 403)),
             ("GET", "/v1/admin/audit", None, (200, 403, 403, 403, 403)),
             ("POST", f"/v1/users/{self.b['id']}/active", {"active": True}, (200, 403, 403, 403, 403)),
-            # Admin hosting of Team members is phase 2: today an admin who is not a member is told nothing.
-            ("POST", "/v1/teams/team-m/members", {"username": "eve", "role": "bogus"}, (404, 404, 400, 403, 404)),
+            ("POST", "/v1/teams/team-m/members", {"username": "eve", "role": "bogus"}, (400, 404, 400, 403, 404)),
             ("POST", f"/v1/workflows/{self.flow['id']}/versions", {"name": "矩阵流程", "steps": steps, "expected_version": 999},
              (404, 404, 409, 403, 404)),
         ]
