@@ -48,6 +48,7 @@ KiroCrew ON 在远端执行开发任务：KiroCrew 的 Kiro Agent 先识别意�
 - `worker_id` 通常省略：空间内只有一个可用 Worker 时由后台自动选用。
 - 提交到 Team 返回 409 `team_without_worker`（该 Team 尚未分配执行环境）或 `environment_disabled`（执行环境已停用）时，
   原样告诉用户需要平台管理员在控制台分配或启用执行环境；也可以建议改在个人空间提交。不要换一个 Team 重试。
+- 返回 409 `team_archived` 时该 Team 已归档：不能提交新会话或续作，已有会话仍可查看与停止；告诉用户需要平台管理员恢复，或改在其他空间提交。
 - 回执只代表登记成功。把 `run_id` 和会话链接告诉用户。
 
 ## 3．查看进度：`octopus_status`
@@ -65,7 +66,7 @@ KiroCrew ON 在远端执行开发任务：KiroCrew 的 Kiro Agent 先识别意�
 | 状态 | 含义与处理 |
 |---|---|
 | `running` / `diagnosing` | 正在执行或自动诊断返工，继续等待 |
-| `waiting_worker` | 还没有 Worker 执行：把 `attention.title` / `attention.action` 告诉用户。`attention.workers` 为 0 时该空间没有可用的执行环境（尚未分配或已停用），请管理员分配或启用，或改在个人空间重新提交；大于 0 时请用户选择，或在 `octopus_start` 中指定 `worker_id` |
+| `waiting_worker` | 还没有 Worker 执行，或原来的执行环境已更换、已移出该空间、已停用或已退役（`error` 写明原因）：把 `attention.title` / `attention.action` 告诉用户。`attention.workers` 为 0 时该空间没有可用的执行环境（尚未分配或已停用），请管理员分配或启用，或改在个人空间重新提交；大于 0 时请用户选择，或在 `octopus_start` 中指定 `worker_id` |
 | `blocked` / `failed` | 读 `attention.title` / `attention.action` 告诉用户；可用 `octopus_recover` 诊断修复，或用 `octopus_continue` 修改后重跑 |
 | `completed` | 完成；用 `octopus_preview` 给出预览 |
 
