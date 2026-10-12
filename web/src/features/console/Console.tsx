@@ -13,7 +13,8 @@ const runFromUrl = () => new URLSearchParams(window.location.search).get("run");
 
 export function Console() {
   const me = useMe();
-  const workspace = useWorkspace();
+  const [allSessions, setAllSessions] = useState(false);
+  const workspace = useWorkspace(allSessions);
   // An administrator sees every Team (D28) but can only switch to and submit in the Teams they belong to.
   const memberTeams = useMemo(() => workspace.teams.filter((t) => t.role != null), [workspace.teams]);
   const [space, setSpaceState] = useState("");
@@ -51,8 +52,8 @@ export function Console() {
   const value = useMemo<ConsoleState | null>(() => me.data ? {
     me: me.data, teams: memberTeams, allTeams: workspace.teams, users: workspace.users, workers: workspace.workers,
     workflows: workspace.workflows, templates: workspace.templates, runs: workspace.runs,
-    space, setSpace, selected, select, open: setDialog, close: () => setDialog(null),
-  } : null, [me.data, workspace, space, setSpace, selected, select]);
+    space, setSpace, allSessions, setAllSessions, selected, select, open: setDialog, close: () => setDialog(null),
+  } : null, [me.data, workspace, space, setSpace, allSessions, selected, select]);
 
   if (!value || workspace.loading) {
     return (

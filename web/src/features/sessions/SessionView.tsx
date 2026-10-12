@@ -18,7 +18,7 @@ import { NativeSessionPanel } from "@/features/sessions/NativeSessionPanel";
 import { RecoveryPanel } from "@/features/sessions/RecoveryPanel";
 import { TaskList } from "@/features/sessions/TaskList";
 import { useSessionActions } from "@/features/sessions/useSessionActions";
-import { canContinue, canDelete, canRecover, canStop, closeAction, crewEntryReason, statusText } from "@/lib/session";
+import { canContinue, canDelete, canRecover, canStop, closeAction, crewEntryReason, deleteReason, statusText } from "@/lib/session";
 
 export function SessionView({ id }: { id: string }) {
   const { teams, workflows, workers, me, open } = useConsole();
@@ -114,6 +114,7 @@ export function SessionView({ id }: { id: string }) {
               <DropdownMenuSeparator />
               <DropdownMenuItem variant="destructive" disabled={!canDelete(run)} onSelect={() => open({ kind: "control", run, action: "delete" })}>
                 <Trash2 /> 删除会话
+                {deleteReason(run) && <small className="ml-1 text-[11px] text-muted-foreground">（{deleteReason(run)}）</small>}
               </DropdownMenuItem>
             </DropdownMenuContent>
           </DropdownMenu>

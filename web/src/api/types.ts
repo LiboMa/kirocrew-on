@@ -199,6 +199,8 @@ export interface Run {
   updated: number;
   attention?: Attention | null;
   recovery?: Recovery | null;
+  /** What the server allows the current user on this Session; absent from older platforms. */
+  permissions?: { operate: boolean; delete: boolean };
   /** KiroCrew Agent planning: intent recognition, requirement enrichment and the generated tasks. */
   planning?: { mode: "agent"; applied: boolean; intent?: string; summary?: string; name?: string; tasks?: string[]; notes?: string[] } | null;
 }
@@ -236,6 +238,27 @@ export interface ApiToken {
   label: string;
   scopes: string;
   expires: number;
+  last_used?: number | null;
+}
+
+/** GET /v1/admin/users (elevated administrators). */
+export interface AdminUser {
+  id: string;
+  username: string;
+  admin: boolean;
+  active: boolean;
+  created: number;
+  last_login: number | null;
+  teams: { id: string; name: string; role: string }[];
+  tokens: number;
+}
+
+export interface UserToken {
+  id: string;
+  label: string;
+  scopes: string[];
+  expires: number;
+  last_used: number | null;
 }
 
 export interface IssuedToken {

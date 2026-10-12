@@ -84,6 +84,14 @@ describe("session detail", () => {
     await waitFor(() => expect(calls.find((c) => c.path === "/v1/runs/run-a/delete")?.body).toMatchObject({ confirmation: "run-a", expected_version: 4 }));
   });
 
+  test("deleting is offered only when the server allows it, with the reason otherwise", async () => {
+    open({ ...blocked, permissions: { operate: true, delete: false } } as Run);
+    await userEvent.click(await screen.findByRole("button", { name: "更多操作" }));
+    const item = await screen.findByRole("menuitem", { name: /删除会话/ });
+    expect(item).toHaveAttribute("aria-disabled", "true");
+    expect(item).toHaveTextContent("只有 Team owner 可以删除他人创建的会话");
+  });
+
   test("a Session waiting for a Worker can be assigned one from its space", async () => {
     const waiting = makeRun({ id: "run-w", status: "waiting_worker", version: 1 });
     const calls = open(waiting, {

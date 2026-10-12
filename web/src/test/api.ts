@@ -28,7 +28,7 @@ export function mockApi(routes: Record<string, Handler | unknown>) {
   return calls;
 }
 
-export const ME = { id: "u1", username: "fixture-owner", admin: 1, scopes: ["read", "execute", "manage"] };
+export const ME = { id: "u1", username: "fixture-owner", admin: 1, scopes: ["read", "execute", "manage", "admin"] };
 
 export function makeRun(overrides: Partial<Run> = {}): Run {
   return {

@@ -8,6 +8,7 @@ import {
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Brand } from "@/features/auth/LoginPage";
 import { useConsole } from "@/features/console/context";
+import { elevated } from "@/lib/access";
 
 const PERSONAL = "__personal__";
 
@@ -49,6 +50,7 @@ export function TopBar({ onMenu }: { onMenu: () => void }) {
             <DropdownMenuItem onSelect={() => open({ kind: "team" })}>团队与成员</DropdownMenuItem>
             <DropdownMenuItem onSelect={() => open({ kind: "tokens" })}>API 与 Coding Agent 接入</DropdownMenuItem>
             <DropdownMenuItem onSelect={() => open({ kind: "workers" })}>执行环境 · Worker</DropdownMenuItem>
+            {elevated(me) && <DropdownMenuItem onSelect={() => open({ kind: "users" })}>用户管理</DropdownMenuItem>}
             <DropdownMenuSeparator />
             <DropdownMenuItem asChild><a href="/classic/">打开经典控制台</a></DropdownMenuItem>
           </DropdownMenuContent>
@@ -67,6 +69,7 @@ export function TopBar({ onMenu }: { onMenu: () => void }) {
               <small className="text-muted-foreground">{me.admin ? "平台管理员" : "平台成员"}</small>
             </DropdownMenuLabel>
             <DropdownMenuSeparator />
+            <DropdownMenuItem onSelect={() => open({ kind: "password" })}>修改密码</DropdownMenuItem>
             <DropdownMenuItem onSelect={() => void logout()}>退出登录</DropdownMenuItem>
           </DropdownMenuContent>
         </DropdownMenu>

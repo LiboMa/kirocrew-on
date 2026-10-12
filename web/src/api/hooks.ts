@@ -24,10 +24,11 @@ export function useMe() {
   return useQuery({ queryKey: keys.me, queryFn: () => api<Me>("/me"), staleTime: 60_000 });
 }
 
-export function useWorkspace() {
+export function useWorkspace(allSessions = false) {
   const teams = useQuery({ queryKey: keys.teams, queryFn: () => api<Team[]>("/teams"), ...every(30_000) });
   const workflows = useQuery({ queryKey: keys.workflows, queryFn: () => api<Workflow[]>("/workflows"), ...every(30_000) });
-  const runs = useQuery({ queryKey: keys.runs, queryFn: () => api<Run[]>("/runs"), ...every(10_000) });
+  const runs = useQuery({ queryKey: [...keys.runs, allSessions],
+    queryFn: () => api<Run[]>(allSessions ? "/runs?all=1" : "/runs"), ...every(10_000) });
   const workers = useQuery({ queryKey: keys.workers, queryFn: () => api<Worker[]>("/workers"), ...every(30_000) });
   const users = useQuery({ queryKey: keys.users, queryFn: () => api<User[]>("/users"), staleTime: 60_000 });
   const templates = useQuery({ queryKey: keys.templates, queryFn: () => api<Template[]>("/workflow-templates"), staleTime: Infinity });

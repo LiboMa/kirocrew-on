@@ -237,6 +237,76 @@ describe("settings", () => {
     await waitFor(() => expect(calls.find((c) => c.path === "/v1/workers/w2/dedicate")?.method).toBe("POST"));
   });
 
+  const adminUsers = [
+    { id: "u1", username: "fixture-owner", admin: true, active: true, created: 1, last_login: 1_790_000_000, teams: [], tokens: 2 },
+    { id: "u2", username: "dev1", admin: false, active: true, created: 1, last_login: null,
+      teams: [{ id: "team-1", name: "平台组", role: "member" }], tokens: 1 },
+  ];
+
+  test("an administrator manages users: deactivate, reset a password and revoke a token", async () => {
+    const calls = start({ "GET /admin/users": adminUsers, "POST /users/u2/active": { id: "u2", active: false },
+      "POST /users/u2/password": { ok: true },
+      "GET /admin/users/u2/tokens": [{ id: "t1", label: "claude MCP", scopes: ["read", "execute"], expires: 1_900_000_000, last_used: null }],
+      "DELETE /admin/users/u2/tokens/t1": { ok: true } });
+    const dialog = await openSetting(/用户管理/);
+    const row = await within(dialog).findByRole("group", { name: "dev1" });
+    expect(row).toHaveTextContent("平台组（member）");
+    expect(row).toHaveTextContent("从未登录");
+    expect(within(dialog).getByRole("group", { name: "fixture-owner" })).toHaveTextContent("管理员");
+    await userEvent.click(within(row).getByRole("button", { name: "停用" }));
+    expect(calls.some((c) => c.path === "/v1/users/u2/active")).toBe(false);   // asks first
+    await userEvent.click(within(row).getByRole("button", { name: "确认停用" }));
+    await waitFor(() => expect(calls.find((c) => c.path === "/v1/users/u2/active")?.body).toEqual({ active: false }));
+    await userEvent.click(within(row).getByRole("button", { name: "重置密码" }));
+    await userEvent.type(within(row).getByLabelText("新密码"), "Another-password-456!");
+    await userEvent.type(within(row).getByLabelText("确认新密码"), "Different-password-789!");
+    await userEvent.click(within(row).getByRole("button", { name: "确认重置" }));
+    expect(within(row).getByRole("alert")).toHaveTextContent("两次输入不一致");
+    await userEvent.clear(within(row).getByLabelText("确认新密码"));
+    await userEvent.type(within(row).getByLabelText("确认新密码"), "Another-password-456!");
+    await userEvent.click(within(row).getByRole("button", { name: "确认重置" }));
+    await waitFor(() => expect(calls.find((c) => c.path === "/v1/users/u2/password")?.body)
+      .toEqual({ password: "Another-password-456!" }));
+    await userEvent.click(within(row).getByRole("button", { name: "Token" }));
+    await userEvent.click(await within(row).findByRole("button", { name: "吊销 claude MCP" }));
+    await waitFor(() => expect(calls.find((c) => c.method === "DELETE" && c.path === "/v1/admin/users/u2/tokens/t1")).toBeTruthy());
+  });
+
+  test("a member sees neither user management nor anything that needs the admin scope", async () => {
+    start({ "GET /me": { id: "u2", username: "dev1", admin: 0, scopes: ["read", "execute", "manage"] } });
+    await userEvent.click(await screen.findByRole("button", { name: "设置" }));
+    expect(screen.queryByRole("menuitem", { name: /用户管理/ })).toBeNull();
+  });
+
+  test("anyone changes their own password from the account menu", async () => {
+    let attempts = 0;
+    const calls = start({ "POST /me/password": () => (attempts++ === 0
+      ? new Response(JSON.stringify({ error: "原密码不正确", code: "forbidden" }), { status: 403 }) : { ok: true }) });
+    await userEvent.click(await screen.findByRole("button", { name: /账户/ }));
+    await userEvent.click(await screen.findByRole("menuitem", { name: "修改密码" }));
+    const dialog = await screen.findByRole("dialog");
+    await userEvent.type(within(dialog).getByLabelText("原密码"), "wrong-password-0");
+    await userEvent.type(within(dialog).getByLabelText("新密码"), "Another-password-456!");
+    await userEvent.type(within(dialog).getByLabelText("确认新密码"), "Another-password-456!");
+    await userEvent.click(within(dialog).getByRole("button", { name: "修改密码" }));
+    expect(await within(dialog).findByRole("alert")).toHaveTextContent("原密码不正确");
+    await userEvent.clear(within(dialog).getByLabelText("原密码"));
+    await userEvent.type(within(dialog).getByLabelText("原密码"), "Test-password-123!");
+    await userEvent.click(within(dialog).getByRole("button", { name: "修改密码" }));
+    await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
+    expect(calls.filter((c) => c.path === "/v1/me/password").at(-1)?.body)
+      .toEqual({ current: "Test-password-123!", password: "Another-password-456!" });
+  });
+
+  test("tokens show when they were last used", async () => {
+    start({ "GET /tokens": [{ id: "t1", label: "claude MCP", scopes: "[\"read\"]", expires: 1_900_000_000, last_used: null },
+      { id: "t2", label: "Web login", scopes: "[\"read\"]", expires: 1_900_000_000, last_used: 1_790_000_000 }] });
+    const dialog = await openSetting(/API 与 Coding Agent 接入/);
+    expect(await within(dialog).findByText(/claude MCP/)).toBeInTheDocument();
+    expect(dialog).toHaveTextContent("从未使用");
+    expect(dialog).toHaveTextContent("最近使用");
+  });
+
   test("an administrator can disable a Worker", async () => {
     const calls = start({
       "GET /workers": [{ id: "w1", name: "personal", owner_id: "u1", team_id: null, enabled: true, capabilities: { isolation: "trusted-local" } }],

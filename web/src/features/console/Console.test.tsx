@@ -52,6 +52,30 @@ describe("console shell", () => {
     expect(within(list).getAllByRole("button").map((b) => b.dataset.run)).toEqual(["run-a"]);
   });
 
+  test("an administrator can list every Session, labelled with its owner; others cannot", async () => {
+    const theirs = makeRun({ id: "run-b", name: "别人的个人会话", owner_id: "u2", team_id: null });
+    const searches: string[] = [];
+    setToken("oct_fixture");
+    mockApi({ ...workspaceRoutes([]), "GET /users": [{ id: "u1", username: "fixture-owner" }, { id: "u2", username: "dev1" }],
+      "GET /runs": (_body: unknown, url: URL) => { searches.push(url.search); return url.search === "?all=1" ? [theirs] : []; } });
+    render(<App />);
+    const toggle = await screen.findByRole("button", { name: "全部会话" });
+    expect(toggle).toHaveAttribute("aria-pressed", "false");
+    await userEvent.click(toggle);
+    const list = await screen.findByRole("navigation", { name: "会话列表" });
+    expect(await within(list).findByText("别人的个人会话")).toBeInTheDocument();
+    expect(list).toHaveTextContent("dev1");
+    expect(searches).toContain("?all=1");
+  });
+
+  test("members have no all-sessions switch", async () => {
+    setToken("oct_fixture");
+    mockApi(workspaceRoutes([], { "GET /me": { id: "u2", username: "dev1", admin: 0, scopes: ["read", "execute", "manage"] } }));
+    render(<App />);
+    await screen.findByRole("navigation", { name: "会话列表" });
+    expect(screen.queryByRole("button", { name: "全部会话" })).toBeNull();
+  });
+
   test("selecting a session is reflected in the URL and an unreadable one is dropped", async () => {
     setToken("oct_fixture");
     window.history.replaceState(null, "", "/?run=run-gone");
