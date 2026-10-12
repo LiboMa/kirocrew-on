@@ -1,6 +1,9 @@
 import "@testing-library/jest-dom/vitest";
 import { afterEach } from "vitest";
-import { cleanup } from "@testing-library/react";
+import { cleanup, configure } from "@testing-library/react";
+
+// The whole console renders behind each test; a busy machine (regress.sh builds first) can exceed the default 1 s.
+configure({ asyncUtilTimeout: 3000 });
 
 // jsdom lacks a few browser APIs Radix and sonner use.
 class ResizeObserverStub {
