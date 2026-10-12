@@ -1,0 +1,123 @@
+AWSTemplateFormatVersion: "2010-09-09"
+Description: >-
+  KiroCrew ON Worker host (D28): a dedicated execution environment for Teams. KiroCrew, the coding tools and one boundary
+  run here; only the platform host reaches the Worker, over TLS signed by the platform's private CA. Admin via SSM.
+
+Parameters:
+  VpcId:
+    Type: AWS::EC2::VPC::Id
+  SubnetId:
+    Type: AWS::EC2::Subnet::Id
+  PlatformSecurityGroupId:
+    Type: AWS::EC2::SecurityGroup::Id
+    Description: The platform host's security group; the only source admitted to the Worker port
+  ImageId:
+    Type: AWS::EC2::Image::Id
+  InstanceType:
+    Type: String
+  VolumeSizeGiB:
+    Type: Number
+    MinValue: 30
+  ArtifactBucket:
+    Type: String
+    Description: The platform stack's artifact bucket (releases are installed from it)
+  WorkerPort:
+    Type: Number
+    Default: 8943
+  BackupTag:
+    Type: String
+    Description: The platform stack name; its daily snapshot policy selects volumes by this Backup tag
+
+Resources:
+  WorkerSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: KiroCrew ON Worker host - TLS Worker port only from the platform host; admin via SSM
+      VpcId: !Ref VpcId
+      SecurityGroupIngress:
+        - IpProtocol: tcp
+          FromPort: !Ref WorkerPort
+          ToPort: !Ref WorkerPort
+          SourceSecurityGroupId: !Ref PlatformSecurityGroupId
+          Description: Platform to Worker (TLS, private CA, Bearer Worker token)
+      SecurityGroupEgress:
+        - IpProtocol: "-1"
+          CidrIp: 0.0.0.0/0
+          Description: Outbound for SSM, Bedrock, package sources and git
+      Tags: [{Key: Name, Value: !Sub "${AWS::StackName}"}]
+
+  WorkerRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal: {Service: ec2.amazonaws.com}
+            Action: sts:AssumeRole
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/AmazonSSMManagedInstanceCore
+      Policies:
+        - PolicyName: kirocrew-on-worker-host
+          PolicyDocument:
+            Version: "2012-10-17"
+            # No platform secret: every process on this host, the agents included, can use this role.
+            Statement:
+              - Sid: BedrockForCodingTools
+                Effect: Allow
+                Action:
+                  - bedrock:InvokeModel
+                  - bedrock:InvokeModelWithResponseStream
+                  - bedrock:GetInferenceProfile
+                  - bedrock:ListInferenceProfiles
+                  - bedrock:GetFoundationModel
+                  - bedrock:ListFoundationModels
+                Resource: "*"
+              - Sid: BedrockMantleForCodex
+                Effect: Allow
+                Action: [bedrock-mantle:CreateInference]
+                Resource: !Sub "arn:${AWS::Partition}:bedrock-mantle:${AWS::Region}:${AWS::AccountId}:project/*"
+              - Sid: ReadReleases
+                Effect: Allow
+                Action: [s3:GetObject]
+                Resource: !Sub "arn:${AWS::Partition}:s3:::${ArtifactBucket}/releases/*"
+
+  WorkerProfile:
+    Type: AWS::IAM::InstanceProfile
+    Properties:
+      Roles: [!Ref WorkerRole]
+
+  WorkerHost:
+    Type: AWS::EC2::Instance
+    Properties:
+      ImageId: !Ref ImageId
+      InstanceType: !Ref InstanceType
+      SubnetId: !Ref SubnetId
+      IamInstanceProfile: !Ref WorkerProfile
+      SecurityGroupIds: [!Ref WorkerSecurityGroup]
+      MetadataOptions:
+        HttpTokens: required
+        HttpEndpoint: enabled
+      PropagateTagsToVolumeOnCreation: true
+      BlockDeviceMappings:
+        - DeviceName: /dev/xvda
+          Ebs:
+            VolumeType: gp3
+            VolumeSize: !Ref VolumeSizeGiB
+            Encrypted: true
+            DeleteOnTermination: false
+      UserData:
+        Fn::Base64: |
+          #!/bin/bash
+          # Minimal bootstrap; deploy.sh worker-host push installs the Worker host through SSM Run Command.
+          dnf install -y git tar gzip jq unzip
+      Tags:
+        - {Key: Name, Value: !Sub "${AWS::StackName}"}
+        - {Key: Project, Value: kirocrew-on}
+        - {Key: Backup, Value: !Ref BackupTag}
+
+Outputs:
+  InstanceId:
+    Value: !Ref WorkerHost
+  PrivateIp:
+    Value: !GetAtt WorkerHost.PrivateIp

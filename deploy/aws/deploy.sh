@@ -4,7 +4,8 @@
 #   deploy/aws/deploy.sh push          # publish the committed HEAD to S3 and install it on the host via SSM
 #   deploy/aws/deploy.sh status        # stack outputs, SSM ping, https://<cloudfront>/health
 #   deploy/aws/deploy.sh tunnel        # SSM port forwarding to the native KiroCrew entry (localhost:15476)
-#   deploy/aws/deploy.sh kiro-login    # one-time kiro-cli device-flow login as crew-<boundary>
+#   deploy/aws/deploy.sh kiro-login [--host <name>]  # one-time kiro-cli device-flow login as crew-<boundary>
+#   deploy/aws/deploy.sh worker-host <up|push|tls|register|status> <name>  # a dedicated Worker host for Teams (D28)
 #   deploy/aws/deploy.sh space <run-id> [stop]  # run a worker run's project on the host and forward it (local = remote + 10000)
 #   deploy/aws/deploy.sh spaces        # list the run projects running on the host
 #   deploy/aws/deploy.sh admin-password
@@ -15,6 +16,8 @@ cd "$(dirname "$0")/../.."
 # shellcheck source=stack.env
 source deploy/aws/stack.env
 TEMPLATE=deploy/aws/kirocrew-on-ec2.yaml
+WORKER_TEMPLATE=deploy/aws/kirocrew-on-worker.yaml
+WORKER_TLS_PORT="${WORKER_TLS_PORT:-8943}"
 PARAMS="/kirocrew-on/$STACK_NAME"
 DRY="${DEPLOY_DRY_RUN:-}"
 WORK="$(mktemp -d)"
@@ -46,14 +49,46 @@ secret() {  # SecureString under /kirocrew-on/<stack>/<name>; created with a ran
   printf '%s' "$value"
 }
 
-output() {
-  query "<$1>" cloudformation describe-stacks --stack-name "$STACK_NAME" \
+output() {  # output KEY [STACK]
+  query "<$1>" cloudformation describe-stacks --stack-name "${2:-$STACK_NAME}" \
     --query "Stacks[0].Outputs[?OutputKey=='$1'].OutputValue" --output text
+}
+
+change_stack() {  # change_stack STACK TEMPLATE PARAMETERS_FILE CREATE|UPDATE: a change set, refused if it replaces anything
+  local stack=$1 file=$2 parameters=$3 type=$4 change reason replaced
+  change="kirocrew-on-$(date -u +%Y%m%d%H%M%S)"
+  run cloudformation create-change-set --stack-name "$stack" --change-set-name "$change" --change-set-type "$type" \
+    --template-body "file://$file" --capabilities CAPABILITY_IAM --tags Key=Project,Value=kirocrew-on \
+    --parameters "file://$parameters"
+  [ -n "$DRY" ] && return
+  if ! aws --region "$REGION" cloudformation wait change-set-create-complete --stack-name "$stack" \
+      --change-set-name "$change" 2>/dev/null; then
+    reason="$(aws --region "$REGION" cloudformation describe-change-set --stack-name "$stack" --change-set-name "$change" \
+      --query StatusReason --output text)"
+    aws --region "$REGION" cloudformation delete-change-set --stack-name "$stack" --change-set-name "$change" || true
+    case "$reason" in
+      *"didn't contain changes"*|*"No updates are to be performed"*) echo "栈没有需要更新的内容"; return ;;
+    esac
+    echo "变更集创建失败：${reason}" >&2
+    exit 1
+  fi
+  # Replacing a host (or anything it depends on) would strand its data on a detached volume.
+  replaced="$(aws --region "$REGION" cloudformation describe-change-set --stack-name "$stack" --change-set-name "$change" \
+    --query "Changes[?ResourceChange.Replacement=='True' || ResourceChange.Replacement=='Conditional'].ResourceChange.LogicalResourceId" \
+    --output text)"
+  if [ -n "$replaced" ] && [ "$replaced" != "None" ] && [ -z "${ALLOW_REPLACEMENT:-}" ]; then
+    aws --region "$REGION" cloudformation delete-change-set --stack-name "$stack" --change-set-name "$change"
+    echo "变更会替换资源：${replaced}。替换主机会让数据留在旧卷上；确认迁移方案后以 ALLOW_REPLACEMENT=1 重新执行" >&2
+    exit 3
+  fi
+  aws --region "$REGION" cloudformation execute-change-set --stack-name "$stack" --change-set-name "$change"
+  aws --region "$REGION" cloudformation wait "stack-$([ "$type" = CREATE ] && echo create || echo update)-complete" \
+    --stack-name "$stack"
 }
 
 up() {
   run cloudformation validate-template --template-body "file://$TEMPLATE" >/dev/null
-  local status prefix_list zone="${AVAILABILITY_ZONE:-}" image="${IMAGE_ID:-}" current origin change type replaced reason
+  local status prefix_list zone="${AVAILABILITY_ZONE:-}" image="${IMAGE_ID:-}" current origin type
   status="$(query "" cloudformation describe-stacks --stack-name "$STACK_NAME" --query 'Stacks[0].StackStatus' \
     --output text 2>/dev/null || true)"
   prefix_list="$(query pl-dryrun ec2 describe-managed-prefix-lists \
@@ -82,42 +117,16 @@ values = dict(zip(keys, sys.argv[1:]), OriginSecret=os.environ["ORIGIN_VALUE"])
 print(json.dumps([{"ParameterKey": k, "ParameterValue": v} for k, v in values.items()]))
 PY
   )
-  change="kirocrew-on-$(date -u +%Y%m%d%H%M%S)"
   type=UPDATE
   [ -n "$status" ] || type=CREATE
-  run cloudformation create-change-set --stack-name "$STACK_NAME" --change-set-name "$change" --change-set-type "$type" \
-    --template-body "file://$TEMPLATE" --capabilities CAPABILITY_IAM --tags Key=Project,Value=kirocrew-on \
-    --parameters "file://$WORK/parameters.json"
+  change_stack "$STACK_NAME" "$TEMPLATE" "$WORK/parameters.json" "$type"
   [ -n "$DRY" ] && return
-  if ! aws --region "$REGION" cloudformation wait change-set-create-complete --stack-name "$STACK_NAME" \
-      --change-set-name "$change" 2>/dev/null; then
-    reason="$(aws --region "$REGION" cloudformation describe-change-set --stack-name "$STACK_NAME" --change-set-name "$change" \
-      --query StatusReason --output text)"
-    aws --region "$REGION" cloudformation delete-change-set --stack-name "$STACK_NAME" --change-set-name "$change" || true
-    case "$reason" in
-      *"didn't contain changes"*|*"No updates are to be performed"*) echo "栈没有需要更新的内容"; return ;;
-    esac
-    echo "变更集创建失败：${reason}" >&2
-    exit 1
-  fi
-  # Replacing the host (or anything it depends on) would strand the platform data on a detached volume.
-  replaced="$(aws --region "$REGION" cloudformation describe-change-set --stack-name "$STACK_NAME" --change-set-name "$change" \
-    --query "Changes[?ResourceChange.Replacement=='True' || ResourceChange.Replacement=='Conditional'].ResourceChange.LogicalResourceId" \
-    --output text)"
-  if [ -n "$replaced" ] && [ "$replaced" != "None" ] && [ -z "${ALLOW_REPLACEMENT:-}" ]; then
-    aws --region "$REGION" cloudformation delete-change-set --stack-name "$STACK_NAME" --change-set-name "$change"
-    echo "变更会替换资源：${replaced}。替换 Host 会让平台数据留在旧卷上；确认迁移方案后以 ALLOW_REPLACEMENT=1 重新执行" >&2
-    exit 3
-  fi
-  aws --region "$REGION" cloudformation execute-change-set --stack-name "$STACK_NAME" --change-set-name "$change"
-  aws --region "$REGION" cloudformation wait "stack-$([ "$type" = CREATE ] && echo create || echo update)-complete" \
-    --stack-name "$STACK_NAME"
   run cloudformation describe-stacks --stack-name "$STACK_NAME" --query 'Stacks[0].Outputs' --output table
 }
 
 push() {
   [ -z "$(git status --porcelain)" ] || { echo "工作区有未提交改动；push 只发布已提交的 commit" >&2; exit 2; }
-  local sha bucket instance domain native archive command_id status
+  local sha bucket instance domain native archive command_id
   sha="$(git rev-parse HEAD)"
   bucket="$(output ArtifactBucket)"; instance="$(output InstanceId)"; domain="$(output CloudFrontDomain)"
   native="$(output NativeDomain)"
@@ -139,16 +148,21 @@ PY
   command_id="$(query cmd-dryrun ssm send-command --instance-ids "$instance" --document-name AWS-RunShellScript \
     --comment "kirocrew-on $sha" --parameters "file://$WORK/commands.json" --query Command.CommandId --output text)"
   [ -n "$DRY" ] && return
-  echo "SSM 命令 $command_id 已发送，等待安装完成（首次安装约 10–20 分钟）"
+  wait_command "$instance" "$command_id"
+  echo "控制台：https://$domain/"
+}
+
+wait_command() {  # wait_command INSTANCE COMMAND_ID: wait for an install command, print its tail, fail unless it succeeded
+  local status
+  echo "SSM 命令 $2 已发送，等待安装完成（首次安装约 10–20 分钟）"
   while :; do
-    status="$(aws --region "$REGION" ssm get-command-invocation --command-id "$command_id" --instance-id "$instance" \
+    status="$(aws --region "$REGION" ssm get-command-invocation --command-id "$2" --instance-id "$1" \
       --query Status --output text 2>/dev/null || echo Pending)"
     case "$status" in Pending|InProgress|Delayed) sleep 15 ;; *) break ;; esac
   done
-  aws --region "$REGION" ssm get-command-invocation --command-id "$command_id" --instance-id "$instance" \
+  aws --region "$REGION" ssm get-command-invocation --command-id "$2" --instance-id "$1" \
     --query '[StandardOutputContent,StandardErrorContent]' --output text | tail -40
   [ "$status" = "Success" ] || { echo "安装状态：$status" >&2; exit 1; }
-  echo "控制台：https://$domain/"
 }
 
 status() {
@@ -239,17 +253,117 @@ spaces() {
   if [ -n "$DRY" ]; then printf '%s\n' "$script"; else remote "$(output InstanceId)" "$script"; fi
 }
 
+worker_host() {  # worker-host <up|push|tls|register|status> <name>: a dedicated Worker host for Teams (D28)
+  local action="${1:-}" name="${2:-}"
+  [[ "$action" =~ ^(up|push|tls|register|status)$ ]] && [[ "$name" =~ ^[a-z][a-z0-9-]{1,19}$ ]] || {
+    echo "用法：deploy.sh worker-host <up|push|tls|register|status> <名称>；名称为小写字母开头的 2–20 位小写字母、数字或连字符" >&2
+    exit 2; }
+  "worker_$action" "$name" "$STACK_NAME-worker-$name"
+}
+
+worker_up() {  # the Worker host stack in the platform's VPC and subnet, admitted only by the platform host
+  local name=$1 stack=$2 status type
+  run cloudformation validate-template --template-body "file://$WORKER_TEMPLATE" >/dev/null
+  status="$(query "" cloudformation describe-stacks --stack-name "$stack" --query 'Stacks[0].StackStatus' \
+    --output text 2>/dev/null || true)"
+  type=UPDATE
+  [ -n "$status" ] || type=CREATE
+  python3 - "$(output VpcId)" "$(output SubnetId)" "$(output HostSecurityGroupId)" "${IMAGE_ID:-$(output ImageId)}" \
+    "${WORKER_INSTANCE_TYPE:-$INSTANCE_TYPE}" "${WORKER_VOLUME_SIZE_GIB:-$VOLUME_SIZE_GIB}" "$(output ArtifactBucket)" \
+    "$WORKER_TLS_PORT" "$STACK_NAME" > "$WORK/worker-parameters.json" <<'PY'
+import json, sys
+keys = ["VpcId", "SubnetId", "PlatformSecurityGroupId", "ImageId", "InstanceType", "VolumeSizeGiB", "ArtifactBucket",
+        "WorkerPort", "BackupTag"]
+print(json.dumps([{"ParameterKey": k, "ParameterValue": v} for k, v in zip(keys, sys.argv[1:])]))
+PY
+  [ -z "$DRY" ] || cat "$WORK/worker-parameters.json"
+  change_stack "$stack" "$WORKER_TEMPLATE" "$WORK/worker-parameters.json" "$type"
+  [ -n "$DRY" ] || run cloudformation describe-stacks --stack-name "$stack" --query 'Stacks[0].Outputs' --output table
+}
+
+worker_push() {  # the committed HEAD, installed in Worker host mode (WORKER_HOST=1) with one dedicated boundary <name>
+  local name=$1 stack=$2 sha bucket instance archive command_id
+  [ -n "$DRY" ] || [ -z "$(git status --porcelain)" ] || { echo "工作区有未提交改动；只发布已提交的 commit" >&2; exit 2; }
+  sha="$(git rev-parse HEAD)"
+  bucket="$(output ArtifactBucket)"; instance="$(output InstanceId "$stack")"
+  archive="$WORK/kirocrew-on-$sha.tar.gz"
+  git archive --format=tar.gz --prefix="kirocrew-on-$sha/" -o "$archive" HEAD
+  run s3 cp "$archive" "s3://$bucket/releases/$sha.tar.gz" --only-show-errors
+  python3 - "$sha" "$bucket" "$REGION" "$name" "$WORKER_TLS_PORT" > "$WORK/commands.json" <<'PY'
+import json, sys
+sha, bucket, region, name, port = sys.argv[1:]
+d = "/opt/kirocrew-on/incoming"
+script = (f"set -euo pipefail; mkdir -p {d}; aws s3 cp s3://{bucket}/releases/{sha}.tar.gz {d}/{sha}.tar.gz "
+          f"--region {region} --only-show-errors; rm -rf {d}/kirocrew-on-{sha}; tar -xzf {d}/{sha}.tar.gz -C {d}; "
+          f"WORKER_HOST=1 WORKER_TLS_PORT={port} KIROCREW_ON_RELEASE={sha} AWS_REGION={region} "
+          f"bash {d}/kirocrew-on-{sha}/deploy/install/al2023.sh {name}")
+print(json.dumps({"commands": [script], "executionTimeout": ["3600"]}))
+PY
+  [ -z "$DRY" ] || cat "$WORK/commands.json"
+  command_id="$(query cmd-dryrun ssm send-command --instance-ids "$instance" --document-name AWS-RunShellScript \
+    --comment "kirocrew-on worker $name $sha" --parameters "file://$WORK/commands.json" --query Command.CommandId --output text)"
+  [ -n "$DRY" ] && return
+  wait_command "$instance" "$command_id"
+}
+
+worker_tls() {  # the Worker host's key stays on it; the platform's private CA signs its CSR (SAN = private IP)
+  local name=$1 stack=$2 worker platform ip request sign install csr="<CSR>" cert="<certificate>"
+  worker="$(output InstanceId "$stack")"; platform="$(output InstanceId)"; ip="$(output PrivateIp "$stack")"
+  [ -n "$DRY" ] || [[ "$ip" =~ ^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$ ]] || { echo "无法取得 Worker 主机私网地址：$ip" >&2; exit 1; }
+  request="set -euo pipefail; umask 077; K=/etc/kirocrew-on/worker-tls.key; [ -s \$K ] || openssl genrsa -out \$K 3072 2>/dev/null; openssl req -new -key \$K -subj /CN=$name"
+  # The Worker host is a lower-trust boundary: only a well-formed PEM block reaches the root script on the platform.
+  [ -n "$DRY" ] || csr="$(remote "$worker" "$request" | python3 -I deploy/aws/pem.py "CERTIFICATE REQUEST")"
+  sign="set -euo pipefail; umask 077; D=\$(mktemp -d); trap 'rm -rf \$D' EXIT; cat > \$D/request.csr <<'PEM_END'
+$csr
+PEM_END
+printf 'subjectAltName=IP:%s\nextendedKeyUsage=serverAuth\n' $ip > \$D/ext; openssl x509 -req -in \$D/request.csr -CA /etc/kirocrew-on/worker-ca.pem -CAkey /etc/kirocrew-on/worker-ca.key -CAserial /etc/kirocrew-on/worker-ca.srl -CAcreateserial -days 825 -extfile \$D/ext 2>/dev/null"
+  [ -n "$DRY" ] || cert="$(remote "$platform" "$sign" | python3 -I deploy/aws/pem.py CERTIFICATE)"
+  install="set -euo pipefail; cat > /etc/kirocrew-on/worker-tls.crt <<'PEM_END'
+$cert
+PEM_END
+chmod 0644 /etc/kirocrew-on/worker-tls.crt; install -m 0644 /etc/kirocrew-on/nginx-worker.conf /etc/nginx/conf.d/kirocrew-worker.conf; nginx -t -q; systemctl enable nginx >/dev/null; systemctl reload-or-restart nginx; echo 已安装证书"
+  if [ -n "$DRY" ]; then printf '%s\n\n' "$request" "$sign" "$install"; return; fi
+  remote "$worker" "$install"
+  echo "平台经 TLS 访问 Worker（不带 Token，期望 401）：$(remote "$platform" "curl -s -o /dev/null -w '%{http_code}' --cacert /etc/kirocrew-on/worker-ca.pem https://$ip:$WORKER_TLS_PORT/health || true")"
+}
+
+worker_register() {  # register the Worker host as a spare execution environment; an admin assigns it to a Team (D28)
+  local name=$1 stack=$2 worker platform ip token="dry-run-token" script
+  worker="$(output InstanceId "$stack")"; platform="$(output InstanceId)"; ip="$(output PrivateIp "$stack")"
+  [ -n "$DRY" ] || [[ "$ip" =~ ^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$ ]] || { echo "无法取得 Worker 主机私网地址：$ip" >&2; exit 1; }
+  # The token travels in an SSM command, so it stays in the SSM command history (same trade-off as admin-password).
+  [ -n "$DRY" ] || token="$(remote "$worker" "cat /var/lib/octopus/boundaries/$name/worker.token" | tr -d '[:space:]')"
+  [ -n "$DRY" ] || [[ "$token" =~ ^[A-Za-z0-9_-]{32,}$ ]] || { echo "未读到有效的 Worker Token" >&2; exit 1; }
+  script="set -euo pipefail; T=\$(mktemp); trap 'rm -f \$T' EXIT; printf '%s' '$token' > \$T; cd /opt/kirocrew-on/current; OCTOPUS_ADMIN_PASSWORD=\"\$(cat /etc/kirocrew-on/admin-password)\" PYTHONPATH=/opt/kirocrew-on/current /opt/kirocrew-on/venv/bin/python -m octopus --config /etc/kirocrew-on/platform.toml bootstrap-worker --spare --worker-url https://$ip:$WORKER_TLS_PORT --token-file \$T --name $name"
+  if [ -n "$DRY" ]; then printf '%s\n' "${script//$token/****}"; return; fi
+  remote "$platform" "$script"
+}
+
+worker_status() {
+  local name=$1 stack=$2 worker ip
+  run cloudformation describe-stacks --stack-name "$stack" --query 'Stacks[0].[StackStatus,Outputs]' --output json
+  worker="$(output InstanceId "$stack")"; ip="$(output PrivateIp "$stack")"
+  run ssm describe-instance-information --filters "Key=InstanceIds,Values=$worker" \
+    --query 'InstanceInformationList[0].[PingStatus,PlatformName,AgentVersion]' --output text
+  [ -n "$DRY" ] && return
+  echo "平台经 TLS 访问 Worker（不带 Token，期望 401）：$(remote "$(output InstanceId)" "curl -s -o /dev/null -w '%{http_code}' --cacert /etc/kirocrew-on/worker-ca.pem https://$ip:$WORKER_TLS_PORT/health || true")"
+}
+
 kiro_login() {
   # kiro-cli still prompts with every flag set and fails without a terminal (observed on EC2), so the device flow runs
   # under script(1) on the host; two carriage returns accept the remaining prompts. The feeder is a process substitution,
   # so the result is recorded as soon as kiro-cli exits, and every attempt writes its own log.
-  local login="kiro-cli login --use-device-flow" instance shown="" finished=""
+  local login="kiro-cli login --use-device-flow" instance shown="" finished="" boundary="$BOUNDARY" stack="$STACK_NAME"
   local log
-  log="/var/lib/octopus/boundaries/$BOUNDARY/logs/kiro-login-$(date -u +%Y%m%dT%H%M%SZ).log"
+  if [ "${1:-}" = "--host" ]; then   # a Worker host (D28): its boundary carries the host's name
+    [[ "${2:-}" =~ ^[a-z][a-z0-9-]{1,19}$ ]] || { echo "用法：deploy.sh kiro-login [--host <Worker 主机名称>]" >&2; exit 2; }
+    boundary="$2"; stack="$STACK_NAME-worker-$2"
+  fi
+  log="/var/lib/octopus/boundaries/$boundary/logs/kiro-login-$(date -u +%Y%m%dT%H%M%SZ).log"
   [ -z "${KIRO_LICENSE:-}" ] || login="$login --license $KIRO_LICENSE"
   [ -z "${KIRO_IDC_START_URL:-}" ] || login="$login --identity-provider $KIRO_IDC_START_URL --region ${KIRO_IDC_REGION:-$REGION}"
-  instance="$(output InstanceId)"
-  python3 - "crew-$BOUNDARY" "$login" "$log" > "$WORK/login.json" <<'PY'
+  instance="$(output InstanceId "$stack")"
+  python3 - "crew-$boundary" "$login" "$log" > "$WORK/login.json" <<'PY'
 import json, shlex, sys
 user, login, log = sys.argv[1:]
 inner = (f"script -q -f -c {shlex.quote(login)} {shlex.quote(log)} "
@@ -273,7 +387,7 @@ PY
     finished="$(remote "$instance" "grep -ao 'exit=[0-9]*' $log || true")"
     [ -z "$finished" ] || break
   done
-  remote "$instance" "sudo -iu crew-$BOUNDARY kiro-cli whoami 2>&1 | head -1"
+  remote "$instance" "sudo -iu crew-$boundary kiro-cli whoami 2>&1 | head -1"
   [ "$finished" = "exit=0" ] || { echo "kiro-cli login 结束状态：${finished:-超时}" >&2; exit 1; }
 }
 
@@ -299,10 +413,11 @@ case "${1:-}" in
   push) push ;;
   status) status ;;
   tunnel) tunnel ;;
-  kiro-login) kiro_login ;;
+  kiro-login) kiro_login "${2:-}" "${3:-}" ;;
+  worker-host) worker_host "${2:-}" "${3:-}" ;;
   space) space "${2:-}" "${3:-}" ;;
   spaces) spaces ;;
   admin-password) admin_password ;;
   down) down "${2:-}" ;;
-  *) sed -n '2,12p' "$0"; exit 2 ;;
+  *) sed -n '2,13p' "$0"; exit 2 ;;
 esac

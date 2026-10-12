@@ -7,6 +7,8 @@ api_port = 8918
 # 安装脚本写入 CloudFront 分发域名，例如 ["d111111abcdef8.cloudfront.net"]
 allowed_hosts = []
 origin_secret_file = "/etc/kirocrew-on/origin-secret"
+# 私有 CA：签发独立 Worker 主机的 TLS 证书，平台访问 HTTPS Worker 时只信任它（al2023.sh 首次安装时生成）
+worker_ca_file = "/etc/kirocrew-on/worker-ca.pem"
 engine_workers = 4
 retry_unavailable = 2.0
 shutdown_grace = 30.0

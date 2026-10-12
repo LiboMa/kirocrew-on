@@ -4,7 +4,10 @@
 #   AWS_REGION=us-east-1 bash <release>/deploy/install/al2023.sh <boundary>
 # Writes no tool credentials: Claude Code and Codex use Amazon Bedrock through the instance role; kiro-cli needs a
 # one-time device-flow login as crew-<boundary> (docs/OPERATIONS.md). Every download is pinned or checksum-verified.
+# WORKER_HOST=1: a Worker host for Teams (D28) — KiroCrew, the tools and one dedicated boundary fronted by TLS; no
+# platform API, admin or native entry. deploy.sh worker-host then signs its certificate and registers it as spare.
 set -euo pipefail
+WORKER_HOST="${WORKER_HOST:-}"
 BOUNDARY="${1:?用法: al2023.sh <边界名，如 personal>}"
 [[ "$BOUNDARY" =~ ^[a-z][a-z0-9-]{1,30}$ ]] || { echo "边界名只允许小写字母、数字和连字符" >&2; exit 2; }
 [ "$(id -u)" -eq 0 ] || { echo "需要 root" >&2; exit 2; }
@@ -64,14 +67,18 @@ log "node $(node --version)"
 log "OS 用户与目录"
 # useradd does not create missing parents of --home-dir.
 install -d -m 0755 /var/lib/octopus /var/lib/octopus/boundaries
-id octopus >/dev/null 2>&1 || useradd --system --home-dir /var/lib/octopus/platform --shell /sbin/nologin octopus
+if [ -z "$WORKER_HOST" ]; then
+  # platform:begin
+  id octopus >/dev/null 2>&1 || useradd --system --home-dir /var/lib/octopus/platform --shell /sbin/nologin octopus
+  install -d -m 0700 -o octopus -g octopus /var/lib/octopus/platform
+  install -d -m 0750 -o octopus -g octopus /var/log/kirocrew-on
+  # platform:end
+fi
 CREW="crew-$BOUNDARY"
 BASE="/var/lib/octopus/boundaries/$BOUNDARY"
 install -d -m 0700 "$BASE"
 id "$CREW" >/dev/null 2>&1 || useradd --system --home-dir "$BASE/home" --shell /bin/bash "$CREW"
 chown "$CREW:$CREW" "$BASE"
-install -d -m 0700 -o octopus -g octopus /var/lib/octopus/platform
-install -d -m 0750 -o octopus -g octopus /var/log/kirocrew-on
 install -d -m 0700 -o "$CREW" -g "$CREW" "$BASE/home" "$BASE/worker" "$BASE/crew" "$BASE/kiro" "$BASE/logs"
 install -d -m 0755 /etc/kirocrew-on /opt/kirocrew-on/releases /opt/kirocrew /opt/kirocrew-tools
 
@@ -82,7 +89,7 @@ if [ ! -f "$TARGET/.installed" ]; then
   cp -a "$SOURCE" "$TARGET"
   (cd "$TARGET" && npm ci --omit=dev --no-audit --no-fund)
   # React console: built on the host into octopus/ui/dist (the repository carries sources and the lockfile only).
-  (cd "$TARGET/web" && npm ci --no-audit --no-fund && npm run build)
+  [ -n "$WORKER_HOST" ] || (cd "$TARGET/web" && npm ci --no-audit --no-fund && npm run build)
   touch "$TARGET/.installed"
 fi
 [ -x /opt/kirocrew-on/venv/bin/python ] || "$PYTHON" -m venv /opt/kirocrew-on/venv
@@ -155,6 +162,8 @@ if [ ! -f "$BASE/home/.codex/config.toml" ]; then
 fi
 
 log "平台与边界配置"
+if [ -z "$WORKER_HOST" ]; then
+  # platform:begin
 if [ -n "${ORIGIN_SECRET_PARAM:-}" ]; then
   # Fetched beside the live file: a failed or empty fetch must never leave the API without its secret.
   umask 027
@@ -173,12 +182,39 @@ fi
 if [ -n "${CF_DOMAIN:-}" ]; then
   merge_hosts /etc/kirocrew-on/platform.toml "$CF_DOMAIN" localhost:18918
 fi
+# Private CA for Worker hosts (D28): the key never leaves this host (root 0600); the platform trusts only its certificate.
+if [ ! -s /etc/kirocrew-on/worker-ca.key ]; then
+  ( umask 077; openssl req -x509 -newkey rsa:3072 -nodes -days 3650 -subj "/CN=KiroCrew ON Worker CA" \
+      -keyout /etc/kirocrew-on/worker-ca.key -out /etc/kirocrew-on/worker-ca.pem 2>/dev/null )
+fi
+chmod 0600 /etc/kirocrew-on/worker-ca.key
+chmod 0644 /etc/kirocrew-on/worker-ca.pem
+  # platform:end
+fi
 BOUNDARY_TOML="/etc/kirocrew-on/boundary-$BOUNDARY.toml"
 if [ ! -f "$BOUNDARY_TOML" ]; then
   sed "s#/boundaries/personal/#/boundaries/$BOUNDARY/#g" \
     "$TARGET/deploy/config/boundary.toml.example" > "$BOUNDARY_TOML"
   chown "root:$CREW" "$BOUNDARY_TOML"
   chmod 0640 "$BOUNDARY_TOML"
+fi
+if [ -n "$WORKER_HOST" ]; then
+  log "Worker 主机：专属边界，nginx 以 TLS 端口 ${WORKER_TLS_PORT:=8943} 转发回环 Worker"
+  toml_set "$BOUNDARY_TOML" worker_isolation '"dedicated"'
+  WORKER_PORT="$(grep -E '^worker_port' "$BOUNDARY_TOML" | grep -oE '[0-9]+')"
+  sed -e "s#__WORKER_TLS_PORT__#$WORKER_TLS_PORT#g" -e "s#__WORKER_PORT__#$WORKER_PORT#g" \
+    "$TARGET/deploy/nginx/kirocrew-worker.conf" > /etc/kirocrew-on/nginx-worker.conf
+  if command -v getenforce >/dev/null 2>&1 && [ "$(getenforce)" = Enforcing ]; then
+    setsebool -P httpd_can_network_connect 1
+    semanage port -a -t http_port_t -p tcp "$WORKER_TLS_PORT" 2>/dev/null || semanage port -m -t http_port_t -p tcp "$WORKER_TLS_PORT"
+  fi
+  # Loaded once deploy.sh worker-host tls has installed the certificate; until then nginx -t would fail.
+  if [ -s /etc/kirocrew-on/worker-tls.crt ]; then
+    install -m 0644 /etc/kirocrew-on/nginx-worker.conf /etc/nginx/conf.d/kirocrew-worker.conf
+    nginx -t -q
+    systemctl enable nginx >/dev/null
+    systemctl reload-or-restart nginx
+  fi
 fi
 
 if [ -n "${NATIVE_DOMAIN:-}" ]; then
@@ -227,6 +263,10 @@ log "切换到已通过检查的发布 $RELEASE 与 KiroCrew $KIROCREW_VERSION"
 ln -sfn "$TARGET" /opt/kirocrew-on/current
 ln -sfn "$KC" /opt/kirocrew/current
 
+if [ -z "$WORKER_HOST" ]; then
+  # platform:begin
+# After the switch: a release before worker_ca_file would refuse to load platform.toml with the key (unknown keys fail).
+toml_set /etc/kirocrew-on/platform.toml worker_ca_file '"/etc/kirocrew-on/worker-ca.pem"'
 OCTO=(/opt/kirocrew-on/venv/bin/python -m octopus --config /etc/kirocrew-on/platform.toml)
 log "平台管理员（首次初始化；已有用户时跳过）"
 # Generated here and readable by root only: the instance role (usable by every process on the host, the execution
@@ -254,17 +294,28 @@ if ! INIT_OUT="$(cd /opt/kirocrew-on/current && runuser -u octopus -- env PYTHON
     *) echo "$INIT_OUT" >&2; exit 4 ;;
   esac
 fi
+  # platform:end
+fi
 
 log "systemd"
 install -m 0644 /opt/kirocrew-on/current/deploy/systemd/*.service /etc/systemd/system/
 systemctl daemon-reload
-systemctl enable "octopus-gateway@$BOUNDARY" "octopus-worker@$BOUNDARY" octopus-api >/dev/null
+systemctl enable "octopus-gateway@$BOUNDARY" "octopus-worker@$BOUNDARY" >/dev/null
 systemctl restart "octopus-gateway@$BOUNDARY"
 systemctl restart "octopus-worker@$BOUNDARY"
+if [ -z "$WORKER_HOST" ]; then
+  # platform:begin
+systemctl enable octopus-api >/dev/null
 systemctl restart octopus-api
 log "注册执行边界 Worker（已注册时跳过）"
 WORKER_PORT="$(grep -E '^worker_port' "$BOUNDARY_TOML" | grep -oE '[0-9]+')"
 (cd /opt/kirocrew-on/current && env PYTHONPATH=/opt/kirocrew-on/current OCTOPUS_ADMIN_PASSWORD="$ADMIN_PASSWORD" \
   "${OCTO[@]}" bootstrap-worker --worker-url "http://127.0.0.1:$WORKER_PORT" \
   --token-file "$BASE/worker.token" --name "$BOUNDARY")
-log "完成：KiroCrew ON $RELEASE，KiroCrew $KIROCREW_VERSION；kiro-cli 首次使用前需以 $CREW 登录（docs/OPERATIONS.md）"
+  # platform:end
+fi
+if [ -n "$WORKER_HOST" ]; then
+  log "完成：Worker 主机 $BOUNDARY（KiroCrew $KIROCREW_VERSION）；下一步 deploy.sh worker-host tls / register，并以 $CREW 登录 kiro-cli"
+else
+  log "完成：KiroCrew ON $RELEASE，KiroCrew $KIROCREW_VERSION；kiro-cli 首次使用前需以 $CREW 登录（docs/OPERATIONS.md）"
+fi

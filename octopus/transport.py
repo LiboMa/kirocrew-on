@@ -1,5 +1,6 @@
 """Authenticated platform-to-worker transport; Worker tokens stay server-side."""
 import json
+import ssl
 import urllib.error
 import urllib.request
 from urllib.parse import urlsplit
@@ -8,13 +9,22 @@ from .db import dumps
 from .security import Error, require
 
 
+_context = None
+
+
+def configure(ca_file):
+    """Trust only this CA for HTTPS Workers (the platform's private CA, D28); None restores the system trust store."""
+    global _context
+    _context = ssl.create_default_context(cafile=str(ca_file)) if ca_file else None
+
+
 def worker_request(config, path, body=None, timeout=35):
     url = config["url"].rstrip("/") + path
     request = urllib.request.Request(url, data=dumps(body).encode() if body is not None else None,
                                      headers={"Authorization": "Bearer " + config["token"],
                                               "Content-Type": "application/json"})
     try:
-        with urllib.request.urlopen(request, timeout=timeout) as response:
+        with urllib.request.urlopen(request, timeout=timeout, context=_context) as response:
             return json.load(response)
     except urllib.error.HTTPError as exc:
         with exc:
@@ -24,6 +34,9 @@ def worker_request(config, path, body=None, timeout=35):
                 data = {}
         raise Error(exc.code, data.get("code", "worker_error"), data.get("error", "Worker 请求失败")) from None
     except (OSError, ValueError) as exc:
+        reason = exc.reason if isinstance(exc, urllib.error.URLError) else exc
+        if isinstance(reason, ssl.SSLError):
+            raise Error(503, "worker_unavailable", "Worker TLS 证书校验失败（未受信任的 CA 或地址不匹配）") from exc
         raise Error(503, "worker_unavailable", "Worker 未返回可核实回执") from exc
 
 

@@ -184,6 +184,95 @@ class ScriptTests(unittest.TestCase):
         self.assertIn("npm --prefix web run build", regress)
         self.assertTrue((ROOT / "web/package-lock.json").is_file(), "the console build is pinned by its lockfile")
 
+    def test_worker_host_mode_skips_the_platform_and_fronts_the_worker_with_tls(self):
+        # WORKER_HOST=1 installs KiroCrew, the tools and one dedicated boundary; the platform is installed elsewhere.
+        lines = (ROOT / "deploy/install/al2023.sh").read_text().splitlines()
+        inside, regions = False, 0
+        for number, line in enumerate(lines, 1):
+            if line.strip() == "# platform:begin":
+                self.assertEqual(lines[number - 2].strip(), 'if [ -z "$WORKER_HOST" ]; then', f"line {number}")
+                inside, regions = True, regions + 1
+            elif line.strip() == "# platform:end":
+                inside = False
+            elif not inside and not line.lstrip().startswith("#"):
+                code = line.split(" # ")[0]   # trailing comments may name platform files
+                for platform_only in ("octopus-api", "bootstrap-worker", "ADMIN_FILE", "ORIGIN_SECRET_PARAM",
+                                      "platform.toml", "worker-ca.key"):
+                    self.assertNotIn(platform_only, code, f"al2023.sh:{number} runs outside a platform-only region")
+        self.assertGreaterEqual(regions, 3)
+        text = "\n".join(lines)
+        self.assertIn('WORKER_HOST="${WORKER_HOST:-}"', text)
+        self.assertIn('toml_set "$BOUNDARY_TOML" worker_isolation \'"dedicated"\'', text)
+        self.assertIn("deploy/nginx/kirocrew-worker.conf", text)
+        self.assertIn("openssl req -x509", text)
+        self.assertIn("chmod 0600 /etc/kirocrew-on/worker-ca.key", text)
+        self.assertIn('toml_set /etc/kirocrew-on/platform.toml worker_ca_file \'"/etc/kirocrew-on/worker-ca.pem"\'', text)
+        # Written only after the release switch: the old release rejects the unknown key if the contract check fails.
+        self.assertGreater(text.index("toml_set /etc/kirocrew-on/platform.toml worker_ca_file"),
+                           text.index('ln -sfn "$TARGET" /opt/kirocrew-on/current'))
+        nginx = (ROOT / "deploy/nginx/kirocrew-worker.conf").read_text()
+        for part in ("listen __WORKER_TLS_PORT__ ssl;", "ssl_certificate /etc/kirocrew-on/worker-tls.crt;",
+                     "ssl_certificate_key /etc/kirocrew-on/worker-tls.key;", "proxy_pass http://127.0.0.1:__WORKER_PORT__;"):
+            self.assertIn(part, nginx)
+
+    def test_worker_host_template_admits_only_the_platform(self):
+        worker = yaml.load((ROOT / "deploy/aws/kirocrew-on-worker.yaml").read_text(), Loader=CfnLoader)
+        resources = worker["Resources"]
+        ingress = resources["WorkerSecurityGroup"]["Properties"]["SecurityGroupIngress"]
+        self.assertEqual(len(ingress), 1)
+        self.assertEqual(ingress[0]["SourceSecurityGroupId"], {"Ref": "PlatformSecurityGroupId"})
+        self.assertEqual((ingress[0]["FromPort"], ingress[0]["ToPort"]), ({"Ref": "WorkerPort"}, {"Ref": "WorkerPort"}))
+        host = resources["WorkerHost"]["Properties"]
+        self.assertEqual(host["MetadataOptions"]["HttpTokens"], "required")
+        ebs = host["BlockDeviceMappings"][0]["Ebs"]
+        self.assertTrue(ebs["Encrypted"])
+        self.assertFalse(ebs["DeleteOnTermination"])
+        self.assertIn({"Key": "Backup", "Value": {"Ref": "BackupTag"}}, host["Tags"])
+        role = resources["WorkerRole"]["Properties"]
+        self.assertIn("arn:aws:iam::aws:policy/AmazonSSMManagedInstanceCore", role["ManagedPolicyArns"])
+        statements = role["Policies"][0]["PolicyDocument"]["Statement"]
+        actions = {action for statement in statements for action in statement["Action"]}
+        self.assertNotIn("ssm:GetParameter", actions)       # a Worker host reads no platform secret
+        self.assertIn("s3:GetObject", actions)
+        self.assertEqual(set(worker["Outputs"]), {"InstanceId", "PrivateIp"})
+
+    def test_platform_template_exports_its_network_without_touching_the_host_security_group(self):
+        outputs = template()["Outputs"]
+        for key in ("VpcId", "SubnetId", "HostSecurityGroupId", "ImageId"):
+            self.assertIn(key, outputs)
+        head = subprocess.run(["git", "show", "HEAD:deploy/aws/kirocrew-on-ec2.yaml"], cwd=ROOT, check=True,
+                              capture_output=True, text=True).stdout
+        self.assertEqual(template()["Resources"]["HostSecurityGroup"],
+                         yaml.load(head, Loader=CfnLoader)["Resources"]["HostSecurityGroup"])
+
+    def test_worker_host_commands(self):
+        env = {**os.environ, "DEPLOY_DRY_RUN": "1"}
+        deploy = lambda *args: subprocess.run(["bash", str(ROOT / "deploy/aws/deploy.sh"), *args], cwd=ROOT, env=env,
+                                              capture_output=True, text=True)
+        up = deploy("worker-host", "up", "w1")
+        self.assertEqual(up.returncode, 0, up.stderr)
+        for part in ("kirocrew-on-worker.yaml", "kirocrew-on-m1-worker-w1", "create-change-set", "PlatformSecurityGroupId",
+                     "BackupTag"):
+            self.assertIn(part, up.stdout + up.stderr)
+        push = deploy("worker-host", "push", "w1")
+        self.assertEqual(push.returncode, 0, push.stderr)
+        self.assertIn("WORKER_HOST=1", push.stdout)
+        self.assertIn("al2023.sh w1", push.stdout)
+        tls = deploy("worker-host", "tls", "w1")
+        self.assertEqual(tls.returncode, 0, tls.stderr)
+        for part in ("openssl req -new", "subjectAltName=IP:", "worker-ca.key", "kirocrew-worker.conf"):
+            self.assertIn(part, tls.stdout)
+        register = deploy("worker-host", "register", "w1")
+        self.assertEqual(register.returncode, 0, register.stderr)
+        self.assertIn("bootstrap-worker --spare", register.stdout)
+        self.assertIn("--worker-url https://", register.stdout)
+        login = deploy("kiro-login", "--host", "w1")
+        self.assertEqual(login.returncode, 0, login.stderr)
+        self.assertIn("crew-w1", login.stdout + login.stderr)
+        self.assertIn("kirocrew-on-m1-worker-w1", login.stdout + login.stderr)
+        self.assertEqual(deploy("worker-host", "bogus", "w1").returncode, 2)
+        self.assertEqual(deploy("worker-host", "up", "W1;reboot").returncode, 2)
+
     def test_versions_file_declares_every_pin(self):
         values = dict(line.split("=", 1) for line in (ROOT / "deploy/versions.env").read_text().splitlines()
                       if line and not line.startswith("#"))
@@ -245,6 +334,7 @@ class ScriptTests(unittest.TestCase):
         self.assertEqual(platform.data_dir, Path("/var/lib/octopus/platform"))
         self.assertEqual(platform.api_host, "0.0.0.0")
         self.assertEqual(platform.origin_secret_file, Path("/etc/kirocrew-on/origin-secret"))
+        self.assertEqual(platform.worker_ca_file, Path("/etc/kirocrew-on/worker-ca.pem"))
         boundary = load(ROOT / "deploy/config/boundary.toml.example", environ={"HOME": "/tmp"}, cwd="/tmp")
         self.assertEqual(boundary.worker_data_dir, Path("/var/lib/octopus/boundaries/personal/worker"))
         self.assertEqual(boundary.approval_mode, "auto")

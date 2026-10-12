@@ -384,3 +384,13 @@ Outputs:
     Value: !Ref ArtifactBucket
   ApiPort:
     Value: !Ref ApiPort
+  # Read by the Worker host stacks (deploy/aws/kirocrew-on-worker.yaml, D28): same VPC and subnet, admitted by this
+  # host's security group, same pinned image. Outputs only; no resource changes.
+  VpcId:
+    Value: !Ref Vpc
+  SubnetId:
+    Value: !Ref PublicSubnet
+  HostSecurityGroupId:
+    Value: !GetAtt HostSecurityGroup.GroupId
+  ImageId:
+    Value: !Ref ImageId

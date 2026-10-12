@@ -78,6 +78,7 @@ def build_parser(settings, environ=None):
     boot.add_argument("--worker-url", required=True)
     boot.add_argument("--token-file", required=True)
     boot.add_argument("--name", required=True)
+    boot.add_argument("--spare", action="store_true", help="登记为空闲专属执行环境，由管理员在控制台分配给 Team")
     backup_cmd = sub.add_parser("backup", help="平台数据库一致性备份")
     backup_cmd.add_argument("--dest", required=True)
     archive = sub.add_parser("archive", help="目录归档（Worker 数据、执行边界）")
@@ -120,6 +121,13 @@ def main(argv=None):
         db = Database(args.data)
         engine = Engine(db, workers=settings.engine_workers, retry_unavailable=settings.retry_unavailable)
         secret = settings.origin_secret_file.read_text().strip() if settings.origin_secret_file else None
+        from . import transport
+        ca = settings.worker_ca_file
+        if ca and not ca.is_file():
+            # Fail closed without taking the API down: Worker hosts signed by the private CA stay unreachable.
+            print(f"警告：worker_ca_file {ca} 不存在；HTTPS Worker 只按系统证书库校验", file=sys.stderr)
+            ca = None
+        transport.configure(ca)
         httpd = server(db, args.port, args.host, allowed_hosts=settings.allowed_hosts, origin_secret=secret)
         signal.signal(signal.SIGTERM, lambda *_: threading.Thread(target=httpd.shutdown, daemon=True).start())
         engine.start()
@@ -173,7 +181,7 @@ def main(argv=None):
         from .bootstrap import register_boundary_worker
         url = f"http://{probe_host(settings.api_host)}:{settings.api_port}"
         print(dumps(register_boundary_worker(url, args.username, os.environ[args.password_env], args.worker_url,
-                                             Path(args.token_file).read_text().strip(), args.name)))
+                                             Path(args.token_file).read_text().strip(), args.name, spare=args.spare)))
     elif args.command == "backup":
         from .backup import backup_database
         print(dumps(backup_database(settings.data_dir / "octopus.sqlite3", Path(args.dest))))
