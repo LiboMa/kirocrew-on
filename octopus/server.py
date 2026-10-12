@@ -164,7 +164,13 @@ def server(database, port=8918, host="127.0.0.1", allowed_hosts=(), origin_secre
         def identity(self):
             header = self.headers.get("Authorization", "")
             with database.read() as db:
-                return authenticate(db, header.removeprefix("Bearer ") if header.startswith("Bearer ") else "")
+                actor = authenticate(db, header.removeprefix("Bearer ") if header.startswith("Bearer ") else "")
+            now = time.time()
+            if actor["last_used"] is None or now - actor["last_used"] >= 60:
+                # At most one write a minute per token, in its own short transaction: reads stay reads.
+                with database.transaction() as db:
+                    db.execute("UPDATE tokens SET last_used=? WHERE id=?", (now, actor["token_id"]))
+            return actor
 
         def do_GET(self):
             self.dispatch("GET")
@@ -190,13 +196,15 @@ def server(database, port=8918, host="127.0.0.1", allowed_hosts=(), origin_secre
                 path, query = url.path, parse_qs(url.query)
                 body = {}
                 if method != "GET":
-                    require(self.headers.get("Content-Type", "").split(";")[0] == "application/json", "需要 application/json")
                     origin = self.headers.get("Origin")
                     require(not origin or urlsplit(origin).netloc == self.headers.get("Host"), "跨站写入被拒绝", 403, "origin")
                     size = int(self.headers.get("Content-Length", "0"))
-                    require(0 < size <= 1_000_000, "请求体过大或为空")
-                    body = json.loads(self.rfile.read(size))
-                    require(isinstance(body, dict), "请求体必须是对象")
+                    # A cross-site DELETE always needs a CORS preflight, so it may come without a JSON body.
+                    if not (method == "DELETE" and size == 0):
+                        require(self.headers.get("Content-Type", "").split(";")[0] == "application/json", "需要 application/json")
+                        require(0 < size <= 1_000_000, "请求体过大或为空")
+                        body = json.loads(self.rfile.read(size))
+                        require(isinstance(body, dict), "请求体必须是对象")
                 if method == "GET" and (static := console_file(path)):
                     file, kind = static
                     return self.respond(file.read_bytes(), kind=kind)
@@ -244,7 +252,7 @@ def server(database, port=8918, host="127.0.0.1", allowed_hosts=(), origin_secre
                 segments = path.strip("/").split("/")
                 if path == "/v1/me":
                     require(method == "GET", "Method not allowed", 405)
-                    return self.respond({k: v for k, v in actor.items() if k != "token_id"})
+                    return self.respond({k: v for k, v in actor.items() if k not in {"token_id", "last_used"}})
                 if path == "/v1/users":
                     with database.transaction() as db:
                         if method == "POST":
@@ -270,7 +278,8 @@ def server(database, port=8918, host="127.0.0.1", allowed_hosts=(), origin_secre
                             require(isinstance(requested, list) and set(requested) <= set(actor["scopes"]), "不能扩大 Token scope", 403, "forbidden")
                             return self.respond(issue_token(db, actor["id"], requested, body.get("label", "API"), body.get("ttl", 86400)), 201)
                         return self.respond([dict(r) for r in db.execute(
-                            "SELECT id,label,scopes,expires FROM tokens WHERE user_id=?", (actor["id"],))])
+                            "SELECT id,label,scopes,expires,last_used FROM tokens WHERE user_id=? AND expires>? "
+                            "ORDER BY expires DESC", (actor["id"], time.time()))])
                 if len(segments) == 3 and segments[:2] == ["v1", "tokens"] and method == "DELETE":
                     with database.transaction() as db:
                         db.execute("DELETE FROM tokens WHERE id=? AND user_id=?", (segments[2], actor["id"]))

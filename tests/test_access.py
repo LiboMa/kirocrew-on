@@ -326,5 +326,47 @@ class UserLifecycleTests(AccessCase):
             self.assertEqual(call("DELETE", f"/v1/admin/users/{self.b['id']}/tokens/{target['id']}", self.tokens["alice"], {})[0], 404)
         self.assertIn(("user.revoke_token", self.b["id"]), [(e["action"], e["target"]) for e in self.service.audit_log(self.a)])
 
+class TokenTests(AccessCase):
+    def last_used(self, name="bob"):
+        with self.db.read() as db:
+            return db.execute("SELECT last_used FROM tokens WHERE user_id=? AND label='API'",
+                              (self.users[name]["id"],)).fetchone()[0]
+
+    def test_last_used_is_written_at_most_once_a_minute(self):
+        import time
+        from unittest.mock import patch
+        start = time.time()
+        with self.http() as call:
+            with patch("octopus.server.time.time", return_value=start):
+                self.assertEqual(call("GET", "/v1/me", self.tokens["bob"])[0], 200)
+            self.assertEqual(self.last_used(), start)
+            with patch("octopus.server.time.time", return_value=start + 30):
+                call("GET", "/v1/me", self.tokens["bob"])
+            self.assertEqual(self.last_used(), start)
+            with patch("octopus.server.time.time", return_value=start + 61):
+                status, me = call("GET", "/v1/me", self.tokens["bob"])
+            self.assertEqual(self.last_used(), start + 61)
+            self.assertNotIn("last_used", me)
+
+    def test_token_list_hides_expired_and_shows_last_used(self):
+        stale = self.token("bob", ["read"])
+        with self.db.transaction() as db:
+            db.execute("UPDATE tokens SET expires=1 WHERE user_id=? AND scopes=?", (self.b["id"], '["read"]'))
+        with self.http() as call:
+            status, tokens = call("GET", "/v1/tokens", self.tokens["bob"])
+            self.assertEqual(status, 200)
+            self.assertEqual(len(tokens), 1)
+            self.assertIn("last_used", tokens[0])
+            self.assertEqual(call("GET", "/v1/me", stale)[0], 401)
+
+    def test_delete_needs_no_body(self):
+        spare = self.token("bob", ["read"])
+        with self.db.read() as db:
+            tid = db.execute("SELECT id FROM tokens WHERE user_id=? AND scopes=?", (self.b["id"], '["read"]')).fetchone()[0]
+        with self.http() as call:
+            status, result = call("DELETE", f"/v1/tokens/{tid}", self.tokens["bob"])
+            self.assertEqual((status, result), (200, {"ok": True}))
+            self.assertEqual(call("GET", "/v1/me", spare)[0], 401)
+
 if __name__ == "__main__":
     unittest.main()
