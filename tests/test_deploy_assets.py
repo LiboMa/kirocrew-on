@@ -521,6 +521,8 @@ class ScriptTests(unittest.TestCase):
         self.assertIn("error_log /var/log/nginx/kirocrew-relay/__WORKER_NAME__.error.log;", relay)
         self.assertIn("access_log /var/log/nginx/kirocrew-relay/__WORKER_NAME__.access.log kirocrew_native;", relay)
         self.assertIn("install -d -m 0700 /var/log/nginx/kirocrew-relay", printed)
+        # Observed on EC2: right after systemctl reload the new port was not listening yet, so the check read HTTP 000.
+        self.assertLess(printed.index('ss -Hltn "sport = :$PORT"'), printed.index("curl -s -o /dev/null"))
 
     def test_space_runs_a_worker_project_on_the_host_and_forwards_it_to_localhost(self):
         run = "run-" + "0123456789abcdef" * 2

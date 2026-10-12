@@ -432,6 +432,8 @@ if command -v getenforce >/dev/null 2>&1 && [ "$(getenforce)" = Enforcing ]; the
 fi
 nginx -t -q || { rm -f "$CONF"; exit 1; }
 systemctl reload nginx
+# reload returns before the new port listens.
+for _ in $(seq 1 20); do ss -Hltn "sport = :$PORT" | grep -q . && break; sleep 0.5; done
 H="$(mktemp)"; trap 'rm -f "$H"' EXIT
 printf 'X-Origin-Verify: %s\n' "$(tr -d '[:space:]' < /etc/kirocrew-on/origin-secret)" > "$H"
 code="$(curl -s -o /dev/null -w '%{http_code}' -H @"$H" "http://127.0.0.1:$PORT/" || true)"

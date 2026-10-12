@@ -69,6 +69,30 @@ class BootstrapTests(unittest.TestCase):
         self.assertEqual((config["url"], config["token"], config["capabilities"]["boundary"]),
                          ("https://10.0.0.7:8943", "n" * 40, "b-new"))
 
+    def test_re_registering_a_worker_host_an_admin_has_shared_updates_it(self):
+        # Observed on EC2: w1 had been shared from the console, and worker-host register then tried to create it (409).
+        health = {"isolation": "dedicated", "boundary": "b-spare", "host_principal": "elsewhere"}
+        with patch("octopus.server.validate_worker", return_value=health):
+            first = register_boundary_worker(self.api_url, "admin", PASSWORD, "https://10.0.0.9:8943", self.token, "w1",
+                                             spare=True)
+            with self.db.transaction() as c:
+                c.execute("UPDATE workers SET scope='shared' WHERE id=?", (first["id"],))
+            again = register_boundary_worker(self.api_url, "admin", PASSWORD, "https://10.0.0.9:8943", self.token, "w1",
+                                             spare=True)
+        self.assertEqual((again["id"], again["created"], again["updated"]), (first["id"], False, True))
+
+    def test_spare_registration_never_rewires_a_platform_worker_of_the_same_name(self):
+        local = register_boundary_worker(self.api_url, "admin", PASSWORD, self.worker_url, self.token, "personal")
+        health = {"isolation": "dedicated", "boundary": "b-host", "host_principal": "elsewhere"}
+        with patch("octopus.server.validate_worker", return_value=health):
+            host = register_boundary_worker(self.api_url, "admin", PASSWORD, "https://10.0.0.9:8943", "h" * 40,
+                                            "personal", spare=True)
+        self.assertTrue(host["created"])
+        self.assertNotEqual(host["id"], local["id"])
+        with self.db.read() as c:
+            self.assertEqual(json.loads(c.execute("SELECT config FROM workers WHERE id=?", (local["id"],)).fetchone()[0])
+                             ["url"], self.worker_url)
+
     def test_wrong_password_fails_loudly(self):
         with self.assertRaises(RuntimeError):
             register_boundary_worker(self.api_url, "admin", "wrong-password-xx", self.worker_url, self.token, "personal")

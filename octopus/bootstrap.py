@@ -11,8 +11,9 @@ def register_boundary_worker(api_url, username, password, worker_url, worker_tok
     try:
         me = client.request("GET", "/v1/me")
         for worker in client.request("GET", "/v1/workers"):
-            # A spare Worker keeps its name once an admin assigns it to a Team (scope becomes dedicated).
-            if worker["name"] == name and (worker.get("scope") in {"spare", "dedicated"} if spare
+            # A Worker host keeps its name whatever an admin does with it (assigned to a Team, or shared); a Worker on the
+            # platform host itself (trusted-local) is never one, even under the same name.
+            if worker["name"] == name and (worker.get("capabilities", {}).get("isolation") == "dedicated" if spare
                                            else worker.get("owner_id") == me["id"]):
                 # Re-registration re-validates and refreshes the connection, so a replaced host is picked up.
                 client.request("POST", f"/v1/workers/{worker['id']}/connection",
