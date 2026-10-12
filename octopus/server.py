@@ -15,7 +15,7 @@ from urllib.parse import parse_qs, unquote, urlsplit
 
 from . import __version__
 from .db import dumps, uid
-from .domain import Service, name
+from .domain import Service, name, team_environment
 from .security import Error, authenticate, check_password, create_user, issue_token, require, scope
 from .transport import validate_worker, worker_request
 from .schema import openapi
@@ -233,7 +233,15 @@ def server(database, port=8918, host="127.0.0.1", allowed_hosts=(), origin_secre
                     with database.transaction() as db:
                         if method == "POST":
                             require(actor["admin"], "需要平台管理员", 403, "forbidden")
-                            return self.respond(create_user(db, body.get("username"), body.get("password"), body.get("admin", False)), 201)
+                            created = create_user(db, body.get("username"), body.get("password"), body.get("admin", False))
+                            if body.get("worker_id"):
+                                # The new user's personal space runs on a shared execution environment (D28).
+                                shared = db.execute("SELECT 1 FROM workers WHERE id=? AND scope='shared' AND enabled=1",
+                                                    (body["worker_id"],)).fetchone()
+                                require(shared is not None, "只能分配共享执行环境", 409, "worker_unavailable")
+                                db.execute("INSERT INTO worker_spaces(worker_id,user_id) VALUES(?,?)",
+                                           (body["worker_id"], created["id"]))
+                            return self.respond(created, 201)
                         require(method == "GET", "Method not allowed", 405)
                         return self.respond([dict(r) for r in db.execute("SELECT id,username FROM users WHERE active=1 ORDER BY username")])
                 if path == "/v1/tokens":
@@ -287,6 +295,40 @@ def server(database, port=8918, host="127.0.0.1", allowed_hosts=(), origin_secre
                         return self.respond(service.share(actor, wid, body, revoke=method == "DELETE"))
                     if action == "archive" and method == "POST":
                         return self.respond(service.archive_workflow(actor, wid, body))
+                if len(segments) == 4 and segments[:2] == ["v1", "workers"] and segments[3] == "share":
+                    require(method == "POST", "Method not allowed", 405)
+                    return self.respond(service.share_worker(actor, segments[2], body))
+                if len(segments) == 4 and segments[:2] == ["v1", "workers"] and segments[3] == "spaces":
+                    require(method in {"POST", "DELETE"}, "Method not allowed", 405)
+                    return self.respond(service.worker_space(actor, segments[2], body, remove=method == "DELETE"))
+                if len(segments) == 4 and segments[:2] == ["v1", "workers"] and segments[3] == "connection":
+                    # After a Worker host is replaced (new address, token, boundary) its environment keeps serving the
+                    # same spaces; the new endpoint is re-validated like a registration (D28, T4 forbids rebinding only).
+                    require(method == "POST" and actor["admin"], "需要平台管理员", 403, "forbidden")
+                    config = body.get("connection")
+                    health = validate_worker(config)
+                    with database.transaction() as db:
+                        row = db.execute("SELECT * FROM workers WHERE id=?", (segments[2],)).fetchone()
+                        require(row is not None, "Worker 不存在", 404, "not_found")
+                        personal = row["scope"] == "dedicated" and not row["team_id"]
+                        require(health.get("isolation") == "dedicated" or personal or row["scope"] == "shared",
+                                "Team 与空闲执行环境须为专属隔离（dedicated）", 409, "isolation_required")
+                        local_principal = hashlib.sha256(f"{socket.gethostname()}:{os.getuid()}".encode()).hexdigest()
+                        if health.get("host_principal") == local_principal:
+                            owner = db.execute("SELECT admin FROM users WHERE id=?", (row["owner_id"],)).fetchone()
+                            require(personal and owner and owner["admin"] and health.get("isolation") == "trusted-local",
+                                    "平台宿主账号仅用于管理员本机验证；Team 和普通用户须使用独立执行账号/容器/主机",
+                                    409, "isolation_required")
+                        for other in db.execute("SELECT config,team_id,owner_id FROM workers WHERE id!=?", (row["id"],)):
+                            previous = json.loads(other["config"]).get("capabilities", {})
+                            require(previous.get("boundary") != health.get("boundary"), "该 Gateway 边界已登记", 409,
+                                    "worker_conflict")
+                            if (other["team_id"], other["owner_id"]) != (row["team_id"], row["owner_id"]):
+                                require(previous.get("host_principal") != health.get("host_principal"),
+                                        "不同执行空间不能复用同一宿主账户；请使用独立账号/容器/主机", 409, "isolation_required")
+                        db.execute("UPDATE workers SET config=? WHERE id=?",
+                                   (dumps({**config, "capabilities": health}), row["id"]))
+                    return self.respond({"id": row["id"], "capabilities": health})
                 if len(segments) == 4 and segments[:2] == ["v1", "workers"] and segments[3] == "enabled":
                     require(method == "POST" and actor["admin"], "需要平台管理员", 403, "forbidden")
                     require(isinstance(body.get("enabled"), bool), "enabled 必须为布尔值")
@@ -312,42 +354,49 @@ def server(database, port=8918, host="127.0.0.1", allowed_hosts=(), origin_secre
                     return self.respond(health)
                 if path == "/v1/workers":
                     if method == "GET":
-                        with database.read() as db:
-                            rows = []
-                            for row in db.execute("SELECT * FROM workers"):
-                                if actor["admin"] or row["owner_id"] == actor["id"] or db.execute(
-                                    "SELECT 1 FROM members WHERE user_id=? AND team_id=?", (actor["id"], row["team_id"])).fetchone():
-                                    value = {k: row[k] for k in ("id", "name", "team_id", "owner_id", "enabled")}
-                                    value["capabilities"] = json.loads(row["config"]).get("capabilities", {})
-                                    rows.append(value)
-                        return self.respond(rows)
+                        return self.respond(service.workers(actor))
                     require(method == "POST" and actor["admin"], "需要平台管理员", 403, "forbidden")
                     config = body.get("connection")
                     health = validate_worker(config)
                     team, user = body.get("team_id"), body.get("owner_id")
-                    require(bool(team) != bool(user), "Worker 必须唯一绑定 Team 或 User")
-                    require(not team or health.get("isolation") == "dedicated",
-                            "Team 执行需要专属 Worker；trusted-local 仅允许个人开发空间", 409, "isolation_required")
+                    # A spare execution environment belongs to no space until an admin assigns it to a Team (D28, T4).
+                    spare = body.get("spare") is True
+                    if spare:
+                        require(not team and not user, "空闲执行环境不绑定 Team 或 User")
+                        require(health.get("isolation") == "dedicated",
+                                "空闲执行环境须为专属隔离（dedicated）", 409, "isolation_required")
+                    else:
+                        require(bool(team) != bool(user), "Worker 必须唯一绑定 Team 或 User")
+                        require(not team or health.get("isolation") == "dedicated",
+                                "Team 执行需要专属 Worker；trusted-local 仅允许个人开发空间", 409, "isolation_required")
                     config = {**config, "capabilities": health}
                     with database.transaction() as db:
-                        require(db.execute("SELECT 1 FROM teams WHERE id=?", (team,)).fetchone() if team else
-                                db.execute("SELECT 1 FROM users WHERE id=?", (user,)).fetchone(), "执行空间不存在", 404, "not_found")
+                        if not spare:
+                            require(db.execute("SELECT 1 FROM teams WHERE id=?", (team,)).fetchone() if team else
+                                    db.execute("SELECT 1 FROM users WHERE id=?", (user,)).fetchone(),
+                                    "执行空间不存在", 404, "not_found")
+                            require(not team or team_environment(db, team) is None,
+                                    "该 Team 已有执行环境（含已停用的）", 409, "team_has_environment")
                         local_principal = hashlib.sha256(f"{socket.gethostname()}:{os.getuid()}".encode()).hexdigest()
                         if health.get("host_principal") == local_principal:
                             owner = db.execute("SELECT admin FROM users WHERE id=?", (user,)).fetchone() if user else None
                             require(owner and owner["admin"] and health.get("isolation") == "trusted-local",
                                     "平台宿主账号仅用于管理员本机验证；Team 和普通用户须使用独立执行账号/容器/主机",
                                     409, "isolation_required")
-                        for row in db.execute("SELECT config,team_id,owner_id FROM workers WHERE enabled=1"):
+                        # A spare boundary must never have been registered, not even on a disabled Worker (T4).
+                        others = "SELECT config,team_id,owner_id FROM workers" + ("" if spare else " WHERE enabled=1")
+                        for row in db.execute(others):
                             previous = json.loads(row["config"])["capabilities"]
                             require(previous.get("boundary") != health.get("boundary"), "该 Gateway 边界已登记", 409, "worker_conflict")
-                            if (team, user) != (row["team_id"], row["owner_id"]):
+                            if spare or (team, user) != (row["team_id"], row["owner_id"]):
                                 require(previous.get("host_principal") != health.get("host_principal"),
                                         "不同执行空间不能复用同一宿主账户；请使用独立账号/容器/主机", 409, "isolation_required")
                         wid = uid("worker")
-                        db.execute("INSERT INTO workers(id,name,owner_id,team_id,config) VALUES(?,?,?,?,?)",
-                                   (wid, name(body.get("name")), user, team, dumps(config)))
-                    return self.respond({"id": wid, "name": body["name"], "capabilities": health}, 201)
+                        db.execute("INSERT INTO workers(id,name,owner_id,team_id,config,scope) VALUES(?,?,?,?,?,?)",
+                                   (wid, name(body.get("name")), actor["id"] if spare else user, team, dumps(config),
+                                    "spare" if spare else "dedicated"))
+                    return self.respond({"id": wid, "name": body["name"], "scope": "spare" if spare else "dedicated",
+                                         "capabilities": health}, 201)
                 if path == "/v1/runs":
                     require(method in {"GET", "POST"}, "Method not allowed", 405)
                     return self.respond(service.runs(actor) if method == "GET" else service.start(actor, body))

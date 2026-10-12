@@ -14,6 +14,8 @@ const runFromUrl = () => new URLSearchParams(window.location.search).get("run");
 export function Console() {
   const me = useMe();
   const workspace = useWorkspace();
+  // An administrator sees every Team (D28) but can only switch to and submit in the Teams they belong to.
+  const memberTeams = useMemo(() => workspace.teams.filter((t) => t.role != null), [workspace.teams]);
   const [space, setSpaceState] = useState("");
   const [selected, setSelected] = useState<string | null>(runFromUrl);
   const [dialog, setDialog] = useState<Dialog | null>(null);
@@ -43,11 +45,11 @@ export function Console() {
   }, [selected, workspace.runs, workspace.loading, select]);
 
   useEffect(() => {
-    if (space && workspace.teams.length && !workspace.teams.some((t) => t.id === space)) setSpaceState("");
-  }, [space, workspace.teams]);
+    if (space && memberTeams.length && !memberTeams.some((t) => t.id === space)) setSpaceState("");
+  }, [space, memberTeams]);
 
   const value = useMemo<ConsoleState | null>(() => me.data ? {
-    me: me.data, teams: workspace.teams, users: workspace.users, workers: workspace.workers,
+    me: me.data, teams: memberTeams, allTeams: workspace.teams, users: workspace.users, workers: workspace.workers,
     workflows: workspace.workflows, templates: workspace.templates, runs: workspace.runs,
     space, setSpace, selected, select, open: setDialog, close: () => setDialog(null),
   } : null, [me.data, workspace, space, setSpace, selected, select]);

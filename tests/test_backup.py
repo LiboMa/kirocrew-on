@@ -7,7 +7,7 @@ import threading
 import time
 import unittest
 
-from octopus import backup
+from octopus import backup, migrations
 from octopus.db import Database
 
 
@@ -39,7 +39,7 @@ class BackupTests(unittest.TestCase):
         stop.set()
         thread.join()
         self.assertEqual(manifest["integrity"], "ok")
-        self.assertEqual(manifest["schema_version"], 1)
+        self.assertEqual(manifest["schema_version"], max(number for number, _, _ in migrations.MIGRATIONS))
         path = self.root / "backups" / manifest["file"]
         self.assertEqual(path.stat().st_mode & 0o777, 0o600)
         report = backup.restore_verify(path.with_suffix(".json"), self.root / "restore")

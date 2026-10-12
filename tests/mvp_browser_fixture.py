@@ -14,7 +14,10 @@ with tempfile.TemporaryDirectory(prefix="octopus-browser-") as root:
         create_user(db, "fixture-reader", "Fixture-password-123!")
         actor = authenticate(db, issue_token(db, owner["id"])["token"])
     service = Service(database)
-    team = service.create_team(actor, {"name": "Fixture Team"})
+    with database.transaction() as db:   # a Team created before execution environments (D28)
+        db.execute("INSERT INTO teams VALUES('team-fixture','Fixture Team',0)")
+        db.execute("INSERT INTO members VALUES('team-fixture',?,'owner')", (actor["id"],))
+    team = {"id": "team-fixture"}
     service.membership(actor, team["id"], {"username": "fixture-reader"})
     spec = [
         {"id": "code", "name": "实现与测试", "tool": "claude", "model": "auto", "effort": "", "prompt": "实现用户功能并记录真实验证"},

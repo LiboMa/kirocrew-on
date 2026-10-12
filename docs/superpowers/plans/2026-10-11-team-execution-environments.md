@@ -33,7 +33,7 @@
 
 ## 阶段 A：平台执行环境
 
-### Task A1: 迁移 2（`scope` 与 `worker_spaces`）
+### Task 1 (A1): 迁移 2（`scope` 与 `worker_spaces`）
 
 **Files:**
 - Modify: `octopus/migrations.py`（`MIGRATIONS` 末尾）
@@ -86,7 +86,7 @@ MIGRATIONS = [(1, "baseline", BASELINE), (2, "environments", ENVIRONMENTS)]
 
 - [ ] **Step 4: 运行通过** — 同上命令全部 OK；再跑 `tests.test_mvp` 确认未受影响。
 
-### Task A2: 归属规则、服务端自动选择、未分配 Team 拒绝
+### Task 2 (A2): 归属规则、服务端自动选择、未分配 Team 拒绝
 
 **Files:**
 - Modify: `octopus/domain.py`（新函数 `space_workers`；`Service.start` 开头；`_worker` `:337-341`；`_space` `:406-414`）
@@ -190,7 +190,7 @@ def space_workers(db, user, team):
 
 - [ ] **Step 4: 运行通过** — `-k Environment` OK；`tests.test_mvp tests.test_recovery` 中依赖旧版 `create_team` 的 Team 测试在 A3 更新夹具前可能失败，记下失败列表，A3 处理。
 
-### Task A3: Team 与用户（管理员创建、必须带环境）
+### Task 3 (A3): Team 与用户（管理员创建、必须带环境）
 
 **Files:**
 - Modify: `octopus/domain.py`（新函数 `assign_spare`；`create_team` `:99-107`；`teams` `:86-97`）、`octopus/server.py`（`/v1/users` POST `:218-224`）
@@ -256,7 +256,7 @@ def assign_spare(db, worker, team):
 
 - [ ] **Step 4: 运行通过** — `.venv/bin/python -m unittest discover -s tests -p 'test_*.py'` 全部 OK。
 
-### Task A4: Worker 管理接口
+### Task 4 (A4): Worker 管理接口
 
 **Files:**
 - Modify: `octopus/server.py`（`/v1/workers` GET 与 POST `:296-345`；在现有 `enabled`/`capabilities` 子路由旁新增 `share`、`spaces`）
@@ -314,7 +314,7 @@ def assign_spare(db, worker, team):
 
 - [ ] **Step 4: 运行通过** — `tests.test_mvp` 全部 OK。
 
-### Task A5: 控制台
+### Task 5 (A5): 控制台
 
 **Files:**
 - Modify: `web/src/api/types.ts`（`Worker.scope`、`Worker.spaces`、`Team.environment`）
@@ -336,7 +336,7 @@ def assign_spare(db, worker, team):
 - [ ] **Step 3: 实现**（按上述行为；表单控件沿用对话框内现有的 `Input`、`NativeSelect`、`Button`、`Alert`）。
 - [ ] **Step 4: 运行通过** — `npm --prefix web test` 与 `npx --prefix web tsc -b` OK。
 
-### Task A6: 文档、回归与本机 E2E
+### Task 6 (A6): 文档、回归与本机 E2E
 
 **Files:**
 - Modify: `docs/WORKERS.md`（§3 归属规则表加入共享 / 空闲；§7 现状）、`docs/OPERATIONS.md`（「执行环境：设为共享、创建 Team、分配」）
@@ -349,7 +349,7 @@ def assign_spare(db, worker, team):
 
 ## 阶段 B：独立 Worker 主机
 
-### Task B1: 平台信任私有 CA
+### Task 7 (B1): 平台信任私有 CA
 
 **Files:**
 - Modify: `octopus/config.py`（`PATHS` 增加 `worker_ca_file`）、`octopus/transport.py`（`worker_request`、`validate_worker`）、`octopus/__main__.py`（`serve` 时把设置传入）
@@ -366,7 +366,7 @@ def assign_spare(db, worker, team):
 - [ ] **Step 3: 实现** — `except ssl.SSLError` 先于 `OSError` 捕获，消息「Worker TLS 证书校验失败（未受信任的 CA 或地址不匹配）」。
 - [ ] **Step 4: 运行通过**。
 
-### Task B2: Worker 主机安装模式
+### Task 8 (B2): Worker 主机安装模式
 
 **Files:**
 - Modify: `deploy/install/al2023.sh`（`WORKER_HOST=1` 时跳过平台 API、管理员、平台配置、原生入口与 `bootstrap-worker`；边界 `worker_isolation = "dedicated"`；启用 `octopus-gateway@<b>`、`octopus-worker@<b>` 与 nginx）；平台模式下若无 `/etc/kirocrew-on/worker-ca.key` 则生成私有 CA（root 0600 / `worker-ca.pem` 0644）并在 `platform.toml` 写入 `worker_ca_file`
@@ -376,7 +376,7 @@ def assign_spare(db, worker, team):
 - [ ] **Step 1: 写失败测试** — 静态检查：`WORKER_HOST` 分支不出现 `octopus-api`、`bootstrap-worker`、`admin-password`；写入 `dedicated`；nginx 模板含 `ssl_certificate`、`127.0.0.1`；平台模式生成 CA 的 `openssl req -x509` 与 `chmod 0600`；`bash -n` 通过。
 - [ ] **Step 2–4:** 实现并通过。
 
-### Task B3: Worker 主机栈与 `deploy.sh worker-host`
+### Task 9 (B3): Worker 主机栈与 `deploy.sh worker-host`
 
 **Files:**
 - Create: `deploy/aws/kirocrew-on-worker.yaml`（参数：`VpcId`、`SubnetId`、`PlatformSecurityGroupId`、`ImageId`、`InstanceType`、`VolumeSizeGiB`、`ArtifactBucket`、`WorkerPort=8943`；资源：安全组（入站仅 `SourceSecurityGroupId: PlatformSecurityGroupId` 的 8943）、角色（SSM、Bedrock、读 `releases/*`）、实例（IMDSv2、加密 gp3、`DeleteOnTermination: false`））
@@ -393,7 +393,7 @@ def assign_spare(db, worker, team):
 - [ ] **Step 1: 写失败测试** — dry-run：`worker-host up w1` 打印 `cloudformation deploy` 与 `kirocrew-on-worker.yaml`、`PlatformSecurityGroupId`；`worker-host register w1` 打印 `bootstrap-worker --spare` 与 `https://`；名称不合法时退出码 2；平台模板 Outputs 含四个新键且 `HostSecurityGroup` 段与 `HEAD` 相同。
 - [ ] **Step 2–4:** 实现并通过；`cfn-lint` 不可用时以 `aws cloudformation validate-template` 校验两个模板。
 
-### Task B4: EC2 验收
+### Task 10 (B4): EC2 验收
 
 - [ ] **Step 1:** 确认 EC2 无运行中的会话，并与并行会话确认 `PREVIEW_KEY` 修复的状态（发布会重启 API）。
 - [ ] **Step 2:** `deploy.sh up`（只新增 Outputs，变更集无替换）→ `deploy.sh push`（阶段 A + B1/B2 的平台部分，生成 CA）。

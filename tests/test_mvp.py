@@ -48,9 +48,23 @@ class MVPTests(unittest.TestCase):
         self.tmp.cleanup()
 
     def team(self):
-        t = self.service.create_team(self.a, {"name": "研发 Team"})
+        with self.db.transaction() as db:
+            db.execute("INSERT INTO workers(id,name,owner_id,config,scope) VALUES('team-env','team-env',?,?,'shared')",
+                       (self.a["id"], dumps({"capabilities": {}})))
+        t = self.service.create_team(self.a, {"name": "研发 Team", "owner": "alice", "worker_id": "team-env"})
         self.service.membership(self.a, t["id"], {"username": "bob"})
         return t
+
+    def legacy_team(self, name="研发 Team", members=("bob",)):
+        """A Team created before execution environments (D28): no Worker; alice is its owner."""
+        tid = "team-" + name.encode().hex()[:12]
+        with self.db.transaction() as db:
+            db.execute("INSERT INTO teams VALUES(?,?,0)", (tid, name))
+            db.execute("INSERT INTO members VALUES(?,?,'owner')", (tid, self.a["id"]))
+            for username in members:
+                user = db.execute("SELECT id FROM users WHERE username=?", (username,)).fetchone()
+                db.execute("INSERT INTO members VALUES(?,?,'member')", (tid, user["id"]))
+        return {"id": tid, "name": name}
 
     def start(self, actor=None, **extra):
         return self.service.start(actor or self.a, {"request_id": "start-00000001", "workflow_id": self.flow["id"],
@@ -305,16 +319,6 @@ class MVPTests(unittest.TestCase):
         self.assertEqual(run["progress"]["total"], 2)
         self.assertEqual(self.service.workflows(self.b), [])
         self.assertIsNone(run["workspace"])
-
-    def test_waiting_worker_attention_explains_a_team_without_a_worker(self):
-        team = self.team()
-        run = self.service.run(self.b, self.start(team_id=team["id"])["id"])
-        self.assertEqual(run["status"], "waiting_worker")
-        attention = run["attention"]
-        self.assertEqual(attention["title"], "Team「研发 Team」没有可用 Worker")
-        self.assertEqual(attention["workers"], 0)
-        self.assertIn("管理员", attention["action"])
-        self.assertIn("个人空间重新提交", attention["action"])
 
     def test_waiting_worker_attention_for_a_personal_space(self):
         run = self.service.run(self.b, self.start(self.b, workflow_id=None, template_id="proof")["id"])
@@ -617,7 +621,7 @@ class MVPTests(unittest.TestCase):
         finally:app.shutdown();app.server_close();thread.join(2)
 
     def test_worker_team_boundary_and_client_visibility(self):
-        team = self.team()
+        team = self.legacy_team()
         health = {"isolation":"trusted-local","boundary":"a","host_principal":"host-1","models":{}}
         connection = {"url":"http://127.0.0.1:8928","token":"private-worker-secret"+"x"*32}
         with self.http() as (_, call), patch("octopus.server.validate_worker", return_value=health):
@@ -633,7 +637,7 @@ class MVPTests(unittest.TestCase):
                 self.assertNotIn(connection["token"],dumps(listed))
             self.assertEqual(call("GET","/v1/workers","eve")[1],[])
             self.assertEqual(call("POST","/v1/workers",body=body)[0],409)
-            other = self.service.create_team(self.a, {"name":"Other"})
+            other = self.legacy_team("Other", members=())
             health["boundary"]="b"  # another HOME under same host account is not isolation
             self.assertEqual(call("POST","/v1/workers",body={**body,"team_id":other["id"]})[0],409)
 
@@ -778,6 +782,242 @@ class MVPTests(unittest.TestCase):
         self.assertIn("execution",spec["components"]["schemas"]["Continue"]["properties"])
         self.assertIn("text/event-stream",spec["paths"]["/v1/runs/{id}/events"]["get"]["responses"]["200"]["content"])
         self.assertIn("/v1/workflows/{id}/shares",spec["paths"])
+
+
+class EnvironmentTests(unittest.TestCase):
+    """Execution environments (D28): dedicated, shared through worker_spaces, spare. Reuses MVPTests' fixtures
+    without inheriting (and re-running) its tests."""
+    setUp, tearDown, start, http, worker_run = (MVPTests.setUp, MVPTests.tearDown, MVPTests.start, MVPTests.http,
+                                               MVPTests.worker_run)
+
+    def shared(self, wid="shared"):
+        with self.db.transaction() as db:
+            db.execute("INSERT INTO workers(id,name,owner_id,config,scope) VALUES(?,?,?,?, 'shared')",
+                       (wid, wid, self.a["id"], dumps({"capabilities": {}})))
+            db.execute("INSERT INTO worker_spaces(worker_id,user_id) VALUES(?,?)", (wid, self.a["id"]))
+        return wid
+
+    def shared_team(self, wid, name="共享 Team"):
+        tid = "team-" + name.encode().hex()[:12]
+        with self.db.transaction() as db:
+            db.execute("INSERT INTO teams VALUES(?,?,0)", (tid, name))
+            db.execute("INSERT INTO members VALUES(?,?,'owner')", (tid, self.a["id"]))
+            db.execute("INSERT INTO members VALUES(?,?,'member')", (tid, self.b["id"]))
+            db.execute("INSERT INTO worker_spaces(worker_id,team_id) VALUES(?,?)", (wid, tid))
+        return tid
+
+    def test_space_workers_cover_dedicated_shared_and_spare(self):
+        from octopus.domain import space_workers
+        wid = self.shared()
+        tid = self.shared_team(wid)
+        with self.db.transaction() as db:
+            db.execute("INSERT INTO workers(id,name,owner_id,config,scope) VALUES('sp','spare',?,'{}','spare')", (self.a["id"],))
+        with self.db.read() as db:
+            self.assertEqual([r["id"] for r in space_workers(db, self.a["id"], tid)], [wid])
+            self.assertEqual([r["id"] for r in space_workers(db, self.a["id"], None)], [wid])
+            self.assertEqual(space_workers(db, self.e["id"], None), [])
+
+    def test_server_picks_the_only_usable_worker(self):
+        wid = self.shared()
+        with self.db.transaction() as db:
+            db.execute("INSERT INTO worker_spaces(worker_id,user_id) VALUES(?,?)", (wid, self.b["id"]))
+        run = self.service.run(self.b, self.start(self.b, workflow_id=None, template_id="proof")["id"])
+        self.assertEqual((run["worker_id"], run["status"]), (wid, "preparing"))
+
+    def test_team_without_environment_is_refused(self):
+        with self.db.transaction() as db:
+            db.execute("INSERT INTO teams VALUES('t-legacy','旧 Team',0)")
+            db.execute("INSERT INTO members VALUES('t-legacy',?,'owner')", (self.a["id"],))
+        with self.assertRaises(Error) as caught:
+            self.start(team_id="t-legacy")
+        self.assertEqual(caught.exception.code, "team_without_worker")
+        self.assertIn("旧 Team", str(caught.exception))
+
+    def test_shared_worker_id_from_old_client_is_accepted(self):
+        wid = self.shared()
+        tid = self.shared_team(wid)
+        self.assertEqual(self.service.run(self.a, self.start(team_id=tid, worker_id=wid)["id"])["worker_id"], wid)
+
+    def test_disabled_shared_worker_counts_as_none(self):
+        wid = self.shared()
+        tid = self.shared_team(wid)
+        with self.db.transaction() as db:
+            db.execute("UPDATE workers SET enabled=0 WHERE id=?", (wid,))
+        with self.assertRaises(Error) as caught:
+            self.start(team_id=tid)
+        self.assertEqual(caught.exception.code, "environment_disabled")
+        self.assertIn("已停用", str(caught.exception))
+        self.assertFalse({t["id"]: t for t in self.service.teams(self.a)}[tid]["environment"]["enabled"])
+
+    def test_one_environment_per_team_counts_disabled_ones(self):
+        wid, other = self.shared(), self.shared("shared-2")
+        tid = self.shared_team(wid)
+        with self.db.transaction() as db:
+            db.execute("UPDATE workers SET enabled=0 WHERE id=?", (wid,))
+        with self.assertRaises(Error) as caught:   # not an IntegrityError turned into a 500
+            self.service.worker_space(self.a, other, {"team_id": tid})
+        self.assertEqual(caught.exception.code, "team_has_environment")
+        health = {"isolation": "dedicated", "boundary": "b-team", "host_principal": "hp-team"}
+        body = {"name": "team-host", "team_id": tid, "connection": {"url": "https://10.0.0.8:8943", "token": "t" * 40}}
+        with patch("octopus.server.validate_worker", return_value=health), self.http() as (_, call):
+            self.assertEqual(call("POST", "/v1/workers", "alice", body)[0], 409)
+
+    def test_a_spare_can_be_assigned_to_an_existing_team(self):
+        with self.db.transaction() as db:
+            db.execute("INSERT INTO teams VALUES('t-legacy','旧 Team',0)")
+            db.execute("INSERT INTO members VALUES('t-legacy',?,'owner')", (self.a["id"],))
+            db.execute("INSERT INTO workers(id,name,owner_id,config,scope) VALUES('sp','team-host-1',?,'{}','spare')",
+                       (self.a["id"],))
+        with self.http() as (_, call):
+            self.assertEqual(call("POST", "/v1/workers/sp/spaces", "alice", {"team_id": "t-legacy"})[0], 200)
+            self.assertEqual(call("POST", "/v1/workers/sp/spaces", "alice", {"user_id": self.b["id"]})[0], 409)
+        with self.db.read() as db:
+            row = db.execute("SELECT scope,team_id FROM workers WHERE id='sp'").fetchone()
+        self.assertEqual(tuple(row), ("dedicated", "t-legacy"))
+
+    def test_legacy_waiting_run_can_use_shared_worker(self):
+        wid = self.shared()
+        tid = self.shared_team(wid)
+        started = self.start(team_id=tid)
+        with self.db.transaction() as db:   # as left by the platform before environments existed
+            db.execute("UPDATE runs SET worker_id=NULL, status='waiting_worker' WHERE id=?", (started["id"],))
+        self.service.operate(self.a, started["id"], "assign-worker",
+                             {"request_id": "assign-00001", "expected_version": 1, "worker_id": wid})
+        self.assertEqual(self.service.run(self.a, started["id"])["status"], "preparing")
+
+    def test_only_admins_create_teams_and_an_environment_is_required(self):
+        wid = self.shared()
+        with self.assertRaises(Error) as caught:
+            self.service.create_team(self.b, {"name": "B", "owner": "bob", "worker_id": wid})
+        self.assertEqual(caught.exception.code, "forbidden")
+        with self.assertRaises(Error) as caught:
+            self.service.create_team(self.a, {"name": "B", "owner": "bob"})
+        self.assertEqual(caught.exception.code, "worker_required")
+        t = self.service.create_team(self.a, {"name": "B", "owner": "bob", "worker_id": wid})
+        self.assertEqual(t["environment"]["scope"], "shared")
+        self.assertEqual({x["id"]: x["role"] for x in self.service.teams(self.b)}[t["id"]], "owner")
+        mine = {x["id"]: x for x in self.service.teams(self.a)}     # the admin sees every Team
+        self.assertIsNone(mine[t["id"]]["role"])
+        self.assertEqual(mine[t["id"]]["environment"]["worker_id"], wid)
+
+    def test_spare_is_assigned_once(self):
+        with self.db.transaction() as db:
+            db.execute("INSERT INTO workers(id,name,owner_id,config,scope) VALUES('sp','team-host-1',?,?,'spare')",
+                       (self.a["id"], dumps({"capabilities": {"isolation": "dedicated"}})))
+        t1 = self.service.create_team(self.a, {"name": "T1", "owner": "alice", "worker_id": "sp"})
+        with self.db.read() as db:
+            row = db.execute("SELECT scope,team_id,owner_id FROM workers WHERE id='sp'").fetchone()
+        self.assertEqual(tuple(row), ("dedicated", t1["id"], None))
+        with self.assertRaises(Error) as caught:
+            self.service.create_team(self.a, {"name": "T2", "owner": "alice", "worker_id": "sp"})
+        self.assertEqual(caught.exception.code, "worker_unavailable")
+        self.assertNotIn("T2", {x["name"] for x in self.service.teams(self.a)})   # nothing half-created
+
+    def test_admin_creates_a_user_on_the_shared_environment(self):
+        from octopus.domain import space_workers
+        wid = self.shared()
+        with self.http() as (_, call):
+            status, user = call("POST", "/v1/users", "alice",
+                                {"username": "carol", "password": "Test-password-123!", "worker_id": wid})
+        self.assertEqual(status, 201)
+        with self.db.read() as db:
+            self.assertEqual([r["id"] for r in space_workers(db, user["id"], None)], [wid])
+
+    def test_share_requires_confirmation_and_keeps_existing_runs(self):
+        run = self.worker_run()
+        with self.http() as (_, call):
+            self.assertEqual(call("POST", "/v1/workers/worker/share", "alice", {})[0], 400)
+            self.assertEqual(call("POST", "/v1/workers/worker/share", "bob", {"confirm": True})[0], 403)
+            self.assertEqual(call("POST", "/v1/workers/worker/share", "alice", {"confirm": True})[0], 200)
+            self.assertEqual(call("POST", "/v1/workers/worker/share", "alice", {"confirm": True})[0], 409)
+            listed = {w["id"]: w for w in call("GET", "/v1/workers", "alice")[1]}
+        self.assertEqual(listed["worker"]["scope"], "shared")
+        self.assertIn({"user_id": self.a["id"]}, listed["worker"]["spaces"])
+        self.assertEqual(self.service.run(self.a, run["id"])["worker_id"], "worker")
+
+    def test_sharing_keeps_the_boundary_owner(self):
+        self.worker_run()                      # dedicated Worker 'worker' of alice
+        with self.db.transaction() as db:
+            other = create_user(db, "root2", "Test-password-123!", admin=True)
+            other = authenticate(db, issue_token(db, other["id"])["token"])
+        self.service.share_worker(other, "worker", {"confirm": True})
+        with self.db.read() as db:
+            self.assertEqual(db.execute("SELECT owner_id FROM workers WHERE id='worker'").fetchone()[0], self.a["id"])
+
+    def test_a_worker_on_the_platform_host_account_cannot_be_shared(self):
+        import hashlib, os, socket
+        local = hashlib.sha256(f"{socket.gethostname()}:{os.getuid()}".encode()).hexdigest()
+        with self.db.transaction() as db:
+            db.execute("INSERT INTO workers(id,name,owner_id,config) VALUES('local','local',?,?)",
+                       (self.a["id"], dumps({"capabilities": {"host_principal": local, "isolation": "trusted-local"}})))
+        with self.assertRaises(Error) as caught:
+            self.service.share_worker(self.a, "local", {"confirm": True})
+        self.assertEqual(caught.exception.code, "isolation_required")
+
+    def test_spaces_add_and_remove_with_one_environment_per_team(self):
+        wid = self.shared()
+        t = self.service.create_team(self.a, {"name": "T1", "owner": "bob", "worker_id": wid})
+        with self.http() as (_, call):
+            self.assertEqual(call("POST", f"/v1/workers/{wid}/spaces", "bob", {"user_id": self.e["id"]})[0], 403)
+            self.assertEqual(call("POST", f"/v1/workers/{wid}/spaces", "alice", {"user_id": self.e["id"]})[0], 200)
+            self.assertEqual(call("POST", f"/v1/workers/{wid}/spaces", "alice", {"team_id": t["id"]})[0], 409)
+            self.assertEqual(call("DELETE", f"/v1/workers/{wid}/spaces", "alice", {"team_id": t["id"]})[0], 200)
+            self.assertEqual(call("DELETE", f"/v1/workers/{wid}/spaces", "alice", {"team_id": t["id"]})[0], 404)
+            self.assertEqual(call("GET", "/v1/workers", "bob")[1], [])
+            eve = call("GET", "/v1/workers", "eve")[1]
+        self.assertEqual([(w["id"], w["spaces"]) for w in eve], [(wid, [{"user_id": self.e["id"]}])])
+
+    def test_an_admin_updates_a_workers_connection_after_its_host_is_replaced(self):
+        with self.db.transaction() as db:
+            for wid, boundary in (("sp", "b-1"), ("other", "b-2")):
+                db.execute("INSERT INTO workers(id,name,owner_id,config,scope) VALUES(?,?,?,?,'spare')", (wid, wid, self.a["id"],
+                           dumps({"url": "https://10.0.0.9:8943", "token": "t" * 40,
+                                  "capabilities": {"isolation": "dedicated", "boundary": boundary, "host_principal": wid}})))
+        body = {"connection": {"url": "https://10.0.0.7:8943", "token": "n" * 40}}
+        replaced = {"isolation": "dedicated", "boundary": "b-3", "host_principal": "new-host"}
+        with patch("octopus.server.validate_worker", return_value=replaced), self.http() as (_, call):
+            self.assertEqual(call("POST", "/v1/workers/sp/connection", "bob", body)[0], 403)
+            self.assertEqual(call("POST", "/v1/workers/sp/connection", "alice", body)[0], 200)
+        with patch("octopus.server.validate_worker", return_value={**replaced, "boundary": "b-2"}), self.http() as (_, call):
+            self.assertEqual(call("POST", "/v1/workers/sp/connection", "alice", body)[0], 409)   # another Worker's boundary
+        with patch("octopus.server.validate_worker", return_value={**replaced, "isolation": "trusted-local"}), \
+                self.http() as (_, call):
+            self.assertEqual(call("POST", "/v1/workers/sp/connection", "alice", body)[0], 409)   # a spare stays dedicated
+        with self.db.read() as db:
+            config = json.loads(db.execute("SELECT config FROM workers WHERE id='sp'").fetchone()[0])
+        self.assertEqual((config["url"], config["capabilities"]["boundary"]), ("https://10.0.0.7:8943", "b-3"))
+
+    def test_spare_registration_requires_a_dedicated_unseen_boundary(self):
+        health = {"isolation": "dedicated", "boundary": "b-1", "host_principal": "hp-1"}
+        body = {"name": "team-host-1", "spare": True, "connection": {"url": "https://10.0.0.9:8943", "token": "t" * 40}}
+        with patch("octopus.server.validate_worker", return_value=health), self.http() as (_, call):
+            status, created = call("POST", "/v1/workers", "alice", body)
+            self.assertEqual(status, 201)
+            self.assertEqual(call("POST", "/v1/workers", "alice", {**body, "name": "again"})[0], 409)
+            self.assertEqual(call("POST", "/v1/workers", "alice", {**body, "owner_id": self.a["id"]})[0], 400)
+            listed = {w["id"]: w for w in call("GET", "/v1/workers", "alice")[1]}
+        self.assertEqual(listed[created["id"]]["scope"], "spare")
+        local = {**health, "boundary": "b-2", "host_principal": "hp-2", "isolation": "trusted-local"}
+        with patch("octopus.server.validate_worker", return_value=local), self.http() as (_, call):
+            self.assertEqual(call("POST", "/v1/workers", "alice", {**body, "name": "x"})[0], 409)
+        with self.db.transaction() as db:   # a disabled Worker's boundary is still taken
+            db.execute("UPDATE workers SET enabled=0 WHERE id=?", (created["id"],))
+        with patch("octopus.server.validate_worker", return_value=health), self.http() as (_, call):
+            self.assertEqual(call("POST", "/v1/workers", "alice", {**body, "name": "y"})[0], 409)
+
+    def test_waiting_worker_attention_explains_a_team_without_a_worker(self):
+        wid = self.shared()
+        tid = self.shared_team(wid)
+        started = self.start(team_id=tid)
+        with self.db.transaction() as db:   # the Team's environment was removed while this run waited
+            db.execute("DELETE FROM worker_spaces WHERE team_id=?", (tid,))
+            db.execute("UPDATE runs SET worker_id=NULL, status='waiting_worker' WHERE id=?", (started["id"],))
+        attention = self.service.run(self.b, started["id"])["attention"]
+        self.assertEqual(attention["title"], "Team「共享 Team」没有可用 Worker")
+        self.assertNotIn("专属", attention["detail"])   # shared and dedicated environments both count (D28)
+        self.assertEqual(attention["workers"], 0)
+        self.assertIn("管理员", attention["action"])
+        self.assertIn("个人空间重新提交", attention["action"])
 
 
 if __name__ == "__main__":

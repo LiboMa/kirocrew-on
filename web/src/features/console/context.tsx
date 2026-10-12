@@ -26,7 +26,10 @@ export type Dialog =
 
 export interface ConsoleState {
   me: Me;
+  /** Teams the user belongs to: spaces they can switch to and submit in. */
   teams: Team[];
+  /** Every Team the user can see; for an administrator this includes Teams they are not a member of. */
+  allTeams: Team[];
   users: User[];
   workers: Worker[];
   workflows: Workflow[];
@@ -48,7 +51,11 @@ export function useConsole(): ConsoleState {
   return value;
 }
 
-/** Workers that may run in a space: the team's workers, or the user's personal ones. */
-export function spaceWorkers(workers: Worker[], space: string, me: Me): Worker[] {
-  return workers.filter((w) => !!w.enabled && (space ? w.team_id === space : w.owner_id === me.id));
+/** Workers that may run in a space: dedicated to it, or a shared environment that serves it; never a spare one. */
+export function spaceWorkers(workers: Worker[], space: string, me: Pick<Me, "id">): Worker[] {
+  return workers.filter((w) => {
+    if (!w.enabled || w.scope === "spare") return false;
+    if (w.scope === "shared") return (w.spaces ?? []).some((s) => (space ? s.team_id === space : s.user_id === me.id));
+    return space ? w.team_id === space : w.owner_id === me.id;
+  });
 }

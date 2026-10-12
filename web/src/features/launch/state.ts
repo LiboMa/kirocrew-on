@@ -99,10 +99,13 @@ export function nameFrom(input: string): string {
 }
 
 /** The first problem that keeps the user on this step, or "" when the step is complete. */
-export function validateStep(step: number, draft: Draft, { workflowMode }: { workflowMode: boolean }): string {
+export function validateStep(step: number, draft: Draft,
+  { workflowMode, teamWithoutEnvironment }: { workflowMode: boolean; teamWithoutEnvironment?: string }): string {
   const input = draft.input.trim();
   if (step === 0) {
     if (input.length < 3) return "请填写这次要完成什么（至少 3 个字符）。";
+    if (!workflowMode && teamWithoutEnvironment)
+      return `Team「${teamWithoutEnvironment}」当前没有可用的执行环境（未分配或已停用），请联系平台管理员。`;
     if (!draft.name.trim()) return "请填写名称。";
     if (!workflowMode && !draft.source) return "请明确选择新建项目或目标 Git 仓库，避免把空工作区当作已有项目。";
     if (!workflowMode && draft.source === "git" && !draft.url.trim()) return "请填写 Git URL。";

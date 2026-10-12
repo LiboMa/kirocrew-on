@@ -36,6 +36,9 @@ def create(service, actor, rid):
         run = run_access(db, actor["id"], rid)
         available(run)
         worker = service._worker(db, actor["id"], run["worker_id"], run["team_id"])
+    # The native login covers the whole Gateway (K03): on a shared environment (D28) only its boundary owner opens it.
+    require(worker["scope"] != "shared" or worker["owner_id"] == actor["id"],
+            "共享执行环境不开放原生 KiroCrew 入口（原生登录覆盖整个 Gateway）；请在控制台查看会话", 403, "forbidden")
     config = json.loads(worker["config"])
     health = worker_request(config, "/health")
     registered = config["capabilities"]

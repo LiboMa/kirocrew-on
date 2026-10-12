@@ -36,6 +36,9 @@ describe("wizard validation", () => {
     expect(validateStep(0, draft({ source: "" }), { workflowMode: false })).toContain("Git 仓库");
     expect(validateStep(0, draft({ source: "git", url: "" }), { workflowMode: false })).toContain("Git URL");
     expect(validateStep(0, draft({ source: "" }), { workflowMode: true })).toBe("");
+    expect(validateStep(0, draft({}), { workflowMode: false, teamWithoutEnvironment: "Web 组" }))
+      .toBe("Team「Web 组」当前没有可用的执行环境（未分配或已停用），请联系平台管理员。");
+    expect(validateStep(0, draft({}), { workflowMode: true, teamWithoutEnvironment: "Web 组" })).toBe("");
   });
 
   test("each plan method has its own completion rule", () => {

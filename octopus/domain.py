@@ -1,7 +1,9 @@
 """Shared use cases for HTTP, Web, CLI and MCP. Authorization lives here."""
 import hashlib
 import json
+import os
 import re
+import socket
 import time
 import unicodedata
 
@@ -67,6 +69,42 @@ def workflow_access(db, user, wid, role="viewer"):
     return dict(flow), next(k for k, v in ROLES.items() if v == allowed)
 
 
+def space_workers(db, user, team):
+    """Enabled Workers usable in a space: dedicated by owner/team, shared through worker_spaces; spare never (D28)."""
+    if team:
+        query = ("SELECT w.* FROM workers w WHERE w.enabled=1 AND ((w.scope='dedicated' AND w.team_id=?) OR "
+                 "(w.scope='shared' AND EXISTS(SELECT 1 FROM worker_spaces s WHERE s.worker_id=w.id AND s.team_id=?)))")
+    else:
+        query = ("SELECT w.* FROM workers w WHERE w.enabled=1 AND ((w.scope='dedicated' AND w.owner_id=?) OR "
+                 "(w.scope='shared' AND EXISTS(SELECT 1 FROM worker_spaces s WHERE s.worker_id=w.id AND s.user_id=?)))")
+    return db.execute(query + " ORDER BY w.name", (team or user, team or user)).fetchall()
+
+
+def assign_spare(db, worker, team):
+    """A spare execution environment becomes the Team's dedicated one; only once (D28, T4)."""
+    changed = db.execute("UPDATE workers SET scope='dedicated', team_id=?, owner_id=NULL "
+                         "WHERE id=? AND scope='spare' AND enabled=1", (team, worker)).rowcount
+    require(changed == 1, "该执行环境不可用或已分配", 409, "worker_unavailable")
+
+
+def team_environment(db, team):
+    """The Team's execution environment, enabled or not: its dedicated Worker or the shared one serving it (T6)."""
+    return db.execute("SELECT w.* FROM workers w WHERE (w.scope='dedicated' AND w.team_id=?) OR (w.scope='shared' AND "
+                      "EXISTS(SELECT 1 FROM worker_spaces s WHERE s.worker_id=w.id AND s.team_id=?)) ORDER BY w.name",
+                      (team, team)).fetchone()
+
+
+def give_environment(db, worker, team):
+    """Give a Team an execution environment: a shared Worker serves it, a spare one becomes its own."""
+    row = db.execute("SELECT scope FROM workers WHERE id=? AND enabled=1", (worker,)).fetchone()
+    require(row is not None and row["scope"] in {"shared", "spare"}, "该执行环境不可用或已分配", 409, "worker_unavailable")
+    require(team_environment(db, team) is None, "该 Team 已有执行环境（含已停用的）", 409, "team_has_environment")
+    if row["scope"] == "shared":
+        db.execute("INSERT INTO worker_spaces(worker_id,team_id) VALUES(?,?)", (worker, team))
+    else:
+        assign_spare(db, worker, team)
+
+
 def run_access(db, user, rid, owner=False):
     row = db.execute("SELECT * FROM runs WHERE id=?", (rid,)).fetchone()
     require(row is not None, "Session 不存在或无权限", 404, "not_found")
@@ -84,27 +122,115 @@ class Service:
         self.db = database
 
     def teams(self, actor):
+        """The actor's Teams; an admin sees every Team (role None where not a member). Each carries its environment."""
         with self.db.read() as db:
-            rows = db.execute("SELECT t.*,m.role FROM teams t JOIN members m ON t.id=m.team_id "
-                              "WHERE m.user_id=? ORDER BY t.created", (actor["id"],))
+            if actor["admin"]:
+                rows = db.execute("SELECT t.*,m.role FROM teams t LEFT JOIN members m ON m.team_id=t.id AND m.user_id=? "
+                                  "ORDER BY t.created", (actor["id"],)).fetchall()
+            else:
+                rows = db.execute("SELECT t.*,m.role FROM teams t JOIN members m ON t.id=m.team_id "
+                                  "WHERE m.user_id=? ORDER BY t.created", (actor["id"],)).fetchall()
             result = []
             for row in rows:
                 entry = dict(row)
                 entry["members"] = [dict(m) for m in db.execute(
                     "SELECT u.id,u.username,m.role FROM members m JOIN users u ON u.id=m.user_id WHERE m.team_id=?",
                     (row["id"],))]
+                entry["environment"] = self._environment(db, row["id"])
                 result.append(entry)
             return result
 
+    @staticmethod
+    def _environment(db, team):
+        row = team_environment(db, team)
+        return {"worker_id": row["id"], "name": row["name"], "scope": row["scope"],
+                "enabled": bool(row["enabled"])} if row else None
+
+    def workers(self, actor):
+        """Workers the actor may see: an admin all; otherwise dedicated ones of their spaces and shared ones serving them."""
+        with self.db.read() as db:
+            teams = {r["team_id"] for r in db.execute("SELECT team_id FROM members WHERE user_id=?", (actor["id"],))}
+            result = []
+            for row in db.execute("SELECT * FROM workers").fetchall():
+                spaces = [{"team_id": s["team_id"]} if s["team_id"] else {"user_id": s["user_id"]} for s in db.execute(
+                    "SELECT team_id,user_id FROM worker_spaces WHERE worker_id=? ORDER BY rowid", (row["id"],))]
+                if not actor["admin"]:
+                    spaces = [x for x in spaces if x.get("user_id") == actor["id"] or x.get("team_id") in teams]
+                visible = actor["admin"] or (row["scope"] == "shared" and spaces) or (
+                    row["scope"] == "dedicated" and (row["owner_id"] == actor["id"] or row["team_id"] in teams))
+                if visible:
+                    value = {k: row[k] for k in ("id", "name", "team_id", "owner_id", "enabled", "scope")}
+                    value["spaces"] = spaces
+                    value["capabilities"] = json.loads(row["config"]).get("capabilities", {})
+                    result.append(value)
+            return result
+
+    def share_worker(self, actor, wid, body):
+        """Turn a dedicated Worker into a shared execution environment; its current space stays served (D28, T3)."""
+        require(actor["admin"], "需要平台管理员", 403, "forbidden")
+        require(body.get("confirm") is True, "设为共享环境需要确认：环境内所有会话的 Agent 以同一系统账号运行，"
+                "能互相读取源码、工具登录与记忆", 400, "confirmation_required")
+        with self.db.transaction() as db:
+            row = db.execute("SELECT * FROM workers WHERE id=?", (wid,)).fetchone()
+            require(row is not None, "Worker 不存在", 404, "not_found")
+            require(row["scope"] == "dedicated", "只有专属 Worker 可以设为共享环境", 409, "invalid_state")
+            # Teams and other users would run as the platform's own account, which reads the database and Worker tokens.
+            local = hashlib.sha256(f"{socket.gethostname()}:{os.getuid()}".encode()).hexdigest()
+            require(json.loads(row["config"]).get("capabilities", {}).get("host_principal") != local,
+                    "平台宿主账号上的 Worker 不能设为共享环境；请使用独立执行账号、容器或主机", 409, "isolation_required")
+            if row["team_id"]:
+                db.execute("INSERT INTO worker_spaces(worker_id,team_id) VALUES(?,?)", (wid, row["team_id"]))
+            else:
+                db.execute("INSERT INTO worker_spaces(worker_id,user_id) VALUES(?,?)", (wid, row["owner_id"]))
+            # The boundary owner is kept: it opens the native entry and re-registers the Worker on reinstall.
+            db.execute("UPDATE workers SET scope='shared', team_id=NULL, owner_id=? WHERE id=?",
+                       (row["owner_id"] or actor["id"], wid))
+        return {"id": wid, "scope": "shared"}
+
+    def worker_space(self, actor, wid, body, remove=False):
+        """Add a Team or a user's personal space to a shared execution environment, or take it away."""
+        require(actor["admin"], "需要平台管理员", 403, "forbidden")
+        team, user = body.get("team_id"), body.get("user_id")
+        require(isinstance(team or user, str) and bool(team) != bool(user), "需要且只能指定 team_id 或 user_id")
+        with self.db.transaction() as db:
+            row = db.execute("SELECT scope FROM workers WHERE id=?", (wid,)).fetchone()
+            require(row is not None, "Worker 不存在", 404, "not_found")
+            # A spare environment can only be given to a Team, where it becomes that Team's own (T4).
+            require(row["scope"] == "shared" or (row["scope"] == "spare" and team and not remove),
+                    "只有共享环境可以调整服务空间；空闲环境只能分配给 Team", 409, "invalid_state")
+            column, value = ("team_id", team) if team else ("user_id", user)
+            if remove:
+                changed = db.execute(f"DELETE FROM worker_spaces WHERE worker_id=? AND {column}=?", (wid, value)).rowcount
+                require(changed == 1, "该空间不在此共享环境中", 404, "not_found")
+            elif team:
+                require(db.execute("SELECT 1 FROM teams WHERE id=?", (team,)).fetchone(), "Team 不存在", 404, "not_found")
+                give_environment(db, wid, team)
+            else:
+                require(db.execute("SELECT 1 FROM users WHERE id=? AND active=1", (user,)).fetchone(),
+                        "用户不存在", 404, "not_found")
+                require(not db.execute("SELECT 1 FROM worker_spaces WHERE worker_id=? AND user_id=?", (wid, user)).fetchone(),
+                        "该用户已在此共享环境中", 409, "conflict")
+                db.execute("INSERT INTO worker_spaces(worker_id,user_id) VALUES(?,?)", (wid, user))
+        return {"ok": True}
+
     def create_team(self, actor, body):
+        """Admin only; the Team gets its owner and its execution environment in the same transaction (D28)."""
+        require(actor["admin"], "只有平台管理员可以创建 Team", 403, "forbidden")
         title = name(body.get("name"))
+        require(isinstance(body.get("worker_id"), str) and body["worker_id"],
+                "创建 Team 必须选择执行环境", 400, "worker_required")
         with self.db.transaction() as db:
             require(not db.execute("SELECT 1 FROM teams WHERE name=?", (title,)).fetchone(),
                     "Team 名称已存在", 409, "conflict")
+            owner = db.execute("SELECT id FROM users WHERE username=? AND active=1",
+                               (text(body.get("owner"), "Team owner", 64).lower(),)).fetchone()
+            require(owner is not None, "Team owner 不存在", 404, "not_found")
             tid = uid("team")
             db.execute("INSERT INTO teams VALUES(?,?,?)", (tid, title, time.time()))
-            db.execute("INSERT INTO members VALUES(?,?,?)", (tid, actor["id"], "owner"))
-        return {"id": tid, "name": title, "role": "owner"}
+            db.execute("INSERT INTO members VALUES(?,?,?)", (tid, owner["id"], "owner"))
+            give_environment(db, body["worker_id"], tid)
+            role = "owner" if owner["id"] == actor["id"] else None
+            return {"id": tid, "name": title, "role": role, "environment": self._environment(db, tid)}
 
     def membership(self, actor, tid, body, remove=False):
         with self.db.transaction() as db:
@@ -258,6 +384,19 @@ class Service:
         selected = any(body.get(key) is not None for key in ("workflow_id", "template_id", "steps", "document"))
         require(body.get("plan") in (None, "agent", "match"), "plan 只能是 agent 或 match")
         require(not (selected and body.get("plan") == "agent"), "plan=agent 时不要同时指定工作流、模板、steps 或 document")
+        if not body.get("worker_id"):
+            # The space's only usable Worker runs it; a Team without an execution environment takes no new Sessions (D28).
+            team = body.get("team_id") or None
+            with self.db.read() as db:
+                usable = space_workers(db, actor["id"], team)
+                if team and not usable:
+                    row = db.execute("SELECT name FROM teams WHERE id=?", (team,)).fetchone()
+                    if row is not None and team_environment(db, team) is not None:
+                        raise Error(409, "environment_disabled", f"Team「{row['name']}」的执行环境已停用，请联系平台管理员")
+                    if row is not None:
+                        raise Error(409, "team_without_worker", f"Team「{row['name']}」尚未分配执行环境，请联系平台管理员分配")
+            if len(usable) == 1:
+                body = {**body, "worker_id": usable[0]["id"]}
         planning = design is None and (body.get("plan") == "agent" or (not selected and body.get("plan") != "match"))
         if planning:
             # A real KiroCrew Agent recognises the intent, enriches the requirement and plans the tasks (planning.py).
@@ -335,9 +474,8 @@ class Service:
 
     @staticmethod
     def _worker(db, user, worker, team):
-        row = db.execute("SELECT * FROM workers WHERE id=? AND enabled=1", (worker,)).fetchone()
-        require(row is not None and (row["team_id"] == team if team else row["owner_id"] == user),
-                "Worker 不属于本次执行空间", 403, "forbidden")
+        row = next((r for r in space_workers(db, user, team) if r["id"] == worker), None)
+        require(row is not None, "Worker 不属于本次执行空间", 403, "forbidden")
         return dict(row)
 
     def preview_entry(self, actor, rid):
@@ -406,12 +544,12 @@ class Service:
     @staticmethod
     def _space(db, run):
         """The run's space for the waiting_worker hint: Team name (None for a personal space) and enabled Workers."""
+        workers = len(space_workers(db, run["owner_id"], run["team_id"]))
         if run["team_id"]:
             team = db.execute("SELECT name FROM teams WHERE id=?", (run["team_id"],)).fetchone()
-            workers = db.execute("SELECT COUNT(*) FROM workers WHERE enabled=1 AND team_id=?", (run["team_id"],))
-            return {"team": team["name"] if team else run["team_id"], "workers": workers.fetchone()[0]}
-        workers = db.execute("SELECT COUNT(*) FROM workers WHERE enabled=1 AND owner_id=?", (run["owner_id"],))
-        return {"team": None, "workers": workers.fetchone()[0]}
+            return {"team": team["name"] if team else run["team_id"], "workers": workers,
+                    "disabled": not workers and team_environment(db, run["team_id"]) is not None}
+        return {"team": None, "workers": workers, "disabled": False}
 
     @staticmethod
     def _attention(run, space=None):
@@ -423,9 +561,12 @@ class Service:
             if space["workers"]:
                 title, detail = "需求已保存，等待选择 Worker", f"{where}有 {space['workers']} 个可用 Worker，提交时未指定。"
                 action = "选择 Worker 后开始执行。"
+            elif space["team"] and space.get("disabled"):
+                title, detail = f"{where}的执行环境已停用", "该 Team 的执行环境被管理员停用，暂时无法执行。"
+                action = "请平台管理员重新启用该执行环境后分配 Worker；也可以改在个人空间重新提交。"
             elif space["team"]:
                 title = f"{where}没有可用 Worker"
-                detail = "Team 的会话需要该 Team 专属的执行环境（独立的 OS 用户、主机或容器），该 Team 尚未分配。"
+                detail = "该 Team 尚未分配执行环境（共享环境或独立的执行环境）。"
                 action = "请平台管理员在控制台为该 Team 分配执行环境后分配 Worker；也可以改在个人空间重新提交。"
             else:
                 title, detail = f"{where}没有可用 Worker", "尚未为你登记执行环境。"

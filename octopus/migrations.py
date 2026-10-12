@@ -71,7 +71,18 @@ CREATE TABLE IF NOT EXISTS recoveries(
 CREATE INDEX IF NOT EXISTS recovery_run ON recoveries(run_id,number);
 """
 
-MIGRATIONS = [(1, "baseline", BASELINE)]
+# Execution environments (D28): a Worker is dedicated to one space, shared by the spaces in worker_spaces, or a
+# spare waiting to be assigned to a Team. Added as a column so workers (referenced by runs) is not rebuilt.
+ENVIRONMENTS = """
+ALTER TABLE workers ADD COLUMN scope TEXT NOT NULL DEFAULT 'dedicated'
+ CHECK(scope IN ('dedicated','shared','spare'));
+CREATE TABLE IF NOT EXISTS worker_spaces(
+ worker_id TEXT NOT NULL REFERENCES workers(id), team_id TEXT REFERENCES teams(id), user_id TEXT REFERENCES users(id),
+ CHECK((team_id IS NULL) != (user_id IS NULL)), UNIQUE(worker_id, team_id), UNIQUE(worker_id, user_id));
+CREATE UNIQUE INDEX IF NOT EXISTS worker_spaces_team ON worker_spaces(team_id) WHERE team_id IS NOT NULL;
+"""
+
+MIGRATIONS = [(1, "baseline", BASELINE), (2, "environments", ENVIRONMENTS)]
 
 
 def _statements(script):

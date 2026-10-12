@@ -96,6 +96,21 @@ describe("session detail", () => {
     await waitFor(() => expect(calls.find((c) => c.path === "/v1/runs/run-w/assign-worker")?.body).toMatchObject({ worker_id: "w1", expected_version: 1 }));
   });
 
+  test("a Session on a shared execution environment says so", async () => {
+    const run = makeRun({ id: "run-s", status: "running", worker_id: "w-shared", version: 1 });
+    open(run, { "GET /workers": [{ id: "w-shared", name: "personal", owner_id: "u1", team_id: null, enabled: true,
+      scope: "shared", spaces: [{ user_id: "u1" }], capabilities: {} }] });
+    expect(await screen.findByText("共享执行环境：环境内会话的 Agent 互相可读，记忆未分隔。")).toBeInTheDocument();
+  });
+
+  test("on someone else's shared environment the native entry is unavailable", async () => {
+    const run = makeRun({ id: "run-n", status: "running", worker_id: "w-shared", native_parent: "octopus-run-n", version: 1 });
+    open(run, { "GET /workers": [{ id: "w-shared", name: "personal", owner_id: "admin-1", team_id: null, enabled: true,
+      scope: "shared", spaces: [{ user_id: "u1" }], capabilities: { crew_entry: true } }] });
+    expect(await screen.findByText("共享执行环境不开放原生 KiroCrew 入口。", { selector: "#crew-entry-hint" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /在 KiroCrew 中打开/ })).toBeDisabled();
+  });
+
   test("a Team Session without any Worker explains why instead of offering an empty assignment", async () => {
     const waiting = makeRun({ id: "run-t", status: "waiting_worker", version: 1, team_id: "t1", attention: {
       title: "Team「Web 组」没有可用 Worker", detail: "该 Team 尚未分配执行环境。", workers: 0,

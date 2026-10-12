@@ -90,8 +90,28 @@ class CrewEntryTests(unittest.TestCase):
             self.create()
         self.assertEqual(self.calls, [])
 
+    def test_shared_environment_opens_the_native_entry_only_to_its_boundary_owner(self):
+        # The native login covers the whole Gateway (K03): on a shared environment (D28) only its owner may use it.
+        with self.db.transaction() as db:
+            db.execute("UPDATE workers SET scope='shared' WHERE id='worker'")
+            for actor in (self.actor, self.actors["bob"]):
+                db.execute("INSERT INTO worker_spaces(worker_id,user_id) VALUES('worker',?)", (actor["id"],))
+        bob = self.service.start(self.actors["bob"], {"request_id": "bob-entry-0001", "input": "只测试原生入口，不执行研发",
+            "source": {"type": "new"}, "steps": [{"id": "task", "name": "测试", "tool": "kiro", "prompt": "测试入口"}]})
+        with self.db.transaction() as db:
+            db.execute("UPDATE runs SET native_parent='native-bob', status='stopped' WHERE id=?", (bob["id"],))
+        with patch("octopus.crew_entry.worker_request", side_effect=self.request), self.assertRaises(Error) as caught:
+            crew_entry.create(self.service, self.actors["bob"], bob["id"])
+        self.assertEqual(caught.exception.code, "forbidden")
+        self.assertIn("共享执行环境", str(caught.exception))
+        self.assertEqual(self.calls, [])          # refused before the Worker is contacted
+        self.assertTrue(self.create()["url"])     # the boundary owner keeps the entry
+
     def test_team_membership_and_revocation_during_entry(self):
-        team = self.service.create_team(self.actor, {"name": "Entry Team"})
+        team = {"id": "team-entry"}   # a Team created before execution environments (D28)
+        with self.db.transaction() as db:
+            db.execute("INSERT INTO teams VALUES('team-entry','Entry Team',0)")
+            db.execute("INSERT INTO members VALUES('team-entry',?,'owner')", (self.actor["id"],))
         self.service.membership(self.actor, team["id"], {"username": "bob"})
         self.health["isolation"] = "dedicated"
         self.config["capabilities"] = dict(self.health)

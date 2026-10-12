@@ -15,7 +15,10 @@ import { openCrewSession } from "@/lib/crew";
 import { cn } from "@/lib/utils";
 
 export function LaunchWizard({ seed }: { seed: LaunchSeed }) {
-  const { me, space, selected, workers, templates, workflows, close, select } = useConsole();
+  const { me, space, selected, workers, teams, templates, workflows, close, select } = useConsole();
+  // A Team without an execution environment takes no new Sessions (D28); null means none, absent means an older platform.
+  const unassigned = (target: string) =>
+    teams.find((t) => t.id === target && (t.environment === null || t.environment?.enabled === false))?.name;
   const client = useQueryClient();
   const workflowMode = seed.mode === "workflow";
   const key = draftKey(me.id, space, selected, seed);
@@ -64,7 +67,7 @@ export function LaunchWizard({ seed }: { seed: LaunchSeed }) {
     if (target <= step) { setStep(target); return; }
     if (target > 1 && ref.current.method !== "agent") await settle();
     for (let index = step; index < target; index++) {
-      const problem = validateStep(index, ref.current, { workflowMode });
+      const problem = validateStep(index, ref.current, { workflowMode, teamWithoutEnvironment: unassigned(ref.current.space) });
       if (problem) {
         setStep(index);
         setError(problem);
@@ -77,7 +80,7 @@ export function LaunchWizard({ seed }: { seed: LaunchSeed }) {
   async function submit() {
     if (ref.current.method !== "agent") await settle();
     for (let index = 0; index < STEPS.length - 1; index++) {
-      const problem = validateStep(index, ref.current, { workflowMode });
+      const problem = validateStep(index, ref.current, { workflowMode, teamWithoutEnvironment: unassigned(ref.current.space) });
       if (problem) { setStep(index); throw new Error(problem); }
     }
     const current = ref.current;

@@ -33,9 +33,12 @@ export interface Member {
 export interface Team {
   id: string;
   name: string;
-  role: "owner" | "member" | string;
+  /** null for an administrator viewing a Team they are not a member of. */
+  role: "owner" | "member" | string | null;
   created: number;
   members: Member[];
+  /** The Team's execution environment (D28); null when none is assigned. Absent from older platforms. */
+  environment?: { worker_id: string; name: string; scope: WorkerScope; enabled?: boolean } | null;
 }
 
 export interface WorkerCapabilities {
@@ -47,12 +50,17 @@ export interface WorkerCapabilities {
   [key: string]: unknown;
 }
 
+export type WorkerScope = "dedicated" | "shared" | "spare";
+
 export interface Worker {
   id: string;
   name: string;
   owner_id: string | null;
   team_id: string | null;
   enabled: boolean | number;
+  /** dedicated to its owner or Team; shared by the spaces listed in `spaces`; spare until assigned to a Team. */
+  scope?: WorkerScope;
+  spaces?: { team_id?: string; user_id?: string }[];
   capabilities: WorkerCapabilities;
 }
 

@@ -20,7 +20,7 @@ import { useSessionActions } from "@/features/sessions/useSessionActions";
 import { canContinue, canDelete, canRecover, canStop, closeAction, crewEntryReason, statusText } from "@/lib/session";
 
 export function SessionView({ id }: { id: string }) {
-  const { teams, workflows, open } = useConsole();
+  const { teams, workflows, workers, me, open } = useConsole();
   const query = useRun(id);
   const { events, stream } = useRunEvents(id);
   const run = query.data;
@@ -38,7 +38,10 @@ export function SessionView({ id }: { id: string }) {
 
   const title = run.name || run.input;
   const flowName = run.workflow_name ?? workflows.find((f) => f.id === run.workflow_id)?.name ?? "定制任务";
-  const crewReason = crewEntryReason(run);
+  const environment = workers.find((w) => w.id === run.worker_id);
+  // A shared environment's native login covers its whole Gateway (K03): only its boundary owner may open it (D28).
+  const crewReason = crewEntryReason(run) ||
+    (environment?.scope === "shared" && environment.owner_id !== me.id ? "共享执行环境不开放原生 KiroCrew 入口。" : "");
   const close = closeAction(run);
   const design = run.purpose === "workflow_design";
   const percent = run.progress.total ? (100 * run.progress.accepted) / run.progress.total : 0;
@@ -114,6 +117,9 @@ export function SessionView({ id }: { id: string }) {
           </DropdownMenu>
         </div>
         {crewReason && <p id="crew-entry-hint" className="text-xs text-muted-foreground">{crewReason}</p>}
+        {workers.find((w) => w.id === run.worker_id)?.scope === "shared" && (
+          <p id="shared-environment" className="text-xs text-muted-foreground">共享执行环境：环境内会话的 Agent 互相可读，记忆未分隔。</p>
+        )}
       </header>
 
       {run.attention && run.status !== "waiting_worker" && (

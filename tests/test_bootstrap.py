@@ -1,8 +1,10 @@
 """First-time bootstrap registers the boundary Worker for the admin exactly once."""
 from pathlib import Path
+import json
 import tempfile
 import threading
 import unittest
+from unittest.mock import patch
 
 from octopus.bootstrap import register_boundary_worker
 from octopus.db import Database
@@ -17,7 +19,7 @@ class BootstrapTests(unittest.TestCase):
     def setUp(self):
         self.temporary = tempfile.TemporaryDirectory()
         root = Path(self.temporary.name)
-        db = Database(root / "platform")
+        db = self.db = Database(root / "platform")
         with db.transaction() as c:
             create_user(c, "admin", PASSWORD, admin=True)
         self.api = server(db, 0)
@@ -40,6 +42,32 @@ class BootstrapTests(unittest.TestCase):
         self.assertTrue(first["created"])
         self.assertFalse(second["created"])
         self.assertEqual(first["id"], second["id"])
+
+    def test_spare_registration_is_idempotent(self):
+        # A Worker host elsewhere (D28): dedicated isolation and a host account other than the platform's.
+        health = {"isolation": "dedicated", "boundary": "b-spare", "host_principal": "elsewhere"}
+        url = "https://10.0.0.9:8943"
+        with patch("octopus.server.validate_worker", return_value=health):
+            first = register_boundary_worker(self.api_url, "admin", PASSWORD, url, self.token, "team-host-1", spare=True)
+            second = register_boundary_worker(self.api_url, "admin", PASSWORD, url, self.token, "team-host-1", spare=True)
+        self.assertTrue(first["created"])
+        self.assertFalse(second["created"])
+        self.assertEqual(first["id"], second["id"])
+
+    def test_re_registering_a_replaced_worker_host_updates_its_connection(self):
+        first_health = {"isolation": "dedicated", "boundary": "b-old", "host_principal": "old-host"}
+        new_health = {"isolation": "dedicated", "boundary": "b-new", "host_principal": "new-host"}
+        with patch("octopus.server.validate_worker", return_value=first_health):
+            first = register_boundary_worker(self.api_url, "admin", PASSWORD, "https://10.0.0.9:8943", self.token,
+                                             "team-host-1", spare=True)
+        with patch("octopus.server.validate_worker", return_value=new_health):
+            again = register_boundary_worker(self.api_url, "admin", PASSWORD, "https://10.0.0.7:8943", "n" * 40,
+                                             "team-host-1", spare=True)
+        self.assertEqual((again["id"], again["created"], again["updated"]), (first["id"], False, True))
+        with self.db.read() as c:
+            config = json.loads(c.execute("SELECT config FROM workers WHERE id=?", (first["id"],)).fetchone()[0])
+        self.assertEqual((config["url"], config["token"], config["capabilities"]["boundary"]),
+                         ("https://10.0.0.7:8943", "n" * 40, "b-new"))
 
     def test_wrong_password_fails_loudly(self):
         with self.assertRaises(RuntimeError):

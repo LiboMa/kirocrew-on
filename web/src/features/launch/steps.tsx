@@ -63,6 +63,14 @@ export function NeedStep({ draft, update, workflowMode }: { draft: Draft; update
             <option value="">我的私有空间</option>
             {teams.map((team) => <option key={team.id} value={team.id}>{team.name} · Team 共同可见</option>)}
           </NativeSelect>
+          {(() => {
+            const environment = teams.find((t) => t.id === draft.space)?.environment;
+            if (environment === null || environment?.enabled === false)
+              return <p id="space-environment" className="text-xs text-destructive">该 Team 当前没有可用的执行环境（未分配或已停用），请联系平台管理员。</p>;
+            if (environment?.scope === "shared")
+              return <p id="space-environment" className="text-xs text-muted-foreground">共享执行环境：环境内会话的 Agent 互相可读，记忆未分隔。</p>;
+            return null;
+          })()}
         </div>
         {!workflowMode && (
           <div className="space-y-1.5">

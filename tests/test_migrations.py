@@ -8,6 +8,7 @@ from octopus import migrations
 from octopus.db import Database
 
 # Verbatim MVP 1.0.0 schema tail used by deployed databases (octopus/db.py before migrations).
+LATEST = max(number for number, _, _ in migrations.MIGRATIONS)
 LEGACY_TAIL = "CREATE TABLE IF NOT EXISTS schema_version(version INTEGER PRIMARY KEY);\nINSERT OR IGNORE INTO schema_version VALUES(1);\n"
 
 
@@ -34,21 +35,22 @@ class MigrationTests(unittest.TestCase):
 
     def test_fresh_database_gets_baseline_without_backup(self):
         result = migrations.apply(self.path, backup_dir=self.backups)
-        self.assertEqual(result, {"from": 0, "to": 1, "backup": None})
-        self.assertEqual(self.version(), 1)
+        self.assertEqual(result, {"from": 0, "to": LATEST, "backup": None})
+        self.assertEqual(self.version(), LATEST)
 
     def test_legacy_mvp_database_keeps_data(self):
         self.legacy_database()
         result = migrations.apply(self.path, backup_dir=self.backups)
-        self.assertEqual(result, {"from": 1, "to": 1, "backup": None})
+        self.assertEqual((result["from"], result["to"]), (1, LATEST))
+        self.assertIsNotNone(result["backup"])
         with sqlite3.connect(self.path) as db:
             self.assertEqual(db.execute("SELECT username FROM users").fetchall(), [("alice",)])
 
     def test_pending_migration_backs_up_then_applies(self):
         self.legacy_database()
-        steps = migrations.MIGRATIONS + [(2, "add_note", "ALTER TABLE users ADD COLUMN note TEXT;")]
+        steps = migrations.MIGRATIONS + [(LATEST + 1, "add_note", "ALTER TABLE users ADD COLUMN note TEXT;")]
         result = migrations.apply(self.path, steps, backup_dir=self.backups, clock=lambda: 1_700_000_000)
-        self.assertEqual((result["from"], result["to"]), (1, 2))
+        self.assertEqual((result["from"], result["to"]), (1, LATEST + 1))
         backup = Path(result["backup"])
         self.assertEqual(backup.stat().st_mode & 0o777, 0o600)
         with sqlite3.connect(backup) as db:
@@ -57,17 +59,36 @@ class MigrationTests(unittest.TestCase):
             self.assertEqual(db.execute("SELECT count(*) FROM users").fetchone()[0], 1)
         with sqlite3.connect(self.path) as db:
             self.assertEqual(db.execute("SELECT note FROM users").fetchall(), [(None,)])
-        self.assertEqual(self.version(), 2)
+        self.assertEqual(self.version(), LATEST + 1)
 
     def test_failed_migration_rolls_back_completely(self):
         self.legacy_database()
-        broken = migrations.MIGRATIONS + [(2, "broken", "ALTER TABLE users ADD COLUMN note TEXT;\nSELECT * FROM missing_table;")]
+        broken = migrations.MIGRATIONS + [(LATEST + 1, "broken", "ALTER TABLE users ADD COLUMN note TEXT;\nSELECT * FROM missing_table;")]
         with self.assertRaises(sqlite3.OperationalError):
             migrations.apply(self.path, broken, backup_dir=self.backups)
-        self.assertEqual(self.version(), 1)
+        self.assertEqual(self.version(), LATEST)
         with sqlite3.connect(self.path) as db:
             columns = [row[1] for row in db.execute("PRAGMA table_info(users)")]
         self.assertNotIn("note", columns)
+
+    def test_environments_migration_keeps_workers_dedicated(self):
+        self.legacy_database()
+        with sqlite3.connect(self.path) as db:
+            db.execute("INSERT INTO workers(id,name,owner_id,config) VALUES('w1','personal','u1','{}')")
+        result = migrations.apply(self.path, backup_dir=self.backups)
+        self.assertEqual(result["to"], 2)
+        self.assertIsNotNone(result["backup"])
+        with sqlite3.connect(self.path) as db:
+            self.assertEqual(db.execute("SELECT scope FROM workers WHERE id='w1'").fetchone()[0], "dedicated")
+            db.execute("INSERT INTO teams VALUES('t1','A',0)")
+            db.execute("INSERT INTO worker_spaces(worker_id,team_id) VALUES('w1','t1')")
+            with self.assertRaises(sqlite3.IntegrityError):
+                db.execute("INSERT INTO worker_spaces(worker_id,team_id,user_id) VALUES('w1','t1','u1')")
+            db.execute("INSERT INTO workers(id,name,owner_id,config) VALUES('w2','other','u1','{}')")
+            with self.assertRaises(sqlite3.IntegrityError):  # a Team has one environment
+                db.execute("INSERT INTO worker_spaces(worker_id,team_id) VALUES('w2','t1')")
+            with self.assertRaises(sqlite3.IntegrityError):
+                db.execute("UPDATE workers SET scope='bogus' WHERE id='w1'")
 
     def test_newer_database_is_refused(self):
         self.legacy_database()
@@ -78,7 +99,7 @@ class MigrationTests(unittest.TestCase):
 
     def test_database_class_applies_migrations(self):
         Database(self.root)
-        self.assertEqual(self.version(), 1)
+        self.assertEqual(self.version(), LATEST)
         Database(self.root)
         self.assertFalse(self.backups.exists())
 

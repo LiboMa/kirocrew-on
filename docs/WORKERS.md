@@ -49,16 +49,20 @@ flowchart LR
 
 ## 3．归属与调度规则
 
+Worker 有三种范围（`workers.scope`，D28）：**专属**（`dedicated`，属于一个用户或一个 Team）、**共享**（`shared`，服务 `worker_spaces` 中登记的 Team 与个人空间）、**空闲**（`spare`，尚未分配，不能运行会话）。
+
 | 规则 | 代码 |
 |---|---|
-| 只有平台管理员能登记 Worker（控制台「执行环境 · Worker」或 `POST /v1/workers`） | `server.py:310` |
-| 一个 Worker 只绑定**一个**用户或**一个** Team | `server.py:313-314` |
-| Team 的 Worker 必须是 `dedicated`；`trusted-local` 只用于个人空间 | `server.py:315-316` |
-| 平台自身的宿主账号只能作为管理员本机验证用的 `trusted-local` Worker | `server.py:321-325` |
-| 同一 Gateway 边界不能登记两次；不同空间不能共用同一宿主账号（主机名 + uid） | `server.py:327-332` |
-| 会话属于提交时选择的空间；Team 会话全体成员可见，个人会话只有本人可见；删除需会话所有者或 Team owner | `domain.py:70-79` |
-| 会话使用的 Worker 必须属于会话的空间且已启用 | `domain.py:337-341` |
-| 提交时未指定 Worker：MCP 在空间内**恰好一个**可用 Worker 时自动选用；否则会话进入 `waiting_worker`，之后用 `assign-worker` 分配 | `mcp.py:95-102`、`domain.py:488-491` |
+| 只有平台管理员能登记 Worker（控制台「执行环境 · Worker」或 `POST /v1/workers`）；`spare: true` 登记为空闲执行环境，必须 `dedicated` 且执行边界从未登记过（含已停用） | `server.py`（`POST /v1/workers`） |
+| 专属 Worker 只绑定**一个**用户或**一个** Team；Team 的专属 Worker 必须是 `dedicated`，`trusted-local` 只用于个人空间 | `server.py`（`POST /v1/workers`） |
+| 平台自身的宿主账号只能作为管理员本机验证用的 `trusted-local` Worker | `server.py`（`POST /v1/workers`） |
+| 同一 Gateway 边界不能登记两次；不同空间不能共用同一宿主账号（主机名 + uid） | `server.py`（`POST /v1/workers`） |
+| 把专属 Worker 设为共享须管理员确认，原所属空间继续由它服务；之后由管理员把 Team 或用户的个人空间加入或移出 | `Service.share_worker`、`Service.worker_space` |
+| 只有平台管理员能创建 Team，创建时必须指定 Team owner 与执行环境（共享环境或空闲环境）；空闲环境分配后成为该 Team 的专属环境，只分配一次 | `Service.create_team`、`give_environment`、`assign_spare` |
+| 一个 Team 同一时间只有一个执行环境（`worker_spaces` 的部分唯一索引与 `give_environment` 校验） | `migrations.ENVIRONMENTS` |
+| 某空间可用的 Worker：已启用，且为该空间的专属 Worker 或服务该空间的共享 Worker；空闲 Worker 永不可用 | `domain.space_workers` |
+| 会话属于提交时选择的空间；Team 会话全体成员可见，个人会话只有本人可见；删除需会话所有者或 Team owner | `domain.run_access` |
+| 提交时未指定 Worker：空间内**恰好一个**可用 Worker 时由服务端选用；Team 没有可用 Worker 时拒绝提交（409 `team_without_worker`）；个人空间有多个或没有时进入 `waiting_worker`，之后用 `assign-worker` 分配 | `Service.start`、`Service.operate` |
 
 ## 4．工作流
 
@@ -153,7 +157,7 @@ KiroCrew 的相关事实：
 
 ## 7．现状与差距
 
-- EC2 上只有 `personal` 一个边界，其 Worker 归管理员个人空间。提交到 Team 空间的会话停在 `waiting_worker`，且 `attention` 为空，用户看不到原因。
+- EC2 上只有 `personal` 一个边界，其 Worker 归管理员个人空间；执行环境（共享、专属、空闲）上线后，由管理员把它设为共享环境并分配给 Team 与用户（`docs/OPERATIONS.md`「执行环境」）。分配前提交到 Team 空间会被拒绝并说明原因；此前已停在 `waiting_worker` 的会话显示 `attention`（`81394f9`），分配后可继续。
 - 用 `al2023.sh <第二个边界>` 增加 Team 边界会遇到：
 
   | 问题 | 后果 |

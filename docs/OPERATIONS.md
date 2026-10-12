@@ -71,6 +71,17 @@ deploy/aws/deploy.sh spaces                # 列出正在运行的应用与端�
 远端从 5173 起取第一个空闲回环端口，本机端口为其加 10000（如 `http://localhost:15173/`）。需要本机安装 session-manager-plugin。
 dev server 只在工作区写 `node_modules/.vite`；不需要把工作区拉回本机。
 
+### 执行环境：共享环境、创建 Team 与分配（D28）
+
+每个 Team 创建时必须分配执行环境；用户的个人空间也可以使用共享环境，不必每人一个 Worker。
+
+1. **设为共享环境**：控制台「执行环境 · Worker」，对专属 Worker 点「设为共享环境」并确认（环境内所有会话的 Agent 以同一系统账号运行，能互相读取源码、工具登录与记忆；记忆未分隔；只用于同一信任范围）。原所属的个人空间继续由它服务。
+2. **创建 Team**（仅管理员）：「团队与成员」，填写名称、Team owner，选择执行环境（共享环境，或已登记的空闲专属环境）。没有可选环境时无法创建。
+3. **为已有 Team 分配**：同一对话框中，未分配执行环境的 Team 显示「分配执行环境」。未分配前，向该 Team 提交会被拒绝（`team_without_worker`）；此前已在等待的会话分配后在会话页「分配 Worker」继续。
+4. **为用户分配**：创建用户时选择「个人空间的执行环境」，或在用户列表中「分配共享环境」。
+
+API 对应：`POST /v1/workers/<id>/share {"confirm": true}`、`POST|DELETE /v1/workers/<id>/spaces {"team_id"}|{"user_id"}`、`POST /v1/teams {"name", "owner", "worker_id"}`、`POST /v1/users {..., "worker_id"}`。
+
 ### 原生 KiroCrew 对话（第二个 CloudFront 分发）
 
 控制台“在 KiroCrew 中打开”经 `https://<NativeDomain>/`（栈输出 `NativeUrl`）打开：CloudFront → 安全组（仅 CloudFront
