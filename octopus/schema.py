@@ -38,8 +38,11 @@ def openapi():
         "ConnectionUpdate": obj({"connection": ref("Connection")}, ["connection"]),
         "Share": obj({"confirm": {"const": True}}, ["confirm"]),
         "Space": obj({"team_id": text, "user_id": text}),
+        "Rename": obj({"name": text}, ["name"]),
+        "TeamArchive": obj({"archived": {"type": "boolean"}}, ["archived"]),
+        "TeamEnvironment": obj({"worker_id": text}, ["worker_id"]),
         "Token": obj({"label": text, "ttl": integer, "scopes": {"type": "array", "minItems": 1,
-                       "items": {"enum": ["read", "execute", "manage"]}}}),
+                       "items": {"enum": ["read", "execute", "manage", "admin"]}}}),
         "Resolve": obj({"input": text, "name": text, "workflow_id": text, "workflow_version": integer,
                         "template_id": text, "steps": step_list, "team_id": text}, ["input"]),
         "Design": obj({"request_id": command["request_id"], "input": text, "worker_id": text,
@@ -70,10 +73,15 @@ def openapi():
     schemas["Share"]["description"] = "Every Session's agents in a shared environment run as one OS account and can read each other's sources, tool logins and memory."
     schemas["ConnectionUpdate"]["description"] = "Administrator only. A replaced Worker host keeps serving its spaces; the new endpoint is re-validated like a registration (same isolation, boundary not used by another Worker)."
     schemas["Space"]["description"] = "Exactly one of team_id or user_id. A spare environment can only be given to a Team."
+    schemas["Rename"]["description"] = "A Team: its owners or an administrator. A Worker: administrator only."
+    schemas["TeamArchive"]["description"] = "Administrator only. An archived Team takes no new Sessions or members; its Sessions stay readable and stoppable; its execution environment is kept."
+    schemas["TeamEnvironment"]["description"] = "Administrator only. A shared or spare environment. The old shared one stops serving the Team; the Team's own host becomes spare and can serve only this Team until it is redeployed. Old Sessions are not moved: they wait to be reassigned at their next dispatch."
     routes = {
         "/v1/login": {"post": "Login"}, "/v1/logout": {"post": "Empty"}, "/v1/me": {"get": None},
         "/v1/users": {"get": None, "post": "User"}, "/v1/teams": {"get": None, "post": "Team"},
+        "/v1/teams/{id}": {"patch": "Rename"},
         "/v1/teams/{id}/members": {"post": "Member", "delete": "Member"},
+        "/v1/teams/{id}/archive": {"post": "TeamArchive"}, "/v1/teams/{id}/environment": {"post": "TeamEnvironment"},
         "/v1/workflows": {"get": None, "post": "Workflow"},
         "/v1/workflow-templates": {"get": None}, "/v1/workflows/resolve": {"post": "Resolve"},
         "/v1/workflows/parse": {"post": "WorkflowDocument"},
@@ -91,6 +99,7 @@ def openapi():
         "/v1/workers/{id}/spaces": {"post": "Space", "delete": "Space"},
         "/v1/workers/{id}/connection": {"post": "ConnectionUpdate"},
         "/v1/workers/{id}/dedicate": {"post": "Empty"},
+        "/v1/workers/{id}": {"patch": "Rename"}, "/v1/workers/{id}/retire": {"post": "Empty"},
         "/v1/workers/{id}/capabilities": {"get": None},
         "/v1/tokens": {"get": None, "post": "Token"}, "/v1/tokens/{id}": {"delete": "Empty"},
         "/v1/runs": {"get": None, "post": "Start"}, "/v1/runs/{id}": {"get": None},
@@ -107,7 +116,8 @@ def openapi():
     admin = {("/v1/admin/environments", "get"), ("/v1/admin/audit", "get"), ("/v1/workers", "post"), ("/v1/workers/{id}/enabled", "post"),
              ("/v1/workers/{id}/share", "post"), ("/v1/workers/{id}/spaces", "post"),
              ("/v1/workers/{id}/spaces", "delete"), ("/v1/workers/{id}/connection", "post"),
-             ("/v1/workers/{id}/dedicate", "post"), ("/v1/teams", "post")}
+             ("/v1/workers/{id}/dedicate", "post"), ("/v1/teams", "post"), ("/v1/teams/{id}/archive", "post"),
+             ("/v1/teams/{id}/environment", "post"), ("/v1/workers/{id}", "patch"), ("/v1/workers/{id}/retire", "post")}
     users_admin = {("/v1/users/{id}/password", "post"), ("/v1/users/{id}/active", "post"), ("/v1/users/{id}/admin", "post"),
                    ("/v1/admin/users", "get"), ("/v1/admin/users/{id}/tokens", "get")}
     paths = {}

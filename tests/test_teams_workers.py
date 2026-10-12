@@ -369,5 +369,18 @@ class DispatchRecheckTests(TeamsWorkersCase):
                                    {"request_id": "recover-000001", "expected_version": 1}), (409, "environment_changed"))
 
 
+class SchemaTests(unittest.TestCase):
+    def test_phase_two_routes_are_documented(self):
+        from octopus.schema import openapi
+        paths = openapi()["paths"]
+        self.assertIn("patch", paths["/v1/teams/{id}"])
+        self.assertIn("patch", paths["/v1/workers/{id}"])
+        for path in ("/v1/teams/{id}/archive", "/v1/teams/{id}/environment", "/v1/workers/{id}/retire"):
+            self.assertEqual(paths[path]["post"].get("tags"), ["执行环境（管理员）"], path)
+        self.assertEqual(paths["/v1/workers/{id}"]["patch"].get("tags"), ["执行环境（管理员）"])
+        self.assertNotIn("tags", paths["/v1/teams/{id}"]["patch"])
+        self.assertIn("admin", openapi()["components"]["schemas"]["Token"]["properties"]["scopes"]["items"]["enum"])
+
+
 if __name__ == "__main__":
     unittest.main()
