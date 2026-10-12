@@ -62,6 +62,7 @@ M4（共享与组织）、M5（仓库闭环）在 MVP 之后分别立项，各�
 | D28 | Team 执行环境：创建 Team 时必须选择执行环境——**共享环境**（管理员指定的共享 Worker，服务 Team 与用户的个人空间，每个用户不必有自己的 Worker；环境内会话的 Agent 以同一 OS 用户运行、互相可读，适用于同一信任范围；MVP 默认）或**专属环境**（独立执行边界：同一主机上的独立 OS 用户或第二台主机；适用于有保密要求的 Team；MVP 之后实现）；会话共享属于平台授权，不共享执行环境（`docs/WORKERS.md`）（2026-10-11；同日修订：由仅严格隔离改为两种并存，MVP 先实现共享环境；专属环境随后提前实现，见 D29） |
 | D29 | 专属环境先以**独立 Worker 主机**实现（2026-10-11）：每台一个 EC2 与 CloudFormation 栈，与平台同 VPC，只接受平台主机访问；平台↔Worker 使用平台私有 CA 签发的 TLS；新主机登记为空闲执行环境，由管理员在控制台分配给 Team；先 1 台（m7i.xlarge）验证，确认后扩到 3 台。同主机新 OS 用户的形态按需再做 |
 | D30 | Worker 主机的原生 KiroCrew 入口统一经平台主机中转（2026-10-12，方案 B）：每台 Worker 主机一个 CloudFront 分发，源站为平台主机的中转端口，平台 nginx 校验源站密钥后经私网 TLS 转发到该主机的 Gateway；管理侧收口为控制台「执行环境」对话框与管理员 API `GET /v1/admin/environments`，运维为 `deploy.sh worker-host add <名称>` |
+| D31 | 访问管理（2026-10-12，`docs/superpowers/specs/2026-10-12-access-management-design.md`）：新增 `admin` scope，平台管理需管理员账号且 Token 含 `admin`；看不到返回 404、看得到不能做返回 403 并说明原因；平台管理员可查看并操作全部会话（原生入口仍按 K03），越权与用户管理写入审计；管理类操作经 MCP 开放但只接受 admin Token；不删除用户与 Team，停用即可 |
 
 ## 3．设计默认值（已提出，待确认）
 

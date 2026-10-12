@@ -147,7 +147,7 @@ sequenceDiagram
 
 | 连接 | 凭据 | 说明 |
 |---|---|---|
-| 客户端 → Octopus | 用户 Token（`read` / `execute` / `manage`；管理接口另见访问管理设计） | 登录 24 小时；`octopus connect` 签发 30 天 Token；CloudFront 注入源站密钥，平台只服务带该头的请求 |
+| 客户端 → Octopus | 用户 Token（`read` / `execute` / `manage` / `admin`；平台管理需管理员账号且 Token 含 `admin`） | 登录 24 小时；`octopus connect` 签发 30 天 Token；CloudFront 注入源站密钥，平台只服务带该头的请求 |
 | Octopus → Worker | Worker Token（Bearer） | 平台主机上为回环 HTTP；Worker 主机为私网 TLS，只信任平台私有 CA；Worker 不做用户级权限判断 |
 | Worker → Gateway | 本边界 `.local_secret` → 短期原生 token | 只在回环；Worker 与 Gateway 同一 OS 用户 |
 | 浏览器 → Gateway | 一次性入口链接 → Gateway 登录 Cookie（1 小时） | 覆盖整个 Gateway（K03），所以只发给有权使用整个边界的人 |
