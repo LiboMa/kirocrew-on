@@ -7,7 +7,7 @@ import { Button } from "@/components/ui/button";
 
 // Roles as KiroCrew names them (observed on EC2 2026-10-12).
 const ROLE: Record<string, string> = { user: "用户", assistant: "KiroCrew 协调者", subagent: "子 Agent", inject: "平台消息",
-  system: "系统" };
+  tool: "工具", error: "错误", system: "系统" };
 const ACTIVE = new Set(["preparing", "ready", "running", "diagnosing", "dispatch_unknown", "waiting_approval"]);
 
 /** The run's native KiroCrew conversation, read through its Worker (D30). It needs no native login, so it also works

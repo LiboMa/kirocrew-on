@@ -115,7 +115,9 @@ describe("session detail", () => {
             context_pct: 12.5, messages: [{ role: "assistant", content: "子 Agent 已完成实现", truncated: false, ts: "2026-10-12T03:05:00Z" },
               { role: "assistant", content: "长内容", truncated: true, ts: null },
               { role: "subagent", content: "子任务回报", truncated: false, ts: null },
-              { role: "inject", content: "平台派发说明", truncated: false, ts: null }] };
+              { role: "inject", content: "平台派发说明", truncated: false, ts: null },
+              { role: "tool", content: "🔧 read", truncated: false, ts: null },
+              { role: "error", content: "工具批准超时", truncated: false, ts: null }] };
     } });
     const panel = await screen.findByRole("region", { name: "KiroCrew 会话" });
     expect(await within(panel).findByText("子 Agent 已完成实现")).toBeInTheDocument();
@@ -124,6 +126,8 @@ describe("session detail", () => {
     // Roles as KiroCrew names them (observed on EC2): the coordinator, its sub-agents and platform-injected notes.
     expect(within(panel).getByText("子任务回报").closest("article")).toHaveTextContent("子 Agent");
     expect(within(panel).getByText("平台派发说明").closest("article")).toHaveTextContent("平台消息");
+    expect(within(panel).getByText("🔧 read").closest("article")).toHaveTextContent("工具");
+    expect(within(panel).getByText("工具批准超时").closest("article")).toHaveTextContent("错误");
     expect(within(panel).getByText("子 Agent 已完成实现").closest("article")).toHaveTextContent("KiroCrew 协调者");
     await userEvent.click(within(panel).getByRole("button", { name: "加载更早的消息" }));
     expect(await within(panel).findByText("最早的需求")).toBeInTheDocument();
