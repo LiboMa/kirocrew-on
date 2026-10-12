@@ -235,5 +235,96 @@ class OversightTests(AccessCase):
         self.assertEqual(result["status"], "accepted")
         self.assertEqual(self.service.run(self.e, waiting)["status"], "preparing")
 
+class UserLifecycleTests(AccessCase):
+    NEW = "Another-password-456!"
+
+    def login(self, call, name, password=PASSWORD):
+        return call("POST", "/v1/login", body={"username": name, "password": password})
+
+    def test_changing_my_password_revokes_my_other_tokens(self):
+        other = self.token("bob", ["read"])
+        with self.http() as call:
+            status, result = call("POST", "/v1/me/password", self.tokens["bob"], {"current": "wrong-password-0", "password": self.NEW})
+            self.assertEqual((status, result["error"]), (403, "原密码不正确"))
+            self.assertEqual(call("POST", "/v1/me/password", self.tokens["bob"], {"current": PASSWORD, "password": "short"})[0], 400)
+            self.assertEqual(call("POST", "/v1/me/password", self.tokens["bob"], {"current": PASSWORD, "password": self.NEW})[0], 200)
+            self.assertEqual(call("GET", "/v1/me", other)[0], 401)
+            self.assertEqual(call("GET", "/v1/me", self.tokens["bob"])[0], 200)
+            self.assertEqual(self.login(call, "bob")[0], 401)
+            self.assertEqual(self.login(call, "bob", self.NEW)[0], 200)
+
+    def test_admin_resets_a_password_and_every_token_of_that_user_stops(self):
+        with self.http() as call:
+            self.assertEqual(call("POST", f"/v1/users/{self.b['id']}/password", self.tokens["eve"], {"password": self.NEW})[0], 403)
+            self.assertEqual(call("POST", f"/v1/users/{self.b['id']}/password", self.tokens["alice"], {"password": self.NEW})[0], 200)
+            self.assertEqual(call("GET", "/v1/me", self.tokens["bob"])[0], 401)
+            self.assertEqual(self.login(call, "bob", self.NEW)[0], 200)
+            self.assertEqual(call("POST", "/v1/users/user-missing/password", self.tokens["alice"], {"password": self.NEW})[0], 404)
+        self.assertEqual([(e["action"], e["target"]) for e in self.service.audit_log(self.a)],
+                         [("user.reset_password", self.b["id"])])
+
+    def test_deactivation_revokes_tokens_but_leaves_sessions_running(self):
+        self.shared_env(users=("bob",))
+        rid = self.start(self.b)["id"]
+        with self.http() as call:
+            self.assertEqual(call("POST", f"/v1/users/{self.b['id']}/active", self.tokens["alice"], {"active": False})[0], 200)
+            self.assertEqual(call("GET", "/v1/me", self.tokens["bob"])[0], 401)
+            self.assertEqual(self.login(call, "bob")[0], 401)
+            self.assertEqual(call("GET", f"/v1/runs/{rid}", self.tokens["alice"])[1]["status"], "preparing")
+            self.assertEqual(call("POST", f"/v1/runs/{rid}/stop", self.tokens["alice"],
+                                  {"request_id": "stop-0000000003", "expected_version": 1})[0], 200)
+            self.assertNotIn("bob", {u["username"] for u in call("GET", "/v1/users", self.tokens["eve"])[1]})
+            self.assertEqual(call("POST", f"/v1/users/{self.b['id']}/active", self.tokens["alice"], {"active": True})[0], 200)
+            self.assertEqual(self.login(call, "bob")[0], 200)
+
+    def test_last_active_owner_and_last_admin_are_protected(self):
+        with self.db.transaction() as db:
+            db.execute("INSERT INTO teams VALUES('team-bob','bob 的 Team',0)")
+            db.execute("INSERT INTO members VALUES('team-bob',?,'owner')", (self.b["id"],))
+        with self.http() as call:
+            status, result = call("POST", f"/v1/users/{self.b['id']}/active", self.tokens["alice"], {"active": False})
+            self.assertEqual((status, result["code"]), (409, "last_owner"))
+            self.assertIn("bob 的 Team", result["error"])
+            status, result = call("POST", f"/v1/users/{self.a['id']}/admin", self.tokens["alice"], {"admin": False})
+            self.assertEqual((status, result["code"]), (409, "last_admin"))
+            status, result = call("POST", f"/v1/users/{self.a['id']}/active", self.tokens["alice"], {"active": False})
+            self.assertEqual((status, result["code"]), (409, "last_admin"))
+            self.assertEqual(call("POST", f"/v1/users/{self.e['id']}/admin", self.tokens["alice"], {"admin": True})[0], 200)
+            self.assertEqual(call("POST", f"/v1/users/{self.a['id']}/admin", self.tokens["alice"], {"admin": False})[0], 200)
+            # The demoted admin's token still carries the admin scope, but elevation needs the account to be admin.
+            self.assertEqual(call("GET", "/v1/admin/users", self.tokens["alice"])[0], 403)
+
+    def test_user_creation_is_audited_and_new_routes_are_documented(self):
+        from octopus.schema import openapi
+        with self.http() as call:
+            status, created = call("POST", "/v1/users", self.tokens["alice"], {"username": "carol", "password": PASSWORD})
+            self.assertEqual(status, 201)
+        self.assertEqual([(e["action"], e["target"]) for e in self.service.audit_log(self.a)], [("user.create", created["id"])])
+        paths = openapi()["paths"]
+        for path, method in (("/v1/users/{id}/password", "post"), ("/v1/users/{id}/active", "post"),
+                             ("/v1/users/{id}/admin", "post"), ("/v1/admin/users", "get"),
+                             ("/v1/admin/users/{id}/tokens", "get")):
+            self.assertEqual(paths[path][method].get("tags"), ["用户与权限（管理员）"], path)
+        self.assertNotIn("tags", paths["/v1/me/password"]["post"])
+
+    def test_admin_user_list_and_token_revocation(self):
+        tid = self.team()
+        with self.http() as call:
+            self.login(call, "bob")
+            status, users = call("GET", "/v1/admin/users", self.tokens["alice"])
+            self.assertEqual(status, 200)
+            bob = next(u for u in users if u["username"] == "bob")
+            self.assertEqual({k: bob[k] for k in ("admin", "active", "tokens")}, {"admin": False, "active": True, "tokens": 2})
+            self.assertIsNotNone(bob["last_login"])
+            self.assertEqual(bob["teams"], [{"id": tid, "name": "研发 Team", "role": "member"}])
+            self.assertEqual(call("GET", "/v1/admin/users", self.tokens["bob"])[0], 403)
+            status, tokens = call("GET", f"/v1/admin/users/{self.b['id']}/tokens", self.tokens["alice"])
+            self.assertEqual(set(tokens[0]), {"id", "label", "scopes", "expires", "last_used"})
+            target = next(t for t in tokens if t["label"] != "Web login")
+            self.assertEqual(call("DELETE", f"/v1/admin/users/{self.b['id']}/tokens/{target['id']}", self.tokens["alice"], {})[0], 200)
+            self.assertEqual(call("GET", "/v1/me", self.tokens["bob"])[0], 401)
+            self.assertEqual(call("DELETE", f"/v1/admin/users/{self.b['id']}/tokens/{target['id']}", self.tokens["alice"], {})[0], 404)
+        self.assertIn(("user.revoke_token", self.b["id"]), [(e["action"], e["target"]) for e in self.service.audit_log(self.a)])
+
 if __name__ == "__main__":
     unittest.main()

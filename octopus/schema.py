@@ -30,6 +30,11 @@ def openapi():
                        "connection": ref("Connection")}, ["name", "connection"]),
         "Connection": obj({"url": text, "token": {"type": "string", "format": "password"}}, ["url", "token"]),
         "Enabled": obj({"enabled": {"type": "boolean"}}, ["enabled"]),
+        "PasswordChange": obj({"current": {"type": "string", "format": "password"},
+                               "password": {"type": "string", "format": "password", "minLength": 12}}, ["current", "password"]),
+        "PasswordReset": obj({"password": {"type": "string", "format": "password", "minLength": 12}}, ["password"]),
+        "Active": obj({"active": {"type": "boolean"}}, ["active"]),
+        "AdminFlag": obj({"admin": {"type": "boolean"}}, ["admin"]),
         "ConnectionUpdate": obj({"connection": ref("Connection")}, ["connection"]),
         "Share": obj({"confirm": {"const": True}}, ["confirm"]),
         "Space": obj({"team_id": text, "user_id": text}),
@@ -78,6 +83,9 @@ def openapi():
         "/v1/workflows/{id}/archive": {"post": "Archive"},
         "/v1/workers": {"get": None, "post": "Worker"},
         "/v1/admin/environments": {"get": None}, "/v1/admin/audit": {"get": None},
+        "/v1/me/password": {"post": "PasswordChange"}, "/v1/users/{id}/password": {"post": "PasswordReset"},
+        "/v1/users/{id}/active": {"post": "Active"}, "/v1/users/{id}/admin": {"post": "AdminFlag"},
+        "/v1/admin/users": {"get": None}, "/v1/admin/users/{id}/tokens": {"get": None},
         "/v1/workers/{id}/enabled": {"post": "Enabled"},
         "/v1/workers/{id}/share": {"post": "Share"},
         "/v1/workers/{id}/spaces": {"post": "Space", "delete": "Space"},
@@ -98,6 +106,8 @@ def openapi():
              ("/v1/workers/{id}/share", "post"), ("/v1/workers/{id}/spaces", "post"),
              ("/v1/workers/{id}/spaces", "delete"), ("/v1/workers/{id}/connection", "post"),
              ("/v1/workers/{id}/dedicate", "post"), ("/v1/teams", "post")}
+    users_admin = {("/v1/users/{id}/password", "post"), ("/v1/users/{id}/active", "post"), ("/v1/users/{id}/admin", "post"),
+                   ("/v1/admin/users", "get"), ("/v1/admin/users/{id}/tokens", "get")}
     paths = {}
     for path, methods in routes.items():
         paths[path] = {}
@@ -117,6 +127,10 @@ def openapi():
                 op["security"] = []
             if (path, method) in admin:
                 op["tags"] = ["执行环境（管理员）"]
+            if (path, method) in users_admin:
+                op["tags"] = ["用户与权限（管理员）"]
+                op["description"] = ("Administrator only (admin scope). Deactivating or resetting a user revokes all of "
+                                     "their tokens; the last active admin and a Team's only active owner are protected.")
             if path == "/v1/admin/environments":
                 op["description"] = "Administrator only. Every execution environment with its scope, owner, Team or shared spaces (with names), enabled, active_runs and live health (reachable=false when its Worker does not answer within a few seconds; never fails the listing). No tokens."
             if path.endswith("/crew-entry"):

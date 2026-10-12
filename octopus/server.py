@@ -229,6 +229,8 @@ def server(database, port=8918, host="127.0.0.1", allowed_hosts=(), origin_secre
                         require(user is not None and check_password(body.get("password"), user["password"]),
                                 "用户名或密码错误", 401, "unauthorized")
                         token = issue_token(db, user["id"], label="Web login")
+                        db.execute("UPDATE users SET last_login=? WHERE id=?", (time.time(), user["id"]))
+                        db.execute("DELETE FROM tokens WHERE expires<?", (time.time(),))
                     with limiter_lock:
                         failures.pop(address, None)
                     return self.respond(token)
@@ -248,6 +250,8 @@ def server(database, port=8918, host="127.0.0.1", allowed_hosts=(), origin_secre
                         if method == "POST":
                             require(elevated(actor), "需要平台管理员", 403, "forbidden")
                             created = create_user(db, body.get("username"), body.get("password"), body.get("admin", False))
+                            from .domain import audit
+                            audit(db, actor, "user.create", "user", created["id"], {"admin": created["admin"]})
                             if body.get("worker_id"):
                                 # The new user's personal space runs on a shared execution environment (D28).
                                 shared = db.execute("SELECT 1 FROM workers WHERE id=? AND scope='shared' AND enabled=1",
@@ -309,6 +313,24 @@ def server(database, port=8918, host="127.0.0.1", allowed_hosts=(), origin_secre
                         return self.respond(service.share(actor, wid, body, revoke=method == "DELETE"))
                     if action == "archive" and method == "POST":
                         return self.respond(service.archive_workflow(actor, wid, body))
+                if path == "/v1/me/password":
+                    require(method == "POST", "Method not allowed", 405)
+                    return self.respond(service.change_password(actor, body))
+                if len(segments) == 4 and segments[:2] == ["v1", "users"]:
+                    require(method == "POST", "Method not allowed", 405)
+                    handler = {"password": service.reset_password, "active": service.set_active,
+                               "admin": service.set_admin}.get(segments[3])
+                    require(handler is not None, "接口不存在", 404, "not_found")
+                    return self.respond(handler(actor, segments[2], body))
+                if path == "/v1/admin/users":
+                    require(method == "GET", "Method not allowed", 405)
+                    return self.respond(service.admin_users(actor))
+                if len(segments) in {5, 6} and segments[:3] == ["v1", "admin", "users"] and segments[4] == "tokens":
+                    if len(segments) == 5:
+                        require(method == "GET", "Method not allowed", 405)
+                        return self.respond(service.user_tokens(actor, segments[3]))
+                    require(method == "DELETE", "Method not allowed", 405)
+                    return self.respond(service.revoke_user_token(actor, segments[3], segments[5]))
                 if path == "/v1/admin/audit":
                     require(method == "GET", "Method not allowed", 405)
                     paging = {}

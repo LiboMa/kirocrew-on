@@ -9,7 +9,7 @@ import time
 import unicodedata
 
 from .db import dumps, uid
-from .security import Error, elevated, require
+from .security import Error, check_password, elevated, password_hash, require
 
 TOOLS = ("kiro", "claude", "codex", "opencode")
 ROLES = {"viewer": 1, "runner": 2, "editor": 3, "owner": 4}
@@ -136,6 +136,14 @@ def audit(db, actor, action, kind, target, detail=None):
     """Who did what to which object: administration and admin oversight of others' Sessions (spec §3.4)."""
     db.execute("INSERT INTO audit(at,actor_id,action,kind,target,detail) VALUES(?,?,?,?,?,?)",
                (time.time(), actor["id"], action, kind, target, dumps(detail or {})))
+
+
+def revoke_tokens(db, user, keep=None):
+    db.execute("DELETE FROM tokens WHERE user_id=? AND (? IS NULL OR id != ?)", (user, keep, keep))
+
+
+def _active_admins(db):
+    return db.execute("SELECT count(*) FROM users WHERE admin=1 AND active=1").fetchone()[0]
 
 
 def run_permissions(db, actor, run):
@@ -770,6 +778,87 @@ class Service:
                     audit(db, actor, "run." + action, "run", rid, {"version": version})
                 return {"id": rid, "session_id": rid, "version": version, "command": action, "status": "accepted"}
             return self._command(db, actor, action, rid, body, execute)
+
+    # --- users (spec §4): only an elevated admin manages others; everyone changes their own password ---
+
+    def change_password(self, actor, body):
+        with self.db.transaction() as db:
+            row = db.execute("SELECT password FROM users WHERE id=?", (actor["id"],)).fetchone()
+            require(check_password(body.get("current"), row["password"]), "原密码不正确", 403, "forbidden")
+            db.execute("UPDATE users SET password=? WHERE id=?", (password_hash(body.get("password")), actor["id"]))
+            revoke_tokens(db, actor["id"], keep=actor["token_id"])
+        return {"ok": True}
+
+    def _target(self, db, actor, uid):
+        require(elevated(actor), "需要平台管理员", 403, "forbidden")
+        row = db.execute("SELECT * FROM users WHERE id=?", (uid,)).fetchone()
+        require(row is not None, "用户不存在", 404, "not_found")
+        return row
+
+    def reset_password(self, actor, uid, body):
+        with self.db.transaction() as db:
+            self._target(db, actor, uid)
+            db.execute("UPDATE users SET password=? WHERE id=?", (password_hash(body.get("password")), uid))
+            revoke_tokens(db, uid)
+            audit(db, actor, "user.reset_password", "user", uid)
+        return {"ok": True}
+
+    def set_active(self, actor, uid, body):
+        require(isinstance(body.get("active"), bool), "active 必须为布尔值")
+        with self.db.transaction() as db:
+            row = self._target(db, actor, uid)
+            if not body["active"] and row["active"]:
+                sole = [r["name"] for r in db.execute(
+                    "SELECT t.name FROM members m JOIN teams t ON t.id=m.team_id WHERE m.user_id=? AND m.role='owner' "
+                    "AND NOT EXISTS(SELECT 1 FROM members o JOIN users u ON u.id=o.user_id WHERE o.team_id=m.team_id "
+                    "AND o.role='owner' AND o.user_id!=? AND u.active=1) ORDER BY t.name", (uid, uid))]
+                require(not sole, f"{row['username']} 是 Team「{'」「'.join(sole)}」唯一的 owner，请先指定另一位 owner",
+                        409, "last_owner")
+                require(not row["admin"] or _active_admins(db) > 1, "至少保留一位有效的平台管理员", 409, "last_admin")
+                revoke_tokens(db, uid)
+            db.execute("UPDATE users SET active=? WHERE id=?", (int(body["active"]), uid))
+            audit(db, actor, "user.activate" if body["active"] else "user.deactivate", "user", uid)
+        return {"id": uid, "active": body["active"]}
+
+    def set_admin(self, actor, uid, body):
+        require(isinstance(body.get("admin"), bool), "admin 必须为布尔值")
+        with self.db.transaction() as db:
+            row = self._target(db, actor, uid)
+            if not body["admin"] and row["admin"] and row["active"]:
+                require(_active_admins(db) > 1, "至少保留一位有效的平台管理员", 409, "last_admin")
+            db.execute("UPDATE users SET admin=? WHERE id=?", (int(body["admin"]), uid))
+            audit(db, actor, "user.promote" if body["admin"] else "user.demote", "user", uid)
+        return {"id": uid, "admin": body["admin"]}
+
+    def admin_users(self, actor):
+        require(elevated(actor), "需要平台管理员", 403, "forbidden")
+        now = time.time()
+        with self.db.read() as db:
+            result = []
+            for row in db.execute("SELECT * FROM users ORDER BY username"):
+                result.append({"id": row["id"], "username": row["username"], "admin": bool(row["admin"]),
+                               "active": bool(row["active"]), "created": row["created"], "last_login": row["last_login"],
+                               "teams": [dict(t) for t in db.execute(
+                                   "SELECT t.id,t.name,m.role FROM members m JOIN teams t ON t.id=m.team_id "
+                                   "WHERE m.user_id=? ORDER BY t.name", (row["id"],))],
+                               "tokens": db.execute("SELECT count(*) FROM tokens WHERE user_id=? AND expires>?",
+                                                    (row["id"], now)).fetchone()[0]})
+            return result
+
+    def user_tokens(self, actor, uid):
+        with self.db.read() as db:
+            self._target(db, actor, uid)
+            return [{**dict(r), "scopes": json.loads(r["scopes"])} for r in db.execute(
+                "SELECT id,label,scopes,expires,last_used FROM tokens WHERE user_id=? AND expires>? ORDER BY expires DESC",
+                (uid, time.time()))]
+
+    def revoke_user_token(self, actor, uid, tid):
+        with self.db.transaction() as db:
+            self._target(db, actor, uid)
+            changed = db.execute("DELETE FROM tokens WHERE id=? AND user_id=?", (tid, uid)).rowcount
+            require(changed == 1, "Token 不存在", 404, "not_found")
+            audit(db, actor, "user.revoke_token", "user", uid, {"token_id": tid})
+        return {"ok": True}
 
     def audit_log(self, actor, before=None, limit=50):
         require(elevated(actor), "需要平台管理员", 403, "forbidden")
