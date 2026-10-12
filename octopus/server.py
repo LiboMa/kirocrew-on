@@ -303,6 +303,9 @@ def server(database, port=8918, host="127.0.0.1", allowed_hosts=(), origin_secre
                 if len(segments) == 4 and segments[:2] == ["v1", "teams"] and segments[3] == "archive":
                     require(method == "POST", "Method not allowed", 405)
                     return self.respond(service.archive_team(actor, segments[2], body))
+                if len(segments) == 4 and segments[:2] == ["v1", "teams"] and segments[3] == "environment":
+                    require(method == "POST", "Method not allowed", 405)
+                    return self.respond(service.change_environment(actor, segments[2], body))
                 if len(segments) == 4 and segments[:2] == ["v1", "teams"] and segments[3] == "members":
                     require(method in {"POST", "DELETE"}, "Method not allowed", 405)
                     return self.respond(service.membership(actor, segments[2], body, remove=method == "DELETE"))
@@ -401,8 +404,10 @@ def server(database, port=8918, host="127.0.0.1", allowed_hosts=(), origin_secre
                             if (other["team_id"], other["owner_id"]) != (row["team_id"], row["owner_id"]):
                                 require(previous.get("host_principal") != health.get("host_principal"),
                                         "不同执行空间不能复用同一宿主账户；请使用独立账号/容器/主机", 409, "isolation_required")
-                        db.execute("UPDATE workers SET config=? WHERE id=?",
-                                   (dumps({**config, "capabilities": health}), row["id"]))
+                        moved = json.loads(row["config"]).get("capabilities", {}).get("boundary") != health.get("boundary")
+                        # A new boundary is a redeployed host: what an earlier Team left there is gone (P2).
+                        db.execute("UPDATE workers SET config=?, last_team=CASE WHEN ? THEN NULL ELSE last_team END "
+                                   "WHERE id=?", (dumps({**config, "capabilities": health}), int(moved), row["id"]))
                     return self.respond({"id": row["id"], "capabilities": health})
                 if len(segments) == 4 and segments[:2] == ["v1", "workers"] and segments[3] == "enabled":
                     require(method == "POST" and elevated(actor), "需要平台管理员", 403, "forbidden")

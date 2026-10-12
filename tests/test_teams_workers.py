@@ -141,5 +141,66 @@ class MembershipTests(TeamsWorkersCase):
             self.assertEqual(call("DELETE", "/v1/teams/team-p/members", self.tokens["bob"], {"username": "bob"})[0], 200)
 
 
+class EnvironmentChangeTests(TeamsWorkersCase):
+    def change(self, worker, actor=None):
+        return self.service.change_environment(actor or self.a, "team-p", {"worker_id": worker})
+
+    def test_moving_a_team_from_a_shared_environment_onto_a_spare_host(self):
+        self.spare()
+        self.assertEqual(self.change("env-spare")["environment"]["worker_id"], "env-spare")
+        with self.db.read() as db:
+            self.assertIsNone(db.execute("SELECT 1 FROM worker_spaces WHERE team_id='team-p'").fetchone())
+            row = db.execute("SELECT scope,team_id FROM workers WHERE id='env-spare'").fetchone()
+        self.assertEqual(tuple(row), ("dedicated", "team-p"))
+        self.assertEqual(json.loads(self.audits("team.environment")[0]["detail"]), {"from": "env-s", "to": "env-spare"})
+
+    def test_the_teams_own_host_becomes_spare_and_serves_only_that_team_again(self):
+        self.spare()
+        self.change("env-spare")
+        self.change("env-s")
+        with self.db.read() as db:
+            row = db.execute("SELECT scope,team_id,last_team FROM workers WHERE id='env-spare'").fetchone()
+        self.assertEqual(tuple(row), ("spare", None, "team-p"))
+        other = self.other_team()
+        status, code = self.code(self.service.worker_space, self.a, "env-spare", {"team_id": other})
+        self.assertEqual((status, code), (409, "environment_reuse"))
+        self.change("env-spare")   # back to the Team whose code is on it
+
+    def test_a_redeployed_host_may_serve_another_team(self):
+        self.spare()
+        self.change("env-spare")
+        self.change("env-s")
+        health = {"isolation": "dedicated", "boundary": "b-new", "host_principal": "hp-new"}
+        with patch("octopus.server.validate_worker", return_value=health), self.http() as call:
+            status, _ = call("POST", "/v1/workers/env-spare/connection", self.tokens["alice"],
+                             {"connection": {"url": "https://w.example", "token": "y" * 40}})
+        self.assertEqual(status, 200)
+        self.service.worker_space(self.a, "env-spare", {"team_id": self.other_team()})
+
+    def test_failed_change_keeps_the_old_environment(self):
+        self.spare()
+        with self.db.transaction() as db:
+            db.execute("UPDATE workers SET enabled=0 WHERE id='env-spare'")
+        self.assertEqual(self.code(self.change, "env-spare"), (409, "worker_unavailable"))
+        self.assertEqual(self.service.teams(self.a)[0]["environment"]["worker_id"], "env-s")
+
+    def test_same_environment_unknown_worker_and_non_admins(self):
+        self.assertEqual(self.code(self.change, "env-s"), (409, "conflict"))
+        self.assertEqual(self.code(self.change, "nope"), (404, "not_found"))
+        self.assertEqual(self.code(self.change, "env-s", self.c), (403, "forbidden"))
+
+    def test_a_team_without_an_environment_is_given_one(self):
+        other = self.other_team()
+        self.spare()
+        self.assertEqual(self.service.change_environment(self.a, other, {"worker_id": "env-spare"})
+                         ["environment"]["scope"], "dedicated")
+
+    def test_change_over_http_needs_the_admin_scope(self):
+        self.spare()
+        with self.http() as call:
+            self.assertEqual(call("POST", "/v1/teams/team-p/environment", self.tokens["carol"], {"worker_id": "env-spare"})[0], 403)
+            self.assertEqual(call("POST", "/v1/teams/team-p/environment", self.tokens["alice"], {"worker_id": "env-spare"})[0], 200)
+
+
 if __name__ == "__main__":
     unittest.main()

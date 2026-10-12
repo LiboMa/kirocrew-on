@@ -93,9 +93,9 @@ def space_workers(db, user, team):
 
 
 def assign_spare(db, worker, team):
-    """A spare execution environment becomes the Team's dedicated one; only once (D28, T4)."""
-    changed = db.execute("UPDATE workers SET scope='dedicated', team_id=?, owner_id=NULL "
-                         "WHERE id=? AND scope='spare' AND enabled=1", (team, worker)).rowcount
+    """A spare execution environment becomes the Team's dedicated one (D28, T4; P2 for a host that served a Team)."""
+    changed = db.execute("UPDATE workers SET scope='dedicated', team_id=?, owner_id=NULL, last_team=NULL "
+                         "WHERE id=? AND scope='spare' AND enabled=1 AND retired=0", (team, worker)).rowcount
     require(changed == 1, "该执行环境不可用或已分配", 409, "worker_unavailable")
 
 
@@ -117,13 +117,17 @@ def active_team(db, team):
 
 def give_environment(db, worker, team):
     """Give a Team an execution environment: a shared Worker serves it, a spare one becomes its own."""
-    row = db.execute("SELECT scope FROM workers WHERE id=? AND enabled=1", (worker,)).fetchone()
+    row = db.execute("SELECT scope,last_team FROM workers WHERE id=? AND enabled=1 AND retired=0", (worker,)).fetchone()
     require(row is not None and row["scope"] in {"shared", "spare"}, "该执行环境不可用或已分配", 409, "worker_unavailable")
     require(team_environment(db, team) is None, "该 Team 已有执行环境（含已停用的）", 409, "team_has_environment")
     if row["scope"] == "shared":
         db.execute("INSERT INTO worker_spaces(worker_id,team_id) VALUES(?,?)", (worker, team))
-    else:
-        assign_spare(db, worker, team)
+        return
+    if row["last_team"] not in (None, team):
+        served = db.execute("SELECT name FROM teams WHERE id=?", (row["last_team"],)).fetchone()
+        raise Error(409, "environment_reuse", f"该空闲环境曾服务 Team「{served['name'] if served else row['last_team']}」，"
+                    "主机上留有其源码、工作区与记忆；请重新部署该主机（新的执行边界）后再分配给其他 Team")
+    assign_spare(db, worker, team)
 
 
 def run_access(db, actor, rid, owner=False, admin=True):
@@ -379,6 +383,28 @@ class Service:
             db.execute("UPDATE teams SET archived=? WHERE id=?", (int(body["archived"]), tid))
             audit(db, actor, "team.archive" if body["archived"] else "team.restore", "team", tid)
         return {"id": tid, "archived": body["archived"]}
+
+    def change_environment(self, actor, tid, body):
+        """Move a Team to another execution environment (spec §5). Old Sessions are not moved (T6): their next dispatch
+        finds the Worker no longer serves the Team and waits to be reassigned (§6.2)."""
+        require(elevated(actor), "需要平台管理员", 403, "forbidden")
+        wid = body.get("worker_id")
+        require(isinstance(wid, str) and wid, "需要 worker_id")
+        with self.db.transaction() as db:
+            self._team(db, actor, tid)
+            require(db.execute("SELECT 1 FROM workers WHERE id=? AND retired=0", (wid,)).fetchone(),
+                    "Worker 不存在", 404, "not_found")
+            old = team_environment(db, tid)
+            require(old is None or old["id"] != wid, "该 Team 已在使用这个执行环境", 409, "conflict")
+            if old is not None and old["scope"] == "shared":
+                db.execute("DELETE FROM worker_spaces WHERE worker_id=? AND team_id=?", (old["id"], tid))
+            elif old is not None:
+                # The Team's own host waits as a spare that remembers it: its code and memories are still there (P2).
+                db.execute("UPDATE workers SET scope='spare', team_id=NULL, owner_id=?, last_team=? WHERE id=?",
+                           (actor["id"], tid, old["id"]))
+            give_environment(db, wid, tid)
+            audit(db, actor, "team.environment", "team", tid, {"from": old["id"] if old else None, "to": wid})
+            return {"id": tid, "environment": self._environment(db, tid)}
 
     def membership(self, actor, tid, body, remove=False):
         """Owners and admins (elevated, members or not) add, remove and re-role members; a member may remove only
