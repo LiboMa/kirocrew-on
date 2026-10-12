@@ -106,6 +106,15 @@ def team_environment(db, team):
                       (team, team)).fetchone()
 
 
+def active_team(db, team):
+    """A Team that takes new Sessions and members: 409 once archived (spec §5)."""
+    row = db.execute("SELECT * FROM teams WHERE id=?", (team,)).fetchone()
+    require(row is not None, "Team 不存在或无权限", 404, "not_found")
+    require(not row["archived"], f"Team「{row['name']}」已归档：会话可查看与停止，不能提交新会话或添加成员",
+            409, "team_archived")
+    return row
+
+
 def give_environment(db, worker, team):
     """Give a Team an execution environment: a shared Worker serves it, a spare one becomes its own."""
     row = db.execute("SELECT scope FROM workers WHERE id=? AND enabled=1", (worker,)).fetchone()
@@ -338,12 +347,44 @@ class Service:
             db.execute("INSERT INTO teams(id,name,created) VALUES(?,?,?)", (tid, title, time.time()))
             db.execute("INSERT INTO members VALUES(?,?,?)", (tid, owner["id"], "owner"))
             give_environment(db, body["worker_id"], tid)
+            audit(db, actor, "team.create", "team", tid, {"owner": owner["id"], "worker_id": body["worker_id"]})
             role = "owner" if owner["id"] == actor["id"] else None
             return {"id": tid, "name": title, "role": role, "environment": self._environment(db, tid)}
+
+    @staticmethod
+    def _team(db, actor, tid, owner=False):
+        """The Team an admin (any Team) or its members (owner=True: its owners) may manage; 404 / 403 as member()."""
+        row = db.execute("SELECT * FROM teams WHERE id=?", (tid,)).fetchone()
+        if elevated(actor):
+            require(row is not None, "Team 不存在", 404, "not_found")
+        else:
+            member(db, actor["id"], tid, owner=owner)
+        return dict(row)
+
+    def rename_team(self, actor, tid, body):
+        with self.db.transaction() as db:
+            team = self._team(db, actor, tid, owner=True)
+            title = name(body.get("name"))
+            require(not db.execute("SELECT 1 FROM teams WHERE name=? AND id!=?", (title, tid)).fetchone(),
+                    "Team 名称已存在", 409, "conflict")
+            db.execute("UPDATE teams SET name=? WHERE id=?", (title, tid))
+            audit(db, actor, "team.rename", "team", tid, {"from": team["name"], "to": title})
+        return {"id": tid, "name": title}
+
+    def archive_team(self, actor, tid, body):
+        require(elevated(actor), "需要平台管理员", 403, "forbidden")
+        require(isinstance(body.get("archived"), bool), "archived 必须为布尔值")
+        with self.db.transaction() as db:
+            self._team(db, actor, tid)
+            db.execute("UPDATE teams SET archived=? WHERE id=?", (int(body["archived"]), tid))
+            audit(db, actor, "team.archive" if body["archived"] else "team.restore", "team", tid)
+        return {"id": tid, "archived": body["archived"]}
 
     def membership(self, actor, tid, body, remove=False):
         with self.db.transaction() as db:
             member(db, actor["id"], tid, owner=True)
+            if not remove:
+                active_team(db, tid)
             target = db.execute("SELECT id FROM users WHERE username=? AND active=1",
                                 (text(body.get("username"), "用户名", 64).lower(),)).fetchone()
             require(target is not None, "用户不存在", 404, "not_found")
@@ -501,6 +542,7 @@ class Service:
             with self.db.read() as db:
                 if team:
                     member(db, actor["id"], team)   # a non-member learns nothing about the Team
+                    active_team(db, team)
                 usable = space_workers(db, actor["id"], team)
                 if team and not usable:
                     row = db.execute("SELECT name FROM teams WHERE id=?", (team,)).fetchone()
@@ -526,6 +568,7 @@ class Service:
             team = body.get("team_id") or None
             if team:
                 member(db, actor["id"], team)
+                active_team(db, team)
             if wid:
                 flow, _ = workflow_access(db, actor["id"], wid, "runner")
                 require(not flow["archived"], "工作流已归档，历史 Session 可继续", 409, "archived")
@@ -736,6 +779,8 @@ class Service:
                 oversight = False
             except Error:
                 oversight = True   # allowed only as an elevated admin (A2): audited
+            if run["team_id"] and action in {"continue", "recover", "reopen", "assign-worker"}:
+                active_team(db, run["team_id"])   # an archived Team's Sessions stay readable and stoppable (P3)
             require(action not in {"continue", "recover"} or json.loads(run["snapshot"]).get("purpose") != "workflow_design",
                     "工作流建议请按新需求重新生成；原建议保留作为证据", 409, "invalid_state")
             def execute():

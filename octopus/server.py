@@ -95,7 +95,8 @@ def required_scope(method, path):
     segments = path.strip("/").split("/")
     if path.startswith("/v1/admin/") or (segments[:2] == ["v1", "workers"] and method != "GET") or \
             (segments[:2] == ["v1", "users"] and (method != "GET" or len(segments) > 2)) or \
-            (path == "/v1/teams" and method == "POST"):
+            (path == "/v1/teams" and method == "POST") or \
+            (segments[:2] == ["v1", "teams"] and len(segments) == 4 and segments[3] in {"archive", "environment"}):
         return "admin"
     if method == "GET" or path in READ_POSTS or path.endswith("/preview"):
         return "read"
@@ -186,6 +187,9 @@ def server(database, port=8918, host="127.0.0.1", allowed_hosts=(), origin_secre
 
         def do_DELETE(self):
             self.dispatch("DELETE")
+
+        def do_PATCH(self):
+            self.dispatch("PATCH")
 
         def dispatch(self, method):
             try:
@@ -293,6 +297,12 @@ def server(database, port=8918, host="127.0.0.1", allowed_hosts=(), origin_secre
                 if path == "/v1/teams":
                     require(method in {"GET", "POST"}, "Method not allowed", 405)
                     return self.respond(service.teams(actor) if method == "GET" else service.create_team(actor, body))
+                if len(segments) == 3 and segments[:2] == ["v1", "teams"]:
+                    require(method == "PATCH", "Method not allowed", 405)
+                    return self.respond(service.rename_team(actor, segments[2], body))
+                if len(segments) == 4 and segments[:2] == ["v1", "teams"] and segments[3] == "archive":
+                    require(method == "POST", "Method not allowed", 405)
+                    return self.respond(service.archive_team(actor, segments[2], body))
                 if len(segments) == 4 and segments[:2] == ["v1", "teams"] and segments[3] == "members":
                     require(method in {"POST", "DELETE"}, "Method not allowed", 405)
                     return self.respond(service.membership(actor, segments[2], body, remove=method == "DELETE"))
