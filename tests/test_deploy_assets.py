@@ -273,6 +273,18 @@ class ScriptTests(unittest.TestCase):
         self.assertEqual(deploy("worker-host", "bogus", "w1").returncode, 2)
         self.assertEqual(deploy("worker-host", "up", "W1;reboot").returncode, 2)
 
+    def test_contract_check_runs_against_the_release_being_installed(self):
+        # Found on the first fresh Worker host (D28): before the switch /opt/kirocrew-on/current and /opt/kirocrew/current
+        # do not exist yet, and on an upgrade they still point at the old release.
+        text = (ROOT / "deploy/install/al2023.sh").read_text()
+        check = text[text.index('log "原生契约检查'):text.index('log "切换到已通过检查的发布')]
+        self.assertIn('-e "s#/opt/kirocrew-on/current/#$TARGET/#g" -e "s#/opt/kirocrew/current/#$KC/#g"', check)
+        for line in (l for l in check.splitlines() if "runuser" in l or "composition.gateway" in l or "OCTOPUS_CONFIG" in l):
+            self.assertNotIn("$BOUNDARY_TOML", line)
+        self.assertIn('--config "$CHECK_TOML" --check', check)
+        self.assertIn('OCTOPUS_CONFIG="$CHECK_TOML"', check)
+        self.assertIn('rm -f "$CHECK_TOML"', check)
+
     def test_versions_file_declares_every_pin(self):
         values = dict(line.split("=", 1) for line in (ROOT / "deploy/versions.env").read_text().splitlines()
                       if line and not line.startswith("#"))

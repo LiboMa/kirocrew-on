@@ -251,11 +251,18 @@ fi
 log "原生契约检查（以 $CREW 身份，隔离边界配置）"
 CREW_ENV=(env HOME="$BASE/home" PATH="/opt/kirocrew-tools/bin:$NODE_ROOT/bin:/usr/local/bin:/usr/bin:/bin"
           PYTHONPATH="$TARGET")
+# The check runs against the release being installed: before the switch, current points at the previous release, or
+# (on a fresh host) does not exist yet. The boundary config with its current paths rewritten is used for the check only.
+CHECK_TOML="/etc/kirocrew-on/boundary-$BOUNDARY.check.toml"
+sed -e "s#/opt/kirocrew-on/current/#$TARGET/#g" -e "s#/opt/kirocrew/current/#$KC/#g" "$BOUNDARY_TOML" > "$CHECK_TOML"
+chown "root:$CREW" "$CHECK_TOML"
+chmod 0640 "$CHECK_TOML"
 # --check seeds the poc-* templates into KIRO_HOME and verifies every route before the native tests read them.
 runuser -u "$CREW" -- "${CREW_ENV[@]}" "$KC/venv/bin/python" -s \
-  -m composition.gateway --config "$BOUNDARY_TOML" --check
-runuser -u "$CREW" -- "${CREW_ENV[@]}" OCTOPUS_CONFIG="$BOUNDARY_TOML" \
+  -m composition.gateway --config "$CHECK_TOML" --check
+runuser -u "$CREW" -- "${CREW_ENV[@]}" OCTOPUS_CONFIG="$CHECK_TOML" \
   "$KC/venv/bin/python" -s -m unittest discover -s "$TARGET/tests/native"
+rm -f "$CHECK_TOML"
 if [ "$KIROCREW_VERSION" = "$KIROCREW_ACCEPTED_VERSION" ]; then
   sed -i "s#^kirocrew_versions = .*#kirocrew_versions = [\"$KIROCREW_VERSION\"]#" "$BOUNDARY_TOML"
 fi
