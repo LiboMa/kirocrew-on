@@ -132,6 +132,12 @@ def run_access(db, actor, rid, owner=False, admin=True):
     return dict(row)
 
 
+def audit(db, actor, action, kind, target, detail=None):
+    """Who did what to which object: administration and admin oversight of others' Sessions (spec §3.4)."""
+    db.execute("INSERT INTO audit(at,actor_id,action,kind,target,detail) VALUES(?,?,?,?,?,?)",
+               (time.time(), actor["id"], action, kind, target, dumps(detail or {})))
+
+
 def run_permissions(db, actor, run):
     """What the console may offer on a run it shows (the server enforces the same rules)."""
     try:
@@ -584,12 +590,14 @@ class Service:
         result = worker_request(json.loads(worker["config"]), "/files", {"run_id": rid, "path": relative})
         return base64.b64decode(result["content"])
 
-    def runs(self, actor):
+    def runs(self, actor, all=False):
+        """The actor's own and Team Sessions; with all=True an elevated admin gets every Session (B5)."""
+        oversee = all and elevated(actor)
         with self.db.read() as db:
             result = []
             for row in db.execute("SELECT id FROM runs ORDER BY created DESC"):
                 try:
-                    run = run_access(db, actor, row["id"])
+                    run = run_access(db, actor, row["id"], admin=oversee)
                     result.append(self._view(db, run, actor, detail=False))
                 except Error:
                     pass
@@ -690,6 +698,11 @@ class Service:
         require(action in {"continue", "recover", "stop", "close", "reopen", "delete", "assign-worker"}, "不支持的操作")
         with self.db.transaction() as db:
             run = run_access(db, actor, rid, owner=action == "delete")
+            try:
+                run_access(db, actor, rid, owner=action == "delete", admin=False)
+                oversight = False
+            except Error:
+                oversight = True   # allowed only as an elevated admin (A2): audited
             require(action not in {"continue", "recover"} or json.loads(run["snapshot"]).get("purpose") != "workflow_design",
                     "工作流建议请按新需求重新生成；原建议保留作为证据", 409, "invalid_state")
             def execute():
@@ -738,7 +751,8 @@ class Service:
                 elif action == "assign-worker":
                     require(run["status"] == "waiting_worker" and run["lifecycle"] == "open",
                             "运行已分配 Worker 或已关闭", 409, "invalid_state")
-                    self._worker(db, actor["id"], body.get("worker_id"), run["team_id"])
+                    # The Session's own space, not the operator's (an admin may assign for someone else).
+                    self._worker(db, run["owner_id"], body.get("worker_id"), run["team_id"])
                     db.execute("UPDATE runs SET worker_id=?,status='preparing' WHERE id=?", (body["worker_id"], rid))
                 elif action == "reopen":
                     require(run["lifecycle"] == "closed", "只有已关闭的 Session 可重新打开", 409, "invalid_state")
@@ -752,8 +766,20 @@ class Service:
                                (lifecycle, rid))
                 db.execute("UPDATE runs SET version=?,updated=? WHERE id=?", (version, time.time(), rid))
                 self.db.event(db, rid, "command." + action, {"actor": actor["id"], "version": version})
+                if oversight:
+                    audit(db, actor, "run." + action, "run", rid, {"version": version})
                 return {"id": rid, "session_id": rid, "version": version, "command": action, "status": "accepted"}
             return self._command(db, actor, action, rid, body, execute)
+
+    def audit_log(self, actor, before=None, limit=50):
+        require(elevated(actor), "需要平台管理员", 403, "forbidden")
+        require(type(limit) is int and 1 <= limit <= 200, "limit 须为 1–200 的整数")
+        with self.db.read() as db:
+            rows = db.execute("SELECT a.*, u.username FROM audit a JOIN users u ON u.id=a.actor_id "
+                              "WHERE a.id < ? ORDER BY a.id DESC LIMIT ?", (before or 2 ** 62, limit)).fetchall()
+        return [{"id": r["id"], "at": r["at"], "actor": {"id": r["actor_id"], "username": r["username"]},
+                 "action": r["action"], "kind": r["kind"], "target": r["target"], "detail": json.loads(r["detail"])}
+                for r in rows]
 
     def events(self, actor, rid, after=0):
         with self.db.read() as db:

@@ -309,6 +309,14 @@ def server(database, port=8918, host="127.0.0.1", allowed_hosts=(), origin_secre
                         return self.respond(service.share(actor, wid, body, revoke=method == "DELETE"))
                     if action == "archive" and method == "POST":
                         return self.respond(service.archive_workflow(actor, wid, body))
+                if path == "/v1/admin/audit":
+                    require(method == "GET", "Method not allowed", 405)
+                    paging = {}
+                    for key in ("before", "limit"):
+                        if key in query:
+                            require(query[key][0].isdigit(), f"{key} 须为非负整数")
+                            paging[key] = int(query[key][0])
+                    return self.respond(service.audit_log(actor, **paging))
                 if path == "/v1/admin/environments":
                     require(method == "GET", "Method not allowed", 405)
                     return self.respond(service.environments(actor))
@@ -419,7 +427,8 @@ def server(database, port=8918, host="127.0.0.1", allowed_hosts=(), origin_secre
                                          "capabilities": health}, 201)
                 if path == "/v1/runs":
                     require(method in {"GET", "POST"}, "Method not allowed", 405)
-                    return self.respond(service.runs(actor) if method == "GET" else service.start(actor, body))
+                    return self.respond(service.runs(actor, all=query.get("all") == ["1"]) if method == "GET"
+                                        else service.start(actor, body))
                 if len(segments) in {3, 4} and segments[:2] == ["v1", "runs"]:
                     rid = segments[2]
                     if len(segments) == 3 and method == "GET":

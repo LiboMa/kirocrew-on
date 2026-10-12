@@ -885,7 +885,7 @@ class EnvironmentTests(unittest.TestCase):
             self.assertEqual(call("GET", "/v1/admin/environments", "bob")[0], 403)
         paths = openapi()["paths"]
         tag = "执行环境（管理员）"
-        for path, method in (("/v1/admin/environments", "get"), ("/v1/workers", "post"),
+        for path, method in (("/v1/admin/environments", "get"), ("/v1/admin/audit", "get"), ("/v1/workers", "post"),
                              ("/v1/workers/{id}/enabled", "post"), ("/v1/workers/{id}/share", "post"),
                              ("/v1/workers/{id}/spaces", "post"), ("/v1/workers/{id}/spaces", "delete"),
                              ("/v1/workers/{id}/connection", "post"), ("/v1/workers/{id}/dedicate", "post"),

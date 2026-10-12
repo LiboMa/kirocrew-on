@@ -77,7 +77,7 @@ def openapi():
         "/v1/workflows/{id}/shares": {"post": "Grant", "delete": "Grant"},
         "/v1/workflows/{id}/archive": {"post": "Archive"},
         "/v1/workers": {"get": None, "post": "Worker"},
-        "/v1/admin/environments": {"get": None},
+        "/v1/admin/environments": {"get": None}, "/v1/admin/audit": {"get": None},
         "/v1/workers/{id}/enabled": {"post": "Enabled"},
         "/v1/workers/{id}/share": {"post": "Share"},
         "/v1/workers/{id}/spaces": {"post": "Space", "delete": "Space"},
@@ -94,7 +94,7 @@ def openapi():
         **{"/v1/runs/{id}/" + action: {"post": "Control"} for action in ["stop", "close", "reopen", "delete"]},
     }
     # Execution environment management (D28): one place for administrators, also in the console's 「执行环境」 dialog.
-    admin = {("/v1/admin/environments", "get"), ("/v1/workers", "post"), ("/v1/workers/{id}/enabled", "post"),
+    admin = {("/v1/admin/environments", "get"), ("/v1/admin/audit", "get"), ("/v1/workers", "post"), ("/v1/workers/{id}/enabled", "post"),
              ("/v1/workers/{id}/share", "post"), ("/v1/workers/{id}/spaces", "post"),
              ("/v1/workers/{id}/spaces", "delete"), ("/v1/workers/{id}/connection", "post"),
              ("/v1/workers/{id}/dedicate", "post"), ("/v1/teams", "post")}
@@ -125,6 +125,13 @@ def openapi():
                 op["description"] = "Read scope. The run's native KiroCrew Session (coordinator and sub-agent messages, running state) read through its Worker; no native login is issued, so Team members on a shared environment can watch it too. Newest page first; pass before=next_before for older messages."
                 op["parameters"] += [{"in": "query", "name": "before", "schema": {"type": "integer", "minimum": 0}},
                                      {"in": "query", "name": "limit", "schema": {"type": "integer", "minimum": 1, "maximum": 100}}]
+            if path == "/v1/admin/audit":
+                op["description"] = "Administrator only (admin scope). Administration and admin oversight of others' Sessions, newest first."
+                op["parameters"] = [{"in": "query", "name": "before", "schema": {"type": "integer", "minimum": 0}},
+                                    {"in": "query", "name": "limit", "schema": {"type": "integer", "minimum": 1, "maximum": 200}}]
+            if path == "/v1/runs" and method == "get":
+                op["parameters"] = [{"in": "query", "name": "all", "schema": {"enum": ["1"]},
+                                     "description": "Elevated admins only: every Session instead of their own and their Teams'."}]
             if path.endswith("/dedicate"):
                 op["description"] = "Administrator only. A shared Worker host serving exactly one Team becomes that Team's dedicated environment; every member then opens its native KiroCrew entry."
             if path.endswith("/events"):

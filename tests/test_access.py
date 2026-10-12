@@ -184,5 +184,56 @@ class SemanticsTests(AccessCase):
             self.start(self.b, team_id=tid)
         self.assertEqual(caught.exception.code, "team_without_worker")
 
+class OversightTests(AccessCase):
+    """A2: an elevated admin sees and operates every Session, except its native entry; oversight is audited."""
+
+    def setUp(self):
+        super().setUp()
+        self.shared_env(users=("bob",))
+        self.rid = self.start(self.b)["id"]   # bob's personal Session on bob's environment
+
+    def test_admin_reads_and_operates_every_session_but_not_its_native_entry(self):
+        from unittest.mock import patch
+        from octopus import crew_entry
+        with self.http() as call:
+            self.assertEqual(call("GET", f"/v1/runs/{self.rid}", self.tokens["alice"])[0], 200)
+            self.assertEqual(call("GET", f"/v1/runs/{self.rid}/events", self.tokens["alice"])[0], 200)
+            self.assertEqual(call("GET", f"/v1/runs/{self.rid}", self.tokens["eve"])[0], 404)
+            status, result = call("POST", f"/v1/runs/{self.rid}/stop", self.tokens["alice"],
+                                  {"request_id": "stop-0000000001", "expected_version": 1})
+            self.assertEqual((status, result["status"]), (200, "accepted"), result)
+            self.assertEqual(call("POST", f"/v1/runs/{self.rid}/crew-entry", self.tokens["alice"], {})[0], 404)
+            audit = call("GET", "/v1/admin/audit", self.tokens["alice"])[1]
+            self.assertEqual([(e["action"], e["kind"], e["target"], e["actor"]["username"]) for e in audit],
+                             [("run.stop", "run", self.rid, "alice")])
+            self.assertEqual(call("GET", "/v1/admin/audit", self.tokens["bob"])[0], 403)
+        with patch("octopus.crew_entry.worker_request", return_value={"messages": []}):
+            with self.db.transaction() as db:
+                db.execute("UPDATE runs SET native_parent='octopus-x' WHERE id=?", (self.rid,))
+            self.assertEqual(crew_entry.observe(self.service, self.a, self.rid), {"messages": []})
+        events = self.service.events(self.a, self.rid)
+        self.assertEqual(next(e for e in events if e["kind"] == "command.stop")["payload"]["actor"], self.a["id"])
+
+    def test_bobs_own_operations_are_not_audited(self):
+        self.service.operate(self.b, self.rid, "stop", {"request_id": "stop-0000000002", "expected_version": 1})
+        self.assertEqual(self.service.audit_log(self.a), [])
+
+    def test_admin_lists_all_sessions_only_on_request(self):
+        with self.http() as call:
+            self.assertNotIn(self.rid, {r["id"] for r in call("GET", "/v1/runs", self.tokens["alice"])[1]})
+            self.assertIn(self.rid, {r["id"] for r in call("GET", "/v1/runs?all=1", self.tokens["alice"])[1]})
+            ordinary = self.token("alice", ["read", "execute"])
+            self.assertNotIn(self.rid, {r["id"] for r in call("GET", "/v1/runs?all=1", ordinary)[1]})
+            self.assertEqual({r["id"] for r in call("GET", "/v1/runs?all=1", self.tokens["eve"])[1]}, set())
+
+    def test_admin_assigns_a_worker_from_the_sessions_own_space(self):
+        waiting = self.start(self.e, "start-0000000004")["id"]   # eve has no environment yet
+        self.assertEqual(self.service.run(self.e, waiting)["status"], "waiting_worker")
+        self.shared_env("env-eve", users=("eve",))
+        result = self.service.operate(self.a, waiting, "assign-worker",
+                                      {"request_id": "assign-000000001", "expected_version": 1, "worker_id": "env-eve"})
+        self.assertEqual(result["status"], "accepted")
+        self.assertEqual(self.service.run(self.e, waiting)["status"], "preparing")
+
 if __name__ == "__main__":
     unittest.main()
