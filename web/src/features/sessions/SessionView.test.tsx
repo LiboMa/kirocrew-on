@@ -103,11 +103,41 @@ describe("session detail", () => {
     expect(await screen.findByText("共享执行环境：环境内会话的 Agent 互相可读，记忆未分隔。")).toBeInTheDocument();
   });
 
+  test("the native KiroCrew conversation is shown on the session page, older messages on request", async () => {
+    const run = makeRun({ id: "run-o", status: "running", worker_id: "w1", native_parent: "octopus-run-o", version: 1 });
+    const pages: string[] = [];
+    open(run, { "GET /runs/run-o/observe": (_body: unknown, url: URL) => {
+      pages.push(url.search);
+      return url.searchParams.get("before") === "40"
+        ? { native_parent: "octopus-run-o", title: "番茄钟", running: true, total: 42, has_more: false, next_before: null,
+            context_pct: 12.5, messages: [{ role: "user", content: "最早的需求", truncated: false, ts: "2026-10-12T03:00:00Z" }] }
+        : { native_parent: "octopus-run-o", title: "番茄钟", running: true, total: 42, has_more: true, next_before: 40,
+            context_pct: 12.5, messages: [{ role: "assistant", content: "子 Agent 已完成实现", truncated: false, ts: "2026-10-12T03:05:00Z" },
+              { role: "assistant", content: "长内容", truncated: true, ts: null }] };
+    } });
+    const panel = await screen.findByRole("region", { name: "KiroCrew 会话" });
+    expect(await within(panel).findByText("子 Agent 已完成实现")).toBeInTheDocument();
+    expect(panel).toHaveTextContent("运行中");
+    expect(panel).toHaveTextContent("已截断");
+    await userEvent.click(within(panel).getByRole("button", { name: "加载更早的消息" }));
+    expect(await within(panel).findByText("最早的需求")).toBeInTheDocument();
+    expect(pages).toContain("?limit=50&before=40");
+    expect(within(panel).queryByRole("button", { name: "加载更早的消息" })).toBeNull();
+  });
+
+  test("before the native Session exists the panel says so instead of asking the Worker", async () => {
+    const calls = open(makeRun({ id: "run-p", status: "preparing", worker_id: "w1", native_parent: null, version: 1 }));
+    const panel = await screen.findByRole("region", { name: "KiroCrew 会话" });
+    expect(panel).toHaveTextContent("原生会话尚未建立");
+    expect(calls.some((c) => c.path.endsWith("/observe"))).toBe(false);
+  });
+
   test("on someone else's shared environment the native entry is unavailable", async () => {
     const run = makeRun({ id: "run-n", status: "running", worker_id: "w-shared", native_parent: "octopus-run-n", version: 1 });
     open(run, { "GET /workers": [{ id: "w-shared", name: "personal", owner_id: "admin-1", team_id: null, enabled: true,
       scope: "shared", spaces: [{ user_id: "u1" }], capabilities: { crew_entry: true } }] });
-    expect(await screen.findByText("共享执行环境不开放原生 KiroCrew 入口。", { selector: "#crew-entry-hint" })).toBeInTheDocument();
+    expect(await screen.findByText("共享执行环境不开放原生 KiroCrew 入口；可在本页「KiroCrew 会话」查看。",
+      { selector: "#crew-entry-hint" })).toBeInTheDocument();
     expect(screen.getByRole("button", { name: /在 KiroCrew 中打开/ })).toBeDisabled();
   });
 

@@ -11,6 +11,7 @@ def object_schema(properties=None, required=()):
 
 
 STRING = {"type": "string"}
+OBSERVE_TEXT = 4000  # per message in octopus_observe: keeps a page well inside an agent's tool output limit
 RECOVERY = object_schema({"enabled": {"type": "boolean"},
                           "max_cycles": {"type": "integer", "minimum": 1, "maximum": 5}})
 TOOLS = [
@@ -39,6 +40,12 @@ TOOLS = [
                     "页面内 localStorage、sessionStorage、IndexedDB 与 Cookie 不可用）；"
                     "需要开发服务器的项目请用 deploy/aws/deploy.sh space <run_id> 在本机预览。",
      "inputSchema": object_schema({"run_id": STRING}, ["run_id"]), "annotations": {"readOnlyHint": True}},
+    {"name": "octopus_observe",
+     "description": "读取 Session 的原生 KiroCrew 会话（协调者与子 Agent 的对话、是否仍在运行），只读，不需要打开 KiroCrew。"
+                    "默认最近 20 条，单条超过 4000 字截断（truncated=true）；has_more 为 true 时用 before=next_before 读取更早的消息。",
+     "inputSchema": object_schema({"run_id": STRING, "limit": {"type": "integer", "minimum": 1, "maximum": 50},
+                                   "before": {"type": "integer", "minimum": 0}}, ["run_id"]),
+     "annotations": {"readOnlyHint": True}},
     {"name": "octopus_parse_workflow",
      "description": "校验并规范化一个由 Agent 预先生成的工作流（JSON / YAML / 含一个代码块的 Markdown；新版导出或旧版 schema 1），返回 name、steps 与规范化说明；仅预览，不执行。",
      "inputSchema": object_schema({"content": STRING, "format": {"type": "string", "enum": ["json", "yaml", "markdown"]}},
@@ -122,6 +129,13 @@ def call(client, name, args):
         return {**result, "url": client.url + result["url"]}
     if name == "octopus_parse_workflow":
         return client.request("POST", "/v1/workflows/parse", args)
+    if name == "octopus_observe":
+        query = "limit=" + str(int(args.get("limit", 20))) + ("&before=" + str(int(args["before"])) if "before" in args else "")
+        result = client.request("GET", "/v1/runs/" + args["run_id"] + "/observe?" + query)
+        result["messages"] = [{**m, "content": m["content"][:OBSERVE_TEXT],
+                               "truncated": m.get("truncated") or len(m["content"]) > OBSERVE_TEXT}
+                              for m in result.get("messages", [])]
+        return result
     if name == "octopus_recommend_workflow":
         return client.request("POST", "/v1/designs", args)
     if name == "octopus_workflow_recommendation":

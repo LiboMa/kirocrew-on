@@ -12,7 +12,7 @@ import socket
 import threading
 import time
 import urllib.error
-from urllib.parse import quote
+from urllib.parse import quote, urlencode
 
 from . import gateway_client as crew_api
 from . import sources as workspace
@@ -67,6 +67,42 @@ class Worker:
         require(not path.is_symlink(), "Workspace 路径不可为符号链接")
         return path
 
+    OBSERVE_TEXT = 20_000
+
+    def observe(self, body):
+        """Read-only view of the run's own native Session for the console and MCP: no native login is handed out (D30)."""
+        run, parent = self.binding(body["run_id"])
+        slot = parent["slot"]
+        require(body.get("native_parent") == slot and parent["parent"] == "dashboard:" + slot,
+                "原生 Session 绑定不一致", 409, "entry_mismatch")
+        lifecycle = run / "lifecycle.json"
+        require(not lifecycle.exists() or json.loads(lifecycle.read_text()).get("status") != "deleted",
+                "原生 Session 已删除", 409, "session_deleted")
+        limit, before = body.get("limit", 50), body.get("before")
+        require(type(limit) is int and 1 <= limit <= 100, "limit 须为 1–100 的整数")
+        require(before is None or type(before) is int and before >= 0, "before 须为非负整数")
+        query = urlencode({"limit": limit, **({"before": before} if before is not None else {})})
+        try:
+            native = self.native("/api/chat/slots/" + quote(slot, safe="") + "?" + query)
+        except crew_api.GatewayError as exc:
+            if exc.status == 404:
+                raise Error(409, "native_unavailable", "原生 Session 当前不可用，请在工作台重新打开或检查 Gateway") from None
+            raise
+        require(native.get("key", native.get("slot")) == slot, "Gateway 返回的 Session 与绑定不一致", 409, "entry_mismatch")
+        messages = []
+        for message in native.get("messages") or []:
+            if not isinstance(message, dict):
+                continue
+            content = message.get("content") if isinstance(message.get("content"), str) else ""
+            messages.append({"role": str(message.get("role") or ""), "content": content[:self.OBSERVE_TEXT],
+                             "truncated": len(content) > self.OBSERVE_TEXT,
+                             "ts": message["ts"] if isinstance(message.get("ts"), str) else None})
+        number = lambda value: value if type(value) in (int, float) else None
+        return {"native_parent": slot, "title": native["title"] if isinstance(native.get("title"), str) else None,
+                "running": native.get("running") is True, "total": number(native.get("total")),
+                "has_more": native.get("has_more") is True, "next_before": number(native.get("next_before")),
+                "context_pct": number(native.get("context_pct")), "messages": messages}
+
     PREVIEW_ENTRIES = ("index.html", "dist/index.html", "build/index.html", "public/index.html", "web/index.html",
                        "out/index.html", "site/index.html")
 
@@ -98,7 +134,7 @@ class Worker:
         advertised = {tool: [m for m in models.get(ns, []) if isinstance(m, str)] for tool, ns in namespace.items()}
         return {"version": "1.0.0", "isolation": self.isolation, "workflow_design": True,
                 "spawn_approval": "auto" if self.approval_mode == "auto" else "interactive",
-                "crew_entry": True, "crew_origin": self.crew_origin,
+                "crew_entry": True, "crew_origin": self.crew_origin, "observe": True,
                 "coordinator_recovery": True, "quality_outcome": True,
                 "boundary": hashlib.sha256(boundary.encode()).hexdigest(),
                 "host_principal": hashlib.sha256(f"{socket.gethostname()}:{os.getuid()}".encode()).hexdigest(),
@@ -479,7 +515,7 @@ def serve(worker, port=8928, host="127.0.0.1"):
                     body = json.loads(self.rfile.read(size))
                     methods = {"/prepare": worker.prepare, "/dispatch": worker.dispatch,
                                "/inspect": worker.inspect, "/control": worker.control,
-                               "/crew-entry": worker.crew_entry, "/files": worker.files}
+                               "/crew-entry": worker.crew_entry, "/files": worker.files, "/observe": worker.observe}
                     require(self.path in methods and self.command == "POST", "接口不存在", 404, "not_found")
                     result = methods[self.path](body)
                 status = 200

@@ -14,6 +14,7 @@ import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip
 import { StatusBadge } from "@/components/StatusBadge";
 import { useConsole } from "@/features/console/context";
 import { EventTimeline } from "@/features/sessions/EventTimeline";
+import { NativeSessionPanel } from "@/features/sessions/NativeSessionPanel";
 import { RecoveryPanel } from "@/features/sessions/RecoveryPanel";
 import { TaskList } from "@/features/sessions/TaskList";
 import { useSessionActions } from "@/features/sessions/useSessionActions";
@@ -41,7 +42,8 @@ export function SessionView({ id }: { id: string }) {
   const environment = workers.find((w) => w.id === run.worker_id);
   // A shared environment's native login covers its whole Gateway (K03): only its boundary owner may open it (D28).
   const crewReason = crewEntryReason(run) ||
-    (environment?.scope === "shared" && environment.owner_id !== me.id ? "共享执行环境不开放原生 KiroCrew 入口。" : "");
+    (environment?.scope === "shared" && environment.owner_id !== me.id
+      ? "共享执行环境不开放原生 KiroCrew 入口；可在本页「KiroCrew 会话」查看。" : "");
   const close = closeAction(run);
   const design = run.purpose === "workflow_design";
   const percent = run.progress.total ? (100 * run.progress.accepted) / run.progress.total : 0;
@@ -180,6 +182,7 @@ export function SessionView({ id }: { id: string }) {
         <section className="space-y-3">
           <h2 className="text-sm font-semibold">开发任务</h2>
           <TaskList run={run} onContinue={(taskId) => open({ kind: "continue", run, taskId })} />
+          <NativeSessionPanel run={run} />
         </section>
         <aside className="space-y-4">
           <EventTimeline events={events} stream={stream} />

@@ -210,6 +210,25 @@ class Service:
                  "active_runs": active.get(row["id"], 0), "health": probe}
                 for row, config, probe in zip(rows, configs, health)]
 
+    def dedicate_worker(self, actor, wid):
+        """A shared Worker host serving exactly one Team becomes that Team's dedicated environment again (D30): every
+        member then opens its native KiroCrew entry, as in a personal space."""
+        require(actor["admin"], "需要平台管理员", 403, "forbidden")
+        with self.db.transaction() as db:
+            row = db.execute("SELECT * FROM workers WHERE id=?", (wid,)).fetchone()
+            require(row is not None, "Worker 不存在", 404, "not_found")
+            spaces = db.execute("SELECT team_id,user_id FROM worker_spaces WHERE worker_id=?", (wid,)).fetchall()
+            require(row["scope"] == "shared" and len(spaces) == 1 and spaces[0]["team_id"],
+                    "只有只服务一个 Team 的共享环境可以改回专属环境", 409, "invalid_state")
+            # A Team's own Worker must be a dedicated boundary: every member's native login covers its Gateway.
+            require(json.loads(row["config"]).get("capabilities", {}).get("isolation") == "dedicated",
+                    "该 Worker 运行在平台主机上（trusted-local），不能成为 Team 的专属环境；请使用独立的 Worker 主机",
+                    409, "isolation_required")
+            team = spaces[0]["team_id"]
+            db.execute("DELETE FROM worker_spaces WHERE worker_id=?", (wid,))
+            db.execute("UPDATE workers SET scope='dedicated', team_id=?, owner_id=NULL WHERE id=?", (team, wid))
+        return {"id": wid, "scope": "dedicated", "team_id": team}
+
     def share_worker(self, actor, wid, body):
         """Turn a dedicated Worker into a shared execution environment; its current space stays served (D28, T3)."""
         require(actor["admin"], "需要平台管理员", 403, "forbidden")

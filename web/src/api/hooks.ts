@@ -2,7 +2,7 @@ import { useEffect, useState } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { api } from "@/api/client";
 import { followRunEvents, type StreamState } from "@/api/events";
-import type { Environment, Me, Run, RunEvent, Team, Template, User, Worker, Workflow } from "@/api/types";
+import type { Environment, Me, Observation, Run, RunEvent, Team, Template, User, Worker, Workflow } from "@/api/types";
 
 export const keys = {
   me: ["me"] as const,
@@ -15,6 +15,7 @@ export const keys = {
   tokens: ["tokens"] as const,
   environments: ["admin", "environments"] as const,
   run: (id: string) => ["run", id] as const,
+  observe: (id: string) => ["observe", id] as const,
 };
 
 const every = (ms: number) => ({ refetchInterval: ms, refetchIntervalInBackground: false });
@@ -46,6 +47,16 @@ export function useWorkspace() {
 export function useEnvironments(enabled: boolean) {
   return useQuery({ queryKey: keys.environments, queryFn: () => api<Environment[]>("/admin/environments"), enabled,
     retry: false, ...every(30_000) });
+}
+
+/** The newest `limit` messages of a run's native Session; refreshed every 5 s while the run is active. */
+export function useObservation(id: string | null, live: boolean, limit = 50) {
+  return useQuery({
+    queryKey: [...keys.observe(id ?? ""), limit],
+    queryFn: () => api<Observation>(`/runs/${encodeURIComponent(id!)}/observe?limit=${limit}`),
+    enabled: !!id, retry: false, placeholderData: (previous) => previous,
+    refetchInterval: live ? 5_000 : false, refetchIntervalInBackground: false,
+  });
 }
 
 export function useRun(id: string | null) {

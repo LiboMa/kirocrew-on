@@ -298,6 +298,9 @@ def server(database, port=8918, host="127.0.0.1", allowed_hosts=(), origin_secre
                 if path == "/v1/admin/environments":
                     require(method == "GET", "Method not allowed", 405)
                     return self.respond(service.environments(actor))
+                if len(segments) == 4 and segments[:2] == ["v1", "workers"] and segments[3] == "dedicate":
+                    require(method == "POST", "Method not allowed", 405)
+                    return self.respond(service.dedicate_worker(actor, segments[2]))
                 if len(segments) == 4 and segments[:2] == ["v1", "workers"] and segments[3] == "share":
                     require(method == "POST", "Method not allowed", 405)
                     return self.respond(service.share_worker(actor, segments[2], body))
@@ -416,6 +419,14 @@ def server(database, port=8918, host="127.0.0.1", allowed_hosts=(), origin_secre
                             result = create(service, actor, rid)
                             scope(self.identity(), "execute")
                             return self.respond(result)
+                        if action == "observe" and method == "GET":
+                            from .crew_entry import observe
+                            paging = {}
+                            for key in ("before", "limit"):
+                                if key in query:
+                                    require(query[key][0].isdigit(), f"{key} 须为非负整数")
+                                    paging[key] = int(query[key][0])
+                            return self.respond(observe(service, actor, rid, **paging))
                         if action == "export" and method == "GET":
                             run = service.run(actor, rid)
                             with database.read() as db:

@@ -149,6 +149,7 @@ describe("settings", () => {
     const dialog = await openSetting(/执行环境/);
     await userEvent.click(within(dialog).getByRole("button", { name: "设为共享环境" }));
     expect(within(dialog).getByText(/能互相读取源码、工具登录与记忆；记忆未分隔；只用于同一信任范围/)).toBeInTheDocument();
+    expect(within(dialog).getByText(/只有边界所有者能打开原生 KiroCrew 入口/)).toBeInTheDocument();
     expect(calls.find((c) => c.path === "/v1/workers/w1/share")).toBeUndefined();
     await userEvent.click(within(dialog).getByRole("button", { name: "确认设为共享环境" }));
     await waitFor(() => expect(calls.find((c) => c.path === "/v1/workers/w1/share")?.body).toEqual({ confirm: true }));
@@ -216,6 +217,24 @@ describe("settings", () => {
     await userEvent.selectOptions(picker, "team:team-2");
     await userEvent.click(within(spare).getByRole("button", { name: "分配" }));
     await waitFor(() => expect(calls.find((c) => c.path === "/v1/workers/w2/spaces")?.body).toEqual({ team_id: "team-2" }));
+  });
+
+  test("a Worker host shared with one Team can be made that Team's own environment again", async () => {
+    const calls = start({
+      "GET /workers": [
+        { id: "w1", name: "personal", owner_id: "u1", team_id: null, enabled: true, scope: "shared",
+          spaces: [{ team_id: "team-1" }], capabilities: { isolation: "trusted-local" } },
+        { id: "w2", name: "w1", owner_id: "u1", team_id: null, enabled: true, scope: "shared",
+          spaces: [{ team_id: "team-1" }], capabilities: { isolation: "dedicated" } },
+      ],
+      "POST /workers/w2/dedicate": { id: "w2", scope: "dedicated", team_id: "team-1" },
+    });
+    const dialog = await openSetting(/执行环境/);
+    const host = await within(dialog).findByRole("group", { name: "w1" });
+    // On the platform host (trusted-local) a Team cannot have its own environment.
+    expect(within(within(dialog).getByRole("group", { name: "personal" })).queryByRole("button", { name: "改回专属环境" })).toBeNull();
+    await userEvent.click(within(host).getByRole("button", { name: "改回专属环境" }));
+    await waitFor(() => expect(calls.find((c) => c.path === "/v1/workers/w2/dedicate")?.method).toBe("POST"));
   });
 
   test("an administrator can disable a Worker", async () => {

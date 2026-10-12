@@ -887,9 +887,12 @@ class EnvironmentTests(unittest.TestCase):
         for path, method in (("/v1/admin/environments", "get"), ("/v1/workers", "post"),
                              ("/v1/workers/{id}/enabled", "post"), ("/v1/workers/{id}/share", "post"),
                              ("/v1/workers/{id}/spaces", "post"), ("/v1/workers/{id}/spaces", "delete"),
-                             ("/v1/workers/{id}/connection", "post"), ("/v1/teams", "post")):
+                             ("/v1/workers/{id}/connection", "post"), ("/v1/workers/{id}/dedicate", "post"),
+                             ("/v1/teams", "post")):
             self.assertEqual(paths[path][method].get("tags"), [tag], (path, method))
         self.assertNotIn("tags", paths["/v1/runs"]["post"])
+        observe = paths["/v1/runs/{id}/observe"]["get"]
+        self.assertEqual({p["name"] for p in observe["parameters"]}, {"id", "before", "limit"})
         schemas = openapi()["components"]["schemas"]
         self.assertEqual(schemas["Team"]["required"], ["name", "owner", "worker_id"])
         self.assertIn("worker_id", schemas["User"]["properties"])

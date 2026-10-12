@@ -82,11 +82,13 @@ def openapi():
         "/v1/workers/{id}/share": {"post": "Share"},
         "/v1/workers/{id}/spaces": {"post": "Space", "delete": "Space"},
         "/v1/workers/{id}/connection": {"post": "ConnectionUpdate"},
+        "/v1/workers/{id}/dedicate": {"post": "Empty"},
         "/v1/workers/{id}/capabilities": {"get": None},
         "/v1/tokens": {"get": None, "post": "Token"}, "/v1/tokens/{id}": {"delete": "Empty"},
         "/v1/runs": {"get": None, "post": "Start"}, "/v1/runs/{id}": {"get": None},
         "/v1/runs/{id}/events": {"get": None}, "/v1/runs/{id}/export": {"get": None},
         "/v1/runs/{id}/crew-entry": {"post": "Empty"}, "/v1/runs/{id}/preview": {"post": "Empty"},
+        "/v1/runs/{id}/observe": {"get": None},
         "/v1/runs/{id}/recover": {"post": "Control"},
         "/v1/runs/{id}/continue": {"post": "Continue"}, "/v1/runs/{id}/assign-worker": {"post": "AssignWorker"},
         **{"/v1/runs/{id}/" + action: {"post": "Control"} for action in ["stop", "close", "reopen", "delete"]},
@@ -94,7 +96,8 @@ def openapi():
     # Execution environment management (D28): one place for administrators, also in the console's 「执行环境」 dialog.
     admin = {("/v1/admin/environments", "get"), ("/v1/workers", "post"), ("/v1/workers/{id}/enabled", "post"),
              ("/v1/workers/{id}/share", "post"), ("/v1/workers/{id}/spaces", "post"),
-             ("/v1/workers/{id}/spaces", "delete"), ("/v1/workers/{id}/connection", "post"), ("/v1/teams", "post")}
+             ("/v1/workers/{id}/spaces", "delete"), ("/v1/workers/{id}/connection", "post"),
+             ("/v1/workers/{id}/dedicate", "post"), ("/v1/teams", "post")}
     paths = {}
     for path, methods in routes.items():
         paths[path] = {}
@@ -118,6 +121,12 @@ def openapi():
                 op["description"] = "Administrator only. Every execution environment with its scope, owner, Team or shared spaces (with names), enabled, active_runs and live health (reachable=false when its Worker does not answer within a few seconds; never fails the listing). No tokens."
             if path.endswith("/crew-entry"):
                 op["description"] = "Execute scope. Opens the existing native parent Session through its authorized Worker. On-demand sensitive login URL; no-store. Does not create, resume, mutate or dispatch a Run. Native login covers the Worker's Gateway boundary, not a single run."
+            if path.endswith("/observe"):
+                op["description"] = "Read scope. The run's native KiroCrew Session (coordinator and sub-agent messages, running state) read through its Worker; no native login is issued, so Team members on a shared environment can watch it too. Newest page first; pass before=next_before for older messages."
+                op["parameters"] += [{"in": "query", "name": "before", "schema": {"type": "integer", "minimum": 0}},
+                                     {"in": "query", "name": "limit", "schema": {"type": "integer", "minimum": 1, "maximum": 100}}]
+            if path.endswith("/dedicate"):
+                op["description"] = "Administrator only. A shared Worker host serving exactly one Team becomes that Team's dedicated environment; every member then opens its native KiroCrew entry."
             if path.endswith("/events"):
                 op["description"] = "SSE connections last up to 30 seconds. Reconnect with last event ID; access rechecked each batch."
                 op["parameters"] += [{"in": "query", "name": "after", "schema": {"type": "integer", "minimum": 0}},

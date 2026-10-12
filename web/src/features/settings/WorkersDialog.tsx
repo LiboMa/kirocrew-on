@@ -78,6 +78,12 @@ export function WorkersDialog() {
             {!!me.admin && w.scope === "dedicated" && !!w.enabled && (
               <Button type="button" size="sm" variant="outline" data-share-worker={w.id} onClick={() => setSharing(w.id)}>设为共享环境</Button>
             )}
+            {!!me.admin && w.scope === "shared" && w.spaces?.length === 1 && !!w.spaces[0].team_id &&
+              w.capabilities.isolation === "dedicated" && (
+              // A Worker host serving one Team becomes its own again: every member then opens the native entry.
+              <Button type="button" size="sm" variant="outline" data-dedicate-worker={w.id}
+                onClick={act(() => api("/workers/" + w.id + "/dedicate", "POST", {}), "已改回该 Team 的专属环境。")}>改回专属环境</Button>
+            )}
             {!!me.admin && (
               <Button type="button" size="sm" variant="outline" data-toggle-worker={w.id}
                 onClick={act(() => api("/workers/" + w.id + "/enabled", "POST", { enabled: !w.enabled }), w.enabled ? "已停用。" : "已启用。")}>
@@ -116,7 +122,8 @@ export function WorkersDialog() {
             )}
             {sharing === w.id && (
               <div role="alert" className="w-full space-y-2 rounded-md border border-warning/40 bg-warning/5 p-3 text-xs">
-                <p>设为共享环境后，管理员可以把 Team 和用户的个人空间分配到它上面。{SHARED_NOTICE}</p>
+                <p>设为共享环境后，管理员可以把 Team 和用户的个人空间分配到它上面。{SHARED_NOTICE}
+                  共享后只有边界所有者能打开原生 KiroCrew 入口，其他人在会话页的「KiroCrew 会话」中查看。</p>
                 <div className="flex gap-2">
                   <Button type="button" size="sm" onClick={act(async () => {
                     await api("/workers/" + w.id + "/share", "POST", { confirm: true });

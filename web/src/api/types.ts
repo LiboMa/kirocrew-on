@@ -203,6 +203,26 @@ export interface Run {
   planning?: { mode: "agent"; applied: boolean; intent?: string; summary?: string; name?: string; tasks?: string[]; notes?: string[] } | null;
 }
 
+/** GET /v1/runs/<id>/observe (D30): the run's native KiroCrew Session, read through its Worker. Messages are oldest
+ * first; `next_before` is the index of the first message of this page, for the previous page. */
+export interface ObservedMessage {
+  role: string;
+  content: string;
+  truncated: boolean;
+  ts: string | null;
+}
+
+export interface Observation {
+  native_parent: string;
+  title: string | null;
+  running: boolean;
+  total: number | null;
+  has_more: boolean;
+  next_before: number | null;
+  context_pct: number | null;
+  messages: ObservedMessage[];
+}
+
 export interface RunEvent {
   id: number;
   run_id: string;
