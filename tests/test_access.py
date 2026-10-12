@@ -368,5 +368,53 @@ class TokenTests(AccessCase):
             self.assertEqual((status, result), (200, {"ok": True}))
             self.assertEqual(call("GET", "/v1/me", spare)[0], 401)
 
+class PreviewAccessTests(AccessCase):
+    """B6: a preview link lasts 10 minutes and every file it serves re-checks its holder's access."""
+
+    def test_revoked_access_stops_an_issued_preview_link(self):
+        import base64
+        import http.client
+        from unittest.mock import patch
+        from octopus.server import preview_key, preview_ticket
+        tid = self.team()
+        rid = self.start(self.b, team_id=tid)["id"]
+        ticket = preview_ticket(rid, self.b["id"], preview_key(self.db.root))
+        file = {"content": base64.b64encode(b"<h1>ok</h1>").decode(), "size": 11}
+        app = server(self.db, 0)
+        thread = threading.Thread(target=app.serve_forever, daemon=True)
+        thread.start()
+        def fetch():
+            connection = http.client.HTTPConnection("127.0.0.1", app.server_address[1], timeout=5)
+            connection.request("GET", f"/preview/{ticket}/index.html")
+            response = connection.getresponse()
+            data = response.read()
+            connection.close()
+            return response.status, data
+        try:
+            with patch("octopus.transport.worker_request", return_value=file):
+                self.assertEqual(fetch(), (200, b"<h1>ok</h1>"))
+                with self.db.transaction() as db:
+                    db.execute("DELETE FROM members WHERE team_id=? AND user_id=?", (tid, self.b["id"]))
+                status, data = fetch()
+                self.assertEqual((status, json.loads(data)["code"]), (403, "preview_forbidden"))
+                with self.db.transaction() as db:
+                    db.execute("INSERT INTO members VALUES(?,?,'member')", (tid, self.b["id"]))
+                    db.execute("UPDATE users SET active=0 WHERE id=?", (self.b["id"],))
+                status, data = fetch()
+                self.assertEqual((status, json.loads(data)["code"]), (403, "preview_forbidden"))
+        finally:
+            app.shutdown()
+            app.server_close()
+            thread.join(2)
+
+    def test_a_new_preview_link_says_it_lasts_ten_minutes(self):
+        from unittest.mock import patch
+        self.shared_env(users=("bob",))
+        rid = self.start(self.b)["id"]
+        with self.http() as call, patch("octopus.transport.worker_request", return_value={"entry": "index.html"}):
+            status, result = call("POST", f"/v1/runs/{rid}/preview", self.tokens["bob"], {})
+            self.assertEqual((status, result["expires_in"]), (200, 600))
+            self.assertEqual(result["url"].split("/")[2].count("."), 3)
+
 if __name__ == "__main__":
     unittest.main()

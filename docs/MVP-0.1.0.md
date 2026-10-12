@@ -53,7 +53,7 @@
 | 查看进度（MCP、控制台、事件流） | ✅ | `octopus_status` 精简 / 完整视图；SSE 事件流 |
 | 观察原生 KiroCrew 会话 | ✅ | 控制台「KiroCrew 会话」面板、MCP `octopus_observe`（D30） |
 | 在 KiroCrew 中打开原生会话 | ✅ | 个人空间本人、Team 专属环境成员、共享环境边界所有者（K03） |
-| 预览产出 | ✅ | 静态页面隔离预览（1 小时）；开发服务器 `deploy.sh space <run-id>` |
+| 预览产出 | ✅ | 静态页面隔离预览（链接 10 分钟有效，每次打开核对权限）；开发服务器 `deploy.sh space <run-id>` |
 | 续作与迭代 | ✅ | 同一会话与工作区；可改工具、模型、提示 |
 | 工作流库 | ✅ | 模板、KiroCrew 推荐、导入 Agent 预先生成的工作流、版本、共享给个人 / Team |
 | Team 与执行环境 | ✅ | 创建 Team 必须分配环境；共享 / 专属 / 空闲；独立 Worker 主机（D28–D30） |

@@ -14,6 +14,7 @@ from octopus.server import preview_key, preview_run, preview_ticket, server
 from octopus.worker import Worker
 
 RID = "run-" + "a" * 32
+USER = "user-" + "c" * 32
 KEY = b"k" * 32
 
 
@@ -24,18 +25,21 @@ class PreviewTests(unittest.TestCase):
         self.assertEqual((caught.exception.status, caught.exception.code), (403, code))
 
     def test_tickets_cannot_be_forged_reused_for_another_run_or_used_late(self):
-        ticket = preview_ticket(RID, KEY, now=1000)
-        self.assertEqual(preview_run(ticket, KEY, now=1000), RID)
-        self.assertRejected(ticket, "preview_expired", now=1000 + 3601)
+        ticket = preview_ticket(RID, USER, KEY, now=1000)
+        self.assertEqual(preview_run(ticket, KEY, now=1000), (RID, USER))
+        self.assertEqual(preview_run(ticket, KEY, now=1000 + 600), (RID, USER))
+        self.assertRejected(ticket, "preview_expired", now=1000 + 601)   # 10 minutes (B6)
         self.assertRejected(ticket.replace(RID, "run-" + "b" * 32), "preview_invalid")
+        self.assertRejected(ticket.replace(USER, "user-" + "d" * 32), "preview_invalid")
+        self.assertRejected(f"{RID}.2000.{ticket.rsplit('.', 1)[1]}", "preview_invalid")   # the old format
         self.assertRejected(ticket[:-2] + "xx", "preview_invalid")
         self.assertRejected("garbage", "preview_invalid")
         self.assertRejected(ticket, "preview_invalid", key=b"o" * 32)
 
     def test_the_key_is_kept_in_the_data_directory_so_tickets_survive_an_api_restart(self):
         with tempfile.TemporaryDirectory() as directory:
-            ticket = preview_ticket(RID, preview_key(Path(directory)), now=1000)
-            self.assertEqual(preview_run(ticket, preview_key(Path(directory)), now=1000), RID)
+            ticket = preview_ticket(RID, USER, preview_key(Path(directory)), now=1000)
+            self.assertEqual(preview_run(ticket, preview_key(Path(directory)), now=1000), (RID, USER))
             self.assertEqual(os.stat(Path(directory, "preview.key")).st_mode & 0o777, 0o600)
             Path(directory, "preview.key").write_bytes(b"short")
             self.assertEqual(len(preview_key(Path(directory))), 32)
@@ -43,7 +47,7 @@ class PreviewTests(unittest.TestCase):
 
     def test_a_restarted_server_accepts_tickets_issued_before_the_restart(self):
         with tempfile.TemporaryDirectory() as directory:
-            ticket = preview_ticket(RID, preview_key(Path(directory)))
+            ticket = preview_ticket(RID, USER, preview_key(Path(directory)))
             httpd = server(Database(Path(directory)), 0, host="127.0.0.1")
             threading.Thread(target=httpd.serve_forever, daemon=True).start()
             try:
@@ -56,7 +60,7 @@ class PreviewTests(unittest.TestCase):
                     return response.status, body["code"]
                 # The ticket passes; the run itself does not exist on this fresh platform.
                 self.assertEqual(fetch(ticket), (404, "not_found"))
-                self.assertEqual(fetch(preview_ticket(RID, b"o" * 32)), (403, "preview_invalid"))
+                self.assertEqual(fetch(preview_ticket(RID, USER, b"o" * 32)), (403, "preview_invalid"))
             finally:
                 httpd.shutdown()
                 httpd.server_close()

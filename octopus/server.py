@@ -46,7 +46,7 @@ TYPES = {".html": "text/html; charset=utf-8", ".js": "text/javascript; charset=u
 
 # Preview links carry their own short-lived capability: an iframe or new tab cannot send the console's bearer token.
 # The signing key is kept in the platform data directory, so links stay valid across API restarts and deploys.
-PREVIEW_TTL = 3600
+PREVIEW_TTL = 600  # B6: ten minutes; every file it serves re-checks its holder's access
 PREVIEW_POLICY = ("sandbox allow-scripts allow-forms allow-popups allow-modals allow-downloads; "
                   "default-src * data: blob: 'unsafe-inline' 'unsafe-eval'; frame-ancestors 'self'")
 
@@ -68,20 +68,21 @@ def preview_signature(key, payload):
     return base64.urlsafe_b64encode(hmac.new(key, payload.encode(), hashlib.sha256).digest()[:18]).decode()
 
 
-def preview_ticket(rid, key, now=None):
-    payload = f"{rid}.{int((now or time.time()) + PREVIEW_TTL)}"
+def preview_ticket(rid, user, key, now=None):
+    payload = f"{rid}.{user}.{int((now or time.time()) + PREVIEW_TTL)}"
     return f"{payload}.{preview_signature(key, payload)}"
 
 
 def preview_run(ticket, key, now=None):
-    """The run a preview ticket grants; 403 preview_invalid when it is forged or signed by another key, 403
-    preview_expired when it is genuine but late."""
+    """(run, user) a preview ticket grants; 403 preview_invalid when it is forged, signed by another key or in the old
+    format, 403 preview_expired when it is genuine but late."""
     parts = ticket.split(".")
-    require(len(parts) == 3 and parts[1].isdigit() and hmac.compare_digest(
-        parts[2].encode(), preview_signature(key, f"{parts[0]}.{parts[1]}").encode()),
+    require(len(parts) == 4 and parts[2].isdigit() and hmac.compare_digest(
+        parts[3].encode(), preview_signature(key, ".".join(parts[:3])).encode()),
         "预览链接无效，请在控制台重新打开预览", 403, "preview_invalid")
-    require(int(parts[1]) >= (now or time.time()), "预览链接已过期（1 小时有效），请在控制台重新打开预览", 403, "preview_expired")
-    return parts[0]
+    require(int(parts[2]) >= (now or time.time()), "预览链接已过期（10 分钟有效），请在控制台重新打开预览", 403,
+            "preview_expired")
+    return parts[0], parts[1]
 
 
 READ_POSTS = {"/v1/workflows/resolve", "/v1/workflows/parse"}
@@ -211,9 +212,9 @@ def server(database, port=8918, host="127.0.0.1", allowed_hosts=(), origin_secre
                 require(not path.startswith("/assets/"), "Not found", 404, "not_found")
                 if method == "GET" and path.startswith("/preview/"):
                     ticket, _, relative = path[len("/preview/"):].partition("/")
-                    rid = preview_run(ticket, signing_key)
+                    rid, holder = preview_run(ticket, signing_key)
                     relative = unquote(relative) or "index.html"
-                    data = service.preview_file(rid, relative)
+                    data = service.preview_file(rid, relative, holder)
                     kind = TYPES.get(Path(relative).suffix.lower()) or {
                         ".json": "application/json", ".jpg": "image/jpeg", ".jpeg": "image/jpeg", ".gif": "image/gif",
                         ".webp": "image/webp", ".mjs": "text/javascript; charset=utf-8", ".txt": "text/plain; charset=utf-8",
@@ -302,7 +303,7 @@ def server(database, port=8918, host="127.0.0.1", allowed_hosts=(), origin_secre
                     return self.respond(service.resolve_workflow(actor, body))
                 if len(segments) == 4 and segments[:2] == ["v1", "runs"] and segments[3] == "preview" and method == "POST":
                     entry = service.preview_entry(actor, segments[2])
-                    return self.respond({"url": "/preview/" + preview_ticket(segments[2], signing_key) + "/" + entry,
+                    return self.respond({"url": "/preview/" + preview_ticket(segments[2], actor["id"], signing_key) + "/" + entry,
                                          "entry": entry, "expires_in": PREVIEW_TTL})
                 if path == "/v1/workflows/parse":
                     require(method == "POST", "Method not allowed", 405)

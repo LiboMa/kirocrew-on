@@ -587,12 +587,20 @@ class Service:
         from .transport import worker_request
         return worker_request(json.loads(worker["config"]), "/files", {"run_id": rid, "path": ""})["entry"]
 
-    def preview_file(self, rid, relative):
-        """One project file of a run, for a holder of a valid preview ticket (checked by the server)."""
+    def preview_file(self, rid, relative, holder):
+        """One project file of a run for the holder of a valid preview ticket (checked by the server), who must still
+        be allowed to read the run: revoked access stops an issued link at once (B6)."""
         import base64
         with self.db.read() as db:
             run = db.execute("SELECT worker_id FROM runs WHERE id=?", (rid,)).fetchone()
             require(run is not None and run["worker_id"], "预览不可用", 404, "not_found")
+            user = db.execute("SELECT id,admin FROM users WHERE id=? AND active=1", (holder,)).fetchone()
+            try:
+                require(user is not None, "预览不可用", 404, "not_found")
+                run_access(db, {"id": user["id"], "admin": user["admin"],
+                                "scopes": ["read"] + (["admin"] if user["admin"] else [])}, rid)
+            except Error:
+                raise Error(403, "preview_forbidden", "预览权限已撤销，请在控制台重新打开") from None
             worker = db.execute("SELECT config FROM workers WHERE id=?", (run["worker_id"],)).fetchone()
         from .transport import worker_request
         result = worker_request(json.loads(worker["config"]), "/files", {"run_id": rid, "path": relative})
