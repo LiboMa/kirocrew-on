@@ -38,7 +38,7 @@ export function WorkersDialog() {
     : "个人 · " + (users.find((u) => u.id === space.user_id)?.username ?? space.user_id);
   // Teams take one environment each; a user may join a shared one beside a personal Worker.
   const candidates = (w: Worker) => [
-    ...teams.filter((t) => !t.environment).map((t) => ({ value: "team:" + t.id, text: "Team · " + t.name })),
+    ...teams.filter((t) => !t.environment && !t.archived).map((t) => ({ value: "team:" + t.id, text: "Team · " + t.name })),
     ...(w.scope === "shared" ? users.filter((u) => !w.spaces?.some((s) => s.user_id === u.id))
       .map((u) => ({ value: "user:" + u.id, text: "个人 · " + u.username })) : []),
   ];
@@ -151,7 +151,7 @@ export function WorkersDialog() {
               <NativeSelect id="worker-owner" value={form.owner} onChange={(e) => setForm({ ...form, owner: e.target.value })}>
                 <option value="spare:">空闲专属环境（之后分配给 Team）</option>
                 {users.map((u) => <option key={u.id} value={"user:" + u.id}>个人 · {u.username}</option>)}
-                {teams.map((t) => <option key={t.id} value={"team:" + t.id}>Team · {t.name}</option>)}
+                {teams.filter((t) => !t.archived).map((t) => <option key={t.id} value={"team:" + t.id}>Team · {t.name}</option>)}
               </NativeSelect>
             </div>
             <div className="space-y-1.5">

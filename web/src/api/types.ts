@@ -37,6 +37,8 @@ export interface Team {
   role: "owner" | "member" | string | null;
   created: number;
   members: Member[];
+  /** An archived Team takes no new Sessions or members; its Sessions stay readable (spec §5). */
+  archived?: boolean | number;
   /** The Team's execution environment (D28); null when none is assigned. Absent from older platforms. */
   environment?: { worker_id: string; name: string; scope: WorkerScope; enabled?: boolean } | null;
 }

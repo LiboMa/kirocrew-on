@@ -32,7 +32,7 @@ export class ApiError extends Error {
   }
 }
 
-type Method = "GET" | "POST" | "DELETE";
+type Method = "GET" | "POST" | "PATCH" | "DELETE";
 
 export async function api<T>(path: string, method: Method = "GET", body?: unknown): Promise<T> {
   let response: Response;

@@ -61,7 +61,7 @@ export function NeedStep({ draft, update, workflowMode }: { draft: Draft; update
             update((d) => ({ ...d, space, worker: spaceWorkers(workers, space, me).some((w) => w.id === d.worker) ? d.worker : "" }));
           }}>
             <option value="">我的私有空间</option>
-            {teams.map((team) => <option key={team.id} value={team.id}>{team.name} · Team 共同可见</option>)}
+            {teams.filter((team) => !team.archived).map((team) => <option key={team.id} value={team.id}>{team.name} · Team 共同可见</option>)}
           </NativeSelect>
           {(() => {
             const environment = teams.find((t) => t.id === draft.space)?.environment;

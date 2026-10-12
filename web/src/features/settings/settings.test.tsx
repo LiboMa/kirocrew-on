@@ -64,14 +64,14 @@ describe("settings", () => {
       "GET /teams": [{ id: "team-1", name: "平台组", role: "owner", created: 1, members: [], environment: null }],
       "GET /workers": [{ id: "w1", name: "personal", owner_id: "u1", team_id: null, enabled: true, scope: "shared",
         spaces: [{ user_id: "u1" }], capabilities: {} }],
-      "POST /workers/w1/spaces": { ok: true },
+      "POST /teams/team-1/environment": { id: "team-1" },
     });
     await userEvent.click(await screen.findByRole("button", { name: "设置" }));
     await userEvent.click(await screen.findByRole("menuitem", { name: /团队与成员/ }));
     const dialog = await screen.findByRole("dialog");
     expect(within(dialog).getByText("未分配执行环境")).toBeInTheDocument();
     await userEvent.click(within(dialog).getByRole("button", { name: "分配执行环境" }));
-    await waitFor(() => expect(calls.find((c) => c.path === "/v1/workers/w1/spaces")?.body).toEqual({ team_id: "team-1" }));
+    await waitFor(() => expect(calls.find((c) => c.path === "/v1/teams/team-1/environment")?.body).toEqual({ worker_id: "w1" }));
   });
 
   test("a Team without an execution environment can be given a spare Worker host", async () => {
@@ -81,13 +81,13 @@ describe("settings", () => {
         { id: "w1", name: "personal", owner_id: "u1", team_id: null, enabled: true, scope: "shared", spaces: [{ user_id: "u1" }], capabilities: {} },
         { id: "sp1", name: "w1", owner_id: "u1", team_id: null, enabled: true, scope: "spare", spaces: [], capabilities: {} },
       ],
-      "POST /workers/sp1/spaces": { ok: true },
+      "POST /teams/team-1/environment": { id: "team-1" },
     });
     const dialog = await openSetting(/团队与成员/);
     const row = dialog.querySelector('[data-team-environment="team-1"]') as HTMLElement;
     await userEvent.selectOptions(within(row).getByLabelText("为 平台组 分配的执行环境"), "sp1");
     await userEvent.click(within(row).getByRole("button", { name: "分配执行环境" }));
-    await waitFor(() => expect(calls.find((c) => c.path === "/v1/workers/sp1/spaces")?.body).toEqual({ team_id: "team-1" }));
+    await waitFor(() => expect(calls.find((c) => c.path === "/v1/teams/team-1/environment")?.body).toEqual({ worker_id: "sp1" }));
   });
 
   test("a disabled environment is shown as disabled, not as missing", async () => {
@@ -111,33 +111,98 @@ describe("settings", () => {
     expect(options.some((o) => o.includes("别人的组"))).toBe(false);
   });
 
-  test("a new user can be put on the shared environment", async () => {
-    const calls = start({
-      "GET /workers": [{ id: "w1", name: "personal", owner_id: "u1", team_id: null, enabled: true, scope: "shared",
-        spaces: [{ user_id: "u1" }], capabilities: {} }],
-      "POST /users": { id: "u2", username: "carol" },
-    });
+  const teamPage = {
+    "GET /teams": [{ id: "team-1", name: "平台组", role: null, created: 1, members: [
+      { id: "u2", username: "bob", role: "member" }, { id: "u3", username: "carol", role: "owner" }],
+    environment: { worker_id: "w1", name: "personal", scope: "shared", enabled: true } }],
+    "GET /users": [{ id: "u1", username: "fixture-owner" }, { id: "u2", username: "bob" }, { id: "u3", username: "carol" }],
+    "GET /workers": [
+      { id: "w1", name: "personal", owner_id: "u1", team_id: null, enabled: true, scope: "shared", spaces: [{ team_id: "team-1" }], capabilities: {} },
+      { id: "w2", name: "w2", owner_id: "u1", team_id: null, enabled: true, scope: "spare", spaces: [], capabilities: { isolation: "dedicated" } },
+    ],
+  };
+
+  test("an administrator renames a Team they are not in and hosts its members", async () => {
+    const calls = start({ ...teamPage, "PATCH /teams/team-1": { id: "team-1", name: "平台二组" },
+      "POST /teams/team-1/members": { ok: true }, "DELETE /teams/team-1/members": { ok: true } });
     const dialog = await openSetting(/团队与成员/);
-    await userEvent.type(within(dialog).getByLabelText("用户名"), "carol");
-    await userEvent.type(within(dialog).getByLabelText("初始密码（至少 12 位）"), "Carol-password-123");
-    expect(within(dialog).getByLabelText("个人空间的执行环境")).toHaveValue("w1");
-    await userEvent.click(within(dialog).getByRole("button", { name: "创建用户" }));
-    await waitFor(() => expect(calls.find((c) => c.method === "POST" && c.path === "/v1/users")?.body)
-      .toEqual({ username: "carol", password: "Carol-password-123", worker_id: "w1" }));
+    const title = within(dialog).getByLabelText("Team 名称");
+    await userEvent.clear(title);
+    await userEvent.type(title, "平台二组");
+    await userEvent.click(within(dialog).getByRole("button", { name: "改名" }));
+    await waitFor(() => expect(calls.find((c) => c.method === "PATCH" && c.path === "/v1/teams/team-1")?.body).toEqual({ name: "平台二组" }));
+    const bob = within(dialog).getByRole("group", { name: "bob" });
+    await userEvent.click(within(bob).getByRole("button", { name: "设为 owner" }));
+    await waitFor(() => expect(calls.find((c) => c.method === "POST" && c.path === "/v1/teams/team-1/members")?.body)
+      .toEqual({ username: "bob", role: "owner" }));
+    await userEvent.click(within(bob).getByRole("button", { name: "移除" }));
+    expect(calls.find((c) => c.method === "DELETE")).toBeUndefined();
+    await userEvent.click(within(bob).getByRole("button", { name: "确认移除" }));
+    await waitFor(() => expect(calls.find((c) => c.method === "DELETE")?.body).toEqual({ username: "bob" }));
   });
 
-  test("an administrator gives an existing user's personal space the shared environment", async () => {
+  test("an administrator changes a Team's execution environment after confirming that old Sessions stay", async () => {
+    const calls = start({ ...teamPage, "POST /teams/team-1/environment": { id: "team-1" } });
+    const dialog = await openSetting(/团队与成员/);
+    const row = dialog.querySelector('[data-team-environment="team-1"]') as HTMLElement;
+    expect(row).toHaveTextContent("共享环境 · personal");
+    expect(within(row).getByLabelText("为 平台组 分配的执行环境")).toHaveValue("w2");   // the current one is not offered
+    await userEvent.click(within(row).getByRole("button", { name: "更换执行环境" }));
+    expect(within(dialog).getByText(/旧会话不迁移/)).toBeInTheDocument();
+    expect(calls.find((c) => c.path === "/v1/teams/team-1/environment")).toBeUndefined();
+    await userEvent.click(within(dialog).getByRole("button", { name: "确认更换" }));
+    await waitFor(() => expect(calls.find((c) => c.path === "/v1/teams/team-1/environment")?.body).toEqual({ worker_id: "w2" }));
+  });
+
+  test("an administrator archives a Team after confirming", async () => {
+    const calls = start({ ...teamPage, "POST /teams/team-1/archive": { id: "team-1", archived: true } });
+    const dialog = await openSetting(/团队与成员/);
+    expect(within(dialog).getByRole("button", { name: "添加 / 更新" })).toBeInTheDocument();
+    await userEvent.click(within(dialog).getByRole("button", { name: "归档 Team" }));
+    expect(calls.find((c) => c.path === "/v1/teams/team-1/archive")).toBeUndefined();
+    await userEvent.click(within(dialog).getByRole("button", { name: "确认归档" }));
+    await waitFor(() => expect(calls.find((c) => c.path === "/v1/teams/team-1/archive")?.body).toEqual({ archived: true }));
+  });
+
+  test("an archived Team shows as archived and offers restore instead of new members", async () => {
+    const calls = start({ ...teamPage, "GET /teams": [{ ...teamPage["GET /teams"][0], archived: 1 }],
+      "POST /teams/team-1/archive": { id: "team-1", archived: false } });
+    const dialog = await openSetting(/团队与成员/);
+    expect(within(dialog).getByText("已归档")).toBeInTheDocument();
+    expect(within(dialog).queryByRole("button", { name: "添加 / 更新" })).not.toBeInTheDocument();
+    await userEvent.click(within(dialog).getByRole("button", { name: "恢复 Team" }));
+    await waitFor(() => expect(calls.find((c) => c.path === "/v1/teams/team-1/archive")?.body).toEqual({ archived: false }));
+  });
+
+  test("a member leaves a Team and sees none of its management", async () => {
     const calls = start({
-      "GET /users": [{ id: "u1", username: "fixture-owner" }, { id: "u2", username: "carol" }],
-      "GET /workers": [{ id: "w1", name: "personal", owner_id: "u1", team_id: null, enabled: true, scope: "shared",
-        spaces: [{ user_id: "u1" }], capabilities: {} }],
-      "POST /workers/w1/spaces": { ok: true },
+      "GET /me": { id: "u1", username: "fixture-owner", admin: 0, scopes: ["read", "execute", "manage"] },
+      "GET /teams": [{ id: "team-1", name: "平台组", role: "member", created: 1, members: [
+        { id: "u1", username: "fixture-owner", role: "member" }, { id: "u3", username: "carol", role: "owner" }],
+      environment: { worker_id: "w1", name: "personal", scope: "shared", enabled: true } }],
+      "DELETE /teams/team-1/members": { ok: true },
     });
     const dialog = await openSetting(/团队与成员/);
-    const carol = within(dialog).getByText("carol", { selector: "[data-user-environment] *" }).closest("[data-user-environment]") as HTMLElement;
-    expect(carol).toHaveTextContent("未分配");
-    await userEvent.click(within(carol).getByRole("button", { name: "分配共享环境" }));
-    await waitFor(() => expect(calls.find((c) => c.path === "/v1/workers/w1/spaces")?.body).toEqual({ user_id: "u2" }));
+    for (const name of ["改名", "移除", "设为 owner", "归档 Team", "更换执行环境", "添加 / 更新"])
+      expect(within(dialog).queryByRole("button", { name })).not.toBeInTheDocument();
+    const self = within(dialog).getByRole("group", { name: "fixture-owner" });
+    await userEvent.click(within(self).getByRole("button", { name: "退出 Team" }));
+    await userEvent.click(within(self).getByRole("button", { name: "确认退出" }));
+    await waitFor(() => expect(calls.find((c) => c.method === "DELETE")?.body).toEqual({ username: "fixture-owner" }));
+  });
+
+  test("archived Teams are marked in the space switcher and not offered for new Sessions", async () => {
+    start({ "GET /teams": [
+      { id: "team-1", name: "平台组", role: "owner", created: 1, members: [], environment: null },
+      { id: "team-2", name: "旧组", role: "owner", created: 2, members: [], archived: 1, environment: null },
+    ] });
+    await userEvent.click(await screen.findByRole("combobox", { name: "开发空间" }));
+    expect(await screen.findByRole("option", { name: "旧组 · Team · 已归档" })).toBeInTheDocument();
+    await userEvent.keyboard("{Escape}");
+    await userEvent.click(screen.getByRole("button", { name: /新建开发/ }));
+    const dialog = await screen.findByRole("dialog");
+    const options = Array.from((within(dialog).getByLabelText("执行空间") as HTMLSelectElement).options).map((o) => o.text);
+    expect(options.some((o) => o.includes("旧组"))).toBe(false);
   });
 
   test("sharing a Worker shows what sharing means and asks for confirmation", async () => {

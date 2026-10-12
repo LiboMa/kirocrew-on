@@ -100,10 +100,11 @@ export function nameFrom(input: string): string {
 
 /** The first problem that keeps the user on this step, or "" when the step is complete. */
 export function validateStep(step: number, draft: Draft,
-  { workflowMode, teamWithoutEnvironment }: { workflowMode: boolean; teamWithoutEnvironment?: string }): string {
+  { workflowMode, teamWithoutEnvironment, archivedTeam }: { workflowMode: boolean; teamWithoutEnvironment?: string; archivedTeam?: string }): string {
   const input = draft.input.trim();
   if (step === 0) {
     if (input.length < 3) return "请填写这次要完成什么（至少 3 个字符）。";
+    if (archivedTeam) return `Team「${archivedTeam}」已归档，不能提交新会话；请选择其他执行空间。`;
     if (!workflowMode && teamWithoutEnvironment)
       return `Team「${teamWithoutEnvironment}」当前没有可用的执行环境（未分配或已停用），请联系平台管理员。`;
     if (!draft.name.trim()) return "请填写名称。";
