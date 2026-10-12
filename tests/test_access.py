@@ -139,5 +139,50 @@ class ScopeTests(AccessCase):
             self.assertEqual((status, token["scopes"]), (201, ["read", "admin"]))
 
 
+class SemanticsTests(AccessCase):
+    """Cannot see it: 404, revealing nothing. Can see it but may not do this: 403 with the reason."""
+
+    def test_member_cannot_delete_someone_elses_team_session_and_is_told_why(self):
+        tid = self.team()
+        rid = self.start(self.a, team_id=tid)["id"]
+        mine = self.start(self.b, "start-0000000002", team_id=tid)["id"]
+        body = {"request_id": "delete-000000001", "expected_version": 1, "confirmation": rid}
+        with self.http() as call:
+            status, result = call("POST", f"/v1/runs/{rid}/delete", self.tokens["bob"], body)
+            self.assertEqual(status, 403)
+            self.assertIn("只有 Team owner 可以删除他人创建的会话", result["error"])
+            self.assertEqual(call("POST", f"/v1/runs/{rid}/delete", self.tokens["eve"], body)[0], 404)
+            self.assertEqual(call("GET", f"/v1/runs/{rid}", self.tokens["bob"])[1]["permissions"],
+                             {"operate": True, "delete": False})
+            self.assertEqual(call("GET", f"/v1/runs/{mine}", self.tokens["bob"])[1]["permissions"],
+                             {"operate": True, "delete": True})
+            listed = {r["id"]: r["permissions"] for r in call("GET", "/v1/runs", self.tokens["bob"])[1]}
+            self.assertEqual(listed[rid], {"operate": True, "delete": False})
+
+    def test_viewer_cannot_edit_a_workflow_and_is_told_why(self):
+        from octopus.security import Error
+        flow = self.service.save_workflow(self.a, {"name": "研发流程", "steps": [
+            {"id": "code", "name": "实现", "tool": "claude", "prompt": "实现"}]})
+        self.service.share(self.a, flow["id"], {"kind": "user", "principal": self.b["id"], "role": "viewer"})
+        edit = {"name": "研发流程", "expected_version": 1, "steps": [{"id": "code", "name": "实现", "tool": "codex", "prompt": "实现"}]}
+        with self.assertRaises(Error) as caught:
+            self.service.save_workflow(self.b, edit, flow["id"])
+        self.assertEqual(caught.exception.status, 403)
+        self.assertIn("editor", str(caught.exception))
+        with self.assertRaises(Error) as caught:
+            self.service.save_workflow(self.e, edit, flow["id"])
+        self.assertEqual(caught.exception.status, 404)
+
+    def test_non_member_does_not_learn_a_team_name(self):
+        from octopus.security import Error
+        tid = self.team("保密项目组", environment=False)
+        with self.assertRaises(Error) as caught:
+            self.start(self.e, team_id=tid)
+        self.assertEqual(caught.exception.status, 404)
+        self.assertNotIn("保密项目组", str(caught.exception))
+        with self.assertRaises(Error) as caught:   # a member still learns why
+            self.start(self.b, team_id=tid)
+        self.assertEqual(caught.exception.code, "team_without_worker")
+
 if __name__ == "__main__":
     unittest.main()

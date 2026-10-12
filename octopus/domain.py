@@ -13,6 +13,7 @@ from .security import Error, elevated, require
 
 TOOLS = ("kiro", "claude", "codex", "opencode")
 ROLES = {"viewer": 1, "runner": 2, "editor": 3, "owner": 4}
+ROLE_LABELS = {"viewer": "查看", "runner": "运行", "editor": "编辑", "owner": "所有者"}
 # Statuses in which an open Session is not running on its Worker (it can be continued).
 SETTLED = ("failed", "blocked", "completed", "stopped", "waiting_worker")
 # What the admin environment listing shows of a live /health (no boundary or principal hashes).
@@ -54,8 +55,11 @@ def steps(value):
 
 
 def member(db, user, team, owner=False):
+    """The user's role in the Team: 404 to a non-member (the Team stays unknown to them), 403 to a member who is not
+    the owner that the action needs."""
     row = db.execute("SELECT role FROM members WHERE user_id=? AND team_id=?", (user, team)).fetchone()
-    require(row and (not owner or row["role"] == "owner"), "无此 Team 权限", 403, "forbidden")
+    require(row is not None, "Team 不存在或无权限", 404, "not_found")
+    require(not owner or row["role"] == "owner", "只有 Team owner 可以执行此操作", 403, "forbidden")
     return row["role"]
 
 
@@ -70,7 +74,8 @@ def workflow_access(db, user, wid, role="viewer"):
                                (grant["principal"], user)).fetchone()
         if match:
             allowed = max(allowed, ROLES[grant["role"]])
-    require(allowed >= ROLES[role], "Workflow 不存在或无权限", 404, "not_found")
+    require(allowed > 0, "Workflow 不存在或无权限", 404, "not_found")
+    require(allowed >= ROLES[role], f"需要该工作流的 {role} 权限（{ROLE_LABELS[role]}）", 403, "forbidden")
     return dict(flow), next(k for k, v in ROLES.items() if v == allowed)
 
 
@@ -110,16 +115,31 @@ def give_environment(db, worker, team):
         assign_spare(db, worker, team)
 
 
-def run_access(db, user, rid, owner=False):
+def run_access(db, actor, rid, owner=False, admin=True):
+    """The run if the actor may see it (404 otherwise, never revealing that it exists). owner=True also requires the
+    right to delete it (403 with the reason). An elevated admin sees and operates every run unless admin=False (A2)."""
     row = db.execute("SELECT * FROM runs WHERE id=?", (rid,)).fetchone()
     require(row is not None, "Session 不存在或无权限", 404, "not_found")
-    shared = row["team_id"] and db.execute("SELECT role FROM members WHERE team_id=? AND user_id=?",
-                                         (row["team_id"], user)).fetchone()
-    allowed = (bool(shared and (not owner or shared["role"] == "owner" or row["owner_id"] == user))
-               if row["team_id"] else row["owner_id"] == user)
-    require(allowed,
-            "Session 不存在或无权限", 404, "not_found")
+    if admin and elevated(actor):
+        return dict(row)
+    if row["team_id"]:
+        role = db.execute("SELECT role FROM members WHERE team_id=? AND user_id=?", (row["team_id"], actor["id"])).fetchone()
+        require(role is not None, "Session 不存在或无权限", 404, "not_found")
+        require(not owner or role["role"] == "owner" or row["owner_id"] == actor["id"],
+                "只有 Team owner 可以删除他人创建的会话", 403, "forbidden")
+    else:
+        require(row["owner_id"] == actor["id"], "Session 不存在或无权限", 404, "not_found")
     return dict(row)
+
+
+def run_permissions(db, actor, run):
+    """What the console may offer on a run it shows (the server enforces the same rules)."""
+    try:
+        run_access(db, actor, run["id"], owner=True)
+        delete = True
+    except Error:
+        delete = False
+    return {"operate": True, "delete": delete}
 
 
 def _probe(config):
@@ -452,6 +472,8 @@ class Service:
             # The space's only usable Worker runs it; a Team without an execution environment takes no new Sessions (D28).
             team = body.get("team_id") or None
             with self.db.read() as db:
+                if team:
+                    member(db, actor["id"], team)   # a non-member learns nothing about the Team
                 usable = space_workers(db, actor["id"], team)
                 if team and not usable:
                     row = db.execute("SELECT name FROM teams WHERE id=?", (team,)).fetchone()
@@ -545,7 +567,7 @@ class Service:
     def preview_entry(self, actor, rid):
         """The file the preview opens first (e.g. index.html), asked from the run's Worker."""
         with self.db.read() as db:
-            run = run_access(db, actor["id"], rid)
+            run = run_access(db, actor, rid)
             require(run["worker_id"], "此 Session 尚未分配 Worker，没有可预览的产出", 409, "no_preview")
             worker = db.execute("SELECT config FROM workers WHERE id=?", (run["worker_id"],)).fetchone()
         from .transport import worker_request
@@ -567,18 +589,19 @@ class Service:
             result = []
             for row in db.execute("SELECT id FROM runs ORDER BY created DESC"):
                 try:
-                    run = run_access(db, actor["id"], row["id"])
-                    result.append(self._view(db, run, detail=False))
+                    run = run_access(db, actor, row["id"])
+                    result.append(self._view(db, run, actor, detail=False))
                 except Error:
                     pass
             return result
 
     def run(self, actor, rid):
         with self.db.read() as db:
-            return self._view(db, run_access(db, actor["id"], rid))
+            return self._view(db, run_access(db, actor, rid), actor)
 
-    def _view(self, db, run, detail=True):
+    def _view(self, db, run, actor, detail=True):
         value = {k: v for k, v in run.items() if k != "snapshot"}
+        value["permissions"] = run_permissions(db, actor, run)
         snapshot = json.loads(run["snapshot"])
         value.update({key: snapshot.get(key) for key in ("name", "workflow_name", "workflow_version",
                                                        "selection", "match_mode", "match_reason", "purpose", "planning")})
@@ -666,7 +689,7 @@ class Service:
     def operate(self, actor, rid, action, body):
         require(action in {"continue", "recover", "stop", "close", "reopen", "delete", "assign-worker"}, "不支持的操作")
         with self.db.transaction() as db:
-            run = run_access(db, actor["id"], rid, owner=action == "delete")
+            run = run_access(db, actor, rid, owner=action == "delete")
             require(action not in {"continue", "recover"} or json.loads(run["snapshot"]).get("purpose") != "workflow_design",
                     "工作流建议请按新需求重新生成；原建议保留作为证据", 409, "invalid_state")
             def execute():
@@ -734,6 +757,6 @@ class Service:
 
     def events(self, actor, rid, after=0):
         with self.db.read() as db:
-            run_access(db, actor["id"], rid)
+            run_access(db, actor, rid)
             return [{**dict(row), "payload": json.loads(row["payload"])} for row in db.execute(
                 "SELECT * FROM events WHERE run_id=? AND id>? ORDER BY id LIMIT 200", (rid, after))]
