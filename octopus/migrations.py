@@ -91,7 +91,16 @@ CREATE TABLE IF NOT EXISTS audit(
 CREATE INDEX IF NOT EXISTS audit_at ON audit(at);
 """
 
-MIGRATIONS = [(1, "baseline", BASELINE), (2, "environments", ENVIRONMENTS), (3, "access", ACCESS)]
+# Access management phase 2: an archived Team takes no new Sessions or members; a retired Worker leaves every listing;
+# last_team is the Team a spare Worker host last served (its code and memories may remain there, P2).
+TEAMS_WORKERS = """
+ALTER TABLE teams ADD COLUMN archived INTEGER NOT NULL DEFAULT 0;
+ALTER TABLE workers ADD COLUMN retired INTEGER NOT NULL DEFAULT 0;
+ALTER TABLE workers ADD COLUMN last_team TEXT REFERENCES teams(id);
+"""
+
+MIGRATIONS = [(1, "baseline", BASELINE), (2, "environments", ENVIRONMENTS), (3, "access", ACCESS),
+              (4, "teams_workers", TEAMS_WORKERS)]
 
 
 def _statements(script):

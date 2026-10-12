@@ -50,7 +50,7 @@ class AccessCase(unittest.TestCase):
         """alice owns the Team, bob is a member, eve is not."""
         tid = "team-" + name.encode().hex()[:12]
         with self.db.transaction() as db:
-            db.execute("INSERT INTO teams VALUES(?,?,0)", (tid, name))
+            db.execute("INSERT INTO teams(id,name,created) VALUES(?,?,0)", (tid, name))
             db.execute("INSERT INTO members VALUES(?,?,'owner')", (tid, self.a["id"]))
             db.execute("INSERT INTO members VALUES(?,?,'member')", (tid, self.b["id"]))
             if environment:
@@ -281,7 +281,7 @@ class UserLifecycleTests(AccessCase):
 
     def test_last_active_owner_and_last_admin_are_protected(self):
         with self.db.transaction() as db:
-            db.execute("INSERT INTO teams VALUES('team-bob','bob 的 Team',0)")
+            db.execute("INSERT INTO teams(id,name,created) VALUES('team-bob','bob 的 Team',0)")
             db.execute("INSERT INTO members VALUES('team-bob',?,'owner')", (self.b["id"],))
         with self.http() as call:
             status, result = call("POST", f"/v1/users/{self.b['id']}/active", self.tokens["alice"], {"active": False})
@@ -425,7 +425,7 @@ class ReviewFixTests(AccessCase):
         from octopus.security import Error
         with self.db.transaction() as db:
             carol = create_user(db, "carol", PASSWORD)
-            db.execute("INSERT INTO teams VALUES('team-bc','BC',0)")
+            db.execute("INSERT INTO teams(id,name,created) VALUES('team-bc','BC',0)")
             db.execute("INSERT INTO members VALUES('team-bc',?,'owner')", (self.b["id"],))
             db.execute("INSERT INTO members VALUES('team-bc',?,'owner')", (carol["id"],))
         self.service.set_active(self.a, carol["id"], {"active": False})       # bob is still an active owner
@@ -504,7 +504,7 @@ class PermissionMatrixTests(AccessCase):
         with self.db.transaction() as db:
             self.carol = create_user(db, "carol", PASSWORD)
             self.tokens["carol"] = issue_token(db, self.carol["id"])["token"]
-            db.execute("INSERT INTO teams VALUES('team-m','矩阵 Team',0)")
+            db.execute("INSERT INTO teams(id,name,created) VALUES('team-m','矩阵 Team',0)")
             db.execute("INSERT INTO members VALUES('team-m',?,'owner')", (self.carol["id"],))
             db.execute("INSERT INTO members VALUES('team-m',?,'member')", (self.b["id"],))
             db.execute("INSERT INTO workers(id,name,owner_id,config,scope) VALUES('env-m','env',?,?,'shared')",

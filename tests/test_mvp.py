@@ -59,7 +59,7 @@ class MVPTests(unittest.TestCase):
         """A Team created before execution environments (D28): no Worker; alice is its owner."""
         tid = "team-" + name.encode().hex()[:12]
         with self.db.transaction() as db:
-            db.execute("INSERT INTO teams VALUES(?,?,0)", (tid, name))
+            db.execute("INSERT INTO teams(id,name,created) VALUES(?,?,0)", (tid, name))
             db.execute("INSERT INTO members VALUES(?,?,'owner')", (tid, self.a["id"]))
             for username in members:
                 user = db.execute("SELECT id FROM users WHERE username=?", (username,)).fetchone()
@@ -801,7 +801,7 @@ class EnvironmentTests(unittest.TestCase):
     def shared_team(self, wid, name="共享 Team"):
         tid = "team-" + name.encode().hex()[:12]
         with self.db.transaction() as db:
-            db.execute("INSERT INTO teams VALUES(?,?,0)", (tid, name))
+            db.execute("INSERT INTO teams(id,name,created) VALUES(?,?,0)", (tid, name))
             db.execute("INSERT INTO members VALUES(?,?,'owner')", (tid, self.a["id"]))
             db.execute("INSERT INTO members VALUES(?,?,'member')", (tid, self.b["id"]))
             db.execute("INSERT INTO worker_spaces(worker_id,team_id) VALUES(?,?)", (wid, tid))
@@ -918,7 +918,7 @@ class EnvironmentTests(unittest.TestCase):
 
     def test_team_without_environment_is_refused(self):
         with self.db.transaction() as db:
-            db.execute("INSERT INTO teams VALUES('t-legacy','旧 Team',0)")
+            db.execute("INSERT INTO teams(id,name,created) VALUES('t-legacy','旧 Team',0)")
             db.execute("INSERT INTO members VALUES('t-legacy',?,'owner')", (self.a["id"],))
         with self.assertRaises(Error) as caught:
             self.start(team_id="t-legacy")
@@ -956,7 +956,7 @@ class EnvironmentTests(unittest.TestCase):
 
     def test_a_spare_can_be_assigned_to_an_existing_team(self):
         with self.db.transaction() as db:
-            db.execute("INSERT INTO teams VALUES('t-legacy','旧 Team',0)")
+            db.execute("INSERT INTO teams(id,name,created) VALUES('t-legacy','旧 Team',0)")
             db.execute("INSERT INTO members VALUES('t-legacy',?,'owner')", (self.a["id"],))
             db.execute("INSERT INTO workers(id,name,owner_id,config,scope) VALUES('sp','team-host-1',?,'{}','spare')",
                        (self.a["id"],))

@@ -335,7 +335,7 @@ class Service:
                                (text(body.get("owner"), "Team owner", 64).lower(),)).fetchone()
             require(owner is not None, "Team owner 不存在", 404, "not_found")
             tid = uid("team")
-            db.execute("INSERT INTO teams VALUES(?,?,?)", (tid, title, time.time()))
+            db.execute("INSERT INTO teams(id,name,created) VALUES(?,?,?)", (tid, title, time.time()))
             db.execute("INSERT INTO members VALUES(?,?,?)", (tid, owner["id"], "owner"))
             give_environment(db, body["worker_id"], tid)
             role = "owner" if owner["id"] == actor["id"] else None

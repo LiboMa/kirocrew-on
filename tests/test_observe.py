@@ -109,7 +109,7 @@ class PlatformObserveTests(unittest.TestCase):
 
     def test_a_team_member_on_a_shared_environment_can_watch_what_they_cannot_open(self):
         with self.db.transaction() as db:
-            db.execute("INSERT INTO teams VALUES('team-shared','Shared Team',0)")
+            db.execute("INSERT INTO teams(id,name,created) VALUES('team-shared','Shared Team',0)")
             db.execute("INSERT INTO members VALUES('team-shared',?,'owner')", (self.actor["id"],))
             db.execute("INSERT INTO members VALUES('team-shared',?,'member')", (self.actors["bob"]["id"],))
             db.execute("UPDATE workers SET scope='shared' WHERE id='worker'")
@@ -195,7 +195,7 @@ class DedicateTests(unittest.TestCase):
         self.health["isolation"] = isolation
         self.config["capabilities"] = dict(self.health)
         with self.db.transaction() as db:
-            db.execute("INSERT INTO teams VALUES('team-w','Web 组',0)")
+            db.execute("INSERT INTO teams(id,name,created) VALUES('team-w','Web 组',0)")
             db.execute("INSERT INTO members VALUES('team-w',?,'owner')", (self.actor["id"],))
             db.execute("INSERT INTO members VALUES('team-w',?,'member')", (self.actors["bob"]["id"],))
             db.execute("UPDATE workers SET scope='shared', config=? WHERE id='worker'", (dumps(self.config),))

@@ -15,7 +15,7 @@ with tempfile.TemporaryDirectory(prefix="octopus-browser-") as root:
         actor = authenticate(db, issue_token(db, owner["id"])["token"])
     service = Service(database)
     with database.transaction() as db:   # a Team created before execution environments (D28)
-        db.execute("INSERT INTO teams VALUES('team-fixture','Fixture Team',0)")
+        db.execute("INSERT INTO teams(id,name,created) VALUES('team-fixture','Fixture Team',0)")
         db.execute("INSERT INTO members VALUES('team-fixture',?,'owner')", (actor["id"],))
     team = {"id": "team-fixture"}
     service.membership(actor, team["id"], {"username": "fixture-reader"})

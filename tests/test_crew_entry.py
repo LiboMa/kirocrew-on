@@ -110,7 +110,7 @@ class CrewEntryTests(unittest.TestCase):
     def test_team_session_on_a_shared_environment_opens_for_its_boundary_owner_only(self):
         # Observed on EC2: the owner of the shared personal Worker was refused with "Team 原生入口需要该 Team 的专属 Worker".
         with self.db.transaction() as db:
-            db.execute("INSERT INTO teams VALUES('team-shared','Shared Team',0)")
+            db.execute("INSERT INTO teams(id,name,created) VALUES('team-shared','Shared Team',0)")
             db.execute("INSERT INTO members VALUES('team-shared',?,'owner')", (self.actor["id"],))
             db.execute("INSERT INTO members VALUES('team-shared',?,'member')", (self.actors["bob"]["id"],))
             db.execute("UPDATE workers SET scope='shared' WHERE id='worker'")
@@ -128,7 +128,7 @@ class CrewEntryTests(unittest.TestCase):
     def test_team_membership_and_revocation_during_entry(self):
         team = {"id": "team-entry"}   # a Team created before execution environments (D28)
         with self.db.transaction() as db:
-            db.execute("INSERT INTO teams VALUES('team-entry','Entry Team',0)")
+            db.execute("INSERT INTO teams(id,name,created) VALUES('team-entry','Entry Team',0)")
             db.execute("INSERT INTO members VALUES('team-entry',?,'owner')", (self.actor["id"],))
         self.service.membership(self.actor, team["id"], {"username": "bob"})
         self.health["isolation"] = "dedicated"
