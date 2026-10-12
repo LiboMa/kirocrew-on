@@ -11,6 +11,7 @@ import threading
 import time
 import base64
 import secrets
+import sqlite3
 from urllib.parse import parse_qs, unquote, urlsplit
 
 from . import __version__
@@ -168,9 +169,13 @@ def server(database, port=8918, host="127.0.0.1", allowed_hosts=(), origin_secre
                 actor = authenticate(db, header.removeprefix("Bearer ") if header.startswith("Bearer ") else "")
             now = time.time()
             if actor["last_used"] is None or now - actor["last_used"] >= 60:
-                # At most one write a minute per token, in its own short transaction: reads stay reads.
-                with database.transaction() as db:
-                    db.execute("UPDATE tokens SET last_used=? WHERE id=?", (now, actor["token_id"]))
+                # At most one write a minute per token, in its own short transaction, and best effort: a busy
+                # database must never fail the request it rides on.
+                try:
+                    with database.transaction() as db:
+                        db.execute("UPDATE tokens SET last_used=? WHERE id=?", (now, actor["token_id"]))
+                except sqlite3.OperationalError:
+                    pass
             return actor
 
         def do_GET(self):
@@ -484,6 +489,7 @@ def server(database, port=8918, host="127.0.0.1", allowed_hosts=(), origin_secre
                             return self.respond(observe(service, actor, rid, **paging))
                         if action == "export" and method == "GET":
                             run = service.run(actor, rid)
+                            service.audit_read(actor, rid, "export")
                             with database.read() as db:
                                 revisions = [{**dict(row), "content": json.loads(row["content"])} for row in db.execute(
                                     "SELECT * FROM revisions WHERE run_id=? ORDER BY version", (rid,))]

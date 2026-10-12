@@ -152,12 +152,13 @@ class SemanticsTests(AccessCase):
             self.assertEqual(status, 403)
             self.assertIn("只有 Team owner 可以删除他人创建的会话", result["error"])
             self.assertEqual(call("POST", f"/v1/runs/{rid}/delete", self.tokens["eve"], body)[0], 404)
+            # native: False — the Team's shared environment belongs to alice (K03).
             self.assertEqual(call("GET", f"/v1/runs/{rid}", self.tokens["bob"])[1]["permissions"],
-                             {"operate": True, "delete": False})
+                             {"operate": True, "delete": False, "native": False})
             self.assertEqual(call("GET", f"/v1/runs/{mine}", self.tokens["bob"])[1]["permissions"],
-                             {"operate": True, "delete": True})
+                             {"operate": True, "delete": True, "native": False})
             listed = {r["id"]: r["permissions"] for r in call("GET", "/v1/runs", self.tokens["bob"])[1]}
-            self.assertEqual(listed[rid], {"operate": True, "delete": False})
+            self.assertEqual(listed[rid], {"operate": True, "delete": False, "native": False})
 
     def test_viewer_cannot_edit_a_workflow_and_is_told_why(self):
         from octopus.security import Error
@@ -202,10 +203,11 @@ class OversightTests(AccessCase):
             status, result = call("POST", f"/v1/runs/{self.rid}/stop", self.tokens["alice"],
                                   {"request_id": "stop-0000000001", "expected_version": 1})
             self.assertEqual((status, result["status"]), (200, "accepted"), result)
-            self.assertEqual(call("POST", f"/v1/runs/{self.rid}/crew-entry", self.tokens["alice"], {})[0], 404)
+            self.assertEqual(call("POST", f"/v1/runs/{self.rid}/crew-entry", self.tokens["alice"], {})[0], 403)
             audit = call("GET", "/v1/admin/audit", self.tokens["alice"])[1]
-            self.assertEqual([(e["action"], e["kind"], e["target"], e["actor"]["username"]) for e in audit],
-                             [("run.stop", "run", self.rid, "alice")])
+            # The stop, and (F5) the views of someone else's Session that preceded it.
+            self.assertEqual({(e["action"], e["kind"], e["target"], e["actor"]["username"]) for e in audit},
+                             {("run.stop", "run", self.rid, "alice"), ("run.view", "run", self.rid, "alice")})
             self.assertEqual(call("GET", "/v1/admin/audit", self.tokens["bob"])[0], 403)
         with patch("octopus.crew_entry.worker_request", return_value={"messages": []}):
             with self.db.transaction() as db:
@@ -415,6 +417,133 @@ class PreviewAccessTests(AccessCase):
             status, result = call("POST", f"/v1/runs/{rid}/preview", self.tokens["bob"], {})
             self.assertEqual((status, result["expires_in"]), (200, 600))
             self.assertEqual(result["url"].split("/")[2].count("."), 3)
+
+class ReviewFixTests(AccessCase):
+    """Findings of the phase-1 review, each reproduced first."""
+
+    def test_a_team_always_keeps_an_active_owner(self):
+        from octopus.security import Error
+        with self.db.transaction() as db:
+            carol = create_user(db, "carol", PASSWORD)
+            db.execute("INSERT INTO teams VALUES('team-bc','BC',0)")
+            db.execute("INSERT INTO members VALUES('team-bc',?,'owner')", (self.b["id"],))
+            db.execute("INSERT INTO members VALUES('team-bc',?,'owner')", (carol["id"],))
+        self.service.set_active(self.a, carol["id"], {"active": False})       # bob is still an active owner
+        with self.assertRaises(Error) as caught:
+            self.service.membership(self.b, "team-bc", {"username": "bob", "role": "member"})
+        self.assertEqual(caught.exception.status, 409)
+        with self.assertRaises(Error):
+            self.service.membership(self.b, "team-bc", {"username": "bob"}, remove=True)
+
+    def test_a_failed_last_used_write_never_fails_the_request(self):
+        import sqlite3
+        from unittest.mock import patch
+        with self.http() as call, patch.object(self.db, "transaction", side_effect=sqlite3.OperationalError("database is locked")):
+            self.assertEqual(call("GET", "/v1/me", self.tokens["bob"])[0], 200)
+
+    def test_password_checks_are_throttled_per_user(self):
+        with self.http() as call:
+            for _ in range(5):
+                self.assertEqual(call("POST", "/v1/me/password", self.tokens["bob"],
+                                      {"current": "wrong-password-0", "password": "Another-password-456!"})[0], 403)
+            status, result = call("POST", "/v1/me/password", self.tokens["bob"],
+                                  {"current": PASSWORD, "password": "Another-password-456!"})
+            self.assertEqual((status, result["code"]), (429, "rate_limited"))
+            self.assertEqual(call("POST", "/v1/me/password", self.tokens["eve"],     # another user is not affected
+                                  {"current": PASSWORD, "password": "Another-password-456!"})[0], 200)
+
+    def oversight_run(self):
+        self.shared_env(users=("bob",))
+        return self.start(self.b)["id"]
+
+    def test_the_native_entry_tells_an_admin_why_it_stays_closed(self):
+        from octopus import crew_entry
+        from octopus.security import Error
+        rid = self.oversight_run()
+        with self.db.transaction() as db:
+            db.execute("UPDATE runs SET native_parent='octopus-x', status='stopped' WHERE id=?", (rid,))
+            # bob's own dedicated Worker: he may open the native entry; alice only oversees.
+            db.execute("UPDATE workers SET scope='dedicated', owner_id=? WHERE id='env'", (self.b["id"],))
+        with self.assertRaises(Error) as caught:
+            crew_entry.create(self.service, self.a, rid)
+        self.assertEqual(caught.exception.status, 403)
+        self.assertIn("管理员", str(caught.exception))
+        self.assertFalse(self.service.run(self.a, rid)["permissions"]["native"])
+        self.assertTrue(self.service.run(self.b, rid)["permissions"]["native"])
+
+    def test_an_admin_action_names_the_admin_in_the_sessions_events(self):
+        rid = self.oversight_run()
+        self.service.operate(self.a, rid, "stop", {"request_id": "stop-0000000009", "expected_version": 1})
+        event = next(e for e in self.service.events(self.b, rid) if e["kind"] == "command.stop")
+        self.assertEqual((event["payload"]["oversight"], event["payload"]["by"]), (True, {"id": self.a["id"], "username": "alice"}))
+
+    def test_admin_reads_of_someone_elses_session_are_audited_once_an_hour(self):
+        from unittest.mock import patch
+        from octopus import crew_entry
+        rid = self.oversight_run()
+        with self.db.transaction() as db:
+            db.execute("UPDATE runs SET native_parent='octopus-x' WHERE id=?", (rid,))
+        reply = {"entry": "index.html", "messages": []}
+        with self.http() as call, patch("octopus.transport.worker_request", return_value=reply), \
+                patch("octopus.crew_entry.worker_request", return_value=reply):
+            for _ in range(2):
+                self.assertEqual(call("GET", f"/v1/runs/{rid}", self.tokens["alice"])[0], 200)
+                self.assertEqual(call("GET", f"/v1/runs/{rid}/observe", self.tokens["alice"])[0], 200)
+            self.assertEqual(call("GET", f"/v1/runs/{rid}/export", self.tokens["alice"])[0], 200)
+            self.assertEqual(call("POST", f"/v1/runs/{rid}/preview", self.tokens["alice"], {})[0], 200)
+            call("GET", f"/v1/runs/{rid}", self.tokens["bob"])               # the owner's own reads are not audited
+        actions = sorted(e["action"] for e in self.service.audit_log(self.a))
+        self.assertEqual(actions, ["run.export", "run.observe", "run.preview", "run.view"])
+
+class PermissionMatrixTests(AccessCase):
+    """Spec §10 phase-1 acceptance: role × route → status. Writes carry a wrong expected_version, so an allowed caller
+    gets 409 and nothing changes."""
+
+    def setUp(self):
+        super().setUp()
+        with self.db.transaction() as db:
+            self.carol = create_user(db, "carol", PASSWORD)
+            self.tokens["carol"] = issue_token(db, self.carol["id"])["token"]
+            db.execute("INSERT INTO teams VALUES('team-m','矩阵 Team',0)")
+            db.execute("INSERT INTO members VALUES('team-m',?,'owner')", (self.carol["id"],))
+            db.execute("INSERT INTO members VALUES('team-m',?,'member')", (self.b["id"],))
+            db.execute("INSERT INTO workers(id,name,owner_id,config,scope) VALUES('env-m','env',?,?,'shared')",
+                       (self.a["id"], dumps({"capabilities": {}})))
+            db.execute("INSERT INTO worker_spaces(worker_id,team_id) VALUES('env-m','team-m')")
+            db.execute("INSERT INTO worker_spaces(worker_id,user_id) VALUES('env-m',?)", (self.b["id"],))
+            carol = authenticate(db, self.tokens["carol"])
+        self.team_run = self.start(carol, "start-matrix-001", team_id="team-m")["id"]
+        self.bob_run = self.start(self.b, "start-matrix-002")["id"]
+        with self.db.transaction() as db:
+            db.execute("UPDATE runs SET native_parent='octopus-m' WHERE id=?", (self.bob_run,))
+        self.flow = self.service.save_workflow(carol, {"name": "矩阵流程", "steps": [
+            {"id": "code", "name": "实现", "tool": "claude", "prompt": "实现"}]})
+        self.service.share(carol, self.flow["id"], {"kind": "user", "principal": self.b["id"], "role": "viewer"})
+        self.tokens["alice_plain"] = self.token("alice", ["read", "execute", "manage"])
+
+    def test_matrix(self):
+        wrong = {"request_id": "matrix-0000000001", "expected_version": 999}
+        steps = [{"id": "code", "name": "实现", "tool": "codex", "prompt": "实现"}]
+        roles = ("alice", "alice_plain", "carol", "bob", "eve")   # admin, admin without admin scope, owner, member, outsider
+        matrix = [
+            ("GET", f"/v1/runs/{self.team_run}", None, (200, 404, 200, 200, 404)),
+            ("POST", f"/v1/runs/{self.team_run}/stop", wrong, (409, 404, 409, 409, 404)),
+            ("POST", f"/v1/runs/{self.team_run}/delete", {**wrong, "confirmation": self.team_run}, (409, 404, 409, 403, 404)),
+            ("GET", f"/v1/runs/{self.bob_run}", None, (200, 404, 404, 200, 404)),
+            ("POST", f"/v1/runs/{self.bob_run}/crew-entry", {}, (403, 404, 404, 403, 404)),
+            ("GET", "/v1/admin/users", None, (200, 403, 403, 403, 403)),
+            ("GET", "/v1/admin/audit", None, (200, 403, 403, 403, 403)),
+            ("POST", f"/v1/users/{self.b['id']}/active", {"active": True}, (200, 403, 403, 403, 403)),
+            # Admin hosting of Team members is phase 2: today an admin who is not a member is told nothing.
+            ("POST", "/v1/teams/team-m/members", {"username": "eve", "role": "bogus"}, (404, 404, 400, 403, 404)),
+            ("POST", f"/v1/workflows/{self.flow['id']}/versions", {"name": "矩阵流程", "steps": steps, "expected_version": 999},
+             (404, 404, 409, 403, 404)),
+        ]
+        with self.http() as call:
+            for method, path, body, expected in matrix:
+                for role, status in zip(roles, expected):
+                    with self.subTest(route=f"{method} {path}", role=role):
+                        self.assertEqual(call(method, path, self.tokens[role], body)[0], status)
 
 if __name__ == "__main__":
     unittest.main()

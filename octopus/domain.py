@@ -5,6 +5,8 @@ import json
 import os
 import re
 import socket
+import sqlite3
+import threading
 import time
 import unicodedata
 
@@ -138,6 +140,9 @@ def audit(db, actor, action, kind, target, detail=None):
                (time.time(), actor["id"], action, kind, target, dumps(detail or {})))
 
 
+_password_attempts, _password_lock = {}, threading.Lock()   # per user: failed current-password checks in the last minute
+
+
 def revoke_tokens(db, user, keep=None):
     db.execute("DELETE FROM tokens WHERE user_id=? AND (? IS NULL OR id != ?)", (user, keep, keep))
 
@@ -147,13 +152,19 @@ def _active_admins(db):
 
 
 def run_permissions(db, actor, run):
-    """What the console may offer on a run it shows (the server enforces the same rules)."""
-    try:
-        run_access(db, actor, run["id"], owner=True)
-        delete = True
-    except Error:
-        delete = False
-    return {"operate": True, "delete": delete}
+    """What the console may offer on a run it shows (the server enforces the same rules). native: whether the
+    actor's own access (never admin oversight, K03) lets them open its native KiroCrew entry."""
+    def allowed(**kwargs):
+        try:
+            run_access(db, actor, run["id"], **kwargs)
+            return True
+        except Error:
+            return False
+    native = allowed(admin=False)
+    if native and run["worker_id"]:
+        worker = db.execute("SELECT scope,owner_id FROM workers WHERE id=?", (run["worker_id"],)).fetchone()
+        native = worker is None or worker["scope"] != "shared" or worker["owner_id"] == actor["id"]
+    return {"operate": True, "delete": allowed(owner=True), "native": native}
 
 
 def _probe(config):
@@ -341,8 +352,10 @@ class Service:
             current = db.execute("SELECT role FROM members WHERE team_id=? AND user_id=?",
                                  (tid, target["id"])).fetchone()
             if current and current["role"] == "owner" and (remove or role != "owner"):
-                require(db.execute("SELECT count(*) FROM members WHERE team_id=? AND role='owner'",
-                                   (tid,)).fetchone()[0] > 1, "不能移除最后一个 Team Owner", 409, "conflict")
+                # Another *active* owner must remain: a deactivated owner cannot manage the Team (B4).
+                require(db.execute("SELECT count(*) FROM members m JOIN users u ON u.id=m.user_id WHERE m.team_id=? "
+                                   "AND m.role='owner' AND u.active=1 AND m.user_id!=?", (tid, target["id"])).fetchone()[0] > 0,
+                        "不能移除最后一位有效的 Team Owner", 409, "conflict")
             if remove:
                 db.execute("DELETE FROM members WHERE team_id=? AND user_id=?", (tid, target["id"]))
             else:
@@ -585,7 +598,9 @@ class Service:
             require(run["worker_id"], "此 Session 尚未分配 Worker，没有可预览的产出", 409, "no_preview")
             worker = db.execute("SELECT config FROM workers WHERE id=?", (run["worker_id"],)).fetchone()
         from .transport import worker_request
-        return worker_request(json.loads(worker["config"]), "/files", {"run_id": rid, "path": ""})["entry"]
+        entry = worker_request(json.loads(worker["config"]), "/files", {"run_id": rid, "path": ""})["entry"]
+        self.audit_read(actor, rid, "preview")
+        return entry
 
     def preview_file(self, rid, relative, holder):
         """One project file of a run for the holder of a valid preview ticket (checked by the server), who must still
@@ -621,7 +636,9 @@ class Service:
 
     def run(self, actor, rid):
         with self.db.read() as db:
-            return self._view(db, run_access(db, actor, rid), actor)
+            value = self._view(db, run_access(db, actor, rid), actor)
+        self.audit_read(actor, rid, "view")
+        return value
 
     def _view(self, db, run, actor, detail=True):
         value = {k: v for k, v in run.items() if k != "snapshot"}
@@ -781,7 +798,8 @@ class Service:
                     db.execute("UPDATE runs SET desired='stopped',status='stopped',lifecycle=? WHERE id=?",
                                (lifecycle, rid))
                 db.execute("UPDATE runs SET version=?,updated=? WHERE id=?", (version, time.time(), rid))
-                self.db.event(db, rid, "command." + action, {"actor": actor["id"], "version": version})
+                self.db.event(db, rid, "command." + action, {"actor": actor["id"], "version": version, **(
+                    {"oversight": True, "by": {"id": actor["id"], "username": actor["username"]}} if oversight else {})})
                 if oversight:
                     audit(db, actor, "run." + action, "run", rid, {"version": version})
                 return {"id": rid, "session_id": rid, "version": version, "command": action, "status": "accepted"}
@@ -790,12 +808,44 @@ class Service:
     # --- users (spec §4): only an elevated admin manages others; everyone changes their own password ---
 
     def change_password(self, actor, body):
+        # Throttled per user, and checked outside the write lock: a limited token must not brute-force the password
+        # (which would yield every scope of the account) or stall other writes with scrypt.
+        now = time.time()
+        with _password_lock:
+            recent = [t for t in _password_attempts.get(actor["id"], []) if now - t < 60]
+            require(len(recent) < 5, "原密码错误次数过多，请 1 分钟后再试", 429, "rate_limited")
+        with self.db.read() as db:
+            saved = db.execute("SELECT password FROM users WHERE id=?", (actor["id"],)).fetchone()["password"]
+        if not check_password(body.get("current"), saved):
+            with _password_lock:
+                _password_attempts[actor["id"]] = recent + [now]
+            raise Error(403, "forbidden", "原密码不正确")
+        with _password_lock:
+            _password_attempts.pop(actor["id"], None)
+        hashed = password_hash(body.get("password"))
         with self.db.transaction() as db:
-            row = db.execute("SELECT password FROM users WHERE id=?", (actor["id"],)).fetchone()
-            require(check_password(body.get("current"), row["password"]), "原密码不正确", 403, "forbidden")
-            db.execute("UPDATE users SET password=? WHERE id=?", (password_hash(body.get("password")), actor["id"]))
+            db.execute("UPDATE users SET password=? WHERE id=?", (hashed, actor["id"]))
             revoke_tokens(db, actor["id"], keep=actor["token_id"])
         return {"ok": True}
+
+    def audit_read(self, actor, rid, action):
+        """An elevated admin reading someone else's Session (A2): one audit row per admin, Session and action an hour
+        (the console polls). Best effort: never fails the read."""
+        if not elevated(actor):
+            return
+        try:
+            with self.db.transaction() as db:
+                try:
+                    run_access(db, actor, rid, admin=False)
+                    return
+                except Error:
+                    pass
+                seen = db.execute("SELECT 1 FROM audit WHERE actor_id=? AND action=? AND target=? AND at>?",
+                                  (actor["id"], "run." + action, rid, time.time() - 3600)).fetchone()
+                if not seen:
+                    audit(db, actor, "run." + action, "run", rid)
+        except sqlite3.OperationalError:
+            pass
 
     def _target(self, db, actor, uid):
         require(elevated(actor), "需要平台管理员", 403, "forbidden")
