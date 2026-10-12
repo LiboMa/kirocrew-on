@@ -2,7 +2,7 @@ import { useEffect, useState } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { api } from "@/api/client";
 import { followRunEvents, type StreamState } from "@/api/events";
-import type { Me, Run, RunEvent, Team, Template, User, Worker, Workflow } from "@/api/types";
+import type { Environment, Me, Run, RunEvent, Team, Template, User, Worker, Workflow } from "@/api/types";
 
 export const keys = {
   me: ["me"] as const,
@@ -13,6 +13,7 @@ export const keys = {
   users: ["users"] as const,
   templates: ["templates"] as const,
   tokens: ["tokens"] as const,
+  environments: ["admin", "environments"] as const,
   run: (id: string) => ["run", id] as const,
 };
 
@@ -39,6 +40,12 @@ export function useWorkspace() {
     loading: runs.isPending || teams.isPending,
     error: runs.error ?? teams.error ?? null,
   };
+}
+
+/** Administrators only. Live health makes it slower than /workers; platforms without the endpoint leave it undefined. */
+export function useEnvironments(enabled: boolean) {
+  return useQuery({ queryKey: keys.environments, queryFn: () => api<Environment[]>("/admin/environments"), enabled,
+    retry: false, ...every(30_000) });
 }
 
 export function useRun(id: string | null) {

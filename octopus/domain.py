@@ -1,4 +1,5 @@
 """Shared use cases for HTTP, Web, CLI and MCP. Authorization lives here."""
+from concurrent.futures import ThreadPoolExecutor
 import hashlib
 import json
 import os
@@ -12,6 +13,10 @@ from .security import Error, require
 
 TOOLS = ("kiro", "claude", "codex", "opencode")
 ROLES = {"viewer": 1, "runner": 2, "editor": 3, "owner": 4}
+# Statuses in which an open Session is not running on its Worker (it can be continued).
+SETTLED = ("failed", "blocked", "completed", "stopped", "waiting_worker")
+# What the admin environment listing shows of a live /health (no boundary or principal hashes).
+HEALTH_FIELDS = ("isolation", "crew_entry", "crew_origin", "version")
 
 
 def text(value, field, maximum=12000, minimum=1):
@@ -117,6 +122,20 @@ def run_access(db, user, rid, owner=False):
     return dict(row)
 
 
+def _probe(config):
+    """One Worker's live health for the admin listing; whatever it answers (or fails with) stays in its own entry."""
+    from .transport import worker_request
+    try:
+        health = worker_request(config, "/health", timeout=4)
+    except Error as exc:
+        return {"reachable": False, "error": str(exc)}
+    except Exception as exc:  # a non-HTTP banner, a truncated body, a config without a token
+        return {"reachable": False, "error": f"Worker 健康检查失败（{type(exc).__name__}）"}
+    if not isinstance(health, dict):
+        return {"reachable": False, "error": "Worker 健康检查返回的不是对象"}
+    return {"reachable": True, **{key: health[key] for key in HEALTH_FIELDS if key in health}}
+
+
 class Service:
     def __init__(self, database):
         self.db = database
@@ -164,6 +183,32 @@ class Service:
                     value["capabilities"] = json.loads(row["config"]).get("capabilities", {})
                     result.append(value)
             return result
+
+    def environments(self, actor):
+        """Admin view of every execution environment (D28): bindings, Sessions running on it and live health. Health
+        checks run concurrently with a short timeout: an unreachable Worker neither fails nor holds up the listing."""
+        require(actor["admin"], "需要平台管理员", 403, "forbidden")
+        with self.db.read() as db:
+            users = dict(db.execute("SELECT id,username FROM users").fetchall())
+            teams = dict(db.execute("SELECT id,name FROM teams").fetchall())
+            active = dict(db.execute(
+                "SELECT worker_id,COUNT(*) FROM runs WHERE worker_id IS NOT NULL AND lifecycle='open' AND status NOT IN "
+                f"({','.join('?' * len(SETTLED))}) GROUP BY worker_id", SETTLED).fetchall())
+            spaces = {}
+            for row in db.execute("SELECT worker_id,team_id,user_id FROM worker_spaces ORDER BY rowid"):
+                spaces.setdefault(row["worker_id"], []).append(
+                    {"team_id": row["team_id"], "name": teams.get(row["team_id"])} if row["team_id"]
+                    else {"user_id": row["user_id"], "username": users.get(row["user_id"])})
+            rows = db.execute("SELECT * FROM workers ORDER BY rowid").fetchall()
+        configs = [json.loads(row["config"]) for row in rows]
+        with ThreadPoolExecutor(max_workers=max(1, min(8, len(rows)))) as pool:
+            health = list(pool.map(_probe, configs))
+        return [{"id": row["id"], "name": row["name"], "scope": row["scope"], "enabled": bool(row["enabled"]),
+                 "owner": {"id": row["owner_id"], "username": users.get(row["owner_id"])} if row["owner_id"] else None,
+                 "team": {"id": row["team_id"], "name": teams.get(row["team_id"])} if row["team_id"] else None,
+                 "spaces": spaces.get(row["id"], []), "url": config.get("url"),
+                 "active_runs": active.get(row["id"], 0), "health": probe}
+                for row, config, probe in zip(rows, configs, health)]
 
     def share_worker(self, actor, wid, body):
         """Turn a dedicated Worker into a shared execution environment; its current space stays served (D28, T3)."""
@@ -610,8 +655,7 @@ class Service:
                 require(run["lifecycle"] != "deleted", "Session 已删除", 409, "invalid_state")
                 version = run["version"] + 1
                 if action == "continue":
-                    require(run["lifecycle"] == "open" and run["status"] in {
-                        "failed", "blocked", "completed", "stopped", "waiting_worker"}, "请先等待结束或停止", 409, "busy")
+                    require(run["lifecycle"] == "open" and run["status"] in SETTLED, "请先等待结束或停止", 409, "busy")
                     ordered = [dict(t) for t in db.execute("SELECT * FROM tasks WHERE run_id=? ORDER BY ordinal", (rid,))]
                     index = next((i for i, t in enumerate(ordered) if t["id"] == body.get("task_id")), None)
                     require(index is not None, "Task 不存在", 404, "not_found")

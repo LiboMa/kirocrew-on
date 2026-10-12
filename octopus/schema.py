@@ -18,18 +18,21 @@ def openapi():
         "Execution": obj({"name": text, **execution}),
         "Source": obj({"type": {"enum": ["new", "git"]}, "url": text, "ref": text}, ["type"]),
         "Login": obj({"username": text, "password": {"type": "string", "format": "password"}}, ["username", "password"]),
-        "User": obj({"username": text, "password": {"type": "string", "format": "password"}, "admin": {"type": "boolean"}},
-                    ["username", "password"]),
-        "Team": obj({"name": text}, ["name"]),
+        "User": obj({"username": text, "password": {"type": "string", "format": "password"}, "admin": {"type": "boolean"},
+                     "worker_id": text}, ["username", "password"]),
+        "Team": obj({"name": text, "owner": text, "worker_id": text}, ["name", "owner", "worker_id"]),
         "Member": obj({"username": text, "role": {"enum": ["owner", "member"]}}, ["username"]),
         "Workflow": obj({"name": text, "steps": step_list, "expected_version": integer}, ["name", "steps"]),
         "Grant": obj({"kind": {"enum": ["user", "team"]}, "principal": text,
                      "role": {"enum": ["viewer", "runner", "editor"]}}, ["kind", "principal"]),
         "Archive": obj({"expected_version": integer, "archived": {"type": "boolean"}}, ["expected_version"]),
-        "Worker": obj({"name": text, "owner_id": text, "team_id": text,
-                       "connection": obj({"url": text, "token": {"type": "string", "format": "password"}}, ["url", "token"])},
-                      ["name", "connection"]),
+        "Worker": obj({"name": text, "owner_id": text, "team_id": text, "spare": {"type": "boolean"},
+                       "connection": ref("Connection")}, ["name", "connection"]),
+        "Connection": obj({"url": text, "token": {"type": "string", "format": "password"}}, ["url", "token"]),
         "Enabled": obj({"enabled": {"type": "boolean"}}, ["enabled"]),
+        "ConnectionUpdate": obj({"connection": ref("Connection")}, ["connection"]),
+        "Share": obj({"confirm": {"const": True}}, ["confirm"]),
+        "Space": obj({"team_id": text, "user_id": text}),
         "Token": obj({"label": text, "ttl": integer, "scopes": {"type": "array", "minItems": 1,
                        "items": {"enum": ["read", "execute", "manage"]}}}),
         "Resolve": obj({"input": text, "name": text, "workflow_id": text, "workflow_version": integer,
@@ -56,7 +59,12 @@ def openapi():
     schemas["WorkflowDocument"]["description"] = "A workflow generated ahead of time (console export, legacy schema 1 or a bare step list) as JSON, YAML or Markdown with one code block. Parsed and normalized by code; /workflows/parse previews the result and its notes."
     schemas["Start"]["description"] = "Optionally specify exactly one of workflow_id, template_id, custom steps or a workflow document (runs as submitted); otherwise a KiroCrew Agent plans the tasks (plan=agent, the default; plan=match uses template rules). Preview via workflows/resolve and pin its selection/version before submit. Team runs are shared with current members. Without worker_id the run waits for assignment."
     schemas["Continue"]["description"] = "Retains Session and Workspace. Creates immutable Attempts; selected Task and downstream Tasks rerun. Earlier tasks must be accepted."
-    schemas["Worker"]["description"] = "Administrator only. Exactly one owner_id/team_id. Team requires a dedicated OS boundary; a declaration is not a sandbox."
+    schemas["Worker"]["description"] = "Administrator only. Exactly one owner_id/team_id, or spare=true (a dedicated environment no space uses until it is assigned to a Team). Team requires a dedicated OS boundary; a declaration is not a sandbox."
+    schemas["Team"]["description"] = "Administrator only. owner is a username; worker_id is the Team's execution environment (shared, or spare which becomes the Team's own), assigned in the same transaction."
+    schemas["User"]["description"] = "Administrator only. worker_id: optional shared execution environment for the user's personal space."
+    schemas["Share"]["description"] = "Every Session's agents in a shared environment run as one OS account and can read each other's sources, tool logins and memory."
+    schemas["ConnectionUpdate"]["description"] = "Administrator only. A replaced Worker host keeps serving its spaces; the new endpoint is re-validated like a registration (same isolation, boundary not used by another Worker)."
+    schemas["Space"]["description"] = "Exactly one of team_id or user_id. A spare environment can only be given to a Team."
     routes = {
         "/v1/login": {"post": "Login"}, "/v1/logout": {"post": "Empty"}, "/v1/me": {"get": None},
         "/v1/users": {"get": None, "post": "User"}, "/v1/teams": {"get": None, "post": "Team"},
@@ -69,7 +77,11 @@ def openapi():
         "/v1/workflows/{id}/shares": {"post": "Grant", "delete": "Grant"},
         "/v1/workflows/{id}/archive": {"post": "Archive"},
         "/v1/workers": {"get": None, "post": "Worker"},
+        "/v1/admin/environments": {"get": None},
         "/v1/workers/{id}/enabled": {"post": "Enabled"},
+        "/v1/workers/{id}/share": {"post": "Share"},
+        "/v1/workers/{id}/spaces": {"post": "Space", "delete": "Space"},
+        "/v1/workers/{id}/connection": {"post": "ConnectionUpdate"},
         "/v1/workers/{id}/capabilities": {"get": None},
         "/v1/tokens": {"get": None, "post": "Token"}, "/v1/tokens/{id}": {"delete": "Empty"},
         "/v1/runs": {"get": None, "post": "Start"}, "/v1/runs/{id}": {"get": None},
@@ -79,6 +91,10 @@ def openapi():
         "/v1/runs/{id}/continue": {"post": "Continue"}, "/v1/runs/{id}/assign-worker": {"post": "AssignWorker"},
         **{"/v1/runs/{id}/" + action: {"post": "Control"} for action in ["stop", "close", "reopen", "delete"]},
     }
+    # Execution environment management (D28): one place for administrators, also in the console's 「执行环境」 dialog.
+    admin = {("/v1/admin/environments", "get"), ("/v1/workers", "post"), ("/v1/workers/{id}/enabled", "post"),
+             ("/v1/workers/{id}/share", "post"), ("/v1/workers/{id}/spaces", "post"),
+             ("/v1/workers/{id}/spaces", "delete"), ("/v1/workers/{id}/connection", "post"), ("/v1/teams", "post")}
     paths = {}
     for path, methods in routes.items():
         paths[path] = {}
@@ -96,6 +112,10 @@ def openapi():
                 op["requestBody"] = {"required": True, "content": {"application/json": {"schema": ref(schema)}}}
             if path == "/v1/login":
                 op["security"] = []
+            if (path, method) in admin:
+                op["tags"] = ["执行环境（管理员）"]
+            if path == "/v1/admin/environments":
+                op["description"] = "Administrator only. Every execution environment with its scope, owner, Team or shared spaces (with names), enabled, active_runs and live health (reachable=false when its Worker does not answer within a few seconds; never fails the listing). No tokens."
             if path.endswith("/crew-entry"):
                 op["description"] = "Execute scope. Opens the existing native parent Session through its authorized Worker. On-demand sensitive login URL; no-store. Does not create, resume, mutate or dispatch a Run. Native login covers the Worker's Gateway boundary, not a single run."
             if path.endswith("/events"):

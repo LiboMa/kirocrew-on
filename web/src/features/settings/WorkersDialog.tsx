@@ -1,8 +1,10 @@
 import { useState } from "react";
 import { useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
+import { X } from "lucide-react";
 import { api } from "@/api/client";
-import { keys } from "@/api/hooks";
+import { keys, useEnvironments } from "@/api/hooks";
+import type { Environment, Worker } from "@/api/types";
 import { FormDialog } from "@/components/FormDialog";
 import { NativeSelect } from "@/components/NativeSelect";
 import { Button } from "@/components/ui/button";
@@ -13,12 +15,37 @@ import { useConsole } from "@/features/console/context";
 /** What a shared execution environment means (D28); shown before an administrator confirms sharing. */
 export const SHARED_NOTICE = "环境内所有会话的 Agent 以同一系统账号运行，能互相读取源码、工具登录与记忆；记忆未分隔；只用于同一信任范围。";
 
+function health(environment: Environment) {
+  const { health: h, active_runs: active } = environment;
+  if (!h.reachable) return `不可达：${h.error}`;
+  let origin = "";
+  try { origin = h.crew_origin ? " · 原生入口 " + new URL(h.crew_origin).host : ""; } catch { /* not a URL: omitted */ }
+  return `可达${h.version ? " · v" + h.version : ""}${origin} · 进行中会话 ${active}`;
+}
+
+/** The single management entry for execution environments (D28): bindings, health, sharing, assignment, enabling. */
 export function WorkersDialog() {
   const { workers, allTeams: teams, users, me, close } = useConsole();
   const client = useQueryClient();
   const [form, setForm] = useState({ name: "", owner: "user:" + me.id, url: "", token: "" });
   const [sharing, setSharing] = useState("");
-  const refresh = () => client.invalidateQueries({ queryKey: keys.workers });
+  const [assign, setAssign] = useState<Record<string, string>>({});
+  const environments = new Map((useEnvironments(!!me.admin).data ?? []).map((e) => [e.id, e]));
+  const refresh = () => Promise.all([keys.workers, keys.teams, keys.environments].map((queryKey) =>
+    client.invalidateQueries({ queryKey })));
+  const label = (space: { team_id?: string; user_id?: string }) => space.team_id
+    ? "Team · " + (teams.find((t) => t.id === space.team_id)?.name ?? space.team_id)
+    : "个人 · " + (users.find((u) => u.id === space.user_id)?.username ?? space.user_id);
+  // Teams take one environment each; a user may join a shared one beside a personal Worker.
+  const candidates = (w: Worker) => [
+    ...teams.filter((t) => !t.environment).map((t) => ({ value: "team:" + t.id, text: "Team · " + t.name })),
+    ...(w.scope === "shared" ? users.filter((u) => !w.spaces?.some((s) => s.user_id === u.id))
+      .map((u) => ({ value: "user:" + u.id, text: "个人 · " + u.username })) : []),
+  ];
+  const space = (value: string) => {
+    const [kind, id] = value.split(":");
+    return kind === "team" ? { team_id: id } : { user_id: id };
+  };
   const act = (action: () => Promise<unknown>, done: string) => () =>
     action().then(refresh).then(() => toast.success(done)).catch((e: Error) => toast.error(e.message));
   const owner = (w: (typeof workers)[number]) => w.scope === "shared" ? `共享环境 · 服务 ${w.spaces?.length ?? 0} 个空间`
@@ -39,7 +66,8 @@ export function WorkersDialog() {
       } : undefined}>
       <div className="space-y-2">
         {workers.map((w) => (
-          <div key={w.id} className="flex flex-wrap items-center gap-2 rounded-lg border bg-card px-3 py-2 text-sm">
+          <div key={w.id} role="group" aria-label={w.name}
+            className="flex flex-wrap items-center gap-2 rounded-lg border bg-card px-3 py-2 text-sm">
             <span className="min-w-0 flex-1">{w.name}
               <small className="ml-2 text-xs text-muted-foreground">
                 {w.capabilities.isolation === "dedicated" ? "专属环境" : "个人本机"} · {w.enabled ? "可用" : "已停用"} · {owner(w)}
@@ -55,6 +83,36 @@ export function WorkersDialog() {
                 onClick={act(() => api("/workers/" + w.id + "/enabled", "POST", { enabled: !w.enabled }), w.enabled ? "已停用。" : "已启用。")}>
                 {w.enabled ? "停用" : "启用"}
               </Button>
+            )}
+            {environments.has(w.id) && (
+              <p className="w-full text-xs text-muted-foreground" data-environment-health={w.id}>{health(environments.get(w.id)!)}</p>
+            )}
+            {!!me.admin && w.scope === "shared" && !!w.spaces?.length && (
+              <ul className="flex w-full flex-wrap gap-1.5" aria-label="服务的空间">
+                {w.spaces.map((s) => (
+                  <li key={s.team_id ?? s.user_id} className="flex items-center gap-1 rounded-md bg-muted px-2 py-0.5 text-xs">
+                    <span>{label(s)}</span>
+                    <button type="button" aria-label={"移出 " + label(s)} className="rounded hover:bg-accent"
+                      onClick={act(() => api("/workers/" + w.id + "/spaces", "DELETE", s.team_id ? { team_id: s.team_id }
+                        : { user_id: s.user_id }), "已移出。")}><X className="size-3" /></button>
+                  </li>
+                ))}
+              </ul>
+            )}
+            {!!me.admin && !!w.enabled && (w.scope === "shared" || w.scope === "spare") && (
+              <div className="flex w-full items-center gap-2">
+                <Label htmlFor={"assign-" + w.id} className="shrink-0 text-xs">分配到</Label>
+                <NativeSelect id={"assign-" + w.id} value={assign[w.id] ?? ""}
+                  onChange={(e) => setAssign({ ...assign, [w.id]: e.target.value })}>
+                  <option value="">{w.scope === "spare" ? "选择 Team" : "选择 Team 或用户"}</option>
+                  {candidates(w).map((c) => <option key={c.value} value={c.value}>{c.text}</option>)}
+                </NativeSelect>
+                <Button type="button" size="sm" variant="outline" disabled={!assign[w.id]}
+                  onClick={act(async () => {
+                    await api("/workers/" + w.id + "/spaces", "POST", space(assign[w.id]));
+                    setAssign({ ...assign, [w.id]: "" });
+                  }, "已分配。")}>分配</Button>
+              </div>
             )}
             {sharing === w.id && (
               <div role="alert" className="w-full space-y-2 rounded-md border border-warning/40 bg-warning/5 p-3 text-xs">

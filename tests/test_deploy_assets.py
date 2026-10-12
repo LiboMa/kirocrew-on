@@ -4,6 +4,8 @@ import os
 from pathlib import Path
 import shutil
 import subprocess
+import sys
+import tempfile
 import unittest
 
 import yaml
@@ -49,7 +51,9 @@ class TemplateTests(unittest.TestCase):
         self.assertEqual(len(group), 1)
         ingress = group[0]["Properties"]["SecurityGroupIngress"]
         self.assertEqual(len(ingress), 1)
-        self.assertEqual((ingress[0]["FromPort"], ingress[0]["ToPort"]), ({"Ref": "ApiPort"}, {"Ref": "NativePort"}))
+        # NativeRelayEnd: the relay ports for the Worker hosts' native entries follow NativePort (D28, design §4.0.1).
+        self.assertEqual((ingress[0]["FromPort"], ingress[0]["ToPort"]), ({"Ref": "ApiPort"}, {"Ref": "NativeRelayEnd"}))
+        self.assertEqual(self.t["Parameters"]["NativeRelayEnd"]["Default"], self.t["Parameters"]["NativePort"]["Default"] + 10)
         self.assertEqual(ingress[0]["SourcePrefixListId"], {"Ref": "CloudFrontPrefixListId"})
         self.assertNotIn("CidrIp", ingress[0])
         self.assertEqual(self.t["Parameters"]["NativePort"]["Default"], self.t["Parameters"]["ApiPort"]["Default"] + 1)
@@ -219,9 +223,12 @@ class ScriptTests(unittest.TestCase):
         worker = yaml.load((ROOT / "deploy/aws/kirocrew-on-worker.yaml").read_text(), Loader=CfnLoader)
         resources = worker["Resources"]
         ingress = resources["WorkerSecurityGroup"]["Properties"]["SecurityGroupIngress"]
-        self.assertEqual(len(ingress), 1)
-        self.assertEqual(ingress[0]["SourceSecurityGroupId"], {"Ref": "PlatformSecurityGroupId"})
-        self.assertEqual((ingress[0]["FromPort"], ingress[0]["ToPort"]), ({"Ref": "WorkerPort"}, {"Ref": "WorkerPort"}))
+        # The Worker port and the Gateway TLS port (native entry relay), each a single port, both only from the platform.
+        self.assertEqual([rule["FromPort"] for rule in ingress], [{"Ref": "WorkerPort"}, {"Ref": "GatewayTlsPort"}])
+        for rule in ingress:
+            self.assertEqual(rule["SourceSecurityGroupId"], {"Ref": "PlatformSecurityGroupId"})
+            self.assertEqual(rule["FromPort"], rule["ToPort"])
+            self.assertNotIn("CidrIp", rule)
         host = resources["WorkerHost"]["Properties"]
         self.assertEqual(host["MetadataOptions"]["HttpTokens"], "required")
         ebs = host["BlockDeviceMappings"][0]["Ebs"]
@@ -234,16 +241,18 @@ class ScriptTests(unittest.TestCase):
         actions = {action for statement in statements for action in statement["Action"]}
         self.assertNotIn("ssm:GetParameter", actions)       # a Worker host reads no platform secret
         self.assertIn("s3:GetObject", actions)
-        self.assertEqual(set(worker["Outputs"]), {"InstanceId", "PrivateIp"})
+        self.assertEqual(set(worker["Outputs"]), {"InstanceId", "PrivateIp", "NativeDomain"})
 
     def test_platform_template_exports_its_network_without_touching_the_host_security_group(self):
         outputs = template()["Outputs"]
         for key in ("VpcId", "SubnetId", "HostSecurityGroupId", "ImageId"):
             self.assertIn(key, outputs)
-        head = subprocess.run(["git", "show", "HEAD:deploy/aws/kirocrew-on-ec2.yaml"], cwd=ROOT, check=True,
-                              capture_output=True, text=True).stdout
-        self.assertEqual(template()["Resources"]["HostSecurityGroup"],
-                         yaml.load(head, Loader=CfnLoader)["Resources"]["HostSecurityGroup"])
+        # The Worker hosts' native distributions use this host as their origin, addressed like its own native one.
+        native = template()["Resources"]["NativeDistribution"]["Properties"]["DistributionConfig"]["Origins"][0]
+        self.assertEqual(outputs["HostOriginDomain"]["Value"], native["DomainName"])
+        # Changing the group's description would replace the host; its single CloudFront rule may only widen.
+        self.assertEqual(template()["Resources"]["HostSecurityGroup"]["Properties"]["GroupDescription"],
+                         "KiroCrew ON API - inbound only from CloudFront origin-facing addresses; admin via SSM")
 
     def test_worker_host_commands(self):
         env = {**os.environ, "DEPLOY_DRY_RUN": "1"}
@@ -285,6 +294,56 @@ class ScriptTests(unittest.TestCase):
         self.assertIn('OCTOPUS_CONFIG="$CHECK_TOML"', check)
         self.assertIn('rm -f "$CHECK_TOML"', check)
 
+    def test_worker_host_native_entry_is_relayed_through_the_platform(self):
+        worker = yaml.load((ROOT / "deploy/aws/kirocrew-on-worker.yaml").read_text(), Loader=CfnLoader)
+        resources, parameters = worker["Resources"], worker["Parameters"]
+        ingress = resources["WorkerSecurityGroup"]["Properties"]["SecurityGroupIngress"]
+        self.assertEqual({rule["FromPort"]["Ref"] for rule in ingress}, {"WorkerPort", "GatewayTlsPort"})
+        self.assertTrue(all(rule["SourceSecurityGroupId"] == {"Ref": "PlatformSecurityGroupId"} for rule in ingress))
+        origin = resources["NativeDistribution"]["Properties"]["DistributionConfig"]["Origins"][0]
+        self.assertEqual(origin["DomainName"], {"Ref": "PlatformOriginDomain"})
+        self.assertEqual(origin["CustomOriginConfig"]["HTTPPort"], {"Ref": "RelayPort"})
+        self.assertEqual(origin["OriginCustomHeaders"], [{"HeaderName": "X-Origin-Verify", "HeaderValue": {"Ref": "OriginSecret"}}])
+        self.assertTrue(parameters["OriginSecret"]["NoEcho"])
+        self.assertIn("NativeDomain", worker["Outputs"])
+        relay = (ROOT / "deploy/nginx/kirocrew-relay.conf").read_text()
+        for part in ('if ($http_x_origin_verify != "__ORIGIN_SECRET__")', "listen __RELAY_PORT__",
+                     "proxy_pass https://__WORKER_IP__:__GATEWAY_TLS_PORT__;", "proxy_ssl_verify on;",
+                     "proxy_ssl_trusted_certificate /etc/kirocrew-on/worker-ca.pem;",
+                     "proxy_ssl_name __WORKER_NAME__.worker.kirocrew-on;", "proxy_set_header Upgrade $http_upgrade;",
+                     'proxy_set_header X-Origin-Verify "";'):
+            self.assertIn(part, relay)
+        gateway = (ROOT / "deploy/nginx/kirocrew-worker.conf").read_text()
+        for part in ("listen __GATEWAY_TLS_PORT__ ssl;", "proxy_pass http://127.0.0.1:__GATEWAY_PORT__;",
+                     "proxy_set_header Upgrade $http_upgrade;"):
+            self.assertIn(part, gateway)
+        install = (ROOT / "deploy/install/al2023.sh").read_text()
+        start = install.index('if [ -n "$WORKER_HOST" ]; then\n  log "Worker 主机')
+        worker_mode = install[start:install.index("\nfi\n", start)]
+        self.assertIn('toml_set "$BOUNDARY_TOML" crew_url "\\"https://$NATIVE_DOMAIN\\""', worker_mode)
+        self.assertIn('-e "s#__GATEWAY_PORT__#$GATEWAY_PORT#g"', worker_mode)
+        self.assertIn('if [ -z "$WORKER_HOST" ] && [ -n "${NATIVE_DOMAIN:-}" ]; then', install)
+
+    def test_worker_host_native_commands_never_print_the_origin_secret(self):
+        secret = "s" * 48
+        env = {**os.environ, "DEPLOY_DRY_RUN": "1", "ORIGIN_SECRET": secret}
+        deploy = lambda *args: subprocess.run(["bash", str(ROOT / "deploy/aws/deploy.sh"), *args], cwd=ROOT, env=env,
+                                              capture_output=True, text=True)
+        up = deploy("worker-host", "up", "w1")
+        self.assertEqual(up.returncode, 0, up.stderr)
+        for part in ("RelayPort", "8920", "PlatformOriginDomain", "<HostOriginDomain>", "OriginSecret", "GatewayTlsPort"):
+            self.assertIn(part, up.stdout)
+        push = deploy("worker-host", "push", "w1")
+        self.assertIn("NATIVE_DOMAIN=", push.stdout)
+        tls = deploy("worker-host", "tls", "w1")
+        self.assertIn("DNS:w1.worker.kirocrew-on", tls.stdout)
+        native = deploy("worker-host", "native", "w1")
+        self.assertEqual(native.returncode, 0, native.stderr)
+        for part in ("kirocrew-relay.conf", "/etc/kirocrew-on/origin-secret", "kirocrew-relay-w1.conf", "nginx -t"):
+            self.assertIn(part, native.stdout)
+        for result in (up, push, tls, native):
+            self.assertNotIn(secret, result.stdout + result.stderr)
+
     def test_versions_file_declares_every_pin(self):
         values = dict(line.split("=", 1) for line in (ROOT / "deploy/versions.env").read_text().splitlines()
                       if line and not line.startswith("#"))
@@ -317,6 +376,136 @@ class ScriptTests(unittest.TestCase):
                      "ssm send-command", "AWS-RunShellScript"):
             self.assertIn(part, printed)
         self.assertNotIn("AWS-StartInteractiveCommand", printed)
+
+    def test_kiro_login_finishes_once_signed_in_instead_of_waiting_for_kiro_cli_to_exit(self):
+        # Observed on w1: kiro-cli printed "Logged in successfully" and kept running, so exit= never reached the log.
+        text = (ROOT / "deploy/aws/deploy.sh").read_text()
+        login = text[text.index("kiro_login() {"):text.index("admin_password() {")]
+        signed_in = login.index("grep -aqF 'Logged in successfully'")
+        ended = login.index("pkill -u crew-$boundary -f 'kiro-cli login'", signed_in)
+        verdict = login.index('[[ "$whoami" == "Logged in"* ]]', ended)
+        self.assertLess(signed_in, verdict)
+        # No long-lived feeder: once the attempt is ended, nothing of it outlives a two-second sleep.
+        self.assertNotIn("sleep 900", login)
+        self.assertNotIn('[ "$finished" = "exit=0" ]', login)
+
+    def test_worker_host_add_runs_every_step_in_order_and_stops_at_the_first_failure(self):
+        secret = "a" * 48
+        env = {**os.environ, "DEPLOY_DRY_RUN": "1", "ORIGIN_SECRET": secret}
+        deploy = lambda *args, **extra: subprocess.run(["bash", str(ROOT / "deploy/aws/deploy.sh"), *args], cwd=ROOT,
+                                                       env={**env, **extra}, capture_output=True, text=True)
+        added = deploy("worker-host", "add", "w2")
+        self.assertEqual(added.returncode, 0, added.stderr)
+        steps = ("cloudformation create-change-set", "WORKER_HOST=1", "subjectAltName=IP:", "kirocrew-relay-w2.conf",
+                 "bootstrap-worker --spare", "kiro-cli login --use-device-flow")
+        positions = [added.stdout.index(step) for step in steps]
+        self.assertEqual(positions, sorted(positions))
+        self.assertIn("kirocrew-on-m1-worker-w2", added.stdout)
+        self.assertNotIn(secret, added.stdout + added.stderr)
+        self.assertEqual(deploy("worker-host", "add", "W2").returncode, 2)
+        # A secret the relay would refuse stops up before any change, and nothing after it runs.
+        stopped = deploy("worker-host", "add", "w2", ORIGIN_SECRET="short")
+        self.assertEqual(stopped.returncode, 2)
+        self.assertIn("源站密钥", stopped.stderr)
+        self.assertNotIn("create-change-set", stopped.stdout)
+        self.assertNotIn("WORKER_HOST=1", stopped.stdout)
+
+    def fake_aws(self, state, *args):
+        """Run deploy.sh for real against tests/fake_aws.py; returns (result, log lines)."""
+        tmp = Path(tempfile.mkdtemp())
+        self.addCleanup(shutil.rmtree, tmp, True)
+        (tmp / "bin").mkdir()
+        (tmp / "bin/aws").write_text(f'#!/bin/sh\nexec "{sys.executable}" -I "{ROOT / "tests/fake_aws.py"}" "$@"\n')
+        (tmp / "bin/aws").chmod(0o755)
+        (tmp / "state.json").write_text(json.dumps(state))
+        env = {k: v for k, v in os.environ.items() if k not in {"DEPLOY_DRY_RUN", "ORIGIN_SECRET"}}
+        env.update(PATH=f"{tmp / 'bin'}:{os.environ['PATH']}", FAKE_AWS_STATE=str(tmp / "state.json"),
+                   FAKE_AWS_LOG=str(tmp / "aws.log"))
+        result = subprocess.run(["bash", str(ROOT / "deploy/aws/deploy.sh"), *args], cwd=ROOT, env=env,
+                                capture_output=True, text=True, timeout=60)
+        log = (tmp / "aws.log").read_text().splitlines() if (tmp / "aws.log").exists() else []
+        return result, log
+
+    def platform(self, **params):
+        outputs = {"VpcId": "vpc-1", "SubnetId": "subnet-1", "HostSecurityGroupId": "sg-1", "ArtifactBucket": "bucket",
+                   "InstanceId": "i-platform", "HostOriginDomain": "ec2-1-2-3-4.compute-1.amazonaws.com"}
+        return {"params": {"NativeRelayEnd": "8929", **params}, "outputs": outputs}
+
+    @staticmethod
+    def relay(log):
+        changes = [json.loads(line[len("PARAMS "):]) for line in log if line.startswith("PARAMS ")]
+        return [next(p["ParameterValue"] for p in change if p["ParameterKey"] == "RelayPort") for change in changes]
+
+    def test_relay_ports_stay_unique_across_worker_hosts(self):
+        worker = lambda **params: {"params": params, "outputs": {"InstanceId": "i-w", "PrivateIp": "10.42.1.9"}}
+        # An existing host created before relay ports gets the lowest free one; a host keeps a port no one else has.
+        result, log = self.fake_aws({"stacks": {"kirocrew-on-m1": self.platform(), "kirocrew-on-m1-worker-w1": worker()}},
+                                    "worker-host", "up", "w1")
+        self.assertEqual((result.returncode, self.relay(log)), (0, ["8920"]), result.stderr)
+        stacks = {"kirocrew-on-m1": self.platform(), "kirocrew-on-m1-worker-w1": worker(RelayPort="8920"),
+                  "kirocrew-on-m1-worker-w2": worker(RelayPort="8922")}
+        result, log = self.fake_aws({"stacks": stacks}, "worker-host", "up", "w2")
+        self.assertEqual(self.relay(log), ["8922"], result.stderr)
+        # Two hosts that were created at the same time and share a port: the one being updated moves.
+        stacks["kirocrew-on-m1-worker-w3"] = worker(RelayPort="8920")
+        result, log = self.fake_aws({"stacks": stacks}, "worker-host", "up", "w3")
+        self.assertEqual(self.relay(log), ["8921"], result.stderr)
+        # The range is the platform's deployed NativeRelayEnd, not the local stack.env.
+        stacks["kirocrew-on-m1"] = self.platform(NativeRelayEnd="8922")
+        stacks["kirocrew-on-m1-worker-w2"] = worker(RelayPort="8921")
+        result, log = self.fake_aws({"stacks": stacks}, "worker-host", "up", "w4")
+        self.assertEqual((result.returncode, self.relay(log)), (0, ["8922"]), result.stderr)
+        stacks["kirocrew-on-m1-worker-w4"] = worker(RelayPort="8922")
+        result, log = self.fake_aws({"stacks": stacks}, "worker-host", "up", "w5")
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("中转端口", result.stderr)
+        self.assertEqual(self.relay(log), [])
+
+    def test_relay_port_lookups_fail_closed(self):
+        worker = {"params": {"RelayPort": "8920"}, "outputs": {"InstanceId": "i-w", "PrivateIp": "10.42.1.9"}}
+        for throttle in ("*list*", "kirocrew-on-m1-worker-w1"):
+            result, log = self.fake_aws({"stacks": {"kirocrew-on-m1": self.platform(), "kirocrew-on-m1-worker-w1": worker},
+                                         "throttle": [throttle]}, "worker-host", "up", "w1")
+            self.assertNotEqual(result.returncode, 0, throttle)
+            self.assertEqual(self.relay(log), [], throttle)
+        # A platform stack from before the relay range: update it first.
+        platform = self.platform()
+        del platform["params"]["NativeRelayEnd"]
+        result, log = self.fake_aws({"stacks": {"kirocrew-on-m1": platform}}, "worker-host", "up", "w1")
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("deploy.sh up", result.stderr)
+        self.assertEqual(self.relay(log), [])
+
+    def test_kiro_login_on_a_host_that_is_already_signed_in_does_not_start_a_device_flow(self):
+        state = {"stacks": {"kirocrew-on-m1-worker-w1": {"outputs": {"InstanceId": "i-w1"}}},
+                 "whoami": "Logged in with IAM Identity Center (https://d-9067e1d68a.awsapps.com/start)"}
+        result, log = self.fake_aws(state, "kiro-login", "--host", "w1")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn("Logged in with IAM Identity Center", result.stdout)
+        commands = [line for line in log if line.startswith("COMMAND ")]
+        self.assertTrue(commands and all("kiro-cli login" not in line for line in commands), commands)
+
+    def test_the_relay_refuses_a_port_another_worker_host_already_listens_on(self):
+        env = {**os.environ, "DEPLOY_DRY_RUN": "1"}
+        printed = subprocess.run(["bash", str(ROOT / "deploy/aws/deploy.sh"), "worker-host", "native", "w2"], cwd=ROOT,
+                                 env=env, capture_output=True, text=True).stdout
+        tmp = Path(tempfile.mkdtemp())
+        self.addCleanup(shutil.rmtree, tmp, True)
+        script = printed.split("\n", 1)[1].replace("/etc/nginx/conf.d", str(tmp))
+        head = f"NAME=w2 IP=10.42.1.9 PORT=8921 GATEWAY_TLS_PORT=8944 CONF={tmp}/kirocrew-relay-w2.conf\n"
+        run = lambda: subprocess.run(["bash", "-c", head + script], capture_output=True, text=True)
+        (tmp / "kirocrew-relay-w1.conf").write_text("server {\n    listen 8920;\n    listen [::]:8920;\n}\n")
+        (tmp / "kirocrew-relay-w2.conf").write_text("server {\n    listen 8921;\n}\n")  # its own, re-rendered
+        self.assertIn("尚未启用原生入口", run().stderr)  # past the port check, stopped by the next one
+        (tmp / "kirocrew-relay-w1.conf").write_text("server {\n    listen 8921;\n    listen [::]:8921;\n}\n")
+        refused = run()
+        self.assertEqual(refused.returncode, 3)
+        self.assertIn("kirocrew-relay-w1.conf", refused.stderr)
+        relay = (ROOT / "deploy/nginx/kirocrew-relay.conf").read_text()
+        # Upstream errors log the request line, one-time ?token= included: kept where only root reads.
+        self.assertIn("error_log /var/log/nginx/kirocrew-relay/__WORKER_NAME__.error.log;", relay)
+        self.assertIn("access_log /var/log/nginx/kirocrew-relay/__WORKER_NAME__.access.log kirocrew_native;", relay)
+        self.assertIn("install -d -m 0700 /var/log/nginx/kirocrew-relay", printed)
 
     def test_space_runs_a_worker_project_on_the_host_and_forwards_it_to_localhost(self):
         run = "run-" + "0123456789abcdef" * 2

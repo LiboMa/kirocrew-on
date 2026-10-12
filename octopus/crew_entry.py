@@ -53,7 +53,8 @@ def create(service, actor, rid):
     origin = browser_origin(health.get("crew_origin"))
     require(urlsplit(config["url"]).hostname in {"localhost", "127.0.0.1", "::1"} or
             urlsplit(origin).hostname not in {"localhost", "127.0.0.1", "::1"},
-            "远程 Worker 尚未配置浏览器可访问的 KiroCrew 地址，请设置 --crew-url",
+            "该执行环境尚未开通原生 KiroCrew 入口：请平台管理员执行 deploy.sh worker-host add <名称>"
+            "（或依次 push、native；docs/OPERATIONS.md「Worker 主机」）",
             409, "crew_origin_required")
     result = worker_request(config, "/crew-entry", {"run_id": rid, "native_parent": run["native_parent"]})
     target = urlsplit(result.get("url", ""))

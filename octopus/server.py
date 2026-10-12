@@ -295,6 +295,9 @@ def server(database, port=8918, host="127.0.0.1", allowed_hosts=(), origin_secre
                         return self.respond(service.share(actor, wid, body, revoke=method == "DELETE"))
                     if action == "archive" and method == "POST":
                         return self.respond(service.archive_workflow(actor, wid, body))
+                if path == "/v1/admin/environments":
+                    require(method == "GET", "Method not allowed", 405)
+                    return self.respond(service.environments(actor))
                 if len(segments) == 4 and segments[:2] == ["v1", "workers"] and segments[3] == "share":
                     require(method == "POST", "Method not allowed", 405)
                     return self.respond(service.share_worker(actor, segments[2], body))

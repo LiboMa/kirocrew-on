@@ -5,7 +5,8 @@
 # Writes no tool credentials: Claude Code and Codex use Amazon Bedrock through the instance role; kiro-cli needs a
 # one-time device-flow login as crew-<boundary> (docs/OPERATIONS.md). Every download is pinned or checksum-verified.
 # WORKER_HOST=1: a Worker host for Teams (D28) — KiroCrew, the tools and one dedicated boundary fronted by TLS; no
-# platform API, admin or native entry. deploy.sh worker-host then signs its certificate and registers it as spare.
+# platform API or admin. NATIVE_DOMAIN there is the host's own native distribution, which the platform host relays.
+# deploy.sh worker-host then signs its certificate, configures the relay and registers it as spare.
 set -euo pipefail
 WORKER_HOST="${WORKER_HOST:-}"
 BOUNDARY="${1:?用法: al2023.sh <边界名，如 personal>}"
@@ -199,14 +200,23 @@ if [ ! -f "$BOUNDARY_TOML" ]; then
   chmod 0640 "$BOUNDARY_TOML"
 fi
 if [ -n "$WORKER_HOST" ]; then
-  log "Worker 主机：专属边界，nginx 以 TLS 端口 ${WORKER_TLS_PORT:=8943} 转发回环 Worker"
+  log "Worker 主机：专属边界，nginx 以 TLS 端口 ${WORKER_TLS_PORT:=8943} 转发回环 Worker、${GATEWAY_TLS_PORT:=8944} 转发回环 Gateway"
   toml_set "$BOUNDARY_TOML" worker_isolation '"dedicated"'
+  if [ -n "${NATIVE_DOMAIN:-}" ]; then
+    # This host's own native distribution; the platform host relays it here (deploy.sh worker-host native, D28).
+    toml_set "$BOUNDARY_TOML" crew_url "\"https://$NATIVE_DOMAIN\""
+    toml_set "$BOUNDARY_TOML" crew_entry_ttl '"1h"'
+  fi
   WORKER_PORT="$(grep -E '^worker_port' "$BOUNDARY_TOML" | grep -oE '[0-9]+')"
+  GATEWAY_PORT="$(grep -E '^gateway_port' "$BOUNDARY_TOML" | grep -oE '[0-9]+')"
   sed -e "s#__WORKER_TLS_PORT__#$WORKER_TLS_PORT#g" -e "s#__WORKER_PORT__#$WORKER_PORT#g" \
+    -e "s#__GATEWAY_TLS_PORT__#$GATEWAY_TLS_PORT#g" -e "s#__GATEWAY_PORT__#$GATEWAY_PORT#g" \
     "$TARGET/deploy/nginx/kirocrew-worker.conf" > /etc/kirocrew-on/nginx-worker.conf
   if command -v getenforce >/dev/null 2>&1 && [ "$(getenforce)" = Enforcing ]; then
     setsebool -P httpd_can_network_connect 1
-    semanage port -a -t http_port_t -p tcp "$WORKER_TLS_PORT" 2>/dev/null || semanage port -m -t http_port_t -p tcp "$WORKER_TLS_PORT"
+    for port in "$WORKER_TLS_PORT" "$GATEWAY_TLS_PORT"; do
+      semanage port -a -t http_port_t -p tcp "$port" 2>/dev/null || semanage port -m -t http_port_t -p tcp "$port"
+    done
   fi
   # Loaded once deploy.sh worker-host tls has installed the certificate; until then nginx -t would fail.
   if [ -s /etc/kirocrew-on/worker-tls.crt ]; then
@@ -217,7 +227,7 @@ if [ -n "$WORKER_HOST" ]; then
   fi
 fi
 
-if [ -n "${NATIVE_DOMAIN:-}" ]; then
+if [ -z "$WORKER_HOST" ] && [ -n "${NATIVE_DOMAIN:-}" ]; then
   log "原生对话入口 https://$NATIVE_DOMAIN/（CloudFront → nginx 校验源站密钥 → 回环 Gateway）"
   NATIVE_PORT="${NATIVE_PORT:-8919}"
   toml_set "$BOUNDARY_TOML" crew_url "\"https://$NATIVE_DOMAIN\""

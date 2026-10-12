@@ -1,7 +1,8 @@
 AWSTemplateFormatVersion: "2010-09-09"
 Description: >-
   KiroCrew ON Worker host (D28): a dedicated execution environment for Teams. KiroCrew, the coding tools and one boundary
-  run here; only the platform host reaches the Worker, over TLS signed by the platform's private CA. Admin via SSM.
+  run here; only the platform host reaches the Worker, over TLS signed by the platform's private CA. Its native chat has
+  its own CloudFront distribution whose origin is the platform host, which relays it over the same TLS. Admin via SSM.
 
 Parameters:
   VpcId:
@@ -24,6 +25,25 @@ Parameters:
   WorkerPort:
     Type: Number
     Default: 8943
+  GatewayTlsPort:
+    Type: Number
+    Default: 8944
+    Description: Worker host nginx port (TLS, private CA) in front of the loopback native KiroCrew Gateway
+  RelayPort:
+    Type: Number
+    MinValue: 1024
+    MaxValue: 65535
+    Description: >-
+      Platform host nginx port that relays this host's native chat (deploy.sh allocates one per Worker host, between the
+      platform's NativePort + 1 and NativeRelayEnd)
+  PlatformOriginDomain:
+    Type: String
+    Description: The platform host's public DNS name (platform stack output HostOriginDomain)
+  OriginSecret:
+    Type: String
+    NoEcho: true
+    MinLength: 32
+    Description: The platform's X-Origin-Verify secret; the relay only forwards requests that carry it
   BackupTag:
     Type: String
     Description: The platform stack name; its daily snapshot policy selects volumes by this Backup tag
@@ -40,6 +60,11 @@ Resources:
           ToPort: !Ref WorkerPort
           SourceSecurityGroupId: !Ref PlatformSecurityGroupId
           Description: Platform to Worker (TLS, private CA, Bearer Worker token)
+        - IpProtocol: tcp
+          FromPort: !Ref GatewayTlsPort
+          ToPort: !Ref GatewayTlsPort
+          SourceSecurityGroupId: !Ref PlatformSecurityGroupId
+          Description: Platform relay to the native KiroCrew Gateway (TLS, private CA; Gateway token login)
       SecurityGroupEgress:
         - IpProtocol: "-1"
           CidrIp: 0.0.0.0/0
@@ -116,8 +141,44 @@ Resources:
         - {Key: Project, Value: kirocrew-on}
         - {Key: Backup, Value: !Ref BackupTag}
 
+  # Browser -> CloudFront (origin secret) -> platform host nginx :RelayPort -> private network, TLS -> this host's nginx
+  # :GatewayTlsPort -> loopback Gateway. The Worker host itself stays unreachable from the internet.
+  NativeDistribution:
+    Type: AWS::CloudFront::Distribution
+    Properties:
+      DistributionConfig:
+        Enabled: true
+        Comment: !Sub "KiroCrew ON native chat (${AWS::StackName})"
+        HttpVersion: http2and3
+        IPV6Enabled: true
+        PriceClass: PriceClass_100
+        Origins:
+          - Id: kirocrew-native-relay
+            DomainName: !Ref PlatformOriginDomain
+            CustomOriginConfig:
+              HTTPPort: !Ref RelayPort
+              OriginProtocolPolicy: http-only
+              OriginReadTimeout: 60
+              OriginKeepaliveTimeout: 5
+            OriginCustomHeaders:
+              - HeaderName: X-Origin-Verify
+                HeaderValue: !Ref OriginSecret
+        DefaultCacheBehavior:
+          TargetOriginId: kirocrew-native-relay
+          ViewerProtocolPolicy: redirect-to-https
+          AllowedMethods: [GET, HEAD, OPTIONS, PUT, PATCH, POST, DELETE]
+          CachedMethods: [GET, HEAD]
+          CachePolicyId: 4135ea2d-6df8-44a3-9df3-4b5a84be39ad        # Managed-CachingDisabled
+          OriginRequestPolicyId: 33f36d7e-f396-46d9-90e0-52428a34d9dc # Managed-AllViewerAndCloudFrontHeaders-2022-06
+          Compress: false
+        ViewerCertificate:
+          CloudFrontDefaultCertificate: true
+      Tags: [{Key: Project, Value: kirocrew-on}]
+
 Outputs:
   InstanceId:
     Value: !Ref WorkerHost
   PrivateIp:
     Value: !GetAtt WorkerHost.PrivateIp
+  NativeDomain:
+    Value: !GetAtt NativeDistribution.DomainName

@@ -64,6 +64,21 @@ export interface Worker {
   capabilities: WorkerCapabilities;
 }
 
+/** GET /v1/admin/environments (administrators, D28): one execution environment with its bindings, load and live health. */
+export interface Environment {
+  id: string;
+  name: string;
+  scope: WorkerScope;
+  enabled: boolean;
+  owner: { id: string; username: string | null } | null;
+  team: { id: string; name: string | null } | null;
+  spaces: ({ team_id: string; name: string | null } | { user_id: string; username: string | null })[];
+  url: string | null;
+  active_runs: number;
+  health: { reachable: true; version?: string; isolation?: string; crew_entry?: boolean; crew_origin?: string }
+    | { reachable: false; error: string };
+}
+
 export interface Grant {
   kind: "user" | "team" | string;
   principal: string;

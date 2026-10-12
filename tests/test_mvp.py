@@ -806,6 +806,94 @@ class EnvironmentTests(unittest.TestCase):
             db.execute("INSERT INTO worker_spaces(worker_id,team_id) VALUES(?,?)", (wid, tid))
         return tid
 
+    def environment_fixture(self):
+        """A shared environment serving alice and a Team (one active Session on it), and an unreachable spare host."""
+        wid = self.shared()
+        tid = self.shared_team(wid)
+        with self.db.transaction() as db:
+            db.execute("UPDATE workers SET config=? WHERE id=?", (dumps({"url": "http://127.0.0.1:8928", "token": "s" * 40,
+                       "capabilities": {"isolation": "trusted-local"}}), wid))
+            db.execute("INSERT INTO workers(id,name,owner_id,config,scope) VALUES('sp','w1',?,?,'spare')",
+                       (self.a["id"], dumps({"url": "https://10.0.0.9:8943", "token": "t" * 40, "capabilities": {}})))
+        self.start(team_id=tid)
+        return wid, tid
+
+    def test_admin_environments_list_bindings_load_and_health_without_secrets(self):
+        wid, tid = self.environment_fixture()
+        def health(config, path, body=None, timeout=35):
+            self.assertEqual((path, body), ("/health", None))
+            self.assertLessEqual(timeout, 5)
+            if "10.0.0.9" in config["url"]:
+                raise Error(503, "worker_unavailable", "Worker 未返回可核实回执")
+            return {"isolation": "trusted-local", "boundary": "b" * 64, "crew_entry": True,
+                    "crew_origin": "https://d1.cloudfront.net", "version": "1.0.0"}
+        with patch("octopus.transport.worker_request", side_effect=health):
+            listing = {e["id"]: e for e in self.service.environments(self.a)}
+        shared = listing[wid]
+        self.assertEqual((shared["scope"], shared["enabled"], shared["active_runs"]), ("shared", True, 1))
+        self.assertEqual(shared["owner"], {"id": self.a["id"], "username": "alice"})
+        self.assertEqual(shared["spaces"], [{"user_id": self.a["id"], "username": "alice"},
+                                            {"team_id": tid, "name": "共享 Team"}])
+        self.assertEqual(shared["url"], "http://127.0.0.1:8928")
+        self.assertEqual(shared["health"], {"reachable": True, "isolation": "trusted-local", "crew_entry": True,
+                                            "crew_origin": "https://d1.cloudfront.net", "version": "1.0.0"})
+        spare = listing["sp"]
+        self.assertEqual((spare["scope"], spare["spaces"], spare["active_runs"]), ("spare", [], 0))
+        self.assertEqual(spare["health"], {"reachable": False, "error": "Worker 未返回可核实回执"})
+        printed = dumps(listing)
+        self.assertNotIn("s" * 40, printed)
+        self.assertNotIn("t" * 40, printed)
+        self.assertNotIn('"token"', printed)
+        with self.assertRaises(Error) as caught:
+            self.service.environments(self.b)
+        self.assertEqual(caught.exception.code, "forbidden")
+
+    def test_one_misbehaving_worker_never_fails_the_environment_listing(self):
+        import http.client
+        self.environment_fixture()
+        for failure in (http.client.BadStatusLine("SSH-2.0-OpenSSH"), http.client.IncompleteRead(b"{"), KeyError("token"),
+                        ["not", "an", "object"], "text"):
+            def answer(config, path, body=None, timeout=35, failure=failure):
+                if "10.0.0.9" not in config["url"]:
+                    return {"isolation": "trusted-local"}
+                if isinstance(failure, Exception):
+                    raise failure
+                return failure
+            with patch("octopus.transport.worker_request", side_effect=answer):
+                listing = {e["id"]: e for e in self.service.environments(self.a)}
+            self.assertEqual(listing["sp"]["health"]["reachable"], False, failure)
+            self.assertTrue(listing["sp"]["health"]["error"], failure)
+            self.assertEqual(listing["shared"]["health"], {"reachable": True, "isolation": "trusted-local"})
+
+    def test_admin_environment_health_checks_run_concurrently(self):
+        self.environment_fixture()
+        def slow(config, path, body=None, timeout=35):
+            time.sleep(0.4)
+            return {"isolation": "dedicated"}
+        began = time.monotonic()
+        with patch("octopus.transport.worker_request", side_effect=slow):
+            listing = self.service.environments(self.a)
+        self.assertEqual(len(listing), 2)
+        self.assertLess(time.monotonic() - began, 0.75)
+
+    def test_admin_environments_route_and_openapi_tag(self):
+        self.environment_fixture()
+        with self.http() as (_, call), patch("octopus.transport.worker_request", return_value={"isolation": "dedicated"}):
+            status, listing = call("GET", "/v1/admin/environments")
+            self.assertEqual((status, len(listing)), (200, 2))
+            self.assertEqual(call("GET", "/v1/admin/environments", "bob")[0], 403)
+        paths = openapi()["paths"]
+        tag = "执行环境（管理员）"
+        for path, method in (("/v1/admin/environments", "get"), ("/v1/workers", "post"),
+                             ("/v1/workers/{id}/enabled", "post"), ("/v1/workers/{id}/share", "post"),
+                             ("/v1/workers/{id}/spaces", "post"), ("/v1/workers/{id}/spaces", "delete"),
+                             ("/v1/workers/{id}/connection", "post"), ("/v1/teams", "post")):
+            self.assertEqual(paths[path][method].get("tags"), [tag], (path, method))
+        self.assertNotIn("tags", paths["/v1/runs"]["post"])
+        schemas = openapi()["components"]["schemas"]
+        self.assertEqual(schemas["Team"]["required"], ["name", "owner", "worker_id"])
+        self.assertIn("worker_id", schemas["User"]["properties"])
+
     def test_space_workers_cover_dedicated_shared_and_spare(self):
         from octopus.domain import space_workers
         wid = self.shared()

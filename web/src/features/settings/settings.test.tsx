@@ -154,6 +154,70 @@ describe("settings", () => {
     await waitFor(() => expect(calls.find((c) => c.path === "/v1/workers/w1/share")?.body).toEqual({ confirm: true }));
   });
 
+  const environments = {
+    "GET /workers": [
+      { id: "w1", name: "personal", owner_id: "u1", team_id: null, enabled: true, scope: "shared",
+        spaces: [{ user_id: "u1" }, { team_id: "team-1" }], capabilities: { isolation: "trusted-local" } },
+      { id: "w2", name: "w1", owner_id: "u1", team_id: null, enabled: true, scope: "spare", spaces: [],
+        capabilities: { isolation: "dedicated" } },
+    ],
+    "GET /teams": [
+      { id: "team-1", name: "平台组", role: "owner", created: 1, members: [],
+        environment: { worker_id: "w1", name: "personal", scope: "shared", enabled: true } },
+      { id: "team-2", name: "Web应用软件研发组", role: null, created: 2, members: [], environment: null },
+    ],
+    "GET /users": [{ id: "u1", username: "fixture-owner" }, { id: "u2", username: "dev1" }],
+    "GET /admin/environments": [
+      { id: "w1", name: "personal", scope: "shared", enabled: true, owner: { id: "u1", username: "fixture-owner" }, team: null,
+        spaces: [{ user_id: "u1", username: "fixture-owner" }, { team_id: "team-1", name: "平台组" }],
+        url: "http://127.0.0.1:8928", active_runs: 2,
+        health: { reachable: true, version: "1.0.0", isolation: "trusted-local", crew_entry: true, crew_origin: "https://d1.cloudfront.net" } },
+      { id: "w2", name: "w1", scope: "spare", enabled: true, owner: { id: "u1", username: "fixture-owner" }, team: null, spaces: [],
+        url: "https://10.42.1.74:8943", active_runs: 0, health: { reachable: false, error: "Worker 未返回可核实回执" } },
+    ],
+  };
+
+  test("the environment dialog shows each environment's health, load and the spaces it serves", async () => {
+    start(environments);
+    const dialog = await openSetting(/执行环境/);
+    const shared = await within(dialog).findByRole("group", { name: "personal" });
+    expect(shared).toHaveTextContent("可达 · v1.0.0");
+    expect(shared).toHaveTextContent("原生入口 d1.cloudfront.net");
+    expect(shared).toHaveTextContent("进行中会话 2");
+    expect(within(shared).getByText("个人 · fixture-owner")).toBeInTheDocument();
+    expect(within(shared).getByText("Team · 平台组")).toBeInTheDocument();
+    const spare = within(dialog).getByRole("group", { name: "w1" });
+    expect(spare).toHaveTextContent("不可达：Worker 未返回可核实回执");
+  });
+
+  test("a shared environment is given to a user and a space taken away from it, in the environment dialog", async () => {
+    const calls = start({ ...environments, "POST /workers/w1/spaces": { ok: true }, "DELETE /workers/w1/spaces": { ok: true } });
+    const dialog = await openSetting(/执行环境/);
+    const shared = await within(dialog).findByRole("group", { name: "personal" });
+    const picker = within(shared).getByLabelText("分配到");
+    // Spaces it already serves are not offered again.
+    expect(within(picker).queryByRole("option", { name: "Team · 平台组" })).toBeNull();
+    expect(within(picker).queryByRole("option", { name: "个人 · fixture-owner" })).toBeNull();
+    await userEvent.selectOptions(picker, "user:u2");
+    await userEvent.click(within(shared).getByRole("button", { name: "分配" }));
+    await waitFor(() => expect(calls.find((c) => c.method === "POST" && c.path === "/v1/workers/w1/spaces")?.body)
+      .toEqual({ user_id: "u2" }));
+    await userEvent.click(within(shared).getByRole("button", { name: "移出 Team · 平台组" }));
+    await waitFor(() => expect(calls.find((c) => c.method === "DELETE" && c.path === "/v1/workers/w1/spaces")?.body)
+      .toEqual({ team_id: "team-1" }));
+  });
+
+  test("a spare environment is offered only to Teams without one", async () => {
+    const calls = start({ ...environments, "POST /workers/w2/spaces": { ok: true } });
+    const dialog = await openSetting(/执行环境/);
+    const spare = await within(dialog).findByRole("group", { name: "w1" });
+    const picker = within(spare).getByLabelText("分配到");
+    expect(within(picker).getAllByRole("option").map((o) => o.textContent)).toEqual(["选择 Team", "Team · Web应用软件研发组"]);
+    await userEvent.selectOptions(picker, "team:team-2");
+    await userEvent.click(within(spare).getByRole("button", { name: "分配" }));
+    await waitFor(() => expect(calls.find((c) => c.path === "/v1/workers/w2/spaces")?.body).toEqual({ team_id: "team-2" }));
+  });
+
   test("an administrator can disable a Worker", async () => {
     const calls = start({
       "GET /workers": [{ id: "w1", name: "personal", owner_id: "u1", team_id: null, enabled: true, capabilities: { isolation: "trusted-local" } }],

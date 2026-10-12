@@ -401,3 +401,22 @@ def assign_spare(db, worker, team):
 - [ ] **Step 4:** 控制台：personal 设为共享；把 `w1` 分配给「Web应用软件研发组」；该组成员经 Skill 提交会话并完成；为一个普通用户分配共享环境并完成一个个人会话；run-b74e9f0d 分配后继续。
 - [ ] **Step 5:** 隔离检查：Worker 主机上读不到平台主机文件；平台以外的地址访问 `w1:8943` 不通；不带 Token 调用 Worker 返回 401。
 - [ ] **Step 6:** 向负责人报告；确认后提交阶段 B，并按确认再开 `w2`、`w3`（重复 Step 3）。
+
+---
+
+## 阶段 C：原生入口中转与管理收口（2026-10-12 追加，设计 §4.0.1–4.0.2）
+
+### Task 11 (C1): 原生入口经平台主机中转
+
+**Files:** `deploy/aws/kirocrew-on-worker.yaml`（NativeDistribution、Gateway TLS 端口入站、RelayPort / OriginSecret / PlatformOriginDomain 参数、NativeDomain 输出）、`deploy/aws/kirocrew-on-ec2.yaml`（`NativeRelayEnd`）、`deploy/nginx/kirocrew-relay.conf`（新）、`deploy/nginx/kirocrew-worker.conf`（Gateway TLS server）、`deploy/install/al2023.sh`（Worker 主机模式写入 crew_url）、`deploy/aws/deploy.sh`（up 参数、中转端口分配、push 传 NATIVE_DOMAIN、tls 增加 DNS SAN、`worker-host native`）、`octopus/crew_entry.py`（提示文案）、`tests/test_deploy_assets.py`。
+- 测试：模板（Worker 安全组只放行平台的两个端口；分发源站头使用 NoEcho 的 OriginSecret；平台安全组上限为 NativeRelayEnd 且仍是一条前缀列表规则）；中转模板（密钥校验、`proxy_ssl_verify on`、`proxy_ssl_trusted_certificate`、WebSocket）；Worker 模板 Gateway server；al2023 Worker 主机模式在 NATIVE_DOMAIN 时写 crew_url；deploy dry-run（native 渲染在主机上读取密钥、tls 的 DNS SAN、push 传 NATIVE_DOMAIN、up 传 RelayPort）。
+
+### Task 12 (C2): 运维一条命令 `worker-host add`
+
+**Files:** `deploy/aws/deploy.sh`、`tests/test_deploy_assets.py`、`docs/OPERATIONS.md`。
+- 测试：dry-run 依次出现 up、push、tls、native、register、kiro-login 各步；名称校验；任一步失败即停止。
+
+### Task 13 (C3): 管理员 API 与控制台统一入口
+
+**Files:** `octopus/domain.py`（`Service.environments`）、`octopus/server.py`（`GET /v1/admin/environments`）、`octopus/schema.py`（OpenAPI 分组）、`web/src/features/settings/WorkersDialog.tsx`、`web/src/api/types.ts`、测试（`tests/test_mvp.py`、`web/src/features/settings/settings.test.tsx`）。
+- 测试：仅管理员（403）；每项含 scope、spaces（含 Team 名与用户名）、enabled、active_runs、health（Worker 不可达时 reachable=false 且不让接口失败，单个 Worker 超时不阻塞其他）；OpenAPI 中各接口同一 tag；控制台显示健康与绑定，并可在此分配空间。

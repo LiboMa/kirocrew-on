@@ -93,6 +93,26 @@
 - **登记**：Worker 主机启动时生成 Worker Token；`deploy.sh` 经 SSM 取得 Token，在平台主机上以 `bootstrap-worker --spare` 登记为空闲专属环境（Token 会留在 SSM 命令历史中，与管理员密码读取的取舍相同）。
 - **kiro-cli**：每台 Worker 主机需单独完成一次设备码登录（`deploy.sh kiro-login` 支持指定 Worker 主机）。
 
+### 4.0.1 原生 KiroCrew 入口（经平台主机中转，2026-10-12 确定）
+
+```
+浏览器 → <Worker 主机> 的原生入口 CloudFront 分发（源站 = 平台主机:中转端口，注入平台源站密钥）
+       → 平台主机 nginx 中转端口（校验源站密钥，与 :NativePort 相同）
+       → 私网 TLS（proxy_ssl_verify，只信任平台私有 CA）→ Worker 主机 nginx :8944 → 回环 Gateway
+Worker 主机边界 crew_url = https://<该分发域名>
+```
+
+- Worker 主机仍只接受平台主机安全组的访问；源站密钥只在平台主机上（CloudFront 与平台 nginx 持有）。
+- 中转端口从 NativePort + 1 起按 Worker 主机分配（记录在 Worker 栈参数中，更新时不变）；平台安全组 CloudFront 规则的上限为参数 `NativeRelayEnd`（默认 NativePort + 10）。
+- nginx 按 DNS 名校验上游证书，Worker 主机证书的 SAN 同时包含私网 IP 与 `<名称>.worker.kirocrew-on`。
+- 打开权限不变：Team 专属环境的成员；共享环境只有边界所有者（§3.4 之后的 C1 修复）。
+
+### 4.0.2 管理收口
+
+- **运维一条命令**：`deploy.sh worker-host add <名称>` 依次完成栈、安装、TLS、原生入口中转与登记，并最后给出 kiro-cli 设备码；分步命令保留用于排障。
+- **管理员 API**：`GET /v1/admin/environments` 在一处给出全部执行环境：范围、服务的 Team 与用户（含名称）、启用状态、实时健康（可达、版本、隔离、原生入口来源）、进行中会话数；设为共享、服务空间、连接更新、启停的接口在 OpenAPI 中归入同一分组「执行环境（管理员）」。
+- **控制台**：「执行环境」对话框基于该接口，成为执行环境的统一管理入口（共享、分配给 Team 或用户、启停、健康）；新建 Team 时选择环境保留。
+
 ### 4.1 命令（`deploy/aws/deploy.sh`）
 
 | 命令 | 作用 |

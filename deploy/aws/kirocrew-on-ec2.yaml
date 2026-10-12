@@ -36,6 +36,12 @@ Parameters:
     MinValue: 1024
     MaxValue: 65535
     Description: 主机 nginx 端口，必须为 ApiPort + 1（与 API 共用一条安全组规则）；第二个 CloudFront 分发经此端口（校验源站密钥）转发到回环上的原生 KiroCrew Gateway
+  NativeRelayEnd:
+    Type: Number
+    Default: 8929
+    MinValue: 1024
+    MaxValue: 65535
+    Description: 安全组规则的上限端口；NativePort + 1 起至此为 Worker 主机原生入口的中转端口（每台 Worker 主机一个，D28）
   VpcCidr:
     Type: String
     Default: 10.42.0.0/16
@@ -115,9 +121,9 @@ Resources:
         # per-group rule quota, and adding a second group would make CloudFormation consider replacing the host.
         - IpProtocol: tcp
           FromPort: !Ref ApiPort
-          ToPort: !Ref NativePort
+          ToPort: !Ref NativeRelayEnd
           SourcePrefixListId: !Ref CloudFrontPrefixListId
-          Description: CloudFront origin fetches to the KiroCrew ON API and the native chat (NativePort = ApiPort + 1)
+          Description: CloudFront origin fetches to the API, the native chat and the Worker hosts' native chat relays
       SecurityGroupEgress:
         - IpProtocol: "-1"
           CidrIp: 0.0.0.0/0
@@ -394,3 +400,9 @@ Outputs:
     Value: !GetAtt HostSecurityGroup.GroupId
   ImageId:
     Value: !Ref ImageId
+  # The origin of every Worker host's native distribution (the platform host relays it, D28).
+  HostOriginDomain:
+    Value: !If
+      - IsUsEast1
+      - !Join ["", ["ec2-", !Join ["-", !Split [".", !Ref HostAddress]], ".compute-1.amazonaws.com"]]
+      - !Join ["", ["ec2-", !Join ["-", !Split [".", !Ref HostAddress]], !Sub ".${AWS::Region}.compute.amazonaws.com"]]
