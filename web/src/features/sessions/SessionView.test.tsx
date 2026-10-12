@@ -167,6 +167,21 @@ describe("session detail", () => {
     await waitFor(() => expect(searches.at(-1)).toBe("?from=1&to=2"));
   });
 
+  test("long prompts fold unchanged lines around each change, and the kind is not repeated", async () => {
+    const body = Array.from({ length: 20 }, (_, i) => same(`第 ${i + 1} 行`));
+    body.splice(10, 0, { op: "+", text: "新增的要求" });
+    open(makeRun({ id: "run-l", version: 2 }), {
+      "GET /runs/run-l/revisions": [revisions[0], { ...revisions[2], version: 2, summary: "续作「实现」：提示词" }],
+      "GET /runs/run-l/revisions/diff": { from: 1, to: 2, from_summary: "", to_summary: "", reconstructed: false,
+        input: [same("需求")], tasks: [{ id: "code", name: "实现", status: "changed", fields: {}, prompt: body }] } });
+    const panel = await screen.findByRole("region", { name: "修订历史" });
+    expect(await within(panel).findByText("新增的要求")).toBeInTheDocument();
+    expect(within(panel).getByText("第 9 行")).toBeInTheDocument();          // two lines of context
+    expect(within(panel).queryByText("第 3 行")).toBeNull();
+    expect(panel).toHaveTextContent("… 8 行未变化 …");
+    expect(within(panel).getByRole("button", { name: /v2 · 续作「实现」/ })).not.toHaveTextContent("续作 · 续作");
+  });
+
   test("a Session with only its first revision says nothing has changed yet", async () => {
     open(makeRun({ id: "run-r1", version: 1 }), { "GET /runs/run-r1/revisions": [revisions[0]] });
     const panel = await screen.findByRole("region", { name: "修订历史" });

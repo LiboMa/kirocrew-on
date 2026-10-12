@@ -9,13 +9,26 @@ const KINDS: Record<string, string> = { created: "创建", planned: "规划", co
 const STATUS: Record<TaskDiff["status"], string> = { added: "新增", removed: "删除", changed: "修改", same: "未变化" };
 const FIELD: Record<string, string> = { name: "名称", tool: "工具", model: "模型", effort: "Effort" };
 
+const CONTEXT = 2;
+
+/** Changed lines with two lines of context; longer unchanged stretches fold into one marker. */
 function Lines({ lines }: { lines: DiffLine[] }) {
+  const near = lines.map((_, i) => lines.slice(Math.max(0, i - CONTEXT), i + CONTEXT + 1).some((l) => l.op !== " "));
+  const rows: ({ line: DiffLine; index: number } | { folded: number; index: number })[] = [];
+  lines.forEach((line, index) => {
+    if (near[index]) rows.push({ line, index });
+    else if (rows.length && "folded" in rows[rows.length - 1]) (rows[rows.length - 1] as { folded: number }).folded += 1;
+    else rows.push({ folded: 1, index });
+  });
   return (
     <pre className="overflow-x-auto rounded-md bg-muted/40 py-1 text-xs leading-5">
-      {lines.map((line, index) => (
-        <div key={index} data-op={line.op} className={cn("px-3 whitespace-pre-wrap",
-          line.op === "+" && "bg-emerald-500/10 text-emerald-700", line.op === "-" && "bg-destructive/10 text-destructive line-through")}>
-          <span className="mr-2 select-none text-muted-foreground">{line.op === " " ? " " : line.op}</span>{line.text}
+      {rows.map((row) => "folded" in row ? (
+        <div key={row.index} className="px-3 text-muted-foreground">… {row.folded} 行未变化 …</div>
+      ) : (
+        <div key={row.index} data-op={row.line.op} className={cn("px-3 whitespace-pre-wrap",
+          row.line.op === "+" && "bg-emerald-500/10 text-emerald-700",
+          row.line.op === "-" && "bg-destructive/10 text-destructive line-through")}>
+          <span className="mr-2 select-none text-muted-foreground">{row.line.op === " " ? " " : row.line.op}</span>{row.line.text}
         </div>
       ))}
     </pre>
@@ -46,7 +59,8 @@ export function RevisionsPanel({ run }: { run: Run }) {
               onClick={() => { setTo(revision.version); setFrom(null); }}
               className={cn("w-full rounded-md px-2.5 py-1.5 text-left text-xs hover:bg-accent",
                 revision.version === target && "bg-primary/10")}>
-              <span className="font-mono">v{revision.version}</span> · {KINDS[revision.kind] ?? revision.kind} ·{" "}
+              <span className="font-mono">v{revision.version}</span> ·{" "}
+              {!revision.summary.startsWith(KINDS[revision.kind] ?? revision.kind) && <>{KINDS[revision.kind] ?? revision.kind} · </>}
               <span className="text-foreground">{revision.summary}</span>
               <span className="ml-2 text-muted-foreground">{formatTime(revision.created, true)} · {revision.actor.username ?? revision.actor.id}</span>
             </button>
