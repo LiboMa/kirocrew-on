@@ -9,7 +9,7 @@ import time
 
 from .db import dumps, uid
 from .transport import worker_request
-from . import planning, recovery
+from . import journal, planning, recovery
 from .security import Error
 from .domain import unserved
 
@@ -47,23 +47,20 @@ class Engine:
             pending = {future for future in self.futures if not future.cancelled()}
         _, not_done = wait_futures(pending, timeout=timeout)
         return not not_done
-    def update(self, rid, status, error=None, **extra):
+    def update(self, rid, status, error=None, *, actor=journal.ENGINE, reason=None, **extra):
         with self.db.transaction() as db:
             run = db.execute("SELECT * FROM runs WHERE id=?", (rid,)).fetchone()
+            binding = {k: v for k, v in extra.items() if k in {"native_parent", "workspace"}}
+            if binding:
+                # The native parent and workspace the Worker prepared. Kept even when a stop raced the preparation,
+                # so the next cycle stops that parent rather than orphaning it.
+                journal.change(db, "runs", rid, journal.WORKER, "run.binding", **binding)
             # A late result must not override a concurrently accepted stop.
             if run["desired"] != "active" and status not in {"stopping", "stopped", "reopening"}:
-                # Preparation can finish after stop was requested. Retain the native
-                # binding so the next cycle stops that parent, rather than orphaning it.
-                binding = {k: v for k, v in extra.items() if k in {"native_parent", "workspace"}}
-                if binding:
-                    db.execute("UPDATE runs SET " + ",".join(k + "=?" for k in binding) + " WHERE id=?",
-                               (*binding.values(), rid))
                 return
-            values = {"status": status, "error": error, "updated": time.time(), **extra}
-            db.execute("UPDATE runs SET " + ",".join(k + "=?" for k in values) + " WHERE id=?",
-                       (*values.values(), rid))
-            if status != run["status"] or error != run["error"]:
-                self.db.event(db, rid, "run.state", {"status": status, "error": error})
+            rest = {k: v for k, v in extra.items() if k not in binding}
+            journal.change(db, "runs", rid, actor, "run.state", reason, event={"status": status, "error": error},
+                           status=status, error=error, updated=time.time(), **rest)
 
     def tick(self, wait=True):
         with self.guard:
@@ -150,10 +147,12 @@ class Engine:
         if current and current["status"] == "dispatching":
             if getattr(exc, "code", "") in {"model_unavailable", "model_transport_unsupported", "invalid_request", "not_prepared"}:
                 with self.db.transaction() as db:
-                    db.execute("UPDATE attempts SET status='blocked',error=?,updated=? WHERE id=?",
-                               (message, time.time(), current["id"]))
-                    db.execute("UPDATE tasks SET status='blocked' WHERE current_attempt=?", (current["id"],))
-                self.update(run["id"], "blocked", message)
+                    journal.change(db, "attempts", current["id"], journal.WORKER, "attempt.state",
+                                   event={"id": current["id"], "status": "blocked", "error": message},
+                                   status="blocked", error=message, updated=time.time())
+                    journal.change_rows(db, "tasks", "current_attempt=?", (current["id"],), journal.WORKER, "task.state",
+                                        status="blocked")
+                self.update(run["id"], "blocked", message, actor=journal.WORKER)
             else:
                 # Worker HTTP acknowledgment may be lost after native spawn.
                 # Reuse this Attempt on recovery; never permit a new retry yet.
@@ -174,16 +173,17 @@ class Engine:
             # reaches SQL. Ask the Worker even when SQL has no native_parent yet.
             result = self.request(config, "/control", {"run_id": rid, "action": run["desired"]})
             if result["status"] == "stopped":
+                now = time.time()
                 with self.db.transaction() as db:
-                    db.execute("UPDATE runs SET status='stopped',lifecycle=?,desired='stopped',error=NULL,updated=? WHERE id=?",
-                               (result["lifecycle"], time.time(), rid))
-                    db.execute("UPDATE attempts SET status='cancelled',updated=? WHERE run_id=? AND status IN "
-                               "('dispatching','running','dispatch_unknown','waiting_approval')", (time.time(), rid))
-                    db.execute("UPDATE tasks SET status='stopped' WHERE run_id=? AND status IN "
-                               "('dispatching','running','dispatch_unknown','waiting_approval')", (rid,))
-                    db.execute("UPDATE recoveries SET status='cancelled',updated=? WHERE run_id=? AND status IN "
-                               "('pending','dispatching','running','dispatch_unknown','waiting_approval')", (time.time(), rid))
-                    self.db.event(db, rid, "session." + run["desired"], result)
+                    journal.change(db, "runs", rid, journal.WORKER, "session." + run["desired"], event=result,
+                                   status="stopped", lifecycle=result["lifecycle"], desired="stopped", error=None, updated=now)
+                    journal.change_rows(db, "attempts", "run_id=? AND status IN ('dispatching','running','dispatch_unknown','waiting_approval')", (rid,),
+                                        journal.WORKER, "attempt.state", status="cancelled", updated=now)
+                    journal.change_rows(db, "tasks", "run_id=? AND status IN ('dispatching','running','dispatch_unknown','waiting_approval')", (rid,),
+                                        journal.WORKER, "task.state", status="stopped")
+                    journal.change_rows(db, "recoveries", "run_id=? AND status IN "
+                                        "('pending','dispatching','running','dispatch_unknown','waiting_approval')", (rid,),
+                                        journal.WORKER, "recovery.state", status="cancelled", updated=now)
             return
         if run["status"] in {"preparing", "ready"}:
             # Before preparing or dispatching a new Attempt, the Worker must still serve the run's space (§6.2);
@@ -198,7 +198,7 @@ class Engine:
             return recovery.Coordinator(self).advance(run)
         if not run["native_parent"]:
             result = self.request(config, "/prepare", {"run_id": rid, "source": json.loads(run["source"])}, timeout=240)
-            self.update(rid, "ready", native_parent=result["native_parent"], workspace=result["workspace"])
+            self.update(rid, "ready", actor=journal.WORKER, native_parent=result["native_parent"], workspace=result["workspace"])
             return
         with self.db.transaction() as db:
             fresh = db.execute("SELECT * FROM runs WHERE id=?", (rid,)).fetchone()
@@ -206,8 +206,8 @@ class Engine:
                 return
             task = db.execute("SELECT * FROM tasks WHERE run_id=? AND status!='accepted' ORDER BY ordinal LIMIT 1", (rid,)).fetchone()
             if task is None:
-                db.execute("UPDATE runs SET status='completed',updated=? WHERE id=?", (time.time(), rid))
-                self.db.event(db, rid, "run.completed", {"quality": "原生执行与交接核对完成；不是自动安全认证"})
+                journal.change(db, "runs", rid, journal.ENGINE, "run.completed",
+                               event={"quality": "原生执行与交接核对完成；不是自动安全认证"}, status="completed", updated=time.time())
                 return
             if task["status"] in {"failed", "blocked", "stopped"}:
                 return
@@ -217,8 +217,8 @@ class Engine:
                 number = db.execute("SELECT count(*) FROM attempts WHERE run_id=? AND task_id=?", (rid, task["id"])).fetchone()[0] + 1
                 db.execute("INSERT INTO attempts(id,run_id,task_id,number,spec,status,created,updated) VALUES(?,?,?,?,?,'dispatching',?,?)",
                            (aid, rid, task["id"], number, task["spec"], now, now))
-                db.execute("UPDATE tasks SET current_attempt=?,status='dispatching' WHERE run_id=? AND id=?", (aid, rid, task["id"]))
-                self.db.event(db, rid, "attempt.created", {"id": aid, "task_id": task["id"], "number": number})
+                journal.change(db, "tasks", (rid, task["id"]), journal.ENGINE, "attempt.created",
+                               event={"id": aid, "task_id": task["id"], "number": number}, current_attempt=aid, status="dispatching")
                 attempt = db.execute("SELECT * FROM attempts WHERE id=?", (aid,)).fetchone()
             task, attempt = dict(task), dict(attempt)
             upstream = [dict(t) for t in db.execute(
@@ -235,12 +235,14 @@ class Engine:
                 **({"design": snapshot["design"]} if snapshot.get("purpose") == "workflow_design" else {})})
             state = result["status"]
             with self.db.transaction() as db:
-                db.execute("UPDATE attempts SET status=?,native_id=?,context_hash=?,error=?,updated=? WHERE id=?",
-                           (state, result.get("native_id"), result.get("context_hash"), result.get("error"), time.time(), attempt["id"]))
-                db.execute("UPDATE tasks SET status=? WHERE run_id=? AND id=? AND current_attempt=? "
-                           "AND EXISTS (SELECT 1 FROM runs WHERE id=? AND desired='active')",
-                           (state, rid, task["id"], attempt["id"], rid))
-            self.update(rid, state, result.get("error"))
+                journal.change(db, "attempts", attempt["id"], journal.WORKER, "attempt.dispatched",
+                               event={"id": attempt["id"], "task_id": task["id"], "status": state},
+                               status=state, native_id=result.get("native_id"), context_hash=result.get("context_hash"),
+                               error=result.get("error"), updated=time.time())
+                journal.change_rows(db, "tasks", "run_id=? AND id=? AND current_attempt=? "
+                                    "AND EXISTS (SELECT 1 FROM runs WHERE id=? AND desired='active')",
+                                    (rid, task["id"], attempt["id"], rid), journal.WORKER, "task.state", status=state)
+            self.update(rid, state, result.get("error"), actor=journal.WORKER)
             return
         result = self.request(config, "/inspect", {"run_id": rid, "attempt_id": attempt["id"]})
         if result.get("status") == "dispatch_unknown":
@@ -249,8 +251,9 @@ class Engine:
         native = result.get("native")
         if not native:
             with self.db.transaction() as db:
-                db.execute("UPDATE attempts SET status='running',native_id=? WHERE id=?", (result["native_id"], attempt["id"]))
-            self.update(rid, "running")
+                journal.change(db, "attempts", attempt["id"], journal.WORKER, "attempt.running",
+                               status="running", native_id=result["native_id"])
+            self.update(rid, "running", actor=journal.WORKER)
             return
         evidence = result.get("evidence", {})
         state, error = ("waiting_approval" if native.get("awaiting_approval") else "running"), None
@@ -288,28 +291,22 @@ class Engine:
             state = "blocked" if error else "accepted"
         with self.db.transaction() as db:
             current = db.execute("SELECT * FROM tasks WHERE run_id=? AND id=?", (rid, task["id"])).fetchone()
-            old = db.execute("SELECT * FROM attempts WHERE id=?", (attempt["id"],)).fetchone()
-            db.execute("UPDATE attempts SET status=?,evidence=?,result=?,error=?,updated=? WHERE id=?",
-                       (state, dumps(evidence), native.get("result"), error, time.time(), attempt["id"]))
             # Old observations cannot complete a newly retried task.
             active = db.execute("SELECT desired FROM runs WHERE id=?", (rid,)).fetchone()[0] == "active"
             if state == "accepted" and current["current_attempt"] == attempt["id"] and active and task["id"] == planning.PLAN_ID:
                 fresh = json.loads(db.execute("SELECT snapshot FROM runs WHERE id=?", (rid,)).fetchone()["snapshot"])
                 if planning.pending(fresh):
-                    try:
-                        applied = planning.expand(db, rid, native.get("result") or "", config.get("capabilities", {}).get("models"))
-                        self.db.event(db, rid, "plan.applied", {"tasks": applied["tasks"], "intent": applied["intent"],
-                                                                 "notes": applied["notes"]})
+                    try:   # the KiroCrew plan is applied (or refused) before the planning Attempt's outcome is written
+                        planning.expand(db, rid, native.get("result") or "", config.get("capabilities", {}).get("models"))
                     except (Error, ValueError, TypeError) as exc:
                         state, error = "blocked", "KiroCrew 规划结果未通过校验：" + str(exc)
                         evidence["failure_type"] = "contract"
-                        db.execute("UPDATE attempts SET status=?,evidence=?,error=? WHERE id=?",
-                                   (state, dumps(evidence), error, attempt["id"]))
+            journal.change(db, "attempts", attempt["id"], journal.WORKER, "attempt.state",
+                           event={"id": attempt["id"], "task_id": task["id"], "status": state, "error": error,
+                                  "evidence": evidence},
+                           status=state, evidence=dumps(evidence), result=native.get("result"), error=error, updated=time.time())
             if current["current_attempt"] == attempt["id"] and active:
-                db.execute("UPDATE tasks SET status=? WHERE run_id=? AND id=?", (state, rid, task["id"]))
-            if old["status"] != state or old["evidence"] != dumps(evidence):
-                self.db.event(db, rid, "attempt.state", {"id": attempt["id"], "task_id": task["id"],
-                                                       "status": state, "error": error, "evidence": evidence})
-        self.update(rid, "ready" if state == "accepted" else state, error)
+                journal.change(db, "tasks", (rid, task["id"]), journal.WORKER, "task.state", status=state)
+        self.update(rid, "ready" if state == "accepted" else state, error, actor=journal.WORKER)
         if state == "blocked":
             recovery.automatic(self.db, rid, attempt["id"])

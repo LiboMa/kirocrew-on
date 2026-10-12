@@ -1,5 +1,7 @@
 """D34 §4: the change journal records who changed which fields of a Session, from what, to what, and why."""
 import json
+from pathlib import Path
+import re
 import tempfile
 import unittest
 
@@ -111,6 +113,57 @@ class CommandJournalTests(AccessCase):
         self.service.operate(self.a, run["id"], "stop", {"request_id": "stop-00000001", "expected_version": 1})
         command = next(p for k, p in self.changes(run["id"]) if k == "command.stop")
         self.assertEqual((command["oversight"], command["by"]["username"]), (True, "alice"))
+
+
+class GuardTests(unittest.TestCase):
+    def test_session_rows_are_updated_only_through_the_journal(self):
+        pattern = re.compile(r"(UPDATE|DELETE FROM)\s+(runs|tasks|attempts|recoveries)\b")
+        offenders = [f"{path.name}:{number}" for path in sorted(Path("octopus").glob("*.py")) if path.name != "journal.py"
+                     for number, line in enumerate(path.read_text().splitlines(), 1) if pattern.search(line)]
+        self.assertEqual(offenders, [])
+
+
+class SystemJournalTests(AccessCase):
+    def test_engine_and_worker_changes_name_their_actor(self):
+        env = self.shared_env()
+        run = self.start(self.a, worker_id=env)
+        def worker(config, path, body, **kwargs):
+            if path == "/prepare":
+                return {"native_parent": "octopus-x", "workspace": "/w/x"}
+            if path == "/dispatch":
+                return {"status": "running", "native_id": "abc12345", "context_hash": "h"}
+            return {"status": "running", "native": {"done": False}, "native_id": "abc12345"}
+        from octopus.engine import Engine
+        engine = Engine(self.db, request=worker)
+        for _ in range(3):
+            engine.tick()
+        with self.db.read() as db:
+            rows = [(r["kind"], json.loads(r["payload"])) for r in
+                    db.execute("SELECT * FROM events WHERE run_id=? ORDER BY id", (run["id"],))]
+        actors = {kind: payload["actor"]["kind"] for kind, payload in rows if isinstance(payload.get("actor"), dict)}
+        self.assertEqual(actors["run.binding"], "worker")
+        self.assertEqual(actors["attempt.created"], "engine")
+        self.assertEqual(actors["attempt.dispatched"], "worker")
+        binding = next(p for k, p in rows if k == "run.binding")
+        self.assertEqual(binding["changes"]["native_parent"], [None, "octopus-x"])
+        dispatched = next(p for k, p in rows if k == "attempt.dispatched")
+        self.assertEqual(dispatched["changes"]["native_id"], [None, "abc12345"])
+
+    def test_manual_diagnosis_names_the_user(self):
+        env = self.shared_env()
+        run = self.start(self.a, worker_id=env)
+        with self.db.transaction() as db:   # fixture: one failed Attempt
+            db.execute("INSERT INTO attempts(id,run_id,task_id,number,spec,status,error,created,updated) "
+                       "VALUES('attempt-1',?,'code',1,'{}','blocked','失败',0,0)", (run["id"],))
+            db.execute("UPDATE tasks SET status='blocked',current_attempt='attempt-1' WHERE run_id=?", (run["id"],))
+            db.execute("UPDATE runs SET status='blocked',native_parent='octopus-x' WHERE id=?", (run["id"],))
+        self.service.operate({**self.a, "client": "console"}, run["id"], "recover",
+                             {"request_id": "recover-000001", "expected_version": 1})
+        with self.db.read() as db:
+            started = json.loads(db.execute("SELECT payload FROM events WHERE run_id=? AND kind='recovery.started'",
+                                            (run["id"],)).fetchone()[0])
+        self.assertEqual((started["actor"]["kind"], started["actor"]["client"]), ("user", "console"))
+        self.assertEqual(started["changes"]["status"], ["blocked", "diagnosing"])
 
 
 if __name__ == "__main__":

@@ -81,7 +81,10 @@ def expand(db, rid, text, models=None):
                "notes": notes}
     snapshot["planning"] = applied
     snapshot["steps"] = snapshot.get("steps", []) + steps
-    db.execute("UPDATE runs SET snapshot=?,version=?,updated=? WHERE id=?", (dumps(snapshot), row["version"] + 1, time.time(), rid))
+    from . import journal
+    journal.change(db, "runs", rid, journal.KIROCREW, "plan.applied",
+                   event={"tasks": applied["tasks"], "intent": applied["intent"], "notes": notes},
+                   snapshot=dumps(snapshot), version=row["version"] + 1, updated=time.time())
     from .revisions import record
     record(db, rid, row["version"] + 1, "planned", f"规划：追加 {len(steps)} 个任务", row["owner_id"], time.time(),
            planning={"intent": applied["intent"], "tasks": applied["tasks"]})

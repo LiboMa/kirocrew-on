@@ -2,6 +2,7 @@
 import json
 import time
 
+from . import journal
 from .db import dumps, uid
 from .domain import unserved
 from .security import Error, require
@@ -122,9 +123,9 @@ def schedule(db, database, run, task, attempt, *, manual=False, actor=None):
     db.execute("INSERT INTO recoveries(id,run_id,number,failed_task_id,failed_attempt_id,attempt_id,status,context,created,updated) "
                "VALUES(?,?,?,?,?,?,'pending',?,?,?)",
                (rid, run["id"], len(rows)+1, task["id"], attempt["id"], aid, dumps(context), now, now))
-    db.execute("UPDATE runs SET status='diagnosing',desired='active',updated=? WHERE id=?", (now, run["id"]))
-    database.event(db, run["id"], "recovery.started", {"id": rid, "number": len(rows)+1, "task_id": task["id"],
-                                                    "failed_attempt_id": attempt["id"], "manual": manual})
+    journal.change(db, "runs", run["id"], actor or journal.RECOVERY, "recovery.started",
+                   event={"id": rid, "number": len(rows)+1, "task_id": task["id"], "failed_attempt_id": attempt["id"],
+                          "manual": manual}, status="diagnosing", desired="active", updated=now)
     return rid
 
 
@@ -160,8 +161,9 @@ def reconcile(database, skip=frozenset()):
                 continue
             attempt = db.execute("SELECT * FROM attempts WHERE id=?", (task["current_attempt"],)).fetchone()
             if run["status"] != "blocked":
-                db.execute("UPDATE runs SET status='blocked',error=?,updated=? WHERE id=?",
-                           (attempt["error"], time.time(), run["id"]))
+                journal.change(db, "runs", run["id"], journal.RECOVERY, "run.state", "核对：任务已失败，安排诊断",
+                               event={"status": "blocked", "error": attempt["error"]},
+                               status="blocked", error=attempt["error"], updated=time.time())
             schedule(db, database, run, task, attempt)
 
 
@@ -203,9 +205,9 @@ class Coordinator:
                 raise
             state = result["status"]
             with self.db.transaction() as db:
-                db.execute("UPDATE recoveries SET status=?,native_id=?,context_hash=?,error=?,updated=? WHERE id=?",
-                           (state, result.get("native_id"), result.get("context_hash"), result.get("error"),
-                            time.time(), item["id"]))
+                journal.change(db, "recoveries", item["id"], journal.WORKER, "recovery.state", event={"id": item["id"]},
+                               status=state, native_id=result.get("native_id"), context_hash=result.get("context_hash"),
+                               error=result.get("error"), updated=time.time())
             if state == "blocked":
                 self.finish(run, item, error="协调者未能启动：" + (result.get("error") or "请检查原生环境"))
             return
@@ -214,12 +216,12 @@ class Coordinator:
         if not native.get("done"):
             state = "waiting_approval" if native.get("awaiting_approval") else "running"
             with self.db.transaction() as db:
-                db.execute("UPDATE recoveries SET status=?,evidence=?,updated=? WHERE id=?",
-                           (state, dumps(evidence), time.time(), item["id"]))
+                journal.change(db, "recoveries", item["id"], journal.WORKER, "recovery.state", event={"id": item["id"]},
+                               status=state, evidence=dumps(evidence), updated=time.time())
             return
         with self.db.transaction() as db:
-            db.execute("UPDATE recoveries SET result=?,evidence=?,updated=? WHERE id=?",
-                       (native.get("result"), dumps(evidence), time.time(), item["id"]))
+            journal.change(db, "recoveries", item["id"], journal.WORKER, "recovery.state", event={"id": item["id"]},
+                           result=native.get("result"), evidence=dumps(evidence), updated=time.time())
         try:
             require(not native.get("error") and not native.get("stopped"), "协调者执行失败或已停止")
             require(result.get("handoff") and evidence.get("actual_backend") == "kiro", "协调者交接或原生后端未核实")
@@ -243,7 +245,8 @@ class Coordinator:
                                 (run["id"], item["failed_task_id"])).fetchone()
             if (fresh["desired"] != "active" or fresh["lifecycle"] != "open" or fresh["status"] != "diagnosing" or
                     not failed or failed["current_attempt"] != item["failed_attempt_id"]):
-                db.execute("UPDATE recoveries SET status='cancelled',updated=? WHERE id=?", (now, item["id"]))
+                journal.change(db, "recoveries", item["id"], journal.RECOVERY, "recovery.state", "会话已变化，诊断结果不再适用",
+                               event={"id": item["id"]}, status="cancelled", updated=now)
                 return
             target = None
             if decision and decision["action"] != "wait_for_user":
@@ -258,24 +261,23 @@ class Coordinator:
                     error = "协调者返工目标必须是失败 Task 或其上游；retry 必须重试当前 Task"
             if error or decision["action"] == "wait_for_user":
                 message = error or (decision["reason"] + "；" + decision["instructions"])
-                db.execute("UPDATE recoveries SET status='blocked',decision=?,error=?,updated=? WHERE id=?",
-                           (dumps(decision) if decision else None, message, now, item["id"]))
-                db.execute("UPDATE runs SET status='blocked',error=?,updated=? WHERE id=?", (message, now, run["id"]))
-                self.db.event(db, run["id"], "recovery.blocked", {"id": item["id"], "error": message})
+                journal.change(db, "recoveries", item["id"], journal.RECOVERY, "recovery.state", event={"id": item["id"]},
+                               status="blocked", decision=dumps(decision) if decision else None, error=message, updated=now)
+                journal.change(db, "runs", run["id"], journal.RECOVERY, "recovery.blocked",
+                               event={"id": item["id"], "error": message}, status="blocked", error=message, updated=now)
                 return
             invalidated = [row["id"] for row in db.execute(
                 "SELECT id FROM tasks WHERE run_id=? AND ordinal>=? ORDER BY ordinal", (run["id"], target["ordinal"]))]
-            db.execute("UPDATE tasks SET status='pending',current_attempt=NULL WHERE run_id=? AND ordinal>=?",
-                       (run["id"], target["ordinal"]))
+            journal.change_rows(db, "tasks", "run_id=? AND ordinal>=?", (run["id"], target["ordinal"]), journal.RECOVERY,
+                                "task.reset", decision.get("reason"), status="pending", current_attempt=None)
             version = fresh["version"] + 1
-            db.execute("UPDATE runs SET status='ready',error=NULL,version=?,updated=? WHERE id=?",
-                       (version, now, run["id"]))
-            db.execute("UPDATE recoveries SET status='applied',decision=?,error=NULL,updated=? WHERE id=?",
-                       (dumps(decision), now, item["id"]))
+            journal.change(db, "recoveries", item["id"], journal.RECOVERY, "recovery.state", event={"id": item["id"]},
+                           status="applied", decision=dumps(decision), error=None, updated=now)
+            journal.change(db, "runs", run["id"], journal.RECOVERY, "recovery.applied", decision.get("reason"),
+                           event={"id": item["id"], "number": item["number"], "target_task_id": target["id"],
+                                  "invalidated": invalidated}, status="ready", error=None, version=version, updated=now)
             from .revisions import record
             name = json.loads(target["spec"]).get("name", target["id"])
             reason = decision.get("reason")
             record(db, run["id"], version, "recovered", f"自动纠错：退回「{name}」" + (f"（{reason}）" if reason else ""),
                    fresh["owner_id"], now, recovery_id=item["id"], decision=decision, invalidated=invalidated)
-            self.db.event(db, run["id"], "recovery.applied", {"id": item["id"], "number": item["number"],
-                                                           "target_task_id": target["id"], "invalidated": invalidated})
