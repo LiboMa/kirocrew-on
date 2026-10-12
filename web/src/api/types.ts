@@ -332,3 +332,16 @@ export interface DesignJob {
   config?: { name: string; steps: Step[] } | null;
   error?: string | null;
 }
+
+/** One write to a Session (D34): who made it (a user and their client, or a part of the system) and what changed. */
+export interface ChangeEntry {
+  id: number;
+  at: number;
+  kind: string;
+  actor: { kind: "user"; id: string; username?: string | null; client?: "console" | "mcp" | "api" }
+    | { kind: "engine" | "worker" | "kirocrew" | "recovery" | "legacy" };
+  /** {field: [before, after]}; a write to many rows lists each row's changes. Long text is {chars, sha256}. */
+  changes: Record<string, [unknown, unknown]> | { id: string; changes: Record<string, [unknown, unknown]> }[] | null;
+  reason: string | null;
+  detail: Record<string, unknown>;
+}

@@ -33,7 +33,14 @@ export const EVENT_LABELS: Record<string, string> = {
   "recovery.blocked": "协调者等待补充条件", "command.stop": "收到停止请求", "command.close": "收到关闭请求",
   "command.delete": "收到删除请求", "command.reopen": "收到重新打开请求", "session.stop": "原生任务已停止",
   "session.close": "已备份并关闭", "session.delete": "原生会话已删除，源码保留",
+  "command.assign-worker": "已分配 Worker", "run.binding": "原生会话与工作区已就绪", "attempt.dispatched": "已派发原生任务",
+  "attempt.running": "原生任务执行中", "attempt.retry": "瞬时失败，自动重试", "task.reset": "任务重置为待执行",
+  "task.spec": "任务配置已修改", "task.state": "任务状态更新", "run.settings": "会话设置已修改",
+  "recovery.state": "协调者记录更新", "plan.applied": "KiroCrew 规划已应用",
 };
+
+/** Change-log entries that repeat an Attempt or recovery event; shown in 「变更记录」, not in the timeline. */
+export const TIMELINE_HIDDEN = new Set(["task.state", "recovery.state"]);
 
 const ADMIN_VERBS: Record<string, string> = {
   stop: "停止", close: "关闭", delete: "删除", reopen: "重新打开", continue: "续作", recover: "请求诊断", "assign-worker": "分配 Worker",

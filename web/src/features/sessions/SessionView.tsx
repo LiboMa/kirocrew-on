@@ -15,6 +15,7 @@ import { StatusBadge } from "@/components/StatusBadge";
 import { useConsole } from "@/features/console/context";
 import { EventTimeline } from "@/features/sessions/EventTimeline";
 import { NativeSessionPanel } from "@/features/sessions/NativeSessionPanel";
+import { ChangesPanel } from "@/features/sessions/ChangesPanel";
 import { RevisionsPanel } from "@/features/sessions/RevisionsPanel";
 import { RecoveryPanel } from "@/features/sessions/RecoveryPanel";
 import { TaskList } from "@/features/sessions/TaskList";
@@ -189,6 +190,7 @@ export function SessionView({ id }: { id: string }) {
           <TaskList run={run} onContinue={(taskId) => open({ kind: "continue", run, taskId })} />
           <NativeSessionPanel run={run} />
           <RevisionsPanel run={run} />
+          <ChangesPanel run={run} />
         </section>
         <aside className="space-y-4">
           <EventTimeline events={events} stream={stream} />

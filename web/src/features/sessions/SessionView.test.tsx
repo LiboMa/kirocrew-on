@@ -190,6 +190,37 @@ describe("session detail", () => {
     expect(within(panel).getByRole("button", { name: /v2 · 续作「实现」/ })).not.toHaveTextContent("续作 · 续作");
   });
 
+  test("the change log lists who changed what, filtered by people or the system", async () => {
+    const entries = [
+      { id: 9, at: 1_790_000_200, kind: "command.continue", actor: { kind: "user", id: "u1", username: "alice", client: "mcp" },
+        changes: { status: ["stopped", "ready"], input: [{ chars: 25, sha256: "a" }, { chars: 31, sha256: "b" }] },
+        reason: null, detail: { version: 3, task_id: "code" } },
+      { id: 8, at: 1_790_000_100, kind: "run.state", actor: { kind: "engine" }, changes: { status: ["ready", "waiting_worker"] },
+        reason: "派发前核对：执行环境已更换", detail: { status: "waiting_worker" } },
+      { id: 7, at: 1_790_000_050, kind: "task.reset", actor: { kind: "recovery" },
+        changes: [{ id: "code", changes: { status: ["blocked", "pending"] } }], reason: null, detail: {} },
+    ];
+    const searches: string[] = [];
+    open(makeRun({ id: "run-c" }), { "GET /runs/run-c/changes": (_b: unknown, url: URL) => {
+      searches.push(url.search);
+      return url.searchParams.get("who") === "user" ? [entries[0]] : entries;
+    } });
+    const panel = await screen.findByRole("region", { name: "变更记录" });
+    expect(searches).toEqual([]);   // loaded only when opened
+    await userEvent.click(within(panel).getByRole("button", { name: "显示变更记录" }));
+    const user = (await within(panel).findByText("已提交原地续作")).closest("[data-change]") as HTMLElement;
+    expect(user).toHaveTextContent("alice · Coding Agent");
+    expect(user).toHaveTextContent("状态：stopped → ready");
+    expect(user).toHaveTextContent("需求：25 字符 → 31 字符");
+    const engine = within(panel).getByText("派发前核对：执行环境已更换").closest("[data-change]") as HTMLElement;
+    expect(engine).toHaveTextContent("Engine");
+    expect(within(panel).getByText(/code：状态 blocked → pending/)).toBeInTheDocument();
+    expect(within(panel).getByText("协调者")).toBeInTheDocument();
+    await userEvent.selectOptions(within(panel).getByLabelText("变更来源"), "user");
+    await waitFor(() => expect(searches.at(-1)).toBe("?who=user&limit=200"));
+    expect(searches[0]).toBe("?limit=200");
+  });
+
   test("a Session with only its first revision says nothing has changed yet", async () => {
     open(makeRun({ id: "run-r1", version: 1 }), { "GET /runs/run-r1/revisions": [revisions[0]] });
     const panel = await screen.findByRole("region", { name: "修订历史" });

@@ -3,7 +3,7 @@ import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { api } from "@/api/client";
 import { followRunEvents, type StreamState } from "@/api/events";
 import type {
-  Environment, Me, Observation, RevisionDiff, RevisionEntry, Run, RunEvent, Team, Template, User, Worker, Workflow,
+  ChangeEntry, Environment, Me, Observation, RevisionDiff, RevisionEntry, Run, RunEvent, Team, Template, User, Worker, Workflow,
 } from "@/api/types";
 
 export const keys = {
@@ -66,6 +66,11 @@ export function useObservation(id: string | null, live: boolean, limit = 50) {
 }
 
 /** The run's revisions; refetched when the run's version changes. */
+export function useChanges(id: string, who: "" | "user" | "system", enabled: boolean) {
+  return useQuery({ queryKey: ["changes", id, who], enabled, retry: false, placeholderData: (previous) => previous,
+    queryFn: () => api<ChangeEntry[]>(`/runs/${encodeURIComponent(id)}/changes?${who ? "who=" + who + "&" : ""}limit=200`) });
+}
+
 export function useRevisions(id: string, version: number) {
   return useQuery({ queryKey: ["revisions", id, version], retry: false,
     queryFn: () => api<RevisionEntry[]>(`/runs/${encodeURIComponent(id)}/revisions`) });
