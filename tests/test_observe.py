@@ -56,6 +56,9 @@ class WorkerObserveTests(unittest.TestCase):
         self.assertNotIn("queue", result)
         self.assertNotIn("local-app", dumps(result))
         self.assertTrue(node.health()["observe"])
+        # The Worker reports the platform's release number (MVP 0.1.0), not a constant of its own.
+        import octopus
+        self.assertEqual((octopus.__version__, node.health()["version"]), ("0.1.0", "0.1.0"))
 
     def test_refuses_another_session_bad_paging_and_a_missing_slot(self):
         from octopus import gateway_client

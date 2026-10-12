@@ -1,0 +1,304 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>KiroCrew ON · MVP 0.1.0 介绍</title>
+<style>
+  :root {
+    --ink: #172033; --muted: #5b6577; --line: #e3e7ef; --bg: #f6f8fb; --card: #ffffff;
+    --brand: #5b4bdb; --brand-soft: #eeebff; --ok: #16794c; --ok-soft: #e3f5ec; --part: #9a6700; --part-soft: #fff4d6;
+    --plan: #4a5568; --plan-soft: #edf0f5; --no: #b42318; --no-soft: #fdecea; --dark: #121733;
+  }
+  * { box-sizing: border-box; }
+  html { scroll-behavior: smooth; }
+  body { margin: 0; font: 16px/1.7 -apple-system, BlinkMacSystemFont, "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei",
+         "Noto Sans CJK SC", "Segoe UI", sans-serif; color: var(--ink); background: var(--bg); }
+  a { color: var(--brand); }
+  nav { position: sticky; top: 0; z-index: 10; background: rgba(255,255,255,.92); backdrop-filter: blur(8px);
+        border-bottom: 1px solid var(--line); }
+  nav .wrap { display: flex; gap: 22px; align-items: center; height: 56px; overflow-x: auto; white-space: nowrap; }
+  nav b { margin-right: 10px; }
+  nav a { color: var(--muted); text-decoration: none; font-size: 14px; }
+  nav a:hover { color: var(--brand); }
+  .wrap { max-width: 1120px; margin: 0 auto; padding: 0 24px; }
+  section { padding: 72px 0; border-bottom: 1px solid var(--line); }
+  h1 { font-size: 44px; line-height: 1.2; margin: 0 0 18px; letter-spacing: -.5px; }
+  h2 { font-size: 30px; margin: 0 0 10px; }
+  h3 { font-size: 18px; margin: 0 0 6px; }
+  .kicker { font-size: 12px; font-weight: 700; letter-spacing: .18em; color: var(--brand); text-transform: uppercase; }
+  .lead { font-size: 18px; color: var(--muted); max-width: 820px; }
+  .hero { background: radial-gradient(1200px 500px at 85% -10%, #e5e0ff 0%, transparent 60%), var(--bg); padding: 88px 0 72px; }
+  .badge { display: inline-block; font-size: 12px; padding: 3px 10px; border-radius: 999px; background: var(--brand-soft);
+           color: var(--brand); font-weight: 600; margin-bottom: 16px; }
+  .promises { display: grid; grid-template-columns: repeat(3, 1fr); gap: 16px; margin-top: 36px; }
+  .promise { background: var(--card); border: 1px solid var(--line); border-radius: 14px; padding: 18px 20px; }
+  .promise strong { display: block; font-size: 17px; margin-bottom: 4px; }
+  .promise span { color: var(--muted); font-size: 14px; }
+  .grid { display: grid; gap: 16px; }
+  .g2 { grid-template-columns: repeat(2, 1fr); } .g3 { grid-template-columns: repeat(3, 1fr); } .g4 { grid-template-columns: repeat(4, 1fr); }
+  .card { background: var(--card); border: 1px solid var(--line); border-radius: 14px; padding: 20px 22px; }
+  .card p { margin: 0; color: var(--muted); font-size: 15px; }
+  .icon { width: 36px; height: 36px; border-radius: 10px; background: var(--brand-soft); color: var(--brand);
+          display: grid; place-items: center; font-weight: 700; margin-bottom: 12px; }
+  .not li { list-style: none; padding: 12px 16px 12px 44px; position: relative; background: var(--card);
+            border: 1px solid var(--line); border-radius: 12px; margin-bottom: 10px; }
+  .not li::before { content: "✕"; position: absolute; left: 16px; top: 12px; color: var(--no); font-weight: 700; }
+  .not { padding: 0; margin: 24px 0 0; display: grid; grid-template-columns: repeat(2, 1fr); gap: 0 14px; }
+  .not li b { display: block; }
+  .not li span { color: var(--muted); font-size: 14px; }
+  .steps { counter-reset: step; display: grid; grid-template-columns: repeat(4, 1fr); gap: 14px; margin-top: 28px; }
+  .step { background: var(--card); border: 1px solid var(--line); border-radius: 14px; padding: 18px; position: relative; }
+  .step::before { counter-increment: step; content: counter(step); position: absolute; top: -12px; left: 16px; width: 26px;
+                  height: 26px; border-radius: 50%; background: var(--brand); color: #fff; font-size: 13px; font-weight: 700;
+                  display: grid; place-items: center; }
+  .step h3 { margin-top: 6px; font-size: 16px; }
+  .step p { margin: 0 0 8px; font-size: 14px; color: var(--muted); }
+  .step .where { font-size: 12px; color: var(--brand); }
+  .chat { margin-top: 32px; background: var(--dark); color: #e8ebff; border-radius: 14px; padding: 22px 24px; font-size: 14px;
+          font-family: "SF Mono", Menlo, Consolas, monospace; line-height: 1.8; overflow-x: auto; }
+  .chat .you { color: #9ee6b8; } .chat .agent { color: #c9c3ff; } .chat .dim { color: #8a93b8; }
+  table { width: 100%; border-collapse: collapse; background: var(--card); border: 1px solid var(--line); border-radius: 14px;
+          overflow: hidden; margin-top: 24px; font-size: 15px; }
+  th, td { text-align: left; padding: 12px 16px; border-bottom: 1px solid var(--line); vertical-align: top; }
+  th { background: #fafbfd; font-size: 13px; color: var(--muted); font-weight: 600; }
+  tr:last-child td { border-bottom: 0; }
+  .chip { display: inline-block; font-size: 12px; font-weight: 600; padding: 2px 10px; border-radius: 999px; white-space: nowrap; }
+  .ok { background: var(--ok-soft); color: var(--ok); } .part { background: var(--part-soft); color: var(--part); }
+  .plan { background: var(--plan-soft); color: var(--plan); }
+  .arch { margin-top: 28px; background: var(--card); border: 1px solid var(--line); border-radius: 16px; padding: 18px; }
+  .arch svg { width: 100%; height: auto; display: block; }
+  .principles { margin-top: 20px; }
+  .timeline { position: relative; margin-top: 32px; padding-left: 28px; }
+  .timeline::before { content: ""; position: absolute; left: 9px; top: 6px; bottom: 6px; width: 2px; background: var(--line); }
+  .ms { position: relative; margin-bottom: 18px; }
+  .ms::before { content: ""; position: absolute; left: -25px; top: 8px; width: 14px; height: 14px; border-radius: 50%;
+                background: #fff; border: 3px solid var(--plan); }
+  .ms.now::before { border-color: var(--brand); background: var(--brand); }
+  .ms .card { padding: 16px 20px; }
+  .ms h3 { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; }
+  .ms .ver { font-family: "SF Mono", Menlo, Consolas, monospace; color: var(--brand); }
+  .vision { background: var(--dark); color: #e8ebff; border-bottom: 0; }
+  .vision .lead, .vision .card p { color: #b9c0e6; }
+  .vision .card { background: #1b2147; border-color: #2a3266; }
+  .vision h2, .vision h3 { color: #fff; }
+  .vision .kicker { color: #a99bff; }
+  footer { padding: 32px 0 48px; color: var(--muted); font-size: 13px; }
+  .note { font-size: 13px; color: var(--muted); margin-top: 14px; }
+  @media (max-width: 900px) {
+    h1 { font-size: 32px; } .promises, .g3, .g4, .steps { grid-template-columns: 1fr 1fr; } .g2, .not { grid-template-columns: 1fr; }
+  }
+  @media (max-width: 560px) { .promises, .g3, .g4, .steps { grid-template-columns: 1fr; } }
+  @media print { nav { display: none; } section { padding: 32px 0; break-inside: avoid; } .vision { color: var(--ink); background: #fff; } }
+</style>
+</head>
+<body>
+<nav><div class="wrap">
+  <b>KiroCrew ON</b>
+  <a href="#what">是什么</a><a href="#not">不是什么</a><a href="#flow">工作流程</a><a href="#roles">角色</a>
+  <a href="#can">能做什么</a><a href="#arch">架构</a><a href="#roadmap">Roadmap</a><a href="#vision">远景</a>
+</div></nav>
+
+<header class="hero"><div class="wrap">
+  <span class="badge">MVP 0.1.0 · 2026-10-12</span>
+  <h1>一个 7×24 在线的研发协作空间<br>用你习惯的 Coding Agent 说一句话就开始</h1>
+  <p class="lead">KiroCrew ON 把开发任务交给后台的多个 Agent 分工完成：规划、实现、互审、自动纠错，全程有记录。
+    个人、Team 与组织在同一空间里共享会话、工作流与成果；它不绑定任何工具或模型，几乎没有学习成本。</p>
+  <div class="promises">
+    <div class="promise"><strong>Always-On</strong><span>任务在服务器上持续执行，关掉电脑也不中断，随时回来查看与续作</span></div>
+    <div class="promise"><strong>几乎零学习成本</strong><span>在 Claude Code、Kiro CLI 里用自然语言操作，同一份 Skill，不必学新界面</span></div>
+    <div class="promise"><strong>解耦、可替换</strong><span>工具与模型按任务选择，Agent 可以替换；部署在你自己的 AWS 账号</span></div>
+  </div>
+</div></header>
+
+<section id="what"><div class="wrap">
+  <div class="kicker">What it is</div>
+  <h2>它是什么</h2>
+  <p class="lead">一个把“交代任务 → 多 Agent 协作完成 → 共享成果”变成日常习惯的后台空间。</p>
+  <div class="grid g4" style="margin-top:24px">
+    <div class="card"><div class="icon">⏱</div><h3>后台协作空间</h3><p>任务交出去后在服务器上运行；进度、证据、对话都保存在会话里。</p></div>
+    <div class="card"><div class="icon">⚙</div><h3>多 Agent 编排</h3><p>KiroCrew Agent 识别意图、补全需求、拆分任务、为每个任务选 Agent；Kiro、Claude Code、Codex 分工执行与互审。</p></div>
+    <div class="card"><div class="icon">⇄</div><h3>共享空间</h3><p>个人空间与 Team 空间；Team 成员共享会话与产出；好的工作流可共享给个人或 Team 复用。</p></div>
+    <div class="card"><div class="icon">✓</div><h3>质量由平台把关</h3><p>Agent 交付的交接文件与结论经平台校验才算完成；不通过时自动诊断并返工。</p></div>
+  </div>
+</div></section>
+
+<section id="not"><div class="wrap">
+  <div class="kicker">What it is not</div>
+  <h2>它不是什么</h2>
+  <ul class="not">
+    <li><b>不是新的 IDE 或 Coding Agent</b><span>你继续用自己的工具，KiroCrew ON 只是它们背后的协作空间。</span></li>
+    <li><b>不是模型或模型网关</b><span>模型由各工具与 KiroCrew 的原生配置提供（当前部署经 Amazon Bedrock）。</span></li>
+    <li><b>不绑定任何工具或模型</b><span>工作流里每个任务可以指定工具与模型，也可以交给 KiroCrew Agent 选择。</span></li>
+    <li><b>不是 CI/CD 或自动发布</b><span>不自动合并、不部署到生产；结果先供人查看与决定。</span></li>
+    <li><b>不是聊天机器人</b><span>对话只是入口；会话、任务、尝试、证据都有结构化记录，可追溯。</span></li>
+    <li><b>不是托管 SaaS</b><span>部署在你自己的云账号里；执行环境按个人 / Team 隔离。</span></li>
+  </ul>
+</div></section>
+
+<section id="flow"><div class="wrap">
+  <div class="kicker">How it works</div>
+  <h2>工作流程：从一句话到可预览的成果</h2>
+  <p class="lead">你只做四件事：说需求、问进度、看结果、继续改。其余由后台完成。</p>
+  <div class="steps">
+    <div class="step"><h3>连接一次</h3><p><code>octopus connect claude</code> 或 <code>kiro</code>，写入 MCP 与 Skill。</p><div class="where">之后不必再配置</div></div>
+    <div class="step"><h3>说需求</h3><p>“用 KiroCrew ON 做一个番茄钟，Codex 审查。”平台登记会话、选好执行环境。</p><div class="where">在你的 Coding Agent 里</div></div>
+    <div class="step"><h3>自动规划</h3><p>KiroCrew Agent 识别意图、补全需求、拆成 1–7 个任务，并为每个任务选 Agent。</p><div class="where">控制台「KiroCrew 规划」</div></div>
+    <div class="step"><h3>分工执行与互审</h3><p>例如 Kiro 规划 → Claude Code 实现 → Codex 审查 → 真实浏览器验证；不通过就诊断并返工。</p><div class="where">事件时间线</div></div>
+    <div class="step"><h3>随时问进度</h3><p>“现在做到哪了？”Agent 读取真实状态和协调者与子 Agent 的对话。</p><div class="where">Coding Agent / 「KiroCrew 会话」</div></div>
+    <div class="step"><h3>预览成果</h3><p>“给我预览。”静态页面在隔离环境中打开；开发服务器可转发到本机。</p><div class="where">浏览器</div></div>
+    <div class="step"><h3>继续改</h3><p>“把小时改成补零。”在同一会话、同一工作区续作，下游重新审查。</p><div class="where">同一会话</div></div>
+    <div class="step"><h3>团队共享</h3><p>Team 成员看到同一会话、产出与对话；需要时直接打开 KiroCrew 原生会话。</p><div class="where">控制台 / 各自的 Agent</div></div>
+  </div>
+  <div class="chat">
+    <div><span class="you">你 ›</span> 用 KiroCrew ON 做一个单页数字时钟：大号数字、每秒刷新、12/24 小时切换，不依赖外部资源。</div>
+    <div><span class="agent">Agent ›</span> 已提交到 Team「Web应用软件研发组」，会话 run-e0df…，执行环境 w1。KiroCrew 正在规划。</div>
+    <div class="dim">… 规划（Kiro）→ 实现（Claude Code）→ 审查（Codex）→ 浏览器验证（Claude Code），4 个任务全部通过 …</div>
+    <div><span class="you">你 ›</span> 做完了吗？给我预览。</div>
+    <div><span class="agent">Agent ›</span> 已完成：单文件 index.html，真实 Chromium 断网验证 12/12 通过。预览链接：https://…/preview/…</div>
+  </div>
+  <p class="note">示例取自 2026-10-12 在 EC2 上的真实会话，链接已省略。</p>
+</div></section>
+
+<section id="roles"><div class="wrap">
+  <div class="kicker">Who it is for</div>
+  <h2>个人、Team、组织</h2>
+  <div class="grid g4" style="margin-top:24px">
+    <div class="card"><h3>个人开发者</h3><p>在自己的空间提交与迭代；查看进度、观察 Agent 对话、预览产出；沉淀自己的工作流。</p></div>
+    <div class="card"><h3>Team</h3><p>成员共享会话与产出；owner 管理成员；Team 可拥有专属的执行环境（独立主机），成员直接打开原生会话。</p></div>
+    <div class="card"><h3>平台管理员</h3><p>创建用户与 Team；开通、共享、分配执行环境；一条命令增加 Worker 主机；查看环境健康与负载。</p></div>
+    <div class="card"><h3>组织 <span class="chip plan">规划</span></h3><p>组织层统一治理；会话共享给个人 / Team / 组织；配额与排队。</p></div>
+  </div>
+</div></section>
+
+<section id="can"><div class="wrap">
+  <div class="kicker">Capabilities</div>
+  <h2>能做什么（MVP 0.1.0）</h2>
+  <table>
+    <tr><th style="width:30%">能力</th><th style="width:12%">状态</th><th>说明</th></tr>
+    <tr><td>Coding Agent 接入</td><td><span class="chip ok">已上线</span></td><td>Claude Code、Kiro CLI 一条命令接入；Codex 等支持 MCP 的客户端按文档接入</td></tr>
+    <tr><td>自然语言提交与自动规划</td><td><span class="chip ok">已上线</span></td><td>KiroCrew Agent 识别意图、补全需求、拆任务、选 Agent</td></tr>
+    <tr><td>多 Agent 执行与互审</td><td><span class="chip ok">已上线</span></td><td>Kiro、Claude Code、Codex；OpenCode 暂由 Claude Code 代替</td></tr>
+    <tr><td>自动诊断与返工</td><td><span class="chip ok">已上线</span></td><td>交接与结论不通过时由协调者诊断，按轮数上限自动纠错</td></tr>
+    <tr><td>查看进度与观察 Agent 对话</td><td><span class="chip ok">已上线</span></td><td>在 Coding Agent 中询问；控制台事件流与「KiroCrew 会话」面板</td></tr>
+    <tr><td>打开 KiroCrew 原生会话</td><td><span class="chip ok">已上线</span></td><td>个人空间本人、Team 专属环境成员可直接打开</td></tr>
+    <tr><td>预览与续作</td><td><span class="chip ok">已上线</span></td><td>隔离预览；同一会话、同一工作区迭代，可改工具、模型与提示</td></tr>
+    <tr><td>工作流库</td><td><span class="chip ok">已上线</span></td><td>模板、KiroCrew 推荐、导入 Agent 生成的工作流、版本、共享</td></tr>
+    <tr><td>Team 与执行环境</td><td><span class="chip ok">已上线</span></td><td>共享环境、Team 专属环境（独立 Worker 主机）、空闲环境；管理员统一管理</td></tr>
+    <tr><td>用户、Team、权限管理</td><td><span class="chip plan">0.2</span></td><td>改密码、停用用户、管理员审计、按角色的 MCP 调用（设计已完成）</td></tr>
+    <tr><td>私有仓库</td><td><span class="chip plan">0.2</span></td><td>GitHub Connector 只读接入</td></tr>
+    <tr><td>成果出库</td><td><span class="chip plan">0.3</span></td><td>Feature 分支推送、diff 与报告</td></tr>
+    <tr><td>完成优先的安全网</td><td><span class="chip part">部分</span></td><td>已有诊断返工；瞬时重试、工具回退、预算、看门狗、批准可见在 0.4</td></tr>
+    <tr><td>更多客户端与检索</td><td><span class="chip plan">0.5</span></td><td>Codex / Kiro IDE 一键接入，服务端全文检索</td></tr>
+  </table>
+</div></section>
+
+<section id="arch"><div class="wrap">
+  <div class="kicker">Architecture</div>
+  <h2>架构：五层，层层解耦</h2>
+  <p class="lead">平台只负责“谁、在哪个空间、做什么、做得怎么样”；怎么跑 Agent 交给 KiroCrew；用什么模型由各工具配置。</p>
+  <div class="arch">
+    <svg viewBox="0 0 1000 600" role="img" aria-label="KiroCrew ON 分层架构">
+      <defs>
+        <marker id="arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto">
+          <path d="M0,0 L10,5 L0,10 z" fill="#8b93a7"/></marker>
+      </defs>
+      <style>
+        .layer { fill: #fafbfd; stroke: #e3e7ef; } .lname { font-size: 13px; font-weight: 700; fill: #5b4bdb; }
+        .box { fill: #fff; stroke: #cfd5e3; } .bx { font-size: 14px; fill: #172033; } .sub { font-size: 12px; fill: #5b6577; }
+        .core { fill: #eeebff; stroke: #b9b0ff; } .edge { stroke: #8b93a7; stroke-width: 1.6; fill: none; }
+        .elabel { font-size: 12px; fill: #5b6577; }
+      </style>
+      <rect class="layer" x="10" y="10" width="980" height="92" rx="12"/>
+      <text class="lname" x="28" y="34">接入层 · 你习惯的工具</text>
+      <rect class="box" x="200" y="30" width="170" height="54" rx="10"/><text class="bx" x="285" y="62" text-anchor="middle">Claude Code</text>
+      <rect class="box" x="385" y="30" width="170" height="54" rx="10"/><text class="bx" x="470" y="62" text-anchor="middle">Kiro CLI</text>
+      <rect class="box" x="570" y="30" width="190" height="54" rx="10"/><text class="bx" x="665" y="55" text-anchor="middle">Codex / 其他客户端</text>
+      <text class="sub" x="665" y="74" text-anchor="middle">支持 MCP 即可</text>
+      <rect class="box" x="775" y="30" width="200" height="54" rx="10"/><text class="bx" x="875" y="55" text-anchor="middle">Web 控制台</text>
+      <text class="sub" x="875" y="74" text-anchor="middle">可选：浏览、观察、管理</text>
+      <text class="sub" x="28" y="62">同一份 Skill + MCP</text>
+      <path class="edge" d="M500,102 L500,132" marker-end="url(#arrow)"/>
+      <text class="elabel" x="512" y="122">HTTPS · 用户 Token（按角色与 scope 授权）</text>
+
+      <rect class="layer" x="10" y="136" width="980" height="118" rx="12"/>
+      <text class="lname" x="28" y="160">调度层 · KiroCrew ON 平台</text>
+      <rect class="core" x="200" y="152" width="775" height="88" rx="12"/>
+      <text class="bx" x="220" y="178" font-weight="700">唯一的权限判定与状态来源</text>
+      <text class="sub" x="220" y="202">身份与角色 · 个人 / Team 空间 · 会话、任务与版本 · 工作流库与推荐</text>
+      <text class="sub" x="220" y="224">执行环境调度 · 交接与结论校验 · 自动诊断与返工 · 事件、观察、预览、审计</text>
+      <path class="edge" d="M500,254 L500,284" marker-end="url(#arrow)"/>
+      <text class="elabel" x="512" y="274">Worker Token · 单向驱动（KiroCrew 从不回调平台）</text>
+
+      <rect class="layer" x="10" y="288" width="980" height="100" rx="12"/>
+      <text class="lname" x="28" y="312">执行层 · 执行环境</text>
+      <rect class="box" x="200" y="304" width="370" height="70" rx="10"/>
+      <text class="bx" x="385" y="332" text-anchor="middle">共享环境</text>
+      <text class="sub" x="385" y="354" text-anchor="middle">平台主机上的执行边界 · 服务多个个人空间与 Team</text>
+      <rect class="box" x="590" y="304" width="385" height="70" rx="10"/>
+      <text class="bx" x="782" y="332" text-anchor="middle">Team 专属环境</text>
+      <text class="sub" x="782" y="354" text-anchor="middle">独立 Worker 主机 · 私网 TLS · 成员可打开原生会话</text>
+      <path class="edge" d="M500,388 L500,418" marker-end="url(#arrow)"/>
+      <text class="elabel" x="512" y="408">每个环境一个 Worker + 一个 KiroCrew Gateway（同一 OS 用户）</text>
+
+      <rect class="layer" x="10" y="422" width="980" height="96" rx="12"/>
+      <text class="lname" x="28" y="446">Agent 层 · KiroCrew</text>
+      <rect class="core" x="200" y="440" width="200" height="62" rx="10"/>
+      <text class="bx" x="300" y="466" text-anchor="middle">协调者</text><text class="sub" x="300" y="486" text-anchor="middle">原生会话 · 解释进度</text>
+      <path class="edge" d="M400,471 L452,471" marker-end="url(#arrow)"/>
+      <rect class="box" x="456" y="440" width="160" height="62" rx="10"/><text class="bx" x="536" y="476" text-anchor="middle">Kiro</text>
+      <rect class="box" x="632" y="440" width="160" height="62" rx="10"/><text class="bx" x="712" y="476" text-anchor="middle">Claude Code</text>
+      <rect class="box" x="808" y="440" width="167" height="62" rx="10"/><text class="bx" x="891" y="476" text-anchor="middle">Codex</text>
+      <path class="edge" d="M712,518 L712,548" marker-end="url(#arrow)"/>
+
+      <rect class="layer" x="10" y="552" width="980" height="40" rx="12"/>
+      <text class="lname" x="28" y="577">模型层</text>
+      <text class="bx" x="200" y="577">Amazon Bedrock 等 · 由各工具与 KiroCrew 原生配置 · 可按任务指定或替换</text>
+    </svg>
+  </div>
+  <div class="grid g3 principles">
+    <div class="card"><h3>解耦</h3><p>接入只依赖 Skill + MCP 这一层薄协议；调度层不运行 Agent、不绑定模型；Agent 与模型按任务选择。</p></div>
+    <div class="card"><h3>单向驱动</h3><p>平台经 Worker 驱动 KiroCrew；会话状态以平台为准，原生会话是执行与对话的记录。</p></div>
+    <div class="card"><h3>隔离</h3><p>每个执行环境是独立的系统账号或独立主机；Team 可拥有自己的 Worker 主机；原生登录只发给有权使用整个环境的人。</p></div>
+  </div>
+  <p class="note">逐层接口、时序与信任边界见仓库 <code>docs/ARCHITECTURE.md</code>。</p>
+</div></section>
+
+<section id="roadmap"><div class="wrap">
+  <div class="kicker">Roadmap</div>
+  <h2>Roadmap</h2>
+  <p class="lead">从“跑通协作闭环”到“Always-On 的组织协作空间”。以下为规划，顺序以负责人确认为准。</p>
+  <div class="timeline">
+    <div class="ms now"><div class="card"><h3><span class="ver">0.1.0</span> 跑通协作闭环 <span class="chip ok">当前</span></h3>
+      <p>连接 → 提交 → 规划 → 多 Agent 执行与互审 → 观察 → 预览 → 续作；Team 执行环境与独立 Worker 主机。</p></div></div>
+    <div class="ms"><div class="card"><h3><span class="ver">0.2.0</span> 可管理</h3>
+      <p>用户与 Token 生命周期、管理员审计、Team 与 Worker 管理、MCP 按角色调用；私有仓库（GitHub 只读）。</p></div></div>
+    <div class="ms"><div class="card"><h3><span class="ver">0.3.0</span> 成果出库</h3>
+      <p>候选 commit 与 Feature 分支推送；在 Coding Agent 中直接读取分支与 diff；Feature 报告。</p></div></div>
+    <div class="ms"><div class="card"><h3><span class="ver">0.4.0</span> 完成优先</h3>
+      <p>瞬时重试、工具回退链、预算与看门狗、批准请求可见、命名质量门禁：先保证每个任务完成。</p></div></div>
+    <div class="ms"><div class="card"><h3><span class="ver">0.5.0</span> 处处可用</h3>
+      <p>Codex、Kiro IDE 一键接入；服务端分页与全文检索；diff 与报告视图。</p></div></div>
+    <div class="ms"><div class="card"><h3><span class="ver">1.0.0</span> Always-On 组织协作空间</h3>
+      <p>组织层；会话共享给个人 / Team / 组织；Draft PR / MR；Issue、Webhook、定时触发；记忆按空间分层；配额与排队。</p></div></div>
+  </div>
+</div></section>
+
+<section id="vision" class="vision"><div class="wrap">
+  <div class="kicker">Vision</div>
+  <h2>远景：7×24 Always-On 的共同协作空间</h2>
+  <p class="lead">研发不再停在某个人的电脑上：需求随时交出去，Agent 一直在做，人在合适的时候查看、决定与协作。</p>
+  <div class="grid g4" style="margin-top:24px">
+    <div class="card"><h3>一直在线</h3><p>任务、审查、纠错在后台持续进行；需求来自一句话，也可以来自 Issue、Webhook 或定时计划。</p></div>
+    <div class="card"><h3>个人 · Team · 组织</h3><p>个人空间里试验，Team 空间里协作，组织层统一治理；会话、工作流、成果按需共享，权限清楚可追溯。</p></div>
+    <div class="card"><h3>工作流即资产</h3><p>好的研发流程沉淀为可版本化、可共享、可推荐的工作流，新任务自动套用。</p></div>
+    <div class="card"><h3>不改变你的习惯</h3><p>每个人用自己习惯的 Coding Agent 与 Skills 操作同一个空间；不绑定工具与模型，几乎没有学习成本。</p></div>
+  </div>
+</div></section>
+
+<footer><div class="wrap">
+  KiroCrew ON · MVP 0.1.0 · 2026-10-12。标注“已上线”的能力已在 AWS us-east-1 的部署上实测；标注版本号的为规划，不是已上线功能。
+  详细说明见仓库 <code>docs/MVP-0.1.0.md</code>。
+</div></footer>
+</body>
+</html>

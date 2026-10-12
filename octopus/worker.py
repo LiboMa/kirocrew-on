@@ -14,6 +14,7 @@ import time
 import urllib.error
 from urllib.parse import quote, urlencode
 
+from . import __version__
 from . import gateway_client as crew_api
 from . import sources as workspace
 from .db import dumps
@@ -132,7 +133,7 @@ class Worker:
         models = json.loads(cache.read_text()) if cache.is_file() else {}
         namespace = {"kiro": "acp", "claude": "claude_code", "codex": "codex", "opencode": "opencode"}
         advertised = {tool: [m for m in models.get(ns, []) if isinstance(m, str)] for tool, ns in namespace.items()}
-        return {"version": "1.0.0", "isolation": self.isolation, "workflow_design": True,
+        return {"version": __version__, "isolation": self.isolation, "workflow_design": True,
                 "spawn_approval": "auto" if self.approval_mode == "auto" else "interactive",
                 "crew_entry": True, "crew_origin": self.crew_origin, "observe": True,
                 "coordinator_recovery": True, "quality_outcome": True,

@@ -106,6 +106,9 @@
 
 ## 4．组件与模块
 
+> 本节与 §5 是**目标架构**（含尚未实现的 Request、CLI、Feature 分支推送）。当前实现与 EC2 拓扑、KiroCrew 与 Octopus 的逐层交互见
+> [`docs/ARCHITECTURE.md`](../../ARCHITECTURE.md)。
+
 ```mermaid
 flowchart TB
     subgraph Clients["本地客户端"]
