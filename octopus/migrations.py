@@ -82,7 +82,16 @@ CREATE TABLE IF NOT EXISTS worker_spaces(
 CREATE UNIQUE INDEX IF NOT EXISTS worker_spaces_team ON worker_spaces(team_id) WHERE team_id IS NOT NULL;
 """
 
-MIGRATIONS = [(1, "baseline", BASELINE), (2, "environments", ENVIRONMENTS)]
+ACCESS = """
+ALTER TABLE users ADD COLUMN last_login REAL;
+ALTER TABLE tokens ADD COLUMN last_used REAL;
+CREATE TABLE IF NOT EXISTS audit(
+ id INTEGER PRIMARY KEY AUTOINCREMENT, at REAL NOT NULL, actor_id TEXT NOT NULL REFERENCES users(id),
+ action TEXT NOT NULL, kind TEXT NOT NULL, target TEXT NOT NULL, detail TEXT NOT NULL DEFAULT '{}');
+CREATE INDEX IF NOT EXISTS audit_at ON audit(at);
+"""
+
+MIGRATIONS = [(1, "baseline", BASELINE), (2, "environments", ENVIRONMENTS), (3, "access", ACCESS)]
 
 
 def _statements(script):

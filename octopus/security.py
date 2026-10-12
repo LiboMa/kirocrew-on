@@ -55,7 +55,7 @@ def issue_token(db, user, scopes=None, label="API", ttl=86400):
     raw = "oct_" + secrets.token_urlsafe(32)
     value = {"id": uid("token"), "token": raw, "scopes": scopes,
              "expires": time.time() + min(max(int(ttl), 60), 30 * 86400)}
-    db.execute("INSERT INTO tokens VALUES(?,?,?,?,?,?)",
+    db.execute("INSERT INTO tokens(hash,id,user_id,scopes,expires,label) VALUES(?,?,?,?,?,?)",
                (hashlib.sha256(raw.encode()).hexdigest(), value["id"], user,
                 dumps(scopes), value["expires"], str(label)[:80]))
     return value
