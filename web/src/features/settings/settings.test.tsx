@@ -269,7 +269,24 @@ describe("settings", () => {
       .toEqual({ password: "Another-password-456!" }));
     await userEvent.click(within(row).getByRole("button", { name: "Token" }));
     await userEvent.click(await within(row).findByRole("button", { name: "吊销 claude MCP" }));
+    await userEvent.click(within(row).getByRole("button", { name: "确认吊销" }));
     await waitFor(() => expect(calls.find((c) => c.method === "DELETE" && c.path === "/v1/admin/users/u2/tokens/t1")).toBeTruthy());
+  });
+
+  test("revoking a token asks first, and an administrator cannot lock themselves out from their own row", async () => {
+    const calls = start({ "GET /admin/users": adminUsers,
+      "GET /admin/users/u2/tokens": [{ id: "t1", label: "claude MCP", scopes: ["read"], expires: 1_900_000_000, last_used: null }],
+      "DELETE /admin/users/u2/tokens/t1": { ok: true } });
+    const dialog = await openSetting(/用户管理/);
+    const own = await within(dialog).findByRole("group", { name: "fixture-owner" });
+    expect(within(own).getByRole("button", { name: "停用" })).toBeDisabled();
+    expect(within(own).getByRole("button", { name: "取消管理员" })).toBeDisabled();
+    const row = within(dialog).getByRole("group", { name: "dev1" });
+    await userEvent.click(within(row).getByRole("button", { name: "Token" }));
+    await userEvent.click(await within(row).findByRole("button", { name: "吊销 claude MCP" }));
+    expect(calls.some((c) => c.method === "DELETE")).toBe(false);
+    await userEvent.click(within(row).getByRole("button", { name: "确认吊销" }));
+    await waitFor(() => expect(calls.some((c) => c.method === "DELETE" && c.path === "/v1/admin/users/u2/tokens/t1")).toBe(true));
   });
 
   test("a member sees neither user management nor anything that needs the admin scope", async () => {

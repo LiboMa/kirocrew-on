@@ -21,7 +21,7 @@ import { useSessionActions } from "@/features/sessions/useSessionActions";
 import { canContinue, canDelete, canRecover, canStop, closeAction, crewEntryReason, deleteReason, statusText } from "@/lib/session";
 
 export function SessionView({ id }: { id: string }) {
-  const { teams, workflows, workers, me, open } = useConsole();
+  const { allTeams, workflows, workers, me, open } = useConsole();
   const query = useRun(id);
   const { events, stream } = useRunEvents(id);
   const run = query.data;
@@ -43,7 +43,8 @@ export function SessionView({ id }: { id: string }) {
   // A shared environment's native login covers its whole Gateway (K03): only its boundary owner may open it (D28).
   const crewReason = crewEntryReason(run) ||
     (environment?.scope === "shared" && environment.owner_id !== me.id
-      ? "共享执行环境不开放原生 KiroCrew 入口；可在本页「KiroCrew 会话」查看。" : "");
+      ? "共享执行环境不开放原生 KiroCrew 入口；可在本页「KiroCrew 会话」查看。"
+      : run.permissions?.native === false ? "原生 KiroCrew 入口不因管理员身份开放；可在本页「KiroCrew 会话」查看。" : "");
   const close = closeAction(run);
   const design = run.purpose === "workflow_design";
   const percent = run.progress.total ? (100 * run.progress.accepted) / run.progress.total : 0;
@@ -54,7 +55,7 @@ export function SessionView({ id }: { id: string }) {
         <div className="flex flex-wrap items-start gap-4">
           <div className="min-w-0 flex-1 space-y-1.5">
             <p className="text-[11px] font-semibold tracking-[0.16em] text-muted-foreground uppercase">
-              {teams.find((t) => t.id === run.team_id)?.name ?? "Personal"} / {flowName}
+              {run.team_id ? allTeams.find((t) => t.id === run.team_id)?.name ?? "Team" : "Personal"} / {flowName}
             </p>
             <h1 id="run-title" className="text-xl leading-snug font-bold break-words sm:text-2xl" title={run.input}>
               {title.length > 125 ? title.slice(0, 125) + "…" : title}

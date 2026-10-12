@@ -68,6 +68,37 @@ describe("console shell", () => {
     expect(searches).toContain("?all=1");
   });
 
+  test("an administrator signed in before the admin scope existed is asked to sign in again", async () => {
+    setToken("oct_fixture");
+    mockApi(workspaceRoutes([], { "GET /me": { id: "u1", username: "admin", admin: 1, scopes: ["read", "execute", "manage"] } }));
+    render(<App />);
+    expect(await screen.findByText(/重新登录后才能使用管理功能/)).toBeInTheDocument();
+  });
+
+  test("switching to all Sessions keeps the console on screen while the list loads", async () => {
+    let release: (value: unknown) => void = () => {};
+    setToken("oct_fixture");
+    mockApi({ ...workspaceRoutes([]), "GET /runs": (_b: unknown, url: URL) => url.search === "?all=1"
+      ? new Promise((resolve) => { release = resolve; }).then(() => new Response("[]", { headers: { "Content-Type": "application/json" } }))
+      : [] });
+    render(<App />);
+    await userEvent.click(await screen.findByRole("button", { name: "全部会话" }));
+    expect(screen.queryByText("正在加载开发空间…")).toBeNull();
+    expect(screen.getByRole("navigation", { name: "会话列表" })).toBeInTheDocument();
+    release(null);
+  });
+
+  test("a link to someone else's Session opens it for an administrator", async () => {
+    const theirs = makeRun({ id: "run-z", name: "别人的会话", owner_id: "u2" });
+    setToken("oct_fixture");
+    window.history.replaceState(null, "", "/?run=run-z");
+    mockApi({ ...workspaceRoutes([]), "GET /runs/run-z": theirs, "GET /runs/run-z/events": [],
+      "GET /runs": (_b: unknown, url: URL) => (url.search === "?all=1" ? [theirs] : []) });
+    render(<App />);
+    expect(await screen.findByRole("heading", { name: "别人的会话" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "全部会话" })).toHaveAttribute("aria-pressed", "true");
+  });
+
   test("members have no all-sessions switch", async () => {
     setToken("oct_fixture");
     mockApi(workspaceRoutes([], { "GET /me": { id: "u2", username: "dev1", admin: 0, scopes: ["read", "execute", "manage"] } }));

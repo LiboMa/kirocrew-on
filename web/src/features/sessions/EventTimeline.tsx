@@ -2,7 +2,7 @@ import { useMemo, useState } from "react";
 import type { StreamState } from "@/api/events";
 import type { RunEvent } from "@/api/types";
 import { Input } from "@/components/ui/input";
-import { EVENT_LABELS, STATES, formatTime } from "@/lib/labels";
+import { STATES, eventLabel, formatTime } from "@/lib/labels";
 import { cn } from "@/lib/utils";
 
 const STREAM: Record<StreamState, [string, string]> = {
@@ -22,7 +22,7 @@ export function EventTimeline({ events, stream }: { events: RunEvent[]; stream: 
   const shown = useMemo(() => {
     const term = query.trim().toLowerCase();
     return [...events].reverse().filter((event) => !term ||
-      [event.kind, EVENT_LABELS[event.kind], detail(event)].some((text) => text?.toLowerCase().includes(term))).slice(0, 200);
+      [event.kind, eventLabel(event), detail(event)].some((text) => text?.toLowerCase().includes(term))).slice(0, 200);
   }, [events, query]);
   const [label, dot] = STREAM[stream];
   return (
@@ -42,7 +42,7 @@ export function EventTimeline({ events, stream }: { events: RunEvent[]; stream: 
           <li key={event.id} className="relative border-l py-2 pl-4 text-xs">
             <span className="absolute top-3 -left-[3.5px] size-1.5 rounded-full bg-primary/60" aria-hidden />
             <time className="font-mono text-[11px] text-muted-foreground">{formatTime(event.created)}</time>
-            <strong className="ml-2 font-medium">{EVENT_LABELS[event.kind] ?? event.kind}</strong>
+            <strong className="ml-2 font-medium">{eventLabel(event)}</strong>
             {detail(event) && <p className="mt-0.5 break-words text-muted-foreground">{detail(event)}</p>}
           </li>
         ))}

@@ -35,6 +35,18 @@ export const EVENT_LABELS: Record<string, string> = {
   "session.close": "已备份并关闭", "session.delete": "原生会话已删除，源码保留",
 };
 
+const ADMIN_VERBS: Record<string, string> = {
+  stop: "停止", close: "关闭", delete: "删除", reopen: "重新打开", continue: "续作", recover: "请求诊断", "assign-worker": "分配 Worker",
+};
+
+/** An event's title; an administrator acting on someone else's Session is named (spec §3.4). */
+export function eventLabel(event: { kind: string; payload: Record<string, unknown> }): string {
+  const by = event.payload.by as { username?: string } | undefined;
+  const verb = ADMIN_VERBS[event.kind.replace(/^command\./, "")];
+  if (event.payload.oversight && by?.username && verb) return `由管理员 ${by.username} ${verb}`;
+  return EVENT_LABELS[event.kind] ?? event.kind;
+}
+
 export const RECOVERY_STATES: Record<string, string> = {
   pending: "等待协调者", running: "诊断中", waiting_approval: "诊断等待权限", dispatch_unknown: "派发待核实",
   applied: "已安排修复", blocked: "需要补充条件", cancelled: "已取消",

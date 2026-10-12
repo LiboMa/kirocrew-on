@@ -29,7 +29,10 @@ export function UsersDialog() {
 }
 
 function UserRow({ user }: { user: AdminUser }) {
+  const { me } = useConsole();
+  const self = user.id === me.id;   // no locking oneself out from one's own row
   const client = useQueryClient();
+  const [revoking, setRevoking] = useState<string | null>(null);
   const [pending, setPending] = useState<Pending>(null);
   const [reset, setReset] = useState<{ password: string; confirm: string; error: string } | null>(null);
   const [showTokens, setShowTokens] = useState(false);
@@ -67,11 +70,11 @@ function UserRow({ user }: { user: AdminUser }) {
           {" · "}{user.tokens} 个有效 Token
         </small>
         <span className="ml-auto flex flex-wrap gap-1.5">
-          <Button type="button" size="sm" variant="outline"
+          <Button type="button" size="sm" variant="outline" disabled={self && user.active} title={self ? "不能停用自己" : undefined}
             onClick={() => setPending(user.active ? { action: "deactivate", label: "停用" } : { action: "activate", label: "恢复" })}>
             {user.active ? "停用" : "恢复"}
           </Button>
-          <Button type="button" size="sm" variant="outline"
+          <Button type="button" size="sm" variant="outline" disabled={self && user.admin} title={self ? "不能取消自己的管理员" : undefined}
             onClick={() => setPending(user.admin ? { action: "demote", label: "取消管理员" } : { action: "promote", label: "设为管理员" })}>
             {user.admin ? "取消管理员" : "设为管理员"}
           </Button>
@@ -109,9 +112,19 @@ function UserRow({ user }: { user: AdminUser }) {
             <li key={token.id} className="flex items-center gap-2">
               <span className="flex-1">{token.label} · {token.scopes.join(" · ")} · {new Date(token.expires * 1000).toLocaleDateString()} 到期 ·{" "}
                 {token.last_used ? "最近使用 " + new Date(token.last_used * 1000).toLocaleString() : "从未使用"}</span>
-              <Button type="button" size="sm" variant="ghost" aria-label={"吊销 " + token.label}
-                onClick={() => void run(() => api(`/admin/users/${encodeURIComponent(user.id)}/tokens/${encodeURIComponent(token.id)}`,
-                  "DELETE"), "已吊销。")}>吊销</Button>
+              {revoking === token.id ? (
+                <>
+                  <Button type="button" size="sm" variant="destructive" onClick={() => {
+                    setRevoking(null);
+                    void run(() => api(`/admin/users/${encodeURIComponent(user.id)}/tokens/${encodeURIComponent(token.id)}`,
+                      "DELETE"), "已吊销。");
+                  }}>确认吊销</Button>
+                  <Button type="button" size="sm" variant="ghost" onClick={() => setRevoking(null)}>取消</Button>
+                </>
+              ) : (
+                <Button type="button" size="sm" variant="ghost" aria-label={"吊销 " + token.label}
+                  onClick={() => setRevoking(token.id)}>吊销</Button>
+              )}
             </li>
           ))}
           {tokens.data && !tokens.data.length && <li className="text-muted-foreground">没有有效的 Token。</li>}

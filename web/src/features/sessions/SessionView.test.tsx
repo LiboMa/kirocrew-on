@@ -92,6 +92,47 @@ describe("session detail", () => {
     expect(item).toHaveTextContent("只有 Team owner 可以删除他人创建的会话");
   });
 
+  test("an administrator assigns a Worker from the space of the Session's owner, not their own", async () => {
+    const waiting = makeRun({ id: "run-x", status: "waiting_worker", version: 1, owner_id: "u2" });
+    open(waiting, {
+      "GET /workers": [
+        { id: "w-admin", name: "admin-own", owner_id: "u1", team_id: null, enabled: true, scope: "dedicated", capabilities: {} },
+        { id: "w-dev", name: "dev-own", owner_id: "u2", team_id: null, enabled: true, scope: "dedicated", capabilities: {} },
+      ],
+      "POST /runs/run-x/assign-worker": { id: "run-x", version: 2 },
+    });
+    await userEvent.click(await screen.findByRole("button", { name: "分配 Worker" }));
+    const dialog = await screen.findByRole("dialog");
+    expect(dialog).toHaveTextContent("dev-own");
+    expect(dialog).not.toHaveTextContent("admin-own");
+  });
+
+  test("an administrator watching someone else's Session is told why the native entry stays closed", async () => {
+    const run = makeRun({ id: "run-o2", status: "running", worker_id: "w1", native_parent: "octopus-run-o2", version: 1,
+      owner_id: "u2", permissions: { operate: true, delete: true, native: false } } as Partial<Run>);
+    open(run, { "GET /workers": [{ id: "w1", name: "w1", owner_id: null, team_id: "t9", enabled: true, scope: "dedicated",
+      capabilities: { crew_entry: true } }], "GET /runs/run-o2/observe": { native_parent: "octopus-run-o2", title: null,
+      running: true, total: 0, has_more: false, next_before: null, context_pct: null, messages: [] } });
+    expect(await screen.findByText("原生 KiroCrew 入口不因管理员身份开放；可在本页「KiroCrew 会话」查看。",
+      { selector: "#crew-entry-hint" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /在 KiroCrew 中打开/ })).toBeDisabled();
+  });
+
+  test("the timeline names the administrator who acted on someone else's Session", async () => {
+    const run = makeRun({ id: "run-t2", status: "stopped", version: 2 });
+    const event = { id: 1, run_id: "run-t2", kind: "command.stop", created: 1_790_000_000,
+      payload: { actor: "u1", version: 2, oversight: true, by: { id: "u1", username: "alice" } } };
+    open(run, { "STREAM /runs/run-t2/events": () => new Response(`data: ${JSON.stringify(event)}\n\n`) });
+    expect(await screen.findByText("由管理员 alice 停止")).toBeInTheDocument();
+  });
+
+  test("a Team Session the administrator is not in still shows the Team's name", async () => {
+    open(makeRun({ id: "run-h", team_id: "team-x", name: "别人的 Team 会话" }), {
+      "GET /teams": [{ id: "team-1", name: "平台组", role: "owner", created: 1, members: [] },
+        { id: "team-x", name: "Hardware-Dev", role: null, created: 2, members: [] }] });
+    expect(await screen.findByText(/Hardware-Dev \/ /)).toBeInTheDocument();
+  });
+
   test("a Session waiting for a Worker can be assigned one from its space", async () => {
     const waiting = makeRun({ id: "run-w", status: "waiting_worker", version: 1 });
     const calls = open(waiting, {

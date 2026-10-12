@@ -186,6 +186,7 @@ API 访问日志不记录 token、请求体或查询串；Engine 只记录异常
 - **scope**：`read`（查看）、`execute`（会话操作）、`manage`（自己的配置：工作流、本人 Token 与密码、作为 Team owner 管理本 Team）、
   `admin`（平台管理：用户、Team 创建、执行环境、`/v1/admin/*`，以及查看与操作他人会话）。管理员网页登录自动带 `admin`；
   **已签发、不含 `admin` 的长期 Token（如 `claude MCP`）调管理接口返回 403**，查看与提交本人会话不受影响，需要时以管理员重新签发。
+  **部署后管理员需重新登录一次**：此前的网页登录不含 `admin`，控制台顶部会提示「重新登录后才能使用管理功能」。
 - **用户**：控制台「设置 → 用户管理」停用 / 恢复、设为 / 取消管理员、重置密码、查看与吊销 Token；停用与重置立即吊销该用户全部 Token，
   会话照常执行；至少保留一位有效管理员，Team 唯一的有效 owner 不能被停用。账户菜单「修改密码」后，本人其他登录与 Token 失效。
   API：`POST /v1/me/password`、`POST /v1/users/<id>/password|active|admin`、`GET /v1/admin/users`、`GET|DELETE /v1/admin/users/<id>/tokens[/<tid>]`。

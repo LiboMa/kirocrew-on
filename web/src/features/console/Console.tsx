@@ -8,6 +8,7 @@ import { EmptyState } from "@/features/console/EmptyState";
 import { Sidebar } from "@/features/console/Sidebar";
 import { TopBar } from "@/features/console/TopBar";
 import { SessionView } from "@/features/sessions/SessionView";
+import { elevated } from "@/lib/access";
 
 const runFromUrl = () => new URLSearchParams(window.location.search).get("run");
 
@@ -35,15 +36,19 @@ export function Console() {
 
   // A selected Session decides the space (like the classic console); a Session that is no longer readable is dropped.
   useEffect(() => {
-    if (!selected || workspace.loading) return;
+    if (!selected || workspace.loading || workspace.refreshing) return;
     const run = workspace.runs.find((r) => r.id === selected);
+    if (!run && me.data && elevated(me.data) && !allSessions) {
+      setAllSessions(true);   // an administrator's link to someone else's Session: look in every Session first
+      return;
+    }
     if (!run) {
       select(null);
       toast.warning("该 Session 已不可访问。");
       return;
     }
     setSpaceState(run.team_id ?? "");
-  }, [selected, workspace.runs, workspace.loading, select]);
+  }, [selected, workspace.runs, workspace.loading, workspace.refreshing, select, me.data, allSessions]);
 
   useEffect(() => {
     if (space && memberTeams.length && !memberTeams.some((t) => t.id === space)) setSpaceState("");
