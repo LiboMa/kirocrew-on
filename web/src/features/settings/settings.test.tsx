@@ -398,4 +398,71 @@ describe("settings", () => {
     await userEvent.click(within(dialog).getByRole("button", { name: "停用" }));
     await waitFor(() => expect(calls.find((c) => c.path === "/v1/workers/w1/enabled")?.body).toEqual({ enabled: false }));
   });
+  const oneWorker = { "GET /workers": [{ id: "w1", name: "personal", owner_id: "u1", team_id: null, enabled: true, scope: "shared",
+    spaces: [{ user_id: "u1" }], capabilities: { isolation: "trusted-local" } }] };
+
+  test("an administrator renames a Worker and updates its connection", async () => {
+    const calls = start({ ...oneWorker, "PATCH /workers/w1": { id: "w1", name: "共享-1" },
+      "POST /workers/w1/connection": { id: "w1", capabilities: {} } });
+    const dialog = await openSetting(/执行环境/);
+    const row = within(dialog).getByRole("group", { name: "personal" });
+    await userEvent.click(within(row).getByRole("button", { name: "改名" }));
+    const title = within(row).getByLabelText("Worker 名称");
+    await userEvent.clear(title);
+    await userEvent.type(title, "共享-1");
+    await userEvent.click(within(row).getByRole("button", { name: "保存名称" }));
+    await waitFor(() => expect(calls.find((c) => c.method === "PATCH" && c.path === "/v1/workers/w1")?.body).toEqual({ name: "共享-1" }));
+    await userEvent.click(within(row).getByRole("button", { name: "更新连接" }));
+    expect(within(row).getByLabelText("新的 Worker Token")).toHaveAttribute("type", "password");
+    await userEvent.type(within(row).getByLabelText("新的 Worker URL"), "https://10.0.0.9:8943");
+    await userEvent.type(within(row).getByLabelText("新的 Worker Token"), "t".repeat(40));
+    await userEvent.click(within(row).getByRole("button", { name: "保存连接" }));
+    await waitFor(() => expect(calls.find((c) => c.path === "/v1/workers/w1/connection")?.body)
+      .toEqual({ connection: { url: "https://10.0.0.9:8943", token: "t".repeat(40) } }));
+  });
+
+  test("retiring a Worker asks first and shows why the server refuses", async () => {
+    const calls = start({ ...oneWorker, "POST /workers/w1/retire": () => new Response(
+      JSON.stringify({ error: "仍是 Team「平台组」的执行环境：先为该 Team 更换执行环境", code: "in_use" }), { status: 409 }) });
+    const dialog = await openSetting(/执行环境/);
+    const row = within(dialog).getByRole("group", { name: "personal" });
+    await userEvent.click(within(row).getByRole("button", { name: "退役" }));
+    expect(within(row).getByText(/退役后不再出现在列表与选择器中/)).toBeInTheDocument();
+    expect(calls.find((c) => c.path === "/v1/workers/w1/retire")).toBeUndefined();
+    await userEvent.click(within(row).getByRole("button", { name: "确认退役" }));
+    await waitFor(() => expect(calls.find((c) => c.path === "/v1/workers/w1/retire")?.body).toEqual({}));
+    expect(await screen.findByText(/仍是 Team「平台组」的执行环境/)).toBeInTheDocument();
+  });
+
+  test("a member refreshes models but cannot rename, reconnect or retire a Worker", async () => {
+    start({ ...oneWorker, "GET /me": { id: "u1", username: "fixture-owner", admin: 0, scopes: ["read", "execute", "manage"] } });
+    const dialog = await openSetting(/执行环境/);
+    const row = within(dialog).getByRole("group", { name: "personal" });
+    expect(within(row).getByRole("button", { name: "刷新模型" })).toBeInTheDocument();
+    for (const name of ["改名", "更新连接", "退役"]) expect(within(row).queryByRole("button", { name })).not.toBeInTheDocument();
+  });
+
+  test("an administrator creates a user on the shared environment in user management", async () => {
+    const calls = start({ ...oneWorker, "GET /admin/users": adminUsers, "POST /users": { id: "u3", username: "carol" } });
+    const dialog = await openSetting(/用户管理/);
+    await userEvent.type(within(dialog).getByLabelText("用户名"), "carol");
+    await userEvent.type(within(dialog).getByLabelText("初始密码（至少 12 位）"), "Carol-password-123");
+    expect(within(dialog).getByLabelText("个人空间的执行环境")).toHaveValue("w1");
+    await userEvent.click(within(dialog).getByRole("button", { name: "创建用户" }));
+    await waitFor(() => expect(calls.find((c) => c.method === "POST" && c.path === "/v1/users")?.body)
+      .toEqual({ username: "carol", password: "Carol-password-123", worker_id: "w1" }));
+  });
+
+  test("user management gives a user's personal space the shared environment, and the Team dialog no longer creates users", async () => {
+    const calls = start({ ...oneWorker, "GET /admin/users": adminUsers, "POST /workers/w1/spaces": { ok: true } });
+    const dialog = await openSetting(/用户管理/);
+    const row = await within(dialog).findByRole("group", { name: "dev1" });
+    expect(row).toHaveTextContent("个人空间：未分配");
+    await userEvent.click(within(row).getByRole("button", { name: "分配共享环境" }));
+    await waitFor(() => expect(calls.find((c) => c.path === "/v1/workers/w1/spaces")?.body).toEqual({ user_id: "u2" }));
+    expect(within(dialog).getByRole("group", { name: "fixture-owner" })).toHaveTextContent("个人空间：共享环境 · personal");
+    await userEvent.keyboard("{Escape}");
+    const team = await openSetting(/团队与成员/);
+    expect(within(team).queryByRole("button", { name: "创建用户" })).not.toBeInTheDocument();
+  });
 });

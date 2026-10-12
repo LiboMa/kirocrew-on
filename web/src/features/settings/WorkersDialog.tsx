@@ -84,6 +84,7 @@ export function WorkersDialog() {
               <Button type="button" size="sm" variant="outline" data-dedicate-worker={w.id}
                 onClick={act(() => api("/workers/" + w.id + "/dedicate", "POST", {}), "已改回该 Team 的专属环境。")}>改回专属环境</Button>
             )}
+            {!!me.admin && <WorkerTools worker={w} act={act} />}
             {!!me.admin && (
               <Button type="button" size="sm" variant="outline" data-toggle-worker={w.id}
                 onClick={act(() => api("/workers/" + w.id + "/enabled", "POST", { enabled: !w.enabled }), w.enabled ? "已停用。" : "已启用。")}>
@@ -167,5 +168,63 @@ export function WorkersDialog() {
         </section>
       ) : <p className="text-sm text-muted-foreground">执行环境由管理员登记和分配。</p>}
     </FormDialog>
+  );
+}
+
+type Tool = "name" | "connection" | "retire" | null;
+
+/** Administrator tools on one Worker (spec §6.1): rename, a new connection after a host is replaced, retirement. */
+function WorkerTools({ worker, act }: { worker: Worker; act: (action: () => Promise<unknown>, done: string) => () => Promise<unknown> }) {
+  const [open, setOpen] = useState<Tool>(null);
+  const [title, setTitle] = useState(worker.name);
+  const [connection, setConnection] = useState({ url: "", token: "" });
+  const base = "/workers/" + encodeURIComponent(worker.id);
+  const toggle = (tool: Tool) => setOpen(open === tool ? null : tool);
+  return (
+    <>
+      <Button type="button" size="sm" variant="outline" onClick={() => toggle("name")}>改名</Button>
+      <Button type="button" size="sm" variant="outline" onClick={() => toggle("connection")}>更新连接</Button>
+      <Button type="button" size="sm" variant="outline" onClick={() => toggle("retire")}>退役</Button>
+      {open === "name" && (
+        <div className="flex w-full items-end gap-2">
+          <div className="flex-1 space-y-1">
+            <Label htmlFor={"worker-title-" + worker.id} className="text-xs">Worker 名称</Label>
+            <Input id={"worker-title-" + worker.id} value={title} maxLength={80} onChange={(e) => setTitle(e.target.value)} />
+          </div>
+          <Button type="button" size="sm" disabled={!title.trim()} onClick={() => void act(async () => {
+            await api(base, "PATCH", { name: title });
+            setOpen(null);
+          }, "Worker 已改名。")()}>保存名称</Button>
+        </div>
+      )}
+      {open === "connection" && (
+        <div className="w-full space-y-2 rounded-md border px-3 py-2">
+          <p className="text-xs text-muted-foreground">用于主机替换或 Token 轮换；新地址按登记时的规则重新核验。执行边界变化（重新部署的主机）后，该环境才可分配给其他 Team。</p>
+          <div className="grid gap-2 sm:grid-cols-2">
+            <div className="space-y-1">
+              <Label htmlFor={"worker-url-" + worker.id} className="text-xs">新的 Worker URL</Label>
+              <Input id={"worker-url-" + worker.id} value={connection.url} onChange={(e) => setConnection({ ...connection, url: e.target.value })} />
+            </div>
+            <div className="space-y-1">
+              <Label htmlFor={"worker-token-" + worker.id} className="text-xs">新的 Worker Token</Label>
+              <Input id={"worker-token-" + worker.id} type="password" autoComplete="off" minLength={32} value={connection.token}
+                onChange={(e) => setConnection({ ...connection, token: e.target.value })} />
+            </div>
+          </div>
+          <Button type="button" size="sm" disabled={!connection.url || !connection.token} onClick={() => void act(async () => {
+            await api(base + "/connection", "POST", { connection });
+            setConnection({ url: "", token: "" });
+            setOpen(null);
+          }, "连接已更新。")()}>保存连接</Button>
+        </div>
+      )}
+      {open === "retire" && (
+        <div role="alert" className="flex w-full flex-wrap items-center gap-2 rounded-md border border-warning/40 bg-warning/5 px-3 py-2 text-xs">
+          <span className="flex-1">退役后不再出现在列表与选择器中，历史会话保留引用；仍是 Team 的执行环境或有进行中的会话时会被拒绝，它服务的个人空间会失去这个环境。</span>
+          <Button type="button" size="sm" variant="destructive" onClick={() => { setOpen(null); void act(() => api(base + "/retire", "POST", {}), "已退役。")(); }}>确认退役</Button>
+          <Button type="button" size="sm" variant="ghost" onClick={() => setOpen(null)}>取消</Button>
+        </div>
+      )}
+    </>
   );
 }
