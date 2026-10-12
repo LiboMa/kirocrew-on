@@ -16,7 +16,7 @@ from urllib.parse import parse_qs, unquote, urlsplit
 
 from . import __version__
 from .db import dumps, uid
-from .domain import Service, name, team_environment
+from .domain import Service, audit, name, team_environment
 from .security import Error, authenticate, check_password, create_user, elevated, issue_token, require, scope
 from .transport import validate_worker, worker_request
 from .schema import openapi
@@ -268,7 +268,6 @@ def server(database, port=8918, host="127.0.0.1", allowed_hosts=(), origin_secre
                         if method == "POST":
                             require(elevated(actor), "需要平台管理员", 403, "forbidden")
                             created = create_user(db, body.get("username"), body.get("password"), body.get("admin", False))
-                            from .domain import audit
                             audit(db, actor, "user.create", "user", created["id"], {"admin": created["admin"]})
                             if body.get("worker_id"):
                                 # The new user's personal space runs on a shared execution environment (D28).
@@ -370,6 +369,12 @@ def server(database, port=8918, host="127.0.0.1", allowed_hosts=(), origin_secre
                 if path == "/v1/admin/environments":
                     require(method == "GET", "Method not allowed", 405)
                     return self.respond(service.environments(actor))
+                if len(segments) == 3 and segments[:2] == ["v1", "workers"]:
+                    require(method == "PATCH", "Method not allowed", 405)
+                    return self.respond(service.rename_worker(actor, segments[2], body))
+                if len(segments) == 4 and segments[:2] == ["v1", "workers"] and segments[3] == "retire":
+                    require(method == "POST", "Method not allowed", 405)
+                    return self.respond(service.retire_worker(actor, segments[2]))
                 if len(segments) == 4 and segments[:2] == ["v1", "workers"] and segments[3] == "dedicate":
                     require(method == "POST", "Method not allowed", 405)
                     return self.respond(service.dedicate_worker(actor, segments[2]))
@@ -386,8 +391,7 @@ def server(database, port=8918, host="127.0.0.1", allowed_hosts=(), origin_secre
                     config = body.get("connection")
                     health = validate_worker(config)
                     with database.transaction() as db:
-                        row = db.execute("SELECT * FROM workers WHERE id=?", (segments[2],)).fetchone()
-                        require(row is not None, "Worker 不存在", 404, "not_found")
+                        row = Service._live_worker(db, segments[2])
                         personal = row["scope"] == "dedicated" and not row["team_id"]
                         require(health.get("isolation") == "dedicated" or personal or row["scope"] == "shared",
                                 "Team 与空闲执行环境须为专属隔离（dedicated）", 409, "isolation_required")
@@ -408,23 +412,22 @@ def server(database, port=8918, host="127.0.0.1", allowed_hosts=(), origin_secre
                         # A new boundary is a redeployed host: what an earlier Team left there is gone (P2).
                         db.execute("UPDATE workers SET config=?, last_team=CASE WHEN ? THEN NULL ELSE last_team END "
                                    "WHERE id=?", (dumps({**config, "capabilities": health}), int(moved), row["id"]))
+                        audit(db, actor, "worker.connection", "worker", row["id"], {"boundary_changed": moved})
                     return self.respond({"id": row["id"], "capabilities": health})
                 if len(segments) == 4 and segments[:2] == ["v1", "workers"] and segments[3] == "enabled":
                     require(method == "POST" and elevated(actor), "需要平台管理员", 403, "forbidden")
                     require(isinstance(body.get("enabled"), bool), "enabled 必须为布尔值")
                     with database.transaction() as db:
-                        require(db.execute("SELECT 1 FROM workers WHERE id=?", (segments[2],)).fetchone(),
-                                "Worker 不存在", 404, "not_found")
+                        Service._live_worker(db, segments[2])
                         db.execute("UPDATE workers SET enabled=? WHERE id=?", (int(body["enabled"]), segments[2]))
+                        audit(db, actor, "worker.enabled", "worker", segments[2], {"enabled": body["enabled"]})
                     return self.respond({"ok": True, "enabled": body["enabled"]})
                 if len(segments) == 4 and segments[:2] == ["v1", "workers"] and segments[3] == "capabilities":
                     require(method == "GET", "Method not allowed", 405)
+                    # Everyone the environment serves may refresh its model catalogue (spec §6.1), shared ones included.
+                    require(any(w["id"] == segments[2] for w in service.workers(actor)), "Worker 不存在或无权限", 404, "not_found")
                     with database.read() as db:
-                        row = db.execute("SELECT * FROM workers WHERE id=?", (segments[2],)).fetchone()
-                        require(row and (elevated(actor) or row["owner_id"] == actor["id"] or db.execute(
-                            "SELECT 1 FROM members WHERE user_id=? AND team_id=?", (actor["id"], row["team_id"])).fetchone()),
-                                "Worker 不存在或无权限", 404, "not_found")
-                        config = json.loads(row["config"])
+                        config = json.loads(db.execute("SELECT config FROM workers WHERE id=?", (segments[2],)).fetchone()["config"])
                     health = worker_request(config, "/health")
                     require(health.get("boundary") == config["capabilities"]["boundary"],
                             "Worker 执行边界发生变化，请由管理员核查", 409, "worker_changed")
@@ -475,6 +478,8 @@ def server(database, port=8918, host="127.0.0.1", allowed_hosts=(), origin_secre
                         db.execute("INSERT INTO workers(id,name,owner_id,team_id,config,scope) VALUES(?,?,?,?,?,?)",
                                    (wid, name(body.get("name")), actor["id"] if spare else user, team, dumps(config),
                                     "spare" if spare else "dedicated"))
+                        audit(db, actor, "worker.register", "worker", wid, {"scope": "spare" if spare else "dedicated",
+                                                                            "team_id": team, "owner_id": None if spare else user})
                     return self.respond({"id": wid, "name": body["name"], "scope": "spare" if spare else "dedicated",
                                          "capabilities": health}, 201)
                 if path == "/v1/runs":

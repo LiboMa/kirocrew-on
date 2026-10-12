@@ -228,7 +228,7 @@ class Service:
         with self.db.read() as db:
             teams = {r["team_id"] for r in db.execute("SELECT team_id FROM members WHERE user_id=?", (actor["id"],))}
             result = []
-            for row in db.execute("SELECT * FROM workers").fetchall():
+            for row in db.execute("SELECT * FROM workers WHERE retired=0").fetchall():
                 spaces = [{"team_id": s["team_id"]} if s["team_id"] else {"user_id": s["user_id"]} for s in db.execute(
                     "SELECT team_id,user_id FROM worker_spaces WHERE worker_id=? ORDER BY rowid", (row["id"],))]
                 if not elevated(actor):
@@ -257,7 +257,7 @@ class Service:
                 spaces.setdefault(row["worker_id"], []).append(
                     {"team_id": row["team_id"], "name": teams.get(row["team_id"])} if row["team_id"]
                     else {"user_id": row["user_id"], "username": users.get(row["user_id"])})
-            rows = db.execute("SELECT * FROM workers ORDER BY rowid").fetchall()
+            rows = db.execute("SELECT * FROM workers WHERE retired=0 ORDER BY rowid").fetchall()
         configs = [json.loads(row["config"]) for row in rows]
         with ThreadPoolExecutor(max_workers=max(1, min(8, len(rows)))) as pool:
             health = list(pool.map(_probe, configs))
@@ -268,13 +268,47 @@ class Service:
                  "active_runs": active.get(row["id"], 0), "health": probe}
                 for row, config, probe in zip(rows, configs, health)]
 
+    @staticmethod
+    def _live_worker(db, wid):
+        row = db.execute("SELECT * FROM workers WHERE id=?", (wid,)).fetchone()
+        require(row is not None, "Worker 不存在", 404, "not_found")
+        require(not row["retired"], "执行环境已退役", 409, "retired")
+        return row
+
+    def rename_worker(self, actor, wid, body):
+        require(elevated(actor), "需要平台管理员", 403, "forbidden")
+        with self.db.transaction() as db:
+            row = self._live_worker(db, wid)
+            title = name(body.get("name"))
+            db.execute("UPDATE workers SET name=? WHERE id=?", (title, wid))
+            audit(db, actor, "worker.rename", "worker", wid, {"from": row["name"], "to": title})
+        return {"id": wid, "name": title}
+
+    def retire_worker(self, actor, wid):
+        """Retire an execution environment (spec §6.1, P6): no Team may still use it and nothing may be in progress on
+        it; the personal spaces it served lose it; historical Sessions keep their reference."""
+        require(elevated(actor), "需要平台管理员", 403, "forbidden")
+        with self.db.transaction() as db:
+            row = self._live_worker(db, wid)
+            team = row["team_id"] or (db.execute("SELECT team_id FROM worker_spaces WHERE worker_id=? AND team_id IS NOT NULL",
+                                                 (wid,)).fetchone() or [None])[0]
+            if team:
+                title = db.execute("SELECT name FROM teams WHERE id=?", (team,)).fetchone()
+                raise Error(409, "in_use", f"仍是 Team「{title['name'] if title else team}」的执行环境：先为该 Team 更换执行环境")
+            busy = db.execute("SELECT count(*) FROM runs WHERE worker_id=? AND lifecycle='open' AND status NOT IN "
+                              f"({','.join('?' * len(SETTLED))})", (wid, *SETTLED)).fetchone()[0]
+            require(busy == 0, f"还有 {busy} 个进行中的会话：先等待结束或停止", 409, "busy")
+            db.execute("DELETE FROM worker_spaces WHERE worker_id=?", (wid,))
+            db.execute("UPDATE workers SET retired=1, enabled=0 WHERE id=?", (wid,))
+            audit(db, actor, "worker.retire", "worker", wid)
+        return {"id": wid, "retired": True}
+
     def dedicate_worker(self, actor, wid):
         """A shared Worker host serving exactly one Team becomes that Team's dedicated environment again (D30): every
         member then opens its native KiroCrew entry, as in a personal space."""
         require(elevated(actor), "需要平台管理员", 403, "forbidden")
         with self.db.transaction() as db:
-            row = db.execute("SELECT * FROM workers WHERE id=?", (wid,)).fetchone()
-            require(row is not None, "Worker 不存在", 404, "not_found")
+            row = self._live_worker(db, wid)
             spaces = db.execute("SELECT team_id,user_id FROM worker_spaces WHERE worker_id=?", (wid,)).fetchall()
             require(row["scope"] == "shared" and len(spaces) == 1 and spaces[0]["team_id"],
                     "只有只服务一个 Team 的共享环境可以改回专属环境", 409, "invalid_state")
@@ -285,6 +319,7 @@ class Service:
             team = spaces[0]["team_id"]
             db.execute("DELETE FROM worker_spaces WHERE worker_id=?", (wid,))
             db.execute("UPDATE workers SET scope='dedicated', team_id=?, owner_id=NULL WHERE id=?", (team, wid))
+            audit(db, actor, "worker.dedicate", "worker", wid, {"team_id": team})
         return {"id": wid, "scope": "dedicated", "team_id": team}
 
     def share_worker(self, actor, wid, body):
@@ -293,8 +328,7 @@ class Service:
         require(body.get("confirm") is True, "设为共享环境需要确认：环境内所有会话的 Agent 以同一系统账号运行，"
                 "能互相读取源码、工具登录与记忆", 400, "confirmation_required")
         with self.db.transaction() as db:
-            row = db.execute("SELECT * FROM workers WHERE id=?", (wid,)).fetchone()
-            require(row is not None, "Worker 不存在", 404, "not_found")
+            row = self._live_worker(db, wid)
             require(row["scope"] == "dedicated", "只有专属 Worker 可以设为共享环境", 409, "invalid_state")
             # Teams and other users would run as the platform's own account, which reads the database and Worker tokens.
             local = hashlib.sha256(f"{socket.gethostname()}:{os.getuid()}".encode()).hexdigest()
@@ -307,6 +341,7 @@ class Service:
             # The boundary owner is kept: it opens the native entry and re-registers the Worker on reinstall.
             db.execute("UPDATE workers SET scope='shared', team_id=NULL, owner_id=? WHERE id=?",
                        (row["owner_id"] or actor["id"], wid))
+            audit(db, actor, "worker.share", "worker", wid)
         return {"id": wid, "scope": "shared"}
 
     def worker_space(self, actor, wid, body, remove=False):
@@ -315,8 +350,7 @@ class Service:
         team, user = body.get("team_id"), body.get("user_id")
         require(isinstance(team or user, str) and bool(team) != bool(user), "需要且只能指定 team_id 或 user_id")
         with self.db.transaction() as db:
-            row = db.execute("SELECT scope FROM workers WHERE id=?", (wid,)).fetchone()
-            require(row is not None, "Worker 不存在", 404, "not_found")
+            row = self._live_worker(db, wid)
             # A spare environment can only be given to a Team, where it becomes that Team's own (T4).
             require(row["scope"] == "shared" or (row["scope"] == "spare" and team and not remove),
                     "只有共享环境可以调整服务空间；空闲环境只能分配给 Team", 409, "invalid_state")
@@ -333,6 +367,7 @@ class Service:
                 require(not db.execute("SELECT 1 FROM worker_spaces WHERE worker_id=? AND user_id=?", (wid, user)).fetchone(),
                         "该用户已在此共享环境中", 409, "conflict")
                 db.execute("INSERT INTO worker_spaces(worker_id,user_id) VALUES(?,?)", (wid, user))
+            audit(db, actor, "worker.space.remove" if remove else "worker.space.add", "worker", wid, {column: value})
         return {"ok": True}
 
     def create_team(self, actor, body):

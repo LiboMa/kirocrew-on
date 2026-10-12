@@ -202,5 +202,77 @@ class EnvironmentChangeTests(TeamsWorkersCase):
             self.assertEqual(call("POST", "/v1/teams/team-p/environment", self.tokens["alice"], {"worker_id": "env-spare"})[0], 200)
 
 
+class WorkerManagementTests(TeamsWorkersCase):
+    def test_rename_is_admin_only_and_audited(self):
+        self.assertEqual(self.service.rename_worker(self.a, "env-s", {"name": "共享-1"})["name"], "共享-1")
+        self.assertEqual(json.loads(self.audits("worker.rename")[0]["detail"]), {"from": "共享", "to": "共享-1"})
+        self.assertEqual(self.code(self.service.rename_worker, self.c, "env-s", {"name": "x"}), (403, "forbidden"))
+
+    def test_retire_refuses_a_team_environment(self):
+        self.assertEqual(self.code(self.service.retire_worker, self.a, "env-s"), (409, "in_use"))
+
+    def test_retire_refuses_sessions_in_progress(self):
+        with self.db.transaction() as db:
+            db.execute("INSERT INTO workers(id,name,owner_id,config) VALUES('env-b','bob',?,?)", (self.b["id"], self.config("b-b")))
+        self.start(self.b, worker_id="env-b")
+        self.assertEqual(self.code(self.service.retire_worker, self.a, "env-b"), (409, "busy"))
+
+    def test_retired_worker_disappears_and_is_locked(self):
+        self.spare()
+        with self.db.transaction() as db:
+            db.execute("INSERT INTO worker_spaces(worker_id,user_id) VALUES('env-s',?)", (self.e["id"],))
+        self.service.change_environment(self.a, "team-p", {"worker_id": "env-spare"})
+        run = self.start(self.e)   # eve's personal space runs on env-s
+        with self.db.transaction() as db:
+            db.execute("UPDATE runs SET status='completed' WHERE id=?", (run["id"],))
+        self.service.retire_worker(self.a, "env-s")
+        self.assertNotIn("env-s", [w["id"] for w in self.service.workers(self.a)])
+        with patch("octopus.domain._probe", return_value={"reachable": False, "error": "x"}):
+            self.assertNotIn("env-s", [w["id"] for w in self.service.environments(self.a)])
+        with self.db.read() as db:
+            self.assertIsNone(db.execute("SELECT 1 FROM worker_spaces WHERE worker_id='env-s'").fetchone())
+        self.assertEqual(self.service.run(self.e, run["id"])["worker_id"], "env-s")   # history keeps its reference
+        self.assertEqual(self.code(self.service.rename_worker, self.a, "env-s", {"name": "x"}), (409, "retired"))
+        with self.http() as call:
+            self.assertEqual(call("POST", "/v1/workers/env-s/enabled", self.tokens["alice"], {"enabled": True})[0], 409)
+            self.assertEqual(call("POST", "/v1/workers/env-s/retire", self.tokens["alice"], {})[0], 409)
+        self.assertEqual(self.audits("worker.retire")[0]["target"], "env-s")
+
+    def test_models_refresh_is_open_to_every_space_the_environment_serves(self):
+        health = {"isolation": "dedicated", "boundary": "b-s", "host_principal": "hp-b-s", "models": {"claude": ["x"]}}
+        with patch("octopus.server.worker_request", return_value=health), self.http() as call:
+            self.assertEqual(call("GET", "/v1/workers/env-s/capabilities", self.tokens["bob"])[0], 200)
+            self.assertEqual(call("GET", "/v1/workers/env-s/capabilities", self.tokens["eve"])[0], 404)
+
+    def test_environment_operations_are_audited(self):
+        self.service.worker_space(self.a, "env-s", {"user_id": self.e["id"]})
+        self.service.worker_space(self.a, "env-s", {"user_id": self.e["id"]}, remove=True)
+        health = {"isolation": "dedicated", "boundary": "b-r", "host_principal": "hp-r"}
+        with patch("octopus.server.validate_worker", return_value=health), self.http() as call:
+            self.assertEqual(call("POST", "/v1/workers/env-s/enabled", self.tokens["alice"], {"enabled": False})[0], 200)
+            status, created = call("POST", "/v1/workers", self.tokens["alice"],
+                                   {"name": "w9", "spare": True, "connection": {"url": "https://w9", "token": "z" * 40}})
+            self.assertEqual(call("PATCH", "/v1/workers/env-s", self.tokens["alice"], {"name": "共享-2"})[0], 200)
+        self.assertEqual(status, 201)
+        self.assertEqual(json.loads(self.audits("worker.space.add")[0]["detail"]), {"user_id": self.e["id"]})
+        self.assertEqual(len(self.audits("worker.space.remove")), 1)
+        self.assertEqual(json.loads(self.audits("worker.enabled")[0]["detail"]), {"enabled": False})
+        entry = self.audits("worker.register")[0]
+        self.assertEqual(entry["target"], created["id"])
+        self.assertNotIn("z" * 40, entry["detail"])
+        self.assertEqual(len(self.audits("worker.rename")), 1)
+
+    def test_connection_share_and_dedicate_are_audited(self):
+        health = {"isolation": "dedicated", "boundary": "b-s", "host_principal": "hp-b-s"}
+        with patch("octopus.server.validate_worker", return_value=health), self.http() as call:
+            self.assertEqual(call("POST", "/v1/workers/env-s/connection", self.tokens["alice"],
+                                  {"connection": {"url": "https://w", "token": "q" * 40}})[0], 200)
+        self.assertEqual(json.loads(self.audits("worker.connection")[0]["detail"]), {"boundary_changed": False})
+        self.service.dedicate_worker(self.a, "env-s")
+        self.assertEqual(json.loads(self.audits("worker.dedicate")[0]["detail"]), {"team_id": "team-p"})
+        self.service.share_worker(self.a, "env-s", {"confirm": True})
+        self.assertEqual(len(self.audits("worker.share")), 1)
+
+
 if __name__ == "__main__":
     unittest.main()
