@@ -55,6 +55,7 @@
 | 在 KiroCrew 中打开原生会话 | ✅ | 个人空间本人、Team 专属环境成员、共享环境边界所有者（K03） |
 | 预览产出 | ✅ | 静态页面隔离预览（链接 10 分钟有效，每次打开核对权限）；开发服务器 `deploy.sh space <run-id>` |
 | 续作与迭代 | ✅ | 同一会话与工作区；可改工具、模型、提示 |
+| 修订历史与 Prompt 差异 | ✅ | 每次创建 / 规划 / 续作 / 自动纠错留下完整快照；任选两版对比需求与各任务的 Prompt 逐行增删（控制台「修订历史」、MCP `octopus_revisions`，D32） |
 | 工作流库 | ✅ | 模板、KiroCrew 推荐、导入 Agent 预先生成的工作流、版本、共享给个人 / Team |
 | Team 与执行环境 | ✅ | 创建 Team 必须分配环境；共享 / 专属 / 空闲；独立 Worker 主机（D28–D30） |
 | 自托管部署与扩容 | ✅ | CloudFormation + `deploy.sh`；`worker-host add <名称>` 一条命令加 Worker 主机 |
