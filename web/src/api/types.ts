@@ -77,7 +77,9 @@ export interface Environment {
   spaces: ({ team_id: string; name: string | null } | { user_id: string; username: string | null })[];
   url: string | null;
   active_runs: number;
-  health: { reachable: true; version?: string; isolation?: string; crew_entry?: boolean; crew_origin?: string }
+  health: { reachable: true; version?: string; isolation?: string; crew_entry?: boolean; crew_origin?: string;
+    /** kiro-cli's login on the boundary (D34): "expired" holds Kiro dispatches until an administrator logs in again. */
+    tool_auth?: { kiro?: "ok" | "expired" | "unknown" } }
     | { reachable: false; error: string };
 }
 

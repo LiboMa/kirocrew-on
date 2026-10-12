@@ -147,7 +147,8 @@ class Engine:
                 (rid,)).fetchone()
         return dict(row) if row else None
     def _failed(self, run, exc):
-        unavailable = bool(self.retry_unavailable) and getattr(exc, "code", "") in {"worker_unavailable", "native_unavailable"}
+        code = getattr(exc, "code", "")
+        unavailable = bool(self.retry_unavailable) and code in {"worker_unavailable", "native_unavailable", "tool_auth_expired"}
         if unavailable:
             failures = self.backoff.get(run["id"], (0, 0.0))[0] + 1
             self.backoff[run["id"]] = (failures, self.clock() + min(60.0, self.retry_unavailable * 2 ** (failures - 1)))
@@ -159,7 +160,10 @@ class Engine:
                 "WHERE a.run_id=? AND a.status IN ('dispatching','running','dispatch_unknown','waiting_approval') "
                 "ORDER BY t.ordinal LIMIT 1", (run["id"],)).fetchone()
         if current and current["status"] == "dispatching":
-            if getattr(exc, "code", "") in {"model_unavailable", "model_transport_unsupported", "invalid_request", "not_prepared"}:
+            if code == "tool_auth_expired":
+                # Refused before anything was spawned: the same Attempt goes out again once the login is back (D34 §5.2).
+                return self.update(run["id"], run["status"], message)
+            if code in {"model_unavailable", "model_transport_unsupported", "invalid_request", "not_prepared"}:
                 with self.db.transaction() as db:
                     journal.change(db, "attempts", current["id"], journal.WORKER, "attempt.state",
                                    event={"id": current["id"], "status": "blocked", "error": message},

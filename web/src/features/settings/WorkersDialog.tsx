@@ -20,7 +20,8 @@ function health(environment: Environment) {
   if (!h.reachable) return `不可达：${h.error}`;
   let origin = "";
   try { origin = h.crew_origin ? " · 原生入口 " + new URL(h.crew_origin).host : ""; } catch { /* not a URL: omitted */ }
-  return `可达${h.version ? " · v" + h.version : ""}${origin} · 进行中会话 ${active}`;
+  const login = h.tool_auth?.kiro === "expired" ? " · kiro-cli 登录已过期（deploy.sh kiro-login）" : "";
+  return `可达${h.version ? " · v" + h.version : ""}${origin} · 进行中会话 ${active}${login}`;
 }
 
 /** The single management entry for execution environments (D28): bindings, health, sharing, assignment, enabling. */

@@ -1,9 +1,16 @@
 """D34 §5: transient native failures retry once without a recovery cycle; an expired login waits instead of failing."""
 import json
+from pathlib import Path
+import subprocess
+import tempfile
 import unittest
+from unittest.mock import patch
 
+from octopus import gateway_client
 from octopus.db import dumps
 from octopus.engine import Engine
+from octopus.security import Error
+from octopus.worker import Worker
 from tests.test_teams_workers import TeamsWorkersCase
 
 CANCELLED = {"done": True, "result": "", "error": "cancelled (stop_reason=cancelled): turn cancelled by the runtime — partial result preserved"}
@@ -119,6 +126,78 @@ class TransientTests(RuntimeCase):
         self.assertEqual((run["status"], len(attempts)), ("blocked", 1))
         self.assertEqual(attempts[0]["evidence"]["failure_type"], "auth")
         self.assertEqual(run["recovery"]["used"], 0)
+
+
+EXPIRED = "Worker 上 kiro-cli 登录已过期：请管理员执行 deploy.sh kiro-login"
+
+
+class LoginPreflightTests(unittest.TestCase):
+    def setUp(self):
+        self.temporary = tempfile.TemporaryDirectory()
+        self.root = Path(self.temporary.name)
+
+    def tearDown(self):
+        self.temporary.cleanup()
+
+    def worker(self, kiro_cli="/opt/kiro/bin/kiro-cli"):
+        node = Worker(self.root / "worker", "x" * 40, crew_home=self.root / "crew", kiro_cli=kiro_cli)
+        rid = "run-" + "1" * 32
+
+        def native(path, body=None, method=None):
+            if path == "/api/chat/slots/octopus-" + rid and body is None:
+                raise gateway_client.GatewayError(404, '{"error":"not found"}')
+            if path == "/api/chat/slots":
+                return {"key": "octopus-" + rid}
+            if path == "/api/spawn":
+                return {"id": "abcdef12"}
+            return {"ok": True}
+
+        node.native = native
+        node.prepare({"run_id": rid, "source": {"type": "new"}})
+        def body(tool, number):
+            return {"run_id": rid, "attempt_id": "attempt-" + str(number) * 32, "input": "需求", "upstream": [],
+                    "spec": {"id": "code", "name": "编码", "tool": tool, "model": "auto", "effort": "", "prompt": "实现"}}
+        return node, rid, body
+
+    def test_expired_login_refuses_kiro_dispatch_before_recording_it(self):
+        node, rid, body = self.worker()
+        expired = subprocess.CompletedProcess(args=[], returncode=1, stdout=b"", stderr=b"not logged in")
+        with patch("octopus.worker.subprocess.run", return_value=expired) as whoami:
+            with self.assertRaises(Error) as caught:
+                node.dispatch(body("kiro", 2))
+            self.assertEqual((caught.exception.status, caught.exception.code), (503, "tool_auth_expired"))
+            self.assertFalse((node.path(rid) / "attempts" / ("attempt-" + "2" * 32) / "dispatch.json").exists())
+            self.assertEqual(node.dispatch(body("claude", 3))["status"], "running")
+            self.assertEqual(node.health()["tool_auth"]["kiro"], "expired")
+            self.assertEqual(whoami.call_count, 1)   # cached for a minute
+
+    def test_an_unknown_login_state_does_not_block(self):
+        node, rid, body = self.worker(kiro_cli=None)
+        with patch("octopus.worker.shutil.which", return_value=None):
+            self.assertEqual(node.tool_auth(), "unknown")
+            self.assertEqual(node.dispatch(body("kiro", 4))["status"], "running")
+
+
+class EngineLoginTests(RuntimeCase):
+    def test_an_expired_login_keeps_the_session_waiting_then_resumes(self):
+        rid = self.session()
+        refuse = [True]
+        def worker(config, path, body, **kwargs):
+            if path == "/dispatch" and refuse[0]:
+                raise Error(503, "tool_auth_expired", EXPIRED)
+            return self.worker(config, path, body, **kwargs)
+        engine = Engine(self.db, request=worker)
+        engine.tick()          # prepare
+        engine.tick()          # dispatch refused
+        run, attempts = self.detail(rid)
+        self.assertEqual((run["status"], run["error"]), ("ready", EXPIRED))
+        self.assertEqual([a["status"] for a in attempts], ["dispatching"])
+        refuse[0] = False
+        engine = Engine(self.db, request=worker)
+        for _ in range(3):
+            engine.tick()
+        run, attempts = self.detail(rid)
+        self.assertEqual((run["status"], [a["status"] for a in attempts]), ("completed", ["accepted"]))
 
 
 if __name__ == "__main__":

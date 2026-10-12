@@ -20,7 +20,7 @@ ROLE_LABELS = {"viewer": "查看", "runner": "运行", "editor": "编辑", "owne
 # Statuses in which an open Session is not running on its Worker (it can be continued).
 SETTLED = ("failed", "blocked", "completed", "stopped", "waiting_worker")
 # What the admin environment listing shows of a live /health (no boundary or principal hashes).
-HEALTH_FIELDS = ("isolation", "crew_entry", "crew_origin", "version")
+HEALTH_FIELDS = ("isolation", "crew_entry", "crew_origin", "version", "tool_auth")
 
 
 def text(value, field, maximum=12000, minimum=1):

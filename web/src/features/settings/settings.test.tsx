@@ -276,6 +276,15 @@ describe("settings", () => {
     expect(spare).toHaveTextContent("不可达：Worker 未返回可核实回执");
   });
 
+  test("an environment whose kiro-cli login has expired says so", async () => {
+    const expired = environments["GET /admin/environments"].map((e) => e.id === "w1"
+      ? { ...e, health: { ...e.health, tool_auth: { kiro: "expired" } } } : e);
+    start({ ...environments, "GET /admin/environments": expired });
+    const dialog = await openSetting(/执行环境/);
+    const shared = await within(dialog).findByRole("group", { name: "personal" });
+    await waitFor(() => expect(shared).toHaveTextContent("kiro-cli 登录已过期"));
+  });
+
   test("a shared environment is given to a user and a space taken away from it, in the environment dialog", async () => {
     const calls = start({ ...environments, "POST /workers/w1/spaces": { ok: true }, "DELETE /workers/w1/spaces": { ok: true } });
     const dialog = await openSetting(/执行环境/);

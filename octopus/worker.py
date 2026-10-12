@@ -8,7 +8,9 @@ import json
 import os
 from pathlib import Path
 import re
+import shutil
 import socket
+import subprocess
 import threading
 import time
 import urllib.error
@@ -40,7 +42,7 @@ def write(path, value):
 
 class Worker:
     def __init__(self, root, token, gateway_port=5476, crew_home=None, isolation="trusted-local", routing_log=None,
-                 crew_url=None, approval_mode="", crew_entry_ttl="8h"):
+                 crew_url=None, approval_mode="", crew_entry_ttl="8h", kiro_cli=None):
         self.root = Path(root).resolve()
         self.root.mkdir(parents=True, exist_ok=True, mode=0o700)
         self.token, self.port = token, gateway_port
@@ -58,6 +60,24 @@ class Worker:
         require(approval_mode in {"", "auto", "interactive"}, "Worker 批准模式无效")
         # "auto": this unattended boundary asks KiroCrew for native auto approval on platform spawns (D14).
         self.approval_mode = approval_mode
+        self.kiro_cli, self._login = kiro_cli, (0.0, None)
+
+    def tool_auth(self, tool="kiro"):
+        """kiro-cli's login on this boundary (D34 §5.2): ok, expired, or unknown when it cannot be checked; cached for
+        a minute so health checks and dispatches stay fast."""
+        now = time.monotonic()
+        if self._login[1] is not None and now - self._login[0] < 60:
+            return self._login[1]
+        binary = self.kiro_cli or shutil.which("kiro-cli") or shutil.which("kiro-cli", path=str(Path.home() / ".local/bin"))
+        state = "unknown"
+        if binary:
+            try:
+                state = "ok" if subprocess.run([str(binary), "whoami"], capture_output=True, timeout=3).returncode == 0 \
+                    else "expired"
+            except (OSError, subprocess.TimeoutExpired):
+                state = "unknown"
+        self._login = (now, state)
+        return state
 
     def native(self, path, body=None, method=None):
         return crew_api.request(path, body, method, port=self.port, home=self.home)
@@ -136,6 +156,7 @@ class Worker:
         return {"version": __version__, "isolation": self.isolation, "workflow_design": True,
                 "spawn_approval": "auto" if self.approval_mode == "auto" else "interactive",
                 "crew_entry": True, "crew_origin": self.crew_origin, "observe": True,
+                "tool_auth": {"kiro": self.tool_auth()},
                 "coordinator_recovery": True, "quality_outcome": True,
                 "boundary": hashlib.sha256(boundary.encode()).hexdigest(),
                 "host_principal": hashlib.sha256(f"{socket.gethostname()}:{os.getuid()}".encode()).hexdigest(),
@@ -240,6 +261,9 @@ class Worker:
                 if value.get("native_id") or value.get("status") == "blocked":
                     return value
                 return self.reconcile(run, parent, attempt, value)
+            if (spec["tool"] == "kiro" or body.get("coordination") or body.get("design")) and self.tool_auth() == "expired":
+                # Refused before anything is recorded or spawned: the platform dispatches this Attempt again later.
+                raise Error(503, "tool_auth_expired", "Worker 上 kiro-cli 登录已过期：请管理员执行 deploy.sh kiro-login")
             folder.mkdir(parents=True, exist_ok=True)
             handoff = folder / "handoff.md"
             context = {"input": body["input"], "task": spec, "upstream": body.get("upstream", []),
