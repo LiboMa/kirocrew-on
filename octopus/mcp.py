@@ -46,6 +46,12 @@ TOOLS = [
      "inputSchema": object_schema({"run_id": STRING, "limit": {"type": "integer", "minimum": 1, "maximum": 50},
                                    "before": {"type": "integer", "minimum": 0}}, ["run_id"]),
      "annotations": {"readOnlyHint": True}},
+    {"name": "octopus_revisions",
+     "description": "Session 的修订历史（创建、规划、续作、自动纠错）。只传 run_id 列出全部修订；传 from / to（版本号，可只传 to）"
+                    "返回两版之间需求与各任务的变化：工具、模型等字段的前后值，以及 Prompt 中新增（+）与删除（-）的行；未变化的任务与行省略。",
+     "inputSchema": object_schema({"run_id": STRING, "from": {"type": "integer", "minimum": 1},
+                                   "to": {"type": "integer", "minimum": 1}}, ["run_id"]),
+     "annotations": {"readOnlyHint": True}},
     {"name": "octopus_parse_workflow",
      "description": "校验并规范化一个由 Agent 预先生成的工作流（JSON / YAML / 含一个代码块的 Markdown；新版导出或旧版 schema 1），返回 name、steps 与规范化说明；仅预览，不执行。",
      "inputSchema": object_schema({"content": STRING, "format": {"type": "string", "enum": ["json", "yaml", "markdown"]}},
@@ -129,6 +135,17 @@ def call(client, name, args):
         return {**result, "url": client.url + result["url"]}
     if name == "octopus_parse_workflow":
         return client.request("POST", "/v1/workflows/parse", args)
+    if name == "octopus_revisions":
+        base = "/v1/runs/" + args["run_id"] + "/revisions"
+        if "from" not in args and "to" not in args:
+            return {"revisions": client.request("GET", base)}
+        query = "&".join(f"{key}={int(args[key])}" for key in ("from", "to") if key in args)
+        result = client.request("GET", base + "/diff?" + query)
+        changed = lambda ops: [f"{op['op']} {op['text']}" for op in ops if op["op"] != " "]
+        return {**{k: result[k] for k in ("from", "to", "from_summary", "to_summary", "reconstructed")},
+                "input": changed(result["input"]),
+                "tasks": [{"id": t["id"], "name": t["name"], "status": t["status"], "fields": t["fields"],
+                           "prompt": changed(t["prompt"])} for t in result["tasks"] if t["status"] != "same"]}
     if name == "octopus_observe":
         query = "limit=" + str(int(args.get("limit", 20))) + ("&before=" + str(int(args["before"])) if "before" in args else "")
         result = client.request("GET", "/v1/runs/" + args["run_id"] + "/observe?" + query)

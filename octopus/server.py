@@ -466,6 +466,20 @@ def server(database, port=8918, host="127.0.0.1", allowed_hosts=(), origin_secre
                     require(method in {"GET", "POST"}, "Method not allowed", 405)
                     return self.respond(service.runs(actor, all=query.get("all") == ["1"]) if method == "GET"
                                         else service.start(actor, body))
+                if len(segments) in {4, 5} and segments[:2] == ["v1", "runs"] and segments[3] == "revisions":
+                    require(method == "GET", "Method not allowed", 405)
+                    rid = segments[2]
+                    if len(segments) == 4:
+                        return self.respond(service.revisions(actor, rid))
+                    if segments[4] == "diff":
+                        versions = {}
+                        for key in ("from", "to"):
+                            if key in query:
+                                require(query[key][0].isdigit(), f"{key} 须为修订版本号")
+                                versions[key] = int(query[key][0])
+                        return self.respond(service.revision_diff(actor, rid, versions.get("from"), versions.get("to")))
+                    require(segments[4].isdigit(), "修订版本号无效", 404, "not_found")
+                    return self.respond(service.revision(actor, rid, int(segments[4])))
                 if len(segments) in {3, 4} and segments[:2] == ["v1", "runs"]:
                     rid = segments[2]
                     if len(segments) == 3 and method == "GET":

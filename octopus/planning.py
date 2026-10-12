@@ -74,7 +74,7 @@ def expand(db, rid, text, models=None):
     start = db.execute("SELECT COALESCE(MAX(ordinal), 0) FROM tasks WHERE run_id=?", (rid,)).fetchone()[0] + 1
     for offset, step in enumerate(steps):
         db.execute("INSERT INTO tasks(run_id,id,ordinal,spec) VALUES(?,?,?,?)", (rid, step["id"], start + offset, dumps(step)))
-    row = db.execute("SELECT snapshot, version FROM runs WHERE id=?", (rid,)).fetchone()
+    row = db.execute("SELECT snapshot, version, owner_id FROM runs WHERE id=?", (rid,)).fetchone()
     snapshot = json.loads(row["snapshot"])
     applied = {"mode": "agent", "applied": True, "intent": str(plan.get("intent") or "")[:500],
                "summary": str(plan.get("summary") or "")[:8000], "name": plan["name"], "tasks": [s["id"] for s in steps],
@@ -82,6 +82,9 @@ def expand(db, rid, text, models=None):
     snapshot["planning"] = applied
     snapshot["steps"] = snapshot.get("steps", []) + steps
     db.execute("UPDATE runs SET snapshot=?,version=?,updated=? WHERE id=?", (dumps(snapshot), row["version"] + 1, time.time(), rid))
+    from .revisions import record
+    record(db, rid, row["version"] + 1, "planned", f"规划：追加 {len(steps)} 个任务", row["owner_id"], time.time(),
+           planning={"intent": applied["intent"], "tasks": applied["tasks"]})
     return applied
 
 

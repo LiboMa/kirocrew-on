@@ -108,6 +108,11 @@ class RecoveryTests(unittest.TestCase):
         self.assertEqual(corrected[0]["spec"], result["tasks"][0]["attempts"][0]["spec"])
         self.assertNotIn("coordination", corrected[0])
         self.assertEqual(result["version"], 2)
+        # The applied decision is a revision with its snapshot (D32).
+        revisions = self.service.revisions(self.actor, result["id"])
+        self.assertEqual([r["kind"] for r in revisions], ["created", "recovered"])
+        self.assertTrue(revisions[1]["summary"].startswith("自动纠错：退回「"))
+        self.assertFalse(revisions[1]["reconstructed"])
 
     def test_cycle_limit_stops_without_infinite_dispatch(self):
         self.always_fail = True

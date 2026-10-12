@@ -577,8 +577,8 @@ class Service:
                 for i, step in enumerate(spec):
                     db.execute("INSERT INTO tasks(run_id,id,ordinal,spec) VALUES(?,?,?,?)",
                                (rid, step["id"], i, dumps(step)))
-                db.execute("INSERT INTO revisions VALUES(?,?,?,?,?)",
-                           (rid, 1, dumps({"input": goal, "steps": spec}), actor["id"], now))
+                from .revisions import record
+                record(db, rid, 1, "created", f"创建：{len(spec)} 个任务", actor["id"], now, input=goal, steps=spec)
                 self.db.event(db, rid, "run.created", {"actor": actor["id"], "worker_assigned": bool(worker)})
                 return {"id": rid, "session_id": rid, "version": 1,
                         "status": "preparing" if worker else "waiting_worker"}
@@ -750,7 +750,8 @@ class Service:
                     require(all(t["status"] == "accepted" for t in ordered[:index]), "先完成上游 Task", 409, "dependency")
                     override = body.get("execution", {})
                     require(isinstance(override, dict) and set(override) <= {"name", "tool", "model", "effort", "prompt"}, "任务覆盖字段无效")
-                    current = steps([{**json.loads(ordered[index]["spec"]), **override}])[0]
+                    before = json.loads(ordered[index]["spec"])
+                    current = steps([{**before, **override}])[0]
                     goal = text(body.get("input", run["input"]), "开发需求", minimum=3)
                     if "recovery" in body:
                         from .recovery import policy
@@ -765,10 +766,11 @@ class Service:
                                    (dumps(spec), rid, row["id"]))
                     db.execute("UPDATE runs SET input=?,desired='active',status=?,error=NULL WHERE id=?",
                                (goal, "ready" if run["worker_id"] else "waiting_worker", rid))
-                    db.execute("INSERT INTO revisions VALUES(?,?,?,?,?)",
-                               (rid, version, dumps({"input": goal, "task": current, "invalidated": [t["id"] for t in ordered[index:]],
-                                                     **({"recovery": snapshot["recovery"]} if "recovery" in body else {})}),
-                                 actor["id"], time.time()))
+                    from .revisions import changes, record
+                    detail = "、".join(filter(None, ["需求" if goal != run["input"] else "", changes(before, current)]))
+                    record(db, rid, version, "continued", f"续作「{current['name']}」" + (f"：{detail}" if detail else ""),
+                           actor["id"], time.time(), input=goal, task=current, invalidated=[t["id"] for t in ordered[index:]],
+                           **({"recovery": snapshot["recovery"]} if "recovery" in body else {}))
                 elif action == "recover":
                     from .recovery import schedule
                     require(run["lifecycle"] == "open" and run["worker_id"] and run["native_parent"] and
@@ -917,6 +919,46 @@ class Service:
             require(changed == 1, "Token 不存在", 404, "not_found")
             audit(db, actor, "user.revoke_token", "user", uid, {"token_id": tid})
         return {"ok": True}
+
+    # --- revisions (D32) ---
+
+    def revisions(self, actor, rid):
+        """Every revision of a run, oldest first, without snapshots (see revision())."""
+        from .revisions import history
+        with self.db.read() as db:
+            run_access(db, actor, rid)
+            entries = history(db, rid)
+        self.audit_read(actor, rid, "view")
+        return [{k: v for k, v in entry.items() if k not in {"snapshot", "content"}} for entry in entries]
+
+    def revision(self, actor, rid, version):
+        from .revisions import history
+        with self.db.read() as db:
+            run_access(db, actor, rid)
+            entry = next((e for e in history(db, rid) if e["version"] == version), None)
+        require(entry is not None, "修订不存在", 404, "not_found")
+        self.audit_read(actor, rid, "view")
+        return entry
+
+    def revision_diff(self, actor, rid, before=None, after=None):
+        """Differences between two revisions; by default the latest and the one before it."""
+        from .revisions import diff, history
+        with self.db.read() as db:
+            run_access(db, actor, rid)
+            entries = {e["version"]: e for e in history(db, rid)}
+        versions = sorted(entries)
+        after = versions[-1] if after is None else after
+        require(after in entries, "修订不存在", 404, "not_found")
+        if before is None:
+            earlier = [v for v in versions if v < after]
+            before = earlier[-1] if earlier else after
+        require(before in entries, "修订不存在", 404, "not_found")
+        old, new = entries[before]["snapshot"], entries[after]["snapshot"]
+        require(old is not None and new is not None, "该修订没有可比较的内容", 409, "no_snapshot")
+        self.audit_read(actor, rid, "view")
+        return {"from": before, "to": after, "from_summary": entries[before]["summary"],
+                "to_summary": entries[after]["summary"],
+                "reconstructed": entries[before]["reconstructed"] or entries[after]["reconstructed"], **diff(old, new)}
 
     def audit_log(self, actor, before=None, limit=50):
         require(elevated(actor), "需要平台管理员", 403, "forbidden")

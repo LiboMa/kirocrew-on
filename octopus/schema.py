@@ -97,6 +97,8 @@ def openapi():
         "/v1/runs/{id}/events": {"get": None}, "/v1/runs/{id}/export": {"get": None},
         "/v1/runs/{id}/crew-entry": {"post": "Empty"}, "/v1/runs/{id}/preview": {"post": "Empty"},
         "/v1/runs/{id}/observe": {"get": None},
+        "/v1/runs/{id}/revisions": {"get": None}, "/v1/runs/{id}/revisions/diff": {"get": None},
+        "/v1/runs/{id}/revisions/{version}": {"get": None},
         "/v1/runs/{id}/recover": {"post": "Control"},
         "/v1/runs/{id}/continue": {"post": "Continue"}, "/v1/runs/{id}/assign-worker": {"post": "AssignWorker"},
         **{"/v1/runs/{id}/" + action: {"post": "Control"} for action in ["stop", "close", "reopen", "delete"]},
@@ -135,6 +137,16 @@ def openapi():
                 op["description"] = "Administrator only. Every execution environment with its scope, owner, Team or shared spaces (with names), enabled, active_runs and live health (reachable=false when its Worker does not answer within a few seconds; never fails the listing). No tokens."
             if path.endswith("/crew-entry"):
                 op["description"] = "Execute scope. Opens the existing native parent Session through its authorized Worker. On-demand sensitive login URL; no-store. Does not create, resume, mutate or dispatch a Run. Native login covers the Worker's Gateway boundary, not a single run."
+            if "/revisions" in path:
+                op["description"] = {
+                    "/v1/runs/{id}/revisions": "Read scope. Every revision of the Session, oldest first: kind (created / planned / continued / recovered), summary, actor; older revisions are rebuilt from what they recorded (reconstructed).",
+                    "/v1/runs/{id}/revisions/diff": "Read scope. Requirement and per-task differences between two revisions (default: the latest and the one before it): changed fields as [before, after] and prompt line operations ' ', '-', '+'.",
+                    "/v1/runs/{id}/revisions/{version}": "Read scope. One revision with the full snapshot of the requirement and every task."}[path]
+                if path.endswith("/diff"):
+                    op["parameters"] += [{"in": "query", "name": key, "schema": {"type": "integer", "minimum": 1}} for key in ("from", "to")]
+                if path.endswith("{version}"):
+                    op["parameters"].append({"in": "path", "name": "version", "required": True, "schema": {"type": "integer", "minimum": 1}})
+                    op["operationId"] = "get_v1_runs_id_revisions_version"
             if path.endswith("/observe"):
                 op["description"] = "Read scope. The run's native KiroCrew Session (coordinator and sub-agent messages, running state) read through its Worker; no native login is issued, so Team members on a shared environment can watch it too. Newest page first; pass before=next_before for older messages."
                 op["parameters"] += [{"in": "query", "name": "before", "schema": {"type": "integer", "minimum": 0}},

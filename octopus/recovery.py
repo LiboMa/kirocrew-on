@@ -270,8 +270,10 @@ class Coordinator:
                        (version, now, run["id"]))
             db.execute("UPDATE recoveries SET status='applied',decision=?,error=NULL,updated=? WHERE id=?",
                        (dumps(decision), now, item["id"]))
-            db.execute("INSERT INTO revisions VALUES(?,?,?,?,?)",
-                       (run["id"], version, dumps({"recovery_id": item["id"], "decision": decision,
-                                                  "invalidated": invalidated}), fresh["owner_id"], now))
+            from .revisions import record
+            name = json.loads(target["spec"]).get("name", target["id"])
+            reason = decision.get("reason")
+            record(db, run["id"], version, "recovered", f"自动纠错：退回「{name}」" + (f"（{reason}）" if reason else ""),
+                   fresh["owner_id"], now, recovery_id=item["id"], decision=decision, invalidated=invalidated)
             self.db.event(db, run["id"], "recovery.applied", {"id": item["id"], "number": item["number"],
                                                            "target_task_id": target["id"], "invalidated": invalidated})
