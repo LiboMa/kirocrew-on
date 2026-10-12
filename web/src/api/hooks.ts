@@ -2,7 +2,9 @@ import { useEffect, useState } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { api } from "@/api/client";
 import { followRunEvents, type StreamState } from "@/api/events";
-import type { Environment, Me, Observation, Run, RunEvent, Team, Template, User, Worker, Workflow } from "@/api/types";
+import type {
+  Environment, Me, Observation, RevisionDiff, RevisionEntry, Run, RunEvent, Team, Template, User, Worker, Workflow,
+} from "@/api/types";
 
 export const keys = {
   me: ["me"] as const,
@@ -61,6 +63,18 @@ export function useObservation(id: string | null, live: boolean, limit = 50) {
     enabled: !!id, retry: false, placeholderData: (previous) => previous,
     refetchInterval: live ? 5_000 : false, refetchIntervalInBackground: false,
   });
+}
+
+/** The run's revisions; refetched when the run's version changes. */
+export function useRevisions(id: string, version: number) {
+  return useQuery({ queryKey: ["revisions", id, version], retry: false,
+    queryFn: () => api<RevisionEntry[]>(`/runs/${encodeURIComponent(id)}/revisions`) });
+}
+
+export function useRevisionDiff(id: string, from: number | null, to: number | null) {
+  return useQuery({ queryKey: ["revisions", id, "diff", from, to], enabled: from !== null && to !== null && from !== to,
+    retry: false, placeholderData: (previous) => previous,
+    queryFn: () => api<RevisionDiff>(`/runs/${encodeURIComponent(id)}/revisions/diff?from=${from}&to=${to}`) });
 }
 
 export function useRun(id: string | null) {

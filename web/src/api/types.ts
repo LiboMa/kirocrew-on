@@ -225,6 +225,40 @@ export interface Observation {
   messages: ObservedMessage[];
 }
 
+/** Session revisions (D32): GET /v1/runs/<id>/revisions and …/revisions/diff. */
+export interface RevisionEntry {
+  version: number;
+  kind: "created" | "planned" | "continued" | "recovered" | string;
+  summary: string;
+  created: number;
+  actor: { id: string; username: string | null };
+  /** Written before snapshots existed: rebuilt from what it recorded. */
+  reconstructed: boolean;
+}
+
+export interface DiffLine {
+  op: " " | "-" | "+";
+  text: string;
+}
+
+export interface TaskDiff {
+  id: string;
+  name: string;
+  status: "added" | "removed" | "changed" | "same";
+  fields: Record<string, [string | null, string | null]>;
+  prompt: DiffLine[];
+}
+
+export interface RevisionDiff {
+  from: number;
+  to: number;
+  from_summary: string;
+  to_summary: string;
+  reconstructed: boolean;
+  input: DiffLine[];
+  tasks: TaskDiff[];
+}
+
 export interface RunEvent {
   id: number;
   run_id: string;

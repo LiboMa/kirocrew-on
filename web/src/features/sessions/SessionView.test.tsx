@@ -133,6 +133,46 @@ describe("session detail", () => {
     expect(await screen.findByText(/Hardware-Dev \/ /)).toBeInTheDocument();
   });
 
+  const revisions = [
+    { version: 1, kind: "created", summary: "创建：2 个任务", created: 1_790_000_000, actor: { id: "u1", username: "fixture-owner" }, reconstructed: false },
+    { version: 2, kind: "planned", summary: "规划：追加 1 个任务", created: 1_790_000_100, actor: { id: "u1", username: "fixture-owner" }, reconstructed: false },
+    { version: 3, kind: "continued", summary: "续作「实现」：工具 claude → codex、提示词", created: 1_790_000_200,
+      actor: { id: "u1", username: "fixture-owner" }, reconstructed: false },
+  ];
+  const same = (text: string) => ({ op: " ", text });
+  const diffs: Record<string, unknown> = {
+    "?from=2&to=3": { from: 2, to: 3, from_summary: "", to_summary: "", reconstructed: false, input: [same("做一个数字时钟")],
+      tasks: [{ id: "plan", name: "规划", status: "same", fields: {}, prompt: [same("规划")] },
+        { id: "code", name: "实现", status: "changed", fields: { tool: ["claude", "codex"] },
+          prompt: [same("实现数字时钟"), { op: "+", text: "12 小时制补零" }, same("不引入外部资源")] },
+        { id: "review", name: "审查", status: "same", fields: {}, prompt: [same("审查")] }] },
+    "?from=1&to=3": { from: 1, to: 3, from_summary: "", to_summary: "", reconstructed: false, input: [same("做一个数字时钟")],
+      tasks: [{ id: "review", name: "审查", status: "added", fields: {}, prompt: [{ op: "+", text: "审查" }] }] },
+  };
+
+  test("revision history lists every change and shows what changed between any two revisions", async () => {
+    const searches: string[] = [];
+    open(makeRun({ id: "run-r", version: 3 }), { "GET /runs/run-r/revisions": revisions,
+      "GET /runs/run-r/revisions/diff": (_b: unknown, url: URL) => { searches.push(url.search); return diffs[url.search]; } });
+    const panel = await screen.findByRole("region", { name: "修订历史" });
+    expect(await within(panel).findByText("续作「实现」：工具 claude → codex、提示词")).toBeInTheDocument();
+    expect(await within(panel).findByText("工具 claude → codex")).toBeInTheDocument();
+    const added = within(panel).getByText("12 小时制补零").closest("[data-op]");
+    expect(added).toHaveAttribute("data-op", "+");
+    expect(panel).toHaveTextContent("另有 2 个任务未变化");
+    await userEvent.selectOptions(within(panel).getByLabelText("对比起点"), "1");
+    expect(await within(panel).findByText("新增")).toBeInTheDocument();
+    expect(searches).toEqual(["?from=2&to=3", "?from=1&to=3"]);
+    await userEvent.click(within(panel).getByRole("button", { name: /v2 · 规划/ }));
+    await waitFor(() => expect(searches.at(-1)).toBe("?from=1&to=2"));
+  });
+
+  test("a Session with only its first revision says nothing has changed yet", async () => {
+    open(makeRun({ id: "run-r1", version: 1 }), { "GET /runs/run-r1/revisions": [revisions[0]] });
+    const panel = await screen.findByRole("region", { name: "修订历史" });
+    expect(await within(panel).findByText("尚无后续修订：续作、KiroCrew 规划与自动纠错都会在这里留下可对比的版本。")).toBeInTheDocument();
+  });
+
   test("a Session waiting for a Worker can be assigned one from its space", async () => {
     const waiting = makeRun({ id: "run-w", status: "waiting_worker", version: 1 });
     const calls = open(waiting, {
