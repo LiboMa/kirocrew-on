@@ -42,10 +42,26 @@ def outcome(text):
     require(isinstance(value.get("findings", []), list) and
             all(finding(item) for item in value.get("findings", [])),
             "outcome.json findings 应为问题列表", 409, "outcome_invalid")
+    checks = value.get("acceptance", [])
+    require(isinstance(checks, list) and len(checks) <= 30 and all(
+        isinstance(item, dict) and isinstance(item.get("item"), str) and item["item"].strip() and
+        item.get("result") in {"pass", "fail", "n/a"} and isinstance(item.get("evidence", ""), str) for item in checks),
+        "outcome.json acceptance 应为 {item, result: pass|fail|n/a, evidence} 列表", 409, "outcome_invalid")
+    require(isinstance(value.get("suggestions", []), list) and len(value.get("suggestions", [])) <= 50 and
+            all(isinstance(item, str) for item in value.get("suggestions", [])),
+            "outcome.json suggestions 应为字符串列表", 409, "outcome_invalid")
     return {**value, "failure_type": failure}
 
 
-def quality_instructions(folder):
+def quality_instructions(folder, contract=None):
+    accept = ""
+    if contract and contract.get("acceptance"):
+        accept = """
+本任务有验收项：在 outcome.json 中加入 "acceptance"，逐项对应本任务契约的每条验收项：
+  "acceptance":[{"item":"验收项原文","result":"pass","evidence":"实际执行的命令与结果"}]
+result 只能是 pass、fail 或 n/a。验收标准之外、且不是必须修复的缺陷或安全问题的改进，写入
+"suggestions"（字符串列表），不作为 changes_requested 的理由；必须修复的问题仍按上面的规则判定。
+"""
     return f"""
 
 ## 必须交付可判定的任务结论
@@ -59,7 +75,7 @@ findings 使用字符串列表，或带 issue/message/description/title 之一�
 failure_type 可选 implementation/tests/environment/input/auth/model/native_error/contract/none。
 缺少源码、仓库来源或需求信息归为 input；权限、认证、额度归为 auth。
 本文件是本次 Attempt 的真实结论，不能复制旧结论或编造命令输出。
-"""
+""" + accept
 
 
 def coordinator_instructions(context, folder):
@@ -119,6 +135,9 @@ def schedule(db, database, run, task, attempt, *, manual=False, actor=None):
                "tasks": [{**t, "spec": json.loads(t["spec"])} for t in ordered],
                "previous_decisions": [json.loads(r["decision"]) for r in rows if r["decision"]],
                "manual": manual}
+    planned = json.loads(run["snapshot"]).get("planning") or {}
+    if planned.get("applied"):   # what the tasks are judged against (D34 §6.2)
+        context["requirement"] = {"intent": planned.get("intent", ""), "summary": planned.get("summary", "")}
     rid, aid, now = uid("recovery"), uid("attempt"), time.time()
     db.execute("INSERT INTO recoveries(id,run_id,number,failed_task_id,failed_attempt_id,attempt_id,status,context,created,updated) "
                "VALUES(?,?,?,?,?,?,'pending',?,?,?)",

@@ -66,6 +66,20 @@ export function TaskList({ run, onContinue }: { run: Run; onContinue: (taskId: s
                           <Meta label="工具 Session" value={attempt.evidence.native_session_id} />
                           <Meta label="Context SHA-256" value={attempt.context_hash ?? "未形成"} />
                         </dl>
+                        {!!attempt.evidence.outcome?.acceptance?.length && (
+                          <ul aria-label="验收项" className="mt-2 space-y-0.5">
+                            {attempt.evidence.outcome.acceptance.map((check, index) => (
+                              <li key={index} className={check.result === "fail" ? "text-destructive" : undefined}>
+                                {{ pass: "✓", fail: "✗", "n/a": "—" }[check.result]} {check.item}{check.evidence ? " · " + check.evidence : ""}
+                              </li>
+                            ))}
+                          </ul>
+                        )}
+                        {!!attempt.evidence.outcome?.suggestions?.length && (
+                          <ul aria-label="建议" className="mt-2 list-inside list-disc text-muted-foreground">
+                            {attempt.evidence.outcome.suggestions.map((item, index) => <li key={index}>{item}</li>)}
+                          </ul>
+                        )}
                         {attempt.error && <p className="mt-2 text-destructive">{attempt.error}</p>}
                         {attempt.result && (
                           <pre className="mt-2 max-h-72 overflow-auto rounded-md bg-card p-3 font-mono text-[11px] leading-5 whitespace-pre-wrap">

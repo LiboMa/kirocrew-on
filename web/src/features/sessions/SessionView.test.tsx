@@ -54,6 +54,20 @@ describe("session detail", () => {
     expect(screen.getByText("缺少测试命令")).toBeInTheDocument();
   });
 
+  test("an attempt's conclusion lists each acceptance item and the suggestions", async () => {
+    const outcome = { decision: "pass", summary: "完成", acceptance: [
+      { item: "登录成功", result: "pass", evidence: "npm test 0" }, { item: "错误提示清晰", result: "fail" },
+      { item: "移动端", result: "n/a" }], suggestions: ["补 CHANGELOG"] };
+    const task = blocked.tasks[0];
+    open({ ...blocked, tasks: [{ ...task, attempts: [{ ...task.attempts![0], evidence: { ...task.attempts![0].evidence, outcome } }] },
+      blocked.tasks[1]] } as Run);
+    await userEvent.click(await screen.findByText("执行证据与历史 Attempt"));
+    const checks = screen.getByRole("list", { name: "验收项" });
+    expect(within(checks).getAllByRole("listitem").map((item) => item.textContent)).toEqual(
+      ["✓ 登录成功 · npm test 0", "✗ 错误提示清晰", "— 移动端"]);
+    expect(screen.getByRole("list", { name: "建议" })).toHaveTextContent("补 CHANGELOG");
+  });
+
   test("continue keeps the Session and submits the edited execution with the expected version", async () => {
     const calls = open(blocked, { "POST /runs/run-a/continue": { id: "run-a", version: 5 } });
     await userEvent.click(await screen.findByRole("button", { name: "续作" }));

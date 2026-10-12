@@ -20,7 +20,7 @@ from . import __version__
 from . import gateway_client as crew_api
 from . import sources as workspace
 from .db import dumps
-from .domain import steps
+from .domain import CONTRACT, steps
 from .security import Error, require
 
 
@@ -38,6 +38,25 @@ def write(path, value):
         os.fsync(directory)
     finally:
         os.close(directory)
+
+
+def briefing(requirement, contract):
+    """The requirement KiroCrew completed and this task's contract, ahead of the task itself (D34 §6.2)."""
+    text = ""
+    if requirement and (requirement.get("intent") or requirement.get("summary")):
+        text += "\n\n## 需求与验收标准（KiroCrew 规划补全）\n"
+        if requirement.get("intent"):
+            text += "意图：" + requirement["intent"] + "\n"
+        text += requirement.get("summary", "")
+    if contract:
+        labels = (("deliverables", "交付物"), ("acceptance", "验收项"), ("verify", "验证命令"), ("paths", "可改动路径"))
+        text += "\n\n## 本任务契约\n" + (f"类别：{contract['kind']}\n" if contract.get("kind") else "")
+        for key, label in labels:
+            if contract.get(key):
+                text += label + "：\n" + "".join(f"- {item}\n" for item in contract[key])
+        if contract.get("acceptance"):
+            text += "逐项完成并核对上述验收项；审查与测试以它们为判定依据。\n"
+    return text
 
 
 class Worker:
@@ -61,6 +80,15 @@ class Worker:
         # "auto": this unattended boundary asks KiroCrew for native auto approval on platform spawns (D14).
         self.approval_mode = approval_mode
         self.kiro_cli, self._login = kiro_cli, (0.0, None)
+
+    @staticmethod
+    def contract(spec, value):
+        """The task contract sent beside the spec, validated like the task itself (D34 §6.2)."""
+        if not value:
+            return {}
+        require(isinstance(value, dict) and set(value) <= set(CONTRACT), "任务契约字段无效")
+        checked = steps([{**spec, **value}], known=value.get("depends_on") or [])[0]
+        return {key: checked[key] for key in CONTRACT if key in checked}
 
     def tool_auth(self, tool="kiro"):
         """kiro-cli's login on this boundary (D34 §5.2): ok, expired, or unknown when it cannot be checked; cached for
@@ -268,6 +296,13 @@ class Worker:
             handoff = folder / "handoff.md"
             context = {"input": body["input"], "task": spec, "upstream": body.get("upstream", []),
                        "project": workspace.read_record(run)}
+            contract, requirement = self.contract(spec, body.get("contract")), body.get("requirement")
+            require(requirement is None or (isinstance(requirement, dict) and
+                    all(isinstance(requirement.get(k, ""), str) for k in ("intent", "summary"))), "需求补全格式无效")
+            if contract:
+                context["contract"] = contract
+            if requirement:
+                context["requirement"] = requirement
             design_prompt = ""
             extra_prompt = ""
             if body.get("coordination"):
@@ -278,7 +313,7 @@ class Worker:
             elif body.get("quality"):
                 from .recovery import quality_instructions
                 context["quality_contract"] = 2
-                extra_prompt += quality_instructions(folder)
+                extra_prompt += quality_instructions(folder, contract)
             if body.get("repair"):
                 context["repair"] = body["repair"]
                 extra_prompt += ("\n\n## 本轮协调者纠错与复审要求\n" + dumps(body["repair"]) +
@@ -290,7 +325,7 @@ class Worker:
                 design_prompt = instructions(body["input"], body["design"], workspace.project_dir(run),
                                              self.health()["models"])
             instructions = (
-                "# 本次研发任务\n\n" + body["input"] + "\n\n## 任务\n" + spec["prompt"] +
+                "# 本次研发任务\n\n" + body["input"] + briefing(requirement, contract) + "\n\n## 任务\n" + spec["prompt"] +
                 "\n\n## 前序交接\n" + dumps(body.get("upstream", [])) +
                 f"\n\n源码目录：{workspace.project_dir(run)}\n交接文件：{handoff}\n"
                 "依据需求进行开发和真实验证，按项目既有依赖与规范工作。记录具体修改、测试命令、结果和限制。"

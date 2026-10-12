@@ -11,7 +11,9 @@ from .db import dumps, uid
 from .transport import worker_request
 from . import journal, planning, recovery
 from .security import Error
-from .domain import unserved
+from .domain import CONTRACT, unserved
+
+LEGACY = ("id", "name", "tool", "model", "effort", "prompt")
 
 
 BLOCKED = "工作者未完成任务或报告 BLOCKED"
@@ -246,8 +248,18 @@ class Engine:
         spec = json.loads(attempt["spec"])
         snapshot = json.loads(run["snapshot"])
         if attempt["status"] == "dispatching":
+            # The spec a Worker validates keeps its six fields (a Worker not yet upgraded runs it as before); the task
+            # contract and the requirement KiroCrew completed travel beside it (D34 §6.2).
+            contract = {key: spec[key] for key in CONTRACT if key in spec}
+            plan = snapshot.get("planning") or {}
+            if contract.get("depends_on"):
+                upstream = [item for item in upstream if item["id"] in contract["depends_on"]]
             result = self.request(config, "/dispatch", {
-                "run_id": rid, "attempt_id": attempt["id"], "input": run["input"], "spec": spec, "upstream": upstream,
+                "run_id": rid, "attempt_id": attempt["id"], "input": run["input"], "upstream": upstream,
+                "spec": {key: spec[key] for key in LEGACY if key in spec},
+                **({"contract": contract} if contract else {}),
+                **({"requirement": {"intent": plan.get("intent", ""), "summary": plan.get("summary", "")}}
+                   if plan.get("applied") else {}),
                 **({"quality": True} if snapshot.get("execution_contract", 1) >= 2 else {}),
                 **({"repair": repair} if repair else {}),
                 **({"design": snapshot["design"]} if snapshot.get("purpose") == "workflow_design" else {})})

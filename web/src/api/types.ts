@@ -113,7 +113,7 @@ export interface AttemptEvidence {
   actual_model?: string | null;
   actual_effort?: string | null;
   native_session_id?: string | null;
-  outcome?: { decision?: string; [key: string]: unknown } | null;
+  outcome?: { decision?: string; acceptance?: AcceptanceCheck[]; suggestions?: string[]; [key: string]: unknown } | null;
   [key: string]: unknown;
 }
 
@@ -346,4 +346,11 @@ export interface ChangeEntry {
   changes: Record<string, [unknown, unknown]> | { id: string; changes: Record<string, [unknown, unknown]> }[] | null;
   reason: string | null;
   detail: Record<string, unknown>;
+}
+
+/** One acceptance item as an Attempt's outcome reports it (D34 §6.2). */
+export interface AcceptanceCheck {
+  item: string;
+  result: "pass" | "fail" | "n/a";
+  evidence?: string;
 }
