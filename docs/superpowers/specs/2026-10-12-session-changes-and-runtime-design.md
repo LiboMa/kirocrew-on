@@ -51,7 +51,7 @@
 
 ### 4.3 接口
 
-- `GET /v1/runs/<id>/changes?actor=user|system&kind=<前缀>&before=<id>&limit=<1–200>`：read，可见性同会话；按时间倒序；旧事件没有 `actor` 时标为系统（旧记录）。
+- `GET /v1/runs/<id>/changes?who=user|system&kind=<前缀>&before=<id>&limit=<1–200>`：read，可见性同会话；按时间倒序；旧事件没有 `actor` 时标为系统（旧记录）。
 - 导出（`GET /v1/runs/<id>/export`）增加 `changes`。
 - 控制台会话页「变更记录」面板：倒序列出，筛选全部 / 人 / 系统；每行显示时间、操作者（用户名 · 控制台 / Coding Agent / API，或 Engine / Worker / KiroCrew / 协调者）、动作、字段前后值（长文本显示字符数）、原因。
 - 修订历史（D32）保留，作为内容快照；MCP 查询工具并入访问管理第 3 期。
