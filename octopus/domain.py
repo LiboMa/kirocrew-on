@@ -9,7 +9,7 @@ import time
 import unicodedata
 
 from .db import dumps, uid
-from .security import Error, require
+from .security import Error, elevated, require
 
 TOOLS = ("kiro", "claude", "codex", "opencode")
 ROLES = {"viewer": 1, "runner": 2, "editor": 3, "owner": 4}
@@ -143,7 +143,7 @@ class Service:
     def teams(self, actor):
         """The actor's Teams; an admin sees every Team (role None where not a member). Each carries its environment."""
         with self.db.read() as db:
-            if actor["admin"]:
+            if elevated(actor):
                 rows = db.execute("SELECT t.*,m.role FROM teams t LEFT JOIN members m ON m.team_id=t.id AND m.user_id=? "
                                   "ORDER BY t.created", (actor["id"],)).fetchall()
             else:
@@ -173,9 +173,9 @@ class Service:
             for row in db.execute("SELECT * FROM workers").fetchall():
                 spaces = [{"team_id": s["team_id"]} if s["team_id"] else {"user_id": s["user_id"]} for s in db.execute(
                     "SELECT team_id,user_id FROM worker_spaces WHERE worker_id=? ORDER BY rowid", (row["id"],))]
-                if not actor["admin"]:
+                if not elevated(actor):
                     spaces = [x for x in spaces if x.get("user_id") == actor["id"] or x.get("team_id") in teams]
-                visible = actor["admin"] or (row["scope"] == "shared" and spaces) or (
+                visible = elevated(actor) or (row["scope"] == "shared" and spaces) or (
                     row["scope"] == "dedicated" and (row["owner_id"] == actor["id"] or row["team_id"] in teams))
                 if visible:
                     value = {k: row[k] for k in ("id", "name", "team_id", "owner_id", "enabled", "scope")}
@@ -187,7 +187,7 @@ class Service:
     def environments(self, actor):
         """Admin view of every execution environment (D28): bindings, Sessions running on it and live health. Health
         checks run concurrently with a short timeout: an unreachable Worker neither fails nor holds up the listing."""
-        require(actor["admin"], "需要平台管理员", 403, "forbidden")
+        require(elevated(actor), "需要平台管理员", 403, "forbidden")
         with self.db.read() as db:
             users = dict(db.execute("SELECT id,username FROM users").fetchall())
             teams = dict(db.execute("SELECT id,name FROM teams").fetchall())
@@ -213,7 +213,7 @@ class Service:
     def dedicate_worker(self, actor, wid):
         """A shared Worker host serving exactly one Team becomes that Team's dedicated environment again (D30): every
         member then opens its native KiroCrew entry, as in a personal space."""
-        require(actor["admin"], "需要平台管理员", 403, "forbidden")
+        require(elevated(actor), "需要平台管理员", 403, "forbidden")
         with self.db.transaction() as db:
             row = db.execute("SELECT * FROM workers WHERE id=?", (wid,)).fetchone()
             require(row is not None, "Worker 不存在", 404, "not_found")
@@ -231,7 +231,7 @@ class Service:
 
     def share_worker(self, actor, wid, body):
         """Turn a dedicated Worker into a shared execution environment; its current space stays served (D28, T3)."""
-        require(actor["admin"], "需要平台管理员", 403, "forbidden")
+        require(elevated(actor), "需要平台管理员", 403, "forbidden")
         require(body.get("confirm") is True, "设为共享环境需要确认：环境内所有会话的 Agent 以同一系统账号运行，"
                 "能互相读取源码、工具登录与记忆", 400, "confirmation_required")
         with self.db.transaction() as db:
@@ -253,7 +253,7 @@ class Service:
 
     def worker_space(self, actor, wid, body, remove=False):
         """Add a Team or a user's personal space to a shared execution environment, or take it away."""
-        require(actor["admin"], "需要平台管理员", 403, "forbidden")
+        require(elevated(actor), "需要平台管理员", 403, "forbidden")
         team, user = body.get("team_id"), body.get("user_id")
         require(isinstance(team or user, str) and bool(team) != bool(user), "需要且只能指定 team_id 或 user_id")
         with self.db.transaction() as db:
@@ -279,7 +279,7 @@ class Service:
 
     def create_team(self, actor, body):
         """Admin only; the Team gets its owner and its execution environment in the same transaction (D28)."""
-        require(actor["admin"], "只有平台管理员可以创建 Team", 403, "forbidden")
+        require(elevated(actor), "只有平台管理员可以创建 Team", 403, "forbidden")
         title = name(body.get("name"))
         require(isinstance(body.get("worker_id"), str) and body["worker_id"],
                 "创建 Team 必须选择执行环境", 400, "worker_required")

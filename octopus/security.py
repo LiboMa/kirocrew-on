@@ -48,10 +48,19 @@ def create_user(db, username, password, admin=False):
     return user
 
 
+SCOPES = ("read", "execute", "manage", "admin")
+
+
+def elevated(actor):
+    """Platform administration needs both: an admin account and a token that carries the admin scope (A3)."""
+    return bool(actor.get("admin")) and "admin" in actor.get("scopes", ())
+
+
 def issue_token(db, user, scopes=None, label="API", ttl=86400):
-    scopes = ["read", "execute", "manage"] if scopes is None else scopes
-    require(isinstance(scopes, list) and bool(scopes) and set(scopes) <= {"read", "execute", "manage"},
-            "不支持的 Token scope")
+    if scopes is None:  # everything the account may hold: administrators also get admin
+        row = db.execute("SELECT admin FROM users WHERE id=?", (user,)).fetchone()
+        scopes = ["read", "execute", "manage"] + (["admin"] if row and row["admin"] else [])
+    require(isinstance(scopes, list) and bool(scopes) and set(scopes) <= set(SCOPES), "不支持的 Token scope")
     raw = "oct_" + secrets.token_urlsafe(32)
     value = {"id": uid("token"), "token": raw, "scopes": scopes,
              "expires": time.time() + min(max(int(ttl), 60), 30 * 86400)}
@@ -74,4 +83,6 @@ def authenticate(db, raw):
 
 
 def scope(actor, permission):
-    require(permission in actor["scopes"], "Token scope 不允许此操作", 403, "forbidden")
+    require(permission in actor["scopes"],
+            "Token 缺少 admin scope（平台管理需要管理员以含 admin 的 Token 调用）" if permission == "admin"
+            else f"Token 缺少 {permission} scope", 403, "forbidden")

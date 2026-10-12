@@ -16,7 +16,7 @@ from urllib.parse import parse_qs, unquote, urlsplit
 from . import __version__
 from .db import dumps, uid
 from .domain import Service, name, team_environment
-from .security import Error, authenticate, check_password, create_user, issue_token, require, scope
+from .security import Error, authenticate, check_password, create_user, elevated, issue_token, require, scope
 from .transport import validate_worker, worker_request
 from .schema import openapi
 
@@ -82,6 +82,22 @@ def preview_run(ticket, key, now=None):
         "预览链接无效，请在控制台重新打开预览", 403, "preview_invalid")
     require(int(parts[1]) >= (now or time.time()), "预览链接已过期（1 小时有效），请在控制台重新打开预览", 403, "preview_expired")
     return parts[0]
+
+
+READ_POSTS = {"/v1/workflows/resolve", "/v1/workflows/parse"}
+
+
+def required_scope(method, path):
+    """The token scope a route needs: platform administration needs admin (A3); writes to one's own configuration
+    need manage; Session and design writes need execute; reads need read."""
+    segments = path.strip("/").split("/")
+    if path.startswith("/v1/admin/") or (segments[:2] == ["v1", "workers"] and method != "GET") or \
+            (segments[:2] == ["v1", "users"] and (method != "GET" or len(segments) > 2)) or \
+            (path == "/v1/teams" and method == "POST"):
+        return "admin"
+    if method == "GET" or path in READ_POSTS or path.endswith("/preview"):
+        return "read"
+    return "execute" if path.startswith(("/v1/runs", "/v1/designs")) else "manage"
 
 
 def console_file(path):
@@ -222,9 +238,7 @@ def server(database, port=8918, host="127.0.0.1", allowed_hosts=(), origin_secre
                     with database.transaction() as db:
                         db.execute("DELETE FROM tokens WHERE id=? AND user_id=?", (actor["token_id"], actor["id"]))
                     return self.respond({"ok": True})
-                scope(actor, "read" if method == "GET" or path in {"/v1/workflows/resolve", "/v1/workflows/parse"}
-                      or path.endswith("/preview") else (
-                    "execute" if path.startswith(("/v1/runs", "/v1/designs")) else "manage"))
+                scope(actor, required_scope(method, path))
                 segments = path.strip("/").split("/")
                 if path == "/v1/me":
                     require(method == "GET", "Method not allowed", 405)
@@ -232,7 +246,7 @@ def server(database, port=8918, host="127.0.0.1", allowed_hosts=(), origin_secre
                 if path == "/v1/users":
                     with database.transaction() as db:
                         if method == "POST":
-                            require(actor["admin"], "需要平台管理员", 403, "forbidden")
+                            require(elevated(actor), "需要平台管理员", 403, "forbidden")
                             created = create_user(db, body.get("username"), body.get("password"), body.get("admin", False))
                             if body.get("worker_id"):
                                 # The new user's personal space runs on a shared execution environment (D28).
@@ -310,7 +324,7 @@ def server(database, port=8918, host="127.0.0.1", allowed_hosts=(), origin_secre
                 if len(segments) == 4 and segments[:2] == ["v1", "workers"] and segments[3] == "connection":
                     # After a Worker host is replaced (new address, token, boundary) its environment keeps serving the
                     # same spaces; the new endpoint is re-validated like a registration (D28, T4 forbids rebinding only).
-                    require(method == "POST" and actor["admin"], "需要平台管理员", 403, "forbidden")
+                    require(method == "POST" and elevated(actor), "需要平台管理员", 403, "forbidden")
                     config = body.get("connection")
                     health = validate_worker(config)
                     with database.transaction() as db:
@@ -336,7 +350,7 @@ def server(database, port=8918, host="127.0.0.1", allowed_hosts=(), origin_secre
                                    (dumps({**config, "capabilities": health}), row["id"]))
                     return self.respond({"id": row["id"], "capabilities": health})
                 if len(segments) == 4 and segments[:2] == ["v1", "workers"] and segments[3] == "enabled":
-                    require(method == "POST" and actor["admin"], "需要平台管理员", 403, "forbidden")
+                    require(method == "POST" and elevated(actor), "需要平台管理员", 403, "forbidden")
                     require(isinstance(body.get("enabled"), bool), "enabled 必须为布尔值")
                     with database.transaction() as db:
                         require(db.execute("SELECT 1 FROM workers WHERE id=?", (segments[2],)).fetchone(),
@@ -347,7 +361,7 @@ def server(database, port=8918, host="127.0.0.1", allowed_hosts=(), origin_secre
                     require(method == "GET", "Method not allowed", 405)
                     with database.read() as db:
                         row = db.execute("SELECT * FROM workers WHERE id=?", (segments[2],)).fetchone()
-                        require(row and (actor["admin"] or row["owner_id"] == actor["id"] or db.execute(
+                        require(row and (elevated(actor) or row["owner_id"] == actor["id"] or db.execute(
                             "SELECT 1 FROM members WHERE user_id=? AND team_id=?", (actor["id"], row["team_id"])).fetchone()),
                                 "Worker 不存在或无权限", 404, "not_found")
                         config = json.loads(row["config"])
@@ -361,7 +375,7 @@ def server(database, port=8918, host="127.0.0.1", allowed_hosts=(), origin_secre
                 if path == "/v1/workers":
                     if method == "GET":
                         return self.respond(service.workers(actor))
-                    require(method == "POST" and actor["admin"], "需要平台管理员", 403, "forbidden")
+                    require(method == "POST" and elevated(actor), "需要平台管理员", 403, "forbidden")
                     config = body.get("connection")
                     health = validate_worker(config)
                     team, user = body.get("team_id"), body.get("owner_id")
