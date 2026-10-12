@@ -74,7 +74,11 @@ KiroCrew ON 在远端执行开发任务：KiroCrew 的 Kiro Agent 先识别意�
 
 - 在原 Session 与原 Workspace 上修改需求或某个任务，并重跑该任务及其后续任务：
   `run_id`、新的 `request_id`、`expected_version`（取自最近一次 `octopus_status` 的 `session.version`）、`task_id`、
-  更新后的 `input`；可选 `execution`（`name`、`prompt`、`tool`、`model`、`effort`），例如某个工具失败时换用 `claude`。
+  更新后的 `input`；可选 `execution`（`name`、`prompt`、`tool`、`model`、`effort`，以及任务契约 `acceptance`、`verify` 等），
+  例如某个工具失败时换用 `claude`。
+- 只重跑受影响的任务：用 `rerun` 列出这次修改会影响的后续任务（例如只改前端时不列后端），省略则重跑之后的全部任务。
+  依赖重跑任务的任务、其后的审查 / 测试任务、尚未完成的任务会由平台自动一并重跑；其余沿用上一版结果。
+  回复用户时说明重跑了哪些任务、沿用了哪些（`octopus_status` 的修订摘要与 `kept`）。
 - 任务暂停（`blocked` / `failed` / `stopped`）时，可用 `octopus_recover` 请 KiroCrew 协调者按失败证据诊断并安排修复。
 
 ## 5．预览产出

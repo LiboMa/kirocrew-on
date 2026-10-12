@@ -67,9 +67,12 @@ TOOLS = [
          "plan": {"type": "string", "enum": ["agent", "match"]},
          "source": {"type": "object"},
          "team_id": STRING, "worker_id": STRING, "recovery": RECOVERY}, ["request_id", "input", "source"])},
-    {"name": "octopus_continue", "description": "原 Session 修订并重跑 Task；保留 Workspace；可覆盖模型/Effort/工具。",
+    {"name": "octopus_continue", "description": "原 Session 修订并重跑 Task；保留 Workspace；可覆盖模型/Effort/工具与任务契约。"
+                                                "rerun 只列出受本次修改影响的后续任务（省略则重跑所选任务之后的全部任务）；"
+                                                "依赖重跑任务的任务与其后的审查 / 测试任务会自动一并重跑，其余沿用上一版结果。",
      "inputSchema": object_schema({"run_id": STRING, "request_id": STRING, "expected_version": {"type": "integer"},
-                                  "task_id": STRING, "input": STRING, "execution": {"type": "object"}, "recovery": RECOVERY},
+                                  "task_id": STRING, "input": STRING, "execution": {"type": "object"}, "recovery": RECOVERY,
+                                  "rerun": {"type": "array", "items": STRING}},
                                  ["run_id", "request_id", "expected_version", "task_id"])},
     {"name": "octopus_recover", "description": "在原 Session 和 Workspace 启动 KiroCrew Coordinator 诊断，按实际失败证据重试、退回上游返工并复审，或说明缺失输入。异步执行，以状态与纠错记录确认结果。",
      "inputSchema": object_schema({"run_id": STRING, "request_id": STRING, "expected_version": {"type": "integer"}},

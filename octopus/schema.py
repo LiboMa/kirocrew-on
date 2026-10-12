@@ -59,7 +59,7 @@ def openapi():
                       "workflow_version": integer, "steps": step_list, "team_id": text, "worker_id": text,
                        "source": ref("Source"), "recovery": ref("RecoveryPolicy")}, ["request_id", "input", "source"]),
         "Continue": obj({**command, "task_id": text, "input": text, "execution": ref("Execution"),
-                         "recovery": ref("RecoveryPolicy")},
+                         "recovery": ref("RecoveryPolicy"), "rerun": {"type": "array", "items": text, "maxItems": 8}},
                         ["request_id", "expected_version", "task_id"]),
         "Control": obj({**command, "confirmation": text}, ["request_id", "expected_version"]),
         "AssignWorker": obj({**command, "worker_id": text}, ["request_id", "expected_version", "worker_id"]),
@@ -69,7 +69,7 @@ def openapi():
     schemas["Design"]["description"] = "Execute scope. Starts a real Kiro workflow-design task via the chosen Worker and native ACP. Only recommends; does not run or save the recommended workflow. Poll /designs/{id}, then adopt and edit config.steps."
     schemas["WorkflowDocument"]["description"] = "A workflow generated ahead of time (console export, legacy schema 1 or a bare step list) as JSON, YAML or Markdown with one code block. Parsed and normalized by code; /workflows/parse previews the result and its notes."
     schemas["Start"]["description"] = "Optionally specify exactly one of workflow_id, template_id, custom steps or a workflow document (runs as submitted); otherwise a KiroCrew Agent plans the tasks (plan=agent, the default; plan=match uses template rules). Preview via workflows/resolve and pin its selection/version before submit. Team runs are shared with current members. Without worker_id the run waits for assignment."
-    schemas["Continue"]["description"] = "Retains Session and Workspace. Creates immutable Attempts; selected Task and downstream Tasks rerun. Earlier tasks must be accepted."
+    schemas["Continue"]["description"] = "Retains Session and Workspace. Creates immutable Attempts; selected Task and downstream Tasks rerun. Earlier tasks must be accepted. rerun (optional): the later tasks this change affects; tasks depending on a rerun task, later review/test tasks and unaccepted tasks are added; the rest keep their accepted results (session.kept)."
     schemas["Worker"]["description"] = "Administrator only. Exactly one owner_id/team_id, or spare=true (a dedicated environment no space uses until it is assigned to a Team). Team requires a dedicated OS boundary; a declaration is not a sandbox."
     schemas["Team"]["description"] = "Administrator only. owner is a username; worker_id is the Team's execution environment (shared, or spare which becomes the Team's own), assigned in the same transaction."
     schemas["User"]["description"] = "Administrator only. worker_id: optional shared execution environment for the user's personal space."

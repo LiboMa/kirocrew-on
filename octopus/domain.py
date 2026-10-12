@@ -81,6 +81,28 @@ def steps(value, known=()):
     return result
 
 
+def rerun_plan(ordered, index, rerun=None):
+    """Which tasks a continue from ``ordered[index]`` reruns (D34 §7): all later ones when ``rerun`` is None; otherwise
+    the chosen task, those listed, and those the rules require — not yet accepted, depending on a task that reruns, or a
+    review / test after one. Returns (rerunning, kept, reasons) with the reason for each task the rules added."""
+    chosen = None if rerun is None else set(rerun)
+    rerunning, kept, reasons = [ordered[index]["id"]], [], {}
+    for row in ordered[index + 1:]:
+        spec = json.loads(row["spec"])
+        why = None
+        if chosen is not None and row["id"] not in chosen:
+            why = ("pending" if row["status"] != "accepted" else
+                   "depends" if any(dep in rerunning for dep in spec.get("depends_on", [])) else
+                   "review" if spec.get("kind") in {"review", "test"} else None)
+        if chosen is None or row["id"] in chosen or why:
+            rerunning.append(row["id"])
+            if why:
+                reasons[row["id"]] = why
+        else:
+            kept.append(row["id"])
+    return rerunning, kept, reasons
+
+
 def member(db, user, team, owner=False):
     """The user's role in the Team: 404 to a non-member (the Team stays unknown to them), 403 to a member who is not
     the owner that the action needs."""
@@ -820,8 +842,24 @@ class Service:
         if detail:
             from .recovery import summary
             value["recovery"] = summary(db, run)
+            kept = self._kept(db, run["id"])
+            if kept:
+                value["kept"] = kept
             value["attention"] = self._attention(value, self._space(db, run) if run["status"] == "waiting_worker" else None)
         return value
+
+    @staticmethod
+    def _kept(db, rid):
+        """Tasks the latest continue left as they were (D34 §7), while they still carry that version's result."""
+        for row in db.execute("SELECT version,created,content FROM revisions WHERE run_id=? ORDER BY version DESC", (rid,)):
+            content = json.loads(row["content"])
+            if content.get("kind") != "continued":
+                continue
+            tasks = [t for t in content.get("kept", []) if db.execute(
+                "SELECT 1 FROM tasks t JOIN attempts a ON a.id=t.current_attempt WHERE t.run_id=? AND t.id=? "
+                "AND t.status='accepted' AND a.created<=?", (rid, t, row["created"])).fetchone()]
+            return {"version": row["version"], "tasks": tasks} if tasks else None
+        return None
 
     @staticmethod
     def _space(db, run):
@@ -912,14 +950,14 @@ class Service:
                 version = run["version"] + 1
                 who = journal.person(actor)
                 # This command's writes to the Session row, recorded as one command event with its parameters (D34).
-                fields, done = {}, []
+                fields, done, extra = {}, [], {}
                 def commit():
                     if done:
                         return
                     done.append(True)
                     fields.update(version=version, updated=time.time())
                     journal.change(db, "runs", rid, who, "command." + action, event={
-                        "version": version, **{k: body[k] for k in ("task_id", "worker_id", "rerun") if k in body},
+                        "version": version, **{k: body[k] for k in ("task_id", "worker_id", "rerun") if k in body}, **extra,
                         **({"oversight": True, "by": {"id": actor["id"], "username": actor["username"]}} if oversight else {})},
                         **fields)
                 if action == "continue":
@@ -943,7 +981,12 @@ class Service:
                             snapshot["execution_contract"] = 2
                         journal.change(db, "runs", rid, who, "run.settings", event={"recovery": [old, snapshot["recovery"]]},
                                        snapshot=dumps(snapshot))
-                    reset = [row["id"] for row in ordered[index:]]
+                    later = {row["id"] for row in ordered[index + 1:]}
+                    rerun = body.get("rerun")
+                    require(rerun is None or (isinstance(rerun, list) and all(isinstance(x, str) for x in rerun)
+                                              and set(rerun) <= later), "rerun 只能列出所选任务之后的任务")
+                    reset, kept, reasons = rerun_plan(ordered, index, rerun)
+                    extra.update(kept=kept)
                     journal.change_rows(db, "tasks", f"run_id=? AND id IN ({','.join('?' * len(reset))})", (rid, *reset),
                                         who, "task.reset", status="pending", current_attempt=None)
                     journal.change(db, "tasks", (rid, current["id"]), who, "task.spec", spec=dumps(current))
@@ -953,9 +996,12 @@ class Service:
                     commit()   # before the revision: its snapshot reads the new requirement
                     from .revisions import changes, record
                     detail = "、".join(filter(None, ["需求" if goal != run["input"] else "", changes(before, current)]))
-                    record(db, rid, version, "continued", f"续作「{current['name']}」" + (f"：{detail}" if detail else ""),
-                           actor["id"], time.time(), input=goal, task=current, invalidated=reset,
-                           **({"recovery": snapshot["recovery"]} if "recovery" in body else {}))
+                    names = {row["id"]: json.loads(row["spec"])["name"] for row in ordered}
+                    scope = f"重跑 {'、'.join(names[t] for t in reset)}，沿用 {'、'.join(names[t] for t in kept)}" if kept else ""
+                    summary = "；".join(filter(None, [detail, scope]))
+                    record(db, rid, version, "continued", f"续作「{current['name']}」" + (f"：{summary}" if summary else ""),
+                           actor["id"], time.time(), input=goal, task=current, invalidated=reset, rerun=reset, kept=kept,
+                           reasons=reasons, **({"recovery": snapshot["recovery"]} if "recovery" in body else {}))
                 elif action == "recover":
                     from .recovery import schedule
                     require(run["lifecycle"] == "open" and run["worker_id"] and run["native_parent"] and

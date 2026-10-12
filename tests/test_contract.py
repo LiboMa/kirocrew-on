@@ -108,6 +108,78 @@ class DispatchContractTests(TeamsWorkersCase):
         self.assertEqual(context["tasks"][0]["spec"]["acceptance"], ["登录成功"])
 
 
+class RerunTests(TeamsWorkersCase):
+    flow = [{"id": "design", "name": "设计", "tool": "kiro", "prompt": "设计", "kind": "design", "acceptance": ["x"]},
+            {"id": "backend", "name": "后端", "tool": "claude", "prompt": "后端", "kind": "implement",
+             "acceptance": ["x"], "verify": ["go test"], "depends_on": ["design"]},
+            {"id": "frontend", "name": "前端", "tool": "claude", "prompt": "前端", "kind": "implement",
+             "acceptance": ["x"], "verify": ["npm test"], "depends_on": ["design"]},
+            {"id": "check", "name": "核对", "tool": "codex", "prompt": "核对", "kind": "test",
+             "acceptance": ["x"], "verify": ["npm test"], "depends_on": ["backend", "frontend"]}]
+
+    def settled(self, flow=None):
+        rid = self.service.start(self.c, {"request_id": "start-0000000003", "input": "研发需求与真实验证", "source": {"type": "new"},
+                                          "team_id": "team-p", "recovery": {"enabled": False, "max_cycles": 2},
+                                          "steps": flow or self.flow})["id"]
+        with self.db.transaction() as db:   # fixture: every task accepted by one Attempt, the run completed
+            for (tid,) in db.execute("SELECT id FROM tasks WHERE run_id=?", (rid,)).fetchall():
+                db.execute("INSERT INTO attempts(id,run_id,task_id,number,spec,status,created,updated) "
+                           "VALUES(?,?,?,1,'{}','accepted',0,0)", ("attempt-" + tid, rid, tid))
+                db.execute("UPDATE tasks SET status='accepted',current_attempt=? WHERE run_id=? AND id=?", ("attempt-" + tid, rid, tid))
+            db.execute("UPDATE runs SET status='completed' WHERE id=?", (rid,))
+        return rid
+
+    def go(self, rid, task, rerun=None, key="continue-000001"):
+        body = {"request_id": key, "expected_version": 1, "task_id": task, **({} if rerun is None else {"rerun": rerun})}
+        self.service.operate(self.c, rid, "continue", body)
+        return self.service.run(self.c, rid)
+
+    def test_only_the_chosen_and_required_tasks_rerun(self):
+        rid = self.settled()
+        detail = self.go(rid, "frontend", [])
+        self.assertEqual({t["id"]: t["status"] for t in detail["tasks"]},
+                         {"design": "accepted", "backend": "accepted", "frontend": "pending", "check": "pending"})
+        self.assertNotIn("kept", detail)   # check is a test task after a rerun task: nothing downstream is kept
+        content = self.service.revision(self.c, rid, 2)["content"]
+        self.assertEqual((content["rerun"], content["kept"]), (["frontend", "check"], []))
+
+    def test_dependents_rerun_and_others_are_kept(self):
+        rid = self.settled()
+        detail = self.go(rid, "design", ["frontend"])
+        self.assertEqual([t["status"] for t in detail["tasks"]], ["pending"] * 4)   # backend depends on design
+        reasons = self.service.revision(self.c, rid, 2)["content"]["reasons"]
+        self.assertEqual(reasons, {"backend": "depends", "check": "depends"})
+
+    def test_omitted_rerun_keeps_todays_behaviour(self):
+        rid = self.settled()
+        detail = self.go(rid, "backend")
+        self.assertEqual([t["status"] for t in detail["tasks"]], ["accepted", "pending", "pending", "pending"])
+        self.assertNotIn("kept", detail)
+
+    def test_legacy_tasks_rerun_only_what_was_chosen(self):
+        legacy = [{"id": x, "name": n, "tool": "claude", "prompt": n} for x, n in (("a", "甲"), ("b", "乙"), ("c", "丙"))]
+        rid = self.settled(legacy)
+        detail = self.go(rid, "a", ["c"])
+        self.assertEqual([t["status"] for t in detail["tasks"]], ["pending", "accepted", "pending"])
+        self.assertEqual(detail["kept"], {"version": 2, "tasks": ["b"]})
+        history = self.service.revisions(self.c, rid)
+        self.assertIn("沿用 乙", history[-1]["summary"])
+
+    def test_rerun_lists_only_later_tasks(self):
+        rid = self.settled()
+        for bad in (["design"], ["nope"], "check", [3]):
+            with self.subTest(bad=bad), self.assertRaises(Error) as caught:
+                self.go(rid, "frontend", bad, key="continue-" + str(abs(hash(str(bad))))[:10])
+            self.assertEqual(caught.exception.status, 400)
+
+    def test_rerun_travels_through_the_api_and_the_mcp_schema(self):
+        from octopus import mcp
+        from octopus.schema import openapi
+        self.assertIn("rerun", openapi()["components"]["schemas"]["Continue"]["properties"])
+        tool = next(t for t in mcp.TOOLS if t["name"] == "octopus_continue")
+        self.assertIn("rerun", tool["inputSchema"]["properties"])
+
+
 class WorkerContractTests(unittest.TestCase):
     def test_worker_instructions_include_requirement_and_contract(self):
         with tempfile.TemporaryDirectory() as tmp:
