@@ -36,11 +36,26 @@ def name(value):
     return value
 
 
-def steps(value):
+# Optional task structure (D34 §6.1): what a task delivers and how it is checked, kept in its spec only when given.
+CONTRACT = ("kind", "deliverables", "acceptance", "verify", "depends_on", "paths")
+KINDS = ("implement", "review", "test", "deliver", "design")
+LIMITS = {"deliverables": (20, 500), "acceptance": (20, 500), "verify": (10, 500), "paths": (20, 500), "depends_on": (8, 48)}
+
+
+def strings(value, field, items, chars):
+    require(isinstance(value, list) and len(value) <= items and all(isinstance(x, str) for x in value),
+            f"{field} 须为不超过 {items} 项的字符串列表")
+    result = list(dict.fromkeys(x.strip() for x in value if x.strip()))
+    require(all(len(x) <= chars for x in result), f"{field} 每项不超过 {chars} 个字符")
+    return result
+
+
+def steps(value, known=()):
+    """Validated tasks; ``known`` are the ids of tasks before ``value`` (a continued task depends on them)."""
     require(isinstance(value, list) and 1 <= len(value) <= 8, "流程须包含 1–8 个顺序任务")
-    seen, result = set(), []
+    seen, earlier, result = set(), set(known), []
     for step in value:
-        require(isinstance(step, dict) and set(step) <= {"id", "name", "prompt", "tool", "model", "effort"},
+        require(isinstance(step, dict) and set(step) <= {"id", "name", "prompt", "tool", "model", "effort", *CONTRACT},
                 "不支持的 Task 字段")
         sid = step.get("id")
         require(isinstance(sid, str) and re.fullmatch(r"[a-z][a-z0-9-]{0,47}", sid)
@@ -51,9 +66,18 @@ def steps(value):
         effort = step.get("effort", "")
         require(effort in ("", "low", "medium", "high", "xhigh", "max"), "Effort 无效")
         require(tool != "opencode" or not effort, "当前 OpenCode 接入未验证 Effort 覆盖")
-        result.append({"id": sid, "name": name(step.get("name")), "tool": tool,
-                       "model": text(step.get("model", "auto"), "Model", 200),
-                       "effort": effort, "prompt": text(step.get("prompt"), "任务说明", 8000)})
+        item = {"id": sid, "name": name(step.get("name")), "tool": tool, "model": text(step.get("model", "auto"), "Model", 200),
+                "effort": effort, "prompt": text(step.get("prompt"), "任务说明", 8000)}
+        if "kind" in step:
+            require(step["kind"] in KINDS, "任务类别只能是 implement、review、test、deliver 或 design")
+            item["kind"] = step["kind"]
+        for field, (items, chars) in LIMITS.items():
+            if field in step:
+                item[field] = strings(step[field], field, items, chars)
+        # Only earlier tasks: dependencies follow the order the Engine runs them in.
+        require(all(dep in (seen | earlier) - {sid} for dep in item.get("depends_on", [])),
+                f"任务「{item['name']}」的 depends_on 只能指向前序任务")
+        result.append(item)
     return result
 
 
@@ -905,9 +929,10 @@ class Service:
                     require(index is not None, "Task 不存在", 404, "not_found")
                     require(all(t["status"] == "accepted" for t in ordered[:index]), "先完成上游 Task", 409, "dependency")
                     override = body.get("execution", {})
-                    require(isinstance(override, dict) and set(override) <= {"name", "tool", "model", "effort", "prompt"}, "任务覆盖字段无效")
+                    require(isinstance(override, dict) and set(override) <= {"name", "tool", "model", "effort", "prompt", *CONTRACT},
+                            "任务覆盖字段无效")
                     before = json.loads(ordered[index]["spec"])
-                    current = steps([{**before, **override}])[0]
+                    current = steps([{**before, **override}], known=[t["id"] for t in ordered[:index]])[0]
                     goal = text(body.get("input", run["input"]), "开发需求", minimum=3)
                     if "recovery" in body:
                         from .recovery import policy

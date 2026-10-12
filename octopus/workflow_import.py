@@ -7,7 +7,7 @@ one code block. Normalization is deterministic and reported in ``notes``; ``doma
 import re
 
 from .documents import parse_document
-from .domain import TOOLS, steps
+from .domain import CONTRACT, TOOLS, steps
 from .security import Error, require
 
 DOCUMENT_KEYS = {"name", "steps", "schema", "id", "revision", "description", "intent", "summary"}
@@ -44,10 +44,10 @@ def step_id(value, index, seen):
 def normalize(raw, notes):
     require(isinstance(raw, list), "工作流需要 steps 任务列表")
     require(1 <= len(raw) <= 8, "流程须包含 1–8 个顺序任务")
-    seen, result = set(), []
+    seen, result, renamed = set(), [], {}
     for index, item in enumerate(raw, 1):
         require(isinstance(item, dict), f"第 {index} 个任务不是对象")
-        used = {"id", "model", "effort"} | {key for keys in FIELD_ALIASES.values() for key in keys}
+        used = {"id", "model", "effort", *CONTRACT} | {key for keys in FIELD_ALIASES.values() for key in keys}
         picked = {field: next((item[key] for key in keys if item.get(key) not in (None, "")), None)
                   for field, keys in FIELD_ALIASES.items()}
         ignored = sorted(set(item) - used)
@@ -60,9 +60,29 @@ def normalize(raw, notes):
         if tool == "opencode" and effort:
             notes.append(f"任务 {index}：OpenCode 接入不支持 Effort，已忽略 {effort!r}")
             effort = ""
-        result.append({"id": step_id(item.get("id"), index, seen), "name": picked["name"] or f"任务 {index}",
+        sid = step_id(item.get("id"), index, seen)
+        if isinstance(item.get("id"), str):
+            renamed[item["id"]] = sid
+        result.append({"id": sid, "name": picked["name"] or f"任务 {index}",
                        "tool": tool, "model": item.get("model") or "auto", "effort": effort,
-                       "prompt": picked["prompt"]})
+                       "prompt": picked["prompt"], **{k: item[k] for k in CONTRACT if k in item}})
+    for index, step in enumerate(result, 1):
+        # Dependencies by original id or by task name, on earlier tasks only; anything else is dropped with a note.
+        if not isinstance(step.get("depends_on"), list):
+            continue
+        earlier = {t["id"]: t["id"] for t in result[:index - 1]}
+        names = {t["name"]: t["id"] for t in result[:index - 1]}
+        kept = []
+        for dep in step["depends_on"]:
+            target = earlier.get(renamed.get(dep, dep)) if isinstance(dep, str) else None
+            if target is None and isinstance(dep, str) and dep in names:
+                target = names[dep]
+                notes.append(f"任务 {index}：depends_on「{dep}」按任务名称对应为 {target}")
+            if target is None:
+                notes.append(f"任务 {index}：忽略 depends_on 中无法对应到前序任务的「{dep}」")
+            elif target not in kept:
+                kept.append(target)
+        step["depends_on"] = kept
     return result
 
 

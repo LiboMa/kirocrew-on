@@ -6,11 +6,14 @@ import json
 from .db import dumps
 
 FIELDS = ("name", "tool", "model", "effort")
-LABELS = {"name": "名称", "tool": "工具", "model": "模型", "effort": "Effort"}
+CONTRACT = ("kind", "deliverables", "acceptance", "verify", "depends_on", "paths")
+LABELS = {"name": "名称", "tool": "工具", "model": "模型", "effort": "Effort", "kind": "类别", "deliverables": "交付物",
+          "acceptance": "验收项", "verify": "验证命令", "depends_on": "依赖", "paths": "可改动路径"}
 
 
 def _task(spec):
-    return {"id": spec.get("id"), **{key: spec.get(key) or "" for key in FIELDS}, "prompt": spec.get("prompt") or ""}
+    return {"id": spec.get("id"), **{key: spec.get(key) or "" for key in FIELDS}, "prompt": spec.get("prompt") or "",
+            **{key: spec[key] for key in CONTRACT if key in spec}}
 
 
 def snapshot(db, rid):
@@ -32,6 +35,7 @@ def changes(before, after):
              if key != "name" and (before.get(key) or "") != (after.get(key) or "")]
     if (before.get("prompt") or "") != (after.get("prompt") or ""):
         parts.append("提示词")
+    parts += [LABELS[key] for key in CONTRACT if before.get(key) != after.get(key)]
     return "、".join(parts)
 
 
@@ -94,7 +98,8 @@ def diff(old, new):
     for tid in order:
         a, b = before.get(tid), after.get(tid)
         status = "added" if a is None else "removed" if b is None else "changed" if a != b else "same"
-        fields = {key: [(a or {}).get(key), (b or {}).get(key)] for key in FIELDS if (a or {}).get(key) != (b or {}).get(key)}
+        fields = {key: [(a or {}).get(key), (b or {}).get(key)] for key in FIELDS + CONTRACT
+                  if (a or {}).get(key) != (b or {}).get(key)}
         if status in {"added", "removed"}:
             fields = {}
         tasks.append({"id": tid, "name": (b or a)["name"], "status": status, "fields": fields,

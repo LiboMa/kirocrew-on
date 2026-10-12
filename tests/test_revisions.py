@@ -9,7 +9,8 @@ from tests import test_access
 
 STEPS = [{"id": "plan", "name": "规划", "tool": "kiro", "prompt": "识别意图\n拆分任务"},
          {"id": "code", "name": "实现", "tool": "claude", "prompt": "实现数字时钟\n不引入外部资源"}]
-PLAN = json.dumps({"name": "数字时钟", "steps": [{"id": "review", "name": "审查", "tool": "codex", "prompt": "审查实现"}]})
+PLAN = json.dumps({"name": "数字时钟", "steps": [{"id": "review", "name": "审查", "tool": "codex", "prompt": "审查实现",
+                                                "kind": "review", "acceptance": ["实现正确"]}]})
 
 
 class RevisionTests(test_access.AccessCase):
@@ -61,6 +62,14 @@ class RevisionTests(test_access.AccessCase):
         added = self.service.revision_diff(self.b, self.rid, 1, 2)
         self.assertEqual([(t["id"], t["status"]) for t in added["tasks"] if t["status"] != "same"], [("review", "added")])
         self.assertEqual(self.service.revision_diff(self.b, self.rid)["from"], 2)   # default: the latest vs its predecessor
+
+    def test_diff_includes_the_task_contract(self):
+        self.plan()
+        self.continue_code(acceptance=["12 小时制补零"])
+        code = next(t for t in self.service.revision_diff(self.b, self.rid, 2, 3)["tasks"] if t["id"] == "code")
+        self.assertEqual(code["fields"]["acceptance"], [None, ["12 小时制补零"]])
+        self.assertIn("验收项", self.service.revisions(self.b, self.rid)[-1]["summary"])
+        self.assertEqual(self.service.revision(self.b, self.rid, 3)["snapshot"]["tasks"][1]["acceptance"], ["12 小时制补零"])
 
     def test_revisions_written_before_snapshots_are_reconstructed_where_possible(self):
         legacy_task = {**STEPS[1], "tool": "codex", "prompt": "实现数字时钟（旧）"}

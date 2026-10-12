@@ -19,7 +19,10 @@ EXAMPLE = {"intent": "一句话：用户真正要完成什么、属于哪类工�
            "summary": "补全后的需求（Markdown）：目标、范围与不做什么、可验证的验收标准、关键假设与待确认问题",
            "name": "针对本次需求的简短名称",
            "steps": [{"id": "task-1", "name": "任务名称", "tool": "claude", "model": "auto", "effort": "",
-                      "prompt": "本任务的具体目标、输入、实施步骤、交付物与验证方法"}]}
+                      "prompt": "本任务的具体目标、输入、实施步骤、交付物与验证方法",
+                      "kind": "implement", "deliverables": ["本任务交付的文件或产物"],
+                      "acceptance": ["可检查的验收项（来自 summary 的验收标准）"], "verify": ["实际执行的验证命令"],
+                      "depends_on": [], "paths": ["本任务可改动的路径或 glob"]}]}
 
 
 def plan_step(models=None):
@@ -32,6 +35,10 @@ def plan_step(models=None):
    只补全用户没有说清但完成任务必需的内容，不改变用户的明确要求。
 3. 任务拆分与 Agent 映射：steps 为 1–7 个顺序任务，每个任务选择最合适的工具并写出具体 prompt；
    后续任务将在同一个 Session、同一份源码检出上依次执行。
+4. 任务契约：每个任务必须给出 kind（implement / review / test / deliver / design）、deliverables、
+   至少 1 条可检查的 acceptance（审查与测试任务的验收项取自 summary 的验收标准，不另加要求）；
+   implement 与 test 任务必须给出至少 1 条 verify（实际可执行的验证命令）；depends_on 只列前序任务的 id；
+   paths 写本任务可改动的路径，便于续作时判断哪些任务受影响。
 本任务只做分析与规划，不修改业务代码。
 
 ## 此执行环境公布的模型
@@ -69,6 +76,11 @@ def expand(db, rid, text, models=None):
             notes.append(f"{step['name']}：模型 {step['model']} 不在执行环境公布的列表中，改为 auto")
             step["model"] = "auto"
         steps.append(step)
+    for step in steps:   # every planned task carries its contract (D34 §6.1)
+        missing = [label for label, ok in (("类别（kind）", "kind" in step), ("验收项（acceptance）", step.get("acceptance")),
+                                           ("验证命令（verify）", step.get("kind") not in {"implement", "test"} or step.get("verify")))
+                   if not ok]
+        require(not missing, f"任务「{step['name']}」缺少{'、'.join(missing)}", 409, "plan_invalid")
     if len(plan["steps"]) > 7:
         notes.append(f"规划给出 {len(plan['steps'])} 个任务，只保留前 7 个")
     start = db.execute("SELECT COALESCE(MAX(ordinal), 0) FROM tasks WHERE run_id=?", (rid,)).fetchone()[0] + 1

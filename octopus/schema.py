@@ -13,8 +13,11 @@ def openapi():
                  "effort": {"enum": ["", "low", "medium", "high", "xhigh", "max"]}, "prompt": text}
     command = {"request_id": {"type": "string", "minLength": 8, "maxLength": 100}, "expected_version": integer}
     step_list = {"type": "array", "items": ref("Step"), "minItems": 1, "maxItems": 8}
+    listed = lambda items: {"type": "array", "items": {"type": "string", "maxLength": 500}, "maxItems": items}
+    contract = {"kind": {"enum": ["implement", "review", "test", "deliver", "design"]}, "deliverables": listed(20),
+                "acceptance": listed(20), "verify": listed(10), "depends_on": listed(8), "paths": listed(20)}
     schemas = {
-        "Step": obj({"id": text, "name": text, **execution}, ["id", "name", "tool", "prompt"]),
+        "Step": obj({"id": text, "name": text, **execution, **contract}, ["id", "name", "tool", "prompt"]),
         "Execution": obj({"name": text, **execution}),
         "Source": obj({"type": {"enum": ["new", "git"]}, "url": text, "ref": text}, ["type"]),
         "Login": obj({"username": text, "password": {"type": "string", "format": "password"}}, ["username", "password"]),
