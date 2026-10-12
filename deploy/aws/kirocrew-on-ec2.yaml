@@ -123,7 +123,7 @@ Resources:
           FromPort: !Ref ApiPort
           ToPort: !Ref NativeRelayEnd
           SourcePrefixListId: !Ref CloudFrontPrefixListId
-          Description: CloudFront origin fetches to the API, the native chat and the Worker hosts' native chat relays
+          Description: CloudFront origin fetches to the API, the native chat and the Worker host native chat relays
       SecurityGroupEgress:
         - IpProtocol: "-1"
           CidrIp: 0.0.0.0/0

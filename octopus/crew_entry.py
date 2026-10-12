@@ -46,7 +46,9 @@ def create(service, actor, rid):
             health.get("host_principal") == registered.get("host_principal") and
             health.get("isolation") == registered.get("isolation"),
             "Worker 执行边界发生变化，请重新核查", 409, "worker_changed")
-    require(not run["team_id"] or health.get("isolation") == "dedicated",
+    # A Team's own Worker must be a dedicated boundary: every member's login covers its Gateway. On a shared environment
+    # only its boundary owner got this far (checked above), so a Team session there opens like the owner's own.
+    require(not run["team_id"] or worker["scope"] == "shared" or health.get("isolation") == "dedicated",
             "Team 原生入口需要该 Team 的专属 Worker", 403, "forbidden")
     require(health.get("crew_entry") is True,
             "此 Worker 尚未支持原生会话入口，请更新并重启 Worker", 409, "worker_upgrade_required")

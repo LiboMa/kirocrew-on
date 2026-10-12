@@ -1,6 +1,7 @@
 """Deployment assets: CloudFront → SG (CloudFront prefix list) → EC2, pinned sources, no macOS assumptions."""
 import json
 import os
+import re
 from pathlib import Path
 import shutil
 import subprocess
@@ -293,6 +294,20 @@ class ScriptTests(unittest.TestCase):
         self.assertIn('--config "$CHECK_TOML" --check', check)
         self.assertIn('OCTOPUS_CONFIG="$CHECK_TOML"', check)
         self.assertIn('rm -f "$CHECK_TOML"', check)
+
+    def test_security_group_descriptions_use_only_what_ec2_accepts(self):
+        # Observed on EC2: an apostrophe in a rule description made the platform update roll back.
+        allowed = re.compile(r"[a-zA-Z0-9. _\-:/()#,@\[\]+=&;{}!$*]{0,255}")
+        worker = yaml.load((ROOT / "deploy/aws/kirocrew-on-worker.yaml").read_text(), Loader=CfnLoader)
+        for name, document in (("platform", template()), ("worker", worker)):
+            for logical, resource in document["Resources"].items():
+                if resource["Type"] != "AWS::EC2::SecurityGroup":
+                    continue
+                properties = resource["Properties"]
+                texts = [properties["GroupDescription"]] + [rule["Description"] for key in
+                         ("SecurityGroupIngress", "SecurityGroupEgress") for rule in properties.get(key, [])]
+                for text in texts:
+                    self.assertTrue(allowed.fullmatch(text), (name, logical, text))
 
     def test_worker_host_native_entry_is_relayed_through_the_platform(self):
         worker = yaml.load((ROOT / "deploy/aws/kirocrew-on-worker.yaml").read_text(), Loader=CfnLoader)

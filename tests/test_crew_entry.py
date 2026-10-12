@@ -107,6 +107,24 @@ class CrewEntryTests(unittest.TestCase):
         self.assertEqual(self.calls, [])          # refused before the Worker is contacted
         self.assertTrue(self.create()["url"])     # the boundary owner keeps the entry
 
+    def test_team_session_on_a_shared_environment_opens_for_its_boundary_owner_only(self):
+        # Observed on EC2: the owner of the shared personal Worker was refused with "Team 原生入口需要该 Team 的专属 Worker".
+        with self.db.transaction() as db:
+            db.execute("INSERT INTO teams VALUES('team-shared','Shared Team',0)")
+            db.execute("INSERT INTO members VALUES('team-shared',?,'owner')", (self.actor["id"],))
+            db.execute("INSERT INTO members VALUES('team-shared',?,'member')", (self.actors["bob"]["id"],))
+            db.execute("UPDATE workers SET scope='shared' WHERE id='worker'")
+            db.execute("INSERT INTO worker_spaces(worker_id,team_id) VALUES('worker','team-shared')")
+        self.update(team_id="team-shared")
+        self.assertEqual(self.health["isolation"], "trusted-local")
+        self.assertEqual(self.create()["native_parent"], self.parent)
+        self.calls.clear()
+        with self.assertRaises(Error) as caught:
+            self.create(self.actors["bob"])
+        self.assertEqual(caught.exception.code, "forbidden")
+        self.assertIn("共享执行环境", str(caught.exception))
+        self.assertEqual(self.calls, [])
+
     def test_team_membership_and_revocation_during_entry(self):
         team = {"id": "team-entry"}   # a Team created before execution environments (D28)
         with self.db.transaction() as db:
