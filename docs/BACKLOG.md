@@ -40,6 +40,12 @@
   会话会切到未列出的空间；用户管理不显示创建时间、管理员降级自己后未刷新 `me`；无变化的启用 / 升级也写审计、审计 `before=0` 视为无游标、
   OpenAPI 缺 `DELETE /v1/admin/users/{id}/tokens/{tid}`；`octopus connect` 遗留 24 小时临时登录 Token（第 3 期）；停用用户不结束已签发的
   原生 Gateway 登录 Cookie（≤ 1 小时，K03）。
+- 访问管理第 2 期（审查延后项）：跨 Worker 改派时，崩溃遗留的 `dispatching` Attempt 以原 id 发往新 Worker（应把未验收任务重置为待执行）；
+  主机重新部署后改派回同一 Worker 时保留旧原生父会话、派发得 `not_prepared`（连接更新改变执行边界时应清除其未关闭会话的绑定，主机替换时原已存在）；
+  空闲主机「只回原 Team」可被「以非空闲方式重新登记同一边界」绕过、控制台不显示 `last_team`（预留的空闲环境点击后才得 409）、
+  退役主机重新登记因边界已登记而失败；`POST /v1/users {worker_id}` 分配个人空间未写 `worker.space.add`、同名改名与重复归档也写审计；
+  退役 Worker 的观察提示为「已停用」；Skill 未说明 `environment_changed`，并在 MCP 尚无分配工具时建议「选择 Worker」（第 3 期）；
+  `WorkerTools` 按 `me.admin` 而非 `elevated(me)` 显示；更换执行环境的确认未写出目标环境。
 - 执行环境（D28 阶段 A / B 审查）：新用户的个人空间默认用共享环境（需手动改选）；
   `team_without_worker` 检查早于成员检查（非成员可得知 Team 名），环境变化后的重试被拒绝而不是重放；`mcp.py` 仍按 owner / team 预选 Worker
   （服务端已自动选择，属冗余）；已分配给 Team 的专属 Worker 也显示「设为共享环境」；`bootstrap-worker --spare` 按名称匹配（名称不唯一）；
