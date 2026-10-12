@@ -7,7 +7,11 @@ import { cn } from "@/lib/utils";
 
 const KINDS: Record<string, string> = { created: "创建", planned: "规划", continued: "续作", recovered: "自动纠错" };
 const STATUS: Record<TaskDiff["status"], string> = { added: "新增", removed: "删除", changed: "修改", same: "未变化" };
-const FIELD: Record<string, string> = { name: "名称", tool: "工具", model: "模型", effort: "Effort" };
+const FIELD: Record<string, string> = {
+  name: "名称", tool: "工具", model: "模型", effort: "Effort", kind: "类别", deliverables: "交付物", acceptance: "验收项",
+  verify: "验证命令", depends_on: "依赖", paths: "可改动路径",
+};
+const shown = (value: unknown) => (Array.isArray(value) ? value.join("；") : value as string) || "默认";
 
 const CONTEXT = 2;
 
@@ -95,7 +99,7 @@ export function RevisionsPanel({ run }: { run: Run }) {
                   <h3 className="flex flex-wrap items-center gap-2 text-xs font-semibold">
                     {task.name}<span className="rounded bg-muted px-1.5 font-normal">{STATUS[task.status]}</span>
                     {Object.entries(task.fields).map(([key, [a, b]]) => (
-                      <span key={key} className="font-normal text-muted-foreground">{FIELD[key] ?? key} {a || "默认"} → {b || "默认"}</span>
+                      <span key={key} className="font-normal text-muted-foreground">{FIELD[key] ?? key} {shown(a)} → {shown(b)}</span>
                     ))}
                   </h3>
                   {task.prompt.some((l) => l.op !== " ") ? <Lines lines={task.prompt} /> : <p className="text-xs text-muted-foreground">提示词未变化</p>}

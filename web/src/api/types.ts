@@ -10,6 +10,13 @@ export interface Step {
   model: string;
   effort: Effort | string;
   prompt: string;
+  /** Optional task contract (D34): what the task delivers and how it is checked. */
+  kind?: "implement" | "review" | "test" | "deliver" | "design";
+  deliverables?: string[];
+  acceptance?: string[];
+  verify?: string[];
+  depends_on?: string[];
+  paths?: string[];
 }
 
 export interface Me {
@@ -179,6 +186,8 @@ export interface RunSource {
 }
 
 export interface Run {
+  /** Tasks the latest continue left as they were, still carrying that version's result (D34). */
+  kept?: { version: number; tasks: string[] };
   id: string;
   name: string | null;
   input: string;

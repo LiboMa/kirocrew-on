@@ -68,6 +68,39 @@ describe("session detail", () => {
     expect(screen.getByRole("list", { name: "建议" })).toHaveTextContent("补 CHANGELOG");
   });
 
+  test("continue lets the user choose which later tasks rerun, the rules adding those that must", async () => {
+    const step = (id: string, name: string, extra: Record<string, unknown>) => ({ ...spec(id, name, "claude"), ...extra });
+    const run = makeRun({ id: "run-k", status: "completed", worker_id: "w1", version: 3, tasks: [
+      { id: "code", run_id: "run-k", ordinal: 0, status: "accepted", current_attempt: null, spec: step("code", "实现", { kind: "implement" }), attempts: [] },
+      { id: "docs", run_id: "run-k", ordinal: 1, status: "accepted", current_attempt: null, spec: step("docs", "文档", { kind: "deliver" }), attempts: [] },
+      { id: "check", run_id: "run-k", ordinal: 2, status: "accepted", current_attempt: null, spec: step("check", "核对", { kind: "test" }), attempts: [] },
+    ] });
+    const calls = open(run, { "POST /runs/run-k/continue": { id: "run-k", version: 4 } });
+    await userEvent.click((await screen.findAllByRole("button", { name: "配置并续作" }))[0]);
+    const dialog = await screen.findByRole("dialog");
+    const docs = within(dialog).getByRole("checkbox", { name: /文档/ });
+    const check = within(dialog).getByRole("checkbox", { name: /核对/ });
+    expect(check).toBeChecked();
+    expect(check).toBeDisabled();
+    expect(within(dialog).getByText(/审查 \/ 测试在改动后必须复验/)).toBeInTheDocument();
+    await userEvent.click(docs);
+    expect(docs).not.toBeChecked();
+    await userEvent.click(within(dialog).getByRole("button", { name: "保存并续作" }));
+    await waitFor(() => expect(calls.find((c) => c.path === "/v1/runs/run-k/continue")?.body).toMatchObject({ task_id: "code", rerun: ["check"] }));
+  });
+
+  test("tasks the latest continue left as they were say so", async () => {
+    const run = makeRun({ id: "run-kept", status: "completed", kept: { version: 3, tasks: ["review"] }, tasks: blocked.tasks.map((t) => ({ ...t, status: "accepted" })) });
+    open(run);
+    const review = await waitFor(() => {
+      const card = document.querySelector('[data-task="review"]');
+      expect(card).not.toBeNull();
+      return card as HTMLElement;
+    });
+    expect(review).toHaveTextContent("沿用 v3 结果");
+    expect(document.querySelector('[data-task="code"]')).not.toHaveTextContent("沿用");
+  });
+
   test("continue keeps the Session and submits the edited execution with the expected version", async () => {
     const calls = open(blocked, { "POST /runs/run-a/continue": { id: "run-a", version: 5 } });
     await userEvent.click(await screen.findByRole("button", { name: "续作" }));

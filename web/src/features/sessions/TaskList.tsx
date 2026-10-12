@@ -34,6 +34,9 @@ export function TaskList({ run, onContinue }: { run: Run; onContinue: (taskId: s
                     {TOOLS[spec.tool] ?? spec.tool} · {spec.model} · Effort {spec.effort || "继承默认"}
                   </p>
                 </div>
+                {run.kept?.tasks.includes(task.id) && (
+                  <span className="rounded bg-muted px-1.5 text-[11px] text-muted-foreground">沿用 v{run.kept.version} 结果</span>
+                )}
                 <StatusBadge status={task.status} />
               </header>
               <p className="mt-3 line-clamp-4 text-sm leading-6 whitespace-pre-wrap text-foreground/85">{spec.prompt}</p>
