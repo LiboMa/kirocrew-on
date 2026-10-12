@@ -59,7 +59,7 @@
 | Team 与执行环境 | ✅ | 创建 Team 必须分配环境；共享 / 专属 / 空闲；独立 Worker 主机（D28–D30） |
 | 自托管部署与扩容 | ✅ | CloudFormation + `deploy.sh`；`worker-host add <名称>` 一条命令加 Worker 主机 |
 | 重启恢复、备份恢复 | ✅ | M1 验收 |
-| 用户、Team、权限管理（改密码、停用、admin scope、审计） | ○ | 设计与第 1 期计划已完成（`docs/superpowers/specs/2026-10-12-access-management-design.md`） |
+| 用户、Team、权限管理（改密码、停用、admin scope、审计） | ◐ EC2 | 第 1 期已上线：admin scope、403 / 404、管理员查看与操作全部会话与审计、用户与 Token 管理；Team 与 Worker 管理、MCP 角色调用在第 2、3 期 |
 | 私有仓库（GitHub Connector） | ○ | 设计草案（`docs/superpowers/specs/2026-10-11-github-connector-design.md`） |
 | 成果出库（Feature 分支、报告、PR） | ○ | M2 / M5 |
 | 服务端检索、更多客户端一键接入 | ○ | M3 |
