@@ -2,7 +2,9 @@ import type { Dialog } from "@/features/console/context";
 import { LaunchWizard } from "@/features/launch/LaunchWizard";
 import { AssignWorkerDialog, ContinueDialog, ControlDialog } from "@/features/sessions/dialogs";
 import { TeamDialog } from "@/features/settings/TeamDialog";
+import { PasswordDialog } from "@/features/settings/PasswordDialog";
 import { TokensDialog } from "@/features/settings/TokensDialog";
+import { UsersDialog } from "@/features/settings/UsersDialog";
 import { WorkersDialog } from "@/features/settings/WorkersDialog";
 import { ShareDialog } from "@/features/workflows/ShareDialog";
 import { WorkflowEditor } from "@/features/workflows/WorkflowEditor";
@@ -23,6 +25,10 @@ export function DialogHost({ dialog }: { dialog: Dialog | null }) {
       return <TokensDialog />;
     case "workers":
       return <WorkersDialog />;
+    case "users":
+      return <UsersDialog />;
+    case "password":
+      return <PasswordDialog />;
     case "continue":
       return <ContinueDialog run={dialog.run} taskId={dialog.taskId} />;
     case "assign":

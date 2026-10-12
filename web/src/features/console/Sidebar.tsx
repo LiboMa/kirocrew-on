@@ -7,16 +7,20 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { StatusBadge } from "@/components/StatusBadge";
 import { useConsole } from "@/features/console/context";
 import { formatTime } from "@/lib/labels";
+import { elevated } from "@/lib/access";
 import { RUN_FILTERS, filterRuns, statusText, type RunFilter } from "@/lib/session";
 import { cn } from "@/lib/utils";
 
 export function Sidebar() {
-  const { runs, workflows, space, selected, select, open, users, me } = useConsole();
+  const { runs, workflows, space, selected, select, open, users, me, allTeams, allSessions, setAllSessions } = useConsole();
   const [query, setQuery] = useState("");
   const [filter, setFilter] = useState<RunFilter>("all");
-  const visible = useMemo(() => filterRuns(runs, { space, query, filter }).sort((a, b) => b.updated - a.updated),
-    [runs, space, query, filter]);
-  const inSpace = useMemo(() => filterRuns(runs, { space, query: "", filter: "all" }), [runs, space]);
+  const scope = allSessions ? null : space;
+  const visible = useMemo(() => filterRuns(runs, { space: scope, query, filter }).sort((a, b) => b.updated - a.updated),
+    [runs, scope, query, filter]);
+  const inSpace = useMemo(() => filterRuns(runs, { space: scope, query: "", filter: "all" }), [runs, scope]);
+  const where = (run: (typeof runs)[number]) => (run.team_id ? "Team · " + (allTeams.find((t) => t.id === run.team_id)?.name ?? run.team_id)
+    : "个人 · " + (users.find((u) => u.id === run.owner_id)?.username ?? run.owner_id));
 
   return (
     <Tabs defaultValue="sessions" className="flex min-h-0 flex-1 flex-col gap-0">
@@ -33,6 +37,13 @@ export function Sidebar() {
             <Input value={query} onChange={(e) => setQuery(e.target.value)} placeholder="搜索名称、需求、工作流或 ID"
               className="h-9 bg-card pl-8" aria-label="搜索会话" type="search" />
           </div>
+          {elevated(me) && (
+            <button type="button" onClick={() => setAllSessions(!allSessions)} aria-pressed={allSessions}
+              className={cn("w-full rounded-md border px-2.5 py-1.5 text-left text-xs transition-colors",
+                allSessions ? "border-primary bg-primary/10 text-primary" : "bg-card text-muted-foreground hover:bg-accent")}>
+              全部会话
+            </button>
+          )}
           <div className="flex flex-wrap gap-1.5" role="group" aria-label="按状态筛选">
             {RUN_FILTERS.map(([value, label]) => (
               <button key={value} type="button" onClick={() => setFilter(value)} aria-pressed={filter === value}
@@ -56,6 +67,7 @@ export function Sidebar() {
                   <span>{run.progress.accepted}/{run.progress.total} 交接</span>
                   <span className="ml-auto font-mono">{formatTime(run.updated, true)}</span>
                 </span>
+                {allSessions && <span className="mt-1 block text-[11px] text-muted-foreground">{where(run)}</span>}
               </button>
             ))}
             {!visible.length && (

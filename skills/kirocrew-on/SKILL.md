@@ -78,7 +78,7 @@ KiroCrew ON 在远端执行开发任务：KiroCrew 的 Kiro Agent 先识别意�
 ## 5．预览产出
 
 - `octopus_preview`（传 `run_id`）返回 Web 预览链接，静态页面可在浏览器中直接打开。
-- 链接 1 小时有效；返回 403（`preview_expired` / `preview_invalid`）时重新调用 `octopus_preview` 取新链接。
+- 链接 10 分钟有效，每次打开都核对你仍能查看该会话；返回 403（`preview_expired` / `preview_invalid` / `preview_forbidden`）时重新调用 `octopus_preview` 取新链接（`preview_forbidden` 表示已无权查看，告诉用户）。
 - 预览在与控制台隔离的沙箱中运行：页面里的 `localStorage`、`sessionStorage`、IndexedDB 与 Cookie 都不可用。
   依赖它们的功能（如保存设置、计数）在预览中失效不代表产出有缺陷；要验证这类功能，把文件下载到本机打开，或用下面的开发服务器方式。
 - 需要运行开发服务器的项目：在 kirocrew-on 仓库执行 `deploy/aws/deploy.sh space <run_id>`，
@@ -89,3 +89,4 @@ KiroCrew ON 在远端执行开发任务：KiroCrew 的 Kiro Agent 先识别意�
 - 停止、关闭、删除会话前先征得用户同意（`octopus_control`）。
 - 只报告工具返回的真实状态与证据，不编造执行结果；工具报错时原样说明错误。
 - 返回 401 / Token 失效时，请用户重新执行第 1 节的连接命令；返回「API 暂不可用」时，说明是平台不可达，稍后重试。
+- 返回 404 表示对象不存在或你无权查看；返回 403 表示能看到但当前角色或 Token scope 不允许此操作——把消息原样告诉用户（例如「只有 Team owner 可以删除他人创建的会话」），不要换个方式重试。

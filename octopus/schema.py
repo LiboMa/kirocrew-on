@@ -30,6 +30,11 @@ def openapi():
                        "connection": ref("Connection")}, ["name", "connection"]),
         "Connection": obj({"url": text, "token": {"type": "string", "format": "password"}}, ["url", "token"]),
         "Enabled": obj({"enabled": {"type": "boolean"}}, ["enabled"]),
+        "PasswordChange": obj({"current": {"type": "string", "format": "password"},
+                               "password": {"type": "string", "format": "password", "minLength": 12}}, ["current", "password"]),
+        "PasswordReset": obj({"password": {"type": "string", "format": "password", "minLength": 12}}, ["password"]),
+        "Active": obj({"active": {"type": "boolean"}}, ["active"]),
+        "AdminFlag": obj({"admin": {"type": "boolean"}}, ["admin"]),
         "ConnectionUpdate": obj({"connection": ref("Connection")}, ["connection"]),
         "Share": obj({"confirm": {"const": True}}, ["confirm"]),
         "Space": obj({"team_id": text, "user_id": text}),
@@ -77,7 +82,10 @@ def openapi():
         "/v1/workflows/{id}/shares": {"post": "Grant", "delete": "Grant"},
         "/v1/workflows/{id}/archive": {"post": "Archive"},
         "/v1/workers": {"get": None, "post": "Worker"},
-        "/v1/admin/environments": {"get": None},
+        "/v1/admin/environments": {"get": None}, "/v1/admin/audit": {"get": None},
+        "/v1/me/password": {"post": "PasswordChange"}, "/v1/users/{id}/password": {"post": "PasswordReset"},
+        "/v1/users/{id}/active": {"post": "Active"}, "/v1/users/{id}/admin": {"post": "AdminFlag"},
+        "/v1/admin/users": {"get": None}, "/v1/admin/users/{id}/tokens": {"get": None},
         "/v1/workers/{id}/enabled": {"post": "Enabled"},
         "/v1/workers/{id}/share": {"post": "Share"},
         "/v1/workers/{id}/spaces": {"post": "Space", "delete": "Space"},
@@ -94,10 +102,12 @@ def openapi():
         **{"/v1/runs/{id}/" + action: {"post": "Control"} for action in ["stop", "close", "reopen", "delete"]},
     }
     # Execution environment management (D28): one place for administrators, also in the console's 「执行环境」 dialog.
-    admin = {("/v1/admin/environments", "get"), ("/v1/workers", "post"), ("/v1/workers/{id}/enabled", "post"),
+    admin = {("/v1/admin/environments", "get"), ("/v1/admin/audit", "get"), ("/v1/workers", "post"), ("/v1/workers/{id}/enabled", "post"),
              ("/v1/workers/{id}/share", "post"), ("/v1/workers/{id}/spaces", "post"),
              ("/v1/workers/{id}/spaces", "delete"), ("/v1/workers/{id}/connection", "post"),
              ("/v1/workers/{id}/dedicate", "post"), ("/v1/teams", "post")}
+    users_admin = {("/v1/users/{id}/password", "post"), ("/v1/users/{id}/active", "post"), ("/v1/users/{id}/admin", "post"),
+                   ("/v1/admin/users", "get"), ("/v1/admin/users/{id}/tokens", "get")}
     paths = {}
     for path, methods in routes.items():
         paths[path] = {}
@@ -117,6 +127,10 @@ def openapi():
                 op["security"] = []
             if (path, method) in admin:
                 op["tags"] = ["执行环境（管理员）"]
+            if (path, method) in users_admin:
+                op["tags"] = ["用户与权限（管理员）"]
+                op["description"] = ("Administrator only (admin scope). Deactivating or resetting a user revokes all of "
+                                     "their tokens; the last active admin and a Team's only active owner are protected.")
             if path == "/v1/admin/environments":
                 op["description"] = "Administrator only. Every execution environment with its scope, owner, Team or shared spaces (with names), enabled, active_runs and live health (reachable=false when its Worker does not answer within a few seconds; never fails the listing). No tokens."
             if path.endswith("/crew-entry"):
@@ -125,6 +139,13 @@ def openapi():
                 op["description"] = "Read scope. The run's native KiroCrew Session (coordinator and sub-agent messages, running state) read through its Worker; no native login is issued, so Team members on a shared environment can watch it too. Newest page first; pass before=next_before for older messages."
                 op["parameters"] += [{"in": "query", "name": "before", "schema": {"type": "integer", "minimum": 0}},
                                      {"in": "query", "name": "limit", "schema": {"type": "integer", "minimum": 1, "maximum": 100}}]
+            if path == "/v1/admin/audit":
+                op["description"] = "Administrator only (admin scope). Administration and admin oversight of others' Sessions, newest first."
+                op["parameters"] = [{"in": "query", "name": "before", "schema": {"type": "integer", "minimum": 0}},
+                                    {"in": "query", "name": "limit", "schema": {"type": "integer", "minimum": 1, "maximum": 200}}]
+            if path == "/v1/runs" and method == "get":
+                op["parameters"] = [{"in": "query", "name": "all", "schema": {"enum": ["1"]},
+                                     "description": "Elevated admins only: every Session instead of their own and their Teams'."}]
             if path.endswith("/dedicate"):
                 op["description"] = "Administrator only. A shared Worker host serving exactly one Team becomes that Team's dedicated environment; every member then opens its native KiroCrew entry."
             if path.endswith("/events"):

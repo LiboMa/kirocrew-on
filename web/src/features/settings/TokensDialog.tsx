@@ -52,7 +52,8 @@ export function TokensDialog() {
       <div className="space-y-2">
         {(tokens.data ?? []).map((token) => (
           <div key={token.id} className="flex items-center justify-between rounded-lg border bg-card px-3 py-2 text-sm">
-            <span>{token.label}<small className="ml-2 text-xs text-muted-foreground">{scopesOf(token)} · {new Date(token.expires * 1000).toLocaleDateString()} 到期</small></span>
+            <span>{token.label}<small className="ml-2 text-xs text-muted-foreground">{scopesOf(token)} · {new Date(token.expires * 1000).toLocaleDateString()} 到期 ·{" "}
+              {token.last_used ? "最近使用 " + new Date(token.last_used * 1000).toLocaleString() : "从未使用"}</small></span>
             <Button type="button" size="sm" variant="ghost" className="text-destructive" data-token={token.id}
               onClick={() => api("/tokens/" + token.id, "DELETE", {}).then(() => client.invalidateQueries({ queryKey: keys.tokens }))
                 .catch((e: Error) => toast.error(e.message))}>撤销</Button>

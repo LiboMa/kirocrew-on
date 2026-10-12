@@ -56,9 +56,10 @@ export function ContinueDialog({ run, taskId }: { run: Run; taskId?: string }) {
 }
 
 export function AssignWorkerDialog({ run }: { run: Run }) {
-  const { close, workers, me } = useConsole();
+  const { close, workers } = useConsole();
   const refresh = useRefreshRun();
-  const choices = spaceWorkers(workers, run.team_id ?? "", me);
+  // The Session's own space: an administrator may assign a Worker to someone else's Session (A2).
+  const choices = spaceWorkers(workers, run.team_id ?? "", { id: run.owner_id });
   const [worker, setWorker] = useState(choices[0]?.id ?? "");
   return (
     <FormDialog title="分配执行 Worker" kicker="ASSIGN WORKER" onClose={close} submitLabel="开始执行"

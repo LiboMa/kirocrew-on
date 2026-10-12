@@ -18,6 +18,8 @@ export type Dialog =
   | { kind: "team" }
   | { kind: "tokens" }
   | { kind: "workers" }
+  | { kind: "users" }
+  | { kind: "password" }
   // Session dialogs carry the Session as it was when they opened: commands then send that expected_version, and a
   // concurrent change is rejected by the server instead of silently retargeting the dialog.
   | { kind: "continue"; run: Run; taskId?: string }
@@ -37,6 +39,9 @@ export interface ConsoleState {
   runs: Run[];
   space: string;
   setSpace: (space: string) => void;
+  /** An administrator's view of every Session, in every space (B5). */
+  allSessions: boolean;
+  setAllSessions: (all: boolean) => void;
   selected: string | null;
   select: (id: string | null) => void;
   open: (dialog: Dialog) => void;

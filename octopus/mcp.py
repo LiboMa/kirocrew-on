@@ -36,7 +36,7 @@ TOOLS = [
                     "（decision、summary、findings、交接文件）和最近 10 条事件；detail=true 返回完整记录（含各次尝试的原始输出与证据，可能很大）。",
      "inputSchema": object_schema({"run_id": STRING, "detail": {"type": "boolean"}}, ["run_id"])},
     {"name": "octopus_preview",
-     "description": "返回某个 Session 产出的 Web 预览链接（Workspace 中的 index.html 等静态页面，1 小时有效，在隔离环境中运行，"
+     "description": "返回某个 Session 产出的 Web 预览链接（Workspace 中的 index.html 等静态页面，10 分钟有效，在隔离环境中运行，"
                     "页面内 localStorage、sessionStorage、IndexedDB 与 Cookie 不可用）；"
                     "需要开发服务器的项目请用 deploy/aws/deploy.sh space <run_id> 在本机预览。",
      "inputSchema": object_schema({"run_id": STRING}, ["run_id"]), "annotations": {"readOnlyHint": True}},

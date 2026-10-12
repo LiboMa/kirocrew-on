@@ -20,7 +20,8 @@ export function mockApi(routes: Record<string, Handler | unknown>) {
     const key = `${method} ${url.pathname.replace(/^\/v1/, "")}`;
     if (!(key in routes)) return new Response(JSON.stringify({ error: "unmocked " + key, code: "test" }), { status: 599 });
     const route = routes[key];
-    const value = typeof route === "function" ? (route as Handler)(body, url, init) : route;
+    // A handler may answer later (a Promise), e.g. to observe the console while a request is in flight.
+    const value = await (typeof route === "function" ? (route as Handler)(body, url, init) : route);
     if (value instanceof Response) return value;
     return new Response(JSON.stringify(value), { status: 200, headers: { "Content-Type": "application/json" } });
   });
@@ -28,7 +29,7 @@ export function mockApi(routes: Record<string, Handler | unknown>) {
   return calls;
 }
 
-export const ME = { id: "u1", username: "fixture-owner", admin: 1, scopes: ["read", "execute", "manage"] };
+export const ME = { id: "u1", username: "fixture-owner", admin: 1, scopes: ["read", "execute", "manage", "admin"] };
 
 export function makeRun(overrides: Partial<Run> = {}): Run {
   return {

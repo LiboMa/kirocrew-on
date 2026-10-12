@@ -76,7 +76,7 @@ class MigrationTests(unittest.TestCase):
         with sqlite3.connect(self.path) as db:
             db.execute("INSERT INTO workers(id,name,owner_id,config) VALUES('w1','personal','u1','{}')")
         result = migrations.apply(self.path, backup_dir=self.backups)
-        self.assertEqual(result["to"], 2)
+        self.assertEqual(result["to"], LATEST)
         self.assertIsNotNone(result["backup"])
         with sqlite3.connect(self.path) as db:
             self.assertEqual(db.execute("SELECT scope FROM workers WHERE id='w1'").fetchone()[0], "dedicated")
@@ -89,6 +89,16 @@ class MigrationTests(unittest.TestCase):
                 db.execute("INSERT INTO worker_spaces(worker_id,team_id) VALUES('w2','t1')")
             with self.assertRaises(sqlite3.IntegrityError):
                 db.execute("UPDATE workers SET scope='bogus' WHERE id='w1'")
+
+    def test_access_migration_adds_audit_and_activity_columns(self):
+        self.legacy_database()
+        result = migrations.apply(self.path, backup_dir=self.backups)
+        self.assertEqual(result["to"], 3)
+        with sqlite3.connect(self.path) as db:
+            self.assertIn("last_login", [c[1] for c in db.execute("PRAGMA table_info(users)")])
+            self.assertIn("last_used", [c[1] for c in db.execute("PRAGMA table_info(tokens)")])
+            db.execute("INSERT INTO audit(at,actor_id,action,kind,target) VALUES(1,'u1','user.deactivate','user','u2')")
+            self.assertEqual(db.execute("SELECT detail FROM audit").fetchone()[0], "{}")
 
     def test_newer_database_is_refused(self):
         self.legacy_database()

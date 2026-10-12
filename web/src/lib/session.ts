@@ -30,7 +30,12 @@ export function closeAction(run: Run): { action: "close" | "reopen"; label: stri
 }
 
 export function canDelete(run: Run): boolean {
-  return run.lifecycle !== "deleted";
+  return run.lifecycle !== "deleted" && run.permissions?.delete !== false;
+}
+
+/** Why deleting is not offered, when the server says the user may not delete this Session. */
+export function deleteReason(run: Run): string {
+  return run.permissions?.delete === false ? "只有 Team owner 可以删除他人创建的会话" : "";
 }
 
 export function crewEntryReason(run: Run): string {
@@ -63,10 +68,11 @@ function matches(run: Run, filter: RunFilter): boolean {
   return run.status === "completed";
 }
 
-export function filterRuns(runs: Run[], { space, query, filter }: { space: string; query: string; filter: RunFilter }): Run[] {
+/** space null: every space (an administrator's all-Sessions view). */
+export function filterRuns(runs: Run[], { space, query, filter }: { space: string | null; query: string; filter: RunFilter }): Run[] {
   const terms = query.trim().toLowerCase().split(/\s+/).filter(Boolean);
   return runs.filter((run) => {
-    if ((run.team_id ?? "") !== space || run.lifecycle === "deleted" || !matches(run, filter)) return false;
+    if ((space !== null && (run.team_id ?? "") !== space) || run.lifecycle === "deleted" || !matches(run, filter)) return false;
     const text = [run.name, run.input, run.id, run.workflow_name].filter(Boolean).join(" ").toLowerCase();
     return terms.every((term) => text.includes(term));
   });

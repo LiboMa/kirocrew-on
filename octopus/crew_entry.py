@@ -3,7 +3,7 @@ import json
 from urllib.parse import parse_qs, urlsplit
 
 from .domain import run_access
-from .security import Error, require
+from .security import Error, elevated, require
 from .transport import worker_request
 
 
@@ -37,12 +37,13 @@ def observe(service, actor, rid, before=None, limit=50):
     require(type(limit) is int and 1 <= limit <= 100, "limit 须为 1–100 的整数")
     require(before is None or type(before) is int and before >= 0, "before 须为非负整数")
     with service.db.read() as db:
-        run = run_access(db, actor["id"], rid)
+        run = run_access(db, actor, rid)
         require(run["lifecycle"] != "deleted", "Session 已删除", 409, "invalid_state")
         require(run["native_parent"] and run["worker_id"], "原生 Session 尚未建立，请等待 Worker 准备完成", 409, "not_prepared")
         worker = db.execute("SELECT config,enabled FROM workers WHERE id=?", (run["worker_id"],)).fetchone()
         require(worker is not None and worker["enabled"], "Session 所在的执行环境已停用", 409, "environment_disabled")
     body = {"run_id": rid, "native_parent": run["native_parent"], "before": before, "limit": limit}
+    service.audit_read(actor, rid, "observe")
     try:
         return worker_request(json.loads(worker["config"]), "/observe", body, timeout=15)
     except Error as exc:
@@ -53,7 +54,14 @@ def observe(service, actor, rid, before=None, limit=50):
 
 def create(service, actor, rid):
     with service.db.read() as db:
-        run = run_access(db, actor["id"], rid)
+        try:
+            run = run_access(db, actor, rid, admin=False)
+        except Error as exc:
+            # An admin can see the Session through oversight, but the native login would cover its whole Gateway.
+            if exc.status == 404 and elevated(actor) and db.execute("SELECT 1 FROM runs WHERE id=?", (rid,)).fetchone():
+                raise Error(403, "forbidden", "原生 KiroCrew 入口不因管理员身份开放（原生登录覆盖整个 Gateway）；"
+                                              "请在本页「KiroCrew 会话」查看") from None
+            raise
         available(run)
         worker = service._worker(db, actor["id"], run["worker_id"], run["team_id"])
     # The native login covers the whole Gateway (K03): on a shared environment (D28) only its boundary owner opens it.
@@ -88,7 +96,7 @@ def create(service, actor, rid):
             "Worker 返回的原生会话入口与当前 Session 不一致", 409, "entry_mismatch")
     # Membership, closure and Worker changes during the network request take effect.
     with service.db.read() as db:
-        current = run_access(db, actor["id"], rid)
+        current = run_access(db, actor, rid, admin=False)
         available(current)
         current_worker = service._worker(db, actor["id"], current["worker_id"], current["team_id"])
         require(current["native_parent"] == run["native_parent"] and

@@ -370,8 +370,9 @@ class MVPTests(unittest.TestCase):
             self.start(self.b)
         self.service.share(self.a, self.flow["id"], {"kind": "user", "principal": self.b["id"], "role": "runner"})
         run = self.start(self.b)
-        with self.assertRaises(Error):
-            self.service.run(self.a, run["id"])  # Workflow owner does not inherit recipients' private runs.
+        with self.assertRaises(Error):  # Workflow ownership does not reach the recipients' private runs ...
+            self.service.run({**self.a, "scopes": ["read", "execute"]}, run["id"])
+        self.assertEqual(self.service.run(self.a, run["id"])["id"], run["id"])  # ... admin oversight does (A2).
         with self.assertRaises(Error):
             self.service.save_workflow(self.b, {"name": "窃改", "steps": SPEC, "expected_version": 1}, self.flow["id"])
         with self.assertRaises(Error):
@@ -884,7 +885,7 @@ class EnvironmentTests(unittest.TestCase):
             self.assertEqual(call("GET", "/v1/admin/environments", "bob")[0], 403)
         paths = openapi()["paths"]
         tag = "执行环境（管理员）"
-        for path, method in (("/v1/admin/environments", "get"), ("/v1/workers", "post"),
+        for path, method in (("/v1/admin/environments", "get"), ("/v1/admin/audit", "get"), ("/v1/workers", "post"),
                              ("/v1/workers/{id}/enabled", "post"), ("/v1/workers/{id}/share", "post"),
                              ("/v1/workers/{id}/spaces", "post"), ("/v1/workers/{id}/spaces", "delete"),
                              ("/v1/workers/{id}/connection", "post"), ("/v1/workers/{id}/dedicate", "post"),

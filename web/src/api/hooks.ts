@@ -24,10 +24,12 @@ export function useMe() {
   return useQuery({ queryKey: keys.me, queryFn: () => api<Me>("/me"), staleTime: 60_000 });
 }
 
-export function useWorkspace() {
+export function useWorkspace(allSessions = false) {
   const teams = useQuery({ queryKey: keys.teams, queryFn: () => api<Team[]>("/teams"), ...every(30_000) });
   const workflows = useQuery({ queryKey: keys.workflows, queryFn: () => api<Workflow[]>("/workflows"), ...every(30_000) });
-  const runs = useQuery({ queryKey: keys.runs, queryFn: () => api<Run[]>("/runs"), ...every(10_000) });
+  // Switching to all Sessions keeps showing the previous list until the new one arrives (no loading screen).
+  const runs = useQuery({ queryKey: [...keys.runs, allSessions], placeholderData: (previous) => previous,
+    queryFn: () => api<Run[]>(allSessions ? "/runs?all=1" : "/runs"), ...every(10_000) });
   const workers = useQuery({ queryKey: keys.workers, queryFn: () => api<Worker[]>("/workers"), ...every(30_000) });
   const users = useQuery({ queryKey: keys.users, queryFn: () => api<User[]>("/users"), staleTime: 60_000 });
   const templates = useQuery({ queryKey: keys.templates, queryFn: () => api<Template[]>("/workflow-templates"), staleTime: Infinity });
@@ -39,6 +41,8 @@ export function useWorkspace() {
     users: users.data ?? [],
     templates: templates.data ?? [],
     loading: runs.isPending || teams.isPending,
+    /** The list shown is the previous one while another is loading. */
+    refreshing: runs.isPlaceholderData,
     error: runs.error ?? teams.error ?? null,
   };
 }

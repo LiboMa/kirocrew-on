@@ -5,14 +5,17 @@ import json
 import os
 import re
 import socket
+import sqlite3
+import threading
 import time
 import unicodedata
 
 from .db import dumps, uid
-from .security import Error, require
+from .security import Error, check_password, elevated, password_hash, require
 
 TOOLS = ("kiro", "claude", "codex", "opencode")
 ROLES = {"viewer": 1, "runner": 2, "editor": 3, "owner": 4}
+ROLE_LABELS = {"viewer": "查看", "runner": "运行", "editor": "编辑", "owner": "所有者"}
 # Statuses in which an open Session is not running on its Worker (it can be continued).
 SETTLED = ("failed", "blocked", "completed", "stopped", "waiting_worker")
 # What the admin environment listing shows of a live /health (no boundary or principal hashes).
@@ -54,8 +57,11 @@ def steps(value):
 
 
 def member(db, user, team, owner=False):
+    """The user's role in the Team: 404 to a non-member (the Team stays unknown to them), 403 to a member who is not
+    the owner that the action needs."""
     row = db.execute("SELECT role FROM members WHERE user_id=? AND team_id=?", (user, team)).fetchone()
-    require(row and (not owner or row["role"] == "owner"), "无此 Team 权限", 403, "forbidden")
+    require(row is not None, "Team 不存在或无权限", 404, "not_found")
+    require(not owner or row["role"] == "owner", "只有 Team owner 可以执行此操作", 403, "forbidden")
     return row["role"]
 
 
@@ -70,7 +76,8 @@ def workflow_access(db, user, wid, role="viewer"):
                                (grant["principal"], user)).fetchone()
         if match:
             allowed = max(allowed, ROLES[grant["role"]])
-    require(allowed >= ROLES[role], "Workflow 不存在或无权限", 404, "not_found")
+    require(allowed > 0, "Workflow 不存在或无权限", 404, "not_found")
+    require(allowed >= ROLES[role], f"需要该工作流的 {role} 权限（{ROLE_LABELS[role]}）", 403, "forbidden")
     return dict(flow), next(k for k, v in ROLES.items() if v == allowed)
 
 
@@ -110,16 +117,54 @@ def give_environment(db, worker, team):
         assign_spare(db, worker, team)
 
 
-def run_access(db, user, rid, owner=False):
+def run_access(db, actor, rid, owner=False, admin=True):
+    """The run if the actor may see it (404 otherwise, never revealing that it exists). owner=True also requires the
+    right to delete it (403 with the reason). An elevated admin sees and operates every run unless admin=False (A2)."""
     row = db.execute("SELECT * FROM runs WHERE id=?", (rid,)).fetchone()
     require(row is not None, "Session 不存在或无权限", 404, "not_found")
-    shared = row["team_id"] and db.execute("SELECT role FROM members WHERE team_id=? AND user_id=?",
-                                         (row["team_id"], user)).fetchone()
-    allowed = (bool(shared and (not owner or shared["role"] == "owner" or row["owner_id"] == user))
-               if row["team_id"] else row["owner_id"] == user)
-    require(allowed,
-            "Session 不存在或无权限", 404, "not_found")
+    if admin and elevated(actor):
+        return dict(row)
+    if row["team_id"]:
+        role = db.execute("SELECT role FROM members WHERE team_id=? AND user_id=?", (row["team_id"], actor["id"])).fetchone()
+        require(role is not None, "Session 不存在或无权限", 404, "not_found")
+        require(not owner or role["role"] == "owner" or row["owner_id"] == actor["id"],
+                "只有 Team owner 可以删除他人创建的会话", 403, "forbidden")
+    else:
+        require(row["owner_id"] == actor["id"], "Session 不存在或无权限", 404, "not_found")
     return dict(row)
+
+
+def audit(db, actor, action, kind, target, detail=None):
+    """Who did what to which object: administration and admin oversight of others' Sessions (spec §3.4)."""
+    db.execute("INSERT INTO audit(at,actor_id,action,kind,target,detail) VALUES(?,?,?,?,?,?)",
+               (time.time(), actor["id"], action, kind, target, dumps(detail or {})))
+
+
+_password_attempts, _password_lock = {}, threading.Lock()   # per user: failed current-password checks in the last minute
+
+
+def revoke_tokens(db, user, keep=None):
+    db.execute("DELETE FROM tokens WHERE user_id=? AND (? IS NULL OR id != ?)", (user, keep, keep))
+
+
+def _active_admins(db):
+    return db.execute("SELECT count(*) FROM users WHERE admin=1 AND active=1").fetchone()[0]
+
+
+def run_permissions(db, actor, run):
+    """What the console may offer on a run it shows (the server enforces the same rules). native: whether the
+    actor's own access (never admin oversight, K03) lets them open its native KiroCrew entry."""
+    def allowed(**kwargs):
+        try:
+            run_access(db, actor, run["id"], **kwargs)
+            return True
+        except Error:
+            return False
+    native = allowed(admin=False)
+    if native and run["worker_id"]:
+        worker = db.execute("SELECT scope,owner_id FROM workers WHERE id=?", (run["worker_id"],)).fetchone()
+        native = worker is None or worker["scope"] != "shared" or worker["owner_id"] == actor["id"]
+    return {"operate": True, "delete": allowed(owner=True), "native": native}
 
 
 def _probe(config):
@@ -143,7 +188,7 @@ class Service:
     def teams(self, actor):
         """The actor's Teams; an admin sees every Team (role None where not a member). Each carries its environment."""
         with self.db.read() as db:
-            if actor["admin"]:
+            if elevated(actor):
                 rows = db.execute("SELECT t.*,m.role FROM teams t LEFT JOIN members m ON m.team_id=t.id AND m.user_id=? "
                                   "ORDER BY t.created", (actor["id"],)).fetchall()
             else:
@@ -173,9 +218,9 @@ class Service:
             for row in db.execute("SELECT * FROM workers").fetchall():
                 spaces = [{"team_id": s["team_id"]} if s["team_id"] else {"user_id": s["user_id"]} for s in db.execute(
                     "SELECT team_id,user_id FROM worker_spaces WHERE worker_id=? ORDER BY rowid", (row["id"],))]
-                if not actor["admin"]:
+                if not elevated(actor):
                     spaces = [x for x in spaces if x.get("user_id") == actor["id"] or x.get("team_id") in teams]
-                visible = actor["admin"] or (row["scope"] == "shared" and spaces) or (
+                visible = elevated(actor) or (row["scope"] == "shared" and spaces) or (
                     row["scope"] == "dedicated" and (row["owner_id"] == actor["id"] or row["team_id"] in teams))
                 if visible:
                     value = {k: row[k] for k in ("id", "name", "team_id", "owner_id", "enabled", "scope")}
@@ -187,7 +232,7 @@ class Service:
     def environments(self, actor):
         """Admin view of every execution environment (D28): bindings, Sessions running on it and live health. Health
         checks run concurrently with a short timeout: an unreachable Worker neither fails nor holds up the listing."""
-        require(actor["admin"], "需要平台管理员", 403, "forbidden")
+        require(elevated(actor), "需要平台管理员", 403, "forbidden")
         with self.db.read() as db:
             users = dict(db.execute("SELECT id,username FROM users").fetchall())
             teams = dict(db.execute("SELECT id,name FROM teams").fetchall())
@@ -213,7 +258,7 @@ class Service:
     def dedicate_worker(self, actor, wid):
         """A shared Worker host serving exactly one Team becomes that Team's dedicated environment again (D30): every
         member then opens its native KiroCrew entry, as in a personal space."""
-        require(actor["admin"], "需要平台管理员", 403, "forbidden")
+        require(elevated(actor), "需要平台管理员", 403, "forbidden")
         with self.db.transaction() as db:
             row = db.execute("SELECT * FROM workers WHERE id=?", (wid,)).fetchone()
             require(row is not None, "Worker 不存在", 404, "not_found")
@@ -231,7 +276,7 @@ class Service:
 
     def share_worker(self, actor, wid, body):
         """Turn a dedicated Worker into a shared execution environment; its current space stays served (D28, T3)."""
-        require(actor["admin"], "需要平台管理员", 403, "forbidden")
+        require(elevated(actor), "需要平台管理员", 403, "forbidden")
         require(body.get("confirm") is True, "设为共享环境需要确认：环境内所有会话的 Agent 以同一系统账号运行，"
                 "能互相读取源码、工具登录与记忆", 400, "confirmation_required")
         with self.db.transaction() as db:
@@ -253,7 +298,7 @@ class Service:
 
     def worker_space(self, actor, wid, body, remove=False):
         """Add a Team or a user's personal space to a shared execution environment, or take it away."""
-        require(actor["admin"], "需要平台管理员", 403, "forbidden")
+        require(elevated(actor), "需要平台管理员", 403, "forbidden")
         team, user = body.get("team_id"), body.get("user_id")
         require(isinstance(team or user, str) and bool(team) != bool(user), "需要且只能指定 team_id 或 user_id")
         with self.db.transaction() as db:
@@ -279,7 +324,7 @@ class Service:
 
     def create_team(self, actor, body):
         """Admin only; the Team gets its owner and its execution environment in the same transaction (D28)."""
-        require(actor["admin"], "只有平台管理员可以创建 Team", 403, "forbidden")
+        require(elevated(actor), "只有平台管理员可以创建 Team", 403, "forbidden")
         title = name(body.get("name"))
         require(isinstance(body.get("worker_id"), str) and body["worker_id"],
                 "创建 Team 必须选择执行环境", 400, "worker_required")
@@ -307,8 +352,10 @@ class Service:
             current = db.execute("SELECT role FROM members WHERE team_id=? AND user_id=?",
                                  (tid, target["id"])).fetchone()
             if current and current["role"] == "owner" and (remove or role != "owner"):
-                require(db.execute("SELECT count(*) FROM members WHERE team_id=? AND role='owner'",
-                                   (tid,)).fetchone()[0] > 1, "不能移除最后一个 Team Owner", 409, "conflict")
+                # Another *active* owner must remain: a deactivated owner cannot manage the Team (B4).
+                require(db.execute("SELECT count(*) FROM members m JOIN users u ON u.id=m.user_id WHERE m.team_id=? "
+                                   "AND m.role='owner' AND u.active=1 AND m.user_id!=?", (tid, target["id"])).fetchone()[0] > 0,
+                        "不能移除最后一位有效的 Team Owner", 409, "conflict")
             if remove:
                 db.execute("DELETE FROM members WHERE team_id=? AND user_id=?", (tid, target["id"]))
             else:
@@ -452,6 +499,8 @@ class Service:
             # The space's only usable Worker runs it; a Team without an execution environment takes no new Sessions (D28).
             team = body.get("team_id") or None
             with self.db.read() as db:
+                if team:
+                    member(db, actor["id"], team)   # a non-member learns nothing about the Team
                 usable = space_workers(db, actor["id"], team)
                 if team and not usable:
                     row = db.execute("SELECT name FROM teams WHERE id=?", (team,)).fetchone()
@@ -545,40 +594,55 @@ class Service:
     def preview_entry(self, actor, rid):
         """The file the preview opens first (e.g. index.html), asked from the run's Worker."""
         with self.db.read() as db:
-            run = run_access(db, actor["id"], rid)
+            run = run_access(db, actor, rid)
             require(run["worker_id"], "此 Session 尚未分配 Worker，没有可预览的产出", 409, "no_preview")
             worker = db.execute("SELECT config FROM workers WHERE id=?", (run["worker_id"],)).fetchone()
         from .transport import worker_request
-        return worker_request(json.loads(worker["config"]), "/files", {"run_id": rid, "path": ""})["entry"]
+        entry = worker_request(json.loads(worker["config"]), "/files", {"run_id": rid, "path": ""})["entry"]
+        self.audit_read(actor, rid, "preview")
+        return entry
 
-    def preview_file(self, rid, relative):
-        """One project file of a run, for a holder of a valid preview ticket (checked by the server)."""
+    def preview_file(self, rid, relative, holder):
+        """One project file of a run for the holder of a valid preview ticket (checked by the server), who must still
+        be allowed to read the run: revoked access stops an issued link at once (B6)."""
         import base64
         with self.db.read() as db:
             run = db.execute("SELECT worker_id FROM runs WHERE id=?", (rid,)).fetchone()
             require(run is not None and run["worker_id"], "预览不可用", 404, "not_found")
+            user = db.execute("SELECT id,admin FROM users WHERE id=? AND active=1", (holder,)).fetchone()
+            try:
+                require(user is not None, "预览不可用", 404, "not_found")
+                run_access(db, {"id": user["id"], "admin": user["admin"],
+                                "scopes": ["read"] + (["admin"] if user["admin"] else [])}, rid)
+            except Error:
+                raise Error(403, "preview_forbidden", "预览权限已撤销，请在控制台重新打开") from None
             worker = db.execute("SELECT config FROM workers WHERE id=?", (run["worker_id"],)).fetchone()
         from .transport import worker_request
         result = worker_request(json.loads(worker["config"]), "/files", {"run_id": rid, "path": relative})
         return base64.b64decode(result["content"])
 
-    def runs(self, actor):
+    def runs(self, actor, all=False):
+        """The actor's own and Team Sessions; with all=True an elevated admin gets every Session (B5)."""
+        oversee = all and elevated(actor)
         with self.db.read() as db:
             result = []
             for row in db.execute("SELECT id FROM runs ORDER BY created DESC"):
                 try:
-                    run = run_access(db, actor["id"], row["id"])
-                    result.append(self._view(db, run, detail=False))
+                    run = run_access(db, actor, row["id"], admin=oversee)
+                    result.append(self._view(db, run, actor, detail=False))
                 except Error:
                     pass
             return result
 
     def run(self, actor, rid):
         with self.db.read() as db:
-            return self._view(db, run_access(db, actor["id"], rid))
+            value = self._view(db, run_access(db, actor, rid), actor)
+        self.audit_read(actor, rid, "view")
+        return value
 
-    def _view(self, db, run, detail=True):
+    def _view(self, db, run, actor, detail=True):
         value = {k: v for k, v in run.items() if k != "snapshot"}
+        value["permissions"] = run_permissions(db, actor, run)
         snapshot = json.loads(run["snapshot"])
         value.update({key: snapshot.get(key) for key in ("name", "workflow_name", "workflow_version",
                                                        "selection", "match_mode", "match_reason", "purpose", "planning")})
@@ -666,7 +730,12 @@ class Service:
     def operate(self, actor, rid, action, body):
         require(action in {"continue", "recover", "stop", "close", "reopen", "delete", "assign-worker"}, "不支持的操作")
         with self.db.transaction() as db:
-            run = run_access(db, actor["id"], rid, owner=action == "delete")
+            run = run_access(db, actor, rid, owner=action == "delete")
+            try:
+                run_access(db, actor, rid, owner=action == "delete", admin=False)
+                oversight = False
+            except Error:
+                oversight = True   # allowed only as an elevated admin (A2): audited
             require(action not in {"continue", "recover"} or json.loads(run["snapshot"]).get("purpose") != "workflow_design",
                     "工作流建议请按新需求重新生成；原建议保留作为证据", 409, "invalid_state")
             def execute():
@@ -715,7 +784,8 @@ class Service:
                 elif action == "assign-worker":
                     require(run["status"] == "waiting_worker" and run["lifecycle"] == "open",
                             "运行已分配 Worker 或已关闭", 409, "invalid_state")
-                    self._worker(db, actor["id"], body.get("worker_id"), run["team_id"])
+                    # The Session's own space, not the operator's (an admin may assign for someone else).
+                    self._worker(db, run["owner_id"], body.get("worker_id"), run["team_id"])
                     db.execute("UPDATE runs SET worker_id=?,status='preparing' WHERE id=?", (body["worker_id"], rid))
                 elif action == "reopen":
                     require(run["lifecycle"] == "closed", "只有已关闭的 Session 可重新打开", 409, "invalid_state")
@@ -728,12 +798,138 @@ class Service:
                     db.execute("UPDATE runs SET desired='stopped',status='stopped',lifecycle=? WHERE id=?",
                                (lifecycle, rid))
                 db.execute("UPDATE runs SET version=?,updated=? WHERE id=?", (version, time.time(), rid))
-                self.db.event(db, rid, "command." + action, {"actor": actor["id"], "version": version})
+                self.db.event(db, rid, "command." + action, {"actor": actor["id"], "version": version, **(
+                    {"oversight": True, "by": {"id": actor["id"], "username": actor["username"]}} if oversight else {})})
+                if oversight:
+                    audit(db, actor, "run." + action, "run", rid, {"version": version})
                 return {"id": rid, "session_id": rid, "version": version, "command": action, "status": "accepted"}
             return self._command(db, actor, action, rid, body, execute)
 
+    # --- users (spec §4): only an elevated admin manages others; everyone changes their own password ---
+
+    def change_password(self, actor, body):
+        # Throttled per user, and checked outside the write lock: a limited token must not brute-force the password
+        # (which would yield every scope of the account) or stall other writes with scrypt.
+        now = time.time()
+        with _password_lock:
+            recent = [t for t in _password_attempts.get(actor["id"], []) if now - t < 60]
+            require(len(recent) < 5, "原密码错误次数过多，请 1 分钟后再试", 429, "rate_limited")
+        with self.db.read() as db:
+            saved = db.execute("SELECT password FROM users WHERE id=?", (actor["id"],)).fetchone()["password"]
+        if not check_password(body.get("current"), saved):
+            with _password_lock:
+                _password_attempts[actor["id"]] = recent + [now]
+            raise Error(403, "forbidden", "原密码不正确")
+        with _password_lock:
+            _password_attempts.pop(actor["id"], None)
+        hashed = password_hash(body.get("password"))
+        with self.db.transaction() as db:
+            db.execute("UPDATE users SET password=? WHERE id=?", (hashed, actor["id"]))
+            revoke_tokens(db, actor["id"], keep=actor["token_id"])
+        return {"ok": True}
+
+    def audit_read(self, actor, rid, action):
+        """An elevated admin reading someone else's Session (A2): one audit row per admin, Session and action an hour
+        (the console polls). Best effort: never fails the read."""
+        if not elevated(actor):
+            return
+        try:
+            with self.db.transaction() as db:
+                try:
+                    run_access(db, actor, rid, admin=False)
+                    return
+                except Error:
+                    pass
+                seen = db.execute("SELECT 1 FROM audit WHERE actor_id=? AND action=? AND target=? AND at>?",
+                                  (actor["id"], "run." + action, rid, time.time() - 3600)).fetchone()
+                if not seen:
+                    audit(db, actor, "run." + action, "run", rid)
+        except sqlite3.OperationalError:
+            pass
+
+    def _target(self, db, actor, uid):
+        require(elevated(actor), "需要平台管理员", 403, "forbidden")
+        row = db.execute("SELECT * FROM users WHERE id=?", (uid,)).fetchone()
+        require(row is not None, "用户不存在", 404, "not_found")
+        return row
+
+    def reset_password(self, actor, uid, body):
+        with self.db.transaction() as db:
+            self._target(db, actor, uid)
+            db.execute("UPDATE users SET password=? WHERE id=?", (password_hash(body.get("password")), uid))
+            revoke_tokens(db, uid)
+            audit(db, actor, "user.reset_password", "user", uid)
+        return {"ok": True}
+
+    def set_active(self, actor, uid, body):
+        require(isinstance(body.get("active"), bool), "active 必须为布尔值")
+        with self.db.transaction() as db:
+            row = self._target(db, actor, uid)
+            if not body["active"] and row["active"]:
+                sole = [r["name"] for r in db.execute(
+                    "SELECT t.name FROM members m JOIN teams t ON t.id=m.team_id WHERE m.user_id=? AND m.role='owner' "
+                    "AND NOT EXISTS(SELECT 1 FROM members o JOIN users u ON u.id=o.user_id WHERE o.team_id=m.team_id "
+                    "AND o.role='owner' AND o.user_id!=? AND u.active=1) ORDER BY t.name", (uid, uid))]
+                require(not sole, f"{row['username']} 是 Team「{'」「'.join(sole)}」唯一的 owner，请先指定另一位 owner",
+                        409, "last_owner")
+                require(not row["admin"] or _active_admins(db) > 1, "至少保留一位有效的平台管理员", 409, "last_admin")
+                revoke_tokens(db, uid)
+            db.execute("UPDATE users SET active=? WHERE id=?", (int(body["active"]), uid))
+            audit(db, actor, "user.activate" if body["active"] else "user.deactivate", "user", uid)
+        return {"id": uid, "active": body["active"]}
+
+    def set_admin(self, actor, uid, body):
+        require(isinstance(body.get("admin"), bool), "admin 必须为布尔值")
+        with self.db.transaction() as db:
+            row = self._target(db, actor, uid)
+            if not body["admin"] and row["admin"] and row["active"]:
+                require(_active_admins(db) > 1, "至少保留一位有效的平台管理员", 409, "last_admin")
+            db.execute("UPDATE users SET admin=? WHERE id=?", (int(body["admin"]), uid))
+            audit(db, actor, "user.promote" if body["admin"] else "user.demote", "user", uid)
+        return {"id": uid, "admin": body["admin"]}
+
+    def admin_users(self, actor):
+        require(elevated(actor), "需要平台管理员", 403, "forbidden")
+        now = time.time()
+        with self.db.read() as db:
+            result = []
+            for row in db.execute("SELECT * FROM users ORDER BY username"):
+                result.append({"id": row["id"], "username": row["username"], "admin": bool(row["admin"]),
+                               "active": bool(row["active"]), "created": row["created"], "last_login": row["last_login"],
+                               "teams": [dict(t) for t in db.execute(
+                                   "SELECT t.id,t.name,m.role FROM members m JOIN teams t ON t.id=m.team_id "
+                                   "WHERE m.user_id=? ORDER BY t.name", (row["id"],))],
+                               "tokens": db.execute("SELECT count(*) FROM tokens WHERE user_id=? AND expires>?",
+                                                    (row["id"], now)).fetchone()[0]})
+            return result
+
+    def user_tokens(self, actor, uid):
+        with self.db.read() as db:
+            self._target(db, actor, uid)
+            return [{**dict(r), "scopes": json.loads(r["scopes"])} for r in db.execute(
+                "SELECT id,label,scopes,expires,last_used FROM tokens WHERE user_id=? AND expires>? ORDER BY expires DESC",
+                (uid, time.time()))]
+
+    def revoke_user_token(self, actor, uid, tid):
+        with self.db.transaction() as db:
+            self._target(db, actor, uid)
+            changed = db.execute("DELETE FROM tokens WHERE id=? AND user_id=?", (tid, uid)).rowcount
+            require(changed == 1, "Token 不存在", 404, "not_found")
+            audit(db, actor, "user.revoke_token", "user", uid, {"token_id": tid})
+        return {"ok": True}
+
+    def audit_log(self, actor, before=None, limit=50):
+        require(elevated(actor), "需要平台管理员", 403, "forbidden")
+        require(type(limit) is int and 1 <= limit <= 200, "limit 须为 1–200 的整数")
+        with self.db.read() as db:
+            rows = db.execute("SELECT a.*, u.username FROM audit a JOIN users u ON u.id=a.actor_id "
+                              "WHERE a.id < ? ORDER BY a.id DESC LIMIT ?", (before or 2 ** 62, limit)).fetchall()
+        return [{"id": r["id"], "at": r["at"], "actor": {"id": r["actor_id"], "username": r["username"]},
+                 "action": r["action"], "kind": r["kind"], "target": r["target"], "detail": json.loads(r["detail"])}
+                for r in rows]
+
     def events(self, actor, rid, after=0):
         with self.db.read() as db:
-            run_access(db, actor["id"], rid)
+            run_access(db, actor, rid)
             return [{**dict(row), "payload": json.loads(row["payload"])} for row in db.execute(
                 "SELECT * FROM events WHERE run_id=? AND id>? ORDER BY id LIMIT 200", (rid, after))]

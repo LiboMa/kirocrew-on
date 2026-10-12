@@ -53,13 +53,13 @@
 | 查看进度（MCP、控制台、事件流） | ✅ | `octopus_status` 精简 / 完整视图；SSE 事件流 |
 | 观察原生 KiroCrew 会话 | ✅ | 控制台「KiroCrew 会话」面板、MCP `octopus_observe`（D30） |
 | 在 KiroCrew 中打开原生会话 | ✅ | 个人空间本人、Team 专属环境成员、共享环境边界所有者（K03） |
-| 预览产出 | ✅ | 静态页面隔离预览（1 小时）；开发服务器 `deploy.sh space <run-id>` |
+| 预览产出 | ✅ | 静态页面隔离预览（链接 10 分钟有效，每次打开核对权限）；开发服务器 `deploy.sh space <run-id>` |
 | 续作与迭代 | ✅ | 同一会话与工作区；可改工具、模型、提示 |
 | 工作流库 | ✅ | 模板、KiroCrew 推荐、导入 Agent 预先生成的工作流、版本、共享给个人 / Team |
 | Team 与执行环境 | ✅ | 创建 Team 必须分配环境；共享 / 专属 / 空闲；独立 Worker 主机（D28–D30） |
 | 自托管部署与扩容 | ✅ | CloudFormation + `deploy.sh`；`worker-host add <名称>` 一条命令加 Worker 主机 |
 | 重启恢复、备份恢复 | ✅ | M1 验收 |
-| 用户、Team、权限管理（改密码、停用、admin scope、审计） | ○ | 设计与第 1 期计划已完成（`docs/superpowers/specs/2026-10-12-access-management-design.md`） |
+| 用户、Team、权限管理（改密码、停用、admin scope、审计） | ◐ EC2 | 第 1 期已上线：admin scope、403 / 404、管理员查看与操作全部会话与审计、用户与 Token 管理；Team 与 Worker 管理、MCP 角色调用在第 2、3 期 |
 | 私有仓库（GitHub Connector） | ○ | 设计草案（`docs/superpowers/specs/2026-10-11-github-connector-design.md`） |
 | 成果出库（Feature 分支、报告、PR） | ○ | M2 / M5 |
 | 服务端检索、更多客户端一键接入 | ○ | M3 |

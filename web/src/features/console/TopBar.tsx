@@ -8,6 +8,7 @@ import {
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Brand } from "@/features/auth/LoginPage";
 import { useConsole } from "@/features/console/context";
+import { elevated } from "@/lib/access";
 
 const PERSONAL = "__personal__";
 
@@ -23,6 +24,14 @@ export function TopBar({ onMenu }: { onMenu: () => void }) {
   }
 
   return (
+    <>
+    {!!me.admin && !elevated(me) && (
+      // A login from before the admin scope existed: administration answers 403 until the admin signs in again.
+      <div role="status" className="flex items-center gap-3 border-b border-warning/30 bg-warning/10 px-4 py-1.5 text-xs">
+        <span className="flex-1">你的登录早于管理员权限更新，重新登录后才能使用管理功能。</span>
+        <Button size="sm" variant="outline" onClick={() => void logout()}>重新登录</Button>
+      </div>
+    )}
     <header className="flex h-14 shrink-0 items-center gap-3 border-b bg-card px-3 sm:px-5">
       <Button variant="ghost" size="icon" className="md:hidden" onClick={onMenu} aria-label="打开会话列表">
         <Menu />
@@ -49,6 +58,7 @@ export function TopBar({ onMenu }: { onMenu: () => void }) {
             <DropdownMenuItem onSelect={() => open({ kind: "team" })}>团队与成员</DropdownMenuItem>
             <DropdownMenuItem onSelect={() => open({ kind: "tokens" })}>API 与 Coding Agent 接入</DropdownMenuItem>
             <DropdownMenuItem onSelect={() => open({ kind: "workers" })}>执行环境 · Worker</DropdownMenuItem>
+            {elevated(me) && <DropdownMenuItem onSelect={() => open({ kind: "users" })}>用户管理</DropdownMenuItem>}
             <DropdownMenuSeparator />
             <DropdownMenuItem asChild><a href="/classic/">打开经典控制台</a></DropdownMenuItem>
           </DropdownMenuContent>
@@ -67,10 +77,12 @@ export function TopBar({ onMenu }: { onMenu: () => void }) {
               <small className="text-muted-foreground">{me.admin ? "平台管理员" : "平台成员"}</small>
             </DropdownMenuLabel>
             <DropdownMenuSeparator />
+            <DropdownMenuItem onSelect={() => open({ kind: "password" })}>修改密码</DropdownMenuItem>
             <DropdownMenuItem onSelect={() => void logout()}>退出登录</DropdownMenuItem>
           </DropdownMenuContent>
         </DropdownMenu>
       </div>
     </header>
+    </>
   );
 }

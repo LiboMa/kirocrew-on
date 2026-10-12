@@ -11,12 +11,13 @@ import threading
 import time
 import base64
 import secrets
+import sqlite3
 from urllib.parse import parse_qs, unquote, urlsplit
 
 from . import __version__
 from .db import dumps, uid
 from .domain import Service, name, team_environment
-from .security import Error, authenticate, check_password, create_user, issue_token, require, scope
+from .security import Error, authenticate, check_password, create_user, elevated, issue_token, require, scope
 from .transport import validate_worker, worker_request
 from .schema import openapi
 
@@ -46,7 +47,7 @@ TYPES = {".html": "text/html; charset=utf-8", ".js": "text/javascript; charset=u
 
 # Preview links carry their own short-lived capability: an iframe or new tab cannot send the console's bearer token.
 # The signing key is kept in the platform data directory, so links stay valid across API restarts and deploys.
-PREVIEW_TTL = 3600
+PREVIEW_TTL = 600  # B6: ten minutes; every file it serves re-checks its holder's access
 PREVIEW_POLICY = ("sandbox allow-scripts allow-forms allow-popups allow-modals allow-downloads; "
                   "default-src * data: blob: 'unsafe-inline' 'unsafe-eval'; frame-ancestors 'self'")
 
@@ -68,20 +69,37 @@ def preview_signature(key, payload):
     return base64.urlsafe_b64encode(hmac.new(key, payload.encode(), hashlib.sha256).digest()[:18]).decode()
 
 
-def preview_ticket(rid, key, now=None):
-    payload = f"{rid}.{int((now or time.time()) + PREVIEW_TTL)}"
+def preview_ticket(rid, user, key, now=None):
+    payload = f"{rid}.{user}.{int((now or time.time()) + PREVIEW_TTL)}"
     return f"{payload}.{preview_signature(key, payload)}"
 
 
 def preview_run(ticket, key, now=None):
-    """The run a preview ticket grants; 403 preview_invalid when it is forged or signed by another key, 403
-    preview_expired when it is genuine but late."""
+    """(run, user) a preview ticket grants; 403 preview_invalid when it is forged, signed by another key or in the old
+    format, 403 preview_expired when it is genuine but late."""
     parts = ticket.split(".")
-    require(len(parts) == 3 and parts[1].isdigit() and hmac.compare_digest(
-        parts[2].encode(), preview_signature(key, f"{parts[0]}.{parts[1]}").encode()),
+    require(len(parts) == 4 and parts[2].isdigit() and hmac.compare_digest(
+        parts[3].encode(), preview_signature(key, ".".join(parts[:3])).encode()),
         "预览链接无效，请在控制台重新打开预览", 403, "preview_invalid")
-    require(int(parts[1]) >= (now or time.time()), "预览链接已过期（1 小时有效），请在控制台重新打开预览", 403, "preview_expired")
-    return parts[0]
+    require(int(parts[2]) >= (now or time.time()), "预览链接已过期（10 分钟有效），请在控制台重新打开预览", 403,
+            "preview_expired")
+    return parts[0], parts[1]
+
+
+READ_POSTS = {"/v1/workflows/resolve", "/v1/workflows/parse"}
+
+
+def required_scope(method, path):
+    """The token scope a route needs: platform administration needs admin (A3); writes to one's own configuration
+    need manage; Session and design writes need execute; reads need read."""
+    segments = path.strip("/").split("/")
+    if path.startswith("/v1/admin/") or (segments[:2] == ["v1", "workers"] and method != "GET") or \
+            (segments[:2] == ["v1", "users"] and (method != "GET" or len(segments) > 2)) or \
+            (path == "/v1/teams" and method == "POST"):
+        return "admin"
+    if method == "GET" or path in READ_POSTS or path.endswith("/preview"):
+        return "read"
+    return "execute" if path.startswith(("/v1/runs", "/v1/designs")) else "manage"
 
 
 def console_file(path):
@@ -148,7 +166,17 @@ def server(database, port=8918, host="127.0.0.1", allowed_hosts=(), origin_secre
         def identity(self):
             header = self.headers.get("Authorization", "")
             with database.read() as db:
-                return authenticate(db, header.removeprefix("Bearer ") if header.startswith("Bearer ") else "")
+                actor = authenticate(db, header.removeprefix("Bearer ") if header.startswith("Bearer ") else "")
+            now = time.time()
+            if actor["last_used"] is None or now - actor["last_used"] >= 60:
+                # At most one write a minute per token, in its own short transaction, and best effort: a busy
+                # database must never fail the request it rides on.
+                try:
+                    with database.transaction() as db:
+                        db.execute("UPDATE tokens SET last_used=? WHERE id=?", (now, actor["token_id"]))
+                except sqlite3.OperationalError:
+                    pass
+            return actor
 
         def do_GET(self):
             self.dispatch("GET")
@@ -174,22 +202,24 @@ def server(database, port=8918, host="127.0.0.1", allowed_hosts=(), origin_secre
                 path, query = url.path, parse_qs(url.query)
                 body = {}
                 if method != "GET":
-                    require(self.headers.get("Content-Type", "").split(";")[0] == "application/json", "需要 application/json")
                     origin = self.headers.get("Origin")
                     require(not origin or urlsplit(origin).netloc == self.headers.get("Host"), "跨站写入被拒绝", 403, "origin")
                     size = int(self.headers.get("Content-Length", "0"))
-                    require(0 < size <= 1_000_000, "请求体过大或为空")
-                    body = json.loads(self.rfile.read(size))
-                    require(isinstance(body, dict), "请求体必须是对象")
+                    # A cross-site DELETE always needs a CORS preflight, so it may come without a JSON body.
+                    if not (method == "DELETE" and size == 0):
+                        require(self.headers.get("Content-Type", "").split(";")[0] == "application/json", "需要 application/json")
+                        require(0 < size <= 1_000_000, "请求体过大或为空")
+                        body = json.loads(self.rfile.read(size))
+                        require(isinstance(body, dict), "请求体必须是对象")
                 if method == "GET" and (static := console_file(path)):
                     file, kind = static
                     return self.respond(file.read_bytes(), kind=kind)
                 require(not path.startswith("/assets/"), "Not found", 404, "not_found")
                 if method == "GET" and path.startswith("/preview/"):
                     ticket, _, relative = path[len("/preview/"):].partition("/")
-                    rid = preview_run(ticket, signing_key)
+                    rid, holder = preview_run(ticket, signing_key)
                     relative = unquote(relative) or "index.html"
-                    data = service.preview_file(rid, relative)
+                    data = service.preview_file(rid, relative, holder)
                     kind = TYPES.get(Path(relative).suffix.lower()) or {
                         ".json": "application/json", ".jpg": "image/jpeg", ".jpeg": "image/jpeg", ".gif": "image/gif",
                         ".webp": "image/webp", ".mjs": "text/javascript; charset=utf-8", ".txt": "text/plain; charset=utf-8",
@@ -213,6 +243,8 @@ def server(database, port=8918, host="127.0.0.1", allowed_hosts=(), origin_secre
                         require(user is not None and check_password(body.get("password"), user["password"]),
                                 "用户名或密码错误", 401, "unauthorized")
                         token = issue_token(db, user["id"], label="Web login")
+                        db.execute("UPDATE users SET last_login=? WHERE id=?", (time.time(), user["id"]))
+                        db.execute("DELETE FROM tokens WHERE expires<?", (time.time(),))
                     with limiter_lock:
                         failures.pop(address, None)
                     return self.respond(token)
@@ -222,18 +254,18 @@ def server(database, port=8918, host="127.0.0.1", allowed_hosts=(), origin_secre
                     with database.transaction() as db:
                         db.execute("DELETE FROM tokens WHERE id=? AND user_id=?", (actor["token_id"], actor["id"]))
                     return self.respond({"ok": True})
-                scope(actor, "read" if method == "GET" or path in {"/v1/workflows/resolve", "/v1/workflows/parse"}
-                      or path.endswith("/preview") else (
-                    "execute" if path.startswith(("/v1/runs", "/v1/designs")) else "manage"))
+                scope(actor, required_scope(method, path))
                 segments = path.strip("/").split("/")
                 if path == "/v1/me":
                     require(method == "GET", "Method not allowed", 405)
-                    return self.respond({k: v for k, v in actor.items() if k != "token_id"})
+                    return self.respond({k: v for k, v in actor.items() if k not in {"token_id", "last_used"}})
                 if path == "/v1/users":
                     with database.transaction() as db:
                         if method == "POST":
-                            require(actor["admin"], "需要平台管理员", 403, "forbidden")
+                            require(elevated(actor), "需要平台管理员", 403, "forbidden")
                             created = create_user(db, body.get("username"), body.get("password"), body.get("admin", False))
+                            from .domain import audit
+                            audit(db, actor, "user.create", "user", created["id"], {"admin": created["admin"]})
                             if body.get("worker_id"):
                                 # The new user's personal space runs on a shared execution environment (D28).
                                 shared = db.execute("SELECT 1 FROM workers WHERE id=? AND scope='shared' AND enabled=1",
@@ -252,7 +284,8 @@ def server(database, port=8918, host="127.0.0.1", allowed_hosts=(), origin_secre
                             require(isinstance(requested, list) and set(requested) <= set(actor["scopes"]), "不能扩大 Token scope", 403, "forbidden")
                             return self.respond(issue_token(db, actor["id"], requested, body.get("label", "API"), body.get("ttl", 86400)), 201)
                         return self.respond([dict(r) for r in db.execute(
-                            "SELECT id,label,scopes,expires FROM tokens WHERE user_id=?", (actor["id"],))])
+                            "SELECT id,label,scopes,expires,last_used FROM tokens WHERE user_id=? AND expires>? "
+                            "ORDER BY expires DESC", (actor["id"], time.time()))])
                 if len(segments) == 3 and segments[:2] == ["v1", "tokens"] and method == "DELETE":
                     with database.transaction() as db:
                         db.execute("DELETE FROM tokens WHERE id=? AND user_id=?", (segments[2], actor["id"]))
@@ -275,7 +308,7 @@ def server(database, port=8918, host="127.0.0.1", allowed_hosts=(), origin_secre
                     return self.respond(service.resolve_workflow(actor, body))
                 if len(segments) == 4 and segments[:2] == ["v1", "runs"] and segments[3] == "preview" and method == "POST":
                     entry = service.preview_entry(actor, segments[2])
-                    return self.respond({"url": "/preview/" + preview_ticket(segments[2], signing_key) + "/" + entry,
+                    return self.respond({"url": "/preview/" + preview_ticket(segments[2], actor["id"], signing_key) + "/" + entry,
                                          "entry": entry, "expires_in": PREVIEW_TTL})
                 if path == "/v1/workflows/parse":
                     require(method == "POST", "Method not allowed", 405)
@@ -295,6 +328,32 @@ def server(database, port=8918, host="127.0.0.1", allowed_hosts=(), origin_secre
                         return self.respond(service.share(actor, wid, body, revoke=method == "DELETE"))
                     if action == "archive" and method == "POST":
                         return self.respond(service.archive_workflow(actor, wid, body))
+                if path == "/v1/me/password":
+                    require(method == "POST", "Method not allowed", 405)
+                    return self.respond(service.change_password(actor, body))
+                if len(segments) == 4 and segments[:2] == ["v1", "users"]:
+                    require(method == "POST", "Method not allowed", 405)
+                    handler = {"password": service.reset_password, "active": service.set_active,
+                               "admin": service.set_admin}.get(segments[3])
+                    require(handler is not None, "接口不存在", 404, "not_found")
+                    return self.respond(handler(actor, segments[2], body))
+                if path == "/v1/admin/users":
+                    require(method == "GET", "Method not allowed", 405)
+                    return self.respond(service.admin_users(actor))
+                if len(segments) in {5, 6} and segments[:3] == ["v1", "admin", "users"] and segments[4] == "tokens":
+                    if len(segments) == 5:
+                        require(method == "GET", "Method not allowed", 405)
+                        return self.respond(service.user_tokens(actor, segments[3]))
+                    require(method == "DELETE", "Method not allowed", 405)
+                    return self.respond(service.revoke_user_token(actor, segments[3], segments[5]))
+                if path == "/v1/admin/audit":
+                    require(method == "GET", "Method not allowed", 405)
+                    paging = {}
+                    for key in ("before", "limit"):
+                        if key in query:
+                            require(query[key][0].isdigit(), f"{key} 须为非负整数")
+                            paging[key] = int(query[key][0])
+                    return self.respond(service.audit_log(actor, **paging))
                 if path == "/v1/admin/environments":
                     require(method == "GET", "Method not allowed", 405)
                     return self.respond(service.environments(actor))
@@ -310,7 +369,7 @@ def server(database, port=8918, host="127.0.0.1", allowed_hosts=(), origin_secre
                 if len(segments) == 4 and segments[:2] == ["v1", "workers"] and segments[3] == "connection":
                     # After a Worker host is replaced (new address, token, boundary) its environment keeps serving the
                     # same spaces; the new endpoint is re-validated like a registration (D28, T4 forbids rebinding only).
-                    require(method == "POST" and actor["admin"], "需要平台管理员", 403, "forbidden")
+                    require(method == "POST" and elevated(actor), "需要平台管理员", 403, "forbidden")
                     config = body.get("connection")
                     health = validate_worker(config)
                     with database.transaction() as db:
@@ -336,7 +395,7 @@ def server(database, port=8918, host="127.0.0.1", allowed_hosts=(), origin_secre
                                    (dumps({**config, "capabilities": health}), row["id"]))
                     return self.respond({"id": row["id"], "capabilities": health})
                 if len(segments) == 4 and segments[:2] == ["v1", "workers"] and segments[3] == "enabled":
-                    require(method == "POST" and actor["admin"], "需要平台管理员", 403, "forbidden")
+                    require(method == "POST" and elevated(actor), "需要平台管理员", 403, "forbidden")
                     require(isinstance(body.get("enabled"), bool), "enabled 必须为布尔值")
                     with database.transaction() as db:
                         require(db.execute("SELECT 1 FROM workers WHERE id=?", (segments[2],)).fetchone(),
@@ -347,7 +406,7 @@ def server(database, port=8918, host="127.0.0.1", allowed_hosts=(), origin_secre
                     require(method == "GET", "Method not allowed", 405)
                     with database.read() as db:
                         row = db.execute("SELECT * FROM workers WHERE id=?", (segments[2],)).fetchone()
-                        require(row and (actor["admin"] or row["owner_id"] == actor["id"] or db.execute(
+                        require(row and (elevated(actor) or row["owner_id"] == actor["id"] or db.execute(
                             "SELECT 1 FROM members WHERE user_id=? AND team_id=?", (actor["id"], row["team_id"])).fetchone()),
                                 "Worker 不存在或无权限", 404, "not_found")
                         config = json.loads(row["config"])
@@ -361,7 +420,7 @@ def server(database, port=8918, host="127.0.0.1", allowed_hosts=(), origin_secre
                 if path == "/v1/workers":
                     if method == "GET":
                         return self.respond(service.workers(actor))
-                    require(method == "POST" and actor["admin"], "需要平台管理员", 403, "forbidden")
+                    require(method == "POST" and elevated(actor), "需要平台管理员", 403, "forbidden")
                     config = body.get("connection")
                     health = validate_worker(config)
                     team, user = body.get("team_id"), body.get("owner_id")
@@ -405,7 +464,8 @@ def server(database, port=8918, host="127.0.0.1", allowed_hosts=(), origin_secre
                                          "capabilities": health}, 201)
                 if path == "/v1/runs":
                     require(method in {"GET", "POST"}, "Method not allowed", 405)
-                    return self.respond(service.runs(actor) if method == "GET" else service.start(actor, body))
+                    return self.respond(service.runs(actor, all=query.get("all") == ["1"]) if method == "GET"
+                                        else service.start(actor, body))
                 if len(segments) in {3, 4} and segments[:2] == ["v1", "runs"]:
                     rid = segments[2]
                     if len(segments) == 3 and method == "GET":
@@ -429,6 +489,7 @@ def server(database, port=8918, host="127.0.0.1", allowed_hosts=(), origin_secre
                             return self.respond(observe(service, actor, rid, **paging))
                         if action == "export" and method == "GET":
                             run = service.run(actor, rid)
+                            service.audit_read(actor, rid, "export")
                             with database.read() as db:
                                 revisions = [{**dict(row), "content": json.loads(row["content"])} for row in db.execute(
                                     "SELECT * FROM revisions WHERE run_id=? ORDER BY version", (rid,))]
