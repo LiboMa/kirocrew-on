@@ -69,8 +69,13 @@ class InstallerSafetyTests(unittest.TestCase):
         for link in ('ln -sfn "$TARGET" /opt/kirocrew-on/current', 'ln -sfn "$KC" /opt/kirocrew/current'):
             self.assertEqual(self.text.count(link), 1, link)
             self.assertGreater(self.text.index(link), checks, link)
-        before = self.text[:checks]
-        self.assertNotIn("/opt/kirocrew/current/venv", before)
+        # The checks read a copy of the boundary config whose current paths are rewritten to the release being installed.
+        rewrite = 'sed -e "s#/opt/kirocrew-on/current/#$TARGET/#g" -e "s#/opt/kirocrew/current/#$KC/#g" "$BOUNDARY_TOML" > "$CHECK_TOML"'
+        self.assertEqual(self.text.count(rewrite), 1)
+        self.assertIn('-m composition.gateway --config "$CHECK_TOML" --check', self.text)
+        self.assertIn('OCTOPUS_CONFIG="$CHECK_TOML"', self.text)
+        before = self.text[:checks].replace(rewrite, "")
+        self.assertNotIn("/opt/kirocrew/current/", before)
         self.assertNotIn("/opt/kirocrew-on/current/", before)
         self.assertIn('"$KC/venv/bin/python" -s -m unittest discover -s "$TARGET/tests/native"', self.text)
 
