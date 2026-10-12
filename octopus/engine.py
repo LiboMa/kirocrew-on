@@ -14,6 +14,20 @@ from .security import Error
 from .domain import unserved
 
 
+BLOCKED = "工作者未完成任务或报告 BLOCKED"
+CANCELLED = re.compile(r"stop_reason=cancelled|turn cancelled by the runtime", re.I)
+EXPIRED = re.compile(r"session (?:has )?expired|not logged in", re.I)
+
+
+def transient(native, error, missing, blocked_line):
+    """A failure the native runtime caused rather than the task (D34 §5.1): retried once without a recovery cycle."""
+    if CANCELLED.search(native.get("error") or ""):
+        return "runtime_cancelled"
+    if error == BLOCKED and missing and not blocked_line:
+        return "result_missing"
+    return None
+
+
 class Engine:
     def __init__(self, database, request=worker_request, workers=1, retry_unavailable=0.0, clock=time.monotonic):
         self.db, self.request = database, request
@@ -257,13 +271,28 @@ class Engine:
             return
         evidence = result.get("evidence", {})
         state, error = ("waiting_approval" if native.get("awaiting_approval") else "running"), None
+        retry = None
         if native.get("done"):
             error = native.get("error") or ("原生任务已停止" if native.get("stopped") else None)
             failure_type = "native_stopped" if native.get("stopped") else "native_error"
-            text = str(native.get("result", ""))
-            if not error and (not text.strip() or text.strip() in {"_No response._", "_No result._"}
-                              or re.search(r"(?im)^\s*(?:[-*]\s*)?BLOCKED\b", text)):
-                error = "工作者未完成任务或报告 BLOCKED"
+            if EXPIRED.search(native.get("error") or ""):
+                failure_type = "auth"   # needs an administrator's login; no automatic recovery (NEEDS_INPUT)
+            text = str(native.get("result", "")).strip()
+            missing = text in {"", "_No response._", "_No result._"}
+            blocked_line = bool(re.search(r"(?im)^\s*(?:[-*]\s*)?BLOCKED\b", text))
+            report, invalid = None, None
+            if snapshot.get("execution_contract", 1) >= 2 and not native.get("error") and not native.get("stopped"):
+                try:
+                    report = recovery.outcome(result.get("outcome", ""))
+                    evidence["outcome"] = report
+                except (Error, ValueError, TypeError) as exc:
+                    invalid = str(exc)
+            # The final reply lost in transport while the Agent wrote a passing outcome and its handoff: the work is
+            # done (D34 §5.1); judge it on the evidence like any other Attempt.
+            lost = missing and not blocked_line and report is not None and report["decision"] == "pass" \
+                and bool(result.get("handoff", "").strip())
+            if not error and (missing or blocked_line) and not lost:
+                error = BLOCKED
             if not error and not result.get("handoff", "").strip():
                 error = "缺少本次交接文件"
                 failure_type = "contract"
@@ -277,17 +306,15 @@ class Engine:
             if not error and spec["effort"] and evidence.get("actual_effort") and evidence["actual_effort"] != spec["effort"]:
                 error = "实际 Effort 与本次配置不匹配"
                 failure_type = "model"
-            if snapshot.get("execution_contract", 1) >= 2 and not native.get("error") and not native.get("stopped"):
-                try:
-                    report = recovery.outcome(result.get("outcome", ""))
-                    evidence["outcome"] = report
-                    if report["decision"] != "pass" and (not error or error == "工作者未完成任务或报告 BLOCKED"):
-                        error, failure_type = report["summary"], report["failure_type"]
-                except (Error, ValueError, TypeError) as exc:
-                    if not error:
-                        error, failure_type = str(exc), "contract"
+            if report is not None and report["decision"] != "pass" and (not error or error == BLOCKED):
+                error, failure_type = report["summary"], report["failure_type"]
+            if invalid and not error:
+                error, failure_type = invalid, "contract"
+            if lost and not error:
+                evidence["result_missing"] = True
             if error:
                 evidence["failure_type"] = failure_type
+                retry = transient(native, error, missing, blocked_line)
             state = "blocked" if error else "accepted"
         with self.db.transaction() as db:
             current = db.execute("SELECT * FROM tasks WHERE run_id=? AND id=?", (rid, task["id"])).fetchone()
@@ -301,12 +328,27 @@ class Engine:
                     except (Error, ValueError, TypeError) as exc:
                         state, error = "blocked", "KiroCrew 规划结果未通过校验：" + str(exc)
                         evidence["failure_type"] = "contract"
+            if retry and current["current_attempt"] == attempt["id"] and active:
+                previous = db.execute("SELECT evidence FROM attempts WHERE run_id=? AND task_id=? AND number=?",
+                                      (rid, task["id"], attempt["number"] - 1)).fetchone()
+                if previous and json.loads(previous["evidence"]).get("transient"):
+                    retry = None   # this Attempt already was the automatic retry: recovery decides from here
+            else:
+                retry = None
+            if retry:
+                evidence["transient"] = retry
             journal.change(db, "attempts", attempt["id"], journal.WORKER, "attempt.state",
                            event={"id": attempt["id"], "task_id": task["id"], "status": state, "error": error,
                                   "evidence": evidence},
                            status=state, evidence=dumps(evidence), result=native.get("result"), error=error, updated=time.time())
-            if current["current_attempt"] == attempt["id"] and active:
+            if retry:
+                why = {"runtime_cancelled": "运行时取消了原生任务", "result_missing": "原生任务没有返回结果"}[retry]
+                journal.change(db, "tasks", (rid, task["id"]), journal.ENGINE, "attempt.retry", f"{why}，自动重试一次",
+                               event={"attempt": attempt["id"], "transient": retry}, status="pending", current_attempt=None)
+            elif current["current_attempt"] == attempt["id"] and active:
                 journal.change(db, "tasks", (rid, task["id"]), journal.WORKER, "task.state", status=state)
+        if retry:
+            return self.update(rid, "ready", None, reason="瞬时失败，自动重试一次")
         self.update(rid, "ready" if state == "accepted" else state, error, actor=journal.WORKER)
         if state == "blocked":
             recovery.automatic(self.db, rid, attempt["id"])
