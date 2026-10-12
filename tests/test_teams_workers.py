@@ -274,5 +274,100 @@ class WorkerManagementTests(TeamsWorkersCase):
         self.assertEqual(len(self.audits("worker.share")), 1)
 
 
+class DispatchRecheckTests(TeamsWorkersCase):
+    def setUp(self):
+        super().setUp()
+        self.calls, self.done = [], False
+
+    def worker(self, config, path, body, **kwargs):
+        self.calls.append(path)
+        if path == "/prepare":
+            return {"native_parent": "octopus-" + body["run_id"], "workspace": "/w/" + body["run_id"]}
+        if path == "/dispatch":
+            return {"status": "running", "native_id": "n-" + body["attempt_id"][-6:], "context_hash": "h"}
+        if path == "/inspect":
+            native = {"done": True, "result": "完成", "error": ""} if self.done else {"done": False}
+            return {"status": "running", "native": native, "evidence": {"actual_backend": "claude"},
+                    "handoff": "交接", "outcome": dumps({"decision": "pass", "summary": "通过"})}
+        raise AssertionError(path)
+
+    def tick(self, times=1):
+        engine = Engine(self.db, request=self.worker)
+        for _ in range(times):
+            engine.tick()
+
+    def two_steps(self, actor, request="start-0000000001"):
+        return self.service.start(actor, {"request_id": request, "input": "研发需求与真实验证", "source": {"type": "new"},
+                                          "team_id": "team-p", "recovery": {"enabled": False, "max_cycles": 2},
+                                          "steps": [{"id": "code", "name": "实现", "tool": "claude", "prompt": "实现"},
+                                                    {"id": "check", "name": "核对", "tool": "claude", "prompt": "核对"}]})
+
+    def assign(self, rid, worker):
+        version = self.service.run(self.c, rid)["version"]
+        self.service.operate(self.c, rid, "assign-worker",
+                             {"request_id": "assign-" + worker, "expected_version": version, "worker_id": worker})
+        return self.service.run(self.c, rid)
+
+    def test_a_session_whose_team_moved_waits_instead_of_dispatching(self):
+        run = self.start(self.c, team_id="team-p")
+        self.service.change_environment(self.a, "team-p", {"worker_id": self.spare()})
+        self.tick()
+        self.assertEqual(self.calls, [])
+        detail = self.service.run(self.c, run["id"])
+        self.assertEqual((detail["status"], detail["error"]), ("waiting_worker", "执行环境已更换或已移出该空间"))
+        self.assertIn("已更换", detail["attention"]["title"])
+        self.assertEqual(self.assign(run["id"], "env-spare")["status"], "preparing")
+
+    def test_running_attempt_finishes_then_the_next_task_waits(self):
+        run = self.two_steps(self.c)
+        self.tick(3)                                    # prepare, dispatch, inspect (still running)
+        with self.db.transaction() as db:
+            db.execute("DELETE FROM worker_spaces WHERE team_id='team-p'")
+        self.done = True
+        self.tick(3)
+        detail = self.service.run(self.c, run["id"])
+        self.assertEqual([t["status"] for t in detail["tasks"]], ["accepted", "pending"])
+        self.assertEqual(detail["status"], "waiting_worker")
+        self.assertEqual(self.calls.count("/dispatch"), 1)
+
+    def test_reassigning_the_same_environment_resumes_without_preparing_again(self):
+        run = self.two_steps(self.c)
+        self.tick()                                     # prepared: ready with a native parent
+        with self.db.transaction() as db:
+            db.execute("UPDATE workers SET enabled=0 WHERE id='env-s'")
+        self.tick()
+        self.assertEqual(self.service.run(self.c, run["id"])["error"], "执行环境已停用")
+        with self.db.transaction() as db:
+            db.execute("UPDATE workers SET enabled=1 WHERE id='env-s'")
+        detail = self.assign(run["id"], "env-s")
+        self.assertEqual((detail["status"], detail["native_parent"]), ("ready", "octopus-" + run["id"]))
+
+    def test_moving_to_another_environment_prepares_afresh(self):
+        run = self.two_steps(self.c)
+        self.tick()
+        self.service.change_environment(self.a, "team-p", {"worker_id": self.spare()})
+        self.tick()
+        detail = self.assign(run["id"], "env-spare")
+        self.assertEqual((detail["status"], detail["native_parent"], detail["workspace"]), ("preparing", None, None))
+
+    def test_continue_checks_the_environment(self):
+        run = self.start(self.c, team_id="team-p")
+        with self.db.transaction() as db:
+            db.execute("UPDATE runs SET status='stopped' WHERE id=?", (run["id"],))
+            db.execute("DELETE FROM worker_spaces WHERE team_id='team-p'")
+        self.service.operate(self.c, run["id"], "continue",
+                             {"request_id": "continue-000001", "expected_version": 1, "task_id": "code"})
+        detail = self.service.run(self.c, run["id"])
+        self.assertEqual((detail["status"], detail["error"]), ("waiting_worker", "执行环境已更换或已移出该空间"))
+
+    def test_recover_refuses_an_environment_that_no_longer_serves(self):
+        run = self.start(self.c, team_id="team-p")
+        with self.db.transaction() as db:
+            db.execute("UPDATE runs SET status='blocked', native_parent='octopus-x' WHERE id=?", (run["id"],))
+            db.execute("UPDATE workers SET enabled=0 WHERE id='env-s'")
+        self.assertEqual(self.code(self.service.operate, self.c, run["id"], "recover",
+                                   {"request_id": "recover-000001", "expected_version": 1}), (409, "environment_changed"))
+
+
 if __name__ == "__main__":
     unittest.main()

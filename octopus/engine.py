@@ -11,6 +11,7 @@ from .db import dumps, uid
 from .transport import worker_request
 from . import planning, recovery
 from .security import Error
+from .domain import unserved
 
 
 class Engine:
@@ -184,6 +185,13 @@ class Engine:
                                "('pending','dispatching','running','dispatch_unknown','waiting_approval')", (time.time(), rid))
                     self.db.event(db, rid, "session." + run["desired"], result)
             return
+        if run["status"] in {"preparing", "ready"}:
+            # Before preparing or dispatching a new Attempt, the Worker must still serve the run's space (§6.2);
+            # an Attempt already running is left to finish.
+            with self.db.read() as db:
+                reason = unserved(db, run)
+            if reason:
+                return self.update(rid, "waiting_worker", reason)
         if not run["worker_enabled"]:
             return self.update(rid, "diagnosing" if run["status"] == "diagnosing" else "blocked", "Worker 已停用")
         if run["status"] == "diagnosing":

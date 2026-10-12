@@ -92,6 +92,18 @@ def space_workers(db, user, team):
     return db.execute(query + " ORDER BY w.name", (team or user, team or user)).fetchall()
 
 
+def unserved(db, run):
+    """Why the run's Worker no longer runs it (spec §6.2): None while it is enabled and still serves the run's space."""
+    row = db.execute("SELECT enabled,retired FROM workers WHERE id=?", (run["worker_id"],)).fetchone()
+    if row is None or row["retired"]:
+        return "执行环境已退役"
+    if not row["enabled"]:
+        return "执行环境已停用"
+    if all(w["id"] != run["worker_id"] for w in space_workers(db, run["owner_id"], run["team_id"])):
+        return "执行环境已更换或已移出该空间"
+    return None
+
+
 def assign_spare(db, worker, team):
     """A spare execution environment becomes the Team's dedicated one (D28, T4; P2 for a host that served a Team)."""
     changed = db.execute("UPDATE workers SET scope='dedicated', team_id=?, owner_id=NULL, last_team=NULL "
@@ -797,6 +809,13 @@ class Service:
         if run["status"] == "waiting_worker":
             space = space or {"team": None, "workers": 0}
             where = f"Team「{space['team']}」" if space["team"] else "个人空间"
+            if run.get("worker_id"):
+                # It ran on an environment that no longer runs it (§6.2).
+                title = f"{where}的{run.get('error') or '执行环境不可用'}"
+                detail = "已完成的任务保留；换到另一个执行环境时，工作区在新环境中重新准备，原环境中的产出不会迁移。"
+                action = ("选择 Worker 后继续执行。" if space["workers"]
+                          else "请平台管理员为该空间分配执行环境后重新分配 Worker。")
+                return {"title": title, "detail": detail, "action": action, "workers": space["workers"], "task_id": None}
             if space["workers"]:
                 title, detail = "需求已保存，等待选择 Worker", f"{where}有 {space['workers']} 个可用 Worker，提交时未指定。"
                 action = "选择 Worker 后开始执行。"
@@ -877,8 +896,9 @@ class Service:
                         spec = current if row["id"] == current["id"] else json.loads(row["spec"])
                         db.execute("UPDATE tasks SET spec=?,status='pending',current_attempt=NULL WHERE run_id=? AND id=?",
                                    (dumps(spec), rid, row["id"]))
-                    db.execute("UPDATE runs SET input=?,desired='active',status=?,error=NULL WHERE id=?",
-                               (goal, "ready" if run["worker_id"] else "waiting_worker", rid))
+                    reason = unserved(db, run) if run["worker_id"] else None
+                    db.execute("UPDATE runs SET input=?,desired='active',status=?,error=? WHERE id=?",
+                               (goal, "ready" if run["worker_id"] and not reason else "waiting_worker", reason, rid))
                     from .revisions import changes, record
                     detail = "、".join(filter(None, ["需求" if goal != run["input"] else "", changes(before, current)]))
                     record(db, rid, version, "continued", f"续作「{current['name']}」" + (f"：{detail}" if detail else ""),
@@ -888,6 +908,8 @@ class Service:
                     from .recovery import schedule
                     require(run["lifecycle"] == "open" and run["worker_id"] and run["native_parent"] and
                             run["status"] in {"blocked", "failed", "stopped"}, "此 Session 当前不能启动诊断", 409, "busy")
+                    reason = unserved(db, run)
+                    require(not reason, f"{reason}：请续作后重新分配 Worker", 409, "environment_changed")
                     task = db.execute("SELECT * FROM tasks WHERE run_id=? AND status!='accepted' ORDER BY ordinal LIMIT 1",
                                       (rid,)).fetchone()
                     attempt = db.execute("SELECT * FROM attempts WHERE id=?", (task["current_attempt"],)).fetchone() if task else None
@@ -901,7 +923,13 @@ class Service:
                             "运行已分配 Worker 或已关闭", 409, "invalid_state")
                     # The Session's own space, not the operator's (an admin may assign for someone else).
                     self._worker(db, run["owner_id"], body.get("worker_id"), run["team_id"])
-                    db.execute("UPDATE runs SET worker_id=?,status='preparing' WHERE id=?", (body["worker_id"], rid))
+                    if run["worker_id"] not in (None, body["worker_id"]):
+                        # Another environment has no native parent of this Session: prepare there afresh (P5).
+                        db.execute("UPDATE runs SET worker_id=?,native_parent=NULL,workspace=NULL,status='preparing',"
+                                   "error=NULL WHERE id=?", (body["worker_id"], rid))
+                    else:
+                        db.execute("UPDATE runs SET worker_id=?,status=?,error=NULL WHERE id=?",
+                                   (body["worker_id"], "ready" if run["native_parent"] else "preparing", rid))
                 elif action == "reopen":
                     require(run["lifecycle"] == "closed", "只有已关闭的 Session 可重新打开", 409, "invalid_state")
                     db.execute("UPDATE runs SET desired='reopen',status='reopening' WHERE id=?", (rid,))
