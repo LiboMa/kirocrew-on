@@ -9,6 +9,35 @@
 
 现状与缺口见 §8（2026-10-12 盘点，均有代码位置）。
 
+### 1.1 架构位置与权限检查点
+
+当前架构见 [`docs/ARCHITECTURE.md`](../../ARCHITECTURE.md)。本设计的全部规则都落在 Octopus 的 API 与 Service 层：Worker 只信任持 Worker Token 的平台，
+KiroCrew Gateway 不知道平台的用户与 Team，从不调用 Octopus API（单向驱动）。
+
+```mermaid
+flowchart LR
+  subgraph callers[调用者]
+    CO["控制台<br/>登录 Token"]
+    MC["MCP / Coding Agent<br/>connect Token"]
+    AD["管理工具<br/>admin Token"]
+  end
+  subgraph octo["Octopus（唯一的权限判定处）"]
+    AU["认证：Token → 用户 + scope<br/>401"]
+    SC["scope 门禁：read / execute / manage / admin<br/>403"]
+    RO["角色与可见性：管理员 / owner / 成员 / 本人<br/>看不到 404 · 看得到不能做 403"]
+    AUD[("审计")]
+    ENG["Engine"]
+  end
+  subgraph bnd["执行边界"]
+    WK["Worker<br/>信任 Worker Token"]
+    GWY["KiroCrew Gateway<br/>不知道平台用户"]
+  end
+  CO & MC & AD --> AU --> SC --> RO
+  RO --> AUD
+  RO --> ENG -->|Worker Token| WK --> GWY
+  RO -.->|原生入口：仅本人个人空间 / 专属环境成员 / 共享环境边界所有者（K03）| WK
+```
+
 ## 2．已确定（负责人，2026-10-12）
 
 | 编号 | 决定 |

@@ -1,6 +1,7 @@
 # 开发空间、Worker 与执行边界
 
-状态：§1–§7 描述分支 `feat/m1-runtime-foundation` 当前代码与 EC2 部署（2026-10-11）；§8 为建议，未实施。
+状态：§1–§7 描述分支 `feat/m1-runtime-foundation` 当前代码与 EC2 部署（2026-10-12 更新）；§8 为建议。
+部署拓扑、KiroCrew 与 Octopus 的逐层交互与时序见 [`docs/ARCHITECTURE.md`](ARCHITECTURE.md)。
 
 ## 1．名词
 
@@ -15,6 +16,9 @@
 **Worker 不是 KiroCrew 本身**：一个 Worker 代表一个执行边界，是平台调用这个边界的入口。
 
 ## 2．组成与连接
+
+下图是逻辑组成；当前 EC2 的实际拓扑（平台主机上的共享边界 personal、独立 Worker 主机 w1、各原生入口分发与中转）见
+[`docs/ARCHITECTURE.md`](ARCHITECTURE.md) §1。
 
 ```mermaid
 flowchart LR
@@ -157,8 +161,9 @@ KiroCrew 的相关事实：
 
 ## 7．现状与差距
 
-- EC2 上只有 `personal` 一个边界，其 Worker 归管理员个人空间；执行环境（共享、专属、空闲）上线后，由管理员把它设为共享环境并分配给 Team 与用户（`docs/OPERATIONS.md`「执行环境」）。分配前提交到 Team 空间会被拒绝并说明原因；此前已停在 `waiting_worker` 的会话显示 `attention`（`81394f9`），分配后可继续。
-- 用 `al2023.sh <第二个边界>` 增加 Team 边界会遇到：
+- EC2（2026-10-12）：平台主机上的 `personal` 边界为**共享环境**，服务管理员与多位用户的个人空间及 Team Hardware-Dev；独立 Worker 主机 `w1`
+  为「Web应用软件研发组」的**专属环境**，原生入口经平台主机中转（D29、D30，`docs/OPERATIONS.md`「Worker 主机」）。
+- 新增专属环境的方式是独立 Worker 主机（`deploy.sh worker-host add <名称>`）。**同一主机上**再加一个边界（`al2023.sh <第二个边界>`）尚未实现，会遇到：
 
   | 问题 | 后果 |
   |---|---|
@@ -175,9 +180,9 @@ KiroCrew 的相关事实：
 
 已确定（D28，修订）：创建 Team 时必须选择执行环境——共享环境（MVP 默认）或专属环境（独立边界，MVP 之后）。设计见 `docs/superpowers/specs/2026-10-11-team-execution-environments-design.md`。以下为专属环境与后续的建议：
 
-1. **拆分安装**：主机层与边界层分开；边界层支持 `--team <team-id>`：按边界分配不冲突的端口，Team 边界写入 `dedicated`，`bootstrap-worker` 登记到指定 Team 而不是管理员个人空间。
-2. `deploy.sh kiro-login [<边界>]` 与 `space` 支持指定边界。
-3. 原生对话入口先只服务 personal；Team 边界的入口另行设计（按边界的路径或分发）。
+1. **拆分安装**（同主机多边界，按需）：主机层与边界层分开；边界层按边界分配不冲突的端口，Team 边界写入 `dedicated`，登记为空闲环境。
+2. ~~`deploy.sh kiro-login` 支持指定边界~~（Worker 主机已支持 `--host <名称>`）；`space` 仍只能定位平台主机上的边界。
+3. ~~Team 边界的原生入口~~（已实现：每台 Worker 主机一个分发，经平台主机中转，D30）。
 4. Team 隔离强度分级并写入运维手册：同主机不同 OS 用户（当前可行，共享实例角色）→ 独立 EC2 或容器（每个 Team 独立实例角色）。
 5. ~~`waiting_worker` 时给出 `attention`~~（已实现，`81394f9`）。
 6. **M4 会话共享**按 §5「会话共享时记忆如何处理」设计：默认 viewer；跨边界继续开发用 fork；跨边界 collaborator 只在所有者明确同意时开放，并以 `incognito` 记忆模式运行（Gateway 在创建会话时支持 `memory_mode`，KiroCrew `dashboard/chat_handlers.py:810-817`；对已建会话收紧模式需核实）。
