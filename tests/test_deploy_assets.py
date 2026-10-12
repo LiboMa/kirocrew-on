@@ -122,6 +122,37 @@ class TemplateTests(unittest.TestCase):
 
 
 class ScriptTests(unittest.TestCase):
+    def test_gateway_restarts_only_when_what_it_loads_changed(self):
+        text = (ROOT / "deploy/install/al2023.sh").read_text()
+        snippet = text[text.index("# gateway:begin"):text.index("# gateway:end")]
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            for name in ("on/composition/gateway.py", "on/octopus/config.py", "on/octopus/prompts.py", "on/octopus/__init__.py",
+                         "etc/boundary-b1.toml", "systemd/octopus-gateway@.service"):
+                (root / name).parent.mkdir(parents=True, exist_ok=True)
+                (root / name).write_text(name)
+            (root / "kc/releases/1").mkdir(parents=True)
+            (root / "kc/current").symlink_to(root / "kc/releases/1")
+            (root / "base").mkdir()
+            body = (snippet.replace("/opt/kirocrew-on/current", str(root / "on")).replace("/opt/kirocrew/current", str(root / "kc/current"))
+                    .replace("/etc/systemd/system", str(root / "systemd")).replace("/etc/kirocrew-on", str(root / "etc")))
+            script = (f"set -euo pipefail\nBOUNDARY=b1\nBASE={root}/base\nBOUNDARY_TOML={root}/etc/boundary-b1.toml\n"
+                      "log() { echo \"LOG $*\"; }\n"
+                      f"systemctl() {{ echo \"$*\" >> {root}/calls; if [ \"$1\" = is-active ]; then [ -f {root}/active ]; fi; }}\n" + body)
+            def run():
+                (root / "calls").write_text("")
+                out = subprocess.run(["bash", "-c", script], capture_output=True, text=True, check=True).stdout
+                return "restart octopus-gateway@b1" in (root / "calls").read_text(), out
+            self.assertTrue(run()[0])                        # first install: no fingerprint yet
+            (root / "active").write_text("")
+            restarted, out = run()
+            self.assertFalse(restarted)                      # nothing changed and it is running
+            self.assertIn("Gateway 未变化", out)
+            (root / "etc/boundary-b1.toml").write_text("changed")
+            self.assertTrue(run()[0])                        # the boundary config changed
+            (root / "active").unlink()
+            self.assertTrue(run()[0])                        # unchanged, but not running
+
     def test_scripts_are_valid_bash_without_mac_assumptions(self):
         for name in ("deploy/install/al2023.sh", "deploy/aws/deploy.sh"):
             script = ROOT / name

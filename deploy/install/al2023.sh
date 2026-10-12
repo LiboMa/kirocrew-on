@@ -318,7 +318,22 @@ log "systemd"
 install -m 0644 /opt/kirocrew-on/current/deploy/systemd/*.service /etc/systemd/system/
 systemctl daemon-reload
 systemctl enable "octopus-gateway@$BOUNDARY" "octopus-worker@$BOUNDARY" >/dev/null
-systemctl restart "octopus-gateway@$BOUNDARY"
+# gateway:begin
+# The Gateway runs every native task: restart it only when what it loads changed (D34 §5.3), so a deploy of the
+# platform alone does not interrupt work in flight. The Worker and the API restart as before.
+GATEWAY_STAMP="$BASE/gateway.fingerprint"
+GATEWAY_PRINT="$( { readlink -f /opt/kirocrew/current
+  cat /opt/kirocrew-on/current/composition/*.py /opt/kirocrew-on/current/octopus/config.py \
+      /opt/kirocrew-on/current/octopus/prompts.py /opt/kirocrew-on/current/octopus/__init__.py \
+      "$BOUNDARY_TOML" /etc/systemd/system/octopus-gateway@.service
+  cat "/etc/kirocrew-on/boundary-$BOUNDARY.env" 2>/dev/null || true; } | sha256sum | cut -d' ' -f1)"
+if [ "$(cat "$GATEWAY_STAMP" 2>/dev/null || true)" = "$GATEWAY_PRINT" ] && systemctl is-active --quiet "octopus-gateway@$BOUNDARY"; then
+  log "Gateway 未变化，保持运行（进行中的原生任务不中断）"
+else
+  systemctl restart "octopus-gateway@$BOUNDARY"
+  printf '%s\n' "$GATEWAY_PRINT" > "$GATEWAY_STAMP"
+fi
+# gateway:end
 systemctl restart "octopus-worker@$BOUNDARY"
 if [ -z "$WORKER_HOST" ]; then
   # platform:begin
