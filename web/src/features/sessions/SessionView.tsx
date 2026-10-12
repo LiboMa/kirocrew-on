@@ -19,7 +19,7 @@ import { RevisionsPanel } from "@/features/sessions/RevisionsPanel";
 import { RecoveryPanel } from "@/features/sessions/RecoveryPanel";
 import { TaskList } from "@/features/sessions/TaskList";
 import { useSessionActions } from "@/features/sessions/useSessionActions";
-import { canContinue, canDelete, canRecover, canStop, closeAction, crewEntryReason, deleteReason, statusText } from "@/lib/session";
+import { canContinue, canDelete, canRecover, canStop, closeAction, crewEntryReason, deleteReason, resumeReason, statusText } from "@/lib/session";
 
 export function SessionView({ id }: { id: string }) {
   const { allTeams, workflows, workers, me, open } = useConsole();
@@ -121,6 +121,7 @@ export function SessionView({ id }: { id: string }) {
             </DropdownMenuContent>
           </DropdownMenu>
         </div>
+        {resumeReason(run) && <p id="resume-hint" className="text-xs text-muted-foreground">{resumeReason(run)}</p>}
         {crewReason && <p id="crew-entry-hint" className="text-xs text-muted-foreground">{crewReason}</p>}
         {workers.find((w) => w.id === run.worker_id)?.scope === "shared" && (
           <p id="shared-environment" className="text-xs text-muted-foreground">共享执行环境：环境内会话的 Agent 互相可读，记忆未分隔。</p>
@@ -149,7 +150,8 @@ export function SessionView({ id }: { id: string }) {
               ? <span id="worker-notice-detail">{[run.attention.detail, run.attention.action].filter(Boolean).join(" ")}</span>
               : "需求已保存。请选择此开发空间的 Worker 后开始执行。"}
             {run.attention?.workers !== 0 && (
-              <Button size="sm" variant="outline" onClick={() => open({ kind: "assign", run })} id="assign-worker"><UserCog /> 分配 Worker</Button>
+              <Button size="sm" variant="outline" onClick={() => open({ kind: "assign", run })} id="assign-worker"
+                disabled={!!resumeReason(run)}><UserCog /> 分配 Worker</Button>
             )}
           </AlertDescription>
         </Alert>

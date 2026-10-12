@@ -191,6 +191,26 @@ describe("settings", () => {
     await waitFor(() => expect(calls.find((c) => c.method === "DELETE")?.body).toEqual({ username: "fixture-owner" }));
   });
 
+  test("leaving one's only Team brings the console back to the personal space", async () => {
+    let left = false;
+    start({
+      "GET /me": { id: "u1", username: "fixture-owner", admin: 0, scopes: ["read", "execute", "manage"] },
+      "GET /teams": () => left ? [] : [{ id: "team-1", name: "平台组", role: "member", created: 1, members: [
+        { id: "u1", username: "fixture-owner", role: "member" }, { id: "u3", username: "carol", role: "owner" }], environment: null }],
+      "DELETE /teams/team-1/members": () => { left = true; return { ok: true }; },
+    });
+    await userEvent.click(await screen.findByRole("combobox", { name: "开发空间" }));
+    await userEvent.click(await screen.findByRole("option", { name: "平台组 · Team" }));
+    expect(screen.getByRole("combobox", { name: "开发空间" })).toHaveTextContent("平台组");
+    const dialog = await openSetting(/团队与成员/);
+    const self = within(dialog).getByRole("group", { name: "fixture-owner" });
+    await userEvent.click(within(self).getByRole("button", { name: "退出 Team" }));
+    await userEvent.click(within(self).getByRole("button", { name: "确认退出" }));
+    await within(dialog).findByText("你还不在任何 Team 中。");
+    await userEvent.keyboard("{Escape}");
+    await waitFor(() => expect(screen.getByRole("combobox", { name: "开发空间" })).toHaveTextContent("我的开发空间"));
+  });
+
   test("archived Teams are marked in the space switcher and not offered for new Sessions", async () => {
     start({ "GET /teams": [
       { id: "team-1", name: "平台组", role: "owner", created: 1, members: [], environment: null },

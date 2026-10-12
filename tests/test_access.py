@@ -154,11 +154,11 @@ class SemanticsTests(AccessCase):
             self.assertEqual(call("POST", f"/v1/runs/{rid}/delete", self.tokens["eve"], body)[0], 404)
             # native: False — the Team's shared environment belongs to alice (K03).
             self.assertEqual(call("GET", f"/v1/runs/{rid}", self.tokens["bob"])[1]["permissions"],
-                             {"operate": True, "delete": False, "native": False})
+                             {"operate": True, "delete": False, "native": False, "resume": True})
             self.assertEqual(call("GET", f"/v1/runs/{mine}", self.tokens["bob"])[1]["permissions"],
-                             {"operate": True, "delete": True, "native": False})
+                             {"operate": True, "delete": True, "native": False, "resume": True})
             listed = {r["id"]: r["permissions"] for r in call("GET", "/v1/runs", self.tokens["bob"])[1]}
-            self.assertEqual(listed[rid], {"operate": True, "delete": False, "native": False})
+            self.assertEqual(listed[rid], {"operate": True, "delete": False, "native": False, "resume": True})
 
     def test_viewer_cannot_edit_a_workflow_and_is_told_why(self):
         from octopus.security import Error

@@ -51,8 +51,9 @@ export function Console() {
   }, [selected, workspace.runs, workspace.loading, workspace.refreshing, select, me.data, allSessions]);
 
   useEffect(() => {
-    if (space && memberTeams.length && !memberTeams.some((t) => t.id === space)) setSpaceState("");
-  }, [space, memberTeams]);
+    // Also after leaving one's only Team: once the Teams are loaded, a space that is not among them is dropped.
+    if (space && !workspace.loading && !memberTeams.some((t) => t.id === space)) setSpaceState("");
+  }, [space, memberTeams, workspace.loading]);
 
   const value = useMemo<ConsoleState | null>(() => me.data ? {
     me: me.data, teams: memberTeams, allTeams: workspace.teams, users: workspace.users, workers: workspace.workers,

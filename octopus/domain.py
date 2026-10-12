@@ -189,7 +189,10 @@ def run_permissions(db, actor, run):
     if native and run["worker_id"]:
         worker = db.execute("SELECT scope,owner_id FROM workers WHERE id=?", (run["worker_id"],)).fetchone()
         native = worker is None or worker["scope"] != "shared" or worker["owner_id"] == actor["id"]
-    return {"operate": True, "delete": allowed(owner=True), "native": native}
+    # An archived Team's Sessions can be read and stopped, not continued, diagnosed, reopened or reassigned (P3).
+    archived = bool(run["team_id"]) and bool(
+        (db.execute("SELECT archived FROM teams WHERE id=?", (run["team_id"],)).fetchone() or {"archived": 0})["archived"])
+    return {"operate": True, "delete": allowed(owner=True), "native": native, "resume": not archived}
 
 
 def _probe(config):
@@ -307,7 +310,8 @@ class Service:
             if team:
                 title = db.execute("SELECT name FROM teams WHERE id=?", (team,)).fetchone()
                 raise Error(409, "in_use", f"仍是 Team「{title['name'] if title else team}」的执行环境：先为该 Team 更换执行环境")
-            busy = db.execute("SELECT count(*) FROM runs WHERE worker_id=? AND lifecycle='open' AND status NOT IN "
+            # Whatever the Engine still drives on it, a closed Session being reopened included.
+            busy = db.execute("SELECT count(*) FROM runs WHERE worker_id=? AND lifecycle!='deleted' AND status NOT IN "
                               f"({','.join('?' * len(SETTLED))})", (wid, *SETTLED)).fetchone()[0]
             require(busy == 0, f"还有 {busy} 个进行中的会话：先等待结束或停止", 409, "busy")
             db.execute("DELETE FROM worker_spaces WHERE worker_id=?", (wid,))
@@ -460,14 +464,16 @@ class Service:
             username = text(body.get("username"), "用户名", 64).lower()
             leaving = remove and username == actor["username"]
             self._team(db, actor, tid, owner=not leaving)
-            if not remove:
-                active_team(db, tid)
-            target = db.execute("SELECT id FROM users WHERE username=? AND active=1", (username,)).fetchone()
+            # A deactivated member can still be removed; only active users join or change role.
+            target = db.execute("SELECT id FROM users WHERE username=?" + ("" if remove else " AND active=1"),
+                                (username,)).fetchone()
             require(target is not None, "用户不存在", 404, "not_found")
             role = body.get("role", "member")
             require(role in {"owner", "member"}, "角色无效")
             current = db.execute("SELECT role FROM members WHERE team_id=? AND user_id=?",
                                  (tid, target["id"])).fetchone()
+            if not remove and current is None:
+                active_team(db, tid)   # an archived Team takes no new members; roles may still change
             if current and current["role"] == "owner" and (remove or role != "owner"):
                 # Another *active* owner must remain: a deactivated owner cannot manage the Team (B4).
                 require(db.execute("SELECT count(*) FROM members m JOIN users u ON u.id=m.user_id WHERE m.team_id=? "
@@ -870,6 +876,11 @@ class Service:
                 active_team(db, run["team_id"])   # an archived Team's Sessions stay readable and stoppable (P3)
             require(action not in {"continue", "recover"} or json.loads(run["snapshot"]).get("purpose") != "workflow_design",
                     "工作流建议请按新需求重新生成；原建议保留作为证据", 409, "invalid_state")
+            # A retired Worker is never called again (P6): its Sessions settle here, and cannot be reopened on it.
+            retired = bool(run["worker_id"]) and bool(
+                db.execute("SELECT retired FROM workers WHERE id=?", (run["worker_id"],)).fetchone()["retired"])
+            require(not (retired and action == "reopen"), "执行环境已退役，会话不能重新打开；可以按此任务列表在其他空间发起新开发",
+                    409, "retired")
             def execute():
                 require(body.get("expected_version") == run["version"], "Session 版本已更新", 409, "version_conflict")
                 require(run["lifecycle"] != "deleted", "Session 已删除", 409, "invalid_state")
@@ -936,7 +947,7 @@ class Service:
                 else:
                     require(action != "delete" or body.get("confirmation") == rid, "删除需完整 Session ID 确认")
                     db.execute("UPDATE runs SET desired=?,status='stopping' WHERE id=?", (action, rid))
-                if not run["worker_id"] and action in {"stop", "close", "delete", "reopen"}:
+                if (not run["worker_id"] or retired) and action in {"stop", "close", "delete", "reopen"}:
                     lifecycle = {"close": "closed", "delete": "deleted", "reopen": "open"}.get(action, run["lifecycle"])
                     db.execute("UPDATE runs SET desired='stopped',status='stopped',lifecycle=? WHERE id=?",
                                (lifecycle, rid))

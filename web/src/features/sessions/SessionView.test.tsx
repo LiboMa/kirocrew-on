@@ -84,6 +84,14 @@ describe("session detail", () => {
     await waitFor(() => expect(calls.find((c) => c.path === "/v1/runs/run-a/delete")?.body).toMatchObject({ confirmation: "run-a", expected_version: 4 }));
   });
 
+  test("a Session of an archived Team cannot be continued, diagnosed or reopened, and says why", async () => {
+    open({ ...blocked, team_id: "team-1", permissions: { operate: true, delete: true, native: true, resume: false } } as Run);
+    expect(await screen.findByRole("button", { name: "续作" })).toBeDisabled();
+    expect(screen.getByRole("button", { name: /请求协调者诊断/ })).toBeDisabled();
+    expect(screen.getByRole("button", { name: /停止/ })).toBeEnabled();
+    expect(screen.getByText(/Team 已归档：会话可查看与停止/)).toBeInTheDocument();
+  });
+
   test("deleting is offered only when the server allows it, with the reason otherwise", async () => {
     open({ ...blocked, permissions: { operate: true, delete: false } } as Run);
     await userEvent.click(await screen.findByRole("button", { name: "更多操作" }));

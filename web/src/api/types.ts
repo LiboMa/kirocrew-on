@@ -202,7 +202,8 @@ export interface Run {
   attention?: Attention | null;
   recovery?: Recovery | null;
   /** What the server allows the current user on this Session; absent from older platforms. */
-  permissions?: { operate: boolean; delete: boolean; native?: boolean };
+  /** resume: false for a Session of an archived Team (readable and stoppable only). */
+  permissions?: { operate: boolean; delete: boolean; native?: boolean; resume?: boolean };
   /** KiroCrew Agent planning: intent recognition, requirement enrichment and the generated tasks. */
   planning?: { mode: "agent"; applied: boolean; intent?: string; summary?: string; name?: string; tasks?: string[]; notes?: string[] } | null;
 }

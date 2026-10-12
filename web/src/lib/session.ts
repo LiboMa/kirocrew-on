@@ -4,9 +4,15 @@ import { ACTIVE_STATES, ATTENTION_STATES, STATES } from "@/lib/labels";
 
 const open = (run: Run) => run.lifecycle === "open";
 const design = (run: Run) => run.purpose === "workflow_design";
+const resumable = (run: Run) => run.permissions?.resume !== false;
 
 export function canContinue(run: Run): boolean {
-  return !ACTIVE_STATES.has(run.status) && open(run) && !design(run);
+  return !ACTIVE_STATES.has(run.status) && open(run) && !design(run) && resumable(run);
+}
+
+/** Why continuing, diagnosing, reopening and reassigning are not offered (an archived Team, P3). */
+export function resumeReason(run: Run): string {
+  return resumable(run) ? "" : "Team 已归档：会话可查看与停止，不能续作、诊断、重新打开或重新分配 Worker。";
 }
 
 export function canRetryTask(run: Run, index: number): boolean {
@@ -14,7 +20,7 @@ export function canRetryTask(run: Run, index: number): boolean {
 }
 
 export function canRecover(run: Run): boolean {
-  return !design(run) && !ACTIVE_STATES.has(run.status) && open(run) &&
+  return !design(run) && !ACTIVE_STATES.has(run.status) && open(run) && resumable(run) &&
     ["blocked", "failed", "stopped"].includes(run.status) && !!run.native_parent &&
     run.tasks.some((task) => task.status !== "accepted" && (task.attempts?.length ?? 0) > 0);
 }
@@ -26,7 +32,7 @@ export function canStop(run: Run): boolean {
 export function closeAction(run: Run): { action: "close" | "reopen"; label: string; disabled: boolean } {
   const closed = run.lifecycle === "closed";
   return { action: closed ? "reopen" : "close", label: closed ? "重新打开" : "关闭",
-    disabled: run.lifecycle === "deleted" || run.status === "stopping" };
+    disabled: run.lifecycle === "deleted" || run.status === "stopping" || (closed && !resumable(run)) };
 }
 
 export function canDelete(run: Run): boolean {

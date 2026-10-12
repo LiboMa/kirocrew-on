@@ -277,7 +277,7 @@ class WorkerManagementTests(TeamsWorkersCase):
 class DispatchRecheckTests(TeamsWorkersCase):
     def setUp(self):
         super().setUp()
-        self.calls, self.done = [], False
+        self.calls, self.done, self.broken = [], False, False
 
     def worker(self, config, path, body, **kwargs):
         self.calls.append(path)
@@ -286,7 +286,7 @@ class DispatchRecheckTests(TeamsWorkersCase):
         if path == "/dispatch":
             return {"status": "running", "native_id": "n-" + body["attempt_id"][-6:], "context_hash": "h"}
         if path == "/inspect":
-            native = {"done": True, "result": "完成", "error": ""} if self.done else {"done": False}
+            native = {"done": True, "result": "完成", "error": "崩溃" if self.broken else ""} if self.done else {"done": False}
             return {"status": "running", "native": native, "evidence": {"actual_backend": "claude"},
                     "handoff": "交接", "outcome": dumps({"decision": "pass", "summary": "通过"})}
         raise AssertionError(path)
@@ -360,6 +360,22 @@ class DispatchRecheckTests(TeamsWorkersCase):
         detail = self.service.run(self.c, run["id"])
         self.assertEqual((detail["status"], detail["error"]), ("waiting_worker", "执行环境已更换或已移出该空间"))
 
+    def test_automatic_diagnosis_is_not_sent_to_an_environment_that_no_longer_serves(self):
+        run = self.service.start(self.c, {"request_id": "start-0000000009", "input": "研发需求与真实验证", "source": {"type": "new"},
+                                          "team_id": "team-p", "recovery": {"enabled": True, "max_cycles": 2},
+                                          "steps": [{"id": "code", "name": "实现", "tool": "claude", "prompt": "实现"}]})
+        self.tick(3)                                    # prepare, dispatch, inspect (still running)
+        with self.db.transaction() as db:
+            db.execute("DELETE FROM worker_spaces WHERE team_id='team-p'")
+        self.done = self.broken = True                  # the running Attempt now fails
+        self.tick(3)
+        detail = self.service.run(self.c, run["id"])
+        self.assertEqual(self.calls.count("/dispatch"), 1)
+        self.assertEqual((detail["status"], detail["recovery"]["used"]), ("blocked", 0))
+        self.service.operate(self.c, run["id"], "continue",
+                             {"request_id": "continue-000009", "expected_version": 1, "task_id": "code"})
+        self.assertEqual(self.service.run(self.c, run["id"])["status"], "waiting_worker")
+
     def test_recover_refuses_an_environment_that_no_longer_serves(self):
         run = self.start(self.c, team_id="team-p")
         with self.db.transaction() as db:
@@ -367,6 +383,55 @@ class DispatchRecheckTests(TeamsWorkersCase):
             db.execute("UPDATE workers SET enabled=0 WHERE id='env-s'")
         self.assertEqual(self.code(self.service.operate, self.c, run["id"], "recover",
                                    {"request_id": "recover-000001", "expected_version": 1}), (409, "environment_changed"))
+
+
+class ReviewFixTests(TeamsWorkersCase):
+    def personal(self):
+        with self.db.transaction() as db:
+            db.execute("INSERT INTO workers(id,name,owner_id,config) VALUES('env-b','bob',?,?)", (self.b["id"], self.config("b-b")))
+        run = self.start(self.b, worker_id="env-b")
+        with self.db.transaction() as db:
+            db.execute("UPDATE runs SET status='completed',native_parent='octopus-b' WHERE id=?", (run["id"],))
+        return run["id"]
+
+    def test_sessions_on_a_retired_worker_close_and_delete_without_its_host(self):
+        rid = self.personal()
+        self.service.retire_worker(self.a, "env-b")
+        self.service.operate(self.b, rid, "close", {"request_id": "close-0000001", "expected_version": 1})
+        detail = self.service.run(self.b, rid)
+        self.assertEqual((detail["lifecycle"], detail["status"]), ("closed", "stopped"))
+        Engine(self.db, request=lambda *a, **k: self.fail("a retired Worker was called")).tick()
+        self.assertEqual(self.code(self.service.operate, self.b, rid, "reopen",
+                                   {"request_id": "reopen-000001", "expected_version": 2}), (409, "retired"))
+        self.service.operate(self.b, rid, "delete", {"request_id": "delete-000001", "expected_version": 2, "confirmation": rid})
+        self.assertEqual(self.service.run(self.b, rid)["lifecycle"], "deleted")
+
+    def test_retire_counts_a_session_being_reopened(self):
+        rid = self.personal()
+        with self.db.transaction() as db:
+            db.execute("UPDATE runs SET lifecycle='closed',status='reopening',desired='reopen' WHERE id=?", (rid,))
+        self.assertEqual(self.code(self.service.retire_worker, self.a, "env-b"), (409, "busy"))
+
+    def test_roles_change_in_an_archived_team_but_no_one_new_joins(self):
+        self.service.archive_team(self.a, "team-p", {"archived": True})
+        self.service.membership(self.c, "team-p", {"username": "bob", "role": "owner"})
+        self.service.membership(self.c, "team-p", {"username": "carol"}, remove=True)   # carol may now leave
+        self.assertEqual(self.code(self.service.membership, self.b, "team-p", {"username": "eve"}), (409, "team_archived"))
+
+    def test_a_deactivated_member_can_be_removed(self):
+        with self.db.transaction() as db:
+            db.execute("UPDATE users SET active=0 WHERE id=?", (self.b["id"],))
+        self.service.membership(self.c, "team-p", {"username": "bob"}, remove=True)
+        members = {m["username"] for m in self.service.teams(self.c)[0]["members"]}
+        self.assertEqual(members, {"carol"})
+        self.assertEqual(self.code(self.service.membership, self.c, "team-p", {"username": "bob"}), (404, "not_found"))
+
+    def test_sessions_of_an_archived_team_say_they_cannot_be_resumed(self):
+        run = self.start(self.c, team_id="team-p")
+        self.assertTrue(self.service.run(self.c, run["id"])["permissions"]["resume"])
+        self.service.archive_team(self.a, "team-p", {"archived": True})
+        self.assertFalse(self.service.run(self.c, run["id"])["permissions"]["resume"])
+        self.assertFalse(self.service.runs(self.c)[0]["permissions"]["resume"])
 
 
 class SchemaTests(unittest.TestCase):

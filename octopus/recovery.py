@@ -3,6 +3,7 @@ import json
 import time
 
 from .db import dumps, uid
+from .domain import unserved
 from .security import Error, require
 
 LIVE = {"pending", "dispatching", "dispatch_unknown", "running", "waiting_approval"}
@@ -103,8 +104,9 @@ def schedule(db, database, run, task, attempt, *, manual=False):
         return None
     failure = json.loads(attempt["evidence"]).get("failure_type", "native_error")
     if not manual:
+        # An environment that no longer serves the run gets no new diagnosis (§6.2): continuing moves it to waiting.
         if (not settings["enabled"] or len(rows) >= settings["max_cycles"] or failure in NEEDS_INPUT or
-                any(r["failed_attempt_id"] == attempt["id"] for r in rows)):
+                any(r["failed_attempt_id"] == attempt["id"] for r in rows) or (run["worker_id"] and unserved(db, run))):
             return None
     ordered = [dict(t) for t in db.execute("SELECT id,ordinal,spec FROM tasks WHERE run_id=? ORDER BY ordinal",
                                          (run["id"],))]
