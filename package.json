@@ -1,0 +1,10 @@
+{
+  "name": "kirocrew-octopus",
+  "private": true,
+  "version": "0.1.0",
+  "description": "Pinned ACP adapters for the KiroCrew App PoC; Gemini excluded.",
+  "dependencies": {
+    "@agentclientprotocol/claude-agent-acp": "0.84.0",
+    "@agentclientprotocol/codex-acp": "1.11.0"
+  }
+}

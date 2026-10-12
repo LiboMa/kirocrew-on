@@ -110,6 +110,7 @@ kirocrew-on/
 │   ├── connect/          四个客户端的 Skill 与 MCP 配置写入
 │   └── ui/               监控控制台（原生 JS，无构建）
 ├── composition/          ← poc.py：registry、poc-* 模板、Gateway 入口、--check
+├── web/                  React 控制台（Vite + TS + Tailwind + shadcn/ui），构建到 octopus/ui/dist
 ├── skills/octopus/       四个客户端共用的 SKILL.md
 ├── deploy/               AL2023 安装、systemd、CloudFormation、备份恢复
 ├── tests/                基线回归 + 原生契约 + 浏览器 + 客户端联动 + EC2 验收
@@ -124,7 +125,7 @@ Python 包名保持 `octopus`，以兼容 `python -m octopus`、`/v1` API 和现
 
 | 里程碑 | 范围 | 状态 |
 |---|---|---|
-| **M1 运行底座** | 两版资产迁入与回归基线；运行时配置；composition；schema 迁移；按 Session 并发的 Engine 与不可用退避；systemd；EC2 单边界部署；备份恢复 | 设计中 |
+| **M1 运行底座** | 先本地 macOS 跑通，再部署 EC2；两版资产迁入与回归基线；运行时配置；composition；schema 迁移；按 Session 并发的 Engine 与不可用退避；systemd；EC2 单边界部署；备份恢复 | 实现中 |
 | **M2 核心闭环** | Request；Pipeline 生成、规范化与门禁；映射与回退链；准入；完整恢复阶梯与看门狗；批准代理；Feature 分支推送与报告 | 未开始 |
 | **M3 客户端直连与控制台** | Claude Code / Codex / Kiro CLI / Kiro IDE 接入；pull / sync / watch / 会话关联；控制台搜索与详情 | 未开始 |
 | **M4 共享与组织** | 组织层；Session 共享给个人 / Team / 公司；Team 执行隔离；排队与配额；HTTPS | 未开始 |
@@ -154,3 +155,7 @@ Python 包名保持 `octopus`，以兼容 `python -m octopus`、`/v1` API 和现
 |---|---|
 | [总体设计](docs/superpowers/specs/2026-10-10-kirocrew-on-design.md) | 领域模型、组件、主流程、Pipeline 生成与门禁、映射、恢复阶梯、客户端联动、控制台、部署、安全、迁移、测试、里程碑 |
 | [MVP Release 计划与状态](docs/MVP-RELEASE.md) | MVP 范围、已确定决策、默认值、各里程碑验收、继承的已知问题、发布记录 |
+| [M1 实施计划](docs/superpowers/plans/2026-10-10-m1-runtime-foundation.md) | M1 运行底座：本机代码、本地端到端、EC2 部署的分任务计划 |
+| [运维手册](docs/OPERATIONS.md) | 目录与端口、启动、访问、升级回滚、日志、认证、备份恢复、本地端到端 |
+| [接手材料](docs/handover/) | 功能对照、事实清单、调用链、已知故障、旧版生成参考 |
+| [迁入来源](docs/PROVENANCE.md) | 迁入文件的来源路径、sha256 与来源 git 状态 |

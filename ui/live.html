@@ -1,0 +1,71 @@
+<!doctype html>
+<html lang="zh-CN">
+<head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>KiroCrew · Pipeline Live</title><link rel="icon" href="data:,"><link rel="stylesheet" href="/live.css"></head>
+<body>
+<header class="topbar"><a class="brand" href="/"><b class="mark">K</b><span>KiroCrew <strong>Pipeline</strong></span></a>
+<div class="connection"><i id="connection-dot"></i><span id="connection">连接 Gateway…</span></div>
+<a class="button quiet" href="http://127.0.0.1:8917/" target="_blank" rel="noopener">配置 Workflow ↗</a>
+<a id="app-link" class="button quiet" target="_blank" rel="noopener">打开 App 会话 ↗</a></header>
+<main>
+<section class="intro">
+<div><p class="eyebrow">ONE CONVERSATION · FOUR CODING TOOLS</p>
+<h1>从任务，到可用的网页。</h1><p class="subtitle">KiroCrew 发起与调度，每次交接都有可核对的执行证据。</p></div>
+<div class="run-status"><span id="overall" class="badge">准备就绪</span><p><strong id="passed">0</strong> / 4 阶段验收</p></div>
+</section>
+<section class="intake-panel" id="new" aria-labelledby="intake-title">
+<div class="intake-intro"><h2 id="intake-title">你想开发什么？</h2>
+<p>描述需求即可。计划、接口规格和验收测试由 Kiro 生成，四种工具在同一条 App 对话中接力。</p>
+<p class="scope-note">本次支持：本地 Web 小应用，HTML / CSS / JavaScript，无需安装依赖。</p>
+<button type="button" class="button quiet" id="app-intake">在 App 中输入需求</button>
+<p class="muted">打开准备好的 KiroCrew 对话，直接在聊天框输入。无需复制任务书。</p></div>
+<form id="intake-form">
+<label for="request-title">任务名称 <span>选填</span></label>
+<input id="request-title" maxlength="80" placeholder="例如：会议成本计算器" autocomplete="off">
+<label for="requirements">开发需求</label>
+<textarea id="requirements" required minlength="10" maxlength="12000" rows="5" placeholder="例如：做一个会议成本计算器。输入参会人数、每人时薪和会议分钟数，计算总成本。拒绝负数和非数字，支持载入示例和清空，界面中文、手机可用。"></textarea>
+<div class="intake-actions"><button class="button primary" id="send-request" type="submit">发送到 KiroCrew 并开始</button>
+<button type="button" class="text-button" id="fill-example">填入示例</button></div>
+<p class="muted">点击后启动真实工具调用；权限请求在 KiroCrew App 中处理。每个新需求单独保存。</p>
+</form>
+<div id="intake-feedback" class="intake-feedback" role="status" hidden></div>
+</section>
+<div class="history-row"><label for="run-select">查看运行</label><select id="run-select"><option value="">尚无任务</option></select></div>
+<div id="run-content">
+<section class="run-line"><span>当前任务 <b id="title">等待选择任务</b></span>
+<code id="run-id">—</code><span id="updated">等待首个真实状态</span></section>
+<details id="request-record"><summary>本次用户需求</summary><pre id="request-text"></pre></details>
+<div id="warning" class="warning" role="status" hidden></div>
+<section class="pipeline" id="stages" aria-label="四阶段流水线"></section>
+<div class="workspace">
+<section class="panel detail">
+<div class="panel-title"><div><p class="eyebrow">EXECUTION EVIDENCE</p><h2 id="detail-title">阶段详情</h2></div><span id="detail-status" class="badge">待执行</span></div>
+<p class="description" id="detail-description"></p>
+<dl class="facts"><div><dt>Agent 模板</dt><dd id="agent">—</dd></div><div><dt>原生任务 ID</dt><dd id="task-id">—</dd></div>
+<div><dt>实际 ACP 后端</dt><dd id="backend">等待创建</dd></div><div><dt>最近工具 / 时长</dt><dd id="last-tool">—</dd></div></dl>
+<div id="gate" class="gate">完成任务后校验归属、后端、文件与测试。</div>
+<details open><summary>真实任务输出</summary><pre id="result">在 KiroCrew App 会话发送任务后，这里会显示真实执行进度。</pre></details>
+<details><summary>候选版本与交接证据</summary><pre id="evidence">尚未产生</pre></details>
+</section>
+<section class="panel output">
+<div class="panel-title"><div><p class="eyebrow">DELIVERY</p><h2>交付与状态报告</h2></div><span class="small-label">本机临时预览</span></div>
+<div class="preview-placeholder" id="preview-placeholder"><div class="window-icon">▤</div><h3 id="product-title">你的 Web 应用</h3>
+<p>OpenCode 交付页面后，可在这里打开实际应用。</p><span>用户需求 → 规格与测试 → 实现与交付</span></div>
+<a id="preview-link" class="preview-ready" href="/preview/index.html" target="_blank" rel="noopener" hidden>
+<span class="window-icon">↗</span><div><h3 id="preview-title">打开交付的应用</h3><p>由 OpenCode 交付的实际 HTML / CSS / JS</p></div></a>
+<p id="browser-state" class="muted">浏览器验收：尚未执行</p>
+<div class="report-actions"><a class="button primary" id="report-link" href="/files/report.html" target="_blank" rel="noopener">查看状态报告 ↗</a>
+<a class="button quiet" href="/files/report.json" download>下载 JSON</a></div>
+<h3 class="artifact-title">本次证据文件</h3><div class="files" id="files"><span class="muted">运行后生成</span></div>
+</section>
+</div>
+</div>
+<section class="panel architecture"><div><p class="eyebrow">HOW IT WORKS</p><h2>同一条 App 对话，独立的工具会话。</h2>
+<p>父会话通过原生 MCP 分派任务，子任务完成后回到父会话。共享任务书、文件与证据，各工具保留自己的上下文和认证。</p></div>
+<div class="architecture-flow"><span>KiroCrew App<br><b>父会话</b></span><i>→</i><span>Gateway<br><b>SubagentManager</b></span><i>→</i><span>ProviderRegistry<br><b>ACP 工具会话</b></span><i>↩</i></div>
+<p class="observer-note">需求入口调用 KiroCrew 原生会话、上下文和聊天接口。四阶段任务由 App 内协调者通过原生 MCP 分派；本页每 2 秒读取状态。审批在 App 中处理，进度按阶段事实显示。</p></section>
+<details class="instructions"><summary>计划和任务文件由谁编写？</summary><p>你提供需求；框架生成阶段任务指令，Kiro 生成计划、接口规格和验收测试，通过规划检查后锁定。
+Claude 实现，Codex 审查，OpenCode 完成页面。这些文件是可查看的过程记录，无需你手写。修改需求时新建任务，先前的运行和 Sessions 保留。</p></details>
+<footer><span>KiroCrew App PoC · Native scheduling, observable handoffs</span><span id="parent-state">父会话：等待任务</span></footer>
+</main><script src="/live.js"></script>
+</body></html>

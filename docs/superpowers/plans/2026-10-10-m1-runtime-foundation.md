@@ -2,9 +2,9 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** 把新旧两版代码等价迁入 `kirocrew-on`，在测试保护下完成配置解耦、组合启动、schema 迁移、按 Session 并发的 Engine、无桌面服务与部署材料，然后在 EC2（AL2023 x86_64）上完成真实最小研发与返工验收。
+**Goal:** 把新旧两版代码等价迁入 `kirocrew-on`，在测试保护下完成配置解耦、组合启动、schema 迁移、按 Session 并发的 Engine、无桌面服务与部署材料；先在本机 macOS 用真实 ACP 跑通完整链路，再在 EC2（AL2023 x86_64）上完成真实最小研发与返工验收。
 
-**Architecture:** Part A 全部在本机完成且不依赖外部输入：第 0 步原样迁入并建立回归基线，之后每个任务只做一类改动并保持全量回归绿色。Part B 是 EC2 上的操作性任务，每个任务开始前都有授权关口。
+**Architecture:** Part A 全部在本机完成且不依赖外部输入：第 0 步原样迁入并建立回归基线，之后每个任务只做一类改动并保持全量回归绿色。Part A′ 在本机用独立端口与数据目录拉起三服务，以真实 ACP 验收。Part B 是 EC2 上的操作性任务，每个任务开始前都有授权关口。
 
 **Tech Stack:** Python 3.12+（标准库 + PyYAML；`tomllib`、`sqlite3`、`concurrent.futures`），原生 JS（无构建），Node ≥22（仅 ACP 适配器与 JS 检查），bash，systemd，CloudFormation。
 
@@ -19,7 +19,7 @@
 - 不绕过 KiroCrew 直接启动 Coding CLI；不重新实现 ACP；不关闭 KiroCrew 沙箱；不默认全部自动批准。
 - 代码注释沿用现有风格（英文、简短）；面向用户的错误信息用中文。
 - 迁入的测试只允许修改 import / 路径，不修改断言语义。
-- **提交规则（负责人 CLAUDE.md）：每个任务完成并通过该任务的端到端验证后，先向负责人报告并获得确认，再执行该任务的 commit；任何情况下不 push。**
+- **提交规则（负责人 CLAUDE.md + 2026-10-11 授权）：Part A / A′ 每个任务的测试与全量回归全绿后直接本地提交；Part A 结束后统一汇报并做一次全分支独立审查；任何情况下不 push。**
 - 回归入口统一为 `tools/regress.sh`；每个任务结束时必须全绿。
 
 ## Review Focus
@@ -357,7 +357,7 @@ git commit -m "chore: 等价迁入 kirocrew-octopus 新旧两版代码并建立�
 ### Task 2: 接手材料
 
 **Files:**
-- Create: `docs/handover/FEATURE-MATRIX.md`、`docs/handover/FACTS.md`、`docs/handover/CALL-CHAINS.md`、`docs/handover/KNOWN-ISSUES.md`
+- Create: `docs/handover/FEATURE-MATRIX.md`、`docs/handover/FACTS.md`、`docs/handover/CALL-CHAINS.md`、`docs/handover/KNOWN-ISSUES.md`、`docs/handover/GENERATION-REFERENCE.md`
 
 **Interfaces:**
 - Consumes: Task 1 迁入的代码与 `docs/inherited/`。
@@ -385,13 +385,23 @@ Web 引导构建；JSON / YAML / Markdown 导入导出；工作流版本库；Se
 
 `docs/handover/KNOWN-ISSUES.md`：复制 `docs/MVP-RELEASE.md` §9 的 K01–K15，每条补「复现方式 / 现有缓解 / 本仓库处理任务」，再追加 Task 1 中发现的新问题（没有则写“Task 1 未发现新问题”）。
 
-- [ ] **Step 5: 运行回归并提交（确认后）**
+- [ ] **Step 5: 旧版自动生成参考（M2 Pipeline 生成的设计输入）**
+
+`docs/handover/GENERATION-REFERENCE.md`：以 `/Users/malibo/MyDev/Kiro-Family-Spaces/experiments/kirocrew-app-poc` 为准（与迁入代码逐文件对照，差异注明），分析旧版“根据需求自动生成 / 编排”的实现，逐项写出 `文件:函数`、输入、输出、校验与可借鉴点：
+1. 意图生成：`workflow_library.start_design` / `_generate` / `design_status` 与 `development_prompts.intent_prompt`——生成任务如何组织、使用哪个 Agent、产出格式（单个 JSON/YAML 代码块）、校验与采纳流程、迟到结果与草稿隔离。
+2. Pipeline 规划阶段：`pipeline_spec.STAGES` / `COORDINATOR_PROMPT` / `WORKER_PROMPTS` / `requested_tasks`，`pipeline.capture_request` / `new_run`——REQUEST.md、TASK.md、`tasks/*.txt` 的生成，Kiro 产出 SPEC.md、plan.md、验收测试，以及规划后锁定哈希。
+3. 确定性门禁：`pipeline.checkpoint` / `tests` / `validate_review` 的判定条件与证据文件（`gates/<stage>.json`、`gate-history.jsonl`）。
+4. 模板：`ui/workflow-templates.json` 的 12 个模板结构（阶段、角色、提示词、验收契约），与新版 `octopus/intent.py` 的 3 个 CORE 模板对照。
+5. 生成样例：`examples/generated-review-workflow.{md,yaml}`；旧版运行目录 `state/workflow-designs/` 只统计数量与结构字段，**不复制、不引用其中的需求原文**。
+6. 结论：哪些逻辑直接复用到 M2 `octopus/pipelines.py` / `gates.py` / `designs.py`，哪些因“Engine 是唯一派发者”而改写（旧版由父 Agent 按 `next / accept` 推进），哪些淘汰。
+
+- [ ] **Step 6: 运行回归并提交**
 
 Run: `tools/regress.sh` → `regress: OK`
 
 ```bash
 git add docs/handover
-git commit -m "docs: 接手材料——功能对照表、事实清单、调用链与已知故障"
+git commit -m "docs: 接手材料——功能对照表、事实清单、调用链、已知故障与旧版生成参考"
 ```
 
 ---
@@ -2525,7 +2535,7 @@ ReadWritePaths=/var/lib/octopus/boundaries/%i
 WantedBy=multi-user.target
 ```
 
-（Gateway 与 Worker 单元暂不加 `ProtectSystem=strict` / `NoNewPrivileges`：KiroCrew 沙箱需要创建 user namespace，其与这些加固项的兼容性在 Task 14 实测后再决定，结论写入运维手册。）
+（Gateway 与 Worker 单元暂不加 `ProtectSystem=strict` / `NoNewPrivileges`：KiroCrew 沙箱需要创建 user namespace，其与这些加固项的兼容性在 Task 16 实测后再决定，结论写入运维手册。）
 
 - [ ] **Step 6: 运行测试与全量回归**
 
@@ -2953,9 +2963,9 @@ Outputs:
 `deploy/versions.env`:
 
 ```bash
-# 固定版本。macOS 本机观测值（2026-10-10）仅作起点；Linux 实际版本在 Task 14 探测后更新并记录来源。
+# 固定版本。macOS 本机观测值（2026-10-10）仅作起点；Linux 实际版本在 Task 16 探测后更新并记录来源。
 KIROCREW_VERSION=0.8.0
-# KiroCrew Linux 安装包地址与校验和：Task 14 依据官方安装文档确定后填写；为空时安装脚本拒绝继续。
+# KiroCrew Linux 安装包地址与校验和：Task 16 依据官方安装文档确定后填写；为空时安装脚本拒绝继续。
 KIROCREW_WHEEL_URL=
 KIROCREW_WHEEL_SHA256=
 KIRO_CLI_URL=
@@ -3026,7 +3036,7 @@ SOURCE="$(cd "$(dirname "$0")/../.." && pwd)"
 # shellcheck source=../versions.env
 source "$SOURCE/deploy/versions.env"
 [ -n "$KIROCREW_WHEEL_URL" ] && [ -n "$KIROCREW_WHEEL_SHA256" ] || {
-  echo "deploy/versions.env 中 KIROCREW_WHEEL_URL / KIROCREW_WHEEL_SHA256 未填写（见计划 Task 14）" >&2; exit 3; }
+  echo "deploy/versions.env 中 KIROCREW_WHEEL_URL / KIROCREW_WHEEL_SHA256 未填写（见计划 Task 16）" >&2; exit 3; }
 
 dnf install -y git tar gzip jq "$PYTHON_PACKAGE" "$NODE_PACKAGE"
 PYTHON="$(command -v "$PYTHON_PACKAGE")"
@@ -3066,7 +3076,7 @@ if [ -n "$KIRO_CLI_URL" ] && [ ! -x /opt/kirocrew-tools/bin/kiro-cli ]; then
   ARCHIVE="$(mktemp -d)/kiro-cli.zip"
   curl -fsSL "$KIRO_CLI_URL" -o "$ARCHIVE"
   echo "$KIRO_CLI_SHA256  $ARCHIVE" | sha256sum -c -
-  echo "kiro-cli 安装包已校验：$ARCHIVE；按 Task 14 记录的官方步骤安装到 /opt/kirocrew-tools/bin" >&2
+  echo "kiro-cli 安装包已校验：$ARCHIVE；按 Task 16 记录的官方步骤安装到 /opt/kirocrew-tools/bin" >&2
 fi
 
 [ -f /etc/kirocrew-on/platform.toml ] || install -m 0640 -o root -g octopus \
@@ -3107,7 +3117,7 @@ git commit -m "feat: EC2 部署材料——SSM-only CloudFormation、AL2023 安�
 
 `docs/OPERATIONS.md` 必须包含以下章节，每节给出实际命令（以 `personal` 边界为例）与预期输出：
 1. **目录与端口**：§12.2 目录表；端口 8918（API，回环）、8928（Worker，回环）、5476（Gateway，回环）；SSM 转发映射 `localhost:18918 → 8918`、`localhost:15476 → 5476`。
-2. **首次启动**：`sudo deploy/install/al2023.sh personal` → 以 `crew-personal` 登录各工具（命令在 Task 14 实测后补全）→ `sudo systemctl start octopus-gateway@personal octopus-worker@personal octopus-api` → `sudo -u octopus /opt/kirocrew-on/venv/bin/python -m octopus --config /etc/kirocrew-on/platform.toml init --username admin` → 注册 Worker（`POST /v1/workers`，连接信息使用 `boundary-personal.toml` 的 Worker 地址与 token 文件）。
+2. **首次启动**：`sudo deploy/install/al2023.sh personal` → 以 `crew-personal` 登录各工具（命令在 Task 16 实测后补全）→ `sudo systemctl start octopus-gateway@personal octopus-worker@personal octopus-api` → `sudo -u octopus /opt/kirocrew-on/venv/bin/python -m octopus --config /etc/kirocrew-on/platform.toml init --username admin` → 注册 Worker（`POST /v1/workers`，连接信息使用 `boundary-personal.toml` 的 Worker 地址与 token 文件）。
 3. **访问**：`aws ssm start-session --target <实例 ID> --document-name AWS-StartPortForwardingSession --parameters portNumber=8918,localPortNumber=18918`（原生入口同理 5476→15476）。
 4. **升级**：`octopus backup` → 拉取新版本 → 重新运行安装脚本（新 release 目录并存）→ 依次重启 api / worker / gateway → `wait-ready`；迁移结果查看启动日志。
 5. **回滚**：`ln -sfn /opt/kirocrew-on/releases/<旧版本> /opt/kirocrew-on/current` → 重启；若新版本执行过 schema 迁移，用升级前备份在独立目录 `restore-verify` 后再替换，且记录回滚原因与已执行的代码变更。
@@ -3119,7 +3129,7 @@ git commit -m "feat: EC2 部署材料——SSM-only CloudFormation、AL2023 安�
 11. **队列异常**：大量 Session 停留在同一状态时的检查顺序（Worker 健康、Gateway 就绪、路由日志、退避中的 Session）。
 12. **备份恢复**：`octopus backup --dest …`、`octopus archive /var/lib/octopus/boundaries/personal --dest … --name boundary-personal --exclude 'home/.cache/*'`、`octopus restore-verify … --into /tmp/restore-<日期>`；列明未覆盖内容（各工具私有会话目录、远端仓库状态）。
 
-尚未在 EC2 实测的命令一律标注“待 Task 14–17 实测”。
+尚未在 EC2 实测的命令一律标注“待 Task 18–19 实测”。
 
 - [ ] **Step 2: 运行回归并提交（确认后）**
 
@@ -3132,60 +3142,329 @@ git commit -m "docs: 运维手册初版（EC2 实测项已标注）"
 
 ---
 
+# Part A′：本地端到端（macOS，真实 ACP）
+
+负责人要求：**先在本地跑通，再部署到远端**。Part A′ 用本仓库代码在本机拉起完整三服务，使用独立端口
+（Gateway 6476 / Worker 8938 / API 8948）与独立数据目录 `state/local-e2e/`（含独立 `KIROCREW_HOME` 与 `KIRO_HOME`），
+不读写 `~/.kiro`、不影响已运行的 8916 / 8917 / 8918 / 8928 与 5476。已核实：kiro-cli 的登录态不依赖 `KIRO_HOME`，
+Agent 定义从 `KIRO_HOME/agents` 读取；Claude Code 与 Codex 使用各自 HOME 下的现有认证。
+真实 ACP 运行会消耗各工具账号的模型额度；测试项目一律新建，不触碰任何历史 Session。
+
+### Task 13: 本地三服务拉起与冒烟
+
+**Files:**
+- Create: `tools/local_stack.sh`、`tests/test_local_stack.py`
+
+**Interfaces:**
+- Consumes: `composition.gateway`（Task 5）、`octopus serve / worker / wait-ready`（Task 9）、`Settings`（Task 4）。
+- Produces: `tools/local_stack.sh init|start|stop|status|restart <service>`；`LOCAL_E2E_DIR`（默认 `state/local-e2e`）下的 `platform.toml`、`boundary.toml`、`logs/`、`run/*.pid`。
+
+- [ ] **Step 1: 写失败测试**
+
+`tests/test_local_stack.py`:
+
+```python
+"""Local stack helper: isolated configs and ports, never the user's ~/.kiro."""
+import os
+from pathlib import Path
+import subprocess
+import tempfile
+import unittest
+
+from octopus.config import load
+
+ROOT = Path(__file__).resolve().parent.parent
+SCRIPT = ROOT / "tools/local_stack.sh"
+
+
+class LocalStackTests(unittest.TestCase):
+    def run_script(self, base, *args):
+        env = {**os.environ, "LOCAL_E2E_DIR": str(base)}
+        return subprocess.run(["bash", str(SCRIPT), *args], cwd=ROOT, env=env, capture_output=True, text=True)
+
+    def test_init_writes_isolated_configs(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            base = Path(temporary) / "e2e"
+            result = self.run_script(base, "init")
+            self.assertEqual(result.returncode, 0, result.stderr)
+            boundary = load(base / "boundary.toml", environ={"HOME": str(Path.home())}, cwd=ROOT)
+            platform = load(base / "platform.toml", environ={"HOME": str(Path.home())}, cwd=ROOT)
+            self.assertEqual((boundary.gateway_port, boundary.worker_port, platform.api_port), (6476, 8938, 8948))
+            self.assertEqual(boundary.crew_home, base / "crew")
+            self.assertEqual(boundary.kiro_home, base / "kiro")
+            self.assertEqual(boundary.worker_data_dir, base / "worker")
+            self.assertEqual(platform.data_dir, base / "platform")
+            for path in (boundary.crew_home, boundary.kiro_home):
+                self.assertFalse(str(path).startswith(str(Path.home() / ".kiro")))
+
+    def test_init_keeps_existing_configs(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            base = Path(temporary) / "e2e"
+            self.run_script(base, "init")
+            (base / "platform.toml").write_text((base / "platform.toml").read_text() + "# kept\n")
+            self.run_script(base, "init")
+            self.assertTrue((base / "platform.toml").read_text().endswith("# kept\n"))
+
+    def test_status_reports_stopped_services(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            result = self.run_script(Path(temporary) / "e2e", "status")
+            self.assertEqual(result.returncode, 0, result.stderr)
+            for service in ("gateway", "worker", "api"):
+                self.assertIn(f"{service}: stopped", result.stdout)
+
+
+if __name__ == "__main__":
+    unittest.main()
+```
+
+- [ ] **Step 2: 运行确认失败**
+
+Run: `.venv/bin/python -m unittest tests/test_local_stack.py -v`
+Expected: FAIL（脚本不存在，returncode 127 / 断言失败）
+
+- [ ] **Step 3: 实现 `tools/local_stack.sh`**
+
+```bash
+#!/usr/bin/env bash
+# Local end-to-end stack from this checkout on isolated ports and data; never touches ~/.kiro.
+#   tools/local_stack.sh init|start|stop|status|restart <gateway|worker|api>
+set -euo pipefail
+cd "$(dirname "$0")/.."
+ROOT="$PWD"
+BASE="${LOCAL_E2E_DIR:-$ROOT/state/local-e2e}"
+RUN="$BASE/run"
+LOGS="$BASE/logs"
+PY="${PYTHON:-$ROOT/.venv/bin/python}"
+KC_PY="${KIROCREW_PYTHON:-/Applications/KiroCrew.app/Contents/Resources/backend-dist/kirocrew-backend-arm64/bin/python3.12}"
+SERVICES=(gateway worker api)
+
+init() {
+  mkdir -p "$RUN" "$LOGS" "$BASE/worker" "$BASE/crew" "$BASE/kiro" "$BASE/platform"
+  chmod 700 "$BASE"
+  local kiro_cli
+  kiro_cli="$(command -v kiro-cli || true)"
+  if [ ! -f "$BASE/boundary.toml" ]; then
+    cat > "$BASE/boundary.toml" <<EOF
+worker_data_dir = "$BASE/worker"
+worker_token_file = "$BASE/worker.token"
+crew_home = "$BASE/crew"
+kiro_home = "$BASE/kiro"
+routing_log = "$BASE/provider-routing.jsonl"
+gateway_runtime_file = "$BASE/gateway-runtime.json"
+log_dir = "$LOGS"
+worker_port = 8938
+gateway_port = 6476
+worker_isolation = "trusted-local"
+crew_url = "http://localhost:6476"
+kirocrew_python = "$KC_PY"
+adapters_dir = "$ROOT/node_modules/.bin"
+path_prepend = ["$HOME/.local/bin", "/opt/homebrew/bin"]
+
+[tools]
+claude = "$HOME/.local/bin/claude"
+codex = "$ROOT/node_modules/.bin/codex"
+opencode = "/opt/homebrew/bin/opencode"
+EOF
+    if [ -n "$kiro_cli" ]; then echo "kiro_cli = \"$kiro_cli\"" >> "$BASE/boundary.toml"; fi
+  fi
+  if [ ! -f "$BASE/platform.toml" ]; then
+    cat > "$BASE/platform.toml" <<EOF
+data_dir = "$BASE/platform"
+log_dir = "$LOGS"
+api_port = 8948
+engine_workers = 4
+retry_unavailable = 2.0
+EOF
+  fi
+}
+
+pid_of() {
+  local file="$RUN/$1.pid" pid
+  [ -f "$file" ] || return 1
+  pid="$(cat "$file")"
+  # Only our own process: the command line must reference this stack's directory.
+  ps -p "$pid" -o command= 2>/dev/null | grep -q -- "$BASE" && echo "$pid"
+}
+
+launch() {
+  local service="$1"
+  if pid_of "$service" >/dev/null; then echo "$service: already running"; return; fi
+  case "$service" in
+    gateway) env PYTHONPATH="$ROOT" nohup "$KC_PY" -s -m composition.gateway --config "$BASE/boundary.toml" >"$LOGS/gateway.log" 2>&1 & ;;
+    worker)  nohup "$PY" -m octopus --config "$BASE/boundary.toml" worker >"$LOGS/worker.log" 2>&1 & ;;
+    api)     nohup "$PY" -m octopus --config "$BASE/platform.toml" serve >"$LOGS/api.log" 2>&1 & ;;
+  esac
+  echo $! > "$RUN/$service.pid"
+  case "$service" in
+    gateway) "$PY" -m octopus --config "$BASE/boundary.toml" wait-ready --gateway --timeout 90 ;;
+    worker)  "$PY" -m octopus --config "$BASE/boundary.toml" wait-ready --worker --timeout 60 ;;
+    api)     "$PY" -m octopus --config "$BASE/platform.toml" wait-ready --api --timeout 60 ;;
+  esac
+  echo "$service: started"
+}
+
+halt() {
+  local service="$1" pid
+  pid="$(pid_of "$service" || true)"
+  if [ -z "$pid" ]; then echo "$service: stopped"; rm -f "$RUN/$service.pid"; return; fi
+  kill -TERM "$pid"
+  for _ in $(seq 1 60); do kill -0 "$pid" 2>/dev/null || break; sleep 0.5; done
+  if kill -0 "$pid" 2>/dev/null; then echo "$service: still running after SIGTERM (pid $pid)" >&2; return 1; fi
+  rm -f "$RUN/$service.pid"
+  echo "$service: stopped"
+}
+
+case "${1:-}" in
+  init) init ;;
+  start) init; for s in "${SERVICES[@]}"; do launch "$s"; done ;;
+  stop) for ((i=${#SERVICES[@]}-1; i>=0; i--)); do halt "${SERVICES[$i]}"; done ;;
+  status) for s in "${SERVICES[@]}"; do if pid_of "$s" >/dev/null; then echo "$s: running"; else echo "$s: stopped"; fi; done ;;
+  restart) halt "${2:?service}"; launch "$2" ;;
+  *) echo "用法: $0 init|start|stop|status|restart <gateway|worker|api>" >&2; exit 2 ;;
+esac
+```
+
+（`[tools]` 中的 `kiro_cli` 只在找到 `kiro-cli` 时追加。）
+
+```bash
+chmod +x tools/local_stack.sh
+```
+
+- [ ] **Step 4: 运行测试与全量回归**
+
+Run: `.venv/bin/python -m unittest tests/test_local_stack.py -v && tools/regress.sh`
+Expected: 3 tests OK；`regress: OK`
+
+- [ ] **Step 5: 提交**
+
+```bash
+git add tools/local_stack.sh tests/test_local_stack.py
+git commit -m "feat: 本地端到端三服务脚本，独立端口与数据目录，不触碰 ~/.kiro"
+```
+
+- [ ] **Step 6: 安装 ACP 适配器**
+
+Run: `npm ci && ls node_modules/.bin | grep -E '^(claude-agent-acp|codex-acp|codex)$'`
+Expected: 三个名字都出现；版本与 `package-lock.json` 一致（claude-agent-acp 0.84.0、codex-acp 1.11.0）。
+
+- [ ] **Step 7: 记录 `~/.kiro` 基线并初始化**
+
+```bash
+find ~/.kiro/agents -maxdepth 1 -type f -exec shasum {} + | sort > .superpowers/kiro-agents-before.txt
+tools/local_stack.sh init
+```
+
+Expected: `state/local-e2e/` 下生成 `boundary.toml`、`platform.toml`。
+
+- [ ] **Step 8: 组合检查**
+
+Run: `env PYTHONPATH="$PWD" /Applications/KiroCrew.app/Contents/Resources/backend-dist/kirocrew-backend-arm64/bin/python3.12 -s -m composition.gateway --config state/local-e2e/boundary.toml --check`
+Expected: 5 行，依次 `poc-coordinator … kiro`、`poc-kiro … kiro`、`poc-claude … claude`、`poc-codex … codex`、`poc-opencode … opencode`。失败时用 superpowers:systematic-debugging 定位，不改断言。
+
+- [ ] **Step 9: 启动三服务**
+
+Run: `tools/local_stack.sh start && tools/local_stack.sh status`
+Expected: 三个 `started`，随后三行 `running`；`state/local-e2e/gateway-runtime.json` 的 `composition` 为 `PocProviderRegistry`。
+
+- [ ] **Step 10: 初始化管理员、登录、注册 Worker**
+
+```bash
+umask 077
+python3 -c 'import secrets;print(secrets.token_urlsafe(24))' > state/local-e2e/admin.password
+OCTOPUS_ADMIN_PASSWORD="$(cat state/local-e2e/admin.password)" .venv/bin/python -m octopus --config state/local-e2e/platform.toml init --username admin --password-env OCTOPUS_ADMIN_PASSWORD
+printf '{"username":"admin","password":"%s"}' "$(cat state/local-e2e/admin.password)" > state/local-e2e/login.json
+.venv/bin/python -m octopus --config state/local-e2e/platform.toml request POST /v1/login --body-file state/local-e2e/login.json > state/local-e2e/login.out
+export OCTOPUS_API_TOKEN="$(python3 -c 'import json;print(json.load(open("state/local-e2e/login.out"))["token"])')"
+ADMIN_ID="$(.venv/bin/python -m octopus --config state/local-e2e/platform.toml request GET /v1/me | python3 -c 'import json,sys;print(json.load(sys.stdin)["id"])')"
+printf '{"name":"local-e2e","owner_id":"%s","connection":{"url":"http://127.0.0.1:8938","token":"%s"}}' "$ADMIN_ID" "$(cat state/local-e2e/worker.token)" > state/local-e2e/worker.json
+.venv/bin/python -m octopus --config state/local-e2e/platform.toml request POST /v1/workers --body-file state/local-e2e/worker.json
+```
+
+Expected: 注册返回 `id` 与 `capabilities.isolation = trusted-local`。（本机同一宿主账号仅允许管理员个人空间使用 trusted-local，这是现有注册规则。）凭据文件只在 `state/local-e2e/`（0600，git 忽略），不打印 token。
+
+- [ ] **Step 11: Kiro 冒烟**
+
+提交单阶段新项目任务（`source.type = new`；`steps = [{"id":"smoke","name":"冒烟","tool":"kiro","model":"auto","effort":"","prompt":"在当前项目创建 HELLO.md，写一句问候；按研发契约写 handoff.md 与 outcome.json"}]`，`worker_id` 为上一步返回值，带唯一 `request_id`），然后 `octopus events <run_id> --once` 直到 `run.completed`。
+Expected: Run `completed`；`state/local-e2e/provider-routing.jsonl` 中有该任务的 `actual_backend: "kiro"`。
+
+- [ ] **Step 12: 确认未触碰 `~/.kiro`，停止服务**
+
+```bash
+find ~/.kiro/agents -maxdepth 1 -type f -exec shasum {} + | sort | diff .superpowers/kiro-agents-before.txt - && echo "~/.kiro/agents unchanged"
+tools/local_stack.sh stop
+```
+
+Expected: `~/.kiro/agents unchanged`；三个 `stopped`（SIGTERM 内正常退出）。把 Step 8–12 的实际输出摘要写入台账。
+
+### Task 14: 本地真实研发、返工、重启恢复与备份验收
+
+**Files:**
+- Create: `docs/handover/M1-LOCAL-EVIDENCE.md`
+- Modify: `docs/MVP-RELEASE.md`（M1 本地验收记录）
+
+**Interfaces:**
+- Consumes: Task 13 的本地三服务、管理员 token 与 Worker ID。
+
+- [ ] **Step 1: 最小研发（Claude 编码 → Codex 审查）**：`tools/local_stack.sh start`；新项目任务，两阶段：`code`（claude，提示：用 Node ES module 实现 `add(a, b)` 与 `node --test` 测试并运行）、`review`（codex，提示：读取真实 diff 与测试输出，独立复测）。Expected：两阶段 `accepted`，Run `completed`；证据含实际后端、原生 ID、diff、测试输出。
+- [ ] **Step 2: 返工**：新 Run，`code` 提示只要求正数加法，`review` 提示要求覆盖负数与非整数输入并以 `changes_requested` 报告缺口。Expected：`recovery.started` → Coordinator `rework` → `code` Attempt 2 → `review` Attempt 2 `pass`；同一 Run、父会话、Workspace。
+- [ ] **Step 3: 含 Kiro 规划阶段**：`plan`（kiro）→ `code`（claude）→ `review`（codex）。Expected：三阶段 `accepted`，路由日志 `actual_backend` 依次为 kiro / claude / codex。
+- [ ] **Step 4: OpenCode 单独核实**：单阶段 `deliver`（opencode，`model=auto`）。记录成功或失败的原始现象；失败时在证据中写明用户可见的替换配置（deliver 改用 claude）。不把失败写成通过。
+- [ ] **Step 5: 重启恢复**：提交一个两阶段 Run，在 `code` 运行中依次 `tools/local_stack.sh restart api`、`restart worker`、`restart gateway`。Expected：每次重启后 Run 恢复推进或进入有明确原因的状态；同一 Task 不出现重复原生派发（核对 Attempt 数与 `/api/spawn` 中带 `[OCTOPUS-ATTEMPT:<id>]` 标记的任务数）。
+- [ ] **Step 6: 并发**：同时提交两个 Run（一个编码任务明显更长）。Expected：短任务不等待长任务完成即推进。
+- [ ] **Step 7: 备份恢复**：`.venv/bin/python -m octopus --config state/local-e2e/platform.toml backup --dest state/local-e2e/backups`；`archive state/local-e2e/worker --dest state/local-e2e/backups --name worker`；`restore-verify <manifest> --into state/local-e2e/restore-1`。Expected：`ok: true`，源数据未变。
+- [ ] **Step 8: 证据与验收记录**：`docs/handover/M1-LOCAL-EVIDENCE.md` 写脱敏摘要（Run ID、阶段、请求 / 实际模型、实际后端、测试结果、重启观察、未通过项），不含 token、需求以外的用户数据；`docs/MVP-RELEASE.md` §5 增加“本地（macOS）验收”记录。`tools/local_stack.sh stop`；`tools/regress.sh` 全绿后提交：
+
+```bash
+git add docs/handover/M1-LOCAL-EVIDENCE.md docs/MVP-RELEASE.md
+git commit -m "docs: M1 本地端到端验收记录（真实 ACP）"
+```
+
 # Part B：EC2 部署与真实验收
 
-Part B 每个任务开始前**必须**获得负责人对该任务的明确授权，并确认所需外部输入（`docs/MVP-RELEASE.md` §12）。
+Part B 在 Part A′ 本地验收完成后开始；每个任务开始前**必须**获得负责人对该任务的明确授权，并确认所需外部输入（`docs/MVP-RELEASE.md` §12）。
 证据保存在实例 `/var/lib/octopus/evidence/m1/`（不进仓库）；仓库只提交脱敏摘要。
 
-### Task 13: 创建实例与环境探测
+### Task 15: 部署 IaC 与本地校验（已完成，2026-10-11）
 
-**授权关口**：创建云资源。需要负责人提供 InstanceType、VpcId、SubnetId、VolumeSizeGiB，并确认费用与 region（当前 CLI 默认 `us-east-1`）。
+D15–D18 确定后实现：`deploy/aws/kirocrew-on-ec2.yaml`（CloudFront → 安全组前缀列表 → EC2，us-east-1）、`deploy/aws/deploy.sh`、
+`deploy/aws/stack.env`、`deploy/install/al2023.sh`（KiroCrew 官方源码锁定 commit、kiro-cli 官方清单校验、Bedrock 环境、原生契约后接受版本、
+管理员与 Worker 引导）、平台源站认证与 viewer 地址限流、`octopus bootstrap-worker`、`tests/native` 原生契约。
+验证：`tests/test_deploy_assets.py`、`tests/test_cloudfront_origin.py`、`tests/test_bootstrap.py` 通过；cfn-lint 与 `validate-template` 通过；
+KiroCrew 0.10.0 本机原生契约 6/6、真实冒烟与 Claude→Codex 通过。
 
-- [ ] **Step 1: 校验模板（只读 API）**：`aws cloudformation validate-template --template-body file://deploy/aws/kirocrew-on-ec2.yaml`，Expected：返回参数列表，无错误。
-- [ ] **Step 2: 创建堆栈**：`aws cloudformation create-stack --stack-name kirocrew-on-m1 --template-body file://deploy/aws/kirocrew-on-ec2.yaml --capabilities CAPABILITY_IAM --parameters ParameterKey=InstanceType,ParameterValue=<提供值> ParameterKey=VpcId,ParameterValue=<提供值> ParameterKey=SubnetId,ParameterValue=<提供值> ParameterKey=VolumeSizeGiB,ParameterValue=<提供值>`；`aws cloudformation wait stack-create-complete --stack-name kirocrew-on-m1`。
-- [ ] **Step 3: SSM 连通**：`aws ssm start-session --target <InstanceId>`，Expected：获得 shell。
-- [ ] **Step 4: 探测并记录**（写入 `/var/lib/octopus/evidence/m1/probe.txt`）：`cat /etc/os-release; uname -r; ldd --version | head -1; sysctl user.max_user_namespaces; unshare -Ur true && echo userns-ok; dnf list --available python3.12 nodejs22 2>&1 | tail -5; nproc; free -g; df -h /`。
-- [ ] **Step 5: 结论**：在 `docs/handover/KNOWN-ISSUES.md` 更新 K12（user namespace 实测结果）；若 `python3.12` / `nodejs22` 包不可用，记录替代来源并更新 `deploy/versions.env` 的 `PYTHON_PACKAGE` / `NODE_PACKAGE`。
+### Task 16: 创建栈（授权关口）
 
-### Task 14: 安装与工具认证
+**授权关口**：创建云资源（费用估算见执行报告）。确认 `deploy/aws/stack.env` 的候选规格与可选告警邮箱。
 
-**授权关口**：确认各工具在 `crew-personal` 下的认证方式（device flow / API key / 其他），并由负责人在需要交互登录时在场。
+- [ ] `deploy/aws/deploy.sh up`；Expected：栈 `CREATE_COMPLETE`，输出 InstanceId、CloudFrontDomain、ConsoleUrl、ArtifactBucket。
+- [ ] `deploy/aws/deploy.sh status`；Expected：SSM `Online`（`/health` 此时尚未就绪）。
+- [ ] 记录：AMI、实例规格、可用区、前缀列表 ID、`sysctl user.max_user_namespaces`、`unshare -Ur true`（经 SSM 会话执行）。
 
-- [ ] **Step 1: 确定 KiroCrew 与 Kiro CLI 的 Linux 安装来源**：依据 KiroCrew 官方安装文档（`docs/guides/install.md`）确定 0.8.0（或负责人指定版本）的 Linux 安装包地址与 sha256，填写 `deploy/versions.env`；Kiro CLI 同理。记录文档来源与日期。
-- [ ] **Step 2: 运行安装脚本**：把仓库检出到实例（`git clone` 本仓库的 bundle 或经 SSM 传输），`sudo deploy/install/al2023.sh personal`，Expected：最后一行提示下一步认证。
-- [ ] **Step 3: 工具认证**：`sudo -iu crew-personal`，依次完成 Kiro CLI、Claude Code、Codex、OpenCode 的登录（按 Step 1 记录的方式）；每个工具执行一次只读版本 / 状态命令确认，不在终端输出 token。
-- [ ] **Step 4: 组合检查**：`sudo -u crew-personal env HOME=/var/lib/octopus/boundaries/personal/home PYTHONPATH=/opt/kirocrew-on/current /opt/kirocrew/current/venv/bin/python -m composition.gateway --config /etc/kirocrew-on/boundary-personal.toml --check`，Expected：5 行 `poc-* <ProviderType> <backend>`，backend 依次为 `kiro kiro claude codex opencode`。
-- [ ] **Step 5: 沙箱与 systemd 加固兼容性**：启动 `octopus-gateway@personal`，运行一次 Task 16 的最小 Kiro 任务；若沙箱因加固项失败，记录错误并决定 Gateway / Worker 单元的加固项（结论写入 `docs/OPERATIONS.md`）。
-- [ ] **Step 6: 更新版本记录**：把实际安装的所有版本写回 `deploy/versions.env` 并注明“EC2 AL2023 实测 <日期>”。
+### Task 17: 发布与安装
 
-### Task 15: 服务启动、注册与隧道验证
+- [ ] `deploy/aws/deploy.sh push`；Expected：SSM 命令 `Success`；输出含 KiroCrew 版本、原生契约 6/6、三个服务启用、Worker 注册结果。
+  失败时按输出定位（Python / Node 包名、npm 构建、沙箱），修复后提交再 push；不在实例上手工改代码。
+- [ ] `deploy/aws/deploy.sh kiro-login`：负责人完成设备码登录。
+- [ ] `deploy/aws/deploy.sh status`：`https://<分发域名>/health` 返回 200。
 
-- [ ] **Step 1**：`sudo systemctl start octopus-gateway@personal octopus-worker@personal octopus-api`；`systemctl status` 三个服务均 active，`wait-ready` 成功。
-- [ ] **Step 2**：初始化管理员（`init`），创建普通用户，用普通用户注册个人 Worker（`POST /v1/workers`，`owner_id` 为该用户）；Expected：注册成功（执行用户与平台用户不同，`host_principal` 不同）。
-- [ ] **Step 3**：本机 SSM 端口转发 8918→18918，浏览器打开 `http://localhost:18918/` 登录；SSE 事件流可持续收到 keepalive。
-- [ ] **Step 4**：转发 5476→15476，在一个已准备的 Session 上点击“在 KiroCrew 中打开”，Expected：进入绑定的父会话，URL 中的 token 不出现在平台日志。
-- [ ] **Step 5**：Host 白名单：用未配置的 Host 访问返回 421。
+### Task 18: 经 CloudFront 的真实研发与返工
 
-### Task 16: 真实最小研发与返工
+- [ ] 浏览器打开 ConsoleUrl，以管理员登录；SSE 事件流持续更新（经 CloudFront）。
+- [ ] 经 `OCTOPUS_URL=https://<分发域名>` 的 CLI 提交：Kiro 冒烟、Claude→Codex、审查返工、Kiro 规划三阶段；OpenCode 单独核实。
+  Expected：与本地验收相同的结论；证据含实际后端、原生 ID、diff 与测试输出。
+- [ ] 安全核对：直接访问 `http://<EIP>:8918/health` 超时（安全组）；伪造请求缺少 `X-Origin-Verify` 时返回 403；未登记 Host 返回 421。
+- [ ] `deploy/aws/deploy.sh tunnel`：原生入口经 SSM 可打开绑定的父会话。
 
-**授权关口**：确认测试仓库（新建的独立小型仓库，或负责人提供的获授权仓库），不使用任何历史 Session。
+### Task 19: 重启恢复与备份恢复
 
-- [ ] **Step 1: 最小研发**：通过 Web 或 `octopus request POST /v1/runs` 提交 code（claude）→ review（codex）两阶段任务，目标为在测试仓库实现一个带 `node --test` 测试的函数。Expected：两个阶段 accepted；证据含 `actual_backend`、原生 ID、源码基线 SHA、diff 与测试输出。
-- [ ] **Step 2: 返工**：提交故意含错误验收条件的需求（如要求测试覆盖边界值，而编码提示不提及），Expected：Codex `changes_requested` → Kiro Coordinator `rework` → Claude 在同一 Workspace 修复 → Codex 复审 pass；同一 Run、父会话、Workspace。
-- [ ] **Step 3: Kiro 规划阶段**：在 Step 1 的流程前加 plan（kiro）阶段，Expected：Kiro 阶段 accepted，路由日志 `actual_backend=kiro`。
-- [ ] **Step 4: OpenCode 单独核实**：单阶段 deliver（opencode），分别用 `auto` 与一个已公布模型；记录成功或失败的原始现象；失败时在报告中给出用户可见的替换配置（deliver 改用 claude）。
-- [ ] **Step 5: 证据摘要**：脱敏摘要写入 `docs/handover/M1-EC2-EVIDENCE.md`（运行 ID、阶段、实际后端、模型请求值 / 实际值、测试结果、未通过项）。
+- [ ] 编码运行中依次重启 `octopus-api`、`octopus-worker@personal`、`octopus-gateway@personal`；Expected：自动恢复、无重复派发。
+- [ ] 实例重启（`aws ec2 reboot-instances`）后服务自动启动，Session 继续。
+- [ ] `octopus backup` / `archive` / `restore-verify`；DLM 快照在次日出现。
 
-### Task 17: 重启恢复与备份恢复
-
-- [ ] **Step 1**：在一个运行中的 Session（编码阶段进行中）依次 `systemctl restart octopus-api`、`octopus-worker@personal`、`octopus-gateway@personal`；Expected：每次重启后 Session 状态在合理时间内恢复推进或进入有明确原因的状态，不产生重复派发（检查 Attempt 数与原生任务数）。
-- [ ] **Step 2**：并发验证：同时提交两个 Session，其中一个仓库较大或任务较慢，Expected：另一个 Session 不被阻塞（`engine_workers=4`）。
-- [ ] **Step 3**：`octopus backup`、`octopus archive` 边界目录、`octopus restore-verify --into /tmp/restore-m1`，Expected：`ok: true`；源数据库与 Session 保持不变。
-
-### Task 18: 验收记录
+### Task 20: 验收记录
 
 - [ ] **Step 1**：逐条更新 `docs/MVP-RELEASE.md` §5 的 M1 验收复选框：通过的附证据摘要位置，未通过的写原因与恢复条件；§1 状态表更新 M1 状态。
-- [ ] **Step 2**：`docs/OPERATIONS.md` 中“待 Task 14–17 实测”的命令替换为实测结果；`deploy/versions.env` 为实测版本。
+- [ ] **Step 2**：`docs/OPERATIONS.md` 中“待 Task 18–19 实测”的命令替换为实测结果；`deploy/versions.env` 为实测版本。
 - [ ] **Step 3**：`tools/regress.sh` 全绿；向负责人报告 M1 结论（含未通过项），确认后提交：
 
 ```bash

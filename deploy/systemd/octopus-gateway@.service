@@ -1,0 +1,26 @@
+[Unit]
+Description=KiroCrew Gateway with Octopus composition for boundary %i
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=crew-%i
+Group=crew-%i
+WorkingDirectory=/var/lib/octopus/boundaries/%i
+Environment=PYTHONPATH=/opt/kirocrew-on/current
+Environment=HOME=/var/lib/octopus/boundaries/%i/home
+# Bedrock provider settings for Claude Code / Codex (instance role credentials)
+EnvironmentFile=-/etc/kirocrew-on/boundary-%i.env
+ExecStart=/opt/kirocrew/current/venv/bin/python -m composition.gateway --config /etc/kirocrew-on/boundary-%i.toml
+ExecStartPost=/opt/kirocrew-on/venv/bin/python -m octopus --config /etc/kirocrew-on/boundary-%i.toml wait-ready --gateway --timeout 90
+KillSignal=SIGTERM
+TimeoutStopSec=60
+Restart=on-failure
+RestartSec=10
+UMask=0077
+# No PrivateTmp/Protect*: KiroCrew's owner-token bootstrap requires the host user+mount namespaces (Linux);
+# agent isolation comes from KiroCrew's own sandbox and the dedicated OS user.
+
+[Install]
+WantedBy=multi-user.target

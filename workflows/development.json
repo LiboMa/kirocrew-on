@@ -1,0 +1,40 @@
+{
+  "schema": 1,
+  "id": "development",
+  "name": "从需求到 Web 交付",
+  "steps": [
+    {
+      "id": "plan",
+      "name": "分析与规划",
+      "tool": "kiro",
+      "model": "auto",
+      "effort": "",
+      "prompt": "在平台准备的项目检出上核实源码结构、技术栈、构建脚本、依赖和现有接口。根据用户需求生成 SPEC.md、plan.md 与可验证的验收标准，明确实施范围、风险和必要的接口变化。新项目选择适合需求的技术栈；已有项目遵循其规范。先解决可恢复的输入或环境问题，再报告真正的阻塞。"
+    },
+    {
+      "id": "code",
+      "name": "实现与自测",
+      "tool": "claude",
+      "model": "global.anthropic.claude-sonnet-4-6",
+      "effort": "medium",
+      "prompt": "读取完整需求、源码基线与计划，在当前项目中完成业务实现和必要的前后端接口。按锁文件准备项目依赖，沿用已有构建和测试脚本，实际运行测试并修复发现的问题。生成真实 candidate.diff，记录新增文件、命令及结果；不擅自缩减用户需求。"
+    },
+    {
+      "id": "review",
+      "name": "安全与测试审查",
+      "tool": "codex",
+      "model": "openai.gpt-6-astra",
+      "effort": "high",
+      "prompt": "读取真实 candidate.diff 和实现，实际运行测试，新增必要的边界回归测试。写 review.md，说明实际检查范围和发现。不要修改实现；有阻断缺陷写 BLOCKED 并停止。"
+    },
+    {
+      "id": "deliver",
+      "name": "前端交付",
+      "tool": "opencode",
+      "model": "auto",
+      "effort": "",
+      "prompt": "核对实现、审查和测试结果，整理可运行交付物、启动说明、Release 文档与已知问题；Web 项目记录真实预览入口和接口联通结果。用户已明确授权提交、推送、PR/MR 或发布时完成对应动作并保存结果。交付阶段如需改变已审查代码，明确要求复验，不沿用过期审查结论。"
+    }
+  ],
+  "revision": 1
+}

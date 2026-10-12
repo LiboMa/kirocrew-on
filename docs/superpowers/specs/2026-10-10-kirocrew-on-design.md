@@ -31,7 +31,7 @@
 |---|---|
 | D01 | `kirocrew-on/` 新仓库，迁入新旧两版资产；原目录与运行数据不动 |
 | D02 | 总体 Design 覆盖全部阶段；详细实施计划先写 M1 |
-| D03 | M1 的 Linux 开发与验收直接在 EC2 上进行（实例创建需单独授权） |
+| D03 | ~~M1 的 Linux 开发与验收直接在 EC2 上进行~~（2026-10-11 由 D12 取代；EC2 实例创建仍需单独授权） |
 | D04 | EC2 使用 Amazon Linux 2023 x86_64 |
 | D05 | 先等价迁入并建立回归基线，再在测试保护下分步重构 |
 | D06 | 六项核心功能：Session 共享（个人 / Team / 公司）；Skills 对接；自动拆分与 Agent 映射（可在 Prompt 指定）；Branch + 报告跟踪 Feature；代码优先；请求全程托管与监控 |
@@ -40,6 +40,13 @@
 | D09 | Session 监控与管理以灵活、易用为目的，以查看和搜索为主，不以编辑为主 |
 | D10 | 稳定性、自主编排、自动重试是核心；先保证完成，其次提升质量 |
 | D11 | 与 Claude Code / Codex / Kiro CLI / Kiro IDE 直连，本地与远端智能联动，纳入 MVP |
+| D12 | 先在本地（macOS）用本仓库代码以真实 ACP 跑通完整链路，再部署到远端 EC2（2026-10-11） |
+| D13 | 自动生成任务（Pipeline 生成）参考旧版 `kirocrew-app-poc` 的实现：意图生成、Pipeline 规划阶段、确定性门禁与模板（2026-10-11） |
+| D14 | 无人值守的执行边界使用 KiroCrew 原生 auto 批准，**仅限平台派发的 spawn**：边界配置 `approval_mode = "auto"` 时 Worker 以 owner 认证请求原生 `approval_mode=auto`；边界的全局工具批准（`KIROCREW_HOME/config.json`）保持 `interactive`，owner 与父会话的原生聊天仍需人工批准；诊断任务使用不能派生子任务的 `poc-diagnose` 模板；约束来自执行边界（独立 OS 用户 / HOME、原生沙箱、cwd 限定 Worker 数据目录）（2026-10-11，经本地真实运行收窄） |
+| D15 | EC2 部署使用 Shell + CloudFormation，IaC 代码留存在 `deploy/aws/`（`kirocrew-on-ec2.yaml`、`deploy.sh`、`stack.env`）与 `deploy/install/al2023.sh`（2026-10-11） |
+| D16 | 对外入口为 CloudFront → 安全组 → EC2：IaC 新建专用 VPC 公有子网，EC2 经 EIP 提供稳定源站名，安全组只允许 CloudFront origin-facing 托管前缀列表访问 API 端口；平台只服务携带 CloudFront 注入的 `X-Origin-Verify` 头的请求；使用默认 `*.cloudfront.net` 证书；不加 WAF；原生 KiroCrew 入口不经 CloudFront，只经 SSM 端口转发（2026-10-11） |
+| D17 | 部署 Region 为 us-east-1（2026-10-11） |
+| D18 | KiroCrew 使用 `https://github.com/kirodotdev/KiroCrew.git` 最新源码安装：部署时锁定到具体 commit（`deploy/versions.env`），已验证集合之外的版本须原生契约检查通过后才在边界配置 `kirocrew_versions` 中接受（2026-10-11；当前锁定 0.10.0 `57df464…`，本机已验证） |
 
 ## 2．设计原则
 
@@ -233,6 +240,7 @@ Request 与 Session 一对多：同一 Request 被重新规划或用户显式重
 2. **规则匹配**：现有 15 个模板与有权运行的 Workflow 按关键词评分（新版 `intent.ranked`），结果标注为“规则”。
 3. **Kiro 生成**：规则不足以确定或用户要求时，后台 Kiro 生成任务基于需求与只读源码检查产出阶段、
    各阶段提示词、验收条件与角色（新版 `designs.py`，并入旧版 `start_design` 的意图生成逻辑）。
+   设计与实现参考旧版 `kirocrew-app-poc` 的生成链路（D13），分析见 `docs/handover/GENERATION-REFERENCE.md`。
 
 生成结果**不直接执行**：一律经过代码规范化，再按准入策略决定是等待确认还是直接运行。
 
@@ -346,9 +354,10 @@ checks:                       # 仓库检查命令；来源记录为 request / w
 - **重启核对**：API / Worker / Gateway 任一重启后，先从 SQLite 与 Worker 落盘记录恢复，再核对原生状态；
   原生已遗忘的内存任务按落盘证据处理，不假定完成。保留现有 `dispatch_unknown` 与 Attempt 标记核对机制。
 - **幂等**：所有命令带 `request_id`；同内容返回原回执，不同内容冲突；修改带 `expected_version`。
-- **权限批准**：后台研发不能因原生批准请求无人处理而静默卡住。批准请求在控制台、CLI 与 MCP 中可见并可处理
-  （代理到原生批准接口），并计入 L4 等待原因。各边界使用 KiroCrew 原生批准策略；不关闭沙箱，不默认全部自动批准。
-  原生批准接口的写操作契约待验证。
+- **权限批准**：后台研发不能因原生批准请求无人处理而静默卡住。无人值守边界按 D14 使用原生 auto 批准
+  （边界 `approval_mode = "auto"` 时，仅平台派发的 spawn 请求原生 `approval_mode=auto`；全局工具批准保持 interactive；
+  诊断使用不能派生子任务的 `poc-diagnose` 模板）；需要人工确认的策略在 M2 通过控制台、CLI 与 MCP 的批准代理处理，并计入 L4 等待原因。
+  不关闭原生沙箱。原生 `approval_mode` 参数的认证契约在升级时复核（K19）。
 
 ## 9．客户端直连与本地 / 远端联动
 
@@ -459,10 +468,21 @@ Python 解释器、KiroCrew 安装位置、各工具与 ACP 适配器路径、�
 
 ### 12.5 网络入口
 
-- 所有服务监听回环；M1–M3 通过 SSM 端口转发访问 API / 控制台，原生入口按需单独转发。
-- Host 白名单与 Origin 校验支持隧道端口和后续反向代理；SSE 在隧道与代理下验证。
-- 基础设施以 CloudFormation 模板描述（实例、卷、IAM 角色、安全组无入站规则）；region、实例规格、子网等参数由目标环境给出，
-  候选值不等于已验证最低配置；只在获得明确授权后创建。
+按 D15–D17（us-east-1，Shell + CloudFormation）：
+
+```text
+浏览器 / Coding 客户端 ──HTTPS──▶ CloudFront（*.cloudfront.net 默认证书，禁用缓存，转发 Host / Authorization / Origin / CloudFront-Viewer-Address，注入 X-Origin-Verify）
+        ──HTTP :8918──▶ 安全组（入站仅 CloudFront origin-facing 托管前缀列表）──▶ EC2（专用 VPC 公有子网，EIP）
+                         octopus-api 监听 0.0.0.0:8918，只服务带正确 X-Origin-Verify 的请求（本机回环运维除外）
+                         Worker 127.0.0.1:8928、KiroCrew Gateway 127.0.0.1:5476 不对外
+运维 ──SSM Session Manager──▶ EC2（无 SSH；原生入口经 SSM 端口转发 15476 → 5476）
+```
+
+- Host 白名单写入 CloudFront 分发域名；写请求的 Origin 必须与 Host 一致；登录限流按 `CloudFront-Viewer-Address`（仅在源站认证通过时采信）。
+- SSE 经 CloudFront：禁用缓存与压缩，源站读超时 60 s，平台每秒发送 keepalive。
+- 已知风险：CloudFront 到 EC2 这一段为 HTTP（无源站证书，按 D16 不使用 VPC Origin）；不加 WAF，控制台登录页对公网可见，
+  依赖平台登录、Token 与登录限流。需要端到端加密时改用 VPC Origin 或自定义域名证书。
+- 容量参数（实例规格、卷大小）是候选值，不等于已验证最低配置；只在获得明确授权后创建资源。
 
 ### 12.6 备份恢复
 
@@ -507,7 +527,7 @@ Python 解释器、KiroCrew 安装位置、各工具与 ACP 适配器路径、�
 
 | 里程碑 | 范围 | 完成条件 |
 |---|---|---|
-| **M1 运行底座** | 迁入两版资产与回归基线；运行时配置；composition 包；依赖解耦；schema 迁移；按 Session 并发的 Engine 与 Worker / Gateway 不可用退避；无桌面服务与 systemd；EC2 单边界部署；备份恢复；运维手册 | EC2 上 Kiro、Claude Code、Codex 真实最小研发与返工跑通；Gateway / Worker / API 重启后自动恢复；OpenCode 单独核实并如实记录 |
+| **M1 运行底座** | 迁入两版资产与回归基线；运行时配置；composition 包；依赖解耦；schema 迁移；按 Session 并发的 Engine 与 Worker / Gateway 不可用退避；无桌面服务与 systemd；EC2 单边界部署；备份恢复；运维手册 | 先在本机 macOS、再在 EC2 上，Kiro、Claude Code、Codex 真实最小研发与返工跑通；Gateway / Worker / API 重启后自动恢复；OpenCode 单独核实并如实记录 |
 | **M2 核心闭环** | Request；Pipeline schema 2、生成、规范化、门禁目录；映射策略与回退链；准入；完整恢复阶梯（L0–L4）与看门狗；批准代理；候选 commit、Feature 分支推送；报告；Claude Code 基础 Skill 用于验收 | 从 Claude Code 一句话提交到远端 Feature 分支与报告；故障注入在预算内恢复完成 |
 | **M3 客户端直连与控制台** | 四个客户端 connect / Skill / MCP；pull / sync / 会话关联 / watch；控制台列表、搜索、详情与少量操作 | 四个客户端完成提交、查询、拉回、续作；控制台搜索与详情覆盖第 10 节 |
 | **M4 共享与组织** | 组织层；Worker Token 移出数据库；Session 共享给个人 / Team / 公司（viewer / collaborator）；权限变化对查询、SSE、导出、运行的影响；Team 执行隔离；排队与配额；HTTPS 入口 | 越权测试通过；授权协作路径完整；隔离在真实独立身份 / 容器 / 主机上验收 |

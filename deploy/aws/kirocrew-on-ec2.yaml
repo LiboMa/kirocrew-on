@@ -1,0 +1,408 @@
+AWSTemplateFormatVersion: "2010-09-09"
+Description: >-
+  KiroCrew ON single-host environment (us-east-1). Viewers reach the console/API only through CloudFront (HTTPS,
+  default *.cloudfront.net certificate); the host security group admits the API port only from the CloudFront
+  origin-facing managed prefix list, and the platform additionally requires a secret origin header. The native
+  KiroCrew Gateway and the Worker stay on loopback (SSM port forwarding only). Capacity and placement parameters have
+  no defaults on purpose: they come from the target environment and are not verified minimums.
+
+Parameters:
+  InstanceType:
+    Type: String
+    Description: 由目标环境给出；不是经过验证的最低配置
+  VolumeSizeGiB:
+    Type: Number
+    MinValue: 30
+  AvailabilityZone:
+    Type: AWS::EC2::AvailabilityZone::Name
+    Description: 选择提供该实例类型的可用区（deploy.sh 自动查询）
+  CloudFrontPrefixListId:
+    Type: String
+    AllowedPattern: "pl-[0-9a-f]+"
+    Description: com.amazonaws.global.cloudfront.origin-facing 托管前缀列表 ID（deploy.sh 自动查询）
+  OriginSecret:
+    Type: String
+    NoEcho: true
+    MinLength: 32
+    Description: CloudFront 注入的 X-Origin-Verify 头；平台只服务携带该头的请求
+  ApiPort:
+    Type: Number
+    Default: 8918
+    MinValue: 1024
+    MaxValue: 65535
+  NativePort:
+    Type: Number
+    Default: 8919
+    MinValue: 1024
+    MaxValue: 65535
+    Description: 主机 nginx 端口，必须为 ApiPort + 1（与 API 共用一条安全组规则）；第二个 CloudFront 分发经此端口（校验源站密钥）转发到回环上的原生 KiroCrew Gateway
+  NativeRelayEnd:
+    Type: Number
+    Default: 8929
+    MinValue: 1024
+    MaxValue: 65535
+    Description: 安全组规则的上限端口；NativePort + 1 起至此为 Worker 主机原生入口的中转端口（每台 Worker 主机一个，D28）
+  VpcCidr:
+    Type: String
+    Default: 10.42.0.0/16
+  SubnetCidr:
+    Type: String
+    Default: 10.42.1.0/24
+  AlarmEmail:
+    Type: String
+    Default: ""
+    Description: 可选；实例恢复等告警的通知邮箱
+  ImageId:
+    Type: AWS::EC2::Image::Id
+    Description: >-
+      固定的 AMI（stack.env 的 IMAGE_ID）。不使用 SSM 别名：别名每次更新都会重新解析，新 AMI 会替换主机并让数据留在旧卷上。
+      deploy.sh 首次创建时解析 AL2023 最新 AMI，已有栈沿用运行中的 AMI；替换实例的变更集会被拒绝
+
+Conditions:
+  HasAlarmEmail: !Not [!Equals [!Ref AlarmEmail, ""]]
+  IsUsEast1: !Equals [!Ref "AWS::Region", us-east-1]
+
+Resources:
+  Vpc:
+    Type: AWS::EC2::VPC
+    Properties:
+      CidrBlock: !Ref VpcCidr
+      EnableDnsHostnames: true
+      EnableDnsSupport: true
+      Tags: [{Key: Name, Value: !Sub "${AWS::StackName}-vpc"}]
+
+  InternetGateway:
+    Type: AWS::EC2::InternetGateway
+    Properties:
+      Tags: [{Key: Name, Value: !Sub "${AWS::StackName}-igw"}]
+
+  GatewayAttachment:
+    Type: AWS::EC2::VPCGatewayAttachment
+    Properties:
+      VpcId: !Ref Vpc
+      InternetGatewayId: !Ref InternetGateway
+
+  PublicSubnet:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId: !Ref Vpc
+      CidrBlock: !Ref SubnetCidr
+      AvailabilityZone: !Ref AvailabilityZone
+      MapPublicIpOnLaunch: true
+      Tags: [{Key: Name, Value: !Sub "${AWS::StackName}-public"}]
+
+  RouteTable:
+    Type: AWS::EC2::RouteTable
+    Properties:
+      VpcId: !Ref Vpc
+      Tags: [{Key: Name, Value: !Sub "${AWS::StackName}-public"}]
+
+  DefaultRoute:
+    Type: AWS::EC2::Route
+    DependsOn: GatewayAttachment
+    Properties:
+      RouteTableId: !Ref RouteTable
+      DestinationCidrBlock: 0.0.0.0/0
+      GatewayId: !Ref InternetGateway
+
+  SubnetRoute:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      SubnetId: !Ref PublicSubnet
+      RouteTableId: !Ref RouteTable
+
+  HostSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: KiroCrew ON API - inbound only from CloudFront origin-facing addresses; admin via SSM
+      VpcId: !Ref Vpc
+      SecurityGroupIngress:
+        # One prefix-list reference for both ports: a reference counts as the list's maximum entries against the
+        # per-group rule quota, and adding a second group would make CloudFormation consider replacing the host.
+        - IpProtocol: tcp
+          FromPort: !Ref ApiPort
+          ToPort: !Ref NativeRelayEnd
+          SourcePrefixListId: !Ref CloudFrontPrefixListId
+          Description: CloudFront origin fetches to the API, the native chat and the Worker host native chat relays
+      SecurityGroupEgress:
+        - IpProtocol: "-1"
+          CidrIp: 0.0.0.0/0
+          Description: Outbound for SSM, Bedrock, package sources and git
+      Tags: [{Key: Name, Value: !Sub "${AWS::StackName}-host"}]
+
+  ArtifactBucket:
+    Type: AWS::S3::Bucket
+    DeletionPolicy: Retain
+    UpdateReplacePolicy: Retain
+    Properties:
+      BucketEncryption:
+        ServerSideEncryptionConfiguration:
+          - ServerSideEncryptionByDefault: {SSEAlgorithm: AES256}
+      PublicAccessBlockConfiguration:
+        BlockPublicAcls: true
+        BlockPublicPolicy: true
+        IgnorePublicAcls: true
+        RestrictPublicBuckets: true
+      OwnershipControls:
+        Rules: [{ObjectOwnership: BucketOwnerEnforced}]
+      VersioningConfiguration: {Status: Enabled}
+      LifecycleConfiguration:
+        Rules:
+          - Id: expire-noncurrent
+            Status: Enabled
+            NoncurrentVersionExpiration: {NoncurrentDays: 30}
+      Tags: [{Key: Project, Value: kirocrew-on}]
+
+  HostRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal: {Service: ec2.amazonaws.com}
+            Action: sts:AssumeRole
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/AmazonSSMManagedInstanceCore
+      Policies:
+        - PolicyName: kirocrew-on-host
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Sid: BedrockForCodingTools
+                Effect: Allow
+                Action:
+                  - bedrock:InvokeModel
+                  - bedrock:InvokeModelWithResponseStream
+                  - bedrock:GetInferenceProfile
+                  - bedrock:ListInferenceProfiles
+                  - bedrock:GetFoundationModel
+                  - bedrock:ListFoundationModels
+                Resource: "*"
+              - Sid: BedrockMantleForCodex
+                # Codex's amazon-bedrock provider (OpenAI models on Bedrock) authorizes through bedrock-mantle.
+                Effect: Allow
+                Action: [bedrock-mantle:CreateInference]
+                Resource: !Sub "arn:${AWS::Partition}:bedrock-mantle:${AWS::Region}:${AWS::AccountId}:project/*"
+              - Sid: ReadReleases
+                Effect: Allow
+                Action: [s3:GetObject]
+                Resource: !Sub "${ArtifactBucket.Arn}/releases/*"
+              - Sid: WriteBackups
+                Effect: Allow
+                Action: [s3:PutObject]
+                Resource: !Sub "${ArtifactBucket.Arn}/backups/*"
+              - Sid: ListBucket
+                Effect: Allow
+                Action: [s3:ListBucket]
+                Resource: !GetAtt ArtifactBucket.Arn
+              - Sid: ReadOriginSecret
+                # Only the origin secret: every process on the host (the execution user included) can use this role.
+                Effect: Allow
+                Action: [ssm:GetParameter]
+                Resource: !Sub "arn:${AWS::Partition}:ssm:${AWS::Region}:${AWS::AccountId}:parameter/kirocrew-on/${AWS::StackName}/origin-secret"
+
+  HostProfile:
+    Type: AWS::IAM::InstanceProfile
+    Properties:
+      Roles: [!Ref HostRole]
+
+  Host:
+    Type: AWS::EC2::Instance
+    DependsOn: DefaultRoute
+    Properties:
+      ImageId: !Ref ImageId
+      InstanceType: !Ref InstanceType
+      SubnetId: !Ref PublicSubnet
+      IamInstanceProfile: !Ref HostProfile
+      SecurityGroupIds: [!Ref HostSecurityGroup]
+      MetadataOptions:
+        HttpTokens: required
+        HttpEndpoint: enabled
+      PropagateTagsToVolumeOnCreation: true
+      BlockDeviceMappings:
+        - DeviceName: /dev/xvda
+          Ebs:
+            VolumeType: gp3
+            VolumeSize: !Ref VolumeSizeGiB
+            Encrypted: true
+            DeleteOnTermination: false
+      UserData:
+        Fn::Base64: |
+          #!/bin/bash
+          # Minimal bootstrap; the platform is installed by deploy.sh through SSM Run Command.
+          dnf install -y git tar gzip jq unzip
+      Tags:
+        - {Key: Name, Value: !Sub "${AWS::StackName}-host"}
+        - {Key: Project, Value: kirocrew-on}
+        - {Key: Backup, Value: !Sub "${AWS::StackName}"}
+
+  HostAddress:
+    Type: AWS::EC2::EIP
+    DependsOn: GatewayAttachment
+    Properties:
+      Domain: vpc
+      InstanceId: !Ref Host
+      Tags: [{Key: Name, Value: !Sub "${AWS::StackName}-origin"}]
+
+  Distribution:
+    Type: AWS::CloudFront::Distribution
+    Properties:
+      DistributionConfig:
+        Enabled: true
+        Comment: !Sub "KiroCrew ON console and API (${AWS::StackName})"
+        HttpVersion: http2and3
+        IPV6Enabled: true
+        PriceClass: PriceClass_100
+        Origins:
+          - Id: kirocrew-on-origin
+            # Stable public DNS name derived from the Elastic IP (survives instance stop/start).
+            DomainName: !If
+              - IsUsEast1
+              - !Join ["", ["ec2-", !Join ["-", !Split [".", !Ref HostAddress]], ".compute-1.amazonaws.com"]]
+              - !Join ["", ["ec2-", !Join ["-", !Split [".", !Ref HostAddress]], !Sub ".${AWS::Region}.compute.amazonaws.com"]]
+            CustomOriginConfig:
+              HTTPPort: !Ref ApiPort
+              OriginProtocolPolicy: http-only
+              OriginReadTimeout: 60
+              OriginKeepaliveTimeout: 5
+            OriginCustomHeaders:
+              - HeaderName: X-Origin-Verify
+                HeaderValue: !Ref OriginSecret
+        DefaultCacheBehavior:
+          TargetOriginId: kirocrew-on-origin
+          ViewerProtocolPolicy: redirect-to-https
+          AllowedMethods: [GET, HEAD, OPTIONS, PUT, PATCH, POST, DELETE]
+          CachedMethods: [GET, HEAD]
+          CachePolicyId: 4135ea2d-6df8-44a3-9df3-4b5a84be39ad        # Managed-CachingDisabled
+          OriginRequestPolicyId: 33f36d7e-f396-46d9-90e0-52428a34d9dc # Managed-AllViewerAndCloudFrontHeaders-2022-06
+          Compress: false
+        ViewerCertificate:
+          CloudFrontDefaultCertificate: true
+      Tags: [{Key: Project, Value: kirocrew-on}]
+
+  NativeDistribution:
+    Type: AWS::CloudFront::Distribution
+    Properties:
+      DistributionConfig:
+        Enabled: true
+        Comment: !Sub "KiroCrew ON native chat (${AWS::StackName})"
+        HttpVersion: http2and3
+        IPV6Enabled: true
+        PriceClass: PriceClass_100
+        Origins:
+          - Id: kirocrew-native-origin
+            DomainName: !If
+              - IsUsEast1
+              - !Join ["", ["ec2-", !Join ["-", !Split [".", !Ref HostAddress]], ".compute-1.amazonaws.com"]]
+              - !Join ["", ["ec2-", !Join ["-", !Split [".", !Ref HostAddress]], !Sub ".${AWS::Region}.compute.amazonaws.com"]]
+            CustomOriginConfig:
+              HTTPPort: !Ref NativePort
+              OriginProtocolPolicy: http-only
+              OriginReadTimeout: 60
+              OriginKeepaliveTimeout: 5
+            OriginCustomHeaders:
+              - HeaderName: X-Origin-Verify
+                HeaderValue: !Ref OriginSecret
+        DefaultCacheBehavior:
+          TargetOriginId: kirocrew-native-origin
+          ViewerProtocolPolicy: redirect-to-https
+          AllowedMethods: [GET, HEAD, OPTIONS, PUT, PATCH, POST, DELETE]
+          CachedMethods: [GET, HEAD]
+          CachePolicyId: 4135ea2d-6df8-44a3-9df3-4b5a84be39ad        # Managed-CachingDisabled
+          OriginRequestPolicyId: 33f36d7e-f396-46d9-90e0-52428a34d9dc # Managed-AllViewerAndCloudFrontHeaders-2022-06
+          Compress: false
+        ViewerCertificate:
+          CloudFrontDefaultCertificate: true
+      Tags: [{Key: Project, Value: kirocrew-on}]
+
+  SnapshotRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal: {Service: dlm.amazonaws.com}
+            Action: sts:AssumeRole
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/service-role/AWSDataLifecycleManagerServiceRole
+
+  DailySnapshots:
+    Type: AWS::DLM::LifecyclePolicy
+    Properties:
+      Description: !Sub "Daily EBS snapshots for ${AWS::StackName} retain 7"
+      State: ENABLED
+      ExecutionRoleArn: !GetAtt SnapshotRole.Arn
+      PolicyDetails:
+        ResourceTypes: [VOLUME]
+        TargetTags: [{Key: Backup, Value: !Sub "${AWS::StackName}"}]
+        Schedules:
+          - Name: daily
+            CreateRule: {Interval: 24, IntervalUnit: HOURS, Times: ["03:00"]}
+            RetainRule: {Count: 7}
+            CopyTags: true
+
+  AlertTopic:
+    # Not encrypted with the AWS-managed aws/sns key: CloudWatch alarms cannot publish to such a topic.
+    Type: AWS::SNS::Topic
+    Properties:
+      DisplayName: !Sub "KiroCrew ON ${AWS::StackName}"
+
+  AlertSubscription:
+    Type: AWS::SNS::Subscription
+    Condition: HasAlarmEmail
+    Properties:
+      TopicArn: !Ref AlertTopic
+      Protocol: email
+      Endpoint: !Ref AlarmEmail
+
+  RecoveryAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmDescription: Recover the KiroCrew ON host when the underlying system check fails
+      Namespace: AWS/EC2
+      MetricName: StatusCheckFailed_System
+      Dimensions: [{Name: InstanceId, Value: !Ref Host}]
+      Statistic: Maximum
+      Period: 60
+      EvaluationPeriods: 2
+      Threshold: 1
+      ComparisonOperator: GreaterThanOrEqualToThreshold
+      AlarmActions:
+        - !Sub "arn:${AWS::Partition}:automate:${AWS::Region}:ec2:recover"
+        - !Ref AlertTopic
+
+Outputs:
+  InstanceId:
+    Value: !Ref Host
+  PublicIp:
+    Value: !Ref HostAddress
+  CloudFrontDomain:
+    Value: !GetAtt Distribution.DomainName
+  ConsoleUrl:
+    Value: !Sub "https://${Distribution.DomainName}/"
+  NativeDomain:
+    Value: !GetAtt NativeDistribution.DomainName
+  NativeUrl:
+    Value: !Sub "https://${NativeDistribution.DomainName}/"
+  ArtifactBucket:
+    Value: !Ref ArtifactBucket
+  ApiPort:
+    Value: !Ref ApiPort
+  # Read by the Worker host stacks (deploy/aws/kirocrew-on-worker.yaml, D28): same VPC and subnet, admitted by this
+  # host's security group, same pinned image. Outputs only; no resource changes.
+  VpcId:
+    Value: !Ref Vpc
+  SubnetId:
+    Value: !Ref PublicSubnet
+  HostSecurityGroupId:
+    Value: !GetAtt HostSecurityGroup.GroupId
+  ImageId:
+    Value: !Ref ImageId
+  # The origin of every Worker host's native distribution (the platform host relays it, D28).
+  HostOriginDomain:
+    Value: !If
+      - IsUsEast1
+      - !Join ["", ["ec2-", !Join ["-", !Split [".", !Ref HostAddress]], ".compute-1.amazonaws.com"]]
+      - !Join ["", ["ec2-", !Join ["-", !Split [".", !Ref HostAddress]], !Sub ".${AWS::Region}.compute.amazonaws.com"]]

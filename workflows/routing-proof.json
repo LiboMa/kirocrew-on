@@ -1,0 +1,40 @@
+{
+  "schema": 1,
+  "id": "routing-proof",
+  "name": "MVP · 四工具参数验证",
+  "steps": [
+    {
+      "id": "plan",
+      "name": "简短契约",
+      "tool": "kiro",
+      "model": "auto",
+      "effort": "",
+      "prompt": "规划好路由以及核心模块，做好整体把控"
+    },
+    {
+      "id": "code",
+      "name": "最小编码",
+      "tool": "claude",
+      "model": "global.anthropic.claude-opus-5",
+      "effort": "medium",
+      "prompt": "按需求，拆解任务，完成任务开发。"
+    },
+    {
+      "id": "review",
+      "name": "独立审查",
+      "tool": "codex",
+      "model": "openai.gpt-6-astra",
+      "effort": "medium",
+      "prompt": "做好安全以及Test的独立审查"
+    },
+    {
+      "id": "deliver",
+      "name": "Web 报告",
+      "tool": "claude",
+      "model": "auto",
+      "effort": "",
+      "prompt": "页面列出四个阶段的角色，注明工具身份以看板原生证据为准。无外部依赖、不改核心和测试。写 deliver-handoff.md，最多100字。"
+    }
+  ],
+  "revision": 7
+}
