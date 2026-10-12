@@ -108,6 +108,7 @@ def openapi():
         "/v1/runs/{id}/observe": {"get": None},
         "/v1/runs/{id}/revisions": {"get": None}, "/v1/runs/{id}/revisions/diff": {"get": None},
         "/v1/runs/{id}/revisions/{version}": {"get": None},
+        "/v1/runs/{id}/changes": {"get": None},
         "/v1/runs/{id}/recover": {"post": "Control"},
         "/v1/runs/{id}/continue": {"post": "Continue"}, "/v1/runs/{id}/assign-worker": {"post": "AssignWorker"},
         **{"/v1/runs/{id}/" + action: {"post": "Control"} for action in ["stop", "close", "reopen", "delete"]},
@@ -147,6 +148,11 @@ def openapi():
                 op["description"] = "Administrator only. Every execution environment with its scope, owner, Team or shared spaces (with names), enabled, active_runs and live health (reachable=false when its Worker does not answer within a few seconds; never fails the listing). No tokens."
             if path.endswith("/crew-entry"):
                 op["description"] = "Execute scope. Opens the existing native parent Session through its authorized Worker. On-demand sensitive login URL; no-store. Does not create, resume, mutate or dispatch a Run. Native login covers the Worker's Gateway boundary, not a single run."
+            if path == "/v1/runs/{id}/changes":
+                op["description"] = ("Read scope. The Session's change journal, newest first: every write by a user (console, "
+                                     "Coding Agent via MCP, API) or the system (engine, worker receipt, kirocrew planning, "
+                                     "recovery) with actor, changes {field: [before, after]} (long text as chars + sha256) "
+                                     "and reason. Query: who=user|system, kind=<prefix>, before=<id>, limit=1-200.")
             if "/revisions" in path:
                 op["description"] = {
                     "/v1/runs/{id}/revisions": "Read scope. Every revision of the Session, oldest first: kind (created / planned / continued / recovered), summary, actor; older revisions are rebuilt from what they recorded (reconstructed).",

@@ -166,5 +166,43 @@ class SystemJournalTests(AccessCase):
         self.assertEqual(started["changes"]["status"], ["blocked", "diagnosing"])
 
 
+class ChangesApiTests(AccessCase):
+    def test_changes_are_filtered_by_actor_and_kind_and_follow_session_visibility(self):
+        run = self.start(self.a)
+        with self.db.transaction() as db:
+            db.execute("INSERT INTO events(run_id,kind,payload,created) VALUES(?,?,?,?)",
+                       (run["id"], "run.state", dumps({"status": "ready", "actor": {"kind": "engine"}}), 1))
+        self.assertEqual([c["kind"] for c in self.service.changes(self.a, run["id"], who="user")], ["run.created"])
+        self.assertEqual([c["kind"] for c in self.service.changes(self.a, run["id"], who="system")], ["run.state"])
+        self.assertEqual([c["kind"] for c in self.service.changes(self.a, run["id"], kind="run.")], ["run.state", "run.created"])
+        entry = self.service.changes(self.a, run["id"], who="system")[0]
+        self.assertEqual((entry["actor"], entry["detail"]), ({"kind": "engine"}, {"status": "ready"}))
+        with self.http() as call:
+            self.assertEqual(call("GET", f"/v1/runs/{run['id']}/changes", self.tokens["eve"])[0], 404)
+            status, body = call("GET", f"/v1/runs/{run['id']}/changes?who=user&limit=1", self.tokens["alice"])
+            self.assertEqual((status, len(body)), (200, 1))
+            self.assertEqual(call("GET", f"/v1/runs/{run['id']}/changes?who=robot", self.tokens["alice"])[0], 400)
+            self.assertIn("changes", call("GET", f"/v1/runs/{run['id']}/export", self.tokens["alice"])[1])
+
+    def test_legacy_events_are_listed_with_their_user(self):
+        run = self.start(self.a)
+        with self.db.transaction() as db:
+            db.execute("INSERT INTO events(run_id,kind,payload,created) VALUES(?,?,?,?)",
+                       (run["id"], "command.stop", dumps({"actor": self.a["id"], "version": 2}), 2))
+            db.execute("INSERT INTO events(run_id,kind,payload,created) VALUES(?,?,?,?)",
+                       (run["id"], "attempt.state", dumps({"status": "accepted"}), 3))
+        listed = {c["kind"]: c for c in self.service.changes(self.a, run["id"])}
+        self.assertEqual(listed["command.stop"]["actor"], {"kind": "user", "id": self.a["id"], "username": "alice"})
+        self.assertEqual(listed["attempt.state"]["actor"], {"kind": "legacy"})
+        self.assertEqual([c["kind"] for c in self.service.changes(self.a, run["id"], who="user")], ["command.stop", "run.created"])
+        self.assertEqual([c["kind"] for c in self.service.changes(self.a, run["id"], who="system")], ["attempt.state"])
+
+    def test_paging_and_kind_wildcards(self):
+        run = self.start(self.a)
+        newest = self.service.changes(self.a, run["id"])[0]["id"]
+        self.assertEqual(self.service.changes(self.a, run["id"], before=newest), [])
+        self.assertEqual(self.service.changes(self.a, run["id"], kind="run%"), [])   # % is literal
+
+
 if __name__ == "__main__":
     unittest.main()

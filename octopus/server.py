@@ -500,6 +500,15 @@ def server(database, port=8918, host="127.0.0.1", allowed_hosts=(), origin_secre
                         return self.respond(service.revision_diff(actor, rid, versions.get("from"), versions.get("to")))
                     require(segments[4].isdigit(), "修订版本号无效", 404, "not_found")
                     return self.respond(service.revision(actor, rid, int(segments[4])))
+                if len(segments) == 4 and segments[:2] == ["v1", "runs"] and segments[3] == "changes":
+                    require(method == "GET", "Method not allowed", 405)
+                    paging = {}
+                    for key in ("before", "limit"):
+                        if key in query:
+                            require(query[key][0].isdigit(), f"{key} 须为非负整数")
+                            paging[key] = int(query[key][0])
+                    return self.respond(service.changes(actor, segments[2], who=query.get("who", [None])[0],
+                                                        kind=query.get("kind", [None])[0], **paging))
                 if len(segments) in {3, 4} and segments[:2] == ["v1", "runs"]:
                     rid = segments[2]
                     if len(segments) == 3 and method == "GET":
@@ -528,6 +537,7 @@ def server(database, port=8918, host="127.0.0.1", allowed_hosts=(), origin_secre
                                 revisions = [{**dict(row), "content": json.loads(row["content"])} for row in db.execute(
                                     "SELECT * FROM revisions WHERE run_id=? ORDER BY version", (rid,))]
                             return self.respond({"schema": "octopus.session/1", "session": run, "revisions": revisions,
+                                                 "changes": service.changes(actor, rid, limit=200),
                                                  "note": "平台状态及交接记录；源码与原生会话备份保留在授权 Worker。"})
                         if action == "events" and method == "GET":
                             after = int(query.get("after", [self.headers.get("Last-Event-ID", "0")])[0])

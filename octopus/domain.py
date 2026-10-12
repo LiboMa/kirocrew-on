@@ -1096,6 +1096,33 @@ class Service:
         self.audit_read(actor, rid, "view")
         return [{k: v for k, v in entry.items() if k not in {"snapshot", "content"}} for entry in entries]
 
+    def changes(self, actor, rid, who=None, kind=None, before=None, limit=50):
+        """The Session's change journal, newest first (D34 §4.3): who changed what, from what, to what and why. Events
+        written before the journal carry a user id string (commands) or no actor (system, listed as legacy)."""
+        require(who in (None, "user", "system"), "who 只能是 user 或 system")
+        require(kind is None or (isinstance(kind, str) and len(kind) <= 40), "kind 不超过 40 个字符")
+        require(type(limit) is int and 1 <= limit <= 200, "limit 须为 1–200 的整数")
+        person = "coalesce(json_type(payload,'$.actor')='text' OR json_extract(payload,'$.actor.kind')='user', 0)"
+        sql, params = "SELECT * FROM events WHERE run_id=? AND id<?", [rid, before or 2 ** 62]
+        if who:
+            sql += f" AND {'' if who == 'user' else 'NOT '}{person}"
+        if kind:
+            sql += " AND kind LIKE ? ESCAPE '\\'"
+            params.append(kind.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_") + "%")
+        with self.db.read() as db:
+            run_access(db, actor, rid)
+            users = dict(db.execute("SELECT id,username FROM users").fetchall())
+            rows = db.execute(sql + " ORDER BY id DESC LIMIT ?", (*params, limit)).fetchall()
+        result = []
+        for row in rows:
+            payload = json.loads(row["payload"])
+            by = payload.pop("actor", None)
+            if isinstance(by, str):
+                by = {"kind": "user", "id": by, "username": users.get(by)}
+            result.append({"id": row["id"], "at": row["created"], "kind": row["kind"], "actor": by or {"kind": "legacy"},
+                           "changes": payload.pop("changes", None), "reason": payload.pop("reason", None), "detail": payload})
+        return result
+
     def revision(self, actor, rid, version):
         from .revisions import history
         with self.db.read() as db:
