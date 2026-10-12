@@ -6,6 +6,7 @@ import unittest
 from octopus import journal
 from octopus.db import Database, dumps
 from octopus.security import authenticate, create_user, issue_token
+from tests.test_access import AccessCase
 
 
 class JournalTests(unittest.TestCase):
@@ -66,6 +67,50 @@ class JournalTests(unittest.TestCase):
         with self.db.transaction() as db:
             token = issue_token(db, self.user["id"], label="claude MCP")["token"]
             self.assertEqual(authenticate(db, token)["client"], "mcp")
+
+
+class CommandJournalTests(AccessCase):
+    def changes(self, rid):
+        with self.db.read() as db:
+            return [(r["kind"], json.loads(r["payload"])) for r in db.execute("SELECT * FROM events WHERE run_id=? ORDER BY id", (rid,))]
+
+    def test_one_command_records_every_field_it_changes(self):
+        env = self.shared_env()
+        run = self.start(self.a, worker_id=env)
+        with self.db.transaction() as db:
+            db.execute("UPDATE runs SET status='stopped' WHERE id=?", (run["id"],))   # fixture only
+            db.execute("UPDATE tasks SET status='blocked' WHERE run_id=?", (run["id"],))
+        actor = {**self.a, "client": "console"}
+        self.service.operate(actor, run["id"], "continue", {"request_id": "continue-000001", "expected_version": 1,
+                                                            "task_id": "code", "input": "研发需求与真实验证（修订）"})
+        self.assertEqual(self.changes(run["id"])[0][0], "run.created")
+        self.assertEqual(self.changes(run["id"])[0][1]["actor"]["kind"], "user")
+        command = next(p for k, p in self.changes(run["id"]) if k == "command.continue")
+        self.assertEqual(command["actor"], {"kind": "user", "id": self.a["id"], "username": "alice", "client": "console"})
+        self.assertEqual(command["task_id"], "code")
+        self.assertEqual(command["changes"]["status"], ["stopped", "ready"])
+        self.assertEqual(command["changes"]["input"], ["研发需求与真实验证", "研发需求与真实验证（修订）"])
+        self.assertEqual(command["changes"]["version"], [1, 2])
+        reset = next(p for k, p in self.changes(run["id"]) if k == "task.reset")
+        self.assertEqual(reset["changes"][0]["id"], "code")
+        latest = self.service.revisions(self.a, run["id"])[-1]["version"]
+        self.assertEqual(self.service.revision(self.a, run["id"], latest)["snapshot"]["input"], "研发需求与真实验证（修订）")
+
+    def test_assign_worker_records_the_worker(self):
+        run = self.start(self.a)   # no environment: waiting_worker
+        env = self.shared_env()
+        self.service.operate({**self.a, "client": "mcp"}, run["id"], "assign-worker",
+                             {"request_id": "assign-0000001", "expected_version": 1, "worker_id": env})
+        command = next(p for k, p in self.changes(run["id"]) if k == "command.assign-worker")
+        self.assertEqual(command["worker_id"], env)
+        self.assertEqual(command["changes"]["worker_id"], [None, env])
+        self.assertEqual(command["actor"]["client"], "mcp")
+
+    def test_admin_oversight_keeps_the_by_field(self):
+        run = self.start(self.b)
+        self.service.operate(self.a, run["id"], "stop", {"request_id": "stop-00000001", "expected_version": 1})
+        command = next(p for k, p in self.changes(run["id"]) if k == "command.stop")
+        self.assertEqual((command["oversight"], command["by"]["username"]), (True, "alice"))
 
 
 if __name__ == "__main__":

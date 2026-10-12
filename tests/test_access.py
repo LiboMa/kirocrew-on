@@ -214,7 +214,7 @@ class OversightTests(AccessCase):
                 db.execute("UPDATE runs SET native_parent='octopus-x' WHERE id=?", (self.rid,))
             self.assertEqual(crew_entry.observe(self.service, self.a, self.rid), {"messages": []})
         events = self.service.events(self.a, self.rid)
-        self.assertEqual(next(e for e in events if e["kind"] == "command.stop")["payload"]["actor"], self.a["id"])
+        self.assertEqual(next(e for e in events if e["kind"] == "command.stop")["payload"]["actor"]["id"], self.a["id"])
 
     def test_bobs_own_operations_are_not_audited(self):
         self.service.operate(self.b, self.rid, "stop", {"request_id": "stop-0000000002", "expected_version": 1})

@@ -96,7 +96,7 @@ def summary(db, run):
             "latest": rows[-1] if rows else None, "history": rows}
 
 
-def schedule(db, database, run, task, attempt, *, manual=False):
+def schedule(db, database, run, task, attempt, *, manual=False, actor=None):
     settings = policy(json.loads(run["snapshot"]).get("recovery"), legacy=True)
     rows = list(db.execute("SELECT * FROM recoveries WHERE run_id=? ORDER BY number", (run["id"],)))
     if any(r["status"] in LIVE for r in rows):

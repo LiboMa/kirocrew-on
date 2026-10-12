@@ -10,6 +10,7 @@ import threading
 import time
 import unicodedata
 
+from . import journal
 from .db import dumps, uid
 from .security import Error, check_password, elevated, password_hash, require
 
@@ -708,7 +709,7 @@ class Service:
                                (rid, step["id"], i, dumps(step)))
                 from .revisions import record
                 record(db, rid, 1, "created", f"创建：{len(spec)} 个任务", actor["id"], now, input=goal, steps=spec)
-                self.db.event(db, rid, "run.created", {"actor": actor["id"], "worker_assigned": bool(worker)})
+                journal.record(db, rid, "run.created", journal.person(actor), worker_assigned=bool(worker))
                 return {"id": rid, "session_id": rid, "version": 1,
                         "status": "preparing" if worker else "waiting_worker"}
             return self._command(db, actor, "design" if design is not None else "start", None,
@@ -885,6 +886,18 @@ class Service:
                 require(body.get("expected_version") == run["version"], "Session 版本已更新", 409, "version_conflict")
                 require(run["lifecycle"] != "deleted", "Session 已删除", 409, "invalid_state")
                 version = run["version"] + 1
+                who = journal.person(actor)
+                # This command's writes to the Session row, recorded as one command event with its parameters (D34).
+                fields, done = {}, []
+                def commit():
+                    if done:
+                        return
+                    done.append(True)
+                    fields.update(version=version, updated=time.time())
+                    journal.change(db, "runs", rid, who, "command." + action, event={
+                        "version": version, **{k: body[k] for k in ("task_id", "worker_id", "rerun") if k in body},
+                        **({"oversight": True, "by": {"id": actor["id"], "username": actor["username"]}} if oversight else {})},
+                        **fields)
                 if action == "continue":
                     require(run["lifecycle"] == "open" and run["status"] in SETTLED, "请先等待结束或停止", 409, "busy")
                     ordered = [dict(t) for t in db.execute("SELECT * FROM tasks WHERE run_id=? ORDER BY ordinal", (rid,))]
@@ -899,21 +912,24 @@ class Service:
                     if "recovery" in body:
                         from .recovery import policy
                         snapshot = json.loads(run["snapshot"])
+                        old = snapshot.get("recovery")
                         snapshot["recovery"] = policy(body["recovery"])
                         if snapshot["recovery"]["enabled"]:
                             snapshot["execution_contract"] = 2
-                        db.execute("UPDATE runs SET snapshot=? WHERE id=?", (dumps(snapshot), rid))
-                    for row in ordered[index:]:
-                        spec = current if row["id"] == current["id"] else json.loads(row["spec"])
-                        db.execute("UPDATE tasks SET spec=?,status='pending',current_attempt=NULL WHERE run_id=? AND id=?",
-                                   (dumps(spec), rid, row["id"]))
+                        journal.change(db, "runs", rid, who, "run.settings", event={"recovery": [old, snapshot["recovery"]]},
+                                       snapshot=dumps(snapshot))
+                    reset = [row["id"] for row in ordered[index:]]
+                    journal.change_rows(db, "tasks", f"run_id=? AND id IN ({','.join('?' * len(reset))})", (rid, *reset),
+                                        who, "task.reset", status="pending", current_attempt=None)
+                    journal.change(db, "tasks", (rid, current["id"]), who, "task.spec", spec=dumps(current))
                     reason = unserved(db, run) if run["worker_id"] else None
-                    db.execute("UPDATE runs SET input=?,desired='active',status=?,error=? WHERE id=?",
-                               (goal, "ready" if run["worker_id"] and not reason else "waiting_worker", reason, rid))
+                    fields.update(input=goal, desired="active", status="ready" if run["worker_id"] and not reason else "waiting_worker",
+                                  error=reason)
+                    commit()   # before the revision: its snapshot reads the new requirement
                     from .revisions import changes, record
                     detail = "、".join(filter(None, ["需求" if goal != run["input"] else "", changes(before, current)]))
                     record(db, rid, version, "continued", f"续作「{current['name']}」" + (f"：{detail}" if detail else ""),
-                           actor["id"], time.time(), input=goal, task=current, invalidated=[t["id"] for t in ordered[index:]],
+                           actor["id"], time.time(), input=goal, task=current, invalidated=reset,
                            **({"recovery": snapshot["recovery"]} if "recovery" in body else {}))
                 elif action == "recover":
                     from .recovery import schedule
@@ -926,9 +942,11 @@ class Service:
                     attempt = db.execute("SELECT * FROM attempts WHERE id=?", (task["current_attempt"],)).fetchone() if task else None
                     require(attempt is not None, "尚无可诊断的失败执行；请补充输入并重跑", 409, "not_attempted")
                     snapshot = json.loads(run["snapshot"])
+                    old = snapshot.get("execution_contract", 1)
                     snapshot["execution_contract"] = 2
-                    db.execute("UPDATE runs SET snapshot=? WHERE id=?", (dumps(snapshot), rid))
-                    schedule(db, self.db, run, task, attempt, manual=True)
+                    journal.change(db, "runs", rid, who, "run.settings", event={"execution_contract": [old, 2]},
+                                   snapshot=dumps(snapshot))
+                    schedule(db, self.db, run, task, attempt, manual=True, actor=who)
                 elif action == "assign-worker":
                     require(run["status"] == "waiting_worker" and run["lifecycle"] == "open",
                             "运行已分配 Worker 或已关闭", 409, "invalid_state")
@@ -936,24 +954,19 @@ class Service:
                     self._worker(db, run["owner_id"], body.get("worker_id"), run["team_id"])
                     if run["worker_id"] not in (None, body["worker_id"]):
                         # Another environment has no native parent of this Session: prepare there afresh (P5).
-                        db.execute("UPDATE runs SET worker_id=?,native_parent=NULL,workspace=NULL,status='preparing',"
-                                   "error=NULL WHERE id=?", (body["worker_id"], rid))
+                        fields.update(worker_id=body["worker_id"], native_parent=None, workspace=None, status="preparing", error=None)
                     else:
-                        db.execute("UPDATE runs SET worker_id=?,status=?,error=NULL WHERE id=?",
-                                   (body["worker_id"], "ready" if run["native_parent"] else "preparing", rid))
+                        fields.update(worker_id=body["worker_id"], status="ready" if run["native_parent"] else "preparing", error=None)
                 elif action == "reopen":
                     require(run["lifecycle"] == "closed", "只有已关闭的 Session 可重新打开", 409, "invalid_state")
-                    db.execute("UPDATE runs SET desired='reopen',status='reopening' WHERE id=?", (rid,))
+                    fields.update(desired="reopen", status="reopening")
                 else:
                     require(action != "delete" or body.get("confirmation") == rid, "删除需完整 Session ID 确认")
-                    db.execute("UPDATE runs SET desired=?,status='stopping' WHERE id=?", (action, rid))
+                    fields.update(desired=action, status="stopping")
                 if (not run["worker_id"] or retired) and action in {"stop", "close", "delete", "reopen"}:
                     lifecycle = {"close": "closed", "delete": "deleted", "reopen": "open"}.get(action, run["lifecycle"])
-                    db.execute("UPDATE runs SET desired='stopped',status='stopped',lifecycle=? WHERE id=?",
-                               (lifecycle, rid))
-                db.execute("UPDATE runs SET version=?,updated=? WHERE id=?", (version, time.time(), rid))
-                self.db.event(db, rid, "command." + action, {"actor": actor["id"], "version": version, **(
-                    {"oversight": True, "by": {"id": actor["id"], "username": actor["username"]}} if oversight else {})})
+                    fields.update(desired="stopped", status="stopped", lifecycle=lifecycle)
+                commit()
                 if oversight:
                     audit(db, actor, "run." + action, "run", rid, {"version": version})
                 return {"id": rid, "session_id": rid, "version": version, "command": action, "status": "accepted"}
