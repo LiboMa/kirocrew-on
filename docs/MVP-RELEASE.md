@@ -1,6 +1,6 @@
 # MVP Release 计划与状态
 
-更新日期：2026-10-11　·　当前阶段：**最小 MVP 已在 EC2 跑通（Coding Agent → 提交 → KiroCrew 规划 → 执行与返工 → 查看 → 迭代 → 预览）**　·　本仓库可运行代码：**分支 `feat/m1-runtime-foundation`，未合并、未推送**　·　已发布版本：**无**
+更新日期：2026-10-12　·　当前阶段：**最小 MVP 已在 EC2 跑通；Team 执行环境（D28：共享 / 专属 / 空闲，独立 Worker 主机）已在 EC2 验收**　·　本仓库可运行代码：**分支 `feat/m1-runtime-foundation`（已推送 origin，未合并 main）；阶段 C（Worker 主机原生入口中转与管理收口）在 `feat/team-environments`，待 EC2 验收后合入**　·　已发布版本：**无**
 
 本文记录 KiroCrew ON 首个可用 MVP 的范围、已确定决策、各里程碑交付与验收条件。
 “已确定”“默认值（待确认）”“未开始 / 待验收”分别标注；不要把本文中的目标当作已上线功能。
@@ -21,10 +21,10 @@ M4（共享与组织）、M5（仓库闭环）在 MVP 之后分别立项，各�
 | 里程碑 | 状态 |
 |---|---|
 | M1 运行底座 | 待验收（负责人确认）：本地（macOS）与 EC2 验收条件全部完成；OpenCode 核实结论为未通过（K01），替换配置可用。证据见 `docs/handover/M1-LOCAL-EVIDENCE.md`、`docs/handover/M1-EC2-EVIDENCE.md` |
-| M2 核心闭环 | 未开始 |
-| M3 客户端直连与控制台 | 未开始 |
-| M4 共享与组织 | 未开始 |
-| M5 仓库闭环 | 未开始 |
+| M2 核心闭环 | 实现中（按 D25 只做最小 MVP 路径）：Kiro Agent 规划、工作流文档规范化、交接与 outcome 校验、协调者诊断返工已上线；Request、门禁目录、回退链、准入、完整恢复阶梯、批准代理、候选 commit 与分支推送、报告未开始。明细见 §14.2 |
+| M3 客户端直连与控制台 | 实现中：Claude Code / Kiro CLI 的 connect + Skill + MCP 与 React 控制台已上线；Codex / Kiro IDE、用户 CLI、pull / sync、服务端分页与全文搜索未开始。明细见 §14.3 |
+| M4 共享与组织 | 部分提前（D28–D30）：Team 执行环境与 Team 会话共享已在 EC2 验收；组织层、Worker Token 移出数据库、单 Session 票据（K03）、排队与配额未开始。明细见 §14.4 |
+| M5 仓库闭环 | 未开始：GitHub Connector 设计草案（`docs/superpowers/specs/2026-10-11-github-connector-design.md`） |
 
 ## 2．已确定决策
 
@@ -59,7 +59,9 @@ M4（共享与组织）、M5（仓库闭环）在 MVP 之后分别立项，各�
 | D25 | 最小 MVP = Coding Agent 连接后台 → 提交任务 → 查看任务 → 更新优化应用；分支开发相关的 M2 / M3 内容后排（`docs/BACKLOG.md`）（2026-10-11） |
 | D26 | 意图识别与需求补全必须由 KiroCrew Agent 生成：未指定任务时 Session 第 1 个任务由 Kiro Agent 规划（intent、summary、1–7 个任务与 Agent 映射），代码校验后追加到同一 Session；规则匹配仅在 `plan=match` 时使用；K01 修复前 OpenCode 任务由代码改派 Claude Code（2026-10-11） |
 | D27 | Coding Agent 接入：`octopus connect claude|kiro` 写入 MCP 服务器 `kirocrew-on` 与同一份 Skill（由 `skills/kirocrew-on/SKILL.md` 渲染；其他客户端见 `docs/CONNECT.md`）；产出经 `/preview` 在隔离来源中预览，开发服务器类项目用 `deploy.sh space <run-id>` 转发到本机（2026-10-11） |
-| D28 | Team 执行环境：创建 Team 时必须选择执行环境——**共享环境**（管理员指定的共享 Worker，服务 Team 与用户的个人空间，每个用户不必有自己的 Worker；环境内会话的 Agent 以同一 OS 用户运行、互相可读，适用于同一信任范围；MVP 默认）或**专属环境**（独立执行边界：同一主机上的独立 OS 用户或第二台主机；适用于有保密要求的 Team；MVP 之后实现）；会话共享属于平台授权，不共享执行环境（`docs/WORKERS.md`）（2026-10-11；同日修订：由仅严格隔离改为两种并存，MVP 先实现共享环境） |
+| D28 | Team 执行环境：创建 Team 时必须选择执行环境——**共享环境**（管理员指定的共享 Worker，服务 Team 与用户的个人空间，每个用户不必有自己的 Worker；环境内会话的 Agent 以同一 OS 用户运行、互相可读，适用于同一信任范围；MVP 默认）或**专属环境**（独立执行边界：同一主机上的独立 OS 用户或第二台主机；适用于有保密要求的 Team；MVP 之后实现）；会话共享属于平台授权，不共享执行环境（`docs/WORKERS.md`）（2026-10-11；同日修订：由仅严格隔离改为两种并存，MVP 先实现共享环境；专属环境随后提前实现，见 D29） |
+| D29 | 专属环境先以**独立 Worker 主机**实现（2026-10-11）：每台一个 EC2 与 CloudFormation 栈，与平台同 VPC，只接受平台主机访问；平台↔Worker 使用平台私有 CA 签发的 TLS；新主机登记为空闲执行环境，由管理员在控制台分配给 Team；先 1 台（m7i.xlarge）验证，确认后扩到 3 台。同主机新 OS 用户的形态按需再做 |
+| D30 | Worker 主机的原生 KiroCrew 入口统一经平台主机中转（2026-10-12，方案 B）：每台 Worker 主机一个 CloudFront 分发，源站为平台主机的中转端口，平台 nginx 校验源站密钥后经私网 TLS 转发到该主机的 Gateway；管理侧收口为控制台「执行环境」对话框与管理员 API `GET /v1/admin/environments`，运维为 `deploy.sh worker-host add <名称>` |
 
 ## 3．设计默认值（已提出，待确认）
 
@@ -257,3 +259,51 @@ M4（共享与组织）、M5（仓库闭环）在 MVP 之后分别立项，各�
 ## 13．发布记录
 
 尚无发布。
+
+## 14．进度与未完成事项（2026-10-12）
+
+状态：✅ 完成 · ◐ 部分 · ○ 未开始。“EC2”表示已在 EC2 实测。
+
+### 14.1 M1 运行底座
+
+14 项交付与 §5 验收条件全部完成（本地与 EC2）。**待办：负责人确认 M1 验收**；OpenCode（K01）按 M2 回退链与门禁层排查处理。
+
+### 14.2 M2 核心闭环
+
+| # | 交付 | 状态 | 已有 / 剩余 |
+|---|---|---|---|
+| 1 | Request | ○ | Session 的 `request_id` 提供幂等登记；Request 表、来源客户端与仓库字段、与 Session 的关联未建 |
+| 2 | Pipeline 生成 | ◐ EC2 | 已有：Kiro Agent 规划（D26：意图、补全、1–7 个任务与 Agent 映射，追加到同一 Session）、`plan=match` 规则匹配、工作流文档（JSON / YAML / Markdown）解析与规范化。剩余：schema 2、规划阶段的只读源码检查 |
+| 3 | 门禁目录 | ◐ | 已有：交接文件与 `outcome.json` 校验、确定性审查返工。剩余：命名门禁目录（`tests_fail_on_baseline`、`diff_present`、`checks_pass`、`review_bound`、`candidate_unchanged` 等）及其入库与展示 |
+| 4 | 映射策略 | ◐ | 已有：Prompt / 工作流显式指定、K01 期间 OpenCode 由代码改派 Claude Code。剩余：个人 / Team 策略、能力校验后的通用回退链、映射来源记录 |
+| 5 | 准入 | ○ | 确认模式与按仓库范围的自动准入 |
+| 6 | 恢复阶梯 | ◐ EC2 | 已有：Worker / Gateway 不可用退避（M1）、协调者诊断（重试、退回上游返工、复审）与轮数上限。剩余：L0 瞬时重试、工具回退、重规划、预算、看门狗、条件满足后自动恢复 |
+| 7 | 批准代理 | ○ | 现以 D14（仅平台派发的 spawn 原生 auto）运行；交互式批准请求在控制台 / MCP 中不可见 |
+| 8 | 候选与分支 | ○ | 后排（D25，`docs/BACKLOG.md`） |
+| 9 | 远端分支推送 | ○ | 依赖仓库写凭据（GitHub Connector 写权限，M5 设计草案） |
+| 10 | Feature 报告 | ○ | |
+| 11 | Claude Code 基础 Skill | ✅ EC2 | D27：同一份 Skill 也安装到 Kiro CLI |
+
+§6 验收条件均未勾选：其中 1、2、4 项依赖 Request、门禁与回退链，3、6 项依赖候选 commit 与分支推送。
+
+### 14.3 M3 客户端直连与控制台
+
+| # | 交付 | 状态 | 已有 / 剩余 |
+|---|---|---|---|
+| 1 | `octopus connect` | ◐ EC2 | 已有：`claude`、`kiro`（Kiro CLI），合并写入 MCP 与 Skill、`--dry-run`。剩余：Codex、Kiro IDE（现为 `docs/CONNECT.md` 手动说明）、写前备份核对 |
+| 2 | 用户 CLI | ○ | 现有命令为运维类（init、serve、worker、connect、skill、wait-ready、bootstrap-worker、backup、archive、restore-verify）；login / submit / status / watch / pull / sync 等未做，用户经 MCP 与控制台操作 |
+| 3 | MCP 工具 | ◐ EC2 | 已有 15 个：工作流列表 / 匹配 / 推荐 / 解析 / 保存 / 共享、teams、runs、status（精简与完整）、preview、start、continue、recover、control。剩余：Request、计划确认、搜索、报告、批准、会话关联 |
+| 4 | 本地 / 远端联动 | ○ | 替代：`deploy.sh space <run-id>` 在主机上运行产出并转发到本机、`/preview`。pull / sync / 会话关联后排（BACKLOG） |
+| 5 | 监控控制台 | ◐ EC2 | 已有（React，D19–D23）：列表、空间切换、状态筛选与关键字搜索（客户端）、详情（任务、Attempt 证据、恢复记录、事件轨迹）、续作 / 诊断 / 停止 / 关闭 / 重开 / 删除 / 导出 / 分配 Worker / 原生入口 / 预览、发起向导、工作流库、设置。剩余：服务端分页，按仓库 / 分支 / 工具 / 客户端 / 提交者 / 时间过滤，全文搜索，diff、门禁与报告视图；`/classic/` 待对齐后移除 |
+
+§7 验收条件均未勾选（依赖 pull / sync 与服务端搜索）。
+
+### 14.4 提前实施：Team 执行环境（D28–D30，原 M4 范围）
+
+| 阶段 | 状态 | 说明 |
+|---|---|---|
+| A 平台执行环境（共享 / 专属 / 空闲，Team 必须带环境，服务端自动选择） | ✅ EC2 | personal 设为共享，服务管理员与 dev1 的个人空间；`run-1eef4428…` 在共享环境完成 |
+| B 独立 Worker 主机（私有 CA TLS、空闲登记、控制台分配） | ✅ EC2 | `w1`（m7i.xlarge）分配给「Web应用软件研发组」；`run-e0dff5b1…` 经 MCP 自动选择 w1 完成；隔离检查通过（外部访问 w1:8943 不通、w1 访问平台 API 不通、w1 上无 CA 私钥 / 管理员密码 / 源站密钥）；`run-b74e9f0d…` 在 w1 上进行到第 7 / 8 个任务 |
+| C 原生入口经平台主机中转、`worker-host add`、管理员 API 与统一入口（D30） | ◐ | 已实现并通过离线回归与独立审查（`feat/team-environments`），**待 EC2 验收**：平台 `up` / `push` → `worker-host add w1` → 从控制台打开 w1 上会话的原生入口 |
+
+剩余：`w2`、`w3` 扩容（负责人确认后）；同主机新 OS 用户边界（设计 §4.1–4.3，按需）；共享环境的记忆分隔（T7，等待 KiroCrew 提供成员创建与继承接口）；组织层、Worker Token 移出数据库（K10）、单 Session 原生票据（K03）、排队与配额。

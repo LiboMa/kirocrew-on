@@ -28,7 +28,18 @@
 - 组织层，Session 共享给个人 / Team / 公司；Team 执行隔离；排队与配额。
 - 原生入口改为单 Session 票据（K03）；Worker Token 移出数据库（K10）。
 
+## 执行环境后续（D28–D30）
+- 扩容 `w2`、`w3`（`deploy.sh worker-host add <名称>`，负责人确认后）。
+- 同主机新 OS 用户的专属边界（设计 §4.1–4.3：`boundary add`、`boundaries`、`boundary.sh`），按需实现。
+- 共享环境的记忆分隔（T7）：等待 KiroCrew 提供成员创建与子任务继承成员记忆的接口。
+- `deploy.sh space` 定位 Worker 主机上的会话（目前只能到平台主机的边界）。
+
 ## 已知的次要问题（审查延后项）
+- 执行环境（D28 阶段 A / B 审查）：非管理员对共享 Worker「刷新模型」返回 404；新用户的个人空间默认用共享环境（需手动改选）；
+  `team_without_worker` 检查早于成员检查（非成员可得知 Team 名），环境变化后的重试被拒绝而不是重放；`mcp.py` 仍按 owner / team 预选 Worker
+  （服务端已自动选择，属冗余）；已分配给 Team 的专属 Worker 也显示「设为共享环境」；`bootstrap-worker --spare` 按名称匹配（名称不唯一）；
+  `openssl` 不在 dnf 依赖列表、只生成了私钥的 CA 会让重跑在 chmod 处失败；`worker-host tls` 在 `nginx -t` 失败时留下 conf.d 文件；
+  `kiro-login` 只识别 `--host` 参数。
 - 源码准备失败时控制台只显示 `Worker 操作未完成 (ValueError)`：`octopus/worker.py:488` 只透传 `security.Error`，`octopus/sources.py` 的提示均为 `ValueError`（Connector 设计 §7 P1）。
 - 向导：导入 / 推荐后切换到模板时来源提示未更新；切换空间未重置推荐 Worker；推荐轮询遇 403 / 404 不停止；提交瞬间在途轮询可能回写草稿。
 - 原生入口弹窗缺少账户切换保护；`crew_url` 公网来源未规范化 `:443` 写法。
