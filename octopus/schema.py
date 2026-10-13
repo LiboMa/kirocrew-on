@@ -112,6 +112,7 @@ def openapi():
         "/v1/runs/{id}/revisions": {"get": None}, "/v1/runs/{id}/revisions/diff": {"get": None},
         "/v1/runs/{id}/revisions/{version}": {"get": None},
         "/v1/runs/{id}/changes": {"get": None},
+        "/v1/runs/{id}/archive": {"post": "Empty"},
         "/v1/runs/{id}/recover": {"post": "Control"},
         "/v1/runs/{id}/continue": {"post": "Continue"}, "/v1/runs/{id}/assign-worker": {"post": "AssignWorker"},
         **{"/v1/runs/{id}/" + action: {"post": "Control"} for action in ["stop", "close", "reopen", "delete"]},
@@ -151,6 +152,11 @@ def openapi():
                 op["description"] = "Administrator only. Every execution environment with its scope, owner, Team or shared spaces (with names), enabled, active_runs and live health (reachable=false when its Worker does not answer within a few seconds; never fails the listing). No tokens."
             if path.endswith("/crew-entry"):
                 op["description"] = "Execute scope. Opens the existing native parent Session through its authorized Worker. On-demand sensitive login URL; no-store. Does not create, resume, mutate or dispatch a Run. Native login covers the Worker's Gateway boundary, not a single run."
+            if path == "/v1/runs/{id}/archive":
+                op["description"] = ("Read scope. A 10-minute link to download the Session's source as a zip: every file and "
+                                     ".git, without dependency or cache directories, .env files or symlinks (200 MB limit); "
+                                     "OCTOPUS-ARCHIVE.txt inside lists what was left out and how to start the project locally. "
+                                     "Each download re-checks that the link's holder may still read the Session.")
             if path == "/v1/runs/{id}/changes":
                 op["description"] = ("Read scope. The Session's change journal, newest first: every write by a user (console, "
                                      "Coding Agent via MCP, API) or the system (engine, worker receipt, kirocrew planning, "

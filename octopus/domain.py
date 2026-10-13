@@ -778,6 +778,35 @@ class Service:
         self.audit_read(actor, rid, "preview")
         return entry
 
+    def archive_entry(self, actor, rid):
+        """Whether the actor may download the run's source, and whether there is any yet (D36 §4.1)."""
+        with self.db.read() as db:
+            run = run_access(db, actor, rid)
+        require(run["worker_id"] and run["workspace"], "此会话尚未准备源码，没有可下载的内容", 409, "no_archive")
+
+    def archive_source(self, rid, holder):
+        """The Worker serving a download, for the link's holder who must still be allowed to read the run (B6)."""
+        with self.db.read() as db:
+            run = db.execute("SELECT * FROM runs WHERE id=?", (rid,)).fetchone()
+            require(run is not None and run["worker_id"], "下载不可用", 404, "not_found")
+            user = db.execute("SELECT id,username,admin FROM users WHERE id=? AND active=1", (holder,)).fetchone()
+            reader = {"id": holder, "username": user["username"] if user else None, "admin": user["admin"] if user else 0,
+                      "scopes": ["read"] + (["admin"] if user and user["admin"] else [])}
+            try:
+                require(user is not None, "下载不可用", 404, "not_found")
+                run_access(db, reader, rid)
+            except Error:
+                raise Error(403, "archive_forbidden", "下载权限已撤销，请在控制台重新下载") from None
+            config = json.loads(db.execute("SELECT config FROM workers WHERE id=?", (run["worker_id"],)).fetchone()["config"])
+            owner = db.execute("SELECT username FROM users WHERE id=?", (run["owner_id"],)).fetchone()
+            name = json.loads(run["snapshot"]).get("name") or run["input"][:40]
+        return config, {"name": name, "creator": owner["username"] if owner else ""}, reader
+
+    def record_download(self, rid, reader, client, size):
+        with self.db.transaction() as db:
+            journal.record(db, rid, "run.downloaded", journal.person({**reader, "client": client}), bytes=size)
+        self.audit_read(reader, rid, "download")
+
     def preview_file(self, rid, relative, holder):
         """One project file of a run for the holder of a valid preview ticket (checked by the server), who must still
         be allowed to read the run: revoked access stops an issued link at once (B6)."""

@@ -12,7 +12,7 @@ import time
 import base64
 import secrets
 import sqlite3
-from urllib.parse import parse_qs, unquote, urlsplit
+from urllib.parse import parse_qs, quote, unquote, urlsplit
 
 from . import __version__
 from .db import dumps, uid
@@ -86,6 +86,22 @@ def preview_run(ticket, key, now=None):
     return parts[0], parts[1]
 
 
+def archive_ticket(rid, user, client, key, now=None):
+    """A download link (D36 §4.1): like a preview ticket, signed for the archive purpose only, and naming the client
+    the link was asked from (for the change journal)."""
+    payload = f"{rid}.{user}.{client}.{int((now or time.time()) + PREVIEW_TTL)}"
+    return f"{payload}.{preview_signature(key, 'archive.' + payload)}"
+
+
+def archive_run(ticket, key, now=None):
+    parts = ticket.split(".")
+    require(len(parts) == 5 and parts[3].isdigit() and hmac.compare_digest(
+        parts[4].encode(), preview_signature(key, "archive." + ".".join(parts[:4])).encode()),
+        "下载链接无效，请在控制台重新下载", 403, "archive_invalid")
+    require(int(parts[3]) >= (now or time.time()), "下载链接已过期（10 分钟有效），请重新下载", 403, "archive_expired")
+    return parts[0], parts[1], parts[2]
+
+
 READ_POSTS = {"/v1/workflows/resolve", "/v1/workflows/parse"}
 
 
@@ -98,7 +114,9 @@ def required_scope(method, path):
             (path == "/v1/teams" and method == "POST") or \
             (segments[:2] == ["v1", "teams"] and len(segments) == 4 and segments[3] in {"archive", "environment"}):
         return "admin"
-    if method == "GET" or path in READ_POSTS or path.endswith("/preview"):
+    # A download is a read; /v1/workflows/<id>/archive (archiving a workflow) is not, hence no endswith() here.
+    if method == "GET" or path in READ_POSTS or path.endswith("/preview") or \
+            (segments[:2] == ["v1", "runs"] and len(segments) == 4 and segments[3] == "archive"):
         return "read"
     return "execute" if path.startswith(("/v1/runs", "/v1/designs")) else "manage"
 
@@ -175,6 +193,34 @@ def server(database, port=8918, host="127.0.0.1", allowed_hosts=(), origin_secre
             self.end_headers()
             self.wfile.write(data)
 
+        def stream_archive(self, rid, config, meta, reader, client):
+            """Relay the Worker's zip as it arrives (chunked, nothing on disk). Only a stream that reached the end of the
+            archive is completed and recorded; otherwise the connection is cut so no partial file looks finished."""
+            from .transport import worker_stream
+            response = worker_stream(config, "/archive", {"run_id": rid, "meta": meta})
+            self.send_response(200)
+            self.send_header("Content-Type", "application/zip")
+            self.send_header("Content-Disposition", f'attachment; filename="{rid}.zip"; '
+                                                    f"filename*=UTF-8''{quote((meta.get('name') or rid) + '.zip')}")
+            self.send_header("Cache-Control", "no-store")
+            self.send_header("X-Content-Type-Options", "nosniff")
+            self.send_header("Transfer-Encoding", "chunked")
+            self.end_headers()
+            total, tail = 0, b""
+            try:
+                with response:
+                    while chunk := response.read(65536):
+                        self.wfile.write(b"%X\r\n%s\r\n" % (len(chunk), chunk))
+                        total, tail = total + len(chunk), (tail + chunk)[-65558:]
+            except OSError:
+                self.close_connection = True
+                return
+            if b"PK\x05\x06" not in tail:   # the Worker stopped before the end of central directory
+                self.close_connection = True
+                return
+            self.wfile.write(b"0\r\n\r\n")
+            service.record_download(rid, reader, client, total)
+
         def identity(self):
             header = self.headers.get("Authorization", "")
             with database.read() as db:
@@ -242,6 +288,12 @@ def server(database, port=8918, host="127.0.0.1", allowed_hosts=(), origin_secre
                         ".ttf": "font/ttf", ".glb": "model/gltf-binary", ".gltf": "model/gltf+json",
                     }.get(Path(relative).suffix.lower(), "application/octet-stream")
                     return self.respond_preview(data, kind)
+                if method == "GET" and path.startswith("/archive/"):
+                    ticket, _, name = path[len("/archive/"):].partition("/")
+                    rid, holder, client = archive_run(ticket, signing_key)
+                    require(name == rid + ".zip", "下载链接无效", 404, "not_found")
+                    config, meta, reader = service.archive_source(rid, holder)
+                    return self.stream_archive(rid, config, meta, reader, client)
                 if method == "GET" and path == "/health":
                     return self.respond({"version": __version__, "service": "octopus-team", "stage": "MVP development"})
                 if method == "GET" and path == "/v1/openapi.json":
@@ -329,6 +381,11 @@ def server(database, port=8918, host="127.0.0.1", allowed_hosts=(), origin_secre
                 if path == "/v1/workflows/resolve":
                     require(method == "POST", "Method not allowed", 405)
                     return self.respond(service.resolve_workflow(actor, body))
+                if len(segments) == 4 and segments[:2] == ["v1", "runs"] and segments[3] == "archive":
+                    require(method == "POST", "Method not allowed", 405)
+                    service.archive_entry(actor, segments[2])
+                    ticket = archive_ticket(segments[2], actor["id"], actor.get("client", "api"), signing_key)
+                    return self.respond({"url": f"/archive/{ticket}/{segments[2]}.zip", "expires_in": PREVIEW_TTL})
                 if len(segments) == 4 and segments[:2] == ["v1", "runs"] and segments[3] == "preview" and method == "POST":
                     entry = service.preview_entry(actor, segments[2])
                     return self.respond({"url": "/preview/" + preview_ticket(segments[2], actor["id"], signing_key) + "/" + entry,
