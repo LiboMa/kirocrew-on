@@ -1,6 +1,7 @@
 """Standard newline-delimited stdio MCP adapter for the SAME authenticated API."""
 import json
 import sys
+from urllib.parse import urlencode
 
 from . import __version__
 from .client import ApiError
@@ -93,6 +94,68 @@ TOOLS = [
 ]
 
 
+READ = {"readOnlyHint": True}
+ADMIN = {"octopus_admin_users", "octopus_admin_teams", "octopus_admin_environments"}
+TOOLS += [
+    {"name": "octopus_me", "description": "当前身份：用户名、是否管理员、Token scope 与客户端（elevated 为 true 时可用管理员工具），"
+                                         "以及所在的 Team、角色与各 Team 的执行环境。",
+     "inputSchema": object_schema(), "annotations": READ},
+    {"name": "octopus_environments",
+     "description": "某个空间可用的执行环境（不传 team_id 为个人空间）。会话处于 waiting_worker 时，从这里取 worker_id 交给 octopus_assign_worker。",
+     "inputSchema": object_schema({"team_id": STRING}), "annotations": READ},
+    {"name": "octopus_assign_worker", "description": "为处于 waiting_worker 的 Session 分配执行环境（worker_id 取自 octopus_environments）；"
+                                                    "换到另一个执行环境时工作区重新准备，已完成的任务保留。",
+     "inputSchema": object_schema({"run_id": STRING, "request_id": STRING, "expected_version": {"type": "integer"},
+                                   "worker_id": STRING}, ["run_id", "request_id", "expected_version", "worker_id"])},
+    {"name": "octopus_changes",
+     "description": "Session 的变更记录（新的在前）：每次写入的操作者（用户与客户端，或 Engine / Worker / KiroCrew / 协调者）、"
+                    "字段前后值（长文本只有字符数）与原因。who=user 只看人的操作，kind 按动作前缀筛选（如 command.）。",
+     "inputSchema": object_schema({"run_id": STRING, "who": {"type": "string", "enum": ["user", "system"]}, "kind": STRING,
+                                   "before": {"type": "integer", "minimum": 1}, "limit": {"type": "integer", "minimum": 1, "maximum": 200}},
+                                  ["run_id"]), "annotations": READ},
+    {"name": "octopus_admin_users",
+     "description": "平台管理员（需含 admin 的 Token）：列出用户，或按用户名停用 / 恢复、设为 / 取消管理员。"
+                    "不创建用户、不设置密码（请在控制台「用户管理」操作）；停用会立即吊销该用户的全部 Token。",
+     "inputSchema": object_schema({"action": {"type": "string", "enum": ["list", "deactivate", "activate", "promote", "demote"]},
+                                   "username": STRING}, ["action"]), "annotations": {"destructiveHint": True}},
+    {"name": "octopus_admin_teams",
+     "description": "平台管理员（需含 admin 的 Token）：列出、创建（name、owner 用户名、worker_id）、改名、归档 / 恢复 Team，"
+                    "增改 / 移除成员（username、role），更换执行环境（worker_id；旧会话下次派发时进入等待）。",
+     "inputSchema": object_schema({"action": {"type": "string", "enum": ["list", "create", "rename", "archive", "restore",
+                                                                         "set_member", "remove_member", "environment"]},
+                                   "team_id": STRING, "name": STRING, "owner": STRING, "worker_id": STRING, "username": STRING,
+                                   "role": {"type": "string", "enum": ["owner", "member"]}}, ["action"]),
+     "annotations": {"destructiveHint": True}},
+    {"name": "octopus_admin_environments",
+     "description": "平台管理员（需含 admin 的 Token）：列出执行环境（含实时健康），设为共享（confirm=true）、增减服务空间"
+                    "（team_id 或 user_id）、改回专属、启用 / 停用、改名、退役。",
+     "inputSchema": object_schema({"action": {"type": "string", "enum": ["list", "share", "add_space", "remove_space", "dedicate",
+                                                                         "enable", "disable", "rename", "retire"]},
+                                   "worker_id": STRING, "team_id": STRING, "user_id": STRING, "name": STRING,
+                                   "confirm": {"type": "boolean"}}, ["action"]),
+     "annotations": {"destructiveHint": True}},
+]
+
+
+def tools_for(client):
+    """The tools this token can use: administrator tools only with the admin scope (A3); all when that cannot be told."""
+    try:
+        scopes = client.request("GET", "/v1/me").get("scopes", [])
+    except (RuntimeError, ValueError, OSError):
+        return TOOLS
+    return [tool for tool in TOOLS if tool["name"] not in ADMIN or "admin" in scopes]
+
+
+def usable(worker, me, team):
+    """Whether a Worker serves the space (a Team, or the caller's personal space), as the platform chooses it."""
+    if not worker.get("enabled") or worker.get("scope") == "spare":
+        return False
+    if worker.get("scope") == "shared":
+        return any((space.get("team_id") == team) if team else (space.get("user_id") == me["id"])
+                   for space in worker.get("spaces") or [])
+    return worker.get("team_id") == team if team else worker.get("owner_id") == me["id"]
+
+
 SESSION_FIELDS = ("id", "name", "status", "desired", "lifecycle", "version", "error", "attention", "progress", "input",
                   "planning", "team_id", "worker_id", "workflow_name", "match_mode", "created", "updated", "kept")
 
@@ -165,16 +228,27 @@ def call(client, name, args):
         rid = args["run_id"]
         session, events = client.request("GET", "/v1/runs/" + rid), client.request("GET", "/v1/runs/" + rid + "/events")
         return {"session": session, "events": events} if args.get("detail") else compact_status(session, events)
-    if name == "octopus_start":
-        if not args.get("worker_id"):
-            # Coding agents rarely know Worker ids: use the space's only enabled Worker, if there is exactly one.
-            me = client.request("GET", "/v1/me")
-            team = args.get("team_id")
-            usable = [w for w in client.request("GET", "/v1/workers")
-                      if w.get("enabled") and (w.get("team_id") == team if team else w.get("owner_id") == me["id"])]
-            if len(usable) == 1:
-                args["worker_id"] = usable[0]["id"]
+    if name == "octopus_start":   # the platform chooses the space's Worker (D28); waiting_worker → octopus_assign_worker
         return client.request("POST", "/v1/runs", args)
+    if name == "octopus_me":
+        me, teams = client.request("GET", "/v1/me"), client.request("GET", "/v1/teams")
+        return {**{key: me.get(key) for key in ("id", "username", "scopes", "client")}, "admin": bool(me.get("admin")),
+                "elevated": bool(me.get("admin")) and "admin" in me.get("scopes", []),
+                "teams": [{"id": t["id"], "name": t["name"], "role": t["role"], "archived": bool(t.get("archived")),
+                           "environment": t.get("environment")} for t in teams if t.get("role")]}
+    if name == "octopus_environments":
+        me, team = client.request("GET", "/v1/me"), args.get("team_id")
+        return {"space": team or "personal", "environments": [
+            {"id": w["id"], "name": w["name"], "scope": w.get("scope"), "isolation": (w.get("capabilities") or {}).get("isolation"),
+             "models": (w.get("capabilities") or {}).get("models", {})}
+            for w in client.request("GET", "/v1/workers") if usable(w, me, team)]}
+    if name == "octopus_assign_worker":
+        rid = args.pop("run_id")
+        return client.request("POST", "/v1/runs/" + rid + "/assign-worker", args)
+    if name == "octopus_changes":
+        query = [(key, args[key]) for key in ("who", "kind", "before") if args.get(key) not in (None, "")]
+        query.append(("limit", int(args.get("limit", 50))))
+        return {"changes": client.request("GET", "/v1/runs/" + args["run_id"] + "/changes?" + urlencode(query))}
     if name in {"octopus_continue", "octopus_recover", "octopus_control"}:
         rid = args.pop("run_id")
         action = args.pop("action") if name == "octopus_control" else name.removeprefix("octopus_")
@@ -191,6 +265,7 @@ def call(client, name, args):
 
 
 def serve(client, input_stream=sys.stdin, output_stream=sys.stdout):
+    listed = []
     for line in input_stream:
         if len(line) > 1_000_000:
             continue
@@ -205,7 +280,9 @@ def serve(client, input_stream=sys.stdin, output_stream=sys.stdout):
             elif method == "ping":
                 result = {}
             elif method == "tools/list":
-                result = {"tools": TOOLS}
+                if not listed:
+                    listed.append(tools_for(client))   # one /v1/me per MCP session
+                result = {"tools": listed[0]}
             elif method == "tools/call":
                 try:
                     value = call(client, request["params"]["name"], request["params"].get("arguments", {}))
