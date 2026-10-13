@@ -1,0 +1,91 @@
+"""The remote preview's platform side (D36 §5.2): how a browser on the preview domain reaches a Session's app.
+
+- ``POST /v1/runs/<id>/app/open`` gives an opening link ``<preview_url>/_kirocrew/open/<ticket>``: ten minutes, single
+  use, signed for this purpose only. Following it clears the preview domain's earlier data and sets a cookie for that
+  domain alone (HttpOnly, eight hours); one browser previews one Session at a time.
+- The preview domain's nginx asks ``/v1/preview-auth`` before every request (auth_request): the cookie's holder must
+  still be allowed to read the Session and its app must run; the answer says where the app is.
+- On the platform host the app is reached over loopback; on a Worker host through that host's nginx preview port (TLS
+  with the private CA), with a check header derived from the Worker's token, so only the platform reaches it.
+"""
+import base64
+import hashlib
+import hmac
+import secrets
+import time
+from urllib.parse import urlsplit
+
+from .security import Error, require
+
+TICKET_TTL = 600
+COOKIE = "__Host-kirocrew_preview"
+COOKIE_TTL = 8 * 3600
+IDLE = 1800          # a preview nobody opened for 30 minutes is stopped
+TOUCH = 60           # the last access is written at most once a minute
+LIMIT = 3            # per execution environment, as the Worker enforces too
+LIVE = ("installing", "starting", "running")
+LOOPBACK = frozenset({"127.0.0.1", "localhost", "::1"})
+
+
+def _sign(key, payload):
+    return base64.urlsafe_b64encode(hmac.new(key, payload.encode(), hashlib.sha256).digest()[:18]).decode()
+
+
+def verify_value(token):
+    """The check header for a Worker host's preview port; its installer renders the same value into nginx."""
+    return hmac.new(token.encode(), b"kirocrew-preview", hashlib.sha256).hexdigest()
+
+
+def upstream(config, port, via):
+    """Where nginx sends the app's requests: loopback for a Worker on this host, else the Worker host's preview port."""
+    host = urlsplit(config["url"]).hostname
+    if host in LOOPBACK:
+        return {"url": f"http://127.0.0.1:{port}", "port": port}
+    require(via and via.get("port") and via.get("name"), "此 Worker 主机尚未配置预览端口：执行 deploy.sh worker-host push <名称>",
+            409, "app_unreachable")
+    return {"url": f"https://{host}:{int(via['port'])}", "name": via["name"], "verify": verify_value(config["token"]),
+            "port": port}
+
+
+def open_ticket(rid, user, key, now=None):
+    payload = f"{rid}.{user}.{secrets.token_hex(8)}.{int((now or time.time()) + TICKET_TTL)}"
+    return f"{payload}.{_sign(key, 'app.' + payload)}"
+
+
+def open_run(ticket, key, now=None):
+    """(run, user, nonce) an opening link grants; 403 when forged, of another purpose, or late."""
+    parts = ticket.split(".")
+    require(len(parts) == 5 and parts[3].isdigit() and hmac.compare_digest(
+        parts[4].encode(), _sign(key, "app." + ".".join(parts[:4])).encode()),
+        "预览链接无效，请在控制台重新打开远程预览", 403, "app_link_invalid")
+    require(int(parts[3]) >= (now or time.time()), "预览链接已过期（10 分钟有效），请在控制台重新打开远程预览", 403,
+            "app_link_expired")
+    return parts[0], parts[1], parts[2]
+
+
+def cookie(rid, user, key, now=None):
+    payload = f"{rid}.{user}.{int((now or time.time()) + COOKIE_TTL)}"
+    return f"{payload}.{_sign(key, 'app-cookie.' + payload)}"
+
+
+def cookie_run(value, key, now=None):
+    """(run, user) of the preview domain's cookie; 401 without a valid, current one."""
+    parts = (value or "").split(".")
+    require(len(parts) == 4 and parts[2].isdigit() and hmac.compare_digest(
+        parts[3].encode(), _sign(key, "app-cookie." + ".".join(parts[:3])).encode())
+        and int(parts[2]) >= (now or time.time()), "远程预览未打开或已过期", 401, "app_cookie_invalid")
+    return parts[0], parts[1]
+
+
+def cookie_value(header):
+    """Our cookie from a Cookie header, ignoring the app's own cookies."""
+    for part in (header or "").split(";"):
+        name, _, value = part.strip().partition("=")
+        if name == COOKIE:
+            return value
+    return ""
+
+
+def entry_path(path):
+    """Where the browser goes after opening: the app's ready path, never another site (``//host``)."""
+    return path if isinstance(path, str) and path.startswith("/") and not path.startswith(("//", "/\\")) else "/"

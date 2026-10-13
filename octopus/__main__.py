@@ -130,9 +130,18 @@ def main(argv=None):
             print(f"警告：worker_ca_file {ca} 不存在；HTTPS Worker 只按系统证书库校验", file=sys.stderr)
             ca = None
         transport.configure(ca)
-        httpd = server(db, args.port, args.host, allowed_hosts=settings.allowed_hosts, origin_secret=secret)
+        httpd = server(db, args.port, args.host, allowed_hosts=settings.allowed_hosts, origin_secret=secret,
+                       preview_url=settings.preview_url)
         signal.signal(signal.SIGTERM, lambda *_: threading.Thread(target=httpd.shutdown, daemon=True).start())
         engine.start()
+
+        def sweep():   # remote previews nobody used for 30 minutes, or whose Session closed (D36 §5.1)
+            while not engine.stopping.wait(60):
+                try:
+                    httpd.service.sweep_apps()
+                except Exception as exc:
+                    print(f"KiroCrew ON API: 远程预览回收失败（{type(exc).__name__}）", file=sys.stderr, flush=True)
+        threading.Thread(target=sweep, daemon=True, name="octopus-app-sweep").start()
         print(f"KiroCrew ON API: http://{args.host}:{httpd.server_address[1]}", flush=True)
         try:
             httpd.serve_forever()

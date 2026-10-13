@@ -2,6 +2,7 @@
 from concurrent.futures import ThreadPoolExecutor
 import hashlib
 import json
+import logging
 import os
 import re
 import socket
@@ -10,7 +11,7 @@ import threading
 import time
 import unicodedata
 
-from . import journal
+from . import journal, remote_preview
 from .db import dumps, uid
 from .security import Error, check_password, elevated, password_hash, require
 
@@ -259,6 +260,7 @@ def _probe(config):
 class Service:
     def __init__(self, database):
         self.db = database
+        self._opened, self._opened_lock = {}, threading.Lock()   # remote preview opening links already followed
 
     def teams(self, actor):
         """The actor's Teams; an admin sees every Team (role None where not a member). Each carries its environment."""
@@ -816,6 +818,179 @@ class Service:
             journal.record(db, rid, "run.downloaded", journal.person({**reader, "client": client}), bytes=size)
         self.audit_read(reader, rid, "download")
 
+    # --- remote preview (D36 §5): the platform's record of each Session's app; the Worker runs it (octopus/apps.py) ---
+
+    @staticmethod
+    def _app_call(config, rid, action):
+        from .transport import worker_request
+        try:
+            return worker_request(config, "/app", {"run_id": rid, "action": action})
+        except Error as exc:
+            if exc.status == 404 and exc.code == "not_found":
+                raise Error(409, "app_unsupported", "执行环境的 Worker 尚未升级，暂不支持远程预览") from None
+            raise
+
+    def _app_sync(self, rid, row, answer):
+        """Bring the record in line with what the Worker reports (ready, failed, or gone after a restart)."""
+        status = answer.get("status")
+        if not row or row["status"] not in remote_preview.LIVE or status == row["status"] or status not in {
+                "running", "failed", "stopped", "starting"}:
+            return row
+        with self.db.transaction() as db:
+            db.execute("UPDATE apps SET status=?,error=?,stopped=? WHERE run_id=?",
+                       (status, answer.get("error"), time.time() if status in {"failed", "stopped"} else None, rid))
+            if status in {"failed", "stopped"}:
+                journal.record(db, rid, "app.stopped", journal.WORKER, reason="worker", status=status,
+                               error=answer.get("error"))
+            return db.execute("SELECT * FROM apps WHERE run_id=?", (rid,)).fetchone()
+
+    def app(self, actor, rid):
+        """The Session's remote preview as the Worker reports it, with the last lines of its log."""
+        with self.db.read() as db:
+            run = run_access(db, actor, rid)
+            row = db.execute("SELECT * FROM apps WHERE run_id=?", (rid,)).fetchone()
+            config = self._worker_config(db, run["worker_id"])
+            users = dict(db.execute("SELECT id,username FROM users").fetchall())
+        view = {"status": "stopped", "port": None, "error": None, "log": [], "started": None, "started_by": None,
+                "last_access": None, "idle_stop_at": None, "openable": False}
+        if config:
+            try:
+                answer = self._app_call(config, rid, "status")
+                row = self._app_sync(rid, row, answer)
+                view["log"] = answer.get("log") or []
+            except Error as exc:
+                if exc.code == "app_unsupported":
+                    return {**view, "status": "unsupported", "error": str(exc)}
+                view["worker_error"] = str(exc)
+        if row:
+            view.update(status=row["status"], port=row["port"], error=row["error"], started=row["started"],
+                        last_access=row["last_access"], openable=row["status"] == "running",
+                        started_by={"id": row["started_by"], "username": users.get(row["started_by"])})
+            if row["status"] in remote_preview.LIVE:
+                view["idle_stop_at"] = (row["last_access"] or row["started"]) + remote_preview.IDLE
+        return view
+
+    @staticmethod
+    def _worker_config(db, wid):
+        row = db.execute("SELECT config FROM workers WHERE id=?", (wid,)).fetchone() if wid else None
+        return json.loads(row["config"]) if row else None
+
+    def app_start(self, actor, rid):
+        with self.db.read() as db:
+            run = run_access(db, actor, rid)
+            require(run_permissions(db, actor, run)["resume"], "Team 已归档，不能启动预览", 409, "team_archived")
+            require(run["lifecycle"] == "open", "会话已关闭，请先重新打开", 409, "invalid_state")
+            require(run["status"] in SETTLED, "会话正在执行任务，完成后再启动预览", 409, "app_busy")
+            require(run["worker_id"] and run["workspace"], "此会话尚未准备源码，无法启动预览", 409, "app_unavailable")
+            row = db.execute("SELECT * FROM apps WHERE run_id=?", (rid,)).fetchone()
+            config = self._worker_config(db, run["worker_id"])
+        probe = self._app_call(config, rid, "status")
+        row = self._app_sync(rid, row, probe)
+        if row and row["status"] in remote_preview.LIVE:
+            return self.app(actor, rid)
+        remote_preview.upstream(config, 0, probe.get("via"))   # a Worker host without a preview port: refuse first
+        with self.db.read() as db:
+            live = db.execute(f"SELECT COUNT(*) FROM apps WHERE worker_id=? AND run_id!=? AND status IN "
+                              f"({','.join('?' * len(remote_preview.LIVE))})",
+                              (run["worker_id"], rid, *remote_preview.LIVE)).fetchone()[0]
+        require(live < remote_preview.LIMIT, f"此执行环境已有 {remote_preview.LIMIT} 个远程预览在运行，请先停止其中一个",
+                409, "app_limit")
+        answer = self._app_call(config, rid, "start")
+        target = remote_preview.upstream(config, answer["port"], answer.get("via"))
+        now = time.time()
+        with self.db.transaction() as db:
+            db.execute("INSERT INTO apps(run_id,worker_id,status,port,path,upstream,error,started_by,started,last_access,stopped)"
+                       " VALUES(?,?,?,?,?,?,NULL,?,?,?,NULL) ON CONFLICT(run_id) DO UPDATE SET worker_id=excluded.worker_id,"
+                       " status=excluded.status,port=excluded.port,path=excluded.path,upstream=excluded.upstream,error=NULL,"
+                       " started_by=excluded.started_by,started=excluded.started,last_access=excluded.last_access,stopped=NULL",
+                       (rid, run["worker_id"], answer["status"], answer["port"], remote_preview.entry_path(answer.get("path")),
+                        dumps(target), actor["id"], now, now))
+            journal.record(db, rid, "app.started", journal.person(actor), port=answer["port"], source=answer.get("source"))
+        return self.app(actor, rid)
+
+    def app_stop(self, actor, rid):
+        with self.db.read() as db:
+            run = run_access(db, actor, rid)
+            config = self._worker_config(db, run["worker_id"])
+        if config:
+            self._app_call(config, rid, "stop")
+        self._app_stopped(rid, journal.person(actor), "user")
+        return {"status": "stopped"}
+
+    def _app_stopped(self, rid, who, reason):
+        with self.db.transaction() as db:
+            row = db.execute("SELECT status FROM apps WHERE run_id=?", (rid,)).fetchone()
+            if row and row["status"] in remote_preview.LIVE:
+                db.execute("UPDATE apps SET status='stopped',stopped=? WHERE run_id=?", (time.time(), rid))
+                journal.record(db, rid, "app.stopped", who, reason=reason)
+
+    def _stop_app(self, rid, reason):
+        """Best effort, for the platform's own reasons (the Session closed or continues, nobody used it): a Worker that
+        cannot be reached keeps the record live, and the next sweep tries again."""
+        with self.db.read() as db:
+            row = db.execute("SELECT a.status,w.config FROM apps a JOIN workers w ON w.id=a.worker_id WHERE a.run_id=?",
+                             (rid,)).fetchone()
+        if not row or row["status"] not in remote_preview.LIVE:
+            return
+        try:
+            self._app_call(json.loads(row["config"]), rid, "stop")
+        except Error as exc:
+            logging.warning("Remote preview of %s not stopped (%s)", rid, exc.code)
+            return
+        self._app_stopped(rid, journal.ENGINE, reason)
+
+    def app_ready(self, actor, rid):
+        """Before an opening link is issued: the preview must run (refreshed from the Worker)."""
+        status = self.app(actor, rid)["status"]
+        require(status == "running", "预览尚未就绪，请稍后再打开" if status in {"installing", "starting"}
+                else "远程预览未运行，请先启动", 409, "app_not_ready")
+
+    def app_auth(self, rid, holder, now=None):
+        """For auth_request on every preview request: the holder may still read the Session and its app runs."""
+        now = now or time.time()
+        with self.db.read() as db:
+            user = db.execute("SELECT id,admin FROM users WHERE id=? AND active=1", (holder,)).fetchone()
+            try:
+                require(user is not None, "预览不可用", 404, "not_found")
+                run_access(db, {"id": user["id"], "admin": user["admin"],
+                                "scopes": ["read"] + (["admin"] if user["admin"] else [])}, rid)
+            except Error:
+                raise Error(403, "app_forbidden", "无权查看此会话的远程预览") from None
+            row = db.execute("SELECT * FROM apps WHERE run_id=?", (rid,)).fetchone()
+        require(row is not None and row["status"] == "running", "远程预览已停止", 403, "app_stopped")
+        if now - (row["last_access"] or 0) >= remote_preview.TOUCH:
+            try:   # best effort: a busy database must not fail the request it rides on
+                with self.db.transaction() as db:
+                    db.execute("UPDATE apps SET last_access=? WHERE run_id=?", (now, rid))
+            except sqlite3.OperationalError:
+                pass
+        return json.loads(row["upstream"])
+
+    def app_enter(self, rid, holder, nonce, now=None):
+        """Follow an opening link once: checked like every request, then its nonce is spent until it expires."""
+        now = now or time.time()
+        self.app_auth(rid, holder, now)
+        with self._opened_lock:
+            for used, expires in list(self._opened.items()):
+                if expires < now:
+                    del self._opened[used]
+            require(nonce not in self._opened, "此预览链接已使用过，请在控制台重新打开远程预览", 403, "app_link_used")
+            self._opened[nonce] = now + remote_preview.TICKET_TTL
+        with self.db.read() as db:
+            return remote_preview.entry_path(db.execute("SELECT path FROM apps WHERE run_id=?", (rid,)).fetchone()["path"])
+
+    def sweep_apps(self, now=None):
+        """Stop previews nobody used for 30 minutes and those of Sessions no longer open (every minute, from serve)."""
+        now = now or time.time()
+        with self.db.read() as db:
+            rows = db.execute(f"SELECT a.run_id,a.started,a.last_access,r.lifecycle FROM apps a JOIN runs r ON r.id=a.run_id "
+                              f"WHERE a.status IN ({','.join('?' * len(remote_preview.LIVE))})", remote_preview.LIVE).fetchall()
+        for row in rows:
+            if (row["last_access"] or row["started"] or 0) < now - remote_preview.IDLE:
+                self._stop_app(row["run_id"], "idle")
+            elif row["lifecycle"] != "open":
+                self._stop_app(row["run_id"], "session")
+
     def preview_file(self, rid, relative, holder):
         """One project file of a run for the holder of a valid preview ticket (checked by the server), who must still
         be allowed to read the run: revoked access stops an issued link at once (B6)."""
@@ -1079,7 +1254,11 @@ class Service:
                 if oversight:
                     audit(db, actor, "run." + action, "run", rid, {"version": version})
                 return {"id": rid, "session_id": rid, "version": version, "command": action, "status": "accepted"}
-            return self._command(db, actor, action, rid, body, execute)
+            result = self._command(db, actor, action, rid, body, execute)
+        if action in {"continue", "recover", "close", "delete"}:
+            # The agents work in the same project again, or the Session ends: its remote preview stops (D36 §5.1).
+            self._stop_app(rid, "session")
+        return result
 
     # --- users (spec §4): only an elevated admin manages others; everyone changes their own password ---
 

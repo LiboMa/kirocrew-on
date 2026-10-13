@@ -23,7 +23,7 @@ INTS = {"api_port": (1, 65535), "worker_port": (1, 65535), "gateway_port": (1, 6
         "preview_tls_port": (1, 65535)}
 FLOATS = {"retry_unavailable": (0.0, 600.0), "shutdown_grace": (0.0, 300.0)}
 STRINGS = {"api_host", "worker_host", "public_url", "crew_url", "worker_isolation", "approval_mode", "crew_entry_ttl",
-           "preview_tls_name"}
+           "preview_tls_name", "preview_url"}
 APPROVAL = ("", "auto", "interactive")
 # Lifetime of the native browser login minted for "open in KiroCrew": 1–480 minutes or 1–8 hours (K03).
 ENTRY_TTL = re.compile(r"(?:[1-9]|[1-9][0-9]|[1-3][0-9]{2}|4[0-7][0-9]|480)m|[1-8]h")
@@ -48,6 +48,8 @@ class Settings:
     api_port: int = 8918
     allowed_hosts: tuple[str, ...] = ()
     public_url: str = ""
+    # The remote preview's own distribution (D36 §5.2), e.g. https://dxxxx.cloudfront.net; empty: no remote preview.
+    preview_url: str = ""
     engine_workers: int = 4
     retry_unavailable: float = 2.0
     shutdown_grace: float = 30.0
@@ -135,6 +137,8 @@ def _layer(values, base):
                 raise ConfigError("approval_mode 只能是 auto 或 interactive（留空表示不指定）")
             if key == "crew_entry_ttl" and not ENTRY_TTL.fullmatch(value):
                 raise ConfigError("crew_entry_ttl 只能是 1–480m 或 1–8h")
+            if key == "preview_url" and value and not re.fullmatch(r"https?://[A-Za-z0-9.\-]+(:\d{1,5})?/?", value):
+                raise ConfigError("preview_url 只能是 https://<域名>[:端口]")
             result[key] = value
     return result
 

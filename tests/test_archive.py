@@ -403,9 +403,11 @@ class PlatformArchiveTests(AccessCase):
 
     def test_a_failed_record_does_not_corrupt_a_finished_download(self):
         with self.platform() as base, patch("octopus.domain.Service.record_download",
-                                            side_effect=sqlite3.OperationalError("database is locked")):
+                                            side_effect=sqlite3.OperationalError("database is locked")), \
+                self.assertLogs(level="ERROR") as logged:
             url = self.post(base, self.tokens["bob"])[1]["url"]
             head, _, body = self.raw_get(base, url)
+        self.assertIn("not recorded (OperationalError)", logged.output[0])
         self.assertIn(b" 200 ", head)
         self.assertTrue(body.endswith(b"0\r\n\r\n"))
         self.assertNotIn(b"HTTP/1.", body)

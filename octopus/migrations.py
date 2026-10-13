@@ -99,8 +99,18 @@ ALTER TABLE workers ADD COLUMN retired INTEGER NOT NULL DEFAULT 0;
 ALTER TABLE workers ADD COLUMN last_team TEXT REFERENCES teams(id);
 """
 
+# Remote preview (D36 §5): the app each Session runs in its execution environment, how the platform reaches it, and
+# the last access its idle stop counts from. The Worker owns the processes; this is the platform's record of them.
+APPS = """
+CREATE TABLE IF NOT EXISTS apps(
+ run_id TEXT PRIMARY KEY REFERENCES runs(id), worker_id TEXT NOT NULL REFERENCES workers(id), status TEXT NOT NULL,
+ port INTEGER, path TEXT NOT NULL DEFAULT '/', upstream TEXT NOT NULL DEFAULT '{}', error TEXT,
+ started_by TEXT REFERENCES users(id), started REAL, last_access REAL, stopped REAL);
+CREATE INDEX IF NOT EXISTS apps_worker ON apps(worker_id,status);
+"""
+
 MIGRATIONS = [(1, "baseline", BASELINE), (2, "environments", ENVIRONMENTS), (3, "access", ACCESS),
-              (4, "teams_workers", TEAMS_WORKERS)]
+              (4, "teams_workers", TEAMS_WORKERS), (5, "apps", APPS)]
 
 
 def _statements(script):

@@ -5,6 +5,7 @@ import json
 import logging
 import hashlib
 import hmac
+import html
 import os
 import re
 from pathlib import Path
@@ -17,7 +18,7 @@ import sqlite3
 import struct
 from urllib.parse import parse_qs, quote, unquote, urlsplit
 
-from . import __version__
+from . import __version__, remote_preview
 from .db import dumps, uid
 from .domain import Service, audit, name, team_environment
 from .security import Error, authenticate, check_password, create_user, elevated, issue_token, require, scope
@@ -137,7 +138,8 @@ def required_scope(method, path):
         return "admin"
     # A download is a read; /v1/workflows/<id>/archive (archiving a workflow) is not, hence no endswith() here.
     if method == "GET" or path in READ_POSTS or path.endswith("/preview") or \
-            (segments[:2] == ["v1", "runs"] and len(segments) == 4 and segments[3] == "archive"):
+            (segments[:2] == ["v1", "runs"] and len(segments) == 4 and segments[3] == "archive") or \
+            (segments[:2] == ["v1", "runs"] and len(segments) == 5 and segments[3:] == ["app", "open"]):
         return "read"
     return "execute" if path.startswith(("/v1/runs", "/v1/designs")) else "manage"
 
@@ -171,7 +173,13 @@ def console_file(path):
     return (file, TYPES[file.suffix]) if file.is_file() else None
 
 
-def server(database, port=8918, host="127.0.0.1", allowed_hosts=(), origin_secret=None):
+# The preview domain's own pages (D36 §5.2): plain HTML, no script, nothing of the console.
+PREVIEW_PAGE = ("<!doctype html><html lang=\"zh-CN\"><head><meta charset=\"utf-8\"><title>KiroCrew ON 远程预览</title>{head}"
+                "<style>body{{font:15px/1.6 system-ui,sans-serif;max-width:36rem;margin:18vh auto;padding:0 1.5rem;color:#333}}"
+                "</style></head><body><h1 style=\"font-size:1.2rem\">KiroCrew ON 远程预览</h1><p>{text}</p></body></html>")
+
+
+def server(database, port=8918, host="127.0.0.1", allowed_hosts=(), origin_secret=None, preview_url=""):
     if origin_secret is not None and len(origin_secret) < 32:
         # An empty or truncated secret file must fail closed instead of turning origin enforcement off.
         raise ValueError("源站密钥为空或过短（至少 32 个字符）；检查 origin_secret_file")
@@ -199,6 +207,69 @@ def server(database, port=8918, host="127.0.0.1", allowed_hosts=(), origin_secre
                              "object-src 'none'; frame-ancestors 'none'; base-uri 'none'")
             self.end_headers()
             self.wfile.write(data)
+
+        def respond_status(self, status, headers=()):
+            self.send_response(status)
+            for key, value in headers:
+                self.send_header(key, value)
+            self.send_header("Content-Length", "0")
+            self.send_header("Cache-Control", "no-store")
+            self.end_headers()
+
+        def respond_page(self, text, status=200, head="", headers=()):
+            data = PREVIEW_PAGE.format(head=head, text=html.escape(text)).encode()
+            self.send_response(status)
+            for key, value in headers:
+                self.send_header(key, value)
+            self.send_header("Content-Type", "text/html; charset=utf-8")
+            self.send_header("Content-Length", str(len(data)))
+            self.send_header("Cache-Control", "no-store")
+            self.send_header("X-Content-Type-Options", "nosniff")
+            self.send_header("Referrer-Policy", "no-referrer")
+            self.send_header("Content-Security-Policy", "default-src 'none'; style-src 'unsafe-inline'")
+            self.end_headers()
+            self.wfile.write(data)
+
+        def preview_gate(self, path):
+            """The preview domain's nginx (on this host) asking: who may see the app (auth_request), opening links, and
+            the page shown when it may not."""
+            if path == "/v1/preview-auth":
+                try:
+                    rid, holder = remote_preview.cookie_run(remote_preview.cookie_value(self.headers.get("Cookie")),
+                                                            signing_key)
+                    target = service.app_auth(rid, holder)
+                except Error as exc:
+                    return self.respond_status(401 if exc.status == 401 else 403)
+                headers = [("X-Preview-Upstream", target["url"]), ("X-Preview-Port", str(target["port"]))]
+                if target.get("name"):
+                    headers += [("X-Preview-Name", target["name"]), ("X-Preview-Verify", target["verify"])]
+                return self.respond_status(204, headers)
+            try:
+                if path.startswith("/_kirocrew/open/"):
+                    ticket = path[len("/_kirocrew/open/"):]
+                    remote_preview.open_run(ticket, signing_key)   # checked here, spent on the next step
+                    # Another Session's app may have used this domain before: its cookies and storage go first.
+                    target = "/_kirocrew/enter/" + ticket
+                    return self.respond_page("正在打开远程预览…", head=f'<meta http-equiv="refresh" content="0;url={html.escape(target)}">',
+                                             headers=[("Clear-Site-Data", '"cookies", "storage"')])
+                if path.startswith("/_kirocrew/enter/"):
+                    rid, holder, nonce = remote_preview.open_run(path[len("/_kirocrew/enter/"):], signing_key)
+                    entry = service.app_enter(rid, holder, nonce)
+                    value = remote_preview.cookie(rid, holder, signing_key)
+                    self.send_response(302)
+                    self.send_header("Location", entry)
+                    self.send_header("Set-Cookie", f"{remote_preview.COOKIE}={value}; Path=/; Secure; HttpOnly; "
+                                                   f"SameSite=Lax; Max-Age={remote_preview.COOKIE_TTL}")
+                    self.send_header("Content-Length", "0")
+                    self.send_header("Cache-Control", "no-store")
+                    self.end_headers()
+                    return
+                if path == "/_kirocrew/denied":
+                    return self.respond_page("远程预览未打开、已停止，或你无权查看此会话：请回到控制台会话页，点「打开远程预览」。",
+                                             403)
+            except Error as exc:
+                return self.respond_page(str(exc), exc.status if exc.status in (401, 403, 404, 409) else 403)
+            return self.respond_page("页面不存在", 404)
 
         def respond_preview(self, data, kind, status=200):
             # The previewed app runs sandboxed in an opaque origin: it cannot read the console's storage or call its API
@@ -313,6 +384,10 @@ def server(database, port=8918, host="127.0.0.1", allowed_hosts=(), origin_secre
                         ".ttf": "font/ttf", ".glb": "model/gltf-binary", ".gltf": "model/gltf+json",
                     }.get(Path(relative).suffix.lower(), "application/octet-stream")
                     return self.respond_preview(data, kind)
+                if path == "/v1/preview-auth" or path.startswith("/_kirocrew/"):
+                    # Only the preview domain's nginx on this host: through the console's distribution these are absent.
+                    require(method == "GET" and local and not self.origin_verified, "Not found", 404, "not_found")
+                    return self.preview_gate(path)
                 if method == "GET" and path.startswith("/archive/"):
                     ticket, _, filename = path[len("/archive/"):].partition("/")   # not "name": that is the validator
                     rid, holder, client = archive_run(ticket, signing_key)
@@ -406,6 +481,20 @@ def server(database, port=8918, host="127.0.0.1", allowed_hosts=(), origin_secre
                 if path == "/v1/workflows/resolve":
                     require(method == "POST", "Method not allowed", 405)
                     return self.respond(service.resolve_workflow(actor, body))
+                if len(segments) in (4, 5) and segments[:2] == ["v1", "runs"] and segments[3] == "app":
+                    rid = segments[2]
+                    if len(segments) == 4 and method == "GET":
+                        return self.respond(service.app(actor, rid))
+                    if len(segments) == 4 and method == "POST":
+                        require(body.get("action") in {"start", "stop"}, "action 只能是 start 或 stop")
+                        return self.respond(service.app_start(actor, rid) if body["action"] == "start"
+                                            else service.app_stop(actor, rid))
+                    require(segments[4:] == ["open"] and method == "POST", "接口不存在", 404, "not_found")
+                    require(preview_url, "平台尚未配置预览域名（preview_url），远程预览暂不可用", 409, "app_preview_unconfigured")
+                    service.app_ready(actor, rid)
+                    ticket = remote_preview.open_ticket(rid, actor["id"], signing_key)
+                    return self.respond({"url": preview_url.rstrip("/") + "/_kirocrew/open/" + ticket,
+                                         "expires_in": remote_preview.TICKET_TTL})
                 if len(segments) == 4 and segments[:2] == ["v1", "runs"] and segments[3] == "archive":
                     require(method == "POST", "Method not allowed", 405)
                     estimate = service.archive_entry(actor, segments[2])
@@ -679,4 +768,5 @@ def server(database, port=8918, host="127.0.0.1", allowed_hosts=(), origin_secre
     bound = httpd.server_address[1]
     local_hosts.update({f"127.0.0.1:{bound}", f"localhost:{bound}", f"[::1]:{bound}"})
     hosts.update({*local_hosts, *allowed_hosts})
+    httpd.service = service   # serve sweeps idle remote previews with it
     return httpd

@@ -42,6 +42,7 @@ def openapi():
         "Share": obj({"confirm": {"const": True}}, ["confirm"]),
         "Space": obj({"team_id": text, "user_id": text}),
         "Rename": obj({"name": text}, ["name"]),
+        "AppAction": obj({"action": {"type": "string", "enum": ["start", "stop"]}}, ["action"]),
         "TeamArchive": obj({"archived": {"type": "boolean"}}, ["archived"]),
         "TeamEnvironment": obj({"worker_id": text}, ["worker_id"]),
         "Token": obj({"label": text, "ttl": integer, "scopes": {"type": "array", "minItems": 1,
@@ -113,6 +114,7 @@ def openapi():
         "/v1/runs/{id}/revisions/{version}": {"get": None},
         "/v1/runs/{id}/changes": {"get": None},
         "/v1/runs/{id}/archive": {"post": "Empty"},
+        "/v1/runs/{id}/app": {"get": None, "post": "AppAction"}, "/v1/runs/{id}/app/open": {"post": "Empty"},
         "/v1/runs/{id}/recover": {"post": "Control"},
         "/v1/runs/{id}/continue": {"post": "Continue"}, "/v1/runs/{id}/assign-worker": {"post": "AssignWorker"},
         **{"/v1/runs/{id}/" + action: {"post": "Control"} for action in ["stop", "close", "reopen", "delete"]},
@@ -157,6 +159,17 @@ def openapi():
                                      ".git, without dependency or cache directories, .env files or symlinks (200 MB limit); "
                                      "OCTOPUS-ARCHIVE.txt inside lists what was left out and how to start the project locally. "
                                      "Each download re-checks that the link's holder may still read the Session.")
+            if path == "/v1/runs/{id}/app":
+                op["description"] = ({"get": "Read scope. The Session's remote preview: status (stopped / installing / starting / "
+                                             "running / failed / unsupported), port, error, the last 200 log lines, who started it, "
+                                             "last access and when it stops for idleness (30 minutes).",
+                                      "post": "Execute scope. start runs the Session's app in its execution environment "
+                                              "(.octopus/preview.json, or detected from package.json / index.html); at most "
+                                              "3 per environment; refused while the Session runs tasks. stop ends it."}[method])
+            if path == "/v1/runs/{id}/app/open":
+                op["description"] = ("Read scope. A single-use 10-minute link to the preview domain; following it sets an "
+                                     "8-hour cookie for that domain only. Every request is re-checked against the holder's "
+                                     "access to the Session.")
             if path == "/v1/runs/{id}/changes":
                 op["description"] = ("Read scope. The Session's change journal, newest first: every write by a user (console, "
                                      "Coding Agent via MCP, API) or the system (engine, worker receipt, kirocrew planning, "

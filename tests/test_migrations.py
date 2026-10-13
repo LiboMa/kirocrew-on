@@ -100,10 +100,18 @@ class MigrationTests(unittest.TestCase):
             db.execute("INSERT INTO audit(at,actor_id,action,kind,target) VALUES(1,'u1','user.deactivate','user','u2')")
             self.assertEqual(db.execute("SELECT detail FROM audit").fetchone()[0], "{}")
 
+    def test_apps_migration_records_remote_previews(self):
+        self.legacy_database()
+        self.assertEqual(migrations.apply(self.path, backup_dir=self.backups)["to"], LATEST)
+        with sqlite3.connect(self.path) as db:
+            columns = [c[1] for c in db.execute("PRAGMA table_info(apps)")]
+        self.assertEqual(columns, ["run_id", "worker_id", "status", "port", "path", "upstream", "error", "started_by",
+                                   "started", "last_access", "stopped"])
+
     def test_teams_workers_migration_adds_archive_and_retire_columns(self):
         self.legacy_database()
         result = migrations.apply(self.path, backup_dir=self.backups)
-        self.assertEqual(result["to"], 4)
+        self.assertEqual(result["to"], LATEST)
         with sqlite3.connect(self.path) as db:
             self.assertIn("archived", [c[1] for c in db.execute("PRAGMA table_info(teams)")])
             columns = [c[1] for c in db.execute("PRAGMA table_info(workers)")]
