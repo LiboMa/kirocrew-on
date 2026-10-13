@@ -77,6 +77,36 @@ class TransientTests(RuntimeCase):
         self.assertNotIn("transient", attempts[1]["evidence"])
         self.assertEqual((run["status"], run["recovery"]["used"]), ("diagnosing", 1))
 
+    def test_a_fresh_attempt_after_continue_is_retried_again(self):
+        rid = self.session()
+        self.natives = [CANCELLED]
+        self.tick(3)                                    # prepare, dispatch, inspect: cancelled → automatic retry queued
+        with self.db.transaction() as db:               # the user stops before the retry is dispatched
+            db.execute("UPDATE runs SET status='stopped',desired='active' WHERE id=?", (rid,))
+        version = self.service.run(self.c, rid)["version"]
+        self.service.operate(self.c, rid, "continue", {"request_id": "continue-000009", "expected_version": version, "task_id": "code"})
+        self.natives = [CANCELLED]                      # the user's fresh run is cancelled by the runtime too
+        self.tick(6)
+        run, attempts = self.detail(rid)
+        self.assertEqual(run["recovery"]["used"], 0)
+        self.assertEqual(attempts[-1]["status"], "accepted")
+        self.assertTrue(any(a["evidence"].get("transient_retry_of") for a in attempts))
+
+    def test_a_deliberate_native_stop_is_not_retried(self):
+        rid = self.session(recovery=False)
+        self.natives = [{**CANCELLED, "stopped": True}]
+        self.tick(4)
+        run, attempts = self.detail(rid)
+        self.assertEqual((run["status"], len(attempts)), ("blocked", 1))
+        self.assertEqual(attempts[0]["evidence"]["failure_type"], "native_stopped")
+
+    def test_a_running_task_with_a_growing_reply_records_no_event_per_poll(self):
+        rid = self.session()
+        self.natives = [{"done": False, "result": "第 1 段"}, {"done": False, "result": "第 1 段\n第 2 段"},
+                        {"done": False, "result": "第 1 段\n第 2 段\n第 3 段"}]
+        self.tick(5)                                    # prepare, dispatch, three polls while running
+        self.assertLessEqual(self.kinds(rid).count("attempt.state"), 1)
+
     def test_a_cancellation_after_stop_is_not_retried(self):
         rid = self.session()
         self.natives = [CANCELLED]
@@ -171,6 +201,18 @@ class LoginPreflightTests(unittest.TestCase):
             self.assertEqual(node.health()["tool_auth"]["kiro"], "expired")
             self.assertEqual(whoami.call_count, 1)   # cached for a minute
 
+    def test_only_a_recognisable_logout_counts_as_expired(self):
+        node, rid, body = self.worker()
+        replies = {"ok": (0, b"Logged in with IAM Identity Center (https://example)"),
+                   "expired": (1, b"Not logged in. Run kiro-cli login"),
+                   "unknown": (2, b"error: unrecognized subcommand 'whoami'")}
+        for state, (code, out) in replies.items():
+            node._login = (0.0, None)
+            done = subprocess.CompletedProcess(args=[], returncode=code, stdout=out, stderr=b"")
+            with self.subTest(state=state), patch("octopus.worker.subprocess.run", return_value=done) as whoami:
+                self.assertEqual(node.tool_auth(), state)
+                self.assertEqual(whoami.call_args.kwargs.get("stdin"), subprocess.DEVNULL)
+
     def test_an_unknown_login_state_does_not_block(self):
         node, rid, body = self.worker(kiro_cli=None)
         with patch("octopus.worker.shutil.which", return_value=None):
@@ -179,6 +221,21 @@ class LoginPreflightTests(unittest.TestCase):
 
 
 class EngineLoginTests(RuntimeCase):
+    def test_a_conflicting_redispatch_is_reconciled_instead_of_resent(self):
+        rid = self.session()
+        def worker(config, path, body, **kwargs):
+            if path == "/dispatch":
+                self.calls.append(path)
+                raise Error(409, "conflict", "Attempt ID 对应不同请求")
+            return self.worker(config, path, body, **kwargs)
+        engine = Engine(self.db, request=worker)
+        for _ in range(4):
+            engine.tick()
+        run, attempts = self.detail(rid)
+        self.assertEqual(self.calls.count("/dispatch"), 1)   # never sent again
+        self.assertIn("/inspect", self.calls)                 # reconciled from what the Worker recorded
+        self.assertEqual((attempts[0]["status"], run["status"]), ("accepted", "completed"))
+
     def test_an_expired_login_keeps_the_session_waiting_then_resumes(self):
         rid = self.session()
         refuse = [True]

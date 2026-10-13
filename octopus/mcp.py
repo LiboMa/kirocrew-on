@@ -93,7 +93,7 @@ TOOLS = [
 
 
 SESSION_FIELDS = ("id", "name", "status", "desired", "lifecycle", "version", "error", "attention", "progress", "input",
-                  "planning", "team_id", "worker_id", "workflow_name", "match_mode", "created", "updated")
+                  "planning", "team_id", "worker_id", "workflow_name", "match_mode", "created", "updated", "kept")
 
 
 def compact_status(session, events):

@@ -22,7 +22,10 @@ EXPIRED = re.compile(r"session (?:has )?expired|not logged in", re.I)
 
 
 def transient(native, error, missing, blocked_line):
-    """A failure the native runtime caused rather than the task (D34 §5.1): retried once without a recovery cycle."""
+    """A failure the native runtime caused rather than the task (D34 §5.1): retried once without a recovery cycle. A stop
+    someone made in the native KiroCrew page is theirs to resume, never retried."""
+    if native.get("stopped"):
+        return None
     if CANCELLED.search(native.get("error") or ""):
         return "runtime_cancelled"
     if error == BLOCKED and missing and not blocked_line:
@@ -165,6 +168,14 @@ class Engine:
             if code == "tool_auth_expired":
                 # Refused before anything was spawned: the same Attempt goes out again once the login is back (D34 §5.2).
                 return self.update(run["id"], run["status"], message)
+            if code == "conflict":
+                # The Worker holds a different request under this Attempt id (e.g. sent before an upgrade): reconcile
+                # what it recorded instead of sending again on every cycle.
+                with self.db.transaction() as db:
+                    journal.change(db, "attempts", current["id"], journal.WORKER, "attempt.state", message,
+                                   event={"id": current["id"], "status": "dispatch_unknown"},
+                                   status="dispatch_unknown", updated=time.time())
+                return self.update(run["id"], "dispatch_unknown", message, actor=journal.WORKER)
             if code in {"model_unavailable", "model_transport_unsupported", "invalid_request", "not_prepared"}:
                 with self.db.transaction() as db:
                     journal.change(db, "attempts", current["id"], journal.WORKER, "attempt.state",
@@ -286,6 +297,10 @@ class Engine:
             self.update(rid, "running", actor=journal.WORKER)
             return
         evidence = result.get("evidence", {})
+        # An automatic retry keeps its mark through every evidence update: it is not retried again (D34 §5.1).
+        retry_of = json.loads(attempt["evidence"] or "{}").get("transient_retry_of")
+        if retry_of:
+            evidence["transient_retry_of"] = retry_of
         state, error = ("waiting_approval" if native.get("awaiting_approval") else "running"), None
         retry = None
         if native.get("done"):
@@ -344,23 +359,27 @@ class Engine:
                     except (Error, ValueError, TypeError) as exc:
                         state, error = "blocked", "KiroCrew 规划结果未通过校验：" + str(exc)
                         evidence["failure_type"] = "contract"
-            if retry and current["current_attempt"] == attempt["id"] and active:
-                previous = db.execute("SELECT evidence FROM attempts WHERE run_id=? AND task_id=? AND number=?",
-                                      (rid, task["id"], attempt["number"] - 1)).fetchone()
-                if previous and json.loads(previous["evidence"]).get("transient"):
-                    retry = None   # this Attempt already was the automatic retry: recovery decides from here
-            else:
-                retry = None
+            if not (retry and current["current_attempt"] == attempt["id"] and active) or retry_of:
+                retry = None   # not ours to retry, or this Attempt already was the automatic retry: recovery decides
             if retry:
                 evidence["transient"] = retry
             journal.change(db, "attempts", attempt["id"], journal.WORKER, "attempt.state",
                            event={"id": attempt["id"], "task_id": task["id"], "status": state, "error": error,
                                   "evidence": evidence},
+                           quiet=() if native.get("done") else ("result",),
                            status=state, evidence=dumps(evidence), result=native.get("result"), error=error, updated=time.time())
             if retry:
                 why = {"runtime_cancelled": "运行时取消了原生任务", "result_missing": "原生任务没有返回结果"}[retry]
+                # The retry is created here and marked, so it is never retried again; a stop or continue before it is
+                # dispatched cancels or replaces it like any other Attempt.
+                aid, now = uid("attempt"), time.time()
+                db.execute("INSERT INTO attempts(id,run_id,task_id,number,spec,status,evidence,created,updated) "
+                           "VALUES(?,?,?,?,?,'dispatching',?,?,?)",
+                           (aid, rid, task["id"], attempt["number"] + 1, current["spec"],
+                            dumps({"transient_retry_of": attempt["id"]}), now, now))
                 journal.change(db, "tasks", (rid, task["id"]), journal.ENGINE, "attempt.retry", f"{why}，自动重试一次",
-                               event={"attempt": attempt["id"], "transient": retry}, status="pending", current_attempt=None)
+                               event={"attempt": attempt["id"], "retry": aid, "transient": retry},
+                               status="dispatching", current_attempt=aid)
             elif current["current_attempt"] == attempt["id"] and active:
                 journal.change(db, "tasks", (rid, task["id"]), journal.WORKER, "task.state", status=state)
         if retry:

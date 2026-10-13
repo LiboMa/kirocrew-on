@@ -32,16 +32,17 @@ def record(db, rid, kind, actor, changes=None, reason=None, **extra):
     db.execute("INSERT INTO events(run_id,kind,payload,created) VALUES(?,?,?,?)", (rid, kind, dumps(payload), time.time()))
 
 
-def _diff(row, fields):
-    return {k: [shown(row[k]), shown(v)] for k, v in fields.items() if k not in QUIET and row[k] != v}
+def _diff(row, fields, quiet=()):
+    return {k: [shown(row[k]), shown(v)] for k, v in fields.items() if k not in QUIET and k not in quiet and row[k] != v}
 
 
 def _run(table, row):
     return row["id"] if table == "runs" else row["run_id"]
 
 
-def change(db, table, key, actor, kind, reason=None, event=None, **fields):
-    """Write ``fields`` to one row (``tasks`` keyed by (run_id, id)) and record what changed; returns the changes."""
+def change(db, table, key, actor, kind, reason=None, event=None, quiet=(), **fields):
+    """Write ``fields`` to one row (``tasks`` keyed by (run_id, id)) and record what changed; returns the changes.
+    ``quiet`` fields are written but not recorded (a running task's partial reply would otherwise log every poll)."""
     columns = KEYS[table]
     where = " AND ".join(f"{column}=?" for column in columns)
     params = tuple(key) if isinstance(key, tuple) else (key,)
@@ -49,7 +50,7 @@ def change(db, table, key, actor, kind, reason=None, event=None, **fields):
     if row is None:
         return {}
     db.execute(f"UPDATE {table} SET " + ",".join(f"{k}=?" for k in fields) + f" WHERE {where}", (*fields.values(), *params))
-    diff = _diff(row, fields)
+    diff = _diff(row, fields, quiet)
     if diff:
         record(db, _run(table, row), kind, actor, diff, reason, **(event or {}))
     return diff

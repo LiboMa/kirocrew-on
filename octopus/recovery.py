@@ -42,15 +42,27 @@ def outcome(text):
     require(isinstance(value.get("findings", []), list) and
             all(finding(item) for item in value.get("findings", [])),
             "outcome.json findings 应为问题列表", 409, "outcome_invalid")
-    checks = value.get("acceptance", [])
-    require(isinstance(checks, list) and len(checks) <= 30 and all(
-        isinstance(item, dict) and isinstance(item.get("item"), str) and item["item"].strip() and
-        item.get("result") in {"pass", "fail", "n/a"} and isinstance(item.get("evidence", ""), str) for item in checks),
-        "outcome.json acceptance 应为 {item, result: pass|fail|n/a, evidence} 列表", 409, "outcome_invalid")
-    require(isinstance(value.get("suggestions", []), list) and len(value.get("suggestions", [])) <= 50 and
-            all(isinstance(item, str) for item in value.get("suggestions", [])),
-            "outcome.json suggestions 应为字符串列表", 409, "outcome_invalid")
-    return {**value, "failure_type": failure}
+    # acceptance / suggestions are reports, not the verdict: malformed entries are dropped or normalized with a note
+    # and never change the decision (D34 §6.2).
+    notes, checks = [], []
+    raw = value.get("acceptance", [])
+    if not isinstance(raw, list):
+        notes.append("acceptance 不是列表，已忽略")
+        raw = []
+    for item in raw[:30]:
+        name = item.get("item") if isinstance(item, dict) else None
+        result = str(item.get("result", "")).strip().lower() if isinstance(item, dict) else ""
+        if not (isinstance(name, str) and name.strip()) or result not in {"pass", "fail", "n/a"}:
+            notes.append(f"忽略无效的验收结果：{dumps(item)[:80]}")
+            continue
+        entry = {"item": name.strip()[:500], "result": result}
+        if item.get("evidence") not in (None, ""):
+            entry["evidence"] = (item["evidence"] if isinstance(item["evidence"], str) else dumps(item["evidence"]))[:2000]
+        checks.append(entry)
+    raw = value.get("suggestions", [])
+    suggestions = [x.strip()[:1000] for x in raw if isinstance(x, str) and x.strip()][:50] if isinstance(raw, list) else []
+    return {**value, "failure_type": failure, "acceptance": checks, "suggestions": suggestions,
+            **({"normalized": notes} if notes else {})}
 
 
 def quality_instructions(folder, contract=None):

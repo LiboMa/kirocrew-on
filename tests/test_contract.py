@@ -172,6 +172,18 @@ class RerunTests(TeamsWorkersCase):
                 self.go(rid, "frontend", bad, key="continue-" + str(abs(hash(str(bad))))[:10])
             self.assertEqual(caught.exception.status, 400)
 
+    def test_mcp_status_reports_the_kept_tasks(self):
+        from octopus import mcp
+        legacy = [{"id": x, "name": n, "tool": "claude", "prompt": n} for x, n in (("a", "甲"), ("b", "乙"))]
+        rid = self.settled(legacy)
+        self.go(rid, "a", [])
+        service, actor = self.service, self.c
+        class Client:
+            def request(self, method, path, body=None):
+                return service.events(actor, rid) if path.endswith("/events") else service.run(actor, rid)
+        status = mcp.call(Client(), "octopus_status", {"run_id": rid})
+        self.assertEqual(status["session"]["kept"], {"version": 2, "tasks": ["b"]})
+
     def test_rerun_travels_through_the_api_and_the_mcp_schema(self):
         from octopus import mcp
         from octopus.schema import openapi
@@ -214,11 +226,16 @@ class OutcomeTests(unittest.TestCase):
         good = outcome('{"decision":"pass","summary":"完成","acceptance":[{"item":"登录成功","result":"pass","evidence":"npm test 0"}],'
                        '"suggestions":["补 CHANGELOG"]}')
         self.assertEqual((good["suggestions"], good["acceptance"][0]["result"]), (["补 CHANGELOG"], "pass"))
-        for bad in ('{"decision":"pass","summary":"x","acceptance":[{"item":"a","result":"ok"}]}',
-                    '{"decision":"pass","summary":"x","acceptance":[{"result":"pass"}]}',
-                    '{"decision":"pass","summary":"x","suggestions":"补"}'):
-            with self.subTest(bad=bad), self.assertRaises(Error):
-                outcome(bad)
+        # Malformed optional fields never fail the task: they are normalized or dropped, with a note.
+        loose = outcome('{"decision":"pass","summary":"x","acceptance":[{"item":"a","result":"PASS","evidence":null},'
+                        '{"item":"b","result":"ok"},{"result":"pass"},{"item":"c","result":"fail","evidence":["npm test","1"]}],'
+                        '"suggestions":["补",{"text":"x"},3]}')
+        self.assertEqual(loose["decision"], "pass")
+        self.assertEqual(loose["acceptance"], [{"item": "a", "result": "pass"},
+                                               {"item": "c", "result": "fail", "evidence": '["npm test","1"]'}])
+        self.assertEqual(loose["suggestions"], ["补"])
+        self.assertEqual(len(loose["normalized"]), 2)
+        self.assertEqual(outcome('{"decision":"pass","summary":"x","suggestions":"补"}')["suggestions"], [])
 
 
 if __name__ == "__main__":

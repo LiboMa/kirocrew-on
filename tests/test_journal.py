@@ -197,6 +197,24 @@ class ChangesApiTests(AccessCase):
         self.assertEqual([c["kind"] for c in self.service.changes(self.a, run["id"], who="user")], ["command.stop", "run.created"])
         self.assertEqual([c["kind"] for c in self.service.changes(self.a, run["id"], who="system")], ["attempt.state"])
 
+    def test_the_export_carries_every_change(self):
+        run = self.start(self.a)
+        with self.db.transaction() as db:
+            for i in range(250):
+                db.execute("INSERT INTO events(run_id,kind,payload,created) VALUES(?,?,?,?)",
+                           (run["id"], "run.state", dumps({"status": "ready", "actor": {"kind": "engine"}}), i))
+        with self.http() as call:
+            exported = call("GET", f"/v1/runs/{run['id']}/export", self.tokens["alice"])[1]
+        self.assertEqual(len(exported["changes"]), 251)
+        self.assertEqual(exported["changes"][-1]["kind"], "run.created")
+
+    def test_an_admin_reading_someone_elses_changes_is_audited(self):
+        run = self.start(self.b)
+        self.service.changes(self.a, run["id"])
+        with self.db.read() as db:
+            self.assertEqual(db.execute("SELECT count(*) FROM audit WHERE action='run.changes' AND target=?",
+                                        (run["id"],)).fetchone()[0], 1)
+
     def test_paging_and_kind_wildcards(self):
         run = self.start(self.a)
         newest = self.service.changes(self.a, run["id"])[0]["id"]

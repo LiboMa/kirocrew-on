@@ -100,8 +100,14 @@ class Worker:
         state = "unknown"
         if binary:
             try:
-                state = "ok" if subprocess.run([str(binary), "whoami"], capture_output=True, timeout=3).returncode == 0 \
-                    else "expired"
+                done = subprocess.run([str(binary), "whoami"], capture_output=True, timeout=3, stdin=subprocess.DEVNULL)
+                text = (done.stdout + done.stderr).decode(errors="replace")
+                # Only a recognisable answer counts: anything else (another CLI version, a crash) must not hold every
+                # Kiro dispatch, the KiroCrew planning task included.
+                if done.returncode == 0 and text.lstrip().startswith("Logged in"):
+                    state = "ok"
+                elif done.returncode != 0 and re.search(r"not logged in|expired|kiro-cli login|log in", text, re.I):
+                    state = "expired"
             except (OSError, subprocess.TimeoutExpired):
                 state = "unknown"
         self._login = (now, state)
@@ -280,6 +286,8 @@ class Worker:
             require(spec["model"] in self.health()["models"][spec["tool"]],
                     "所选模型未由此 Worker 后端公布", 409, "model_unavailable")
         folder = run / "attempts" / attempt
+        # Checked before the lock: a slow kiro-cli must not hold every other request of this Worker.
+        login = self.tool_auth() if spec["tool"] == "kiro" or body.get("coordination") or body.get("design") else "ok"
         with self.lock:
             record = folder / "dispatch.json"
             if record.exists():
@@ -289,7 +297,7 @@ class Worker:
                 if value.get("native_id") or value.get("status") == "blocked":
                     return value
                 return self.reconcile(run, parent, attempt, value)
-            if (spec["tool"] == "kiro" or body.get("coordination") or body.get("design")) and self.tool_auth() == "expired":
+            if login == "expired":
                 # Refused before anything is recorded or spawned: the platform dispatches this Attempt again later.
                 raise Error(503, "tool_auth_expired", "Worker 上 kiro-cli 登录已过期：请管理员执行 deploy.sh kiro-login")
             folder.mkdir(parents=True, exist_ok=True)

@@ -128,7 +128,7 @@ class ScriptTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
             for name in ("on/composition/gateway.py", "on/octopus/config.py", "on/octopus/prompts.py", "on/octopus/__init__.py",
-                         "etc/boundary-b1.toml", "systemd/octopus-gateway@.service"):
+                         "on/pipeline_spec.py", "etc/boundary-b1.toml", "systemd/octopus-gateway@.service"):
                 (root / name).parent.mkdir(parents=True, exist_ok=True)
                 (root / name).write_text(name)
             (root / "kc/releases/1").mkdir(parents=True)
@@ -150,6 +150,12 @@ class ScriptTests(unittest.TestCase):
             self.assertIn("Gateway 未变化", out)
             (root / "etc/boundary-b1.toml").write_text("changed")
             self.assertTrue(run()[0])                        # the boundary config changed
+            self.assertFalse(run()[0])
+            (root / "on/pipeline_spec.py").write_text("changed")
+            self.assertTrue(run()[0])                        # templates import it lazily
+            (root / "systemd/octopus-gateway@b1.service.d").mkdir()
+            (root / "systemd/octopus-gateway@b1.service.d/limits.conf").write_text("[Service]")
+            self.assertTrue(run()[0])                        # a drop-in for this boundary
             (root / "active").unlink()
             self.assertTrue(run()[0])                        # unchanged, but not running
 

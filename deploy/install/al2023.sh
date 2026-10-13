@@ -325,8 +325,9 @@ GATEWAY_STAMP="$BASE/gateway.fingerprint"
 GATEWAY_PRINT="$( { readlink -f /opt/kirocrew/current
   cat /opt/kirocrew-on/current/composition/*.py /opt/kirocrew-on/current/octopus/config.py \
       /opt/kirocrew-on/current/octopus/prompts.py /opt/kirocrew-on/current/octopus/__init__.py \
-      "$BOUNDARY_TOML" /etc/systemd/system/octopus-gateway@.service
-  cat "/etc/kirocrew-on/boundary-$BOUNDARY.env" 2>/dev/null || true; } | sha256sum | cut -d' ' -f1)"
+      /opt/kirocrew-on/current/pipeline_spec.py "$BOUNDARY_TOML" /etc/systemd/system/octopus-gateway@.service
+  cat /etc/systemd/system/octopus-gateway@.service.d/*.conf "/etc/systemd/system/octopus-gateway@$BOUNDARY.service.d/"*.conf \
+      "/etc/kirocrew-on/boundary-$BOUNDARY.env" 2>/dev/null || true; } | sha256sum | cut -d' ' -f1)"
 if [ "$(cat "$GATEWAY_STAMP" 2>/dev/null || true)" = "$GATEWAY_PRINT" ] && systemctl is-active --quiet "octopus-gateway@$BOUNDARY"; then
   log "Gateway 未变化，保持运行（进行中的原生任务不中断）"
 else

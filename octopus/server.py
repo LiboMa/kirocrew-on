@@ -103,6 +103,17 @@ def required_scope(method, path):
     return "execute" if path.startswith(("/v1/runs", "/v1/designs")) else "manage"
 
 
+def every_change(service, actor, rid):
+    """The whole change journal of a Session, newest first, for its export (the query API pages by 200)."""
+    result, before = [], None
+    while True:
+        page = service.changes(actor, rid, before=before, limit=200, audited=False)
+        result += page
+        if len(page) < 200:
+            return result
+        before = page[-1]["id"]
+
+
 def console_file(path):
     """Static console files: the React build (ui/dist) at / and /assets/*, the classic console at /classic/ and its
     original root paths. Returns (file, content type) or None; asset names are flat, so nothing escapes ui/dist/assets."""
@@ -537,7 +548,7 @@ def server(database, port=8918, host="127.0.0.1", allowed_hosts=(), origin_secre
                                 revisions = [{**dict(row), "content": json.loads(row["content"])} for row in db.execute(
                                     "SELECT * FROM revisions WHERE run_id=? ORDER BY version", (rid,))]
                             return self.respond({"schema": "octopus.session/1", "session": run, "revisions": revisions,
-                                                 "changes": service.changes(actor, rid, limit=200),
+                                                 "changes": every_change(service, actor, rid),
                                                  "note": "平台状态及交接记录；源码与原生会话备份保留在授权 Worker。"})
                         if action == "events" and method == "GET":
                             after = int(query.get("after", [self.headers.get("Last-Event-ID", "0")])[0])

@@ -1167,7 +1167,7 @@ class Service:
         self.audit_read(actor, rid, "view")
         return [{k: v for k, v in entry.items() if k not in {"snapshot", "content"}} for entry in entries]
 
-    def changes(self, actor, rid, who=None, kind=None, before=None, limit=50):
+    def changes(self, actor, rid, who=None, kind=None, before=None, limit=50, audited=True):
         """The Session's change journal, newest first (D34 §4.3): who changed what, from what, to what and why. Events
         written before the journal carry a user id string (commands) or no actor (system, listed as legacy)."""
         require(who in (None, "user", "system"), "who 只能是 user 或 system")
@@ -1184,6 +1184,8 @@ class Service:
             run_access(db, actor, rid)
             users = dict(db.execute("SELECT id,username FROM users").fetchall())
             rows = db.execute(sql + " ORDER BY id DESC LIMIT ?", (*params, limit)).fetchall()
+        if audited:   # the export audits itself once
+            self.audit_read(actor, rid, "changes")
         result = []
         for row in rows:
             payload = json.loads(row["payload"])
