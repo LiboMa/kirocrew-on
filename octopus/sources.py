@@ -115,8 +115,15 @@ def prepare_project(run, *, source=None, ref=None, new=False):
         staging = workspace / (".checkout-" + uuid.uuid4().hex)
         try:
             if new:
+                # Like a cloned source: a repository on octopus/<run> with an empty first commit, so the download
+                # carries the history and the agents' commits have a baseline. The platform's own commit runs no hooks.
                 staging.mkdir()
-                commit, branch = None, None
+                branch = "octopus/" + run.name
+                _git(staging, "init", "-q", "-b", branch)
+                _git(staging, "-c", "user.name=KiroCrew ON", "-c", "user.email=kirocrew-on@localhost",
+                     "-c", "commit.gpgsign=false", "commit", "-q", "--no-verify", "--allow-empty",
+                     "-m", "KiroCrew ON：新建项目")
+                commit = _git(staging, "rev-parse", "HEAD")
             else:
                 if kind == "local-git":
                     source_path = Path(source)
