@@ -507,6 +507,9 @@ def server(database, port=8918, host="127.0.0.1", allowed_hosts=(), origin_secre
                 if path == "/v1/workflows/resolve":
                     require(method == "POST", "Method not allowed", 405)
                     return self.respond(service.resolve_workflow(actor, body))
+                if len(segments) == 4 and segments[:2] == ["v1", "runs"] and segments[3] == "publish":
+                    require(method == "POST", "Method not allowed", 405)
+                    return self.respond(service.publish(actor, segments[2], body))
                 if len(segments) == 4 and segments[:2] == ["v1", "runs"] and segments[3] == "credentials":
                     require(method == "POST", "Method not allowed", 405)
                     return self.respond(service.rebind(actor, segments[2], body))

@@ -4,6 +4,7 @@ import hashlib
 import json
 import logging
 import os
+from pathlib import Path
 import re
 import socket
 import sqlite3
@@ -887,6 +888,61 @@ class Service:
         row = db.execute("SELECT config,retired FROM workers WHERE id=?", (wid,)).fetchone() if wid else None
         return (json.loads(row["config"]), bool(row["retired"])) if row else (None, False)
 
+    def publish(self, actor, rid, body):
+        """Push the Session's work as one branch and open (or reuse) a draft pull / merge request with the bound write
+        credential (D35 §5.2): its creator, a Team owner or an admin, once its tasks have ended."""
+        import tempfile
+        from . import credentials as repo_credentials, publish as publishing
+        from .transport import worker_stream
+        require(isinstance(body, dict) and set(body) <= {"branch", "title"}, "只接受 branch 与 title")
+        with self.db.read() as db:
+            run = run_access(db, actor, rid)
+            team_owner = bool(run["team_id"]) and db.execute(
+                "SELECT 1 FROM members WHERE team_id=? AND user_id=? AND role='owner'", (run["team_id"], actor["id"])).fetchone()
+            require(run["owner_id"] == actor["id"] or team_owner or elevated(actor),
+                    "只有会话创建者、Team owner 或管理员可以发布", 403, "forbidden")
+            require(run["lifecycle"] == "open" and run["status"] in SETTLED and run["workspace"],
+                    "会话执行结束后才能发布", 409, "publish_busy")
+            snapshot, source = json.loads(run["snapshot"]), json.loads(run["source"])
+            bound = (snapshot.get("credentials") or {}).get("source")
+            require(bound, "会话没有绑定凭证：先在会话页绑定一枚有写权限的凭证", 409, "credential_unavailable")
+            row = db.execute("SELECT * FROM credentials WHERE id=?", (bound["id"],)).fetchone()
+            require(row is not None and not row["disabled"], f"凭证「{bound['name']}」已停用或删除", 409, "credential_unavailable")
+            require(row["access"] == "write", f"凭证「{row['name']}」为只读，无法发布", 409, "credential_read_only")
+            try:
+                host, path = repo_credentials.repo_path(source.get("url", ""))
+            except ValueError as exc:
+                raise Error(409, "credential_https_only", str(exc)) from None
+            require(row["host"] == host and repo_credentials.covers(json.loads(row["repos"]), path) is not None,
+                    f"凭证「{row['name']}」不覆盖仓库 {path}", 409, "credential_unavailable")
+            config = json.loads(db.execute("SELECT config FROM workers WHERE id=?", (run["worker_id"],)).fetchone()["config"])
+        branch = publishing.check_branch(body.get("branch") or "octopus/" + rid, source.get("ref"))
+        title = text(body.get("title") or snapshot.get("name") or run["input"][:60], "标题", 200)
+        secret = self.credentials.secret(row["id"])
+        auth = {"kind": row["kind"], "host": row["host"], "username": repo_credentials.username(row["kind"]), "secret": secret}
+        response = worker_stream(config, "/publish/bundle", {"run_id": rid, "message": f"KiroCrew ON：{title}（{rid}）"},
+                                 timeout=120)
+        with response, tempfile.TemporaryDirectory(dir=self.db.root, prefix=".publish-") as work:
+            commit = publishing.receive(response, int(response.headers.get("Content-Length") or 0), Path(work) / "repo",
+                                        response.headers["X-Publish-Branch"], response.headers["X-Publish-Base"])
+            pushed = publishing.push(Path(work) / "repo", source["url"], branch, commit, auth)
+        request = publishing.pull_request(row["kind"], host, path, branch, source.get("ref"), title,
+                                          f"由 KiroCrew ON 会话 {rid} 发布。", secret)
+        record = {"branch": branch, "commit": commit, "url": request["url"], "number": request["number"],
+                  "kind": request["kind"], "reused": request["reused"], "created_branch": pushed["created"], "at": time.time(),
+                  "by": {"id": actor["id"], "username": actor.get("username")}}
+        with self.db.transaction() as db:
+            snapshot = json.loads(db.execute("SELECT snapshot FROM runs WHERE id=?", (rid,)).fetchone()["snapshot"])
+            snapshot["publish"] = record
+            journal.change(db, "runs", rid, journal.person(actor), "run.published",
+                           event={**{k: record[k] for k in ("branch", "commit", "url", "number", "reused")},
+                                  "request": record["kind"]},
+                           snapshot=dumps(snapshot))
+            db.execute("UPDATE credentials SET last_used=? WHERE id=?", (time.time(), row["id"]))
+            audit(db, actor, "credential.use", "credential", row["id"],
+                  {"run_id": rid, "repo": path, "access": "write", "branch": branch})
+        return record
+
     def rebind(self, actor, rid, body):
         """Change or remove a Session's source credential (spec §4): its creator, a Team owner or an admin, with a
         credential they may use for this repository; removal also by the owner of the personal credential bound."""
@@ -1134,6 +1190,7 @@ class Service:
         pinned = snapshot.get("credentials") or {}
         value["credentials"] = ({"source": repo_credentials.availability(db, pinned["source"], run)} if pinned.get("source")
                                 else {"source": None, "removed": pinned["removed"]} if pinned.get("removed") else None)
+        value["publish"] = snapshot.get("publish")
         value["tasks"] = []
         for row in db.execute("SELECT * FROM tasks WHERE run_id=? ORDER BY ordinal", (run["id"],)):
             task = dict(row)
