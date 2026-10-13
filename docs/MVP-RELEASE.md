@@ -1,6 +1,6 @@
 # MVP Release 计划与状态
 
-更新日期：2026-10-14　·　当前阶段：**最小 MVP 已在 EC2 跑通；Team 执行环境（D28：共享 / 专属 / 空闲，独立 Worker 主机）已在 EC2 验收**　·　本仓库可运行代码：**分支 `feat/m1-runtime-foundation`（origin 在 a57b30e：D36 第 1 期、新建项目 `git init`、控制台域名，经负责人同意以 `--no-verify` 推送）；远程预览（D36 第 2 期）与代码仓库凭证第 1 / 2 期（D35）在 `feat/m7`–`feat/m9`，已部署到 EC2（b894363），需登录的验收待管理员密码，推送待负责人确认**　·　已发布版本：**无**
+更新日期：2026-10-14　·　当前阶段：**最小 MVP 已在 EC2 跑通；Team 执行环境（D28：共享 / 专属 / 空闲，独立 Worker 主机）已在 EC2 验收**　·　本仓库可运行代码：**分支 `feat/m1-runtime-foundation`（origin 在 a57b30e：D36 第 1 期、新建项目 `git init`、控制台域名，经负责人同意以 `--no-verify` 推送）；远程预览（D36 第 2 期）与代码仓库凭证第 1 / 2 期（D35）在 `feat/m7`–`feat/m9`，已部署到 EC2（b894363）：远程预览与凭证第 1 期已验收，第 2 期实际发布到公开测试仓库待负责人同意；推送待负责人确认**　·　已发布版本：**无**
 
 本文记录 KiroCrew ON 首个可用 MVP 的范围、已确定决策、各里程碑交付与验收条件。
 “已确定”“默认值（待确认）”“未开始 / 待验收”分别标注；不要把本文中的目标当作已上线功能。
@@ -328,12 +328,18 @@ v4 → v6 显示规划 Prompt 新增的行）；控制台「修订历史」在�
 - 控制台设置页、向导选择与会话页显示；MCP `octopus_credentials`。
 
 本机测试用真实的需认证 HTTPS Git 仓库（自签证书 + git-http-backend）。最终审查（opus）的 5 项重要问题已修复：使用时复核、托管方检查的 SSRF 与跳转、
-带凭证的 git 不读全局配置、会话页 / MCP 更换凭证、撤下留痕。EC2 验收待进行。
+带凭证的 git 不读全局配置、会话页 / MCP 更换凭证、撤下留痕。
+
+✅ EC2（2026-10-14，b894363）：负责人提供的 GitHub 细粒度 Token 以「kirocrew-on-admin」加密存入平台（本机临时文件随即删除），
+托管方检查得到账号 LiboMa 与到期时间；`LiboMa/bedrock-claude-call` 的会话（`run-a11cccd9…`）以该凭证在平台主机准备好工作区，
+会话页显示创建者与凭证，`credential.use` 审计与 `run.credentials` 变更记录写入；停用的凭证不能指定（403）、范围外的仓库被拒（409）；
+所有 API 回答中都没有 Token。10/10。
 
 第 2 期「平台代发布」离线完成（分支 `feat/m9-repo-publish`）：Worker 导出待发布的提交（自动提交、排除 .env 与依赖、拒绝疑似凭证），
 平台只快进推送 `octopus/<run>` 并创建或沿用 Draft PR / MR，会话页「发布到仓库」与 MCP `octopus_publish`。本机以需认证的 HTTPS 仓库与假 GitHub / GitLab API 测试。
 最终审查（opus）的 1 项严重、4 项重要问题已修复：检查覆盖 bundle 携带的全部历史（拒绝后分支不动，Agent 提交的 `.env` 与已删除的凭证
-也被发现）、按原始内容检查任何文件、平台先限大小、推送后 PR / MR 失败也记录与审计、排除的目录不读入 Git。EC2 验收待进行。
+也被发现）、按原始内容检查任何文件、平台先限大小、推送后 PR / MR 失败也记录与审计、排除的目录不读入 Git。
+EC2（2026-10-14）：已部署；只读凭证不能发布（409 `credential_read_only`）。实际推送分支与创建 Draft PR（公开的测试仓库）待负责人同意。
 
 ### 14.10 开发成果快速预览第 1 期「下载」（D36）
 
@@ -345,7 +351,13 @@ v4 → v6 显示规划 Prompt 新增的行）；控制台「修订历史」在�
 篡改链接 403、外人 404、无源码 409、10 分钟后 403 `archive_expired`；MCP 解压与非空目录拒绝；Git 来源的 `run-bca9c588…`
 解压后 refs 目录在、hooks 已去掉、config 已清理、`git log` / `git status` 可用；两台主机以执行用户新建项目得到 Git 仓库。
 同日控制台加上自定义域名 `https://kirocrew-on.tinyboat.blog`（`*.tinyboat.blog` 证书、Route 53 别名记录；cloudfront.net 域名保留）。
-第 2 期（浏览器内远程预览）实现中：计划 `docs/superpowers/plans/2026-10-13-preview-remote.md`，Task 1（Worker 运行会话应用）已完成。
+第 2 期（浏览器内远程预览）：计划 `docs/superpowers/plans/2026-10-13-preview-remote.md`。✅ EC2（2026-10-14，b894363）21/21：
+平台主机的 Vite 项目 7 s 启动，打开页清除预览域的站点数据、一次性链接换取 `__Host-` Cookie 后进入应用，应用经预览分发回答且不缓存，
+Vite 客户端模块可用；打开链接第二次使用被拒、无 Cookie 时为拒绝页、Service Worker 不能注册；同一执行环境第 4 个预览 409 `app_limit`，
+腾出位置后静态站点运行、点文件不提供；`w1` 的应用经平台主机（私网 TLS + 校验头）回答，停止后为拒绝页；外人申请链接或启动均 404；
+变更记录有 `app.started` / `app.stopped`；MCP 状态、打开与停止。浏览器（Playwright）中修改 `src/styles.css` 后样式即时更新、页面未重载
+（Vite HMR 经 CloudFront 与 nginx 的 WebSocket），改回后同样更新。无需登录的检查：伪造或缺少校验头的 `w1` 预览端口 403、
+本机未带门禁头的 `preview-auth` 404。
 
 ### 14.9 访问管理第 3 期「MCP 与角色调用」（D31）
 
