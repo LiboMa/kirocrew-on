@@ -19,9 +19,11 @@ MAC_KIROCREW_PYTHON = Path("/Applications/KiroCrew.app/Contents/Resources/backen
                            "kirocrew-backend-arm64/bin/python3.12")
 PATHS = {"data_dir", "worker_data_dir", "worker_token_file", "crew_home", "kiro_home", "routing_log",
          "log_dir", "gateway_runtime_file", "kirocrew_python", "adapters_dir", "origin_secret_file", "worker_ca_file"}
-INTS = {"api_port": (1, 65535), "worker_port": (1, 65535), "gateway_port": (1, 65535), "engine_workers": (1, 32)}
+INTS = {"api_port": (1, 65535), "worker_port": (1, 65535), "gateway_port": (1, 65535), "engine_workers": (1, 32),
+        "preview_tls_port": (1, 65535)}
 FLOATS = {"retry_unavailable": (0.0, 600.0), "shutdown_grace": (0.0, 300.0)}
-STRINGS = {"api_host", "worker_host", "public_url", "crew_url", "worker_isolation", "approval_mode", "crew_entry_ttl"}
+STRINGS = {"api_host", "worker_host", "public_url", "crew_url", "worker_isolation", "approval_mode", "crew_entry_ttl",
+           "preview_tls_name"}
 APPROVAL = ("", "auto", "interactive")
 # Lifetime of the native browser login minted for "open in KiroCrew": 1–480 minutes or 1–8 hours (K03).
 ENTRY_TTL = re.compile(r"(?:[1-9]|[1-9][0-9]|[1-3][0-9]{2}|4[0-7][0-9]|480)m|[1-8]h")
@@ -57,6 +59,9 @@ class Settings:
     # KiroCrew native tool/spawn approval for this boundary; "" keeps the legacy seed default.
     approval_mode: str = ""
     crew_entry_ttl: str = "8h"
+    # A Worker host's nginx preview port and the name its certificate carries (D36 §5.2); unset on the platform host.
+    preview_tls_port: int = 0
+    preview_tls_name: str = ""
     kirocrew_python: Path | None = None
     adapters_dir: Path | None = None
     # Secret CloudFront adds as X-Origin-Verify; when set, only verified (or host-local) requests are served.

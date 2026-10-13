@@ -118,7 +118,8 @@ def pack_file(archive, relative, path):
 
 class Worker:
     def __init__(self, root, token, gateway_port=5476, crew_home=None, isolation="trusted-local", routing_log=None,
-                 crew_url=None, approval_mode="", crew_entry_ttl="8h", kiro_cli=None):
+                 crew_url=None, approval_mode="", crew_entry_ttl="8h", kiro_cli=None, path_prepend=(),
+                 preview_tls_port=0, preview_tls_name=""):
         self.root = Path(root).resolve()
         self.root.mkdir(parents=True, exist_ok=True, mode=0o700)
         self.token, self.port = token, gateway_port
@@ -137,6 +138,11 @@ class Worker:
         # "auto": this unattended boundary asks KiroCrew for native auto approval on platform spawns (D14).
         self.approval_mode = approval_mode
         self.kiro_cli, self._login = kiro_cli, (0.0, None)
+        from .apps import Apps
+        # Remote preview (D36 §5): on a Worker host the platform reaches the apps through this host's nginx preview
+        # port (TLS, preview_tls_name in its certificate); without one, on the platform host's loopback.
+        self.apps = Apps(path_prepend)
+        self.preview_tls_port, self.preview_tls_name = preview_tls_port, preview_tls_name
 
     @staticmethod
     def contract(spec, value):
@@ -349,6 +355,24 @@ class Worker:
             archive.fp = None   # never write the central directory of a partial archive
             raise
 
+    def app(self, body):
+        """Start, stop or report the run's application for the remote preview (D36 §5.1)."""
+        action, rid = body.get("action"), body["run_id"]
+        require(action in {"start", "stop", "status"}, "操作无效")
+        run = self.path(rid)
+        if action == "stop":
+            return self.apps.stop(rid)
+        if action == "start":
+            try:
+                project = workspace.project_dir(run)
+            except ValueError as exc:
+                raise Error(409, "app_unavailable", f"此会话的源码不可用：{exc}") from None
+            result = self.apps.start(rid, project, run)
+        else:
+            result = self.apps.status(rid, run)
+        result["via"] = {"port": self.preview_tls_port, "name": self.preview_tls_name} if self.preview_tls_port else None
+        return result
+
     def health(self):
         # Descriptive boundary, not cryptographic proof of OS isolation.
         boundary = f"{socket.gethostname()}:{os.getuid()}:{self.home}"
@@ -358,7 +382,7 @@ class Worker:
         advertised = {tool: [m for m in models.get(ns, []) if isinstance(m, str)] for tool, ns in namespace.items()}
         return {"version": __version__, "isolation": self.isolation, "workflow_design": True,
                 "spawn_approval": "auto" if self.approval_mode == "auto" else "interactive",
-                "crew_entry": True, "crew_origin": self.crew_origin, "observe": True,
+                "crew_entry": True, "crew_origin": self.crew_origin, "observe": True, "app_preview": True,
                 "tool_auth": {"kiro": self.tool_auth()},
                 "coordinator_recovery": True, "quality_outcome": True,
                 "boundary": hashlib.sha256(boundary.encode()).hexdigest(),
@@ -770,7 +794,7 @@ def serve(worker, port=8928, host="127.0.0.1"):
                     methods = {"/prepare": worker.prepare, "/dispatch": worker.dispatch,
                                "/inspect": worker.inspect, "/control": worker.control,
                                "/crew-entry": worker.crew_entry, "/files": worker.files, "/observe": worker.observe,
-                               "/archive/plan": worker.archive_summary}
+                               "/archive/plan": worker.archive_summary, "/app": worker.app}
                     require(self.path in methods and self.command == "POST", "接口不存在", 404, "not_found")
                     result = methods[self.path](body)
                 status = 200

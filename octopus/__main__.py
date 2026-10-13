@@ -152,13 +152,15 @@ def main(argv=None):
             os.chmod(token_path, 0o600)
         node = Worker(args.data, token_path.read_text().strip(), args.gateway_port, args.crew_home,
                       args.isolation, args.routing_log, args.crew_url, args.approval_mode, settings.crew_entry_ttl,
-                      kiro_cli=settings.tools.get("kiro_cli"))
+                      kiro_cli=settings.tools.get("kiro_cli"), path_prepend=settings.path_prepend,
+                      preview_tls_port=settings.preview_tls_port, preview_tls_name=settings.preview_tls_name)
         httpd = serve(node, args.port, args.host)
         signal.signal(signal.SIGTERM, lambda *_: threading.Thread(target=httpd.shutdown, daemon=True).start())
         print(f"KiroCrew ON Worker: http://{args.host}:{httpd.server_address[1]} ({args.isolation})", flush=True)
         try:
             httpd.serve_forever()
         finally:
+            node.apps.stop_all()   # under systemd the unit's cgroup ends them anyway; elsewhere they would linger
             httpd.server_close()
     elif args.command == "wait-ready":
         from .ops import runtime_marker_ok, wait_for_file, wait_ready
