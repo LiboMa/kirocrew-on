@@ -25,7 +25,8 @@ def openapi():
                      "worker_id": text}, ["username", "password"]),
         "Team": obj({"name": text, "owner": text, "worker_id": text}, ["name", "owner", "worker_id"]),
         "Member": obj({"username": text, "role": {"enum": ["owner", "member"]}}, ["username"]),
-        "Workflow": obj({"name": text, "steps": step_list, "expected_version": integer}, ["name", "steps"]),
+        "Workflow": obj({"name": text, "steps": step_list, "expected_version": integer, "credentials": obj({"source": text})},
+                        ["name", "steps"]),
         "Grant": obj({"kind": {"enum": ["user", "team"]}, "principal": text,
                      "role": {"enum": ["viewer", "runner", "editor"]}}, ["kind", "principal"]),
         "Archive": obj({"expected_version": integer, "archived": {"type": "boolean"}}, ["expected_version"]),
@@ -68,7 +69,9 @@ def openapi():
         "Start": obj({"request_id": command["request_id"], "input": text, "name": text, "workflow_id": text,
                       "template_id": text, "document": ref("WorkflowDocument"), "plan": {"enum": ["agent", "match"]},
                       "workflow_version": integer, "steps": step_list, "team_id": text, "worker_id": text,
-                       "source": ref("Source"), "recovery": ref("RecoveryPolicy")}, ["request_id", "input", "source"]),
+                       "source": ref("Source"), "recovery": ref("RecoveryPolicy"),
+                       "credentials": obj({"source": text})}, ["request_id", "input", "source"]),
+        "Rebind": obj({"source": {"type": ["string", "null"]}}, ["source"]),
         "Continue": obj({**command, "task_id": text, "input": text, "execution": ref("Execution"),
                          "recovery": ref("RecoveryPolicy"), "rerun": {"type": "array", "items": text, "maxItems": 8}},
                         ["request_id", "expected_version", "task_id"]),
@@ -128,6 +131,7 @@ def openapi():
         "/v1/runs/{id}/revisions/{version}": {"get": None},
         "/v1/runs/{id}/changes": {"get": None},
         "/v1/runs/{id}/archive": {"post": "Empty"},
+        "/v1/runs/{id}/credentials": {"post": "Rebind"},
         "/v1/runs/{id}/app": {"get": None, "post": "AppAction"}, "/v1/runs/{id}/app/open": {"post": "Empty"},
         "/v1/runs/{id}/recover": {"post": "Control"},
         "/v1/runs/{id}/continue": {"post": "Continue"}, "/v1/runs/{id}/assign-worker": {"post": "AssignWorker"},
@@ -173,6 +177,10 @@ def openapi():
                                      ".git, without dependency or cache directories, .env files or symlinks (200 MB limit); "
                                      "OCTOPUS-ARCHIVE.txt inside lists what was left out and how to start the project locally. "
                                      "Each download re-checks that the link's holder may still read the Session.")
+            if path == "/v1/runs/{id}/credentials":
+                op["tags"] = ["代码仓库凭证"]
+                op["description"] = ("Execute scope. Change (or, with null, remove) the Session's source credential: its creator, "
+                                     "a Team owner or an admin, with a credential they may use for the Session's repository.")
             if path.startswith("/v1/credentials"):
                 op["tags"] = ["代码仓库凭证"]
                 op["description"] = {

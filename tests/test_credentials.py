@@ -198,6 +198,125 @@ class HostCheckTests(CredentialCase):
         self.assertNotIn("wrongwrong", json.dumps(result))
 
 
+class BindingTests(CredentialCase):
+    """D35 §4: a Session's source credential is resolved at submission and pinned (R1, R4)."""
+    URL = "https://github.com/kirocrew/app.git"
+
+    def setUp(self):
+        super().setUp()
+        self.tid = self.team("凭证 Team")   # with an execution environment, so Team Sessions start
+
+    def submit(self, actor, request="start-0000000301", url=URL, team=True, **extra):
+        return self.service.start(actor, {"request_id": request, "input": "研发需求与真实验证", "source": {"type": "git", "url": url},
+                                          "steps": [{"id": "code", "name": "实现", "tool": "claude", "prompt": "实现"}],
+                                          "recovery": {"enabled": False, "max_cycles": 2},
+                                          **({"team_id": self.tid} if team else {}), **extra})
+
+    def bound(self, rid, actor=None):
+        return (self.service.run(actor or self.a, rid).get("credentials") or {}).get("source")
+
+    def test_an_explicit_choice_is_pinned_with_who_made_it(self):
+        mine = self.make(self.b, name="bob 的 GitHub")
+        rid = self.submit(self.b, credentials={"source": mine["id"]})["id"]
+        binding = self.bound(rid, self.b)
+        self.assertEqual((binding["id"], binding["name"], binding["hint"], binding["scope"]), (mine["id"], "bob 的 GitHub", "…1a2b", "user"))
+        self.assertEqual(binding["bound_by"]["username"], "bob")
+        view = self.service.run(self.b, rid)
+        self.assertEqual(view["created_by"]["username"], "bob")
+        self.assertNotIn(SECRET, json.dumps(view))
+        with self.db.read() as db:
+            events = [json.loads(r[0]) for r in db.execute("SELECT payload FROM events WHERE run_id=? AND kind='run.credentials'", (rid,))]
+        self.assertEqual(events[0]["source"]["name"], "bob 的 GitHub")
+
+    def test_automatic_matching_follows_the_tiers_and_the_most_specific_range(self):
+        personal = self.make(self.b, name="bob 的")
+        platform = self.make(self.a, name="平台", scope="platform")
+        self.store.grant(self.a, platform["id"], {"team_id": self.tid})
+        team = self.make(self.a, name="Team 全部", scope="team", team_id=self.tid)
+        self.assertEqual(self.bound(self.submit(self.b, "start-0000000302")["id"])["id"], team["id"])
+        narrow = self.make(self.a, name="Team kirocrew", scope="team", team_id=self.tid, repos=["kirocrew/*"])
+        self.assertEqual(self.bound(self.submit(self.b, "start-0000000303")["id"])["id"], narrow["id"])
+        twin = self.make(self.a, name="Team kirocrew 2", scope="team", team_id=self.tid, repos=["kirocrew/*"])
+        with self.assertRaises(Error) as caught:
+            self.submit(self.b, "start-0000000304")
+        self.assertEqual((caught.exception.status, caught.exception.code), (409, "credential_ambiguous"))
+        self.assertIn("Team kirocrew 2", str(caught.exception))
+        for row in (team, narrow, twin):
+            self.store.delete(self.a, row["id"])
+        self.assertEqual(self.bound(self.submit(self.b, "start-0000000305")["id"])["id"], platform["id"])
+        self.store.revoke(self.a, platform["id"], {"team_id": self.tid})
+        self.assertEqual(self.bound(self.submit(self.b, "start-0000000306")["id"])["id"], personal["id"])
+        self.assertEqual(self.bound(self.submit(self.b, "start-0000000307", team=False)["id"], self.b)["id"], personal["id"])
+
+    def test_a_workflow_default_applies_only_to_those_who_may_use_it(self):
+        team = self.make(self.a, name="Team 凭证", scope="team", team_id=self.tid)
+        alices = self.make(self.a, name="alice 的")
+        flow = self.service.save_workflow(self.a, {"name": "带凭证的流程", "credentials": {"source": team["id"]},
+                                                   "steps": [{"id": "code", "name": "实现", "tool": "claude", "prompt": "实现"}]})
+        self.assertEqual(flow["credentials"], {"source": team["id"]})
+        with self.db.transaction() as db:
+            db.execute("INSERT INTO grants(workflow_id,kind,principal,role) VALUES(?,?,?,?)", (flow["id"], "team", self.tid, "runner"))
+        body = lambda request: {"request_id": request, "input": "研发需求与真实验证", "workflow_id": flow["id"], "team_id": self.tid,
+                                "source": {"type": "git", "url": self.URL}, "recovery": {"enabled": False, "max_cycles": 2}}
+        self.assertEqual(self.bound(self.service.start(self.b, body("start-0000000310"))["id"])["id"], team["id"])
+        personal_flow = self.service.save_workflow(self.a, {"name": "alice 的流程", "credentials": {"source": alices["id"]},
+                                                            "steps": [{"id": "code", "name": "实现", "tool": "claude", "prompt": "实现"}]})
+        with self.db.transaction() as db:
+            db.execute("INSERT INTO grants(workflow_id,kind,principal,role) VALUES(?,?,?,?)", (personal_flow["id"], "team", self.tid, "runner"))
+        rid = self.service.start(self.b, {**body("start-0000000311"), "workflow_id": personal_flow["id"]})["id"]
+        self.assertEqual(self.bound(rid)["id"], team["id"])   # alice's own is not bob's to use: matching decides
+        with self.assertRaises(Error) as caught:
+            self.service.save_workflow(self.b, {"name": "借用", "credentials": {"source": alices["id"]},
+                                                "steps": [{"id": "code", "name": "实现", "tool": "claude", "prompt": "实现"}]})
+        self.assertEqual(caught.exception.code, "credential_forbidden")
+
+    def test_one_cannot_use_a_credential_one_may_not_use(self):
+        alices = self.make(self.a, name="alice 的")
+        platform = self.make(self.a, name="平台", scope="platform")
+        narrow = self.make(self.b, name="bob 的 other", repos=["other/*"])
+        gitlab = self.make(self.b, name="bob 的 GitLab", kind="gitlab_token", host="gitlab.example.com")
+        for cid, code in ((alices["id"], "credential_forbidden"), (platform["id"], "credential_forbidden"),
+                          (narrow["id"], "credential_scope"), (gitlab["id"], "credential_scope"), ("cred-nope", "credential_forbidden")):
+            with self.assertRaises(Error) as caught:
+                self.submit(self.b, "start-0000000320", credentials={"source": cid})
+            self.assertEqual(caught.exception.code, code, cid)
+
+    def test_public_and_ssh_repositories(self):
+        self.make(self.b, name="bob 的")
+        self.assertIsNone(self.bound(self.submit(self.b, "start-0000000330", url="https://gitlab.com/public/app.git")["id"]))
+        self.assertIsNone(self.bound(self.submit(self.b, "start-0000000331", url="git@github.com:kirocrew/app.git")["id"]))
+        mine = self.store.list(self.b)[0]["id"]
+        with self.assertRaises(Error) as caught:
+            self.submit(self.b, "start-0000000332", url="git@github.com:kirocrew/app.git", credentials={"source": mine})
+        self.assertEqual(caught.exception.code, "credential_https_only")
+
+    def test_who_may_rebind_and_what_it_records(self):
+        mine, other = self.make(self.b, name="bob 的"), self.make(self.b, name="bob 的第二枚")
+        team = self.make(self.a, name="Team 凭证", scope="team", team_id=self.tid)
+        rid = self.submit(self.b, credentials={"source": mine["id"]})["id"]
+        self.assertEqual(self.service.rebind(self.b, rid, {"source": other["id"]})["source"]["id"], other["id"])   # the creator
+        self.assertEqual(self.service.rebind(self.a, rid, {"source": team["id"]})["source"]["id"], team["id"])     # the Team owner
+        alices = self.submit(self.a, "start-0000000340")["id"]
+        with self.assertRaises(Error) as caught:
+            self.service.rebind(self.b, alices, {"source": mine["id"]})   # a member, not the creator
+        self.assertEqual(caught.exception.status, 403)
+        with self.assertRaises(Error) as caught:
+            self.service.rebind(self.e, rid, {"source": None})
+        self.assertEqual(caught.exception.status, 404)
+        self.assertIsNone(self.service.rebind(self.b, rid, {"source": None})["source"])
+        with self.db.read() as db:
+            kinds = [r[0] for r in db.execute("SELECT kind FROM events WHERE run_id=? AND kind='run.credentials'", (rid,))]
+        self.assertEqual(len(kinds), 4)   # bound at creation, then three changes
+
+    def test_a_disabled_binding_shows_as_unavailable(self):
+        mine = self.make(self.b, name="bob 的")
+        rid = self.submit(self.b, credentials={"source": mine["id"]})["id"]
+        self.store.update(self.b, mine["id"], {"disabled": True})
+        self.assertTrue(self.bound(rid, self.b)["unavailable"])
+        self.store.delete(self.b, mine["id"])
+        self.assertTrue(self.bound(rid, self.b)["unavailable"])
+
+
 class HttpTests(CredentialCase):
     def test_routes_and_scopes(self):
         self.assertEqual(required_scope("GET", "/v1/credentials"), "read")

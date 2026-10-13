@@ -559,7 +559,16 @@ class Service:
 
     def save_workflow(self, actor, body, wid=None):
         title, spec = name(body.get("name")), steps(body.get("steps"))
+        named = body.get("credentials") or {}
+        require(isinstance(named, dict) and set(named) <= {"source"} and isinstance(named.get("source", ""), str),
+                "credentials 只能是 {\"source\": \"<凭证 ID>\"}")
         with self.db.transaction() as db:
+            if named.get("source"):
+                # Only a reference: whoever runs the workflow later uses it only if they may (spec §4).
+                from . import credentials as repo_credentials
+                row = db.execute("SELECT * FROM credentials WHERE id=?", (named["source"],)).fetchone()
+                require(row is not None and repo_credentials.usable(db, actor["id"], row, "*"),
+                        "无权使用此凭证作为工作流默认值", 403, "credential_forbidden")
             if wid:
                 flow, _ = workflow_access(db, actor["id"], wid, "editor")
                 require(body.get("expected_version") == flow["version"], "Workflow 版本已更新", 409, "version_conflict")
@@ -575,9 +584,9 @@ class Service:
             else:
                 db.execute("UPDATE workflows SET name=?,name_key=?,version=? WHERE id=?",
                            (title, title.casefold(), version, wid))
-            db.execute("INSERT INTO workflow_versions(workflow_id,version,spec,author,created) VALUES(?,?,?,?,?)",
-                       (wid, version, dumps(spec), actor["id"], time.time()))
-        return {"id": wid, "name": title, "version": version, "steps": spec}
+            db.execute("INSERT INTO workflow_versions(workflow_id,version,spec,author,created,credentials) VALUES(?,?,?,?,?,?)",
+                       (wid, version, dumps(spec), actor["id"], time.time(), dumps(named)))
+        return {"id": wid, "name": title, "version": version, "steps": spec, "credentials": named}
 
     def resolve_workflow(self, actor, body):
         """Preview only: no Session, source checkout or Coding task is created."""
@@ -710,12 +719,12 @@ class Service:
                 flow, _ = workflow_access(db, actor["id"], wid, "runner")
                 require(not flow["archived"], "工作流已归档，历史 Session 可继续", 409, "archived")
                 version = resolved["selection"]["workflow_version"]
-                saved = db.execute("SELECT spec FROM workflow_versions WHERE workflow_id=? AND version=?",
+                saved = db.execute("SELECT spec,credentials FROM workflow_versions WHERE workflow_id=? AND version=?",
                                    (wid, version)).fetchone()
                 require(saved is not None, "工作流版本不存在", 404, "not_found")
-                spec = json.loads(saved["spec"])
+                spec, default = json.loads(saved["spec"]), json.loads(saved["credentials"]).get("source")
             else:
-                spec, version = resolved["steps"], None
+                spec, version, default = resolved["steps"], None, None
             goal = text(body.get("input"), "开发需求", minimum=3)
             source = body.get("source")
             require(isinstance(source, dict) and set(source) <= {"type", "url", "ref"}
@@ -736,6 +745,11 @@ class Service:
             worker = body.get("worker_id")
             if worker:
                 self._worker(db, actor["id"], worker, team)
+            named = body.get("credentials") or {}
+            require(isinstance(named, dict) and set(named) <= {"source"} and isinstance(named.get("source", ""), str),
+                    "credentials 只能是 {\"source\": \"<凭证 ID>\"}")
+            from . import credentials as repo_credentials
+            bound = repo_credentials.resolve(db, actor, source, team, named.get("source"), default)
 
             def execute():
                 rid, now = uid("run"), time.time()
@@ -745,6 +759,8 @@ class Service:
                             "match_mode": resolved["mode"], "match_reason": resolved["reason"]}
                 snapshot.update(recovery=policy(body.get("recovery")) if design is None else policy({"enabled": False}),
                                 execution_contract=2 if design is None else 1)
+                if bound:
+                    snapshot["credentials"] = {"source": bound}
                 if design is not None:
                     snapshot.update(purpose="workflow_design", design=design)
                 if planning:
@@ -760,6 +776,9 @@ class Service:
                 from .revisions import record
                 record(db, rid, 1, "created", f"创建：{len(spec)} 个任务", actor["id"], now, input=goal, steps=spec)
                 journal.record(db, rid, "run.created", journal.person(actor), worker_assigned=bool(worker))
+                if bound:
+                    journal.record(db, rid, "run.credentials", journal.person(actor),
+                                   source={k: bound[k] for k in ("id", "name", "scope", "hint")})
                 return {"id": rid, "session_id": rid, "version": 1,
                         "status": "preparing" if worker else "waiting_worker"}
             return self._command(db, actor, "design" if design is not None else "start", None,
@@ -867,6 +886,38 @@ class Service:
         """(config, retired) of a Worker; a retired one is never called again (P6)."""
         row = db.execute("SELECT config,retired FROM workers WHERE id=?", (wid,)).fetchone() if wid else None
         return (json.loads(row["config"]), bool(row["retired"])) if row else (None, False)
+
+    def rebind(self, actor, rid, body):
+        """Change or remove a Session's source credential (spec §4): its creator, a Team owner or an admin, with a
+        credential they may use for this repository; removal also by the owner of the personal credential bound."""
+        from . import credentials as repo_credentials
+        require(isinstance(body, dict) and "source" in body and (body["source"] is None or isinstance(body["source"], str)),
+                "需要 source（凭证 ID，或 null 表示撤下）")
+        with self.db.transaction() as db:
+            run = run_access(db, actor, rid)
+            snapshot = json.loads(run["snapshot"])
+            current = (snapshot.get("credentials") or {}).get("source")
+            team_owner = bool(run["team_id"]) and db.execute(
+                "SELECT 1 FROM members WHERE team_id=? AND user_id=? AND role='owner'", (run["team_id"], actor["id"])).fetchone()
+            own_removal = body["source"] is None and current and current["scope"] == "user" and \
+                (current.get("owner") or {}).get("id") == actor["id"]
+            require(run["owner_id"] == actor["id"] or team_owner or elevated(actor) or own_removal,
+                    "只有会话创建者、Team owner 或管理员可以更换凭证", 403, "forbidden")
+            bound = None
+            if body["source"]:
+                source = json.loads(run["source"])
+                try:
+                    host, path = repo_credentials.repo_path(source.get("url", ""))
+                except ValueError as exc:
+                    raise Error(409, "credential_https_only", str(exc)) from None
+                row = db.execute("SELECT * FROM credentials WHERE id=?", (body["source"],)).fetchone()
+                repo_credentials.check(db, actor, row, run["team_id"], host, path)
+                bound = repo_credentials.binding(db, row, actor)
+            snapshot["credentials"] = {"source": bound} if bound else {}
+            summary = lambda value: {k: value[k] for k in ("id", "name", "scope", "hint")} if value else None
+            journal.change(db, "runs", rid, journal.person(actor), "run.credentials",
+                           event={"source": [summary(current), summary(bound)]}, snapshot=dumps(snapshot))
+        return {"source": bound}
 
     def app(self, actor, rid):
         """The Session's remote preview as the Worker reports it, with the last lines of its log."""
@@ -1074,6 +1125,11 @@ class Service:
                                                        "selection", "match_mode", "match_reason", "purpose", "planning")})
         value["source"] = json.loads(value["source"])
         value["session_id"] = run["id"]
+        creator = db.execute("SELECT username FROM users WHERE id=?", (run["owner_id"],)).fetchone()
+        value["created_by"] = {"id": run["owner_id"], "username": creator["username"] if creator else None}
+        from . import credentials as repo_credentials
+        pinned = (snapshot.get("credentials") or {}).get("source")
+        value["credentials"] = {"source": repo_credentials.availability(db, pinned)} if pinned else None
         value["tasks"] = []
         for row in db.execute("SELECT * FROM tasks WHERE run_id=? ORDER BY ordinal", (run["id"],)):
             task = dict(row)

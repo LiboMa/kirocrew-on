@@ -303,3 +303,78 @@ class CredentialStore:
                 db.execute("UPDATE credentials SET expires=? WHERE id=?", (result["expires"], cid))
             audit(db, actor, "credential.test", "credential", cid, {"ok": result["ok"], "account": result.get("account")})
         return result
+
+
+def binding(db, row, actor):
+    """What a Session pins (spec §4): the credential's identity and who bound it, never the secret."""
+    owner = None
+    if row["scope"] == "user":
+        user = db.execute("SELECT username FROM users WHERE id=?", (row["owner_id"],)).fetchone()
+        owner = {"id": row["owner_id"], "username": user["username"] if user else None}
+    elif row["scope"] == "team":
+        team = db.execute("SELECT name FROM teams WHERE id=?", (row["owner_id"],)).fetchone()
+        owner = {"id": row["owner_id"], "name": team["name"] if team else None}
+    return {"id": row["id"], "name": row["name"], "kind": row["kind"], "scope": row["scope"], "owner": owner,
+            "hint": row["hint"], "bound_by": {"id": actor["id"], "username": actor.get("username")}, "at": time.time()}
+
+
+def check(db, actor, row, team_id, host, path):
+    """A credential the actor names for this repository: usable by them in this space, for this host and range."""
+    require(row is not None and usable(db, actor["id"], row, team_id), "无权使用此凭证（已停用、已删除或不在你的空间）",
+            403, "credential_forbidden")
+    require(row["host"] == host, f"凭证「{row['name']}」用于 {row['host']}，仓库在 {host}", 409, "credential_scope")
+    require(covers(json.loads(row["repos"]), path) is not None, f"凭证「{row['name']}」的仓库范围不含 {path}", 409,
+            "credential_scope")
+
+
+def resolve(db, actor, source, team_id, explicit=None, default=None):
+    """The source credential of a new Session (R1): the one named, else the workflow's default when the submitter may
+    use it, else the best match by tier (Team: Team → platform granted to the Team → the submitter's own; personal:
+    own → platform granted to them) and, within a tier, the most specific range. None: no credential (public)."""
+    if source.get("type") != "git":
+        require(not explicit, "新建项目不需要凭证", 409, "credential_scope")
+        return None
+    try:
+        host, path = repo_path(source["url"])
+    except ValueError as exc:
+        require(not explicit, str(exc), 409, "credential_https_only")
+        return None   # ssh / scp addresses use git's own authentication
+    fetch = lambda cid: db.execute("SELECT * FROM credentials WHERE id=?", (cid,)).fetchone()
+    if explicit:
+        row = fetch(explicit)
+        check(db, actor, row, team_id, host, path)
+        return binding(db, row, actor)
+    if default:
+        row = fetch(default)
+        try:
+            check(db, actor, row, team_id, host, path)
+            return binding(db, row, actor)
+        except Error:
+            pass   # a shared workflow's default the submitter may not use: matching decides
+    rows = [row for row in db.execute("SELECT * FROM credentials WHERE host=? AND disabled=0 ORDER BY created", (host,))
+            if usable(db, actor["id"], row, team_id) and covers(json.loads(row["repos"]), path) is not None]
+    granted = lambda row, column, value: db.execute(
+        f"SELECT 1 FROM credential_grants WHERE credential_id=? AND {column}=?", (row["id"], value)).fetchone() is not None
+    if team_id:
+        tiers = [lambda r: r["scope"] == "team" and r["owner_id"] == team_id,
+                 lambda r: r["scope"] == "platform" and granted(r, "team_id", team_id),
+                 lambda r: r["scope"] == "user"]
+    else:
+        tiers = [lambda r: r["scope"] == "user", lambda r: r["scope"] == "platform" and granted(r, "user_id", actor["id"])]
+    for tier in tiers:
+        candidates = [(covers(json.loads(row["repos"]), path), row) for row in rows if tier(row)]
+        if candidates:
+            best = max(rank for rank, _ in candidates)
+            top = [row for rank, row in candidates if rank == best]
+            require(len(top) == 1, "有多枚凭证同样适用于此仓库，请选择一枚：" + "、".join(row["name"] for row in top), 409,
+                    "credential_ambiguous")
+            return binding(db, top[0], actor)
+    return None
+
+
+def availability(db, bound):
+    """A pinned binding as the Session shows it: unavailable once its credential is disabled or deleted."""
+    if not bound:
+        return bound
+    row = db.execute("SELECT disabled FROM credentials WHERE id=?", (bound["id"],)).fetchone()
+    return {**bound, **({"unavailable": True} if row is None or row["disabled"] else {})}
