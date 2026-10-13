@@ -289,9 +289,9 @@ def server(database, port=8918, host="127.0.0.1", allowed_hosts=(), origin_secre
                     }.get(Path(relative).suffix.lower(), "application/octet-stream")
                     return self.respond_preview(data, kind)
                 if method == "GET" and path.startswith("/archive/"):
-                    ticket, _, name = path[len("/archive/"):].partition("/")
+                    ticket, _, filename = path[len("/archive/"):].partition("/")   # not "name": that is the validator
                     rid, holder, client = archive_run(ticket, signing_key)
-                    require(name == rid + ".zip", "下载链接无效", 404, "not_found")
+                    require(filename == rid + ".zip", "下载链接无效", 404, "not_found")
                     config, meta, reader = service.archive_source(rid, holder)
                     return self.stream_archive(rid, config, meta, reader, client)
                 if method == "GET" and path == "/health":
