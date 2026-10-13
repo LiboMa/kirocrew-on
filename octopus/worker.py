@@ -15,6 +15,7 @@ import threading
 import time
 import urllib.error
 from urllib.parse import quote, urlencode
+import zipfile
 
 from . import __version__
 from . import gateway_client as crew_api
@@ -38,6 +39,12 @@ def write(path, value):
         os.fsync(directory)
     finally:
         os.close(directory)
+
+
+ARCHIVE_LIMIT = 200 * 1024 * 1024   # D36 §4.2: before compression
+ARCHIVE_SKIP = {"node_modules", ".venv", "venv", "__pycache__", ".pytest_cache", ".mypy_cache", "target", ".gradle",
+                ".turbo", ".parcel-cache", ".cache"}
+ENV_KEPT = {".env.example", ".env.sample"}
 
 
 def briefing(requirement, contract):
@@ -179,6 +186,67 @@ class Worker:
         require(size <= 5_000_000, "文件超过 5 MB，不在浏览器中预览", 413, "too_large")
         import base64
         return {"content": base64.b64encode(target.read_bytes()).decode(), "size": size}
+
+    def archive_plan(self, run_id):
+        """What a download of the run's project contains (D36 §4.2): every file and .git, without dependency and cache
+        directories, .env files or symlinks (never followed); 413 above the size limit, naming the largest parts."""
+        project = workspace.project_dir(self.path(run_id))
+        files, links, excluded, sizes, total = [], [], set(), {}, 0
+        for current, dirs, names in os.walk(project, followlinks=False):
+            here = Path(current)
+            base = here.relative_to(project)
+            keep = []
+            for name in sorted(dirs):
+                relative = (base / name).as_posix()
+                if (here / name).is_symlink():
+                    links.append(relative)
+                elif name in ARCHIVE_SKIP or (name == "cache" and here.name == ".next"):
+                    excluded.add(".next/cache" if name == "cache" else name)
+                else:
+                    keep.append(name)
+            dirs[:] = keep
+            for name in sorted(names):
+                path, relative = here / name, (base / name).as_posix()
+                if path.is_symlink():
+                    links.append(relative)
+                elif (name == ".env" or name.startswith(".env.")) and name not in ENV_KEPT:
+                    excluded.add(".env")
+                elif path.is_file():
+                    size = path.stat().st_size
+                    total += size
+                    top = relative.split("/")[0]
+                    sizes[top] = sizes.get(top, 0) + size
+                    files.append((relative, path))
+        if total > ARCHIVE_LIMIT:
+            largest = "、".join(f"{name} {size / 1048576:.0f} MB" for name, size in sorted(sizes.items(), key=lambda x: -x[1])[:3])
+            raise Error(413, "archive_too_large", f"项目超过 {ARCHIVE_LIMIT // 1048576} MB（最大的部分：{largest}）："
+                        "请在交付任务中清理产物，或改用远程预览")
+        return {"files": files, "bytes": total, "excluded": sorted(excluded), "links": sorted(links)}
+
+    def write_archive(self, stream, run_id, meta, plan=None):
+        """Write the zip to ``stream`` as it is built (no temporary file), with OCTOPUS-ARCHIVE.txt last."""
+        from . import preview_spec
+        plan = plan or self.archive_plan(run_id)
+        project = workspace.project_dir(self.path(run_id))
+        try:
+            head = subprocess.run(["git", "rev-parse", "HEAD"], cwd=project, capture_output=True, text=True,
+                                  timeout=10, stdin=subprocess.DEVNULL).stdout.strip() or "无"
+        except (OSError, subprocess.TimeoutExpired):
+            head = "无"
+        spec, source, problem = preview_spec.resolve(project)
+        steps = preview_spec.local_steps(spec) if spec else [problem]
+        text = lambda key: str((meta or {}).get(key) or "")[:200]
+        readme = "\n".join([
+            "KiroCrew ON 会话源码", "", f"会话：{text('name')}（{run_id}）", f"创建者：{text('creator')}",
+            f"打包时间：{time.strftime('%Y-%m-%d %H:%M:%S UTC', time.gmtime())}", f"HEAD：{head}", "",
+            "未打包：" + ("、".join(plan["excluded"]) or "无") + "（依赖与缓存目录请在本机重新安装；.env 不随包下载）",
+            "符号链接（未打包）：" + ("、".join(plan["links"]) or "无"), "",
+            "本机启动" + {"declared": "（来自 .octopus/preview.json）", "detected": "（自动识别）"}.get(source, "") + "：",
+            *[f"  {step}" for step in steps], ""])
+        with zipfile.ZipFile(stream, "w", zipfile.ZIP_DEFLATED) as archive:
+            for relative, path in plan["files"]:
+                archive.write(path, relative)
+            archive.writestr("OCTOPUS-ARCHIVE.txt", readme)
 
     def health(self):
         # Descriptive boundary, not cryptographic proof of OS isolation.
@@ -575,6 +643,22 @@ def serve(worker, port=8928, host="127.0.0.1"):
             try:
                 require(hmac.compare_digest(self.headers.get("Authorization", ""), "Bearer " + worker.token),
                         "Worker authentication required", 401, "unauthorized")
+                if self.command == "POST" and self.path == "/archive":
+                    size = int(self.headers.get("Content-Length", "0"))
+                    require(0 < size <= 100_000, "请求体无效")
+                    body = json.loads(self.rfile.read(size))
+                    plan = worker.archive_plan(body.get("run_id"))   # refusals still answer as JSON errors
+                    self.send_response(200)
+                    self.send_header("Content-Type", "application/zip")
+                    self.send_header("Cache-Control", "no-store")
+                    self.send_header("Connection", "close")
+                    self.end_headers()
+                    self.close_connection = True
+                    try:   # streamed as it is built; a failure from here on can only end the connection
+                        worker.write_archive(self.wfile, body["run_id"], body.get("meta"), plan)
+                    except (OSError, ValueError, zipfile.BadZipFile):
+                        pass
+                    return
                 if self.command == "GET" and self.path == "/health":
                     result = worker.health()
                 else:
