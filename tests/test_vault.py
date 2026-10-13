@@ -80,6 +80,10 @@ class VaultTests(unittest.TestCase):
                          Path("/etc/kirocrew-on/credentials.key"))
         with self.assertRaises(ConfigError):
             _layer({"credentials_key": "x"}, Path("/"))
+        self.assertEqual(_layer({"credentials_private_hosts": ["gitlab.corp.example", "10.0.0.5:8443"]}, Path("/")),
+                         {"credentials_private_hosts": ("gitlab.corp.example", "10.0.0.5:8443")})
+        with self.assertRaises(ConfigError):
+            _layer({"credentials_private_hosts": ["https://x"]}, Path("/"))
 
 
 if __name__ == "__main__":

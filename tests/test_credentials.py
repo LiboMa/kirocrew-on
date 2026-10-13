@@ -308,6 +308,21 @@ class BindingTests(CredentialCase):
             kinds = [r[0] for r in db.execute("SELECT kind FROM events WHERE run_id=? AND kind='run.credentials'", (rid,))]
         self.assertEqual(len(kinds), 4)   # bound at creation, then three changes
 
+    def test_a_removed_binding_is_remembered(self):
+        mine = self.make(self.b, name="bob 的")
+        rid = self.submit(self.b, credentials={"source": mine["id"]})["id"]
+        self.service.rebind(self.b, rid, {"source": None})
+        view = self.service.run(self.b, rid)["credentials"]
+        self.assertIsNone(view["source"])
+        self.assertEqual(view["removed"]["name"], "bob 的")
+        self.assertEqual(view["removed"]["by"]["username"], "bob")
+
+    def test_a_binding_one_may_no_longer_use_shows_as_unavailable(self):
+        mine = self.make(self.b, name="bob 的")
+        rid = self.submit(self.b, credentials={"source": mine["id"]})["id"]
+        self.service.membership(self.a, self.tid, {"username": "bob"}, remove=True)   # bob's own credential, bob gone
+        self.assertTrue(self.bound(rid)["unavailable"])
+
     def test_a_disabled_binding_shows_as_unavailable(self):
         mine = self.make(self.b, name="bob 的")
         rid = self.submit(self.b, credentials={"source": mine["id"]})["id"]
@@ -315,6 +330,72 @@ class BindingTests(CredentialCase):
         self.assertTrue(self.bound(rid, self.b)["unavailable"])
         self.store.delete(self.b, mine["id"])
         self.assertTrue(self.bound(rid, self.b)["unavailable"])
+
+
+class HostSafetyTests(CredentialCase):
+    """The host check and clones must not reach this host, its network or link-local addresses (SSRF), and a redirect
+    must not carry the token elsewhere."""
+
+    def test_internal_addresses_are_refused_unless_an_admin_allows_them(self):
+        for host in ("127.0.0.1", "169.254.169.254", "10.0.0.5:8443", "0.0.0.0", "[::1]"):
+            with self.assertRaises(Error, msg=host) as caught:
+                self.make(self.b, host=host)
+            self.assertEqual(caught.exception.code, "credential_host_refused", host)
+        with patch("octopus.credentials.socket.getaddrinfo", return_value=[(2, 1, 6, "", ("127.0.0.1", 443))]):
+            with self.assertRaises(Error) as caught:
+                self.make(self.b, host="sneaky.example")
+        self.assertEqual(caught.exception.code, "credential_host_refused")
+        self.store.private_hosts = {"10.0.0.5:8443"}
+        self.assertEqual(self.make(self.b, host="10.0.0.5:8443", kind="gitlab_token")["host"], "10.0.0.5:8443")
+
+    def test_a_redirecting_host_never_gets_the_token_forwarded(self):
+        seen = []
+
+        class Redirect(BaseHTTPRequestHandler):
+            def do_GET(self):
+                seen.append(dict(self.headers))
+                if self.path.startswith("/start"):
+                    self.send_response(302)
+                    self.send_header("Location", f"http://127.0.0.1:{self.server.server_address[1]}/elsewhere/user")
+                    self.send_header("Content-Length", "0")
+                    self.end_headers()
+                    return
+                data = b'{"login": "stolen"}'
+                self.send_response(200)
+                self.send_header("Content-Length", str(len(data)))
+                self.end_headers()
+                self.wfile.write(data)
+
+            def log_message(self, *args):
+                pass
+        server = ThreadingHTTPServer(("127.0.0.1", 0), Redirect)
+        threading.Thread(target=server.serve_forever, daemon=True).start()
+        self.addCleanup(server.server_close)
+        self.addCleanup(server.shutdown)
+        made = self.make(self.b)
+        with patch("octopus.credentials.api_base", lambda kind, host: f"http://127.0.0.1:{server.server_address[1]}/start"):
+            result = self.store.test(self.b, made["id"])
+        self.assertFalse(result["ok"])
+        self.assertEqual(len(seen), 1)   # the redirect was not followed
+
+    def test_an_odd_answer_from_the_host_is_not_an_error_500(self):
+        class Odd(BaseHTTPRequestHandler):
+            def do_GET(self):
+                data = b'["not", "an", "object"]'
+                self.send_response(200)
+                self.send_header("Content-Length", str(len(data)))
+                self.end_headers()
+                self.wfile.write(data)
+
+            def log_message(self, *args):
+                pass
+        server = ThreadingHTTPServer(("127.0.0.1", 0), Odd)
+        threading.Thread(target=server.serve_forever, daemon=True).start()
+        self.addCleanup(server.server_close)
+        self.addCleanup(server.shutdown)
+        made = self.make(self.b)
+        with patch("octopus.credentials.api_base", lambda kind, host: f"http://127.0.0.1:{server.server_address[1]}"):
+            self.assertFalse(self.store.test(self.b, made["id"])["ok"])
 
 
 class HttpTests(CredentialCase):

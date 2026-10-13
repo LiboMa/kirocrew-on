@@ -174,6 +174,23 @@ describe("session detail", () => {
     expect(line).not.toHaveTextContent("不可用");
   });
 
+  test("the creator can change or remove the Session's credential", async () => {
+    const source = { id: "cred-1", name: "旧的", kind: "github_pat", scope: "user", owner: { id: "u1", username: "fixture-owner" },
+      hint: "…1a2b", bound_by: { id: "u1", username: "fixture-owner" }, at: 1, unavailable: true };
+    const calls = open(makeRun({ id: "run-e", status: "blocked", worker_id: "w1", owner_id: "u1",
+      source: { type: "git", url: "https://github.com/kirocrew/app.git" }, created_by: { id: "u1", username: "fixture-owner" },
+      credentials: { source } } as Partial<Run>), {
+      "GET /credentials": [{ id: "cred-2", name: "新的", kind: "github_pat", host: "github.com", scope: "user", access: "read",
+        hint: "…9z9z", owner: { id: "u1", username: "fixture-owner" }, repos: [], disabled: false, can_manage: true }],
+      "POST /runs/run-e/credentials": { source: { ...source, id: "cred-2", name: "新的", hint: "…9z9z", unavailable: undefined } },
+    });
+    await userEvent.click(await screen.findByRole("button", { name: "更换凭证" }));
+    await userEvent.selectOptions(screen.getByLabelText("会话凭证"), "cred-2");
+    await userEvent.click(screen.getByRole("button", { name: "保存凭证" }));
+    await waitFor(() => expect(calls.find((c) => c.method === "POST" && c.path === "/v1/runs/run-e/credentials")?.body)
+      .toEqual({ source: "cred-2" }));
+  });
+
   test("a credential that was disabled or deleted is shown as unavailable", async () => {
     const source = { id: "cred-2", name: "Team GitLab", kind: "gitlab_token", scope: "team", owner: { id: "t1", name: "平台组" },
       hint: "…0000", bound_by: { id: "u1", username: "fixture-owner" }, at: 1, unavailable: true };

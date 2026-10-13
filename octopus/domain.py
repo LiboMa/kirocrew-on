@@ -903,6 +903,7 @@ class Service:
                 (current.get("owner") or {}).get("id") == actor["id"]
             require(run["owner_id"] == actor["id"] or team_owner or elevated(actor) or own_removal,
                     "只有会话创建者、Team owner 或管理员可以更换凭证", 403, "forbidden")
+            summary = lambda value: {k: value[k] for k in ("id", "name", "scope", "hint")} if value else None
             bound = None
             if body["source"]:
                 source = json.loads(run["source"])
@@ -913,8 +914,10 @@ class Service:
                 row = db.execute("SELECT * FROM credentials WHERE id=?", (body["source"],)).fetchone()
                 repo_credentials.check(db, actor, row, run["team_id"], host, path)
                 bound = repo_credentials.binding(db, row, actor)
-            snapshot["credentials"] = {"source": bound} if bound else {}
-            summary = lambda value: {k: value[k] for k in ("id", "name", "scope", "hint")} if value else None
+            # A removal is remembered: the next preparation stops instead of cloning without the credential.
+            snapshot["credentials"] = {"source": bound} if bound else (
+                {"source": None, "removed": {**summary(current), "by": {"id": actor["id"], "username": actor.get("username")},
+                                            "at": time.time()}} if current else {})
             journal.change(db, "runs", rid, journal.person(actor), "run.credentials",
                            event={"source": [summary(current), summary(bound)]}, snapshot=dumps(snapshot))
         return {"source": bound}
@@ -1128,8 +1131,9 @@ class Service:
         creator = db.execute("SELECT username FROM users WHERE id=?", (run["owner_id"],)).fetchone()
         value["created_by"] = {"id": run["owner_id"], "username": creator["username"] if creator else None}
         from . import credentials as repo_credentials
-        pinned = (snapshot.get("credentials") or {}).get("source")
-        value["credentials"] = {"source": repo_credentials.availability(db, pinned)} if pinned else None
+        pinned = snapshot.get("credentials") or {}
+        value["credentials"] = ({"source": repo_credentials.availability(db, pinned["source"], run)} if pinned.get("source")
+                                else {"source": None, "removed": pinned["removed"]} if pinned.get("removed") else None)
         value["tasks"] = []
         for row in db.execute("SELECT * FROM tasks WHERE run_id=? ORDER BY ordinal", (run["id"],)):
             task = dict(row)
@@ -1216,7 +1220,8 @@ class Service:
         if "原生任务已停止" in error:
             title = (task["spec"]["name"] + "：已停止") if task else "原生任务已停止，尚未完成"
             action = "可请求协调者诊断，或配置后原地重跑；停止原因未报告时不能推断。"
-        elif not task and not run.get("native_parent") and ((run.get("credentials") or {}).get("source") or {}).get("unavailable"):
+        elif not task and not run.get("native_parent") and (
+                ((run.get("credentials") or {}).get("source") or {}).get("unavailable") or (run.get("credentials") or {}).get("removed")):
             title, action = "仓库凭证不可用", "在会话页更换凭证（或请凭证管理者重新启用），再续作。"
         elif not task and not run.get("native_parent"):
             title, action = "项目准备未完成", "检查仓库来源、访问权限和 Worker，处理具体错误后重跑。"

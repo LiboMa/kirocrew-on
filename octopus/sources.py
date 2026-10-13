@@ -29,9 +29,20 @@ def scrub(text, secret=None):
     return text.replace(secret, HIDDEN) if secret else text
 
 
+# Authenticated git ignores the system and the user's global configuration — an agent of the same OS user could
+# redirect the token there (url.<x>.insteadOf) or add a helper — speaks HTTPS only and follows no redirect.
+SAFE_GIT_ENV = {"GIT_CONFIG_NOSYSTEM": "1", "GIT_CONFIG_GLOBAL": os.devnull, "GIT_TERMINAL_PROMPT": "0"}
+SAFE_GIT_ARGS = ("-c", "credential.helper=", "-c", "protocol.allow=never", "-c", "protocol.https.allow=always",
+                 "-c", "http.followRedirects=false")
+
+
 @contextmanager
 def askpass(run, auth):
-    """GIT_ASKPASS answering git's Username / Password prompts from a 0600 file, both removed when the clone ends."""
+    """GIT_ASKPASS answering git's Username / Password prompts from a 0600 file, both removed when the clone ends. It
+    answers only the prompts for its own host (and user), so the token goes nowhere else."""
+    host, user = str(auth.get("host", "")), str(auth.get("username", ""))
+    if not re.fullmatch(r"[A-Za-z0-9.\-\[\]:]+", host) or not re.fullmatch(r"[A-Za-z0-9._-]+", user):
+        raise ValueError("凭证的主机或用户名无效")
     folder = run / ".askpass"
     shutil.rmtree(folder, ignore_errors=True)   # left by a crash
     folder.mkdir(mode=0o700)
@@ -42,10 +53,11 @@ def askpass(run, auth):
             file.write(auth["secret"])
         script = folder / "askpass.sh"
         script.write_text("#!/bin/sh\ncase \"$1\" in\n"
-                          f"  Username*) printf '%s\\n' {shlex.quote(auth['username'])} ;;\n"
-                          f"  *) cat {shlex.quote(str(secret))} ;;\nesac\n")
+                          f"  \"Username for 'https://{host}'\"*) printf '%s\\n' {shlex.quote(user)} ;;\n"
+                          f"  \"Password for 'https://{user}@{host}'\"*) cat {shlex.quote(str(secret))} ;;\n"
+                          "  *) exit 1 ;;\nesac\n")
         script.chmod(0o700)
-        yield {"GIT_ASKPASS": str(script), "GIT_TERMINAL_PROMPT": "0"}
+        yield {**SAFE_GIT_ENV, "GIT_ASKPASS": str(script)}
     finally:
         shutil.rmtree(folder, ignore_errors=True)
 
@@ -168,7 +180,7 @@ def prepare_project(run, *, source=None, ref=None, new=False, auth=None):
                 if auth:
                     # No other credential helper answers; the remote keeps the plain URL; agents cannot push with it.
                     with askpass(run, auth) as env:
-                        _git(workspace, "-c", "credential.helper=", "clone", "--no-hardlinks", "--no-checkout", "--",
+                        _git(workspace, *SAFE_GIT_ARGS, "clone", "--no-hardlinks", "--no-checkout", "--",
                              source, str(staging), env=env)
                     _git(staging, "remote", "set-url", "--push", "origin", "DISABLED_NO_PUSH")
                 else:

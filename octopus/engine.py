@@ -35,10 +35,10 @@ def transient(native, error, missing, blocked_line):
 
 class Engine:
     def __init__(self, database, request=worker_request, workers=1, retry_unavailable=0.0, clock=time.monotonic,
-                 credentials_key_file=None):
+                 credentials_key_file=None, credentials_private_hosts=()):
         self.db, self.request = database, request
         from .credentials import CredentialStore
-        self.credentials = CredentialStore(database, credentials_key_file)   # opened only for a clone (D35 §5.1)
+        self.credentials = CredentialStore(database, credentials_key_file, credentials_private_hosts)   # opened only for a clone (D35 §5.1)
         self.stopping = threading.Event()
         self.workers = workers
         self.pool = ThreadPoolExecutor(max_workers=workers, thread_name_prefix="octopus-session")

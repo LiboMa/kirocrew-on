@@ -131,6 +131,43 @@ class CloneTests(PrivateCloneCase):
         self.assertNotIn(b"wrongWRONG", self.everything())
         self.assertFalse((self.run_dir / ".askpass").exists())
 
+    def test_global_git_config_cannot_redirect_the_token(self):
+        caught = []
+
+        class Thief(BaseHTTPRequestHandler):
+            def do_GET(self):
+                caught.append(self.headers.get("Authorization"))
+                self.send_response(401)
+                self.send_header("WWW-Authenticate", 'Basic realm="x"')
+                self.send_header("Content-Length", "0")
+                self.end_headers()
+
+            def log_message(self, *args):
+                pass
+        thief = ThreadingHTTPServer(("127.0.0.1", 0), Thief)
+        threading.Thread(target=thief.serve_forever, daemon=True).start()
+        self.addCleanup(thief.server_close)
+        self.addCleanup(thief.shutdown)
+        planted = self.root / "planted-gitconfig"   # what an agent of the same OS user could write
+        planted.write_text(f'[url "http://127.0.0.1:{thief.server_address[1]}/"]\n\tinsteadOf = {self.url.rsplit("/", 1)[0]}/\n'
+                           '[credential]\n\thelper = store\n')
+        with patch.dict(os.environ, {"GIT_CONFIG_GLOBAL": str(planted)}):
+            record = sources.prepare_project(self.run_dir, source=self.url, auth=self.auth())
+        self.assertEqual(record["status"], "ready")
+        self.assertEqual(caught, [])
+
+    def test_askpass_answers_only_its_own_host(self):
+        auth = self.auth()
+        with sources.askpass(self.root, auth) as env:
+            script = env["GIT_ASKPASS"]
+            ask = lambda prompt: subprocess.run([script, prompt], capture_output=True, text=True)
+            own = ask(f"Password for 'https://x-access-token@{auth['host']}': ")
+            other = ask("Password for 'https://x-access-token@evil.example': ")
+            user = ask(f"Username for 'https://{auth['host']}': ")
+        self.assertEqual((own.returncode, own.stdout), (0, TOKEN))
+        self.assertEqual((other.returncode, other.stdout), (1, ""))
+        self.assertEqual(user.stdout.strip(), "x-access-token")
+
     def test_git_errors_never_carry_the_secret(self):
         text = ("fatal: unable to access 'https://x-access-token:ghp_SECRET@github.com/a/b.git/'\n"
                 "> Authorization: Basic eC1hY2Nlc3MtdG9rZW46Z2hwX1NFQ1JFVA==\nPRIVATE-TOKEN: glpat-abc\nplain ghp_SECRET here")
@@ -205,6 +242,32 @@ class EngineTests(AccessCase):
         self.advance(self.submit("start-0000000402"))
         prepare = next(body for path, body in self.calls if path == "/prepare")
         self.assertNotIn("git_auth", prepare)
+
+    def test_a_credential_the_session_may_no_longer_use_is_not_sent(self):
+        platform = self.service.credentials.create(self.a, {"name": "平台", "kind": "github_pat", "host": "github.com",
+                                                            "scope": "platform", "secret": TOKEN})
+        self.service.credentials.grant(self.a, platform["id"], {"team_id": self.tid})
+        granted = self.submit("start-0000000410", credentials={"source": platform["id"]})
+        self.service.credentials.revoke(self.a, platform["id"], {"team_id": self.tid})
+        personal = self.service.credentials.create(self.b, {"name": "bob 的", "kind": "github_pat", "host": "github.com",
+                                                            "scope": "user", "secret": TOKEN})
+        left = self.submit("start-0000000411", credentials={"source": personal["id"]})
+        self.service.membership(self.a, self.tid, {"username": "bob"}, remove=True)
+        for rid in (granted, left):
+            run = self.advance(rid)
+            self.assertEqual(run["status"], "blocked", rid)
+        self.assertNotIn("/prepare", [path for path, _ in self.calls])
+
+    def test_removing_the_binding_blocks_the_next_preparation(self):
+        made = self.service.credentials.create(self.b, {"name": "bob 的", "kind": "github_pat", "host": "github.com",
+                                                        "scope": "user", "secret": TOKEN})
+        rid = self.submit("start-0000000412", credentials={"source": made["id"]})
+        self.service.rebind(self.b, rid, {"source": None})
+        run = self.advance(rid)
+        self.assertEqual(run["status"], "blocked")
+        self.assertIn("撤下", run["error"])
+        self.assertNotIn("/prepare", [path for path, _ in self.calls])
+        self.assertEqual(self.service.run(self.b, rid)["attention"]["title"], "仓库凭证不可用")
 
     def test_a_disabled_credential_blocks_preparation_and_says_so(self):
         made = self.service.credentials.create(self.b, {"name": "bob 的", "kind": "github_pat", "host": "github.com",

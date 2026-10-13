@@ -158,6 +158,16 @@ class CredentialToolTests(unittest.TestCase):
                                            "credentials": {"source": "cred-1"}})
         self.assertEqual(client.calls[-1][2]["credentials"], {"source": "cred-1"})
 
+    def test_continue_can_change_the_sessions_credential_first(self):
+        client = Fake()
+        mcp.call(client, "octopus_continue", {"run_id": "r1", "request_id": "c-1", "expected_version": 3, "task_id": "code",
+                                              "credentials": {"source": "cred-2"}})
+        self.assertEqual(client.calls[0], ("POST", "/v1/runs/r1/credentials", {"source": "cred-2"}))
+        self.assertEqual(client.calls[1][1], "/v1/runs/r1/continue")
+        self.assertNotIn("credentials", client.calls[1][2])
+        continue_tool = next(tool for tool in mcp.TOOLS if tool["name"] == "octopus_continue")
+        self.assertIn("credentials", continue_tool["inputSchema"]["properties"])
+
     def test_no_tool_creates_a_credential_or_takes_a_secret(self):
         names = {tool["name"] for tool in mcp.TOOLS}
         self.assertIn("octopus_credentials", names)

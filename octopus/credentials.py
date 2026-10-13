@@ -8,8 +8,10 @@ A credential others may not see answers 404; one they may see but not manage, 40
 sealed (octopus/vault.py) on the way in and only ever opened for a host check or a clone, never returned.
 """
 import calendar
+import ipaddress
 import json
 import re
+import socket
 import time
 import urllib.error
 import urllib.request
@@ -22,10 +24,38 @@ from .security import Error, elevated, require
 KINDS = ("github_pat", "gitlab_token")      # github_app arrives in phase 3
 SCOPES = ("user", "team", "platform")
 ACCESS = ("read", "write")
-HOST = re.compile(r"[a-z0-9]([a-z0-9-]*[a-z0-9])?(\.[a-z0-9]([a-z0-9-]*[a-z0-9])?)+(:[0-9]{1,5})?")
+HOST = re.compile(r"([a-z0-9]([a-z0-9-]*[a-z0-9])?(\.[a-z0-9]([a-z0-9-]*[a-z0-9])?)+|\[[0-9a-f:]+\])(:[0-9]{1,5})?")
 SEGMENT = r"[A-Za-z0-9_][A-Za-z0-9_.-]*"
 REPO = re.compile(rf"{SEGMENT}(/{SEGMENT})*(/\*)?")
 SECRET = re.compile(r"[\x21-\x7e]{8,500}")   # printable, no spaces or line breaks
+
+
+class _NoRedirect(urllib.request.HTTPRedirectHandler):
+    def redirect_request(self, *args, **kwargs):
+        return None   # a redirect answers as an error: the token is never sent on to another address
+
+
+OPENER = urllib.request.build_opener(_NoRedirect)
+
+
+def refused_address(host, allowed=()):
+    """Why a credential's host may not be used — it names or resolves to this host, a private or link-local network
+    (the token would go there with the host check or a clone) — or None. Admins list self-hosted instances on a private
+    network in credentials_private_hosts."""
+    if host in allowed:
+        return None
+    name = host[1:host.index("]")] if host.startswith("[") else host.rsplit(":", 1)[0]
+    try:
+        addresses = {ipaddress.ip_address(name)}
+    except ValueError:
+        try:
+            addresses = {ipaddress.ip_address(info[4][0].split("%")[0]) for info in socket.getaddrinfo(name, 443, proto=socket.IPPROTO_TCP)}
+        except (OSError, UnicodeError):
+            return None   # not resolvable now: a check or clone would fail on its own
+    if any(a.is_loopback or a.is_link_local or a.is_private or a.is_unspecified or a.is_multicast or a.is_reserved
+           for a in addresses):
+        return f"主机 {host} 指向本机、内网或链路本地地址：自建实例请由平台管理员加入 credentials_private_hosts"
+    return None
 
 
 def repo_path(url):
@@ -94,9 +124,26 @@ def manageable(db, actor, row):
     return elevated(actor)
 
 
+def bound_usable(db, row, run):
+    """May this Session (still) use the credential it pinned? The rule of every use (spec §7), and what the Session
+    shows: not disabled; a personal one only while its owner is active and — in a Team Session — still a member; a Team
+    one for that Team's Sessions; a platform one while it is granted to the Session's Team or creator."""
+    if row is None or row["disabled"]:
+        return False
+    if row["scope"] == "user":
+        owner = db.execute("SELECT active FROM users WHERE id=?", (row["owner_id"],)).fetchone()
+        if owner is None or not owner["active"]:
+            return False
+        return _member_role(db, row["owner_id"], run["team_id"]) is not None if run["team_id"] else row["owner_id"] == run["owner_id"]
+    if row["scope"] == "team":
+        return row["owner_id"] == run["team_id"]
+    return any((g["team_id"] and g["team_id"] == run["team_id"]) or (g["user_id"] and g["user_id"] == run["owner_id"])
+               for g in db.execute("SELECT team_id,user_id FROM credential_grants WHERE credential_id=?", (row["id"],)))
+
+
 class CredentialStore:
-    def __init__(self, database, key_file=None):
-        self.db, self.configured = database, key_file
+    def __init__(self, database, key_file=None, private_hosts=()):
+        self.db, self.configured, self.private_hosts = database, key_file, frozenset(private_hosts)
 
     @property
     def key(self):
@@ -170,6 +217,8 @@ class CredentialStore:
         require(body.get("kind") in KINDS, "kind 只能是 github_pat 或 gitlab_token")
         host = str(body.get("host", "")).strip().lower()
         require(HOST.fullmatch(host), "host 须为主机名（如 github.com、gitlab.example.com），不含 https:// 与路径")
+        refused = refused_address(host, self.private_hosts)
+        require(not refused, refused, 409, "credential_host_refused")
         scope = body.get("scope", "user")
         require(scope in SCOPES, "scope 只能是 user、team 或 platform")
         values = self._fields(body)
@@ -271,13 +320,20 @@ class CredentialStore:
         without a binding. A disabled, deleted or no longer matching credential is refused; each use is audited, with
         the Session's creator as the one on whose behalf it is used."""
         from .domain import audit
-        bound = (json.loads(run["snapshot"]).get("credentials") or {}).get("source")
+        pinned = json.loads(run["snapshot"]).get("credentials") or {}
+        bound = pinned.get("source")
+        require(bound or not pinned.get("removed"),
+                f"此会话的凭证「{(pinned.get('removed') or {}).get('name', '')}」已被撤下：请在会话页更换凭证后续作", 409,
+                "credential_unavailable")
         if not bound:
             return None
         with self.db.read() as db:
             row = db.execute("SELECT * FROM credentials WHERE id=?", (bound["id"],)).fetchone()
-        require(row is not None and not row["disabled"],
-                f"凭证「{bound['name']}」已停用或删除：请在会话页更换凭证（或请管理者重新启用）后续作", 409, "credential_unavailable")
+            usable_now = bound_usable(db, row, run)
+        require(usable_now, f"凭证「{bound['name']}」已不能用于此会话（已停用、删除、授权撤销或所有者已离开）："
+                            "请在会话页更换凭证后续作", 409, "credential_unavailable")
+        refused = refused_address(row["host"], self.private_hosts)
+        require(not refused, refused, 409, "credential_host_refused")
         source = json.loads(run["source"])
         host, path = repo_path(source.get("url", ""))
         require(row["host"] == host and covers(json.loads(row["repos"]), path) is not None,
@@ -301,9 +357,15 @@ class CredentialStore:
 
         def get(path):
             request = urllib.request.Request(base + path, headers=headers)
-            with urllib.request.urlopen(request, timeout=15) as response:
-                return json.load(response), response.headers
+            with OPENER.open(request, timeout=15) as response:
+                value = json.loads(response.read(65536))
+                if not isinstance(value, dict):
+                    raise ValueError("not an object")
+                return value, response.headers
         result = {"ok": False}
+        refused = refused_address(row["host"], self.private_hosts)
+        if refused:
+            return {"ok": False, "error": refused}
         try:
             user, answer = get("/user")
             result = {"ok": True, "account": user.get("login") or user.get("username"), "expires": None}
@@ -318,9 +380,12 @@ class CredentialStore:
                     pass   # project and group tokens may not read themselves
         except urllib.error.HTTPError as exc:
             exc.close()
-            result["error"] = f"托管方拒绝了这枚凭证（HTTP {exc.code}）"
-        except (urllib.error.URLError, OSError, ValueError):
-            result["error"] = f"无法连接 {row['host']} 的 API"
+            result = {"ok": False, "error": f"托管方拒绝了这枚凭证（HTTP {exc.code}）" if exc.code in (401, 403)
+                      else f"托管方返回 HTTP {exc.code}（不跟随跳转）"}
+        except ValueError:
+            result = {"ok": False, "error": "托管方的回答无法识别"}
+        except (urllib.error.URLError, OSError):
+            result = {"ok": False, "error": f"无法连接 {row['host']} 的 API"}
         with self.db.transaction() as db:
             if result.get("expires"):
                 db.execute("UPDATE credentials SET expires=? WHERE id=?", (result["expires"], cid))
@@ -395,9 +460,9 @@ def resolve(db, actor, source, team_id, explicit=None, default=None):
     return None
 
 
-def availability(db, bound):
-    """A pinned binding as the Session shows it: unavailable once its credential is disabled or deleted."""
+def availability(db, bound, run):
+    """A pinned binding as the Session shows it: unavailable when its next use would be refused (bound_usable)."""
     if not bound:
         return bound
-    row = db.execute("SELECT disabled FROM credentials WHERE id=?", (bound["id"],)).fetchone()
-    return {**bound, **({"unavailable": True} if row is None or row["disabled"] else {})}
+    row = db.execute("SELECT * FROM credentials WHERE id=?", (bound["id"],)).fetchone()
+    return {**bound, **({} if bound_usable(db, row, run) else {"unavailable": True})}

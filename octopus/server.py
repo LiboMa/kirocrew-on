@@ -181,12 +181,13 @@ PREVIEW_PAGE = ("<!doctype html><html lang=\"zh-CN\"><head><meta charset=\"utf-8
 
 
 def server(database, port=8918, host="127.0.0.1", allowed_hosts=(), origin_secret=None, preview_url="",
-           credentials_key_file=None):
+           credentials_key_file=None, credentials_private_hosts=()):
     if origin_secret is not None and len(origin_secret) < 32:
         # An empty or truncated secret file must fail closed instead of turning origin enforcement off.
         raise ValueError("源站密钥为空或过短（至少 32 个字符）；检查 origin_secret_file")
     service = Service(database)
     service.credentials.configured = credentials_key_file
+    service.credentials.private_hosts = frozenset(credentials_private_hosts)
     signing_key = preview_key(database.root)
     hosts, local_hosts = set(), set()
     failures, limiter_lock = {}, threading.Lock()

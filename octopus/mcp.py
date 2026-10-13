@@ -79,7 +79,8 @@ TOOLS = [
                                                 "依赖重跑任务的任务与其后的审查 / 测试任务会自动一并重跑，其余沿用上一版结果。",
      "inputSchema": object_schema({"run_id": STRING, "request_id": STRING, "expected_version": {"type": "integer"},
                                   "task_id": STRING, "input": STRING, "execution": {"type": "object"}, "recovery": RECOVERY,
-                                  "rerun": {"type": "array", "items": STRING}},
+                                  "rerun": {"type": "array", "items": STRING},
+                                  "credentials": object_schema({"source": {"type": ["string", "null"]}})},
                                  ["run_id", "request_id", "expected_version", "task_id"])},
     {"name": "octopus_recover", "description": "在原 Session 和 Workspace 启动 KiroCrew Coordinator 诊断，按实际失败证据重试、退回上游返工并复审，或说明缺失输入。异步执行，以状态与纠错记录确认结果。",
      "inputSchema": object_schema({"run_id": STRING, "request_id": STRING, "expected_version": {"type": "integer"}},
@@ -422,6 +423,9 @@ def call(client, name, args):
         return {"changes": client.request("GET", "/v1/runs/" + args["run_id"] + "/changes?" + urlencode(query))}
     if name in {"octopus_continue", "octopus_recover", "octopus_control"}:
         rid = args.pop("run_id")
+        if name == "octopus_continue" and "credentials" in args:
+            # A Session stopped on its credential: change (or remove) it first, then continue (D35 §4).
+            client.request("POST", "/v1/runs/" + quote(rid, safe="") + "/credentials", {"source": args.pop("credentials").get("source")})
         action = args.pop("action") if name == "octopus_control" else name.removeprefix("octopus_")
         if action not in {"continue", "recover", "stop", "close", "reopen", "delete"}:
             raise ValueError("Invalid action")

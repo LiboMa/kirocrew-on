@@ -189,7 +189,7 @@ export interface Run {
   /** Who submitted the Session (D35 §4). */
   created_by?: { id: string; username?: string | null };
   /** The source credential pinned at submission (D35 §4); never the secret. */
-  credentials?: { source: CredentialBinding | null } | null;
+  credentials?: { source: CredentialBinding | null; removed?: { id: string; name: string; hint: string; by: { username?: string | null } } } | null;
   /** Tasks the latest continue left as they were, still carrying that version's result (D34). */
   kept?: { version: number; tasks: string[] };
   id: string;

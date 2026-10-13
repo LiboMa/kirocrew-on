@@ -19,6 +19,7 @@ import { EventTimeline } from "@/features/sessions/EventTimeline";
 import { NativeSessionPanel } from "@/features/sessions/NativeSessionPanel";
 import { AppPreviewPanel } from "@/features/sessions/AppPreviewPanel";
 import { ChangesPanel } from "@/features/sessions/ChangesPanel";
+import { CredentialControl } from "@/features/sessions/CredentialControl";
 import { RevisionsPanel } from "@/features/sessions/RevisionsPanel";
 import { RecoveryPanel } from "@/features/sessions/RecoveryPanel";
 import { TaskList } from "@/features/sessions/TaskList";
@@ -78,6 +79,8 @@ export function SessionView({ id }: { id: string }) {
                   <> · 凭证：{bindingLabel(run.credentials.source)}
                     {run.credentials.source.unavailable && <span className="text-destructive">（已停用或删除，请更换后续作）</span>}</>
                 )}
+                {run.credentials?.removed && <> · <span className="text-destructive">凭证「{run.credentials.removed.name}」已撤下</span></>}
+                <CredentialControl run={run} />
               </p>
             )}
           </div>

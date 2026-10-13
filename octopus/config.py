@@ -48,6 +48,8 @@ class Settings:
     api_host: str = "127.0.0.1"
     api_port: int = 8918
     allowed_hosts: tuple[str, ...] = ()
+    # Self-hosted Git instances on a private network that repository credentials may name (D35; others are refused).
+    credentials_private_hosts: tuple[str, ...] = ()
     public_url: str = ""
     # The remote preview's own distribution (D36 §5.2), e.g. https://dxxxx.cloudfront.net; empty: no remote preview.
     preview_url: str = ""
@@ -86,7 +88,8 @@ def _path(value, base):
 
 def _layer(values, base):
     """Validate one layer's raw values and resolve its relative paths against ``base``."""
-    known = PATHS | set(INTS) | set(FLOATS) | STRINGS | {"allowed_hosts", "path_prepend", "tools", "kirocrew_versions"}
+    known = PATHS | set(INTS) | set(FLOATS) | STRINGS | {"allowed_hosts", "path_prepend", "tools", "kirocrew_versions",
+                                                         "credentials_private_hosts"}
     unknown = set(values) - known
     if unknown:
         raise ConfigError("未知配置项：" + ", ".join(sorted(unknown)))
@@ -114,10 +117,10 @@ def _layer(values, base):
             if not low <= number <= high:
                 raise ConfigError(f"{key} 须在 {low}–{high} 之间")
             result[key] = number
-        elif key == "allowed_hosts":
+        elif key in ("allowed_hosts", "credentials_private_hosts"):
             hosts = tuple(h.strip() for h in (value.split(",") if isinstance(value, str) else value) if h.strip())
             if not all(HOST.match(h) for h in hosts):
-                raise ConfigError("allowed_hosts 只能包含 host[:port]")
+                raise ConfigError(f"{key} 只能包含 host[:port]")
             result[key] = hosts
         elif key == "kirocrew_versions":
             versions = tuple(v.strip() for v in (value.split(",") if isinstance(value, str) else value) if str(v).strip())
@@ -149,7 +152,8 @@ def _layer(values, base):
 def _environment(environ):
     # Only known settings are read: the OCTOPUS_ namespace is shared with secrets passed by name
     # (e.g. `init --password-env OCTOPUS_ADMIN_PASSWORD`). Unknown keys are still errors in files.
-    known = PATHS | set(INTS) | set(FLOATS) | STRINGS | {"allowed_hosts", "path_prepend", "kirocrew_versions"}
+    known = PATHS | set(INTS) | set(FLOATS) | STRINGS | {"allowed_hosts", "path_prepend", "kirocrew_versions",
+                                                         "credentials_private_hosts"}
     values, tools = {}, {}
     for key, value in environ.items():
         if key.startswith("OCTOPUS_TOOL_"):
