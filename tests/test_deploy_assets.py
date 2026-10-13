@@ -322,7 +322,17 @@ class ScriptTests(unittest.TestCase):
         log_format = conf[conf.index("log_format"):conf.index(";", conf.index("log_format"))]
         self.assertIn("$uri", log_format)
         self.assertNotIn("$request_uri", log_format)   # opening links carry a ticket: the path only
-        self.assertEqual(set(re.findall(r"__[A-Z_]+__", conf)), {"__PREVIEW_PORT__", "__API_PORT__", "__ORIGIN_SECRET__"})
+        self.assertEqual(set(re.findall(r"__[A-Z_]+__", conf)),
+                         {"__PREVIEW_PORT__", "__API_PORT__", "__ORIGIN_SECRET__", "__PREVIEW_GATE__"})
+        # Every request to the API proves it comes through this nginx (other processes on the host cannot).
+        self.assertEqual(conf.count('proxy_set_header X-Preview-Gate "__PREVIEW_GATE__";'), 3)
+        app = conf[conf.index("    location / {"):]
+        for part in ("if ($http_service_worker) {", "proxy_hide_header Cache-Control;", 'add_header Cache-Control "no-cache" always;',
+                     "proxy_ignore_headers X-Accel-Redirect X-Accel-Expires X-Accel-Limit-Rate X-Accel-Buffering X-Accel-Charset;",
+                     'proxy_set_header X-Preview-Gate "";'):
+            self.assertIn(part, app)
+        # The service-worker check comes before auth_request, so no script is ever fetched for a registration.
+        self.assertLess(app.index("$http_service_worker"), app.index("auth_request /_kirocrew_auth;"))
 
     def test_a_worker_host_preview_port_reaches_only_preview_ports_with_the_check_header(self):
         conf = (ROOT / "deploy/nginx/kirocrew-worker-preview.conf").read_text()
@@ -332,6 +342,8 @@ class ScriptTests(unittest.TestCase):
                      'proxy_set_header X-Preview-Verify "";', "proxy_set_header Upgrade $http_upgrade;"):
             self.assertIn(part, conf)
         self.assertEqual(set(re.findall(r"__[A-Z_]+__", conf)), {"__PREVIEW_TLS_PORT__", "__PREVIEW_VERIFY__"})
+        self.assertIn("proxy_ignore_headers X-Accel-Redirect X-Accel-Expires X-Accel-Limit-Rate X-Accel-Buffering X-Accel-Charset;",
+                      conf)
 
     def installer_function(self, name):
         text = (ROOT / "deploy/install/al2023.sh").read_text()
@@ -355,6 +367,8 @@ class ScriptTests(unittest.TestCase):
             self.assertEqual(platform.returncode, 0, platform.stderr)
             self.assertIn("listen 8929;", platform.stdout)
             self.assertIn("proxy_pass http://127.0.0.1:8918/v1/preview-auth;", platform.stdout)
+            from octopus.remote_preview import gate_value
+            self.assertIn(f'proxy_set_header X-Preview-Gate "{gate_value("s" * 40)}";', platform.stdout)
             self.assertNotRegex(worker.stdout + platform.stdout, r"__[A-Z_]+__")
             secret.write_text("short")
             self.assertNotEqual(run("render_preview", str(ROOT / "deploy/nginx/kirocrew-preview.conf"), str(secret), "8929",

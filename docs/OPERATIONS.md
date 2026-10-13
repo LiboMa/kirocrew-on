@@ -237,7 +237,16 @@ CloudFront 只使用 us-east-1 的证书）：分发加上别名与证书（SNI�
   - 安装脚本渲染 nginx 配置（`nginx -t` 不通过时移除并退出），平台 `platform.toml` 写入 `preview_url`，Worker 主机边界配置写入
     `preview_tls_port` / `preview_tls_name`。
   - 首次写入边界配置会让该主机的 Gateway 重启一次（指纹包含边界配置），部署前确认没有进行中的会话。
-- **限制**：第一版不限 CPU / 内存；同一浏览器同时只预览一个会话（预览域对所有会话相同）；`/_kirocrew/` 路径保留给平台。
+- **同源防护**：所有会话的应用共用预览域。
+  - nginx 拒绝 Service Worker 脚本请求（`Service-Worker` 头），所以应用无法注册 Service Worker。
+  - 代理的响应一律为 `Cache-Control: no-cache`，并忽略应用发出的 `X-Accel-*`。
+  - 打开链接时清除预览域的缓存、Cookie、存储与已打开的页面（`Clear-Site-Data`）。
+  - 本机接口要求 nginx 带上由源站密钥派生的 `X-Preview-Gate`，因此平台主机上的其他进程（如个人空间的 Agent）拿不到上游
+    与 Worker 主机的校验头。
+  - Worker 重启后，旧预览的记录在该执行环境下一次启动预览时，以及每分钟回收时停止（按 Worker 进程实例判断）。
+  - 剩余风险：浏览器中仍开着的旧预览页面，在打开另一个会话的预览后仍能以新 Cookie 访问预览域。只打开可信会话的预览，或预览
+    完关闭页面；按会话分开的预览域（`<会话>.preview.<域名>`，需要泛域名证书）可以彻底消除，待定。
+- **限制**：第一版不限 CPU / 内存；同一浏览器同时只预览一个会话；`/_kirocrew/` 路径保留给平台。
 
 ### 下载会话源码（D36）
 

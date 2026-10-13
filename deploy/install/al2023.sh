@@ -38,15 +38,17 @@ open(path, "w").write(text)
 PY
 }
 render_preview() {  # render_preview TEMPLATE SECRET_FILE PREVIEW_PORT API_PORT: the platform's remote preview server (D36);
-  # the origin secret comes from its file, never a command line
-  "$PYTHON" -I - "$@" <<'PY'
+  # the origin secret comes from its file, never a command line, and the gate from it as the API derives it
+  "$PYTHON" -I - "$TARGET" "$@" <<'PY'
 import re, sys
-template, secret_file, preview_port, api_port = sys.argv[1:]
+release, template, secret_file, preview_port, api_port = sys.argv[1:]
+sys.path.insert(0, release)
+from octopus.remote_preview import gate_value
 secret = open(secret_file).read().strip()
 if not re.fullmatch(r"[A-Za-z0-9_-]{32,}", secret):
     sys.exit("源站密钥缺失或格式不符")
-print(open(template).read().replace("__ORIGIN_SECRET__", secret).replace("__PREVIEW_PORT__", preview_port)
-      .replace("__API_PORT__", api_port), end="")
+print(open(template).read().replace("__ORIGIN_SECRET__", secret).replace("__PREVIEW_GATE__", gate_value(secret))
+      .replace("__PREVIEW_PORT__", preview_port).replace("__API_PORT__", api_port), end="")
 PY
 }
 render_worker_preview() {  # render_worker_preview TEMPLATE TOKEN_FILE PORT: a Worker host's preview server; its check header
