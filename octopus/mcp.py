@@ -121,6 +121,13 @@ TOOLS += [
      "description": "把 Session 的源码（含 .git，不含依赖目录与 .env）下载并解压到本机目录 dest（默认 ./kirocrew-<run>），"
                     "返回目录、HEAD 与本机启动步骤（来自 .octopus/preview.json 或自动识别）。目录已存在且非空时拒绝。",
      "inputSchema": object_schema({"run_id": STRING, "dest": STRING}, ["run_id"])},
+    {"name": "octopus_app",
+     "description": "Session 的远程预览（在执行环境中运行应用，经独立的预览域名在浏览器中打开）：start 启动（按 .octopus/preview.json "
+                    "或自动识别；会话执行中不能启动；每个执行环境最多 3 个）；status 查看状态与最近日志（installing / starting / "
+                    "running / failed / stopped）；open 取得打开链接（10 分钟内有效、只能打开一次，打开后浏览器保持 8 小时）；"
+                    "stop 停止。空闲 30 分钟自动停止。",
+     "inputSchema": object_schema({"run_id": STRING, "action": {"type": "string", "enum": ["start", "status", "open", "stop"]}},
+                                  ["run_id", "action"])},
     {"name": "octopus_admin_users",
      "description": "平台管理员（需含 admin 的 Token）：列出用户，或按用户名停用 / 恢复、设为 / 取消管理员。"
                     "不创建用户、不设置密码（请在控制台「用户管理」操作）；停用会立即吊销该用户的全部 Token。",
@@ -210,6 +217,24 @@ def download(client, args):
     spec, _, problem = preview_spec.resolve(target)
     return {"dir": str(target), "bytes": size, "files": files, "head": head,
             "start": preview_spec.local_steps(spec) if spec else [problem], "skipped": skipped, "readme": notes}
+
+
+APP_LOG = 40   # status keeps the agent's context small; the console shows 200 lines
+
+
+def app(client, args):
+    """Start, look at, open or stop a Session's remote preview (D36 §5.3)."""
+    action = args.get("action")
+    if action not in {"start", "status", "open", "stop"}:
+        raise ValueError("action 只能是 start / status / open / stop")
+    path = "/v1/runs/" + quote(str(args.get("run_id") or ""), safe="") + "/app"
+    if action == "status":
+        view = client.request("GET", path)
+        return {**view, "log": (view.get("log") or [])[-APP_LOG:]}
+    if action == "open":
+        return {**client.request("POST", path + "/open", {}),
+                "note": "链接 10 分钟内有效、只能打开一次；打开后浏览器保持 8 小时，可直接刷新。只交给用户本人，不要转发到公开渠道。"}
+    return client.request("POST", path, {"action": action})
 
 
 def need(args, *keys):
@@ -377,6 +402,8 @@ def call(client, name, args):
             for w in client.request("GET", "/v1/workers") if usable(w, me, team)]}
     if name == "octopus_download":
         return download(client, args)
+    if name == "octopus_app":
+        return app(client, args)
     if name == "octopus_assign_worker":
         rid = args.pop("run_id")
         return client.request("POST", "/v1/runs/" + rid + "/assign-worker", args)

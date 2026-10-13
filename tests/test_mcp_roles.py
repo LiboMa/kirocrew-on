@@ -116,6 +116,33 @@ class RoleToolTests(unittest.TestCase):
         self.assertNotIn("octopus_admin_teams", names)
 
 
+class AppToolTests(unittest.TestCase):
+    """octopus_app (D36 §5.3): start, look at, open and stop a Session's remote preview."""
+
+    def test_each_action_calls_its_endpoint(self):
+        client = Fake({("GET", "/v1/runs/r1/app"): {"status": "running", "log": [f"line {i}" for i in range(200)]},
+                       ("POST", "/v1/runs/r1/app/open"): {"url": "https://preview.example/_kirocrew/open/t", "expires_in": 600}})
+        mcp.call(client, "octopus_app", {"run_id": "r1", "action": "start"})
+        mcp.call(client, "octopus_app", {"run_id": "r1", "action": "stop"})
+        status = mcp.call(client, "octopus_app", {"run_id": "r1", "action": "status"})
+        opened = mcp.call(client, "octopus_app", {"run_id": "r1", "action": "open"})
+        self.assertEqual(client.calls, [("POST", "/v1/runs/r1/app", {"action": "start"}),
+                                        ("POST", "/v1/runs/r1/app", {"action": "stop"}),
+                                        ("GET", "/v1/runs/r1/app", None), ("POST", "/v1/runs/r1/app/open", {})])
+        self.assertEqual(status["log"], [f"line {i}" for i in range(160, 200)])   # the last 40 lines
+        self.assertEqual(opened["url"], "https://preview.example/_kirocrew/open/t")
+        self.assertIn("一次", opened["note"])
+
+    def test_an_unknown_action_is_refused_before_any_call(self):
+        client = Fake()
+        with self.assertRaises(ValueError):
+            mcp.call(client, "octopus_app", {"run_id": "r1", "action": "restart"})
+        self.assertEqual(client.calls, [])
+
+    def test_ordinary_tokens_list_it(self):
+        self.assertIn("octopus_app", {t["name"] for t in mcp.tools_for(Fake({("GET", "/v1/me"): ME}))})
+
+
 USERS = [{"id": "u1", "username": "alice"}, {"id": "u2", "username": "bob"}]
 
 
