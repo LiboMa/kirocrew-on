@@ -316,10 +316,12 @@ class Worker:
         return {"project": project, "base": base, "head": head, "branch": branch, "run": run}
 
     def publish_bundle(self, plan):
-        """The bundle file of ``plan``: the branch on top of its baseline; the caller streams and removes it."""
+        """The bundle file of ``plan``: the branch with its whole history — the platform holds no copy of the repository
+        to satisfy a baseline prerequisite; it checks the baseline is an ancestor, and the push sends only what is new.
+        The caller streams and removes it."""
         bundle = plan["run"] / ".publish.bundle"
         bundle.unlink(missing_ok=True)
-        workspace._git(plan["project"], "bundle", "create", "-q", str(bundle), f"{plan['base']}..{plan['branch']}")
+        workspace._git(plan["project"], "bundle", "create", "-q", str(bundle), plan["branch"])
         require(bundle.stat().st_size <= PUBLISH_LIMIT, f"待发布的内容超过 {PUBLISH_LIMIT // 1048576} MB", 413, "publish_too_large")
         return bundle
 

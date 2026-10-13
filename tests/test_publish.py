@@ -64,9 +64,12 @@ class WorkerBundleTests(unittest.TestCase):
         saved = self.root / "out.bundle"
         saved.write_bytes(bundle)
         self.assertIn(f"{commit} refs/heads/octopus/{RID}", git(self.project, "bundle", "list-heads", str(saved)))
-        verify = subprocess.run(["git", "-C", str(self.project), "bundle", "verify", str(saved)], capture_output=True, text=True)
-        self.assertEqual(verify.returncode, 0, verify.stderr)
-        self.assertIn(self.base, verify.stdout + verify.stderr)   # the baseline is its prerequisite
+        empty = self.root / "empty"
+        subprocess.run(["git", "init", "-q", "--bare", str(empty)], check=True)
+        verify = subprocess.run(["git", "-C", str(empty), "bundle", "verify", str(saved)], capture_output=True, text=True)
+        self.assertEqual(verify.returncode, 0, verify.stderr)   # complete: it needs nothing the platform does not have
+        subprocess.run(["git", "-C", str(empty), "fetch", "-q", str(saved), f"octopus/{RID}:x"], check=True)
+        self.assertEqual(subprocess.run(["git", "-C", str(empty), "merge-base", "--is-ancestor", self.base, commit]).returncode, 0)
         self.assertEqual((self.project / ".env").read_text(), "SECRET=1")   # left in the workspace, untouched
 
     def test_nothing_to_publish(self):
