@@ -327,7 +327,11 @@ v4 → v6 显示规划 Prompt 新增的行）；控制台「修订历史」在�
 - Engine 在准备的那一刻解密，Worker 以 `GIT_ASKPASS` 克隆私有仓库（push 地址不可用、错误去除凭证、使用写审计）；源码失败的原因如实显示（原为「Worker 操作未完成」）。
 - 控制台设置页、向导选择与会话页显示；MCP `octopus_credentials`。
 
-本机测试用真实的需认证 HTTPS Git 仓库（自签证书 + git-http-backend）。EC2 验收待进行：需要负责人提供私有 GitHub 与 GitLab 测试仓库，并在控制台自行录入 Token。
+本机测试用真实的需认证 HTTPS Git 仓库（自签证书 + git-http-backend）。最终审查（opus）的 5 项重要问题已修复：使用时复核、托管方检查的 SSRF 与跳转、
+带凭证的 git 不读全局配置、会话页 / MCP 更换凭证、撤下留痕。EC2 验收待进行。
+
+第 2 期「平台代发布」离线完成（分支 `feat/m9-repo-publish`）：Worker 导出待发布的提交（自动提交、排除 .env 与依赖、拒绝疑似凭证），
+平台只快进推送 `octopus/<run>` 并创建或沿用 Draft PR / MR，会话页「发布到仓库」与 MCP `octopus_publish`。本机以需认证的 HTTPS 仓库与假 GitHub / GitLab API 测试。
 
 ### 14.10 开发成果快速预览第 1 期「下载」（D36）
 

@@ -234,6 +234,19 @@ CloudFront 只使用 us-east-1 的证书）：分发加上别名与证书（SNI�
   运行目录内 0600 的临时文件，克隆完立即删除；remote 不含凭证，push 地址为 `DISABLED_NO_PUSH`；git 报错去除凭证后显示。
   每次使用审计 `credential.use`。停用、删除或范围不再覆盖时会话停在「仓库凭证不可用」，改绑后续作。
 
+### 发布到仓库（D35 第 2 期）
+
+会话页「发布到仓库」或 MCP `octopus_publish`：会话结束后，把成果推送到源仓库的分支（默认 `octopus/<run-id>`），并创建或沿用
+Draft PR（GitHub）/ Draft MR（GitLab）。
+
+- **前提**：会话绑定一枚写权限（`access: write`）、仍可用于该会话的凭证。只有会话创建者、Team owner 或管理员可以发布。
+- **Worker**：把工作区未提交的改动提交到会话分支（作者 `KiroCrew ON`；不含 `.env` 与依赖、缓存目录，即使未被 `.gitignore` 忽略），
+  新增内容中有疑似凭证（GitHub / GitLab Token、AWS Key、私钥）时拒绝并列出文件，然后导出带完整历史的 bundle（≤ 100 MB）。
+  写凭证不交给 Worker。
+- **平台**：在数据目录的临时裸仓库中核对 bundle（完整、基于会话克隆时的提交），只推送这一个分支：不 force，远端分支被他人改动时
+  拒绝（409 `publish_conflict`）。推送与托管方 API 用同一套加固：不读全局 git 配置、只走 HTTPS、不跟随跳转。
+  结果写入会话（`publish`）与变更记录 `run.published`，审计 `credential.use`（`access: write`）。
+
 ### 远程预览（D36 第 2 期）
 
 会话页「远程预览」或 MCP `octopus_app`：在执行环境中运行会话的应用，经第三个 CloudFront 分发（`deploy.sh status` 的 `PreviewUrl`）
