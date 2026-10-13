@@ -63,6 +63,7 @@ M4（共享与组织）、M5（仓库闭环）在 MVP 之后分别立项，各�
 | D29 | 专属环境先以**独立 Worker 主机**实现（2026-10-11）：每台一个 EC2 与 CloudFormation 栈，与平台同 VPC，只接受平台主机访问；平台↔Worker 使用平台私有 CA 签发的 TLS；新主机登记为空闲执行环境，由管理员在控制台分配给 Team；先 1 台（m7i.xlarge）验证，确认后扩到 3 台。同主机新 OS 用户的形态按需再做 |
 | D30 | Worker 主机的原生 KiroCrew 入口统一经平台主机中转（2026-10-12，方案 B）：每台 Worker 主机一个 CloudFront 分发，源站为平台主机的中转端口，平台 nginx 校验源站密钥后经私网 TLS 转发到该主机的 Gateway；管理侧收口为控制台「执行环境」对话框与管理员 API `GET /v1/admin/environments`，运维为 `deploy.sh worker-host add <名称>` |
 | D31 | 访问管理（2026-10-12，`docs/superpowers/specs/2026-10-12-access-management-design.md`）：新增 `admin` scope，平台管理需管理员账号且 Token 含 `admin`；看不到返回 404、看得到不能做返回 403 并说明原因；平台管理员可查看并操作全部会话（原生入口仍按 K03），越权与用户管理写入审计；管理类操作经 MCP 开放但只接受 admin Token；不删除用户与 Team，停用即可 |
+| D35 | 代码仓库凭证（2026-10-13，`docs/superpowers/specs/2026-10-13-repo-credentials-design.md`）：个人 / Team / 平台三级 GitHub 与 GitLab 凭证（参照 Jenkins Credentials），秘密只写、加密存储（openssl AES-256-CBC + HMAC，主密钥只在平台主机）；工作流可带默认凭证，提交时按明确指定 → 工作流默认 → 按仓库自动匹配解析并固定在会话中，会话显示创建者与凭证；个人凭证可用于本人提交的 Team 会话；第 1 期克隆私有仓库，第 2 期平台代发 PR / MR，第 3 期 GitHub App 与专属环境注入 |
 | D36 | 开发成果快速预览（2026-10-13，`docs/superpowers/specs/2026-10-13-session-preview-design.md`）：第 1 期下载会话源码（含 `.git`、排除依赖与 `.env`，10 分钟签名链接、每次复核权限、流式不落盘），MCP `octopus_download` 解压到本机并给出启动步骤；交付任务以 `.octopus/preview.json` 声明启动方式（下载与远程预览共用）；第 2 期浏览器内远程预览（独立预览分发 + 签名 Cookie） |
 | D34 | 会话变更记录与运行优化（2026-10-12，`docs/superpowers/specs/2026-10-12-session-changes-and-runtime-design.md`）：会话的每次写入（人与系统）记录操作者、来源、字段前后值与原因，可查询、筛选、导出；KiroCrew 规划产出结构化任务（类别、交付物、验收项、验证命令、依赖、可改动路径），规划补全的需求与任务契约传给每个任务与协调者，结论逐项对照验收项并单列建议；续作可只重跑受影响的任务（依赖、审查 / 测试与未验收规则补全），其余沿用上一版结果；运行时取消与结果丢失自动重试一次、不占纠错轮次，kiro-cli 登录过期时派发等待而不失败；部署时 Gateway 依赖未变不重启 |
 | D33 | 访问管理第 2 期 Team 与 Worker 管理（2026-10-12，`docs/superpowers/plans/2026-10-12-access-phase2-teams-workers.md`）：Team 改名、归档 / 恢复（归档后拒绝新会话与新成员，旧会话可查看与停止）、管理员托管成员、成员退出、管理员更换执行环境；Worker 改名、退役（迁移 4）、控制台更新连接，服务的全部用户可刷新模型；Engine 派发前核对会话的 Worker 仍服务其空间，否则进入等待并可重新分配；Team 的专属主机更换后改为空闲，只能回到原 Team，重新部署（新的执行边界）后才可给其他 Team；Team 与执行环境的管理操作写入审计 |
@@ -317,6 +318,16 @@ M4（共享与组织）、M5（仓库闭环）在 MVP 之后分别立项，各�
 
 ✅ EC2（2026-10-12，`436233b`）：线上已有会话的旧修订按记录还原（`run-690b49c1…` 9 条：创建、续作、自动纠错；`run-63b33288…`
 v4 → v6 显示规划 Prompt 新增的行）；控制台「修订历史」在改动处保留 2 行上下文、其余折叠。离线：Python 322、控制台 91、旧版回归 92。
+
+### 14.11 代码仓库凭证第 1 期（D35）
+
+离线完成（2026-10-13，分支 `feat/m8-repo-credentials`）：
+- 凭证加密存储；个人 / Team / 平台作用域与授权；托管方测试。
+- 提交时解析与会话绑定、改绑。
+- Engine 在准备的那一刻解密，Worker 以 `GIT_ASKPASS` 克隆私有仓库（push 地址不可用、错误去除凭证、使用写审计）；源码失败的原因如实显示（原为「Worker 操作未完成」）。
+- 控制台设置页、向导选择与会话页显示；MCP `octopus_credentials`。
+
+本机测试用真实的需认证 HTTPS Git 仓库（自签证书 + git-http-backend）。EC2 验收待进行：需要负责人提供私有 GitHub 与 GitLab 测试仓库，并在控制台自行录入 Token。
 
 ### 14.10 开发成果快速预览第 1 期「下载」（D36）
 

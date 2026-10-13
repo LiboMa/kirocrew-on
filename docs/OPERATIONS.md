@@ -215,6 +215,25 @@ CloudFront 只使用 us-east-1 的证书）：分发加上别名与证书（SNI�
 托管区与证书 ID 不写入仓库，每次 `up` 时查询。浏览器中的登录按域名分开保存：改用新域名后需要重新登录；MCP 的 `--url`
 可以继续使用 cloudfront.net 地址，也可以换成新域名。清空 `CONSOLE_DOMAIN` 后再执行 `up` 会移除别名与 DNS 记录。
 
+### 代码仓库凭证（D35）
+
+控制台「设置 → 代码仓库凭证」或 API `/v1/credentials`：GitHub fine-grained Token 与 GitLab Token（含自建实例），用于克隆私有仓库。
+
+- **作用域**：
+  - 个人：本人管理与使用，可用于本人提交的 Team 会话。
+  - Team：Team owner 与管理员管理，该 Team 的会话使用。
+  - 平台：管理员管理，并授权给 Team 或用户（`POST|DELETE /v1/credentials/<id>/grants`）。
+  - 看不到为 404，不能管理为 403。
+- **秘密只写**：创建或轮换时提交，之后只返回元数据与末 4 位，审计 `credential.*` 不含秘密。MCP 不创建凭证。
+- **主密钥**：`/etc/kirocrew-on/credentials.key`（root:octopus 0640，安装脚本首次生成，不在 SSM、不进备份）。数据库备份只含密文：
+  恢复到另一台主机时，须把同一个主密钥文件放到同一路径（`platform.toml` 的 `credentials_key_file`），否则现有凭证无法解密，
+  需要逐个轮换。主密钥丢失后，现有凭证无法恢复，只能逐个轮换（重新录入 Token）。
+- **会话绑定**：提交时依次按明确指定、工作流默认值、按仓库自动匹配（Team → 授权给 Team 的平台 → 提交者个人；同层取仓库范围
+  更具体者，并列时 409 `credential_ambiguous`）解析，并固定在会话中；会话页显示创建者与凭证。改绑：`POST /v1/runs/<id>/credentials`。
+- **使用**：只在准备工作区（首次与改派到其他 Worker）时由 Engine 解密，交给 Worker 的 `/prepare`。Worker 以 `GIT_ASKPASS` 读取
+  运行目录内 0600 的临时文件，克隆完立即删除；remote 不含凭证，push 地址为 `DISABLED_NO_PUSH`；git 报错去除凭证后显示。
+  每次使用审计 `credential.use`。停用、删除或范围不再覆盖时会话停在「仓库凭证不可用」，改绑后续作。
+
 ### 远程预览（D36 第 2 期）
 
 会话页「远程预览」或 MCP `octopus_app`：在执行环境中运行会话的应用，经第三个 CloudFront 分发（`deploy.sh status` 的 `PreviewUrl`）

@@ -216,6 +216,14 @@ if [ ! -s /etc/kirocrew-on/worker-ca.key ]; then
       -keyout /etc/kirocrew-on/worker-ca.key -out /etc/kirocrew-on/worker-ca.pem 2>/dev/null )
 fi
 chmod 0600 /etc/kirocrew-on/worker-ca.key
+# Master key of the sealed repository credentials (D35 §3.3): made here once and never leaves the host (not in SSM, not in
+# backups); the API reads it, the execution users cannot. A database restored elsewhere needs this same file.
+if [ ! -s /etc/kirocrew-on/credentials.key ]; then
+  ( umask 077; openssl rand -base64 32 > /etc/kirocrew-on/credentials.key.new )
+  mv -f /etc/kirocrew-on/credentials.key.new /etc/kirocrew-on/credentials.key
+fi
+chown root:octopus /etc/kirocrew-on/credentials.key
+chmod 0640 /etc/kirocrew-on/credentials.key
 chmod 0644 /etc/kirocrew-on/worker-ca.pem
   # platform:end
 fi
@@ -339,6 +347,7 @@ if [ -z "$WORKER_HOST" ]; then
   # platform:begin
 # After the switch: a release before worker_ca_file would refuse to load platform.toml with the key (unknown keys fail).
 toml_set /etc/kirocrew-on/platform.toml worker_ca_file '"/etc/kirocrew-on/worker-ca.pem"'
+toml_set /etc/kirocrew-on/platform.toml credentials_key_file '"/etc/kirocrew-on/credentials.key"'
 if [ -n "${PREVIEW_DOMAIN:-}" ]; then
   toml_set /etc/kirocrew-on/platform.toml preview_url "\"https://$PREVIEW_DOMAIN\""
 fi

@@ -393,6 +393,22 @@ class ScriptTests(unittest.TestCase):
         self.assertIn("WORKER_PREVIEW_TLS_PORT={preview_port}", deploy)
         self.assertIn("/etc/kirocrew-on/nginx-worker-preview.conf /etc/nginx/conf.d/kirocrew-worker-preview.conf", deploy)
 
+    def test_the_platform_keeps_a_credentials_master_key_of_its_own(self):
+        # D35 §3.3: generated once on the platform host, readable by the API only, written into platform.toml after the
+        # switch (an older release rejects the key), never fetched from or stored in SSM.
+        text = (ROOT / "deploy/install/al2023.sh").read_text()
+        start = text.index('if [ ! -s /etc/kirocrew-on/credentials.key ]; then')
+        block = text[start:text.index("\nfi\n", start)]
+        self.assertIn("openssl rand -base64 32 > /etc/kirocrew-on/credentials.key.new", block)
+        self.assertIn("umask 077", block)
+        self.assertIn("chown root:octopus /etc/kirocrew-on/credentials.key", text)
+        self.assertIn("chmod 0640 /etc/kirocrew-on/credentials.key", text)
+        region = text.rfind("# platform:begin", 0, start)
+        self.assertGreater(region, text.rfind("# platform:end", 0, start))   # inside a platform-only region
+        written = text.index('toml_set /etc/kirocrew-on/platform.toml credentials_key_file \'"/etc/kirocrew-on/credentials.key"\'')
+        self.assertGreater(written, text.index('ln -sfn "$TARGET" /opt/kirocrew-on/current'))
+        self.assertNotIn("credentials.key", (ROOT / "deploy/aws/deploy.sh").read_text())
+
     def test_worker_host_template_admits_only_the_platform(self):
         worker = yaml.load((ROOT / "deploy/aws/kirocrew-on-worker.yaml").read_text(), Loader=CfnLoader)
         resources = worker["Resources"]
