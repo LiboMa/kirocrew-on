@@ -87,5 +87,77 @@ class RoleToolTests(unittest.TestCase):
         self.assertNotIn("octopus_admin_teams", names)
 
 
+USERS = [{"id": "u1", "username": "alice"}, {"id": "u2", "username": "bob"}]
+
+
+class AdminToolTests(unittest.TestCase):
+    def calls(self, name, args):
+        client = Fake({("GET", "/v1/admin/users"): USERS})
+        mcp.call(client, name, args)
+        return [c for c in client.calls if c[:2] != ("GET", "/v1/admin/users") or args.get("action") == "list"]
+
+    def test_user_actions(self):
+        cases = {"list": [("GET", "/v1/admin/users", None)],
+                 "deactivate": [("POST", "/v1/users/u2/active", {"active": False})],
+                 "activate": [("POST", "/v1/users/u2/active", {"active": True})],
+                 "promote": [("POST", "/v1/users/u2/admin", {"admin": True})],
+                 "demote": [("POST", "/v1/users/u2/admin", {"admin": False})]}
+        for action, expected in cases.items():
+            with self.subTest(action=action):
+                self.assertEqual(self.calls("octopus_admin_users", {"action": action, "username": "bob"}), expected)
+
+    def test_an_unknown_username_is_not_found_and_nothing_is_written(self):
+        client = Fake({("GET", "/v1/admin/users"): USERS})
+        with self.assertRaises(ApiError) as caught:
+            mcp.call(client, "octopus_admin_users", {"action": "deactivate", "username": "nobody"})
+        self.assertEqual((caught.exception.status, caught.exception.code), (404, "not_found"))
+        self.assertEqual([c[0] for c in client.calls], ["GET"])
+
+    def test_team_actions(self):
+        team = "/v1/teams/t1"
+        cases = {"list": ({}, [("GET", "/v1/teams", None)]),
+                 "create": ({"name": "新组", "owner": "bob", "worker_id": "w1"},
+                            [("POST", "/v1/teams", {"name": "新组", "owner": "bob", "worker_id": "w1"})]),
+                 "rename": ({"team_id": "t1", "name": "二组"}, [("PATCH", team, {"name": "二组"})]),
+                 "archive": ({"team_id": "t1"}, [("POST", team + "/archive", {"archived": True})]),
+                 "restore": ({"team_id": "t1"}, [("POST", team + "/archive", {"archived": False})]),
+                 "set_member": ({"team_id": "t1", "username": "bob", "role": "owner"},
+                                [("POST", team + "/members", {"username": "bob", "role": "owner"})]),
+                 "remove_member": ({"team_id": "t1", "username": "bob"}, [("DELETE", team + "/members", {"username": "bob"})]),
+                 "environment": ({"team_id": "t1", "worker_id": "w2"}, [("POST", team + "/environment", {"worker_id": "w2"})])}
+        for action, (args, expected) in cases.items():
+            with self.subTest(action=action):
+                self.assertEqual(self.calls("octopus_admin_teams", {"action": action, **args}), expected)
+
+    def test_environment_actions(self):
+        worker = "/v1/workers/w1"
+        cases = {"list": ({}, [("GET", "/v1/admin/environments", None)]),
+                 "share": ({"worker_id": "w1", "confirm": True}, [("POST", worker + "/share", {"confirm": True})]),
+                 "add_space": ({"worker_id": "w1", "team_id": "t1"}, [("POST", worker + "/spaces", {"team_id": "t1"})]),
+                 "remove_space": ({"worker_id": "w1", "user_id": "u2"}, [("DELETE", worker + "/spaces", {"user_id": "u2"})]),
+                 "dedicate": ({"worker_id": "w1"}, [("POST", worker + "/dedicate", {})]),
+                 "enable": ({"worker_id": "w1"}, [("POST", worker + "/enabled", {"enabled": True})]),
+                 "disable": ({"worker_id": "w1"}, [("POST", worker + "/enabled", {"enabled": False})]),
+                 "rename": ({"worker_id": "w1", "name": "共享-1"}, [("PATCH", worker, {"name": "共享-1"})]),
+                 "retire": ({"worker_id": "w1"}, [("POST", worker + "/retire", {})])}
+        for action, (args, expected) in cases.items():
+            with self.subTest(action=action):
+                self.assertEqual(self.calls("octopus_admin_environments", {"action": action, **args}), expected)
+
+    def test_unknown_actions_and_missing_arguments_are_refused(self):
+        for name, args in (("octopus_admin_users", {"action": "create", "username": "x"}),
+                           ("octopus_admin_teams", {"action": "delete", "team_id": "t1"}),
+                           ("octopus_admin_teams", {"action": "rename"}),
+                           ("octopus_admin_environments", {"action": "share", "worker_id": "w1"})):
+            with self.subTest(args=args), self.assertRaises(ValueError):
+                mcp.call(Fake({("GET", "/v1/admin/users"): USERS}), name, args)
+
+    def test_no_tool_creates_users_or_sets_passwords(self):
+        text = json.dumps([t for t in mcp.TOOLS if t["name"].startswith("octopus_admin_")], ensure_ascii=False)
+        self.assertNotIn("password", text)
+        users = next(t for t in mcp.TOOLS if t["name"] == "octopus_admin_users")
+        self.assertNotIn("create", users["inputSchema"]["properties"]["action"]["enum"])
+
+
 if __name__ == "__main__":
     unittest.main()

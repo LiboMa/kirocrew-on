@@ -1,7 +1,7 @@
 """Standard newline-delimited stdio MCP adapter for the SAME authenticated API."""
 import json
 import sys
-from urllib.parse import urlencode
+from urllib.parse import quote, urlencode
 
 from . import __version__
 from .client import ApiError
@@ -156,6 +156,82 @@ def usable(worker, me, team):
     return worker.get("team_id") == team if team else worker.get("owner_id") == me["id"]
 
 
+def need(args, *keys):
+    missing = [key for key in keys if not args.get(key)]
+    if missing:
+        raise ValueError("缺少参数：" + "、".join(missing))
+
+
+USER_ACTIONS = {"deactivate": ("active", {"active": False}), "activate": ("active", {"active": True}),
+                "promote": ("admin", {"admin": True}), "demote": ("admin", {"admin": False})}
+
+
+def admin_users(client, args):
+    """List users, or deactivate / restore / promote / demote one by username (never create users or set passwords, B7)."""
+    action = args.get("action")
+    if action != "list" and action not in USER_ACTIONS:
+        raise ValueError("不支持的用户操作（list / deactivate / activate / promote / demote）")
+    users = client.request("GET", "/v1/admin/users")
+    if action == "list":
+        return {"users": users}
+    need(args, "username")
+    user = next((u for u in users if u["username"] == args["username"].strip().lower()), None)
+    if user is None:
+        raise ApiError(404, "not_found", "用户不存在")
+    path, body = USER_ACTIONS[action]
+    return client.request("POST", f"/v1/users/{quote(user['id'])}/{path}", body)
+
+
+def admin_teams(client, args):
+    action = args.get("action")
+    if action == "list":
+        return {"teams": client.request("GET", "/v1/teams")}
+    if action == "create":
+        need(args, "name", "owner", "worker_id")
+        return client.request("POST", "/v1/teams", {key: args[key] for key in ("name", "owner", "worker_id")})
+    if action not in {"rename", "archive", "restore", "set_member", "remove_member", "environment"}:
+        raise ValueError("不支持的 Team 操作")
+    need(args, "team_id")
+    base = "/v1/teams/" + quote(args["team_id"])
+    if action == "rename":
+        need(args, "name")
+        return client.request("PATCH", base, {"name": args["name"]})
+    if action in {"archive", "restore"}:
+        return client.request("POST", base + "/archive", {"archived": action == "archive"})
+    if action == "environment":
+        need(args, "worker_id")
+        return client.request("POST", base + "/environment", {"worker_id": args["worker_id"]})
+    need(args, "username")
+    if action == "set_member":
+        return client.request("POST", base + "/members", {"username": args["username"], "role": args.get("role", "member")})
+    return client.request("DELETE", base + "/members", {"username": args["username"]})
+
+
+def admin_environments(client, args):
+    action = args.get("action")
+    if action == "list":
+        return {"environments": client.request("GET", "/v1/admin/environments")}
+    if action not in {"share", "add_space", "remove_space", "dedicate", "enable", "disable", "rename", "retire"}:
+        raise ValueError("不支持的执行环境操作")
+    need(args, "worker_id")
+    base = "/v1/workers/" + quote(args["worker_id"])
+    if action == "share":
+        if args.get("confirm") is not True:
+            raise ValueError("设为共享环境需要 confirm=true：环境内所有会话的 Agent 以同一系统账号运行，能互相读取源码、工具登录与记忆")
+        return client.request("POST", base + "/share", {"confirm": True})
+    if action in {"add_space", "remove_space"}:
+        if not (args.get("team_id") or args.get("user_id")):
+            raise ValueError("缺少参数：team_id 或 user_id")
+        space = {"team_id": args["team_id"]} if args.get("team_id") else {"user_id": args["user_id"]}
+        return client.request("POST" if action == "add_space" else "DELETE", base + "/spaces", space)
+    if action in {"enable", "disable"}:
+        return client.request("POST", base + "/enabled", {"enabled": action == "enable"})
+    if action == "rename":
+        need(args, "name")
+        return client.request("PATCH", base, {"name": args["name"]})
+    return client.request("POST", base + "/" + action, {})   # dedicate, retire
+
+
 SESSION_FIELDS = ("id", "name", "status", "desired", "lifecycle", "version", "error", "attention", "progress", "input",
                   "planning", "team_id", "worker_id", "workflow_name", "match_mode", "created", "updated", "kept")
 
@@ -255,6 +331,9 @@ def call(client, name, args):
         if action not in {"continue", "recover", "stop", "close", "reopen", "delete"}:
             raise ValueError("Invalid action")
         return client.request("POST", "/v1/runs/" + rid + "/" + action, args)
+    if name in ADMIN:
+        return {"octopus_admin_users": admin_users, "octopus_admin_teams": admin_teams,
+                "octopus_admin_environments": admin_environments}[name](client, args)
     if name == "octopus_save_workflow":
         wid = args.pop("workflow_id", None)
         return client.request("POST", "/v1/workflows" + ("/" + wid + "/versions" if wid else ""), args)
