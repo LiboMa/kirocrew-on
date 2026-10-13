@@ -43,9 +43,9 @@ def write(path, value):
 
 
 ARCHIVE_LIMIT = 200 * 1024 * 1024   # D36 §4.2: before compression
-ARCHIVE_SKIP = {"node_modules", ".venv", "venv", "__pycache__", ".pytest_cache", ".mypy_cache", "target", ".gradle",
-                ".turbo", ".parcel-cache", ".cache"}
-ENV_KEPT = {".env.example", ".env.sample"}
+ARCHIVE_SKIP = workspace.SKIP_DIRS
+ENV_KEPT = workspace.ENV_KEPT
+PUBLISH_LIMIT = 100 * 1024 * 1024   # D35 §5.2: one bundle
 
 
 def briefing(requirement, contract):
@@ -295,6 +295,33 @@ class Worker:
                         "请在交付任务中清理产物，或改用远程预览")
         return {"files": files, "dirs": folders, "configs": configs, "bytes": total, "excluded": sorted(excluded),
                 "links": sorted(links), "skipped": skipped}
+
+    def publish_plan(self, body):
+        """What a publish exports (D35 §5.2): pending changes committed on the Session's branch (without what a download
+        leaves out), refused when nothing is new or when a credential seems to be in it."""
+        run = self.path(body["run_id"])
+        project, record = workspace.project_dir(run), workspace.read_record(run)
+        base, branch = record.get("commit"), record.get("branch")
+        require(base and branch, "此会话的项目没有 Git 基线，无法发布", 409, "nothing_to_publish")
+        message = str(body.get("message") or "KiroCrew ON：发布会话成果")[:300]
+        try:
+            workspace.commit_pending(project, message, branch)
+        except ValueError as exc:
+            raise Error(409, "publish_failed", workspace.scrub(exc)) from None
+        head = workspace._git(project, "rev-parse", "HEAD")
+        require(head != base, "没有可发布的改动：工作区与克隆时相同", 409, "nothing_to_publish")
+        found = workspace.suspicious(project, base)
+        require(not found, "检测到疑似凭证，未发布（请从这些文件中移除后再发布）：" + "、".join(found[:20]), 409,
+                "publish_secret_found")
+        return {"project": project, "base": base, "head": head, "branch": branch, "run": run}
+
+    def publish_bundle(self, plan):
+        """The bundle file of ``plan``: the branch on top of its baseline; the caller streams and removes it."""
+        bundle = plan["run"] / ".publish.bundle"
+        bundle.unlink(missing_ok=True)
+        workspace._git(plan["project"], "bundle", "create", "-q", str(bundle), f"{plan['base']}..{plan['branch']}")
+        require(bundle.stat().st_size <= PUBLISH_LIMIT, f"待发布的内容超过 {PUBLISH_LIMIT // 1048576} MB", 413, "publish_too_large")
+        return bundle
 
     def archive_summary(self, body):
         """A dry run before a download link is issued: size and refusals reach the console as an answer, not as a
@@ -794,6 +821,25 @@ def serve(worker, port=8928, host="127.0.0.1"):
                         worker.write_archive(self.wfile, body["run_id"], body.get("meta"), plan, readme)
                     except Exception:   # the zip has no end record: the platform sees an incomplete download
                         pass
+                    return
+                if self.command == "POST" and self.path == "/publish/bundle":
+                    size = int(self.headers.get("Content-Length", "0"))
+                    require(0 < size <= 100_000, "请求体无效")
+                    plan = worker.publish_plan(json.loads(self.rfile.read(size)))   # refusals answer as JSON errors
+                    bundle = worker.publish_bundle(plan)
+                    try:
+                        self.send_response(200)
+                        self.send_header("Content-Type", "application/x-git-bundle")
+                        self.send_header("Content-Length", str(bundle.stat().st_size))
+                        self.send_header("X-Publish-Commit", plan["head"])
+                        self.send_header("X-Publish-Base", plan["base"])
+                        self.send_header("X-Publish-Branch", plan["branch"])
+                        self.send_header("Cache-Control", "no-store")
+                        self.end_headers()
+                        with open(bundle, "rb") as source:
+                            shutil.copyfileobj(source, self.wfile, 1 << 20)
+                    finally:
+                        bundle.unlink(missing_ok=True)
                     return
                 if self.command == "GET" and self.path == "/health":
                     result = worker.health()

@@ -21,6 +21,54 @@ import uuid
 
 HIDDEN = "[凭证已隐去]"
 
+# Left out of a download (D36 §4.2) and of a published commit (D35 §5.2), ignored by .gitignore or not.
+SKIP_DIRS = {"node_modules", ".venv", "venv", "__pycache__", ".pytest_cache", ".mypy_cache", "target", ".gradle",
+             ".turbo", ".parcel-cache", ".cache"}
+ENV_KEPT = {".env.example", ".env.sample"}
+# What a credential looks like in a diff: GitHub (fine-grained, classic, OAuth, app), GitLab, AWS keys, private keys.
+SUSPICIOUS = re.compile(rb"github_pat_[A-Za-z0-9_]{20,}|gh[pousr]_[A-Za-z0-9]{30,}|glpat-[A-Za-z0-9_-]{20,}|AKIA[0-9A-Z]{16}"
+                        rb"|-----BEGIN [A-Z ]*PRIVATE KEY-----")
+
+
+def left_out(path):
+    """Whether a project path is never packed or published: a dependency or cache folder, or a .env file."""
+    parts = path.split("/")
+    name = parts[-1]
+    return any(part in SKIP_DIRS for part in parts[:-1]) \
+        or any(parts[i:i + 2] == [".next", "cache"] for i in range(len(parts) - 1)) \
+        or ((name == ".env" or name.startswith(".env.")) and name not in ENV_KEPT)
+
+
+def commit_pending(project, message, branch):
+    """Commit the workspace's pending changes on ``branch`` for publishing, without what a download leaves out (a .env
+    or dependency folder the project forgot to ignore stays in the workspace, uncommitted). The new commit, or None."""
+    current = _git(project, "rev-parse", "--abbrev-ref", "HEAD")
+    if current != branch:
+        raise ValueError(f"工作区不在分支 {branch}（当前 {current}），未发布")
+    _git(project, "add", "-A")
+    staged = [p for p in _git(project, "diff", "--cached", "--name-only", "-z").split("\0") if p]
+    dropped = [p for p in staged if left_out(p)]
+    for start in range(0, len(dropped), 200):
+        _git(project, "reset", "-q", "--", *dropped[start:start + 200])   # back to HEAD's version (or unstaged)
+    if not _git(project, "diff", "--cached", "--name-only"):
+        return None
+    _git(project, "-c", "user.name=KiroCrew ON", "-c", "user.email=kirocrew-on@localhost", "-c", "commit.gpgsign=false",
+         "commit", "-q", "--no-verify", "-m", message)
+    return _git(project, "rev-parse", "HEAD")
+
+
+def suspicious(project, base):
+    """Files whose added lines since ``base`` look like a credential (only the names, never the content)."""
+    diff = subprocess.run(["git", "diff", "--no-color", "--no-ext-diff", "-U0", f"{base}..HEAD"], cwd=project,
+                          capture_output=True, timeout=120, stdin=subprocess.DEVNULL).stdout
+    found, current = [], None
+    for line in diff.split(b"\n"):
+        if line.startswith(b"+++ "):
+            current = line[6:].decode(errors="replace") if line.startswith(b"+++ b/") else None
+        elif line.startswith(b"+") and current and current not in found and SUSPICIOUS.search(line):
+            found.append(current)
+    return found
+
 
 def scrub(text, secret=None):
     """Git output as it may be shown or stored: no URL userinfo, no Authorization / PRIVATE-TOKEN line, no secret."""
