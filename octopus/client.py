@@ -7,6 +7,14 @@ from urllib.parse import urlencode, urlsplit
 from .db import dumps
 
 
+class ApiError(RuntimeError):
+    """An API error response: HTTP status, the API's stable code and its message (spec §7.2: Agents act on these)."""
+
+    def __init__(self, status, code, error, text=None):
+        super().__init__(text or f"{status} {code}: {error}")
+        self.status, self.code, self.error = status, code, error
+
+
 def http_error(exc):
     """A readable error for an API error response, including non-JSON pages from a proxy (CloudFront)."""
     with exc:
@@ -14,11 +22,11 @@ def http_error(exc):
     try:
         result = json.loads(raw)
     except ValueError:
-        hint = ": API 暂不可用，稍后重试" if exc.code >= 500 else ""
-        return RuntimeError(f"{exc.code} {exc.reason}{hint}")
+        hint = "：API 暂不可用，稍后重试" if exc.code >= 500 else ""
+        return ApiError(exc.code, "http_error", f"{exc.reason}{hint}", f"{exc.code} {exc.reason}{hint.replace('：', ': ', 1)}")
     if not isinstance(result, dict):
-        return RuntimeError(f"{exc.code} {exc.reason}")
-    return RuntimeError(f"{exc.code} {result.get('code')}: {result.get('error')}")
+        return ApiError(exc.code, "http_error", str(exc.reason), f"{exc.code} {exc.reason}")
+    return ApiError(exc.code, result.get("code"), result.get("error"))
 
 
 class Client:

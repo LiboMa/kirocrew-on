@@ -3,7 +3,11 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 import threading
 import unittest
 
-from octopus.client import Client
+import io
+import json
+
+from octopus import mcp
+from octopus.client import ApiError, Client
 
 
 class GatewayTimeout(BaseHTTPRequestHandler):
@@ -58,6 +62,59 @@ class ClientErrorTests(unittest.TestCase):
         self.assertEqual(result.returncode, 1)
         self.assertIn("504 Gateway Timeout", result.stderr)
         self.assertNotIn("Traceback", result.stderr)
+
+
+class JsonError(BaseHTTPRequestHandler):
+    def do_GET(self):
+        body = json.dumps({"error": "Token 缺少 admin scope", "code": "forbidden"}).encode()
+        self.send_response(403)
+        self.send_header("Content-Type", "application/json")
+        self.send_header("Content-Length", str(len(body)))
+        self.end_headers()
+        self.wfile.write(body)
+
+    def log_message(self, *args):
+        pass
+
+
+class StructuredErrorTests(unittest.TestCase):
+    def serve(self, handler):
+        server = ThreadingHTTPServer(("127.0.0.1", 0), handler)
+        threading.Thread(target=server.serve_forever, daemon=True).start()
+        self.addCleanup(server.server_close)
+        self.addCleanup(server.shutdown)
+        return Client(f"http://127.0.0.1:{server.server_port}", "token")
+
+    def call(self, client, name="octopus_runs"):
+        out = io.StringIO()
+        mcp.serve(client, io.StringIO(json.dumps({"jsonrpc": "2.0", "id": 1, "method": "tools/call",
+                                                  "params": {"name": name, "arguments": {}}}) + "\n"), out)
+        return json.loads(out.getvalue())["result"]
+
+    def test_api_errors_carry_status_code_and_message(self):
+        with self.assertRaises(ApiError) as caught:
+            self.serve(JsonError).request("GET", "/v1/runs")
+        error = caught.exception
+        self.assertEqual((error.status, error.code, error.error), (403, "forbidden", "Token 缺少 admin scope"))
+        self.assertEqual(str(error), "403 forbidden: Token 缺少 admin scope")
+        self.assertIsInstance(error, RuntimeError)
+
+    def test_mcp_returns_the_error_as_structured_content(self):
+        result = self.call(self.serve(JsonError))
+        self.assertTrue(result["isError"])
+        self.assertEqual(result["structuredContent"], {"status": 403, "code": "forbidden", "error": "Token 缺少 admin scope"})
+        self.assertEqual(result["content"][0]["text"], "403 forbidden: Token 缺少 admin scope")
+
+    def test_proxy_errors_keep_their_status(self):
+        result = self.call(self.serve(GatewayTimeout))
+        self.assertEqual((result["structuredContent"]["status"], result["structuredContent"]["code"]), (504, "http_error"))
+
+    def test_other_failures_are_client_errors(self):
+        class Broken:
+            def request(self, *args, **kwargs):
+                raise ValueError("Use a /v1/ API path")
+        result = self.call(Broken())
+        self.assertEqual(result["structuredContent"], {"status": 0, "code": "client_error", "error": "Use a /v1/ API path"})
 
 
 if __name__ == "__main__":

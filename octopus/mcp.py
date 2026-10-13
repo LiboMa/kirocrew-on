@@ -3,6 +3,7 @@ import json
 import sys
 
 from . import __version__
+from .client import ApiError
 from .db import dumps
 
 
@@ -211,7 +212,10 @@ def serve(client, input_stream=sys.stdin, output_stream=sys.stdout):
                     result = {"content": [{"type": "text", "text": dumps(value)}],
                               "structuredContent": value if isinstance(value, dict) else {"items": value}}
                 except (ValueError, KeyError, RuntimeError, OSError) as exc:
-                    result = {"isError": True, "content": [{"type": "text", "text": str(exc)}]}
+                    # Structured, so an Agent can tell 401 / 403 / 404 / 409 apart and say who must act (spec §7.2).
+                    error = ({"status": exc.status, "code": exc.code, "error": exc.error} if isinstance(exc, ApiError)
+                             else {"status": 0, "code": "client_error", "error": str(exc)})
+                    result = {"isError": True, "content": [{"type": "text", "text": str(exc)}], "structuredContent": error}
             else:
                 output_stream.write(dumps({"jsonrpc": "2.0", "id": request["id"],
                                            "error": {"code": -32601, "message": "Method not found"}}) + "\n")
