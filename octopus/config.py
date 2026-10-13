@@ -18,7 +18,8 @@ ISOLATION = ("trusted-local", "dedicated")
 MAC_KIROCREW_PYTHON = Path("/Applications/KiroCrew.app/Contents/Resources/backend-dist/"
                            "kirocrew-backend-arm64/bin/python3.12")
 PATHS = {"data_dir", "worker_data_dir", "worker_token_file", "crew_home", "kiro_home", "routing_log",
-         "log_dir", "gateway_runtime_file", "kirocrew_python", "adapters_dir", "origin_secret_file", "worker_ca_file"}
+         "log_dir", "gateway_runtime_file", "kirocrew_python", "adapters_dir", "origin_secret_file", "worker_ca_file",
+         "credentials_key_file"}
 INTS = {"api_port": (1, 65535), "worker_port": (1, 65535), "gateway_port": (1, 65535), "engine_workers": (1, 32),
         "preview_tls_port": (1, 65535)}
 FLOATS = {"retry_unavailable": (0.0, 600.0), "shutdown_grace": (0.0, 300.0)}
@@ -70,6 +71,8 @@ class Settings:
     origin_secret_file: Path | None = None
     # Private CA that signs remote Worker hosts' TLS certificates (D28); the platform trusts only it for HTTPS Workers.
     worker_ca_file: Path | None = None
+    # Master key of the sealed repository credentials (D35 §3.3); unset: <data_dir>/credentials.key, created on first use.
+    credentials_key_file: Path | None = None
     path_prepend: tuple[Path, ...] = ()
     # KiroCrew releases accepted beyond the verified set, only after their contract check passed.
     kirocrew_versions: tuple[str, ...] = ()
