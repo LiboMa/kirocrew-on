@@ -39,6 +39,9 @@ def plan_step(models=None):
    至少 1 条可检查的 acceptance（审查与测试任务的验收项取自 summary 的验收标准，不另加要求）；
    implement 与 test 任务必须给出至少 1 条 verify（实际可执行的验证命令）；depends_on 只列前序任务的 id；
    paths 写本任务可改动的路径，便于续作时判断哪些任务受影响。
+5. 可运行的产出：交付物是可以运行的应用时，最后的交付任务须在项目根目录写 .octopus/preview.json
+   （processes：命令、cwd、端口或 "$PORT"、哪个是入口；install：依赖安装；前后端分开时各写一个进程），
+   并把「.octopus/preview.json 能按声明启动应用」列为该任务的验收项；用户据此下载到本机或远程预览。
 本任务只做分析与规划，不修改业务代码。
 
 ## 此执行环境公布的模型

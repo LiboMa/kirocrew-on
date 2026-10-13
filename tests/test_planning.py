@@ -60,6 +60,11 @@ class PlanningTests(unittest.TestCase):
         self.assertIn("验收", run["planning"]["summary"])
         self.assertTrue(any("made-up-model" in note for note in applied["notes"]))
 
+    def test_the_planner_asks_runnable_deliveries_to_declare_how_they_start(self):
+        prompt = planning.plan_step()["prompt"]
+        self.assertIn(".octopus/preview.json", prompt)
+        self.assertIn("验收", prompt[prompt.index(".octopus/preview.json") - 200:prompt.index(".octopus/preview.json") + 200])
+
     def test_planned_tasks_need_their_contract(self):
         rid = self.start()["id"]
         missing = [('{"name": "x", "steps": [{"name": "实现", "tool": "claude", "prompt": "实现", "kind": "implement", '

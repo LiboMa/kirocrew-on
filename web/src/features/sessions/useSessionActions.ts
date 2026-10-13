@@ -5,7 +5,7 @@ import { api, command } from "@/api/client";
 import { keys } from "@/api/hooks";
 import type { Run } from "@/api/types";
 import { openCrewSession } from "@/lib/crew";
-import { downloadJson } from "@/lib/download";
+import { downloadJson, followDownload } from "@/lib/download";
 
 export function useRefreshRun() {
   const client = useQueryClient();
@@ -47,6 +47,13 @@ export function useSessionActions(run: Run | undefined) {
     toast.success("Coordinator 已收到诊断请求，将在原工作区安排修复或说明缺失条件。");
   });
 
+  // D36: the source as a zip, through a ten-minute link that is checked again when it is followed.
+  const downloadSource = () => guarded("download", async () => {
+    const result = await api<{ url: string }>("/runs/" + encodeURIComponent(run!.id) + "/archive", "POST", {});
+    followDownload(result.url);
+    toast.success("源码开始下载（含 .git，不含依赖目录与 .env）；解压后按 OCTOPUS-ARCHIVE.txt 在本机启动。");
+  });
+
   const exportRun = () => guarded("export", async () => {
     downloadJson(run!.id + ".json", await api("/runs/" + run!.id + "/export"));
   });
@@ -71,5 +78,5 @@ export function useSessionActions(run: Run | undefined) {
       .catch((error: Error) => { tab.close(); toast.error(error.message); });
   };
 
-  return { stop, recover, exportRun, openCrew, preview, opening, busy };
+  return { stop, recover, exportRun, downloadSource, openCrew, preview, opening, busy };
 }

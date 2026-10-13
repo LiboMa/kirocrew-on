@@ -1,5 +1,6 @@
 import {
-  CircleStop, Copy, Download, Eye, ExternalLink, ListRestart, MoreHorizontal, Power, RotateCcw, Stethoscope, Trash2, UserCog,
+  CircleStop, Copy, Download, Eye, ExternalLink, FolderDown, ListRestart, MoreHorizontal, Power, RotateCcw, Stethoscope, Trash2,
+  UserCog,
 } from "lucide-react";
 import { toast } from "sonner";
 import { useRun, useRunEvents } from "@/api/hooks";
@@ -94,6 +95,11 @@ export function SessionView({ id }: { id: string }) {
             </TooltipTrigger>
             <TooltipContent>{crewReason || "在新标签页打开此 Session 对应的 KiroCrew 原生父会话"}</TooltipContent>
           </Tooltip>
+          <Button size="sm" variant="outline" onClick={actions.downloadSource} id="run-download"
+            disabled={!run.worker_id || !run.workspace || !!actions.busy}
+            title={!run.worker_id || !run.workspace ? "源码尚未准备，暂无可下载的内容" : "下载源码（含 .git，不含依赖目录与 .env）"}>
+            <FolderDown /> 下载源码
+          </Button>
           <Button size="sm" variant="outline" onClick={actions.preview} disabled={!run.worker_id} id="run-preview">
             <Eye /> 预览产出
           </Button>

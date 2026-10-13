@@ -101,6 +101,21 @@ describe("session detail", () => {
     expect(document.querySelector('[data-task="code"]')).not.toHaveTextContent("沿用");
   });
 
+  test("downloading the source asks for a link and follows it", async () => {
+    const click = vi.spyOn(HTMLAnchorElement.prototype, "click").mockImplementation(() => {});
+    const calls = open(blocked, { "POST /runs/run-a/archive": { url: "/archive/t/run-a.zip", expires_in: 600 } });
+    await userEvent.click(await screen.findByRole("button", { name: /下载源码/ }));
+    await waitFor(() => expect(click).toHaveBeenCalled());
+    expect((click.mock.contexts[0] as HTMLAnchorElement).getAttribute("href")).toBe("/archive/t/run-a.zip");
+    expect(calls.some((c) => c.method === "POST" && c.path === "/v1/runs/run-a/archive")).toBe(true);
+    click.mockRestore();
+  });
+
+  test("a Session without a Worker has no source to download yet", async () => {
+    open(makeRun({ id: "run-n", status: "waiting_worker", worker_id: null, workspace: null }));
+    expect(await screen.findByRole("button", { name: /下载源码/ })).toBeDisabled();
+  });
+
   test("continue keeps the Session and submits the edited execution with the expected version", async () => {
     const calls = open(blocked, { "POST /runs/run-a/continue": { id: "run-a", version: 5 } });
     await userEvent.click(await screen.findByRole("button", { name: "续作" }));
