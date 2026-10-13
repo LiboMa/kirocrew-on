@@ -207,6 +207,65 @@ class AppsTests(unittest.TestCase):
         self.assertTrue(view["log"])   # the log of the last run stays readable
 
 
+class ReviewFixTests(AppsTests):
+    """The final review's findings on the Worker side (D36 phase 2)."""
+
+    def test_answers_carry_this_workers_instance(self):
+        started, _, folder = self.start(declaration={"processes": [{"command": SERVE, "port": "$PORT"}]})
+        self.assertRegex(started["instance"], r"^[0-9a-f]{32}$")
+        self.assertEqual(self.apps.status(RID, folder)["instance"], started["instance"])
+        self.assertNotEqual(Apps(ports=self.ports).status(RID, folder)["instance"], started["instance"])
+
+    def test_the_static_server_hides_dotfiles_and_links_outside_the_project(self):
+        outside = self.root / "outside.txt"
+        outside.write_text("outside")
+        project, folder = self.project(files={"index.html": "<h1>ok</h1>", ".env": "SECRET=abc", ".git/config": "[x]",
+                                              "assets/app.js": "js", "assets/.hidden": "h"})
+        (project / "link.txt").symlink_to(outside)
+        (project / "inner.txt").symlink_to(project / "assets/app.js")
+        self.apps.start(RID, project, folder)
+        view = self.settle(RID, folder)
+        self.assertEqual(view["status"], "running", view)
+        self.assertEqual(self.get(view["port"]), "<h1>ok</h1>")
+        self.assertEqual(self.get(view["port"], "/assets/app.js"), "js")
+        self.assertEqual(self.get(view["port"], "/inner.txt"), "js")
+        for path in ("/.env", "/.git/config", "/assets/.hidden", "/link.txt", "/%2e%65nv", "/assets/../.env"):
+            with self.assertRaises(urllib.error.HTTPError) as caught:
+                self.get(view["port"], path)
+            self.assertEqual(caught.exception.code, 404, path)
+
+    def test_an_unusual_ready_path_is_refused_before_anything_starts(self):
+        project, folder = self.project(declaration={"processes": [{"command": SERVE, "port": "$PORT"}],
+                                                    "ready": {"path": "/首页"}})
+        with self.assertRaises(Error) as caught:
+            self.apps.start(RID, project, folder)
+        self.assertEqual(caught.exception.code, "app_unavailable")
+        self.assertIn("ready.path", str(caught.exception))
+        self.assertEqual(self.apps.running(), [])
+
+    def test_an_unexpected_error_still_fails_the_preview(self):
+        project, _ = self.project(declaration={"processes": [{"command": SERVE, "port": "$PORT"}]})
+        gone_folder = self.root / "no-such-folder"
+        self.apps.start(RID, project, gone_folder)
+        view = self.settle(RID, gone_folder)
+        self.assertEqual(view["status"], "failed", view)
+        self.assertEqual(self.apps.running(), [])
+
+    def test_install_runs_again_when_the_lockfile_changes(self):
+        declaration = {"processes": [{"command": SERVE, "port": "$PORT"}], "install": [{"command": "echo done >> installed.txt"}]}
+        _, project, folder = self.start(declaration=declaration, files={"package-lock.json": "{\"v\": 1}"})
+        self.assertEqual(self.settle(RID, folder)["status"], "running")
+        self.apps.stop(RID)
+        self.apps.start(RID, project, folder)
+        self.assertEqual(self.settle(RID, folder)["status"], "running")
+        self.assertEqual((project / "installed.txt").read_text(), "done\n")   # unchanged: not again
+        self.apps.stop(RID)
+        (project / "package-lock.json").write_text("{\"v\": 2}")   # a continuation added a dependency
+        self.apps.start(RID, project, folder)
+        self.assertEqual(self.settle(RID, folder)["status"], "running")
+        self.assertEqual((project / "installed.txt").read_text(), "done\ndone\n")
+
+
 class WorkerAppTests(unittest.TestCase):
     def setUp(self):
         from tests.test_archive import make_worker

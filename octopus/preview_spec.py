@@ -2,6 +2,7 @@
 one, what the project's own files say. Used for the local start steps in a download and for the remote preview."""
 import json
 from pathlib import Path
+import re
 
 DECLARATION = ".octopus/preview.json"
 READY = {"path": "/", "timeout": 120}
@@ -63,9 +64,9 @@ def load(project):
         raise ValueError("ready 须为对象")
     path_ = ready.get("path", READY["path"])
     timeout = ready.get("timeout", READY["timeout"])
-    if not isinstance(path_, str) or not path_.startswith("/") or isinstance(timeout, bool) \
+    if not isinstance(path_, str) or not re.fullmatch(r"/[\x21-\x7e]{0,500}", path_) or isinstance(timeout, bool) \
             or not isinstance(timeout, int) or not 1 <= timeout <= 600:
-        raise ValueError("ready.path 须以 / 开头，ready.timeout 为 1–600 秒")
+        raise ValueError("ready.path 须以 / 开头、只含可见 ASCII 字符（中文路径请 URL 编码），ready.timeout 为 1–600 秒")
     return {"processes": processes, "install": install, "ready": {"path": path_, "timeout": timeout}}
 
 

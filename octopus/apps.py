@@ -14,6 +14,8 @@ import subprocess
 import sys
 import threading
 import time
+import uuid
+from pathlib import Path
 
 from . import preview_spec
 from .security import Error, require
@@ -23,6 +25,10 @@ LIMIT = 3
 LOG_LINES = 200
 LIVE = {"installing", "starting", "running"}
 STOP_GRACE = 5.0
+STATIC = Path(__file__).with_name("static_site.py")
+# Install again when these change (a continuation added a dependency), not only when the declaration does.
+LOCKFILES = ("package.json", "package-lock.json", "npm-shrinkwrap.json", "yarn.lock", "pnpm-lock.yaml", "requirements.txt",
+             "poetry.lock", "Pipfile.lock", "go.sum", "Cargo.lock")
 
 
 def tail(path, lines=LOG_LINES):
@@ -49,9 +55,9 @@ class App:
         self.processes, self.current = [], None   # [(name, Popen)]; the install step running now
         self.stopping, self.lock = threading.Event(), threading.Lock()
 
-    def view(self):
+    def view(self, instance):
         return {"status": self.status, "port": self.port, "path": self.spec["ready"]["path"], "error": self.error,
-                "started": self.started, "source": self.source}
+                "started": self.started, "source": self.source, "instance": instance}
 
 
 class Apps:
@@ -59,6 +65,8 @@ class Apps:
         self.path_prepend, self.limit, self.ports = tuple(str(p) for p in path_prepend), limit, ports
         self.install_timeout, self.poll = install_timeout, poll
         self.apps, self.lock = {}, threading.Lock()
+        # Every answer names this process: after a Worker restart the platform knows its records are stale.
+        self.instance = uuid.uuid4().hex
 
     def running(self):
         with self.lock:
@@ -68,8 +76,10 @@ class Apps:
         with self.lock:
             app = self.apps.get(run_id)
             if app and app.status in LIVE:
-                return app.view()
-            spec, source, problem = preview_spec.resolve(project)
+                return app.view(self.instance)
+            # As for a download: the dependency directories count as absent, so the first preview installs them once
+            # (the install marker decides afterwards).
+            spec, source, problem = preview_spec.resolve(project, packaged=True)
             require(spec, problem or "未找到启动方式", 409, "app_unavailable")
             if not spec.get("static"):
                 require(preview_spec.entry(spec)["port"] == "$PORT",
@@ -82,7 +92,7 @@ class Apps:
             ports = self._free({port for a in live for port in a.ports}, wanted)
             app = self.apps[run_id] = App(run_id, project, folder, spec, source, ports)
         threading.Thread(target=self._run, args=(app,), daemon=True, name="octopus-app-" + run_id[4:12]).start()
-        return app.view()
+        return app.view(self.instance)
 
     def stop(self, run_id):
         with self.lock:
@@ -105,8 +115,8 @@ class Apps:
             exited = next(((name, proc.returncode) for name, proc in app.processes if proc.poll() is not None), None)
             if exited:
                 self._fail(app, f"进程 {exited[0]} 已退出（代码 {exited[1]}）")
-        view = app.view() if app else {"status": "stopped", "port": None, "path": None, "error": None, "started": None,
-                                       "source": None}
+        view = app.view(self.instance) if app else {"status": "stopped", "port": None, "path": None, "error": None,
+                                                    "started": None, "source": None, "instance": self.instance}
         view["log"] = tail(folder / "app.log")
         return view
 
@@ -136,6 +146,12 @@ class Apps:
                                 stderr=subprocess.STDOUT, start_new_session=True)
 
     def _run(self, app):
+        try:
+            self._launch(app)
+        except Exception as exc:   # nothing may leave a preview starting forever with its quota held
+            self._fail(app, f"启动失败：{type(exc).__name__}: {exc}")
+
+    def _launch(self, app):
         path = app.folder / "app.log"
         path.write_text("")
         try:
@@ -155,8 +171,8 @@ class Apps:
                                      ["/bin/sh", "-c", process["command"]], app.project / process["cwd"], port))
                 if app.spec.get("static"):
                     launches.append(("static", f"== 启动静态站点：{app.spec['static']}（端口 {app.port}）",
-                                     [sys.executable, "-m", "http.server", str(app.port), "--bind", "127.0.0.1",
-                                      "--directory", str(app.project / app.spec["static"])], app.project, app.port))
+                                     [sys.executable, "-I", str(STATIC), str(app.port), str(app.project / app.spec["static"])],
+                                     app.project, app.port))
                 for name, line, argv, cwd, port in launches:
                     note(line)
                     with app.lock:   # a stop in between must see every process it has to end
@@ -170,7 +186,13 @@ class Apps:
     def _install(self, app, log, note):
         """The install steps, once per declaration (a marker in the run's folder); False when the preview ended."""
         marker = app.folder / "app-install.json"
-        digest = hashlib.sha256(json.dumps(app.spec["install"], sort_keys=True).encode()).hexdigest()
+        digest = hashlib.sha256(json.dumps(app.spec["install"], sort_keys=True).encode())
+        for folder in sorted({step["cwd"] for step in app.spec["install"]}):
+            for name in LOCKFILES:
+                lock = app.project / folder / name
+                if lock.is_file():
+                    digest.update(f"{folder}/{name}:".encode() + hashlib.sha256(lock.read_bytes()).digest())
+        digest = digest.hexdigest()
         if marker.is_file() and marker.read_text() == digest:
             return True
         for step in app.spec["install"]:
