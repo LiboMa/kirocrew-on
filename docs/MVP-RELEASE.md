@@ -327,7 +327,8 @@ v4 → v6 显示规划 Prompt 新增的行）；控制台「修订历史」在�
 （read, execute, manage），临时登录已登出；普通账号 `--admin` 被拒且同样登出；管理员 `--admin` 得到含 admin 的 7 天 Token。
 本机 MCP 服务以普通 Token 列出角色工具、不列管理员工具，`octopus_me` 显示 e2e-member · 未提权 · mcp，环境与会话可查，调用
 管理员工具得结构化 403；以 admin Token 列出三个管理员工具，用户与执行环境（personal、w1）可列出，变更记录按人筛选，
-不存在的用户名得结构化 404。验收后两枚 Token 已吊销、`e2e-member` 停用。
+不存在的用户名得结构化 404。验收后两枚 Token 已吊销、`e2e-member` 停用。独立审查 3 个 Important 与 4 个上调项修复后重跑 15/15；
+离线 Python 443、控制台 108、旧版回归 92。
 
 ### 14.8 会话变更记录与运行优化（D34）
 
