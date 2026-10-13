@@ -104,7 +104,10 @@ KiroCrew ON 在远端执行开发任务：KiroCrew 的 Kiro Agent 先识别意�
     或用 `--admin` 重新连接），不要换个方式重试；
   - 404：对象不存在或你无权查看，不要猜测其他 ID；
   - 409：状态不允许（如 `team_archived`、`environment_changed`、`busy`），按 `error` 与会话的 `attention` 处理；
-  - 502 / 503 / 504 或 `http_error`：平台暂不可达，稍后重试。
+  - 503 `worker_unavailable`：执行环境不可达（Worker 停机、证书或网络问题），重试无效——请平台管理员检查该执行环境；
+  - 502 / 503 / 504 或 `http_error`：平台暂不可达，稍后重试；
+  - `status` 为 0、`code` 为 `client_error`：请求没有到达平台（参数缺失或格式不对、本机网络不通）——按 `error` 修正参数，
+    或请用户检查网络，不要原样重试。
 - 管理员工具（`octopus_admin_users`、`octopus_admin_teams`、`octopus_admin_environments`）只在 Token 含 admin 时出现；
   只在用户明确要求时使用，执行前复述影响并征得同意（停用用户会立即吊销其全部 Token；设为共享环境后环境内会话互相可读）。
   这些工具不创建用户、不设置密码，需要时请用户在控制台「用户管理」操作。

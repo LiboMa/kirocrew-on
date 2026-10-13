@@ -34,6 +34,11 @@
 - 自适应轮询：长时间运行的原生任务降低 `/inspect` 频率。
 - KiroCrew 自动影响评估：续作时由 Kiro 判定重跑范围并调整后续任务的 Prompt。
 - 工作流编辑器编辑任务契约字段；把各工具实测耗时与通过率提供给规划。
+- 访问管理第 3 期审查延后项：`tools_for` 只看 scope、未看账号是否仍为管理员（被降级者的旧 admin Token 仍列出管理员工具）；
+  管理员工具的 ID 用 `quote` 但未禁止 `/`；`add_space` 同时给 team_id 与 user_id 时只发 team_id；API 错误体缺 `code` / `error`
+  时结构化字段为 null；有 `--username` 但无终端且未设密码环境变量时 `getpass` 报堆栈、交互输入空用户名到登录才失败；
+  README 的 connect 示例未带 `--username`；`octopus_environments` 对看不到的 Team 返回空列表，管理员为他人个人空间的会话分配时
+  列出的是管理员本人的环境。
 - `GET /v1/tokens` 的 `scopes` 是 JSON 字符串（`/v1/admin/users/<id>/tokens` 是数组；控制台已兼容），统一为数组时同步控制台。
 - D34 审查延后项：「沿用 v<N> 结果」显示的是续作的版本而非被沿用结果的版本；控制台续作时被规则补全的任务也作为勾选项发送，
   修订的 `reasons` 为空；命令事件对 stop / close 也抄录请求体中未校验的 `task_id` / `worker_id` / `rerun`；500 字符内的结果与证据在

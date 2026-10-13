@@ -137,13 +137,18 @@ TOOLS += [
 ]
 
 
-def tools_for(client):
-    """The tools this token can use: administrator tools only with the admin scope (A3); all when that cannot be told."""
+def scoped_tools(client):
+    """(tools, known): administrator tools only with the admin scope (A3); every tool when the scope cannot be told
+    (known=False, asked again next time). A short probe: tools/list must not wait on a slow platform."""
     try:
-        scopes = client.request("GET", "/v1/me").get("scopes", [])
+        scopes = client.request("GET", "/v1/me", timeout=5).get("scopes", [])
     except (RuntimeError, ValueError, OSError):
-        return TOOLS
-    return [tool for tool in TOOLS if tool["name"] not in ADMIN or "admin" in scopes]
+        return TOOLS, False
+    return [tool for tool in TOOLS if tool["name"] not in ADMIN or "admin" in scopes], True
+
+
+def tools_for(client):
+    return scoped_tools(client)[0]
 
 
 def usable(worker, me, team):
@@ -202,8 +207,9 @@ def admin_teams(client, args):
         need(args, "worker_id")
         return client.request("POST", base + "/environment", {"worker_id": args["worker_id"]})
     need(args, "username")
-    if action == "set_member":
-        return client.request("POST", base + "/members", {"username": args["username"], "role": args.get("role", "member")})
+    if action == "set_member":   # explicit: a default would silently demote an existing owner
+        need(args, "role")
+        return client.request("POST", base + "/members", {"username": args["username"], "role": args["role"]})
     return client.request("DELETE", base + "/members", {"username": args["username"]})
 
 
@@ -359,15 +365,19 @@ def serve(client, input_stream=sys.stdin, output_stream=sys.stdout):
             elif method == "ping":
                 result = {}
             elif method == "tools/list":
-                if not listed:
-                    listed.append(tools_for(client))   # one /v1/me per MCP session
-                result = {"tools": listed[0]}
+                if listed:
+                    tools = listed[0]
+                else:
+                    tools, known = scoped_tools(client)
+                    if known:
+                        listed.append(tools)   # one /v1/me per MCP session once the scope is known
+                result = {"tools": tools}
             elif method == "tools/call":
                 try:
                     value = call(client, request["params"]["name"], request["params"].get("arguments", {}))
                     result = {"content": [{"type": "text", "text": dumps(value)}],
                               "structuredContent": value if isinstance(value, dict) else {"items": value}}
-                except (ValueError, KeyError, RuntimeError, OSError) as exc:
+                except Exception as exc:   # any failure is this call's error; the server keeps answering
                     # Structured, so an Agent can tell 401 / 403 / 404 / 409 apart and say who must act (spec §7.2).
                     error = ({"status": exc.status, "code": exc.code, "error": exc.error} if isinstance(exc, ApiError)
                              else {"status": 0, "code": "client_error", "error": str(exc)})

@@ -14,8 +14,9 @@ class Fake:
     def __init__(self, responses=None):
         self.responses, self.calls = responses or {}, []
 
-    def request(self, method, path, body=None):
+    def request(self, method, path, body=None, **options):
         self.calls.append((method, path, body))
+        self.options = options
         value = self.responses.get((method, path.split("?")[0]), {"ok": True})
         if isinstance(value, Exception):
             raise value
@@ -78,6 +79,34 @@ class RoleToolTests(unittest.TestCase):
         self.assertTrue({"octopus_admin_users", "octopus_admin_teams", "octopus_admin_environments"} <= admin)
         unknown = names(Fake({("GET", "/v1/me"): ApiError(503, "worker_unavailable", "x")}))
         self.assertIn("octopus_admin_users", unknown)
+
+    def test_a_wrong_argument_type_is_an_error_not_a_crash(self):
+        out = io.StringIO()
+        lines = [{"jsonrpc": "2.0", "id": 1, "method": "tools/call",
+                  "params": {"name": "octopus_admin_users", "arguments": {"action": "deactivate", "username": 123}}},
+                 {"jsonrpc": "2.0", "id": 2, "method": "ping"}]
+        users = [{"id": "u1", "username": "alice"}]
+        mcp.serve(Fake({("GET", "/v1/admin/users"): users}), io.StringIO("".join(json.dumps(x) + "\n" for x in lines)), out)
+        first, second = [json.loads(line) for line in out.getvalue().splitlines()]
+        self.assertEqual((first["result"]["isError"], first["result"]["structuredContent"]["code"]), (True, "client_error"))
+        self.assertEqual((second["id"], second["result"]), (2, {}))
+
+    def test_an_unknown_scope_is_not_remembered_and_the_probe_is_short(self):
+        class Flaky(Fake):
+            def request(self, method, path, body=None, **options):
+                self.options = options
+                if not self.calls:
+                    self.calls.append(path)
+                    raise ApiError(504, "http_error", "Gateway Timeout")
+                return {**ME, "scopes": ["read", "execute"]}
+        client = Flaky()
+        out = io.StringIO()
+        listing = "".join(json.dumps({"jsonrpc": "2.0", "id": i, "method": "tools/list"}) + "\n" for i in (1, 2))
+        mcp.serve(client, io.StringIO(listing), out)
+        first, second = [{t["name"] for t in json.loads(line)["result"]["tools"]} for line in out.getvalue().splitlines()]
+        self.assertIn("octopus_admin_users", first)          # unknown: everything
+        self.assertNotIn("octopus_admin_users", second)      # asked again, now known
+        self.assertEqual(client.options.get("timeout"), 5)
 
     def test_tools_list_over_stdio_follows_the_token(self):
         out = io.StringIO()
@@ -151,6 +180,10 @@ class AdminToolTests(unittest.TestCase):
                            ("octopus_admin_environments", {"action": "share", "worker_id": "w1"})):
             with self.subTest(args=args), self.assertRaises(ValueError):
                 mcp.call(Fake({("GET", "/v1/admin/users"): USERS}), name, args)
+
+    def test_setting_a_member_needs_the_role(self):
+        with self.assertRaisesRegex(ValueError, "role"):
+            mcp.call(Fake(), "octopus_admin_teams", {"action": "set_member", "team_id": "t1", "username": "bob"})
 
     def test_no_tool_creates_users_or_sets_passwords(self):
         text = json.dumps([t for t in mcp.TOOLS if t["name"].startswith("octopus_admin_")], ensure_ascii=False)

@@ -192,10 +192,14 @@ def main(argv=None):
         from .backup import archive_directory
         print(dumps(archive_directory(Path(args.source), Path(args.dest), args.name, tuple(args.exclude))))
     elif args.command == "connect":
-        from .connect import connect
+        import subprocess
+        from .connect import connect, revoke
         token = args.token or os.environ.get("OCTOPUS_API_TOKEN")
+        if token and args.admin:
+            raise SystemExit("--admin 只用于以账号登录签发新 Token：不能与 --token 或环境变量 OCTOPUS_API_TOKEN 同时使用")
         if token and not args.token:
             print("使用环境变量 OCTOPUS_API_TOKEN 中的 Token")
+        issued = None
         if not token and not args.dry_run:
             from .connect import issue_token
             username = args.username
@@ -205,11 +209,27 @@ def main(argv=None):
                 username = input("平台用户名：").strip()
             password = os.environ.get(args.password_env) or getpass.getpass(f"{username} 的密码：")
             try:
-                token = issue_token(Client, args.url, args.client, username, password, admin=args.admin)
+                issued = issue_token(Client, args.url, args.client, username, password, admin=args.admin)
             except (RuntimeError, ValueError, OSError) as exc:
                 raise SystemExit(f"错误：{exc}") from None
-        for action in connect(args.client, args.url, token or "dry-run-token", scope=args.scope, project=args.project,
-                              dry_run=args.dry_run):
+            token = issued["token"]
+            if issued.get("warning"):
+                print("提示：" + issued["warning"], file=sys.stderr)
+        try:
+            actions = connect(args.client, args.url, token or "dry-run-token", scope=args.scope, project=args.project,
+                              dry_run=args.dry_run)
+        except (subprocess.CalledProcessError, OSError) as exc:
+            # Never echo the command: its arguments carry the token.
+            code = getattr(exc, "returncode", None)
+            note = ""
+            if issued:
+                try:
+                    revoke(Client, args.url, issued)
+                    note = "；刚签发的 Token 已吊销"
+                except (RuntimeError, OSError):
+                    note = "；刚签发的 Token 未能吊销，请在控制台撤销"
+            raise SystemExit(f"错误：写入 {args.client} 配置失败（{'退出码 ' + str(code) if code is not None else type(exc).__name__}）{note}") from None
+        for action in actions:
             print(action)
         issued = not (args.token or os.environ.get("OCTOPUS_API_TOKEN"))
         lifetime = f"Token {7 if args.admin else 30} 天有效" if issued else "使用你提供的 Token"

@@ -36,7 +36,7 @@ class Client:
             raise ValueError("Remote API connections require HTTPS")
         self.url, self.token = url.rstrip("/"), token
 
-    def request(self, method, path, body=None):
+    def request(self, method, path, body=None, timeout=40):
         if not path.startswith("/v1/") or path.startswith("//"):
             raise ValueError("Use a /v1/ API path")
         req = urllib.request.Request(self.url + path, method=method,
@@ -44,7 +44,7 @@ class Client:
                                      headers={"Authorization": "Bearer " + self.token,
                                               "Content-Type": "application/json"})
         try:
-            with urllib.request.urlopen(req, timeout=40) as response:
+            with urllib.request.urlopen(req, timeout=timeout) as response:
                 return json.load(response)
         except urllib.error.HTTPError as exc:
             raise http_error(exc) from None
