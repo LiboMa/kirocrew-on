@@ -77,9 +77,10 @@ class Apps:
             app = self.apps.get(run_id)
             if app and app.status in LIVE:
                 return app.view(self.instance)
-            # As for a download: the dependency directories count as absent, so the first preview installs them once
-            # (the install marker decides afterwards).
-            spec, source, problem = preview_spec.resolve(project, packaged=True)
+            # The project as it is: dependencies an agent already installed are used, not reinstalled over (npm ci
+            # would also refuse a lockfile the agent did not update). Declared install steps rerun when a lockfile
+            # changes (the install marker).
+            spec, source, problem = preview_spec.resolve(project)
             require(spec, problem or "未找到启动方式", 409, "app_unavailable")
             if not spec.get("static"):
                 require(preview_spec.entry(spec)["port"] == "$PORT",

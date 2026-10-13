@@ -5,6 +5,7 @@ import os
 from pathlib import Path
 import random
 import shlex
+import shutil
 import socket
 import sys
 import tempfile
@@ -264,6 +265,19 @@ class ReviewFixTests(AppsTests):
         self.apps.start(RID, project, folder)
         self.assertEqual(self.settle(RID, folder)["status"], "running")
         self.assertEqual((project / "installed.txt").read_text(), "done\ndone\n")
+
+
+class DetectedProjectTests(AppsTests):
+    def test_a_detected_project_with_its_dependencies_installed_starts_without_installing(self):
+        if not shutil.which("npm") or not shutil.which("node"):
+            self.skipTest("npm and node are needed")
+        server = "require('http').createServer((q, r) => r.end('node app')).listen(process.env.PORT, '127.0.0.1')"
+        _, project, folder = self.start(files={"package.json": json.dumps({"scripts": {"dev": "node server.js"}}),
+                                               "server.js": server, "node_modules/.keep": ""})
+        view = self.settle(RID, folder, timeout=30)
+        self.assertEqual(view["status"], "running", view)
+        self.assertEqual(self.get(view["port"]), "node app")
+        self.assertFalse(any(line.startswith("== 安装") for line in view["log"]), view["log"])   # no npm ci over it
 
 
 class WorkerAppTests(unittest.TestCase):
