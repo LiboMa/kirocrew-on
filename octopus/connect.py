@@ -25,6 +25,23 @@ def skill(url, repo=ROOT):
     return SKILL.read_text().replace("{{OCTOPUS_URL}}", url.rstrip("/")).replace("{{KIROCREW_ON_REPO}}", str(repo))
 
 
+def issue_token(client_factory, url, client, username, password, admin=False):
+    """Sign in as ``username`` and issue the Coding Agent's own token (spec §7.1): read, execute and manage for 30 days;
+    with ``admin`` (an administrator only) also admin, for 7 days. The sign-in token is logged out in every case."""
+    login = client_factory(url, "").request("POST", "/v1/login", {"username": username, "password": password})
+    session = client_factory(url, login["token"])
+    try:
+        if admin and not session.request("GET", "/v1/me").get("admin"):
+            raise ValueError("--admin 需要管理员账号")
+        issued = session.request("POST", "/v1/tokens", {
+            "label": f"{client} MCP" + (" admin" if admin else ""),
+            "scopes": ["read", "execute", "manage"] + (["admin"] if admin else []),
+            "ttl": (7 if admin else 30) * 86400})
+        return issued["token"]
+    finally:
+        session.request("POST", "/v1/logout", {})
+
+
 def server(url, token):
     return {"command": sys.executable, "args": ["-m", "octopus", "mcp", "--url", url],
             "env": {"OCTOPUS_API_TOKEN": token, "PYTHONPATH": str(ROOT)}}

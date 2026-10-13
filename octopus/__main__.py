@@ -57,7 +57,9 @@ def build_parser(settings, environ=None):
     link.add_argument("client", choices=["claude", "kiro"])
     link.add_argument("--url", required=True, help="平台地址，如 https://<分发>.cloudfront.net 或 http://127.0.0.1:8918")
     link.add_argument("--token", help="已有 API Token（也可用环境变量 OCTOPUS_API_TOKEN）；都没有时用 --username 登录并创建一枚 30 天 Token")
-    link.add_argument("--username", default="admin")
+    link.add_argument("--username", help="你的平台用户名（未指定时交互询问）")
+    link.add_argument("--admin", action="store_true",
+                      help="管理员：Token 额外含 admin scope（可调用管理员工具），7 天有效；只在本人设备上使用")
     link.add_argument("--password-env", default="OCTOPUS_PASSWORD", help="读取密码的环境变量；未设置时交互输入")
     link.add_argument("--scope", help="claude: user/project/local（默认 user）；kiro: workspace/global（默认 workspace）")
     link.add_argument("--project", help="kiro workspace 范围的项目目录（默认当前目录）")
@@ -195,16 +197,24 @@ def main(argv=None):
         if token and not args.token:
             print("使用环境变量 OCTOPUS_API_TOKEN 中的 Token")
         if not token and not args.dry_run:
-            password = os.environ.get(args.password_env) or getpass.getpass(f"{args.username} 的密码：")
-            session = Client(args.url, "")
-            login = session.request("POST", "/v1/login", {"username": args.username, "password": password})
-            issued = Client(args.url, login["token"]).request("POST", "/v1/tokens", {
-                "label": f"{args.client} MCP", "scopes": ["read", "execute"], "ttl": 30 * 86400})
-            token = issued["token"]
+            from .connect import issue_token
+            username = args.username
+            if not username:
+                if not sys.stdin.isatty():
+                    raise SystemExit("未指定 --username，且没有可交互的终端：请用 --username <你的平台用户名>")
+                username = input("平台用户名：").strip()
+            password = os.environ.get(args.password_env) or getpass.getpass(f"{username} 的密码：")
+            try:
+                token = issue_token(Client, args.url, args.client, username, password, admin=args.admin)
+            except (RuntimeError, ValueError, OSError) as exc:
+                raise SystemExit(f"错误：{exc}") from None
         for action in connect(args.client, args.url, token or "dry-run-token", scope=args.scope, project=args.project,
                               dry_run=args.dry_run):
             print(action)
-        print("完成：重新打开客户端后可用 kirocrew-on 的 MCP 工具；Token 30 天有效，可在控制台撤销。" if not args.dry_run else "（dry-run，未写入）")
+        issued = not (args.token or os.environ.get("OCTOPUS_API_TOKEN"))
+        lifetime = f"Token {7 if args.admin else 30} 天有效" if issued else "使用你提供的 Token"
+        print(f"完成：重新打开客户端后可用 kirocrew-on 的 MCP 工具；{lifetime}，可在控制台撤销。" if not args.dry_run
+              else "（dry-run，未写入）")
     elif args.command == "skill":
         from .connect import install_skill, skill
         if not args.dest:
