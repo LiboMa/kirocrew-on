@@ -2,7 +2,7 @@ import { useEffect, useState } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { api } from "@/api/client";
 import { followRunEvents, type StreamState } from "@/api/events";
-import type { AppPreview, ChangeEntry, Environment, Me, Observation, RevisionDiff, RevisionEntry, Run, RunEvent, Team, Template, User, Worker, Workflow } from "@/api/types";
+import type { AppPreview, ChangeEntry, Credential, Environment, Me, Observation, RevisionDiff, RevisionEntry, Run, RunEvent, Team, Template, User, Worker, Workflow } from "@/api/types";
 
 export const keys = {
   me: ["me"] as const,
@@ -17,6 +17,7 @@ export const keys = {
   run: (id: string) => ["run", id] as const,
   observe: (id: string) => ["observe", id] as const,
   app: (id: string) => ["app", id] as const,
+  credentials: ["credentials"] as const,
 };
 
 const every = (ms: number) => ({ refetchInterval: ms, refetchIntervalInBackground: false });
@@ -62,6 +63,11 @@ export function useObservation(id: string | null, live: boolean, limit = 50) {
     enabled: !!id, retry: false, placeholderData: (previous) => previous,
     refetchInterval: live ? 5_000 : false, refetchIntervalInBackground: false,
   });
+}
+
+/** The repository credentials the user may use or manage (D35); metadata only. */
+export function useCredentials(enabled = true) {
+  return useQuery({ queryKey: keys.credentials, queryFn: () => api<Credential[]>("/credentials"), enabled, retry: false });
 }
 
 /** The run's remote preview: every 3 s while it installs or starts, every 15 s while it runs. */

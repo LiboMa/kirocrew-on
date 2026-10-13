@@ -143,6 +143,30 @@ class AppToolTests(unittest.TestCase):
         self.assertIn("octopus_app", {t["name"] for t in mcp.tools_for(Fake({("GET", "/v1/me"): ME}))})
 
 
+class CredentialToolTests(unittest.TestCase):
+    """D35 §6: an agent lists credentials (metadata only) and names one at submission; it never creates one."""
+
+    def test_listing_by_host_and_naming_one_at_start(self):
+        listed = [{"id": "cred-1", "name": "bob 的 GitHub", "kind": "github_pat", "host": "github.com", "scope": "user",
+                   "hint": "…1a2b", "repos": [], "access": "read", "disabled": False, "can_manage": True, "owner": {"id": "u1"}}]
+        client = Fake({("GET", "/v1/credentials"): listed})
+        result = mcp.call(client, "octopus_credentials", {"host": "github.com"})
+        self.assertEqual(client.calls[-1], ("GET", "/v1/credentials?host=github.com", None))
+        self.assertEqual(result["credentials"][0]["name"], "bob 的 GitHub")
+        self.assertNotIn("secret", json.dumps(result))
+        mcp.call(client, "octopus_start", {"request_id": "start-1", "input": "修复", "source": {"type": "git", "url": "https://github.com/a/b"},
+                                           "credentials": {"source": "cred-1"}})
+        self.assertEqual(client.calls[-1][2]["credentials"], {"source": "cred-1"})
+
+    def test_no_tool_creates_a_credential_or_takes_a_secret(self):
+        names = {tool["name"] for tool in mcp.TOOLS}
+        self.assertIn("octopus_credentials", names)
+        schemas = json.dumps([tool["inputSchema"] for tool in mcp.TOOLS])
+        self.assertNotIn('"secret"', schemas)
+        start = next(tool for tool in mcp.TOOLS if tool["name"] == "octopus_start")
+        self.assertIn("credentials", start["inputSchema"]["properties"])
+
+
 USERS = [{"id": "u1", "username": "alice"}, {"id": "u2", "username": "bob"}]
 
 

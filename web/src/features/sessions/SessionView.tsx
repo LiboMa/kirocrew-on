@@ -23,6 +23,7 @@ import { RevisionsPanel } from "@/features/sessions/RevisionsPanel";
 import { RecoveryPanel } from "@/features/sessions/RecoveryPanel";
 import { TaskList } from "@/features/sessions/TaskList";
 import { useSessionActions } from "@/features/sessions/useSessionActions";
+import { bindingLabel } from "@/lib/credentials";
 import { canContinue, canDelete, canRecover, canStop, closeAction, crewEntryReason, deleteReason, resumeReason, statusText } from "@/lib/session";
 
 export function SessionView({ id }: { id: string }) {
@@ -70,6 +71,15 @@ export function SessionView({ id }: { id: string }) {
               <p id="run-goal" className="line-clamp-3 text-sm leading-6 whitespace-pre-wrap text-muted-foreground">{run.input}</p>
             )}
             <p id="run-id" className="font-mono text-[11px] text-muted-foreground">{run.id} · revision {run.version}</p>
+            {run.created_by && (
+              <p id="run-owner" className="text-xs text-muted-foreground" title={run.credentials?.source?.name}>
+                创建者 {run.created_by.username ?? run.created_by.id}
+                {run.credentials?.source && (
+                  <> · 凭证：{bindingLabel(run.credentials.source)}
+                    {run.credentials.source.unavailable && <span className="text-destructive">（已停用或删除，请更换后续作）</span>}</>
+                )}
+              </p>
+            )}
           </div>
           <div className="flex flex-col items-end gap-2">
             <StatusBadge status={run.lifecycle === "closed" ? "stopped" : run.status} label={statusText(run)} className="text-xs" />

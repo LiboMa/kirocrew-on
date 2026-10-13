@@ -164,6 +164,24 @@ describe("session detail", () => {
     });
   });
 
+  test("shows who created the Session and the credential it clones with", async () => {
+    const source = { id: "cred-1", name: "bob 的 GitHub", kind: "github_pat", scope: "user", owner: { id: "u2", username: "bob" },
+      hint: "…1a2b", bound_by: { id: "u2", username: "bob" }, at: 1 };
+    open(makeRun({ id: "run-c", status: "completed", worker_id: "w1", created_by: { id: "u2", username: "bob" },
+      credentials: { source } } as Partial<Run>));
+    const line = await screen.findByText(/创建者 bob/);
+    expect(line).toHaveTextContent("创建者 bob · 凭证：bob 的个人 GitHub Token（…1a2b）");
+    expect(line).not.toHaveTextContent("不可用");
+  });
+
+  test("a credential that was disabled or deleted is shown as unavailable", async () => {
+    const source = { id: "cred-2", name: "Team GitLab", kind: "gitlab_token", scope: "team", owner: { id: "t1", name: "平台组" },
+      hint: "…0000", bound_by: { id: "u1", username: "fixture-owner" }, at: 1, unavailable: true };
+    open(makeRun({ id: "run-d", status: "blocked", worker_id: "w1", created_by: { id: "u1", username: "fixture-owner" },
+      credentials: { source } } as Partial<Run>));
+    expect(await screen.findByText(/凭证：Team「平台组」的 GitLab Token（…0000）/)).toHaveTextContent("已停用或删除");
+  });
+
   test("a Session without a Worker has no source to download yet", async () => {
     open(makeRun({ id: "run-n", status: "waiting_worker", worker_id: null, workspace: null }));
     expect(await screen.findByRole("button", { name: /下载源码/ })).toBeDisabled();

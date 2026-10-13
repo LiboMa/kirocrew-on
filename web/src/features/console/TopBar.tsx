@@ -58,6 +58,7 @@ export function TopBar({ onMenu }: { onMenu: () => void }) {
           <DropdownMenuContent align="end" className="w-52">
             <DropdownMenuItem onSelect={() => open({ kind: "team" })}>团队与成员</DropdownMenuItem>
             <DropdownMenuItem onSelect={() => open({ kind: "tokens" })}>API 与 Coding Agent 接入</DropdownMenuItem>
+            <DropdownMenuItem onSelect={() => open({ kind: "credentials" })}>代码仓库凭证</DropdownMenuItem>
             <DropdownMenuItem onSelect={() => open({ kind: "workers" })}>执行环境 · Worker</DropdownMenuItem>
             {elevated(me) && <DropdownMenuItem onSelect={() => open({ kind: "users" })}>用户管理</DropdownMenuItem>}
             <DropdownMenuSeparator />

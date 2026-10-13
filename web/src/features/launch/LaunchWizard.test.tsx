@@ -58,7 +58,41 @@ afterEach(() => {
   window.history.replaceState(null, "", "/");
 });
 
+const credentials = [
+  { id: "cred-1", name: "bob 的 GitHub", kind: "github_pat", host: "github.com", scope: "user", access: "read", hint: "…1a2b",
+    owner: { id: "u1", username: "fixture-owner" }, repos: [], disabled: false, can_manage: true },
+  { id: "cred-2", name: "GitLab", kind: "gitlab_token", host: "gitlab.example.com", scope: "user", access: "read", hint: "…0000",
+    owner: { id: "u1", username: "fixture-owner" }, repos: [], disabled: false, can_manage: true },
+];
+
+async function submitGit(dialog: HTMLElement, calls: { method: string; path: string; body: unknown }[], credential?: string) {
+  await userEvent.type(within(dialog).getByLabelText("这次要完成什么？"), "修复私有仓库里的登录 Bug。");
+  await userEvent.selectOptions(within(dialog).getByLabelText("代码来源"), "git");
+  await userEvent.type(within(dialog).getByLabelText("Git URL"), "https://github.com/kirocrew/app.git");
+  const select = await within(dialog).findByLabelText("仓库凭证");
+  expect(within(select).getAllByRole("option").map((o) => o.textContent)).toEqual(["自动匹配（按仓库选择可用凭证）", "bob 的 GitHub · 个人 · …1a2b"]);
+  if (credential) await userEvent.selectOptions(select, credential);
+  await next(dialog);
+  await next(dialog);
+  await next(dialog);
+  await userEvent.click(within(dialog).getByRole("button", { name: "确认任务并提交" }));
+  await waitFor(() => expect(calls.some((c) => c.method === "POST" && c.path === "/v1/runs")).toBe(true));
+  return calls.find((c) => c.method === "POST" && c.path === "/v1/runs")?.body as Record<string, unknown>;
+}
+
 describe("launch wizard", () => {
+  test("a Git source can name the credential for its host", async () => {
+    const calls = start({ "GET /credentials": credentials });
+    const body = await submitGit(await openWizard(), calls, "cred-1");
+    expect(body).toMatchObject({ source: { type: "git", url: "https://github.com/kirocrew/app.git" }, credentials: { source: "cred-1" } });
+  });
+
+  test("left to matching, no credential is named", async () => {
+    const calls = start({ "GET /credentials": credentials });
+    const body = await submitGit(await openWizard(), calls);
+    expect(body.credentials).toBeUndefined();
+  });
+
   test("each step explains what is missing before moving on", async () => {
     start();
     const dialog = await openWizard();

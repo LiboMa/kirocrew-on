@@ -72,6 +72,7 @@ TOOLS = [
                                    ["content"]),
          "plan": {"type": "string", "enum": ["agent", "match"]},
          "source": {"type": "object"},
+         "credentials": object_schema({"source": STRING}),
          "team_id": STRING, "worker_id": STRING, "recovery": RECOVERY}, ["request_id", "input", "source"])},
     {"name": "octopus_continue", "description": "原 Session 修订并重跑 Task；保留 Workspace；可覆盖模型/Effort/工具与任务契约。"
                                                 "rerun 只列出受本次修改影响的后续任务（省略则重跑所选任务之后的全部任务）；"
@@ -121,6 +122,11 @@ TOOLS += [
      "description": "把 Session 的源码（含 .git，不含依赖目录与 .env）下载并解压到本机目录 dest（默认 ./kirocrew-<run>），"
                     "返回目录、HEAD 与本机启动步骤（来自 .octopus/preview.json 或自动识别）。目录已存在且非空时拒绝。",
      "inputSchema": object_schema({"run_id": STRING, "dest": STRING}, ["run_id"])},
+    {"name": "octopus_credentials",
+     "description": "列出你可以使用或管理的代码仓库凭证（GitHub / GitLab；只有名称、类型、主机、范围与末 4 位，不含 Token），"
+                    "可按 host 过滤。私有仓库提交时以 octopus_start 的 credentials.source 指定其 ID，不指定时平台按仓库自动匹配。"
+                    "凭证只能由用户在控制台「设置 → 代码仓库凭证」创建：不要向用户索要 Token。",
+     "inputSchema": object_schema({"host": STRING}), "annotations": READ},
     {"name": "octopus_app",
      "description": "Session 的远程预览（在执行环境中运行应用，经独立的预览域名在浏览器中打开）：start 启动（按 .octopus/preview.json "
                     "或自动识别；会话执行中不能启动；每个执行环境最多 3 个）；status 查看状态与最近日志（installing / starting / "
@@ -404,6 +410,9 @@ def call(client, name, args):
         return download(client, args)
     if name == "octopus_app":
         return app(client, args)
+    if name == "octopus_credentials":
+        query = ("?" + urlencode({"host": args["host"]})) if args.get("host") else ""
+        return {"credentials": client.request("GET", "/v1/credentials" + query)}
     if name == "octopus_assign_worker":
         rid = args.pop("run_id")
         return client.request("POST", "/v1/runs/" + rid + "/assign-worker", args)

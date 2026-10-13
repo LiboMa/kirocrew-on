@@ -29,6 +29,8 @@ export interface Draft {
   source: "" | "new" | "git";
   url: string;
   ref: string;
+  /** A source credential named by the user (D35); "" leaves it to matching by repository. */
+  credential: string;
   method: PlanMethod;
   choice: string; // "auto" | "custom" | "workflow:<id>" | "template:<id>"
   tasks: Step[];
@@ -52,7 +54,7 @@ export function initialDraft(seed: LaunchSeed, { worker, space = "" }: { worker:
   const workflowMode = seed.mode === "workflow";
   return {
     input: seed.input ?? "", name: seed.name ?? "", nameTouched: !!seed.workflow?.id, space, worker,
-    source: workflowMode ? "new" : "", url: "", ref: "",
+    source: workflowMode ? "new" : "", url: "", ref: "", credential: "",
     method: explicit && !workflowMode ? "template" : workflowMode ? "recommend" : "agent",
     choice: seed.workflow_id ? "workflow:" + seed.workflow_id : seed.template_id ? "template:" + seed.template_id : seed.steps ? "custom" : "auto",
     tasks: structuredClone(seed.steps ?? []), resolution: null, imported: null, importContent: "", generation: null,
@@ -142,6 +144,7 @@ export function submitBody(draft: Draft) {
     : { type: "new" as const };
   return {
     ...plan, input: draft.input.trim(), name: draft.name, source, recovery: draft.recovery,
+    ...(draft.source === "git" && draft.credential ? { credentials: { source: draft.credential } } : {}),
     ...(draft.space ? { team_id: draft.space } : {}), ...(draft.worker ? { worker_id: draft.worker } : {}),
   };
 }

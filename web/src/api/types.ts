@@ -186,6 +186,10 @@ export interface RunSource {
 }
 
 export interface Run {
+  /** Who submitted the Session (D35 §4). */
+  created_by?: { id: string; username?: string | null };
+  /** The source credential pinned at submission (D35 §4); never the secret. */
+  credentials?: { source: CredentialBinding | null } | null;
   /** Tasks the latest continue left as they were, still carrying that version's result (D34). */
   kept?: { version: number; tasks: string[] };
   id: string;
@@ -377,4 +381,41 @@ export interface AppPreview {
   idle_stop_at: number | null;
   openable: boolean;
   worker_error?: string;
+}
+
+export type CredentialKind = "github_pat" | "gitlab_token";
+export type CredentialScope = "user" | "team" | "platform";
+export type CredentialOwner = { id: string; username?: string | null; name?: string | null } | null;
+
+/** A repository credential as the API lists it (D35 §3): metadata only — the secret is write-only. */
+export interface Credential {
+  id: string;
+  name: string;
+  kind: CredentialKind;
+  host: string;
+  scope: CredentialScope;
+  owner: CredentialOwner;
+  repos: string[];
+  access: "read" | "write";
+  hint: string;
+  expires: number | null;
+  created: number;
+  updated: number;
+  last_used: number | null;
+  disabled: boolean;
+  can_manage: boolean;
+  grants?: ({ team_id: string } | { user_id: string })[];
+}
+
+/** What a Session pins: the credential's identity and who bound it. */
+export interface CredentialBinding {
+  id: string;
+  name: string;
+  kind: CredentialKind;
+  scope: CredentialScope;
+  owner: CredentialOwner;
+  hint: string;
+  bound_by: { id: string; username?: string | null };
+  at: number;
+  unavailable?: boolean;
 }

@@ -85,6 +85,16 @@ KiroCrew ON 在远端执行开发任务：KiroCrew 的 Kiro Agent 先识别意�
   回复用户时说明重跑了哪些任务、沿用了哪些（`octopus_status` 的修订摘要与 `kept`）。
 - 任务暂停（`blocked` / `failed` / `stopped`）时，可用 `octopus_recover` 请 KiroCrew 协调者按失败证据诊断并安排修复。
 
+## 私有仓库与凭证
+
+- 私有仓库需要代码仓库凭证（GitHub fine-grained Token、GitLab Token）。凭证只能由用户在控制台「设置 → 代码仓库凭证」创建：
+  **不要向用户索要 Token**，不要把 Token 写进对话、命令或项目文件。
+- `octopus_credentials`（可传 `host`）列出可用的凭证（只有名称、归属与末 4 位）。提交时可以用 `credentials: {"source": "<ID>"}`
+  指定；不指定时，平台按仓库自动匹配：Team 会话依次为 Team 凭证、授权给 Team 的平台凭证、提交者个人凭证。
+- 409 `credential_ambiguous`：有多枚同样适用的凭证，`error` 里列出了名称，请用户选一枚后用 `credentials.source` 重新提交。
+- 403 `credential_forbidden` / 409 `credential_scope`：指定的凭证不能用于这个仓库（不是你的、未授权、主机或仓库范围不符）。
+- 会话停在「仓库凭证不可用」：绑定的凭证被停用或删除，请用户在会话页更换凭证（`POST /v1/runs/<id>/credentials`）后续作。
+
 ## 5．预览产出
 
 - 想在本机运行、查看或继续开发：`octopus_download`（传 `run_id`，可选 `dest`）把源码（含 `.git`，不含依赖目录与 `.env`）
