@@ -1,19 +1,53 @@
 """Prepare a pinned project checkout before native workflow dispatch.
 
-Invoked by the KiroCrew coordinator through its existing Shell tool. No model,
-Coding CLI, new Gateway endpoint, or credential-copying mechanism is introduced.
+Invoked by the KiroCrew coordinator through its existing Shell tool. No model, Coding CLI or new Gateway endpoint is
+introduced. A private repository's token (D35 §5.1) reaches git only through GIT_ASKPASS and a 0600 file that exists
+for the clone alone; it is never copied into the workspace, the remote URL or any record.
 """
 from __future__ import annotations
 
+from contextlib import contextmanager
 import fcntl
 import json
 import os
 from pathlib import Path
 import re
+import shlex
+import shutil
 import subprocess
 import time
 from urllib.parse import urlsplit
 import uuid
+
+HIDDEN = "[凭证已隐去]"
+
+
+def scrub(text, secret=None):
+    """Git output as it may be shown or stored: no URL userinfo, no Authorization / PRIVATE-TOKEN line, no secret."""
+    text = re.sub(r"(https?://)[^/@\s]+@", r"\1", str(text))
+    text = re.sub(r"(?im)^.*\b(authorization|private-token)\s*:.*$", HIDDEN, text)
+    return text.replace(secret, HIDDEN) if secret else text
+
+
+@contextmanager
+def askpass(run, auth):
+    """GIT_ASKPASS answering git's Username / Password prompts from a 0600 file, both removed when the clone ends."""
+    folder = run / ".askpass"
+    shutil.rmtree(folder, ignore_errors=True)   # left by a crash
+    folder.mkdir(mode=0o700)
+    try:
+        secret = folder / "secret"
+        fd = os.open(secret, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+        with os.fdopen(fd, "w") as file:
+            file.write(auth["secret"])
+        script = folder / "askpass.sh"
+        script.write_text("#!/bin/sh\ncase \"$1\" in\n"
+                          f"  Username*) printf '%s\\n' {shlex.quote(auth['username'])} ;;\n"
+                          f"  *) cat {shlex.quote(str(secret))} ;;\nesac\n")
+        script.chmod(0o700)
+        yield {"GIT_ASKPASS": str(script), "GIT_TERMINAL_PROMPT": "0"}
+    finally:
+        shutil.rmtree(folder, ignore_errors=True)
 
 
 def read_record(run):
@@ -31,8 +65,8 @@ def _write(run, value):
     os.replace(temporary, run / "project.json")
 
 
-def _git(cwd, *args):
-    env = dict(os.environ, GIT_TERMINAL_PROMPT="0")
+def _git(cwd, *args, env=None):
+    env = {**os.environ, "GIT_TERMINAL_PROMPT": "0", **(env or {})}
     result = subprocess.run(["git", *args], cwd=cwd, stdin=subprocess.DEVNULL,
                             capture_output=True, text=True, timeout=180, env=env)
     if result.returncode:
@@ -82,7 +116,7 @@ def project_dir(run):
     return expected
 
 
-def prepare_project(run, *, source=None, ref=None, new=False):
+def prepare_project(run, *, source=None, ref=None, new=False, auth=None):
     run = Path(run)
     if not run.is_dir() or not (run / "workflow-run.json").is_file():
         raise ValueError("缺少有效 Workflow Run。")
@@ -131,7 +165,14 @@ def prepare_project(run, *, source=None, ref=None, new=False):
                     if not ref and _git(source_path, "status", "--porcelain", "--untracked-files=normal"):
                         raise ValueError("本地来源有未提交改动；本操作检出 Git 版本，不会隐式丢弃或提交改动。"
                                          "请用 --ref 明确选择已提交基线，或先保存所需源码版本。")
-                _git(workspace, "clone", "--no-hardlinks", "--no-checkout", "--", source, str(staging))
+                if auth:
+                    # No other credential helper answers; the remote keeps the plain URL; agents cannot push with it.
+                    with askpass(run, auth) as env:
+                        _git(workspace, "-c", "credential.helper=", "clone", "--no-hardlinks", "--no-checkout", "--",
+                             source, str(staging), env=env)
+                    _git(staging, "remote", "set-url", "--push", "origin", "DISABLED_NO_PUSH")
+                else:
+                    _git(workspace, "clone", "--no-hardlinks", "--no-checkout", "--", source, str(staging))
                 selected = ref or "HEAD"
                 try:
                     commit = _git(staging, "rev-parse", "--verify", "--end-of-options", selected + "^{commit}")
@@ -148,8 +189,9 @@ def prepare_project(run, *, source=None, ref=None, new=False):
             _write(run, state)
             return state
         except (OSError, ValueError, subprocess.SubprocessError) as exc:
-            state.update(status="failed", error=str(exc), at=time.time())
+            reason = scrub(exc, auth and auth.get("secret"))
+            state.update(status="failed", error=reason, at=time.time())
             if staging.exists():
                 state["retained_attempt"] = str(staging.relative_to(run))
             _write(run, state)
-            raise ValueError("源码准备失败：" + str(exc)) from exc
+            raise ValueError("源码准备失败：" + reason) from None

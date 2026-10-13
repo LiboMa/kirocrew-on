@@ -121,7 +121,8 @@ def main(argv=None):
         from .engine import Engine
         from .server import server
         db = Database(args.data)
-        engine = Engine(db, workers=settings.engine_workers, retry_unavailable=settings.retry_unavailable)
+        engine = Engine(db, workers=settings.engine_workers, retry_unavailable=settings.retry_unavailable,
+                        credentials_key_file=settings.credentials_key_file)
         secret = settings.origin_secret_file.read_text().strip() if settings.origin_secret_file else None
         from . import transport
         ca = settings.worker_ca_file

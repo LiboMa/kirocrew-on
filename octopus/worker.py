@@ -15,7 +15,7 @@ import subprocess
 import threading
 import time
 import urllib.error
-from urllib.parse import quote, urlencode
+from urllib.parse import quote, urlencode, urlsplit
 import zipfile
 
 from . import __version__
@@ -410,8 +410,18 @@ class Worker:
                 url = str(source.get("url", ""))
                 require(url.startswith(("https://", "ssh://")) or re.fullmatch(r"[\w.-]+@[\w.-]+:[^\s]+", url),
                         "API 仅接受远程 Git 来源；不接受任意宿主机路径")
-            workspace.prepare_project(run, source=source.get("url"), ref=source.get("ref"),
-                                      new=source["type"] == "new")
+            auth = body.get("git_auth")
+            if auth is not None:
+                # Only for this clone, and only for the repository's own host (D35 §5.1).
+                require(isinstance(auth, dict) and set(auth) == {"kind", "host", "username", "secret"}
+                        and all(isinstance(v, str) and v for v in auth.values()), "git_auth 无效")
+                require(source["type"] == "git" and urlsplit(str(source.get("url", ""))).netloc.lower() == auth["host"],
+                        "凭证的主机与仓库地址不符")
+            try:
+                workspace.prepare_project(run, source=source.get("url"), ref=source.get("ref"),
+                                          new=source["type"] == "new", auth=auth)
+            except ValueError as exc:   # the reason as sources cleaned it, instead of 「Worker 操作未完成」
+                raise Error(409, "source_failed", str(exc)) from None
             slot = "octopus-" + rid
             parent_file = run / "parent.json"
             if not parent_file.exists():

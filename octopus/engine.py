@@ -34,8 +34,11 @@ def transient(native, error, missing, blocked_line):
 
 
 class Engine:
-    def __init__(self, database, request=worker_request, workers=1, retry_unavailable=0.0, clock=time.monotonic):
+    def __init__(self, database, request=worker_request, workers=1, retry_unavailable=0.0, clock=time.monotonic,
+                 credentials_key_file=None):
         self.db, self.request = database, request
+        from .credentials import CredentialStore
+        self.credentials = CredentialStore(database, credentials_key_file)   # opened only for a clone (D35 §5.1)
         self.stopping = threading.Event()
         self.workers = workers
         self.pool = ThreadPoolExecutor(max_workers=workers, thread_name_prefix="octopus-session")
@@ -228,7 +231,11 @@ class Engine:
         if run["status"] == "diagnosing":
             return recovery.Coordinator(self).advance(run)
         if not run["native_parent"]:
-            result = self.request(config, "/prepare", {"run_id": rid, "source": json.loads(run["source"])}, timeout=240)
+            body = {"run_id": rid, "source": json.loads(run["source"])}
+            auth = self.credentials.material(run)   # 409 credential_unavailable blocks the run with its reason
+            if auth:
+                body["git_auth"] = auth
+            result = self.request(config, "/prepare", body, timeout=240)
             self.update(rid, "ready", actor=journal.WORKER, native_parent=result["native_parent"], workspace=result["workspace"])
             return
         with self.db.transaction() as db:

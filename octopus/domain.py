@@ -1216,6 +1216,8 @@ class Service:
         if "原生任务已停止" in error:
             title = (task["spec"]["name"] + "：已停止") if task else "原生任务已停止，尚未完成"
             action = "可请求协调者诊断，或配置后原地重跑；停止原因未报告时不能推断。"
+        elif not task and not run.get("native_parent") and ((run.get("credentials") or {}).get("source") or {}).get("unavailable"):
+            title, action = "仓库凭证不可用", "在会话页更换凭证（或请凭证管理者重新启用），再续作。"
         elif not task and not run.get("native_parent"):
             title, action = "项目准备未完成", "检查仓库来源、访问权限和 Worker，处理具体错误后重跑。"
         elif failure == "input":

@@ -266,6 +266,29 @@ class CredentialStore:
         except vault.VaultError as exc:
             raise Error(503, "credentials_unavailable", str(exc)) from None
 
+    def material(self, run):
+        """The bound credential, opened at the moment of a clone (spec §5.1): ``git_auth`` for the Worker, or None
+        without a binding. A disabled, deleted or no longer matching credential is refused; each use is audited, with
+        the Session's creator as the one on whose behalf it is used."""
+        from .domain import audit
+        bound = (json.loads(run["snapshot"]).get("credentials") or {}).get("source")
+        if not bound:
+            return None
+        with self.db.read() as db:
+            row = db.execute("SELECT * FROM credentials WHERE id=?", (bound["id"],)).fetchone()
+        require(row is not None and not row["disabled"],
+                f"凭证「{bound['name']}」已停用或删除：请在会话页更换凭证（或请管理者重新启用）后续作", 409, "credential_unavailable")
+        source = json.loads(run["source"])
+        host, path = repo_path(source.get("url", ""))
+        require(row["host"] == host and covers(json.loads(row["repos"]), path) is not None,
+                f"凭证「{row['name']}」已不覆盖仓库 {path}：请更换凭证后续作", 409, "credential_unavailable")
+        secret = self.secret(row["id"])
+        with self.db.transaction() as db:
+            db.execute("UPDATE credentials SET last_used=? WHERE id=?", (time.time(), row["id"]))
+            audit(db, {"id": run["owner_id"]}, "credential.use", "credential", row["id"],
+                  {"run_id": run["id"], "repo": path, "access": "read"})
+        return {"kind": row["kind"], "host": row["host"], "username": username(row["kind"]), "secret": secret}
+
     def test(self, actor, cid):
         """Ask the host who the token belongs to and when it expires; the answer never carries the secret."""
         from .domain import audit
