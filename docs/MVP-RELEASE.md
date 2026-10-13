@@ -1,6 +1,6 @@
 # MVP Release 计划与状态
 
-更新日期：2026-10-12　·　当前阶段：**最小 MVP 已在 EC2 跑通；Team 执行环境（D28：共享 / 专属 / 空闲，独立 Worker 主机）已在 EC2 验收**　·　本仓库可运行代码：**分支 `feat/m1-runtime-foundation`（已推送 origin，未合并 main）；阶段 C（Worker 主机原生入口中转与管理收口）已在 EC2 验收，待负责人确认后推送**　·　已发布版本：**无**
+更新日期：2026-10-13　·　当前阶段：**最小 MVP 已在 EC2 跑通；Team 执行环境（D28：共享 / 专属 / 空闲，独立 Worker 主机）已在 EC2 验收**　·　本仓库可运行代码：**分支 `feat/m1-runtime-foundation`（origin 停在访问管理第 3 期 7627ecd，未合并 main）；D36 第 1 期、新建项目 `git init` 与控制台域名已在 EC2 验收并经负责人同意推送，推送被 Code Defender 拦截（远端仓库未获批准），待处理**　·　已发布版本：**无**
 
 本文记录 KiroCrew ON 首个可用 MVP 的范围、已确定决策、各里程碑交付与验收条件。
 “已确定”“默认值（待确认）”“未开始 / 待验收”分别标注；不要把本文中的目标当作已上线功能。
@@ -320,8 +320,15 @@ v4 → v6 显示规划 Prompt 新增的行）；控制台「修订历史」在�
 
 ### 14.10 开发成果快速预览第 1 期「下载」（D36）
 
-离线完成（2026-10-13）：启动声明解析与自动识别、Worker 流式打包、平台签名下载与转发、MCP `octopus_download`、控制台「下载源码」、
-规划要求交付任务写启动声明。EC2 验收待进行。
+✅ EC2（2026-10-13）：启动声明解析与自动识别、Worker 流式打包、平台签名下载与转发、MCP `octopus_download`、控制台「下载源码」、
+规划要求交付任务写启动声明。最终审查后的修复：打包出错时 zip 不写结尾、平台严格校验结尾记录（不再把残缺包记为已下载）；
+目录项（含空目录）；`.git/config` 只保留格式 / remote / branch、不打包 hooks；说明文件含依赖安装；签发前在 Worker 试算
+（`bytes_estimate`，超限与离线直接报错）；MCP 解压保留可执行位。负责人确认后新建项目也 `git init`（`octopus/<run>` 与首个 commit）。
+验收（不执行任务）：平台主机与 `w1` 各下载一个会话（经 CloudFront，带试算），不含依赖与 `.env`，变更记录有 `run.downloaded`；
+篡改链接 403、外人 404、无源码 409、10 分钟后 403 `archive_expired`；MCP 解压与非空目录拒绝；Git 来源的 `run-bca9c588…`
+解压后 refs 目录在、hooks 已去掉、config 已清理、`git log` / `git status` 可用；两台主机以执行用户新建项目得到 Git 仓库。
+同日控制台加上自定义域名 `https://kirocrew-on.tinyboat.blog`（`*.tinyboat.blog` 证书、Route 53 别名记录；cloudfront.net 域名保留）。
+第 2 期（浏览器内远程预览）实现中：计划 `docs/superpowers/plans/2026-10-13-preview-remote.md`，Task 1（Worker 运行会话应用）已完成。
 
 ### 14.9 访问管理第 3 期「MCP 与角色调用」（D31）
 

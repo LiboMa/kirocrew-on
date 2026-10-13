@@ -1,6 +1,6 @@
 # 后续排期（Backlog）
 
-整理日期：2026-10-11。当前目标是**最小 MVP**：Coding Agent 连接后台 → 提交任务 → 查看任务 → 更新优化应用。
+整理日期：2026-10-11（2026-10-13 补充）。当前目标是**最小 MVP**：Coding Agent 连接后台 → 提交任务 → 查看任务 → 更新优化应用。
 以下事项不阻塞该闭环，按负责人要求延后（与分支开发相关的 M2 / M3 内容整体后排）。
 
 ## 分支与仓库闭环（原 M2 / M3 / M5）
@@ -74,6 +74,11 @@
   可从公网访问（可选：nginx 以 444 占住未分配端口）；Worker `/health` 的 version 恒为 1.0.0，管理员列表看不出旧版本主机；
   「执行环境」对话框移出空间无确认；Worker 不可达时不显示进行中会话数；`worker-host native` 的实测以 `Host: 127.0.0.1` 发出，
   链路正常时读到 Gateway 的 4xx；环境列表并发测试的时间余量偏小。
+- 开发成果下载（D36 第 1 期审查延后项）：`preview_spec` 的 `cwd` 未拒绝 shell 元字符且在 `cd` 步骤中未加引号、`install` 中非对象项被静默丢弃、
+  符号链接的 `.octopus/preview.json` 被跟随、允许两个 `$PORT` 进程、`next dev` 的本机端口提示为 5173（实为 3000）；`filename*` 未转义 `/`；
+  `.envrc`、`.npmrc`（可能含 `_authToken`）与名为 `.env/` 的虚拟环境目录会被打包，已提交到 Git 的 `.env` 仍在 `.git` 对象中；
+  同一链接 10 分钟内可反复下载、每次重新打包并写记录；`run.downloaded` 未记 commit；`OCTOPUS-ARCHIVE.txt` 在解压的仓库中显示为未跟踪；
+  不支持 HEAD 与 Range；`test_errors_before_streaming_stay_json_and_auth_is_required` 的第一条断言恒成立；此前已准备的新建项目没有 `.git`。
 - 源码准备失败时控制台只显示 `Worker 操作未完成 (ValueError)`：`octopus/worker.py:488` 只透传 `security.Error`，`octopus/sources.py` 的提示均为 `ValueError`（Connector 设计 §7 P1）。
 - 向导：导入 / 推荐后切换到模板时来源提示未更新；切换空间未重置推荐 Worker；推荐轮询遇 403 / 404 不停止；提交瞬间在途轮询可能回写草稿。
 - 原生入口弹窗缺少账户切换保护；`crew_url` 公网来源未规范化 `:443` 写法。
