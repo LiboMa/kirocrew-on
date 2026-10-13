@@ -111,6 +111,59 @@ describe("session detail", () => {
     click.mockRestore();
   });
 
+  describe("remote preview", () => {
+    const done = makeRun({ id: "run-p", status: "completed", worker_id: "w1", native_parent: "octopus-run-p", version: 3 });
+    const view = (extra: Record<string, unknown>) => ({ status: "stopped", port: null, error: null, log: [], started: null,
+      started_by: null, last_access: null, idle_stop_at: null, openable: false, ...extra });
+
+    test("starts the Session's app", async () => {
+      const calls = open(done, { "GET /runs/run-p/app": view({}), "POST /runs/run-p/app": view({ status: "starting" }) });
+      const panel = await screen.findByRole("region", { name: "远程预览" });
+      await userEvent.click(within(panel).getByRole("button", { name: "启动" }));
+      await waitFor(() => expect(calls.find((c) => c.method === "POST" && c.path === "/v1/runs/run-p/app")?.body)
+        .toEqual({ action: "start" }));
+    });
+
+    test("a running preview opens in a new tab through a single-use link", async () => {
+      const replace = vi.fn();
+      vi.stubGlobal("open", vi.fn(() => ({ closed: false, opener: {}, location: { replace }, close: vi.fn() })));
+      const calls = open(done, {
+        "GET /runs/run-p/app": view({ status: "running", port: 47001, openable: true, started: 1_790_000_000,
+          started_by: { id: "u1", username: "fixture-owner" }, idle_stop_at: 1_790_001_800 }),
+        "POST /runs/run-p/app/open": { url: "https://preview.example/_kirocrew/open/t", expires_in: 600 },
+      });
+      await userEvent.click(await screen.findByRole("button", { name: /打开远程预览/ }));
+      await waitFor(() => expect(replace).toHaveBeenCalledWith("https://preview.example/_kirocrew/open/t"));
+      expect(calls.some((c) => c.method === "POST" && c.path === "/v1/runs/run-p/app/open")).toBe(true);
+      const panel = screen.getByRole("region", { name: "远程预览" });
+      expect(panel).toHaveTextContent("运行中");
+      expect(panel).toHaveTextContent("fixture-owner");
+      expect(panel).toHaveTextContent("空闲 30 分钟后自动停止");
+    });
+
+    test("a failed preview shows why, with its log", async () => {
+      open(done, { "GET /runs/run-p/app": view({ status: "failed", error: "进程 web 已退出（代码 1）", log: ["npm ERR! boom"] }) });
+      const panel = await screen.findByRole("region", { name: "远程预览" });
+      expect(await within(panel).findByText("进程 web 已退出（代码 1）")).toBeInTheDocument();
+      await userEvent.click(within(panel).getByText("最近日志"));
+      expect(within(panel).getByText(/npm ERR! boom/)).toBeInTheDocument();
+    });
+
+    test("a Session running tasks cannot start one, and says why", async () => {
+      open(makeRun({ id: "run-r", status: "running", worker_id: "w1" }), { "GET /runs/run-r/app": view({}) });
+      const panel = await screen.findByRole("region", { name: "远程预览" });
+      expect(within(panel).getByRole("button", { name: "启动" })).toBeDisabled();
+      expect(panel).toHaveTextContent("会话正在执行任务");
+    });
+
+    test("an environment without remote preview says it needs an upgrade", async () => {
+      open(done, { "GET /runs/run-p/app": view({ status: "unsupported" }) });
+      const panel = await screen.findByRole("region", { name: "远程预览" });
+      expect(await within(panel).findByText(/执行环境需要升级/)).toBeInTheDocument();
+      expect(within(panel).queryByRole("button", { name: "启动" })).not.toBeInTheDocument();
+    });
+  });
+
   test("a Session without a Worker has no source to download yet", async () => {
     open(makeRun({ id: "run-n", status: "waiting_worker", worker_id: null, workspace: null }));
     expect(await screen.findByRole("button", { name: /下载源码/ })).toBeDisabled();

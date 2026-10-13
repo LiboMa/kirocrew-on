@@ -363,3 +363,18 @@ export interface AcceptanceCheck {
   result: "pass" | "fail" | "n/a";
   evidence?: string;
 }
+
+/** A Session's remote preview (D36 §5): its app running in the execution environment, reached through the preview domain. */
+export interface AppPreview {
+  status: "stopped" | "installing" | "starting" | "running" | "failed" | "unsupported";
+  port: number | null;
+  error: string | null;
+  /** The last lines of the app's log (install steps and every process). */
+  log: string[];
+  started: number | null;
+  started_by: { id: string; username?: string | null } | null;
+  last_access: number | null;
+  idle_stop_at: number | null;
+  openable: boolean;
+  worker_error?: string;
+}

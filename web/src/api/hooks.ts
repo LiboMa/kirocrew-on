@@ -2,9 +2,7 @@ import { useEffect, useState } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { api } from "@/api/client";
 import { followRunEvents, type StreamState } from "@/api/events";
-import type {
-  ChangeEntry, Environment, Me, Observation, RevisionDiff, RevisionEntry, Run, RunEvent, Team, Template, User, Worker, Workflow,
-} from "@/api/types";
+import type { AppPreview, ChangeEntry, Environment, Me, Observation, RevisionDiff, RevisionEntry, Run, RunEvent, Team, Template, User, Worker, Workflow } from "@/api/types";
 
 export const keys = {
   me: ["me"] as const,
@@ -18,6 +16,7 @@ export const keys = {
   environments: ["admin", "environments"] as const,
   run: (id: string) => ["run", id] as const,
   observe: (id: string) => ["observe", id] as const,
+  app: (id: string) => ["app", id] as const,
 };
 
 const every = (ms: number) => ({ refetchInterval: ms, refetchIntervalInBackground: false });
@@ -62,6 +61,19 @@ export function useObservation(id: string | null, live: boolean, limit = 50) {
     queryFn: () => api<Observation>(`/runs/${encodeURIComponent(id!)}/observe?limit=${limit}`),
     enabled: !!id, retry: false, placeholderData: (previous) => previous,
     refetchInterval: live ? 5_000 : false, refetchIntervalInBackground: false,
+  });
+}
+
+/** The run's remote preview: every 3 s while it installs or starts, every 15 s while it runs. */
+export function useRunApp(id: string, enabled: boolean) {
+  return useQuery({
+    queryKey: keys.app(id), enabled, retry: false, placeholderData: (previous) => previous,
+    queryFn: () => api<AppPreview>(`/runs/${encodeURIComponent(id)}/app`),
+    refetchInterval: (query) => {
+      const status = query.state.data?.status;
+      return status === "installing" || status === "starting" ? 3_000 : status === "running" ? 15_000 : false;
+    },
+    refetchIntervalInBackground: false,
   });
 }
 

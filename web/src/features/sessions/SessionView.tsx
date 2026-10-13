@@ -1,9 +1,10 @@
 import {
-  CircleStop, Copy, Download, Eye, ExternalLink, FolderDown, ListRestart, MoreHorizontal, Power, RotateCcw, Stethoscope, Trash2,
+  CircleStop, Copy, Download, Eye, ExternalLink, FolderDown, ListRestart, MonitorPlay, MoreHorizontal, Power, RotateCcw, Stethoscope,
+  Trash2,
   UserCog,
 } from "lucide-react";
 import { toast } from "sonner";
-import { useRun, useRunEvents } from "@/api/hooks";
+import { useRun, useRunApp, useRunEvents } from "@/api/hooks";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
 import {
@@ -16,6 +17,7 @@ import { StatusBadge } from "@/components/StatusBadge";
 import { useConsole } from "@/features/console/context";
 import { EventTimeline } from "@/features/sessions/EventTimeline";
 import { NativeSessionPanel } from "@/features/sessions/NativeSessionPanel";
+import { AppPreviewPanel } from "@/features/sessions/AppPreviewPanel";
 import { ChangesPanel } from "@/features/sessions/ChangesPanel";
 import { RevisionsPanel } from "@/features/sessions/RevisionsPanel";
 import { RecoveryPanel } from "@/features/sessions/RecoveryPanel";
@@ -29,6 +31,7 @@ export function SessionView({ id }: { id: string }) {
   const { events, stream } = useRunEvents(id);
   const run = query.data;
   const actions = useSessionActions(run);
+  const app = useRunApp(id, !!run?.worker_id).data;   // shared with the panel: one request
 
   if (!run) {
     return (
@@ -100,6 +103,11 @@ export function SessionView({ id }: { id: string }) {
             title={!run.worker_id || !run.workspace ? "源码尚未准备，暂无可下载的内容" : "下载源码（含 .git，不含依赖目录与 .env）"}>
             <FolderDown /> 下载源码
           </Button>
+          {app?.openable && (
+            <Button size="sm" onClick={actions.openApp} id="run-open-app">
+              <MonitorPlay /> 打开远程预览
+            </Button>
+          )}
           <Button size="sm" variant="outline" onClick={actions.preview} disabled={!run.worker_id} id="run-preview">
             <Eye /> 预览产出
           </Button>
@@ -199,6 +207,7 @@ export function SessionView({ id }: { id: string }) {
           <ChangesPanel run={run} />
         </section>
         <aside className="space-y-4">
+          {!design && <AppPreviewPanel run={run} onOpen={actions.openApp} />}
           <EventTimeline events={events} stream={stream} />
           <section className="space-y-2 rounded-xl border bg-card p-4 text-xs" id="native-details">
             <h2 className="text-sm font-semibold">Workspace 与原生会话</h2>

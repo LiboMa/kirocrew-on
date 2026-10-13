@@ -78,5 +78,16 @@ export function useSessionActions(run: Run | undefined) {
       .catch((error: Error) => { tab.close(); toast.error(error.message); });
   };
 
-  return { stop, recover, exportRun, downloadSource, openCrew, preview, opening, busy };
+  // D36 §5: the preview domain's single-use link, opened like the static preview (the tab opens inside the click).
+  const openApp = () => {
+    if (!run) return;
+    const tab = window.open("", "_blank");
+    if (!tab) { toast.error("浏览器拦截了新标签页，请允许此工作台打开弹出窗口后重试。"); return; }
+    tab.opener = null;
+    api<{ url: string }>("/runs/" + encodeURIComponent(run.id) + "/app/open", "POST", {})
+      .then((result) => { if (!tab.closed) tab.location.replace(result.url); })
+      .catch((error: Error) => { tab.close(); toast.error(error.message); });
+  };
+
+  return { stop, recover, exportRun, downloadSource, openCrew, preview, openApp, opening, busy };
 }
