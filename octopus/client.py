@@ -49,6 +49,21 @@ class Client:
         except urllib.error.HTTPError as exc:
             raise http_error(exc) from None
 
+    def download(self, path, file, timeout=300):
+        """Write a signed download (``/archive/<ticket>/…``) to ``file``; returns the bytes written."""
+        if not path.startswith("/archive/"):
+            raise ValueError("只能下载 /archive/ 链接")
+        req = urllib.request.Request(self.url + path)
+        try:
+            with urllib.request.urlopen(req, timeout=timeout) as response:
+                total = 0
+                while chunk := response.read(65536):
+                    file.write(chunk)
+                    total += len(chunk)
+                return total
+        except urllib.error.HTTPError as exc:
+            raise http_error(exc) from None
+
     def events(self, run_id, after=0):
         """One bounded SSE connection; resume using the last yielded event id."""
         path = "/v1/runs/" + run_id + "/events?" + urlencode({"stream": 1, "after": after})

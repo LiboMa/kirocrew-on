@@ -87,6 +87,9 @@ KiroCrew ON 在远端执行开发任务：KiroCrew 的 Kiro Agent 先识别意�
 
 ## 5．预览产出
 
+- 想在本机运行、查看或继续开发：`octopus_download`（传 `run_id`，可选 `dest`）把源码（含 `.git`，不含依赖目录与 `.env`）
+  下载解压到本机目录，返回启动步骤 `start`。征得用户同意后按步骤安装依赖并启动，把 `localhost` 地址告诉用户；
+  不要把任何凭证写进下载的项目。下载链接 10 分钟有效，用户也可以在控制台会话页点「下载源码」。
 - `octopus_preview`（传 `run_id`）返回 Web 预览链接，静态页面可在浏览器中直接打开。
 - 链接 10 分钟有效，每次打开都核对你仍能查看该会话；返回 403（`preview_expired` / `preview_invalid` / `preview_forbidden`）时重新调用 `octopus_preview` 取新链接（`preview_forbidden` 表示已无权查看，告诉用户）。
 - 预览在与控制台隔离的沙箱中运行：页面里的 `localStorage`、`sessionStorage`、IndexedDB 与 Cookie 都不可用。

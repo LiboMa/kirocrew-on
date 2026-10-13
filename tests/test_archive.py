@@ -259,5 +259,69 @@ class PlatformArchiveTests(AccessCase):
         self.assertEqual((status, body["code"]), (409, "no_archive"))
 
 
+class FakeDownloadClient:
+    url = "https://on.example"
+
+    def __init__(self, data):
+        self.data, self.calls = data, []
+
+    def request(self, method, path, body=None, **options):
+        self.calls.append((method, path))
+        return {"url": "/archive/ticket/" + RID + ".zip", "expires_in": 600}
+
+    def download(self, path, file, timeout=300):
+        self.calls.append(("GET", path))
+        file.write(self.data)
+        return len(self.data)
+
+
+def archive_bytes(entries):
+    buffer = io.BytesIO()
+    with zipfile.ZipFile(buffer, "w") as archive:
+        for name, text in entries.items():
+            archive.writestr(name, text)
+    return buffer.getvalue()
+
+
+class McpDownloadTests(unittest.TestCase):
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.cwd = os.getcwd()
+        os.chdir(self.tmp.name)
+
+    def tearDown(self):
+        os.chdir(self.cwd)
+        self.tmp.cleanup()
+
+    def test_download_extracts_and_reports_how_to_start(self):
+        from octopus import mcp
+        data = archive_bytes({"src/a.js": "a", ".octopus/preview.json": json.dumps({"processes": [{"command": "npm run dev", "port": "$PORT"}]}),
+                              "OCTOPUS-ARCHIVE.txt": "会话：x\nHEAD：abc123\n"})
+        result = mcp.call(FakeDownloadClient(data), "octopus_download", {"run_id": RID})
+        target = Path(self.tmp.name, "kirocrew-" + RID[4:16]).resolve()
+        self.assertEqual(Path(result["dir"]), target)
+        self.assertEqual((target / "src/a.js").read_text(), "a")
+        self.assertEqual((result["files"], result["bytes"], result["head"]), (3, len(data), "abc123"))
+        self.assertEqual(result["start"], ["npm run dev", "打开 http://localhost:5173/"])
+
+    def test_a_nonempty_target_is_refused(self):
+        from octopus import mcp
+        Path("busy").mkdir()
+        Path("busy/file").write_text("x")
+        client = FakeDownloadClient(archive_bytes({"a": "a"}))
+        with self.assertRaisesRegex(ValueError, "非空"):
+            mcp.call(client, "octopus_download", {"run_id": RID, "dest": "busy"})
+        self.assertEqual(client.calls, [])   # nothing requested
+
+    def test_extraction_stays_inside_the_target(self):
+        from octopus import mcp
+        data = archive_bytes({"ok.txt": "ok", "../evil.txt": "evil", "/abs.txt": "abs", "a/../../up.txt": "up"})
+        result = mcp.call(FakeDownloadClient(data), "octopus_download", {"run_id": RID, "dest": "out"})
+        self.assertTrue(Path("out/ok.txt").is_file())
+        for outside in ("evil.txt", "up.txt", "/abs.txt"):
+            self.assertFalse(Path(outside).exists() and Path(outside).read_text() in {"evil", "up", "abs"}, outside)
+        self.assertEqual(sorted(result["skipped"]), ["../evil.txt", "/abs.txt", "a/../../up.txt"])
+
+
 if __name__ == "__main__":
     unittest.main()

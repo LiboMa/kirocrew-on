@@ -1,7 +1,10 @@
 """Standard newline-delimited stdio MCP adapter for the SAME authenticated API."""
 import json
+from pathlib import Path
 import sys
+import tempfile
 from urllib.parse import quote, urlencode
+import zipfile
 
 from . import __version__
 from .client import ApiError
@@ -113,6 +116,10 @@ TOOLS += [
      "inputSchema": object_schema({"run_id": STRING, "who": {"type": "string", "enum": ["user", "system"]}, "kind": STRING,
                                    "before": {"type": "integer", "minimum": 1}, "limit": {"type": "integer", "minimum": 1, "maximum": 200}},
                                   ["run_id"]), "annotations": READ},
+    {"name": "octopus_download",
+     "description": "把 Session 的源码（含 .git，不含依赖目录与 .env）下载并解压到本机目录 dest（默认 ./kirocrew-<run>），"
+                    "返回目录、HEAD 与本机启动步骤（来自 .octopus/preview.json 或自动识别）。目录已存在且非空时拒绝。",
+     "inputSchema": object_schema({"run_id": STRING, "dest": STRING}, ["run_id"])},
     {"name": "octopus_admin_users",
      "description": "平台管理员（需含 admin 的 Token）：列出用户，或按用户名停用 / 恢复、设为 / 取消管理员。"
                     "不创建用户、不设置密码（请在控制台「用户管理」操作）；停用会立即吊销该用户的全部 Token。",
@@ -159,6 +166,47 @@ def usable(worker, me, team):
         return any((space.get("team_id") == team) if team else (space.get("user_id") == me["id"])
                    for space in worker.get("spaces") or [])
     return worker.get("team_id") == team if team else worker.get("owner_id") == me["id"]
+
+
+def extract(archive, target):
+    """Extract into ``target`` only: entries whose path would leave it (``..``, absolute) are skipped and listed."""
+    root, skipped, files = target.resolve(), [], 0
+    for info in archive.infolist():
+        destination = (root / info.filename.lstrip("/") if not info.filename.startswith("/") else None)
+        if destination is None or not destination.resolve().is_relative_to(root) or ".." in Path(info.filename).parts:
+            skipped.append(info.filename)
+            continue
+        if info.is_dir():
+            destination.mkdir(parents=True, exist_ok=True)
+            continue
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        with archive.open(info) as source, open(destination, "wb") as sink:
+            while chunk := source.read(65536):
+                sink.write(chunk)
+        files += 1
+    return files, skipped
+
+
+def download(client, args):
+    """Download a Session's source and unpack it on this machine (D36 §4.3); returns where and how to start it."""
+    from . import preview_spec
+    rid = args["run_id"]
+    target = Path(args.get("dest") or f"kirocrew-{rid[4:16]}").expanduser().resolve()
+    if target.exists() and (not target.is_dir() or any(target.iterdir())):
+        raise ValueError(f"{target} 已存在且非空：请指定另一个目录（dest）")
+    link = client.request("POST", "/v1/runs/" + rid + "/archive", {})
+    with tempfile.TemporaryFile() as raw:
+        size = client.download(link["url"], raw)
+        raw.seek(0)
+        target.mkdir(parents=True, exist_ok=True)
+        with zipfile.ZipFile(raw) as archive:
+            files, skipped = extract(archive, target)
+    readme = target / "OCTOPUS-ARCHIVE.txt"
+    notes = readme.read_text(errors="replace") if readme.is_file() else ""
+    head = next((line.split("：", 1)[1].strip() for line in notes.splitlines() if line.startswith("HEAD：")), None)
+    spec, _, problem = preview_spec.resolve(target)
+    return {"dir": str(target), "bytes": size, "files": files, "head": head,
+            "start": preview_spec.local_steps(spec) if spec else [problem], "skipped": skipped, "readme": notes}
 
 
 def need(args, *keys):
@@ -324,6 +372,8 @@ def call(client, name, args):
             {"id": w["id"], "name": w["name"], "scope": w.get("scope"), "isolation": (w.get("capabilities") or {}).get("isolation"),
              "models": (w.get("capabilities") or {}).get("models", {})}
             for w in client.request("GET", "/v1/workers") if usable(w, me, team)]}
+    if name == "octopus_download":
+        return download(client, args)
     if name == "octopus_assign_worker":
         rid = args.pop("run_id")
         return client.request("POST", "/v1/runs/" + rid + "/assign-worker", args)
