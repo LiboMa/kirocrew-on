@@ -22,7 +22,7 @@ TOKEN = "x" * 40
 
 class FakeAppWorker(BaseHTTPRequestHandler):
     """Answers POST /app like a Worker (Task 1); ``old`` answers 404 like a Worker from before the remote preview."""
-    calls, mode, via = [], "ok", None
+    calls, mode, via, instance = [], "ok", None, "i1"
     state = {"status": "stopped", "port": None, "path": None, "error": None, "started": None, "source": None}
 
     def do_POST(self):
@@ -39,7 +39,8 @@ class FakeAppWorker(BaseHTTPRequestHandler):
                 FakeAppWorker.state = {**FakeAppWorker.state, "status": "stopped"}
                 answer = {"status": "stopped"}
             else:
-                answer = {**FakeAppWorker.state, "log": ["== 启动 app：npm run dev（端口 47001）"], "via": FakeAppWorker.via}
+                answer = {**FakeAppWorker.state, "log": ["== 启动 app：npm run dev（端口 47001）"], "via": FakeAppWorker.via,
+                          "instance": FakeAppWorker.instance}
         data = json.dumps(answer).encode()
         self.send_response(status)
         self.send_header("Content-Type", "application/json")
@@ -54,7 +55,7 @@ class FakeAppWorker(BaseHTTPRequestHandler):
 class PreviewCase(AccessCase):
     def setUp(self):
         super().setUp()
-        FakeAppWorker.calls, FakeAppWorker.mode, FakeAppWorker.via = [], "ok", None
+        FakeAppWorker.calls, FakeAppWorker.mode, FakeAppWorker.via, FakeAppWorker.instance = [], "ok", None, "i1"
         FakeAppWorker.state = {"status": "stopped", "port": None, "path": None, "error": None, "started": None, "source": None}
         self.worker = ThreadingHTTPServer(("127.0.0.1", 0), FakeAppWorker)
         threading.Thread(target=self.worker.serve_forever, daemon=True).start()
@@ -195,8 +196,8 @@ class AppTests(PreviewCase):
         others = [self.start(self.a, f"start-000000010{i}", team_id=self.tid, worker_id="w-z")["id"] for i in range(3)]
         with self.db.transaction() as db:
             for rid in others:
-                db.execute("INSERT INTO apps(run_id,worker_id,status,port,started,last_access) VALUES(?,?,?,?,?,?)",
-                           (rid, "w-z", "running", 47100, time.time(), time.time()))
+                db.execute("INSERT INTO apps(run_id,worker_id,status,port,upstream,started,last_access) VALUES(?,?,?,?,?,?,?)",
+                           (rid, "w-z", "running", 47100, dumps({"instance": "i1"}), time.time(), time.time()))
         with self.assertRaises(Error) as caught:
             self.service.app_start(self.b, self.rid)
         self.assertEqual((caught.exception.status, caught.exception.code), (409, "app_limit"))
@@ -250,7 +251,7 @@ class PreviewDomainTests(PreviewCase):
         with self.platform() as port:
             status, headers, page = self.raw(port, "GET", "/_kirocrew/open/" + ticket)
             self.assertEqual(status, 200)
-            self.assertEqual(headers["clear-site-data"], '"cookies", "storage"')
+            self.assertEqual(headers["clear-site-data"], '"cache", "cookies", "storage", "executionContexts"')
             self.assertIn(f"/_kirocrew/enter/{ticket}".encode(), page)
             status, headers, _ = self.raw(port, "GET", "/_kirocrew/enter/" + ticket)
             self.assertEqual((status, headers["location"]), (302, "/"))
@@ -295,7 +296,8 @@ class PreviewDomainTests(PreviewCase):
                     status, answer, _ = self.raw(port, "GET", path, {"Cookie": "__Host-kirocrew_preview=" + value, **headers})
                     self.assertIn(status, {403, 404}, (path, headers))
                     self.assertFalse([h for h in answer if h.startswith("x-preview")], (path, headers))
-            self.assertEqual(self.raw(port, "GET", "/v1/preview-auth", {"Cookie": "__Host-kirocrew_preview=" + value})[0], 204)
+            self.assertEqual(self.raw(port, "GET", "/v1/preview-auth", {"Cookie": "__Host-kirocrew_preview=" + value,
+                                                                     "X-Preview-Gate": remote_preview.gate_value(secret)})[0], 204)
 
     def test_a_cookie_stops_working_when_access_is_revoked(self):
         self.running()
@@ -353,6 +355,92 @@ class LifecycleTests(PreviewCase):
         result = self.service.operate(self.a, self.rid, "close", {"request_id": "close-00000002", "expected_version": 1})
         self.assertEqual(result["status"], "accepted")
         self.assertEqual(self.row()["status"], "running")   # retried by the next sweep (the session is closing)
+
+
+class ReviewFixTests(PreviewCase):
+    """The final review's findings on the platform side (D36 phase 2)."""
+
+    def other(self):
+        rid = self.start(self.a, "start-0000000200", team_id=self.tid, worker_id="w-z", name="另一个")["id"]
+        self.settle(rid)
+        return rid
+
+    def test_a_worker_restart_never_routes_an_old_cookie_to_another_app(self):
+        self.running()
+        other = self.other()
+        FakeAppWorker.instance = "i2"   # the Worker restarted: its previews are gone, the port is free again
+        FakeAppWorker.state = {**FakeAppWorker.state, "status": "stopped"}
+        self.service.app_start(self.b, other)
+        self.assertEqual(self.row()["status"], "stopped")
+        self.assertEqual(self.events("app.stopped")[-1]["reason"], "worker")
+        with self.assertRaises(Error) as caught:
+            self.service.app_auth(self.rid, self.b["id"])
+        self.assertEqual(caught.exception.code, "app_stopped")
+        self.assertEqual(json.loads(self.row(other)["upstream"])["instance"], "i2")
+
+    def test_the_sweep_notices_a_worker_restart(self):
+        self.running()
+        FakeAppWorker.instance = "i2"
+        FakeAppWorker.state = {**FakeAppWorker.state, "status": "stopped"}
+        self.service.sweep_apps()
+        self.assertEqual(self.row()["status"], "stopped")
+
+    def test_a_retired_workers_previews_end_without_calling_it(self):
+        self.running()
+        with self.db.transaction() as db:
+            db.execute("UPDATE workers SET retired=1 WHERE id='w-z'")
+        FakeAppWorker.calls = []
+        self.service.sweep_apps()
+        self.assertEqual(self.row()["status"], "stopped")
+        self.assertEqual(self.service.app(self.b, self.rid)["status"], "stopped")
+        self.assertEqual(FakeAppWorker.calls, [])
+
+    def test_a_closing_session_cuts_its_preview_even_with_its_worker_away(self):
+        self.running()
+        self.worker.shutdown()
+        self.worker.server_close()
+        self.service.operate(self.a, self.rid, "delete", {"request_id": "delete-0000001", "expected_version": 1,
+                                                          "confirmation": self.rid})
+        with self.assertRaises(Error) as caught:
+            self.service.app_auth(self.rid, self.b["id"])
+        self.assertEqual(caught.exception.code, "app_stopped")
+
+    def test_what_a_worker_reports_is_checked(self):
+        loopback = {"url": "http://127.0.0.1:8928", "token": TOKEN}
+        host = {"url": "https://10.42.1.50:8943", "token": TOKEN}
+        for config, port, via in ((loopback, 8918, None), (loopback, "47001", None), (loopback, 48000, None),
+                                  (host, 47001, {"port": 8945, "name": "w1\r\nX-Evil: 1"}),
+                                  (host, 47001, {"port": "8945; x", "name": "w1.worker.kirocrew-on"})):
+            with self.assertRaises(Error) as caught:
+                remote_preview.upstream(config, port, via)
+            self.assertEqual(caught.exception.code, "worker_invalid", (port, via))
+
+    def test_status_and_stop_calls_do_not_wait_long(self):
+        from octopus import transport
+        seen = []
+        real = transport.worker_request
+
+        def watch(config, path, body=None, timeout=35):
+            seen.append((body["action"], timeout))
+            return real(config, path, body, timeout=timeout)
+        with patch("octopus.transport.worker_request", side_effect=watch):
+            self.running()
+            self.service.app_stop(self.b, self.rid)
+        timeouts = dict(seen)
+        self.assertLessEqual(timeouts["status"], 5)
+        self.assertLessEqual(timeouts["stop"], 10)
+
+    def test_the_local_endpoints_need_the_proxys_gate_once_an_origin_secret_is_set(self):
+        self.running()
+        value, secret = remote_preview.cookie(self.rid, self.b["id"], self.key), "s" * 40
+        with self.platform(origin_secret=secret) as port:
+            cookie = {"Cookie": "__Host-kirocrew_preview=" + value}
+            self.assertEqual(self.raw(port, "GET", "/v1/preview-auth", cookie)[0], 404)   # an agent on this host
+            self.assertEqual(self.raw(port, "GET", "/v1/preview-auth", {**cookie, "X-Preview-Gate": "wrong"})[0], 404)
+            status, headers, _ = self.raw(port, "GET", "/v1/preview-auth",
+                                          {**cookie, "X-Preview-Gate": remote_preview.gate_value(secret)})
+            self.assertEqual((status, headers["x-preview-port"]), (204, "47001"))
+            self.assertEqual(self.raw(port, "GET", "/_kirocrew/denied")[0], 404)
 
 
 if __name__ == "__main__":

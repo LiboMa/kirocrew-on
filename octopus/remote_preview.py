@@ -11,6 +11,7 @@
 import base64
 import hashlib
 import hmac
+import re
 import secrets
 import time
 from urllib.parse import urlsplit
@@ -25,6 +26,8 @@ TOUCH = 60           # the last access is written at most once a minute
 LIMIT = 3            # per execution environment, as the Worker enforces too
 LIVE = ("installing", "starting", "running")
 LOOPBACK = frozenset({"127.0.0.1", "localhost", "::1"})
+APP_PORTS = range(47000, 48000)   # what a Worker may report, as its host's nginx forwards only these
+NAME = re.compile(r"[a-z0-9]([a-z0-9-]*[a-z0-9])?(\.[a-z0-9]([a-z0-9-]*[a-z0-9])?)+")
 
 
 def _sign(key, payload):
@@ -36,14 +39,26 @@ def verify_value(token):
     return hmac.new(token.encode(), b"kirocrew-preview", hashlib.sha256).hexdigest()
 
 
+def gate_value(origin_secret):
+    """The header the preview domain's nginx sends the API: proof a request came through it, not from another process
+    on the platform host (agents of the personal space run there). Rendered into nginx by al2023.sh render_preview."""
+    return hmac.new(origin_secret.encode(), b"kirocrew-preview-gate", hashlib.sha256).hexdigest()
+
+
 def upstream(config, port, via):
-    """Where nginx sends the app's requests: loopback for a Worker on this host, else the Worker host's preview port."""
+    """Where nginx sends the app's requests: loopback for a Worker on this host, else the Worker host's preview port.
+    What the Worker reports is checked: it ends up in nginx's upstream and in response headers."""
+    require(isinstance(port, int) and not isinstance(port, bool) and (port == 0 or port in APP_PORTS),
+            "Worker 报告的端口无效", 502, "worker_invalid")
     host = urlsplit(config["url"]).hostname
     if host in LOOPBACK:
         return {"url": f"http://127.0.0.1:{port}", "port": port}
-    require(via and via.get("port") and via.get("name"), "此 Worker 主机尚未配置预览端口：执行 deploy.sh worker-host push <名称>",
-            409, "app_unreachable")
-    return {"url": f"https://{host}:{int(via['port'])}", "name": via["name"], "verify": verify_value(config["token"]),
+    if via is not None:
+        require(isinstance(via, dict) and isinstance(via.get("port"), int) and not isinstance(via["port"], bool)
+                and 1 <= via["port"] <= 65535 and isinstance(via.get("name"), str) and NAME.fullmatch(via["name"]),
+                "Worker 报告的预览端口或名称无效", 502, "worker_invalid")
+    require(via, "此 Worker 主机尚未配置预览端口：执行 deploy.sh worker-host push <名称>", 409, "app_unreachable")
+    return {"url": f"https://{host}:{via['port']}", "name": via["name"], "verify": verify_value(config["token"]),
             "port": port}
 
 

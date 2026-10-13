@@ -248,10 +248,11 @@ def server(database, port=8918, host="127.0.0.1", allowed_hosts=(), origin_secre
                 if path.startswith("/_kirocrew/open/"):
                     ticket = path[len("/_kirocrew/open/"):]
                     remote_preview.open_run(ticket, signing_key)   # checked here, spent on the next step
-                    # Another Session's app may have used this domain before: its cookies and storage go first.
+                    # Another Session's app may have used this domain before: its cookies, storage (service workers
+                    # included), cached responses and open pages go first.
                     target = "/_kirocrew/enter/" + ticket
                     return self.respond_page("正在打开远程预览…", head=f'<meta http-equiv="refresh" content="0;url={html.escape(target)}">',
-                                             headers=[("Clear-Site-Data", '"cookies", "storage"')])
+                                             headers=[("Clear-Site-Data", '"cache", "cookies", "storage", "executionContexts"')])
                 if path.startswith("/_kirocrew/enter/"):
                     rid, holder, nonce = remote_preview.open_run(path[len("/_kirocrew/enter/"):], signing_key)
                     entry = service.app_enter(rid, holder, nonce)
@@ -385,8 +386,12 @@ def server(database, port=8918, host="127.0.0.1", allowed_hosts=(), origin_secre
                     }.get(Path(relative).suffix.lower(), "application/octet-stream")
                     return self.respond_preview(data, kind)
                 if path == "/v1/preview-auth" or path.startswith("/_kirocrew/"):
-                    # Only the preview domain's nginx on this host: through the console's distribution these are absent.
-                    require(method == "GET" and local and not self.origin_verified, "Not found", 404, "not_found")
+                    # Only the preview domain's nginx on this host: through the console's distribution these are absent,
+                    # and with an origin secret the nginx proves itself with the gate (other local processes cannot).
+                    gate = self.headers.get("X-Preview-Gate", "")
+                    require(method == "GET" and local and not self.origin_verified and (
+                        not origin_secret or hmac.compare_digest(gate, remote_preview.gate_value(origin_secret))),
+                        "Not found", 404, "not_found")
                     return self.preview_gate(path)
                 if method == "GET" and path.startswith("/archive/"):
                     ticket, _, filename = path[len("/archive/"):].partition("/")   # not "name": that is the validator
