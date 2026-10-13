@@ -211,6 +211,7 @@ class PublishCase(AccessCase):
             db.execute("INSERT INTO workers(id,name,team_id,config) VALUES('w-p','p',?,?)",
                        (self.tid, dumps({"url": f"http://127.0.0.1:{self.worker_server.server_address[1]}", "token": TOKEN,
                                          "capabilities": {"isolation": "dedicated"}})))
+        self.service.credentials.private_hosts = {self.host}   # as an admin allows a self-hosted instance on a private network
         self.cred = self.service.credentials.create(self.b, {"name": "bob 写", "kind": "github_pat", "host": self.host,
                                                              "scope": "user", "access": "write", "secret": SECRET})
 
@@ -320,6 +321,68 @@ class PublishTests(PublishCase):
         leaks = [p for p in Path(self.tmp.name).rglob("*") if p.is_file() and not p.is_symlink()
                  and "repos" not in p.parts and SECRET.encode() in p.read_bytes()]
         self.assertEqual(leaks, [])
+
+
+class PublishHardeningTests(PublishCase):
+    """The phase-1 review's lessons, applied to publishing."""
+
+    def test_publishing_rechecks_that_the_session_may_still_use_the_credential(self):
+        rid, project = self.session(cred=self.cred["id"])
+        (project / "a.txt").write_text("1")
+        self.service.membership(self.a, self.tid, {"username": "bob"}, remove=True)   # bob's own credential, bob gone
+        with self.assertRaises(Error) as caught:
+            self.service.publish(self.a, rid, {})   # the Team owner tries
+        self.assertEqual(caught.exception.code, "credential_unavailable")
+        self.assertIsNone(self.remote_head("octopus/" + rid))
+
+    def test_a_planted_global_git_config_cannot_redirect_the_push(self):
+        caught = []
+
+        class Thief(BaseHTTPRequestHandler):
+            def do_GET(self):
+                caught.append(self.headers.get("Authorization"))
+                self.send_response(401)
+                self.send_header("WWW-Authenticate", 'Basic realm="x"')
+                self.send_header("Content-Length", "0")
+                self.end_headers()
+            do_POST = do_GET
+
+            def log_message(self, *args):
+                pass
+        thief = ThreadingHTTPServer(("127.0.0.1", 0), Thief)
+        threading.Thread(target=thief.serve_forever, daemon=True).start()
+        self.addCleanup(thief.server_close)
+        self.addCleanup(thief.shutdown)
+        rid, project = self.session(cred=self.cred["id"])
+        (project / "a.txt").write_text("1")
+        planted = Path(self.tmp.name) / "planted-gitconfig"
+        planted.write_text(f'[url "http://127.0.0.1:{thief.server_address[1]}/"]\n\tinsteadOf = https://{self.host}/\n')
+        with patch.dict(os.environ, {"GIT_CONFIG_GLOBAL": str(planted)}):
+            record = self.service.publish(self.b, rid, {})
+        self.assertEqual(self.remote_head("octopus/" + rid), record["commit"])
+        self.assertEqual(caught, [])
+
+    def test_the_hosts_api_is_never_followed_through_a_redirect(self):
+        hits = []
+
+        class Redirect(BaseHTTPRequestHandler):
+            def do_GET(self):
+                hits.append(self.path)
+                self.send_response(302)
+                self.send_header("Location", f"http://127.0.0.1:{self.server.server_address[1]}/elsewhere")
+                self.send_header("Content-Length", "0")
+                self.end_headers()
+
+            def log_message(self, *args):
+                pass
+        server = ThreadingHTTPServer(("127.0.0.1", 0), Redirect)
+        threading.Thread(target=server.serve_forever, daemon=True).start()
+        self.addCleanup(server.server_close)
+        self.addCleanup(server.shutdown)
+        with patch("octopus.credentials.api_base", lambda kind, host: f"http://127.0.0.1:{server.server_address[1]}"):
+            with self.assertRaises(Error):
+                publish.pull_request("github_pat", "github.com", "owner/app", "octopus/run-x", None, "t", "b", SECRET)
+        self.assertEqual(len(hits), 1)
 
 
 class ReceiveTests(unittest.TestCase):

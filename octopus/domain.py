@@ -907,8 +907,11 @@ class Service:
             bound = (snapshot.get("credentials") or {}).get("source")
             require(bound, "会话没有绑定凭证：先在会话页绑定一枚有写权限的凭证", 409, "credential_unavailable")
             row = db.execute("SELECT * FROM credentials WHERE id=?", (bound["id"],)).fetchone()
-            require(row is not None and not row["disabled"], f"凭证「{bound['name']}」已停用或删除", 409, "credential_unavailable")
+            require(repo_credentials.bound_usable(db, row, run),
+                    f"凭证「{bound['name']}」已不能用于此会话（已停用、删除、授权撤销或所有者已离开）", 409, "credential_unavailable")
             require(row["access"] == "write", f"凭证「{row['name']}」为只读，无法发布", 409, "credential_read_only")
+            refused = repo_credentials.refused_address(row["host"], self.credentials.private_hosts)
+            require(not refused, refused, 409, "credential_host_refused")
             try:
                 host, path = repo_credentials.repo_path(source.get("url", ""))
             except ValueError as exc:

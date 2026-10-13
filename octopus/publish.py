@@ -64,7 +64,7 @@ def receive(stream, length, workdir, branch, base):
 def push(workdir, url, branch, commit, auth):
     """Push ``commit`` to ``branch`` at ``url`` as a fast-forward only: a branch someone else moved is left alone."""
     with sources.askpass(Path(workdir), auth) as env:
-        listed = _git(workdir, "-c", "credential.helper=", "ls-remote", "--heads", url, f"refs/heads/{branch}",
+        listed = _git(workdir, *sources.SAFE_GIT_ARGS, "ls-remote", "--heads", url, f"refs/heads/{branch}",
                       env=env, secret=auth["secret"])
         theirs = listed.split()[0] if listed else None
         if theirs and theirs != commit:
@@ -73,7 +73,7 @@ def push(workdir, url, branch, commit, auth):
             require(ahead, f"远端分支 {branch} 已被他人改动：未覆盖。请合并后再发布，或改用新的分支名", 409, "publish_conflict")
         if theirs != commit:
             # A plain refspec (no +, no --force): git itself also refuses anything but a fast-forward.
-            _git(workdir, "-c", "credential.helper=", "push", "-q", url, f"{commit}:refs/heads/{branch}",
+            _git(workdir, *sources.SAFE_GIT_ARGS, "push", "-q", url, f"{commit}:refs/heads/{branch}",
                  env=env, secret=auth["secret"])
     return {"created": theirs is None}
 
@@ -85,8 +85,11 @@ def _api(method, url, secret, kind, body=None):
     request = urllib.request.Request(url, method=method, headers=headers,
                                      data=json.dumps(body).encode() if body is not None else None)
     try:
-        with urllib.request.urlopen(request, timeout=30) as response:
-            return json.load(response)
+        with repo_credentials.OPENER.open(request, timeout=30) as response:   # never follows a redirect
+            value = json.loads(response.read(1 << 20))
+        if not isinstance(value, (dict, list)):
+            raise ValueError("unexpected answer")
+        return value
     except urllib.error.HTTPError as exc:
         with exc:
             detail = exc.read()[:500].decode(errors="replace")
