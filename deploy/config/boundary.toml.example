@@ -19,6 +19,9 @@ gateway_port = 5476
 crew_url = "http://localhost:15476"
 # 原生登录有效期（K03：该登录覆盖整个 Gateway；经公网入口时保持较短）
 crew_entry_ttl = "1h"
+# Worker 主机才有（D36 远程预览）：平台经此主机 nginx 的预览端口访问会话应用；证书中的名称。al2023.sh 写入
+# preview_tls_port = 8945
+# preview_tls_name = "w1.worker.kirocrew-on"
 kirocrew_python = "/opt/kirocrew/current/venv/bin/python"
 adapters_dir = "/opt/kirocrew-on/current/node_modules/.bin"
 path_prepend = ["/opt/kirocrew-tools/bin", "/opt/kirocrew-node/bin"]

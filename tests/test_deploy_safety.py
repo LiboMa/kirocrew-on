@@ -230,6 +230,11 @@ class DeployUpTests(unittest.TestCase):
     def parameters(self, calls):
         return {p["ParameterKey"]: p["ParameterValue"] for p in self.made(calls, "create-change-set")[0]["parameters"]}
 
+    def test_the_preview_port_goes_to_the_stack(self):
+        result, calls = self.up()
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(self.parameters(calls)["PreviewPort"], env_file(ROOT / "deploy/aws/stack.env")["PREVIEW_PORT"])
+
     def test_without_a_console_domain_the_console_keeps_its_cloudfront_name(self):
         result, calls = self.up(stack_env={"CONSOLE_DOMAIN": ""})
         self.assertEqual(result.returncode, 0, result.stderr)

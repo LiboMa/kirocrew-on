@@ -42,6 +42,12 @@ Parameters:
     MinValue: 1024
     MaxValue: 65535
     Description: 安全组规则的上限端口；NativePort + 1 起至此为 Worker 主机原生入口的中转端口（每台 Worker 主机一个，D28）
+  PreviewPort:
+    Type: Number
+    Default: 8929
+    MinValue: 1024
+    MaxValue: 65535
+    Description: 主机 nginx 端口，第三个 CloudFront 分发（远程预览，D36）经此端口（校验源站密钥）转发；取现有安全组规则范围内的最后一个端口（= NativeRelayEnd，不再分配给 Worker 主机中转）
   ConsoleDomain:
     Type: String
     Default: ""
@@ -361,6 +367,42 @@ Resources:
           CloudFrontDefaultCertificate: true
       Tags: [{Key: Project, Value: kirocrew-on}]
 
+  # Remote preview (D36 §5.2): its own origin for the apps, so no console cookie or storage is ever theirs.
+  PreviewDistribution:
+    Type: AWS::CloudFront::Distribution
+    Properties:
+      DistributionConfig:
+        Enabled: true
+        Comment: !Sub "KiroCrew ON remote preview (${AWS::StackName})"
+        HttpVersion: http2and3
+        IPV6Enabled: true
+        PriceClass: PriceClass_100
+        Origins:
+          - Id: kirocrew-preview-origin
+            DomainName: !If
+              - IsUsEast1
+              - !Join ["", ["ec2-", !Join ["-", !Split [".", !Ref HostAddress]], ".compute-1.amazonaws.com"]]
+              - !Join ["", ["ec2-", !Join ["-", !Split [".", !Ref HostAddress]], !Sub ".${AWS::Region}.compute.amazonaws.com"]]
+            CustomOriginConfig:
+              HTTPPort: !Ref PreviewPort
+              OriginProtocolPolicy: http-only
+              OriginReadTimeout: 60
+              OriginKeepaliveTimeout: 5
+            OriginCustomHeaders:
+              - HeaderName: X-Origin-Verify
+                HeaderValue: !Ref OriginSecret
+        DefaultCacheBehavior:
+          TargetOriginId: kirocrew-preview-origin
+          ViewerProtocolPolicy: redirect-to-https
+          AllowedMethods: [GET, HEAD, OPTIONS, PUT, PATCH, POST, DELETE]
+          CachedMethods: [GET, HEAD]
+          CachePolicyId: 4135ea2d-6df8-44a3-9df3-4b5a84be39ad        # Managed-CachingDisabled
+          OriginRequestPolicyId: 33f36d7e-f396-46d9-90e0-52428a34d9dc # Managed-AllViewerAndCloudFrontHeaders-2022-06
+          Compress: false
+        ViewerCertificate:
+          CloudFrontDefaultCertificate: true
+      Tags: [{Key: Project, Value: kirocrew-on}]
+
   SnapshotRole:
     Type: AWS::IAM::Role
     Properties:
@@ -434,6 +476,10 @@ Outputs:
     Value: !GetAtt NativeDistribution.DomainName
   NativeUrl:
     Value: !Sub "https://${NativeDistribution.DomainName}/"
+  PreviewDomain:
+    Value: !GetAtt PreviewDistribution.DomainName
+  PreviewUrl:
+    Value: !Sub "https://${PreviewDistribution.DomainName}/"
   ArtifactBucket:
     Value: !Ref ArtifactBucket
   ApiPort:

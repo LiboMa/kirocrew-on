@@ -37,6 +37,31 @@ text = re.sub(r"(?m)^allowed_hosts[ \t]*=.*$", lambda _: line, text, count=1) if
 open(path, "w").write(text)
 PY
 }
+render_preview() {  # render_preview TEMPLATE SECRET_FILE PREVIEW_PORT API_PORT: the platform's remote preview server (D36);
+  # the origin secret comes from its file, never a command line
+  "$PYTHON" -I - "$@" <<'PY'
+import re, sys
+template, secret_file, preview_port, api_port = sys.argv[1:]
+secret = open(secret_file).read().strip()
+if not re.fullmatch(r"[A-Za-z0-9_-]{32,}", secret):
+    sys.exit("源站密钥缺失或格式不符")
+print(open(template).read().replace("__ORIGIN_SECRET__", secret).replace("__PREVIEW_PORT__", preview_port)
+      .replace("__API_PORT__", api_port), end="")
+PY
+}
+render_worker_preview() {  # render_worker_preview TEMPLATE TOKEN_FILE PORT: a Worker host's preview server; its check header
+  # comes from the boundary's Worker token exactly as the platform derives it (octopus.remote_preview.verify_value)
+  "$PYTHON" -I - "$TARGET" "$@" <<'PY'
+import sys
+release, template, token_file, port = sys.argv[1:]
+sys.path.insert(0, release)
+from octopus.remote_preview import verify_value
+token = open(token_file).read().strip()
+if len(token) < 32:
+    sys.exit("Worker Token 缺失或过短")
+print(open(template).read().replace("__PREVIEW_VERIFY__", verify_value(token)).replace("__PREVIEW_TLS_PORT__", port), end="")
+PY
+}
 toml_set() {  # top-level TOML key: replace its line, or insert it before the first table so it never lands in [tools]
   "$PYTHON" - "$1" "$2" "$3" <<'PY'
 import re, sys
@@ -258,6 +283,34 @@ PY
   systemctl reload-or-restart nginx
 fi
 
+if [ -z "$WORKER_HOST" ]; then
+  # platform:begin
+if [ -n "${PREVIEW_DOMAIN:-}" ]; then
+  log "远程预览入口 https://$PREVIEW_DOMAIN/（CloudFront → nginx auth_request → 会话应用，D36）"
+  PREVIEW_PORT="${PREVIEW_PORT:-8929}"
+  API_PORT="$(grep -E '^api_port' /etc/kirocrew-on/platform.toml | grep -oE '[0-9]+' || echo 8918)"
+  umask 027
+  render_preview "$TARGET/deploy/nginx/kirocrew-preview.conf" /etc/kirocrew-on/origin-secret "$PREVIEW_PORT" "$API_PORT" \
+    > /etc/nginx/conf.d/kirocrew-preview.conf.new
+  umask 022
+  chown root:nginx /etc/nginx/conf.d/kirocrew-preview.conf.new
+  chmod 0640 /etc/nginx/conf.d/kirocrew-preview.conf.new
+  mv -f /etc/nginx/conf.d/kirocrew-preview.conf.new /etc/nginx/conf.d/kirocrew-preview.conf
+  if command -v getenforce >/dev/null 2>&1 && [ "$(getenforce)" = Enforcing ]; then
+    setsebool -P httpd_can_network_connect 1
+    semanage port -a -t http_port_t -p tcp "$PREVIEW_PORT" 2>/dev/null || semanage port -m -t http_port_t -p tcp "$PREVIEW_PORT"
+  fi
+  if ! nginx -t -q; then   # never leave a configuration nginx rejects for its next restart
+    rm -f /etc/nginx/conf.d/kirocrew-preview.conf
+    echo "远程预览的 nginx 配置未通过 nginx -t，已移除" >&2
+    exit 1
+  fi
+  systemctl enable nginx >/dev/null
+  systemctl reload-or-restart nginx
+fi
+  # platform:end
+fi
+
 log "原生契约检查（以 $CREW 身份，隔离边界配置）"
 CREW_ENV=(env HOME="$BASE/home" PATH="/opt/kirocrew-tools/bin:$NODE_ROOT/bin:/usr/local/bin:/usr/bin:/bin"
           PYTHONPATH="$TARGET")
@@ -284,6 +337,9 @@ if [ -z "$WORKER_HOST" ]; then
   # platform:begin
 # After the switch: a release before worker_ca_file would refuse to load platform.toml with the key (unknown keys fail).
 toml_set /etc/kirocrew-on/platform.toml worker_ca_file '"/etc/kirocrew-on/worker-ca.pem"'
+if [ -n "${PREVIEW_DOMAIN:-}" ]; then
+  toml_set /etc/kirocrew-on/platform.toml preview_url "\"https://$PREVIEW_DOMAIN\""
+fi
 OCTO=(/opt/kirocrew-on/venv/bin/python -m octopus --config /etc/kirocrew-on/platform.toml)
 log "平台管理员（首次初始化；已有用户时跳过）"
 # Generated here and readable by root only: the instance role (usable by every process on the host, the execution
@@ -314,6 +370,13 @@ fi
   # platform:end
 fi
 
+if [ -n "$WORKER_HOST" ] && [ -n "${WORKER_PREVIEW_TLS_PORT:-}" ]; then
+  # After the switch (an older release rejects unknown keys): the platform reaches this host's apps through its preview
+  # port (D36 §5.2); the Worker reports it with the name in this host's certificate.
+  toml_set "$BOUNDARY_TOML" preview_tls_port "$WORKER_PREVIEW_TLS_PORT"
+  toml_set "$BOUNDARY_TOML" preview_tls_name "\"$BOUNDARY.worker.kirocrew-on\""
+fi
+
 log "systemd"
 install -m 0644 /opt/kirocrew-on/current/deploy/systemd/*.service /etc/systemd/system/
 systemctl daemon-reload
@@ -336,6 +399,26 @@ else
 fi
 # gateway:end
 systemctl restart "octopus-worker@$BOUNDARY"
+if [ -n "$WORKER_HOST" ] && [ -n "${WORKER_PREVIEW_TLS_PORT:-}" ] && [ -s "$BASE/worker.token" ]; then
+  log "远程预览端口 $WORKER_PREVIEW_TLS_PORT（TLS；只转发到回环 47000–47999，校验头由 Worker Token 派生）"
+  ( umask 077; render_worker_preview "$TARGET/deploy/nginx/kirocrew-worker-preview.conf" "$BASE/worker.token" \
+      "$WORKER_PREVIEW_TLS_PORT" > /etc/kirocrew-on/nginx-worker-preview.conf.new )
+  mv -f /etc/kirocrew-on/nginx-worker-preview.conf.new /etc/kirocrew-on/nginx-worker-preview.conf
+  if command -v getenforce >/dev/null 2>&1 && [ "$(getenforce)" = Enforcing ]; then
+    semanage port -a -t http_port_t -p tcp "$WORKER_PREVIEW_TLS_PORT" 2>/dev/null ||
+      semanage port -m -t http_port_t -p tcp "$WORKER_PREVIEW_TLS_PORT"
+  fi
+  # Loaded once deploy.sh worker-host tls has installed the certificate (it installs this file too).
+  if [ -s /etc/kirocrew-on/worker-tls.crt ]; then
+    install -m 0640 -o root -g nginx /etc/kirocrew-on/nginx-worker-preview.conf /etc/nginx/conf.d/kirocrew-worker-preview.conf
+    if ! nginx -t -q; then
+      rm -f /etc/nginx/conf.d/kirocrew-worker-preview.conf
+      echo "远程预览的 nginx 配置未通过 nginx -t，已移除" >&2
+      exit 1
+    fi
+    systemctl reload-or-restart nginx
+  fi
+fi
 if [ -z "$WORKER_HOST" ]; then
   # platform:begin
 systemctl enable octopus-api >/dev/null

@@ -23,7 +23,8 @@
 | 8918 | `octopus-api`（Web 控制台 + `/v1` API + Engine） | 127.0.0.1 |
 | 8928 | `octopus-worker@personal` | 127.0.0.1 |
 | 5476 | `octopus-gateway@personal`（KiroCrew Gateway + composition） | 127.0.0.1 |
-| 8919 / 8920–8929 | 主机 nginx：平台原生入口 / 各 Worker 主机原生入口的中转（只接受 CloudFront 且校验源站密钥） | 0.0.0.0 |
+| 8919 / 8920–8928 / 8929 | 主机 nginx：平台原生入口 / 各 Worker 主机原生入口的中转 / 远程预览（D36；只接受 CloudFront 且校验源站密钥） | 0.0.0.0 |
+| 47000–47999 | 远程预览的会话应用（执行环境内的进程） | 127.0.0.1 |
 
 控制台与 API 经 CloudFront 访问：`https://<分发域名>/`（`deploy/aws/deploy.sh status` 显示），配置了自定义域名时也可经
 `https://<CONSOLE_DOMAIN>/` 访问（见下）。API 监听 `0.0.0.0:8918`，
@@ -213,6 +214,30 @@ CloudFront 只使用 us-east-1 的证书）：分发加上别名与证书（SNI�
 证书时 `up` 在任何变更前停止。之后执行 `deploy.sh push`，把该域名加入 `platform.toml` 的 `allowed_hosts`（Host 校验）。
 托管区与证书 ID 不写入仓库，每次 `up` 时查询。浏览器中的登录按域名分开保存：改用新域名后需要重新登录；MCP 的 `--url`
 可以继续使用 cloudfront.net 地址，也可以换成新域名。清空 `CONSOLE_DOMAIN` 后再执行 `up` 会移除别名与 DNS 记录。
+
+### 远程预览（D36 第 2 期）
+
+会话页「远程预览」或 MCP `octopus_app`：在执行环境中运行会话的应用，经第三个 CloudFront 分发（`deploy.sh status` 的 `PreviewUrl`）
+在浏览器中打开。
+
+- **运行**：Worker 按 `.octopus/preview.json`（或自动识别 `package.json` / `index.html`）以执行环境的 OS 用户、在项目目录中启动。
+  - 每个进程独立进程组，入口端口取 47000–47999。
+  - 依赖安装只执行一次，日志写入会话目录的 `app.log`。
+  - 每个执行环境最多 3 个；会话执行任务时不能启动。
+  - 空闲 30 分钟、会话关闭 / 删除 / 续作 / 诊断时停止；Worker 重启（含每次部署）后预览随之结束。
+- **访问**：浏览器 → CloudFront（源站密钥）→ 平台主机 nginx `:8929` → `auth_request` 问 API `/v1/preview-auth`（校验预览域
+  Cookie、复核查看权限、记录最近访问）→ 平台主机回环端口，或经私网 TLS 到 Worker 主机 nginx `:8945` → 回环端口。
+  - Worker 主机端口只接受平台安全组，并校验由该边界 Worker Token 派生的请求头（`HMAC-SHA256(token, "kirocrew-preview")`）。
+  - 打开链接 10 分钟内有效、只能用一次。打开时先清除预览域的旧 Cookie 与存储，再写入 8 小时的 `__Host-kirocrew_preview`。
+  - `/v1/preview-auth` 与 `/_kirocrew/*` 只接受本机 nginx 的请求。
+- **部署**（一次）：
+  1. `deploy.sh up`：新增预览分发；端口取现有安全组规则的最后一个，规则本身不变。
+  2. `deploy.sh worker-host up <名称>`：Worker 主机加一条只对平台安全组开放的入站规则。
+  3. `deploy.sh push` 与 `deploy.sh worker-host push <名称>`。
+  - 安装脚本渲染 nginx 配置（`nginx -t` 不通过时移除并退出），平台 `platform.toml` 写入 `preview_url`，Worker 主机边界配置写入
+    `preview_tls_port` / `preview_tls_name`。
+  - 首次写入边界配置会让该主机的 Gateway 重启一次（指纹包含边界配置），部署前确认没有进行中的会话。
+- **限制**：第一版不限 CPU / 内存；同一浏览器同时只预览一个会话（预览域对所有会话相同）；`/_kirocrew/` 路径保留给平台。
 
 ### 下载会话源码（D36）
 

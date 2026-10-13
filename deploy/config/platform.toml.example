@@ -12,3 +12,5 @@ worker_ca_file = "/etc/kirocrew-on/worker-ca.pem"
 engine_workers = 4
 retry_unavailable = 2.0
 shutdown_grace = 30.0
+# 远程预览（D36）的预览分发地址；deploy.sh push 写入（https://<PreviewDomain>），留空时不提供远程预览
+# preview_url = "https://dxxxxxxxxxxxxx.cloudfront.net"

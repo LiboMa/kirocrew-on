@@ -20,6 +20,8 @@ WORKER_TEMPLATE=deploy/aws/kirocrew-on-worker.yaml
 WORKER_TLS_PORT="${WORKER_TLS_PORT:-8943}"
 WORKER_GATEWAY_TLS_PORT="${WORKER_GATEWAY_TLS_PORT:-8944}"
 NATIVE_RELAY_END="${NATIVE_RELAY_END:-$((NATIVE_PORT + 10))}"
+PREVIEW_PORT="${PREVIEW_PORT:-$NATIVE_RELAY_END}"
+WORKER_PREVIEW_TLS_PORT="${WORKER_PREVIEW_TLS_PORT:-8945}"
 PARAMS="/kirocrew-on/$STACK_NAME"
 DRY="${DEPLOY_DRY_RUN:-}"
 WORK="$(mktemp -d)"
@@ -160,10 +162,10 @@ up() {
   # Parameters go through a 0600 file: the origin secret never appears on a command line.
   (umask 077; ORIGIN_VALUE="$origin" python3 - "$INSTANCE_TYPE" "$VOLUME_SIZE_GIB" "$zone" "$image" "$prefix_list" \
     "$API_PORT" "$NATIVE_PORT" "$NATIVE_RELAY_END" "$ALARM_EMAIL" "$console" "$console_certificate_arn" "$console_zone_id" \
-    > "$WORK/parameters.json" <<'PY'
+    "$PREVIEW_PORT" > "$WORK/parameters.json" <<'PY'
 import json, os, sys
 keys = ["InstanceType", "VolumeSizeGiB", "AvailabilityZone", "ImageId", "CloudFrontPrefixListId", "ApiPort", "NativePort",
-        "NativeRelayEnd", "AlarmEmail", "ConsoleDomain", "ConsoleCertificateArn", "ConsoleHostedZoneId"]
+        "NativeRelayEnd", "AlarmEmail", "ConsoleDomain", "ConsoleCertificateArn", "ConsoleHostedZoneId", "PreviewPort"]
 values = dict(zip(keys, sys.argv[1:]), OriginSecret=os.environ["ORIGIN_VALUE"])
 print(json.dumps([{"ParameterKey": k, "ParameterValue": v} for k, v in values.items()]))
 PY
@@ -177,23 +179,24 @@ PY
 
 push() {
   [ -z "$(git status --porcelain)" ] || { echo "工作区有未提交改动；push 只发布已提交的 commit" >&2; exit 2; }
-  local sha bucket instance domain native console archive command_id
+  local sha bucket instance domain native console preview archive command_id
   sha="$(git rev-parse HEAD)"
   bucket="$(output ArtifactBucket)"; instance="$(output InstanceId)"; domain="$(output CloudFrontDomain)"
-  native="$(output NativeDomain)"; console="$(output ConsoleDomain)"
+  native="$(output NativeDomain)"; console="$(output ConsoleDomain)"; preview="$(output PreviewDomain)"
   [ "$console" != "None" ] || console=""   # a stack from before ConsoleDomain
+  [ "$preview" != "None" ] || preview=""   # a stack from before the remote preview (D36): no preview server
   archive="$WORK/kirocrew-on-$sha.tar.gz"
   git archive --format=tar.gz --prefix="kirocrew-on-$sha/" -o "$archive" HEAD
   run s3 cp "$archive" "s3://$bucket/releases/$sha.tar.gz" --only-show-errors
-  python3 - "$sha" "$bucket" "$domain" "$PARAMS" "$REGION" "$BOUNDARY" "$native" "$NATIVE_PORT" "$console" \
-    > "$WORK/commands.json" <<'PY'
+  python3 - "$sha" "$bucket" "$domain" "$PARAMS" "$REGION" "$BOUNDARY" "$native" "$NATIVE_PORT" "$console" "$preview" \
+    "$PREVIEW_PORT" > "$WORK/commands.json" <<'PY'
 import json, sys
-sha, bucket, domain, params, region, boundary, native, native_port, console = sys.argv[1:]
+sha, bucket, domain, params, region, boundary, native, native_port, console, preview, preview_port = sys.argv[1:]
 d = "/opt/kirocrew-on/incoming"
 script = (f"set -euo pipefail; mkdir -p {d}; aws s3 cp s3://{bucket}/releases/{sha}.tar.gz {d}/{sha}.tar.gz "
           f"--region {region} --only-show-errors; rm -rf {d}/kirocrew-on-{sha}; tar -xzf {d}/{sha}.tar.gz -C {d}; "
           f"KIROCREW_ON_RELEASE={sha} CF_DOMAIN={domain} CONSOLE_DOMAIN={console} NATIVE_DOMAIN={native} "
-          f"NATIVE_PORT={native_port} "
+          f"NATIVE_PORT={native_port} PREVIEW_DOMAIN={preview} PREVIEW_PORT={preview_port} "
           f"ORIGIN_SECRET_PARAM={params}/origin-secret "
           f"AWS_REGION={region} "
           f"bash {d}/kirocrew-on-{sha}/deploy/install/al2023.sh {boundary}")
@@ -318,17 +321,21 @@ worker_host() {  # worker-host <add|up|push|tls|native|register|status> <name>: 
 relay_port() {  # relay_port STACK: the Worker host's relay port on the platform host. A host keeps its port unless another
   # host has it too (both created at once); otherwise it takes the lowest free one in the platform's deployed range.
   # Runs in a command substitution, where set -e does not apply: every lookup failure exits explicitly.
-  local own end used port
+  local own end used port preview
   own="$(stack_parameter "$1" RelayPort)" || exit 2
   end="$(stack_parameter "$STACK_NAME" NativeRelayEnd)" || exit 2
+  preview="$(stack_parameter "$STACK_NAME" PreviewPort)" || exit 2   # the remote preview's port is never a relay (D36)
   if [ -n "$DRY" ]; then end="${end:-$NATIVE_RELAY_END}"; else
     [[ "$end" =~ ^[0-9]+$ ]] || { echo "平台栈还没有中转端口范围（NativeRelayEnd）：先执行 deploy.sh up" >&2; exit 2; }
   fi
   used=" $(query "" cloudformation describe-stacks --output text --query \
     "Stacks[?starts_with(StackName, '$STACK_NAME-worker-') && StackName != '$1'].Parameters[] | [?ParameterKey=='RelayPort'].ParameterValue") " ||
     { echo "无法读取其他 Worker 主机的中转端口，稍后重试" >&2; exit 2; }
-  if [[ "$own" =~ ^[0-9]+$ ]] && [[ "$used" != *[[:space:]]$own[[:space:]]* ]]; then echo "$own"; return; fi
+  if [[ "$own" =~ ^[0-9]+$ ]] && [ "$own" != "$preview" ] && [[ "$used" != *[[:space:]]$own[[:space:]]* ]]; then
+    echo "$own"; return
+  fi
   for ((port = NATIVE_PORT + 1; port <= end; port++)); do
+    [ "$port" != "$preview" ] || continue
     [[ "$used" == *[[:space:]]$port[[:space:]]* ]] || { echo "$port"; return; }
   done
   echo "平台主机的中转端口 $((NATIVE_PORT + 1))–$end 已用完：调大 stack.env 的 NATIVE_RELAY_END 并先执行 deploy.sh up" >&2
@@ -363,10 +370,10 @@ worker_up() {  # the Worker host stack in the platform's VPC and subnet, admitte
   (umask 077; ORIGIN_VALUE="$origin" python3 - "$(output VpcId)" "$(output SubnetId)" "$(output HostSecurityGroupId)" \
     "${IMAGE_ID:-$(output ImageId)}" "${WORKER_INSTANCE_TYPE:-$INSTANCE_TYPE}" "${WORKER_VOLUME_SIZE_GIB:-$VOLUME_SIZE_GIB}" \
     "$(output ArtifactBucket)" "$WORKER_TLS_PORT" "$STACK_NAME" "$WORKER_GATEWAY_TLS_PORT" "$relay" "$domain" \
-    > "$WORK/worker-parameters.json" <<'PY'
+    "$WORKER_PREVIEW_TLS_PORT" > "$WORK/worker-parameters.json" <<'PY'
 import json, os, sys
 keys = ["VpcId", "SubnetId", "PlatformSecurityGroupId", "ImageId", "InstanceType", "VolumeSizeGiB", "ArtifactBucket",
-        "WorkerPort", "BackupTag", "GatewayTlsPort", "RelayPort", "PlatformOriginDomain"]
+        "WorkerPort", "BackupTag", "GatewayTlsPort", "RelayPort", "PlatformOriginDomain", "PreviewTlsPort"]
 values = dict(zip(keys, sys.argv[1:]), OriginSecret=os.environ["ORIGIN_VALUE"])
 print(json.dumps([{"ParameterKey": k, "ParameterValue": v} for k, v in values.items()]))
 PY
@@ -389,13 +396,14 @@ worker_push() {  # the committed HEAD, installed in Worker host mode (WORKER_HOS
   git archive --format=tar.gz --prefix="kirocrew-on-$sha/" -o "$archive" HEAD
   run s3 cp "$archive" "s3://$bucket/releases/$sha.tar.gz" --only-show-errors
   python3 - "$sha" "$bucket" "$REGION" "$name" "$WORKER_TLS_PORT" "$WORKER_GATEWAY_TLS_PORT" "$native" \
-    > "$WORK/commands.json" <<'PY'
+    "$WORKER_PREVIEW_TLS_PORT" > "$WORK/commands.json" <<'PY'
 import json, sys
-sha, bucket, region, name, port, gateway_port, native = sys.argv[1:]
+sha, bucket, region, name, port, gateway_port, native, preview_port = sys.argv[1:]
 d = "/opt/kirocrew-on/incoming"
 script = (f"set -euo pipefail; mkdir -p {d}; aws s3 cp s3://{bucket}/releases/{sha}.tar.gz {d}/{sha}.tar.gz "
           f"--region {region} --only-show-errors; rm -rf {d}/kirocrew-on-{sha}; tar -xzf {d}/{sha}.tar.gz -C {d}; "
           f"WORKER_HOST=1 WORKER_TLS_PORT={port} GATEWAY_TLS_PORT={gateway_port} NATIVE_DOMAIN={native} "
+          f"WORKER_PREVIEW_TLS_PORT={preview_port} "
           f"KIROCREW_ON_RELEASE={sha} AWS_REGION={region} "
           f"bash {d}/kirocrew-on-{sha}/deploy/install/al2023.sh {name}")
 print(json.dumps({"commands": [script], "executionTimeout": ["3600"]}))
@@ -422,7 +430,7 @@ printf 'subjectAltName=IP:%s,DNS:$name.worker.kirocrew-on\nextendedKeyUsage=serv
   install="set -euo pipefail; cat > /etc/kirocrew-on/worker-tls.crt <<'PEM_END'
 $cert
 PEM_END
-chmod 0644 /etc/kirocrew-on/worker-tls.crt; install -m 0644 /etc/kirocrew-on/nginx-worker.conf /etc/nginx/conf.d/kirocrew-worker.conf; nginx -t -q; systemctl enable nginx >/dev/null; systemctl reload-or-restart nginx; echo 已安装证书"
+chmod 0644 /etc/kirocrew-on/worker-tls.crt; install -m 0644 /etc/kirocrew-on/nginx-worker.conf /etc/nginx/conf.d/kirocrew-worker.conf; [ ! -s /etc/kirocrew-on/nginx-worker-preview.conf ] || install -m 0640 -o root -g nginx /etc/kirocrew-on/nginx-worker-preview.conf /etc/nginx/conf.d/kirocrew-worker-preview.conf; nginx -t -q; systemctl enable nginx >/dev/null; systemctl reload-or-restart nginx; echo 已安装证书"
   if [ -n "$DRY" ]; then printf '%s\n\n' "$request" "$sign" "$install"; return; fi
   remote "$worker" "$install"
   echo "平台经 TLS 访问 Worker（不带 Token，期望 401）：$(remote "$platform" "curl -s -o /dev/null -w '%{http_code}' --cacert /etc/kirocrew-on/worker-ca.pem https://$ip:$WORKER_TLS_PORT/health || true")"

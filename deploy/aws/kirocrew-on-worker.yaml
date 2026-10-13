@@ -29,6 +29,10 @@ Parameters:
     Type: Number
     Default: 8944
     Description: Worker host nginx port (TLS, private CA) in front of the loopback native KiroCrew Gateway
+  PreviewTlsPort:
+    Type: Number
+    Default: 8945
+    Description: Worker host nginx port (TLS, private CA) for the remote preview; forwards only to loopback ports 47000-47999
   RelayPort:
     Type: Number
     MinValue: 1024
@@ -65,6 +69,11 @@ Resources:
           ToPort: !Ref GatewayTlsPort
           SourceSecurityGroupId: !Ref PlatformSecurityGroupId
           Description: Platform relay to the native KiroCrew Gateway (TLS, private CA; Gateway token login)
+        - IpProtocol: tcp
+          FromPort: !Ref PreviewTlsPort
+          ToPort: !Ref PreviewTlsPort
+          SourceSecurityGroupId: !Ref PlatformSecurityGroupId
+          Description: Platform preview proxy to the apps (TLS, private CA; check header from the Worker token)
       SecurityGroupEgress:
         - IpProtocol: "-1"
           CidrIp: 0.0.0.0/0
