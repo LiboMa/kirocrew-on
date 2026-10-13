@@ -322,7 +322,12 @@ v4 → v6 显示规划 Prompt 新增的行）；控制台「修订历史」在�
 离线完成（2026-10-13）：`octopus connect` 以本人账号签发 30 天 Token（`read, execute, manage`），`--admin` 另含 admin、7 天，
 完成后登出临时登录；MCP 新增 `octopus_me`、`octopus_environments`、`octopus_assign_worker`、`octopus_changes` 与三个管理员工具
 （用户启停与升降、Team 管理、执行环境管理；不创建用户、不设密码），按 Token scope 列出；提交不再在客户端预选 Worker；
-错误以 `{status, code, error}` 返回。EC2 验收待进行。
+错误以 `{status, code, error}` 返回。
+✅ EC2（2026-10-13，客户端改动，平台无需部署；不执行任务）15 项：测试用户经 `issue_token` 得到唯一一枚 `claude MCP`
+（read, execute, manage），临时登录已登出；普通账号 `--admin` 被拒且同样登出；管理员 `--admin` 得到含 admin 的 7 天 Token。
+本机 MCP 服务以普通 Token 列出角色工具、不列管理员工具，`octopus_me` 显示 e2e-member · 未提权 · mcp，环境与会话可查，调用
+管理员工具得结构化 403；以 admin Token 列出三个管理员工具，用户与执行环境（personal、w1）可列出，变更记录按人筛选，
+不存在的用户名得结构化 404。验收后两枚 Token 已吊销、`e2e-member` 停用。
 
 ### 14.8 会话变更记录与运行优化（D34）
 
