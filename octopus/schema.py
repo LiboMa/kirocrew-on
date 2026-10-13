@@ -43,6 +43,16 @@ def openapi():
         "Space": obj({"team_id": text, "user_id": text}),
         "Rename": obj({"name": text}, ["name"]),
         "AppAction": obj({"action": {"type": "string", "enum": ["start", "stop"]}}, ["action"]),
+        "Credential": obj({"name": text, "kind": {"type": "string", "enum": ["github_pat", "gitlab_token"]}, "host": text,
+                           "scope": {"type": "string", "enum": ["user", "team", "platform"]}, "team_id": text,
+                           "repos": {"type": "array", "items": text, "maxItems": 50},
+                           "access": {"type": "string", "enum": ["read", "write"]},
+                           "secret": {"type": "string", "writeOnly": True, "minLength": 8, "maxLength": 500}},
+                          ["name", "kind", "host", "secret"]),
+        "CredentialUpdate": obj({"name": text, "repos": {"type": "array", "items": text, "maxItems": 50},
+                                 "access": {"type": "string", "enum": ["read", "write"]}, "disabled": {"type": "boolean"},
+                                 "secret": {"type": "string", "writeOnly": True, "minLength": 8, "maxLength": 500}}),
+        "CredentialGrant": obj({"team_id": text, "username": text}),
         "TeamArchive": obj({"archived": {"type": "boolean"}}, ["archived"]),
         "TeamEnvironment": obj({"worker_id": text}, ["worker_id"]),
         "Token": obj({"label": text, "ttl": integer, "scopes": {"type": "array", "minItems": 1,
@@ -106,6 +116,10 @@ def openapi():
         "/v1/workers/{id}": {"patch": "Rename"}, "/v1/workers/{id}/retire": {"post": "Empty"},
         "/v1/workers/{id}/capabilities": {"get": None},
         "/v1/tokens": {"get": None, "post": "Token"}, "/v1/tokens/{id}": {"delete": "Empty"},
+        "/v1/credentials": {"get": None, "post": "Credential"},
+        "/v1/credentials/{id}": {"patch": "CredentialUpdate", "delete": "Empty"},
+        "/v1/credentials/{id}/test": {"post": "Empty"},
+        "/v1/credentials/{id}/grants": {"post": "CredentialGrant", "delete": "CredentialGrant"},
         "/v1/runs": {"get": None, "post": "Start"}, "/v1/runs/{id}": {"get": None},
         "/v1/runs/{id}/events": {"get": None}, "/v1/runs/{id}/export": {"get": None},
         "/v1/runs/{id}/crew-entry": {"post": "Empty"}, "/v1/runs/{id}/preview": {"post": "Empty"},
@@ -159,6 +173,16 @@ def openapi():
                                      ".git, without dependency or cache directories, .env files or symlinks (200 MB limit); "
                                      "OCTOPUS-ARCHIVE.txt inside lists what was left out and how to start the project locally. "
                                      "Each download re-checks that the link's holder may still read the Session.")
+            if path.startswith("/v1/credentials"):
+                op["tags"] = ["代码仓库凭证"]
+                op["description"] = {
+                    "/v1/credentials": "GitHub / GitLab credentials the caller may use or manage (personal, Team, platform). "
+                                       "The secret is write-only: no response, export or audit row ever carries it.",
+                    "/v1/credentials/{id}": "Manage scope: rename, change the repository range or access, disable, or rotate "
+                                            "the secret (same id).",
+                    "/v1/credentials/{id}/test": "Manage scope. Asks the host (GitHub GET /user, GitLab GET /api/v4/user) "
+                                                 "whose token it is and when it expires.",
+                    "/v1/credentials/{id}/grants": "Administrator only. Grant a platform credential to a Team or a user."}[path]
             if path == "/v1/runs/{id}/app":
                 op["description"] = ({"get": "Read scope. The Session's remote preview: status (stopped / installing / starting / "
                                              "running / failed / unsupported), port, error, the last 200 log lines, who started it, "

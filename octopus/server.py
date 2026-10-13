@@ -132,6 +132,7 @@ def required_scope(method, path):
     need manage; Session and design writes need execute; reads need read."""
     segments = path.strip("/").split("/")
     if path.startswith("/v1/admin/") or (segments[:2] == ["v1", "workers"] and method != "GET") or \
+            (segments[:2] == ["v1", "credentials"] and len(segments) == 4 and segments[3] == "grants") or \
             (segments[:2] == ["v1", "users"] and (method != "GET" or len(segments) > 2)) or \
             (path == "/v1/teams" and method == "POST") or \
             (segments[:2] == ["v1", "teams"] and len(segments) == 4 and segments[3] in {"archive", "environment"}):
@@ -179,11 +180,13 @@ PREVIEW_PAGE = ("<!doctype html><html lang=\"zh-CN\"><head><meta charset=\"utf-8
                 "</style></head><body><h1 style=\"font-size:1.2rem\">KiroCrew ON 远程预览</h1><p>{text}</p></body></html>")
 
 
-def server(database, port=8918, host="127.0.0.1", allowed_hosts=(), origin_secret=None, preview_url=""):
+def server(database, port=8918, host="127.0.0.1", allowed_hosts=(), origin_secret=None, preview_url="",
+           credentials_key_file=None):
     if origin_secret is not None and len(origin_secret) < 32:
         # An empty or truncated secret file must fail closed instead of turning origin enforcement off.
         raise ValueError("源站密钥为空或过短（至少 32 个字符）；检查 origin_secret_file")
     service = Service(database)
+    service.credentials.configured = credentials_key_file
     signing_key = preview_key(database.root)
     hosts, local_hosts = set(), set()
     failures, limiter_lock = {}, threading.Lock()
@@ -447,6 +450,23 @@ def server(database, port=8918, host="127.0.0.1", allowed_hosts=(), origin_secre
                             return self.respond(created, 201)
                         require(method == "GET", "Method not allowed", 405)
                         return self.respond([dict(r) for r in db.execute("SELECT id,username FROM users WHERE active=1 ORDER BY username")])
+                if segments[:2] == ["v1", "credentials"]:
+                    store = service.credentials
+                    if len(segments) == 2:
+                        require(method in {"GET", "POST"}, "Method not allowed", 405)
+                        if method == "POST":
+                            return self.respond(store.create(actor, body), 201)
+                        return self.respond(store.list(actor, query.get("host", [None])[0], query.get("scope", [None])[0]))
+                    cid = segments[2]
+                    if len(segments) == 3 and method == "PATCH":
+                        return self.respond(store.update(actor, cid, body))
+                    if len(segments) == 3 and method == "DELETE":
+                        return self.respond(store.delete(actor, cid))
+                    if segments[3:] == ["test"] and method == "POST":
+                        return self.respond(store.test(actor, cid))
+                    if segments[3:] == ["grants"] and method in {"POST", "DELETE"}:
+                        return self.respond(store.grant(actor, cid, body) if method == "POST" else store.revoke(actor, cid, body))
+                    raise Error(404, "not_found", "接口不存在")
                 if path == "/v1/tokens":
                     require(method in {"GET", "POST"}, "Method not allowed", 405)
                     with database.transaction() as db:

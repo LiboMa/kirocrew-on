@@ -109,8 +109,25 @@ CREATE TABLE IF NOT EXISTS apps(
 CREATE INDEX IF NOT EXISTS apps_worker ON apps(worker_id,status);
 """
 
+# Repository credentials (D35 §3): sealed secrets (octopus/vault.py) of a person, a Team or the platform, grants of
+# platform credentials, and the default a workflow version names for its Sessions' source.
+CREDENTIALS = """
+CREATE TABLE IF NOT EXISTS credentials(
+ id TEXT PRIMARY KEY, name TEXT NOT NULL, kind TEXT NOT NULL CHECK(kind IN ('github_pat','gitlab_token','github_app')),
+ host TEXT NOT NULL, scope TEXT NOT NULL CHECK(scope IN ('user','team','platform')), owner_id TEXT,
+ repos TEXT NOT NULL DEFAULT '[]', access TEXT NOT NULL DEFAULT 'read' CHECK(access IN ('read','write')),
+ inject INTEGER NOT NULL DEFAULT 0, hint TEXT NOT NULL, secret TEXT NOT NULL, expires REAL,
+ created_by TEXT NOT NULL REFERENCES users(id), created REAL NOT NULL, updated REAL NOT NULL, last_used REAL,
+ disabled INTEGER NOT NULL DEFAULT 0, CHECK((scope = 'platform') = (owner_id IS NULL)));
+CREATE INDEX IF NOT EXISTS credentials_owner ON credentials(scope,owner_id);
+CREATE TABLE IF NOT EXISTS credential_grants(
+ credential_id TEXT NOT NULL REFERENCES credentials(id), team_id TEXT REFERENCES teams(id), user_id TEXT REFERENCES users(id),
+ CHECK((team_id IS NULL) != (user_id IS NULL)), UNIQUE(credential_id,team_id), UNIQUE(credential_id,user_id));
+ALTER TABLE workflow_versions ADD COLUMN credentials TEXT NOT NULL DEFAULT '{}';
+"""
+
 MIGRATIONS = [(1, "baseline", BASELINE), (2, "environments", ENVIRONMENTS), (3, "access", ACCESS),
-              (4, "teams_workers", TEAMS_WORKERS), (5, "apps", APPS)]
+              (4, "teams_workers", TEAMS_WORKERS), (5, "apps", APPS), (6, "credentials", CREDENTIALS)]
 
 
 def _statements(script):

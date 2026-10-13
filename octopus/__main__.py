@@ -131,7 +131,7 @@ def main(argv=None):
             ca = None
         transport.configure(ca)
         httpd = server(db, args.port, args.host, allowed_hosts=settings.allowed_hosts, origin_secret=secret,
-                       preview_url=settings.preview_url)
+                       preview_url=settings.preview_url, credentials_key_file=settings.credentials_key_file)
         signal.signal(signal.SIGTERM, lambda *_: threading.Thread(target=httpd.shutdown, daemon=True).start())
         engine.start()
 

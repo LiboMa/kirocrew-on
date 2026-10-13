@@ -261,6 +261,8 @@ class Service:
     def __init__(self, database):
         self.db = database
         self._opened, self._opened_lock = {}, threading.Lock()   # remote preview opening links already followed
+        from .credentials import CredentialStore
+        self.credentials = CredentialStore(database)   # D35; the server sets its key file
 
     def teams(self, actor):
         """The actor's Teams; an admin sees every Team (role None where not a member). Each carries its environment."""
@@ -573,7 +575,7 @@ class Service:
             else:
                 db.execute("UPDATE workflows SET name=?,name_key=?,version=? WHERE id=?",
                            (title, title.casefold(), version, wid))
-            db.execute("INSERT INTO workflow_versions VALUES(?,?,?,?,?)",
+            db.execute("INSERT INTO workflow_versions(workflow_id,version,spec,author,created) VALUES(?,?,?,?,?)",
                        (wid, version, dumps(spec), actor["id"], time.time()))
         return {"id": wid, "name": title, "version": version, "steps": spec}
 
