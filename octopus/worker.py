@@ -10,6 +10,7 @@ from pathlib import Path
 import re
 import shutil
 import socket
+import stat
 import subprocess
 import threading
 import time
@@ -64,6 +65,55 @@ def briefing(requirement, contract):
         if contract.get("acceptance"):
             text += "逐项完成并核对上述验收项；审查与测试以它们为判定依据。\n"
     return text
+
+
+# A cloned repository's config may carry commands git runs when the copy is opened (core.fsmonitor, core.pager,
+# aliases, filters, credential helpers…): a download keeps only the format, remote and branch settings.
+SAFE_GIT = re.compile(r"core\.(repositoryformatversion|filemode|bare|logallrefupdates|ignorecase|precomposeunicode"
+                      r"|symlinks)|extensions\.[a-z0-9]+|remote\..+\.(url|fetch|pushurl)|branch\..+\.(remote|merge|rebase)")
+
+
+def safe_git_config(path):
+    try:
+        listed = subprocess.run(["git", "config", "--file", str(path), "--list", "-z"], capture_output=True,
+                                timeout=10, stdin=subprocess.DEVNULL)
+        entries = listed.stdout.decode(errors="replace").split("\0") if listed.returncode == 0 else []
+    except (OSError, subprocess.TimeoutExpired):
+        entries = []
+    sections = {}
+    for entry in filter(None, entries):
+        key, newline, value = entry.partition("\n")
+        if SAFE_GIT.fullmatch(key):
+            section, _, rest = key.partition(".")
+            subsection, _, name = rest.rpartition(".")
+            sections.setdefault((section, subsection), []).append((name, value if newline else None))
+    if not sections:
+        sections[("core", "")] = [("repositoryformatversion", "0"), ("bare", "false")]
+    quote = lambda text: text.replace("\\", "\\\\").replace('"', '\\"').replace("\n", "\\n").replace("\t", "\\t")
+    lines = []
+    for (section, subsection), items in sections.items():
+        lines.append(f'[{section} "{quote(subsection)}"]' if subsection else f"[{section}]")
+        lines += [f"\t{name}" if value is None else f'\t{name} = "{quote(value)}"' for name, value in items]
+    return "\n".join(lines) + "\n"
+
+
+def pack_file(archive, relative, path):
+    """Add one regular file, opened without following a link and without blocking on a FIFO swapped in since the
+    plan; False when it can no longer be read (removed, unreadable, no longer a regular file)."""
+    try:
+        fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
+    except OSError:
+        return False
+    with os.fdopen(fd, "rb") as source:
+        status = os.fstat(source.fileno())
+        if not stat.S_ISREG(status.st_mode):
+            return False
+        info = zipfile.ZipInfo(relative, time.localtime(max(status.st_mtime, 315619200))[:6])   # zip dates start in 1980
+        info.external_attr, info.compress_type = (status.st_mode & 0xFFFF) << 16, zipfile.ZIP_DEFLATED
+        info.file_size = status.st_size
+        with archive.open(info, "w") as target:
+            shutil.copyfileobj(source, target, 1 << 20)
+    return True
 
 
 class Worker:
@@ -188,10 +238,11 @@ class Worker:
         return {"content": base64.b64encode(target.read_bytes()).decode(), "size": size}
 
     def archive_plan(self, run_id):
-        """What a download of the run's project contains (D36 §4.2): every file and .git, without dependency and cache
-        directories, .env files or symlinks (never followed); 413 above the size limit, naming the largest parts."""
+        """What a download of the run's project contains (D36 §4.2): every file and directory and .git, without
+        dependency and cache directories, .env files, symlinks (never followed) or git hooks; .git config files are
+        packed cleaned (safe_git_config). 413 above the size limit, naming the largest parts."""
         project = workspace.project_dir(self.path(run_id))
-        files, links, excluded, sizes, total = [], [], set(), {}, 0
+        files, folders, configs, links, skipped, excluded, sizes, total = [], [], [], [], [], set(), {}, 0
         for current, dirs, names in os.walk(project, followlinks=False):
             here = Path(current)
             base = here.relative_to(project)
@@ -204,49 +255,99 @@ class Worker:
                     excluded.add(".next/cache" if name == "cache" else name)
                 else:
                     keep.append(name)
+                    folders.append(relative)
             dirs[:] = keep
+            inside_git = ".git" in base.parts
             for name in sorted(names):
                 path, relative = here / name, (base / name).as_posix()
-                if path.is_symlink():
+                try:
+                    mode = path.lstat().st_mode
+                except OSError:   # removed while walking
+                    skipped.append(relative)
+                    continue
+                if stat.S_ISLNK(mode):
                     links.append(relative)
                 elif (name == ".env" or name.startswith(".env.")) and name not in ENV_KEPT:
                     excluded.add(".env")
-                elif path.is_file():
-                    size = path.stat().st_size
+                elif inside_git and ("hooks" in base.parts[base.parts.index(".git"):] and not name.endswith(".sample")
+                                     or name == "config.worktree"):
+                    # Run by git on the machine the repository is opened on (D36 review).
+                    excluded.add(".git/hooks" if name != "config.worktree" else ".git/config.worktree")
+                elif not stat.S_ISREG(mode):   # FIFOs, sockets, devices
+                    skipped.append(relative)
+                else:
+                    size = path.lstat().st_size
                     total += size
                     top = relative.split("/")[0]
                     sizes[top] = sizes.get(top, 0) + size
                     files.append((relative, path))
+                    if inside_git and name == "config" and (here / "HEAD").is_file():
+                        configs.append(relative)
         if total > ARCHIVE_LIMIT:
             largest = "、".join(f"{name} {size / 1048576:.0f} MB" for name, size in sorted(sizes.items(), key=lambda x: -x[1])[:3])
             raise Error(413, "archive_too_large", f"项目超过 {ARCHIVE_LIMIT // 1048576} MB（最大的部分：{largest}）："
                         "请在交付任务中清理产物，或改用远程预览")
-        return {"files": files, "bytes": total, "excluded": sorted(excluded), "links": sorted(links)}
+        return {"files": files, "dirs": folders, "configs": configs, "bytes": total, "excluded": sorted(excluded),
+                "links": sorted(links), "skipped": skipped}
 
-    def write_archive(self, stream, run_id, meta, plan=None):
-        """Write the zip to ``stream`` as it is built (no temporary file), with OCTOPUS-ARCHIVE.txt last."""
+    def archive_summary(self, body):
+        """A dry run before a download link is issued: size and refusals reach the console as an answer, not as a
+        page the browser navigates to."""
+        plan = self.archive_plan(body["run_id"])
+        return {"bytes": plan["bytes"], "files": len(plan["files"]), "excluded": plan["excluded"], "links": plan["links"]}
+
+    def archive_readme(self, run_id, meta, plan):
+        """OCTOPUS-ARCHIVE.txt, built before the response starts: nothing in it may fail a download."""
         from . import preview_spec
-        plan = plan or self.archive_plan(run_id)
         project = workspace.project_dir(self.path(run_id))
         try:
             head = subprocess.run(["git", "rev-parse", "HEAD"], cwd=project, capture_output=True, text=True,
                                   timeout=10, stdin=subprocess.DEVNULL).stdout.strip() or "无"
         except (OSError, subprocess.TimeoutExpired):
             head = "无"
-        spec, source, problem = preview_spec.resolve(project)
-        steps = preview_spec.local_steps(spec) if spec else [problem]
+        try:
+            # The steps are for the downloaded copy, which has none of the dependency directories left behind.
+            spec, source, problem = preview_spec.resolve(project, packaged=True)
+            steps = preview_spec.local_steps(spec) if spec else [problem]
+        except Exception:   # a declaration nothing anticipated (a cwd looping through links…)
+            source, steps = None, [f"启动方式无法识别：请检查 {preview_spec.DECLARATION}"]
         text = lambda key: str((meta or {}).get(key) or "")[:200]
-        readme = "\n".join([
+        return "\n".join([
             "KiroCrew ON 会话源码", "", f"会话：{text('name')}（{run_id}）", f"创建者：{text('creator')}",
             f"打包时间：{time.strftime('%Y-%m-%d %H:%M:%S UTC', time.gmtime())}", f"HEAD：{head}", "",
             "未打包：" + ("、".join(plan["excluded"]) or "无") + "（依赖与缓存目录请在本机重新安装；.env 不随包下载）",
-            "符号链接（未打包）：" + ("、".join(plan["links"]) or "无"), "",
+            "符号链接（未打包）：" + ("、".join(plan["links"]) or "无"),
+            *(["已移除：.git/config 中会执行命令的设置与 .git/hooks（打开下载的仓库不会运行会话中的命令）"]
+              if plan["configs"] else []), "",
             "本机启动" + {"declared": "（来自 .octopus/preview.json）", "detected": "（自动识别）"}.get(source, "") + "：",
             *[f"  {step}" for step in steps], ""])
-        with zipfile.ZipFile(stream, "w", zipfile.ZIP_DEFLATED) as archive:
+
+    def write_archive(self, stream, run_id, meta, plan=None, readme=None):
+        """Write the zip to ``stream`` as it is built (no temporary file), with OCTOPUS-ARCHIVE.txt last. A file
+        that can no longer be read is listed there; any other failure leaves the zip without its end record, so the
+        platform never completes or records a partial download."""
+        plan = plan or self.archive_plan(run_id)
+        readme = readme or self.archive_readme(run_id, meta, plan)
+        archive, skipped = zipfile.ZipFile(stream, "w", zipfile.ZIP_DEFLATED), list(plan["skipped"])
+        try:
+            for relative in plan["dirs"]:   # empty ones included: git needs .git/refs even when it is empty
+                info = zipfile.ZipInfo(relative + "/")
+                info.external_attr = (0o40755 << 16) | 0x10
+                archive.writestr(info, b"")
             for relative, path in plan["files"]:
-                archive.write(path, relative)
+                if relative in plan["configs"]:
+                    info = zipfile.ZipInfo(relative, time.localtime()[:6])
+                    info.external_attr = 0o100644 << 16
+                    archive.writestr(info, safe_git_config(path), zipfile.ZIP_DEFLATED)
+                elif not pack_file(archive, relative, path):
+                    skipped.append(relative)
+            if skipped:
+                readme += "未能读取（未打包）：" + "、".join(skipped) + "\n"
             archive.writestr("OCTOPUS-ARCHIVE.txt", readme)
+            archive.close()
+        except BaseException:
+            archive.fp = None   # never write the central directory of a partial archive
+            raise
 
     def health(self):
         # Descriptive boundary, not cryptographic proof of OS isolation.
@@ -648,6 +749,7 @@ def serve(worker, port=8928, host="127.0.0.1"):
                     require(0 < size <= 100_000, "请求体无效")
                     body = json.loads(self.rfile.read(size))
                     plan = worker.archive_plan(body.get("run_id"))   # refusals still answer as JSON errors
+                    readme = worker.archive_readme(body["run_id"], body.get("meta"), plan)
                     self.send_response(200)
                     self.send_header("Content-Type", "application/zip")
                     self.send_header("Cache-Control", "no-store")
@@ -655,8 +757,8 @@ def serve(worker, port=8928, host="127.0.0.1"):
                     self.end_headers()
                     self.close_connection = True
                     try:   # streamed as it is built; a failure from here on can only end the connection
-                        worker.write_archive(self.wfile, body["run_id"], body.get("meta"), plan)
-                    except (OSError, ValueError, zipfile.BadZipFile):
+                        worker.write_archive(self.wfile, body["run_id"], body.get("meta"), plan, readme)
+                    except Exception:   # the zip has no end record: the platform sees an incomplete download
                         pass
                     return
                 if self.command == "GET" and self.path == "/health":
@@ -667,7 +769,8 @@ def serve(worker, port=8928, host="127.0.0.1"):
                     body = json.loads(self.rfile.read(size))
                     methods = {"/prepare": worker.prepare, "/dispatch": worker.dispatch,
                                "/inspect": worker.inspect, "/control": worker.control,
-                               "/crew-entry": worker.crew_entry, "/files": worker.files, "/observe": worker.observe}
+                               "/crew-entry": worker.crew_entry, "/files": worker.files, "/observe": worker.observe,
+                               "/archive/plan": worker.archive_summary}
                     require(self.path in methods and self.command == "POST", "接口不存在", 404, "not_found")
                     result = methods[self.path](body)
                 status = 200

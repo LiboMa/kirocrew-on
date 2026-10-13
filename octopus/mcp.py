@@ -1,5 +1,6 @@
 """Standard newline-delimited stdio MCP adapter for the SAME authenticated API."""
 import json
+import os
 from pathlib import Path
 import sys
 import tempfile
@@ -183,6 +184,8 @@ def extract(archive, target):
         with archive.open(info) as source, open(destination, "wb") as sink:
             while chunk := source.read(65536):
                 sink.write(chunk)
+        if mode := (info.external_attr >> 16) & 0o755:   # keeps ./gradlew runnable; never setuid
+            os.chmod(destination, mode)
         files += 1
     return files, skipped
 

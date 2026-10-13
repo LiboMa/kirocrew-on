@@ -779,10 +779,19 @@ class Service:
         return entry
 
     def archive_entry(self, actor, rid):
-        """Whether the actor may download the run's source, and whether there is any yet (D36 §4.1)."""
+        """Whether the actor may download the run's source and how large it is: a dry run on the Worker, so a
+        refusal (too large, Worker offline) is an answer here rather than a page the browser opens (D36 §4.1)."""
         with self.db.read() as db:
             run = run_access(db, actor, rid)
-        require(run["worker_id"] and run["workspace"], "此会话尚未准备源码，没有可下载的内容", 409, "no_archive")
+            require(run["worker_id"] and run["workspace"], "此会话尚未准备源码，没有可下载的内容", 409, "no_archive")
+            config = json.loads(db.execute("SELECT config FROM workers WHERE id=?", (run["worker_id"],)).fetchone()["config"])
+        from .transport import worker_request
+        try:
+            return worker_request(config, "/archive/plan", {"run_id": rid})
+        except Error as exc:
+            if exc.status == 404 and exc.code == "not_found":
+                raise Error(409, "archive_unsupported", "执行环境的 Worker 尚未升级，暂不支持下载源码") from None
+            raise
 
     def archive_source(self, rid, holder):
         """The Worker serving a download, for the link's holder who must still be allowed to read the run (B6)."""

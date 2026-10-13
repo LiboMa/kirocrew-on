@@ -69,15 +69,17 @@ def load(project):
     return {"processes": processes, "install": install, "ready": {"path": path_, "timeout": timeout}}
 
 
-def detect(project):
-    """How a project without a declaration starts: its package.json scripts, or a static site; None otherwise."""
+def detect(project, packaged=False):
+    """How a project without a declaration starts: its package.json scripts, or a static site; None otherwise.
+    ``packaged``: steps for the downloaded copy, where the dependency directories left behind count as absent."""
     project = Path(project)
     package = project / "package.json"
     if package.is_file():
         try:
-            scripts = json.loads(package.read_text()).get("scripts") or {}
+            scripts = json.loads(package.read_text()).get("scripts")
         except (ValueError, UnicodeDecodeError, AttributeError):
-            scripts = {}
+            scripts = None
+        scripts = scripts if isinstance(scripts, dict) else {}
         command = None
         if isinstance(scripts.get("dev"), str):
             command = ("npm run dev -- --host 127.0.0.1 --port $PORT --strictPort" if scripts["dev"].strip().startswith("vite")
@@ -85,7 +87,9 @@ def detect(project):
         elif isinstance(scripts.get("start"), str):
             command = "npm start"
         if command:
-            install = [] if (project / "node_modules").is_dir() else [{"cwd": ".", "command": "npm ci"}]
+            # npm ci installs exactly the lockfile and refuses to run without one.
+            install = [] if (project / "node_modules").is_dir() and not packaged else [
+                {"cwd": ".", "command": "npm ci" if (project / "package-lock.json").is_file() else "npm install"}]
             return {"processes": [{"name": "app", "cwd": ".", "command": command, "port": "$PORT", "entry": True}],
                     "install": install, "ready": dict(READY)}
     if (project / "index.html").is_file():
@@ -93,7 +97,7 @@ def detect(project):
     return None
 
 
-def resolve(project):
+def resolve(project, packaged=False):
     """(spec, "declared" | "detected" | None, error): a broken declaration is reported, never silently replaced."""
     try:
         spec = load(project)
@@ -101,7 +105,7 @@ def resolve(project):
         return None, None, f"{DECLARATION}：{exc}"
     if spec:
         return spec, "declared", None
-    spec = detect(project)
+    spec = detect(project, packaged)
     return (spec, "detected", None) if spec else (None, None, f"未找到启动方式：请在交付任务中写 {DECLARATION}")
 
 

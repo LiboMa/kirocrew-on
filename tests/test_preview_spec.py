@@ -60,6 +60,8 @@ class PreviewSpecTests(unittest.TestCase):
     def test_detection_without_a_declaration(self):
         package = lambda scripts: (self.project / "package.json").write_text(json.dumps({"scripts": scripts}))
         package({"dev": "vite", "build": "vite build"})
+        self.assertEqual(preview_spec.detect(self.project)["install"], [{"cwd": ".", "command": "npm install"}])
+        (self.project / "package-lock.json").write_text("{}")   # npm ci needs the lockfile
         vite = preview_spec.detect(self.project)
         self.assertEqual(vite["install"], [{"cwd": ".", "command": "npm ci"}])
         self.assertEqual(vite["processes"][0]["command"], "npm run dev -- --host 127.0.0.1 --port $PORT --strictPort")
@@ -75,6 +77,21 @@ class PreviewSpecTests(unittest.TestCase):
         self.assertEqual(preview_spec.detect(self.project), {"static": ".", "processes": [], "install": [],
                                                             "ready": {"path": "/", "timeout": 120}})
         self.assertEqual(preview_spec.resolve(self.project)[1], "detected")
+
+    def test_a_packaged_project_installs_what_the_package_leaves_out(self):
+        (self.project / "package.json").write_text(json.dumps({"scripts": {"dev": "vite"}}))
+        (self.project / "package-lock.json").write_text("{}")
+        (self.project / "node_modules").mkdir()
+        self.assertEqual(preview_spec.detect(self.project)["install"], [])
+        self.assertEqual(preview_spec.detect(self.project, packaged=True)["install"], [{"cwd": ".", "command": "npm ci"}])
+        self.assertEqual(preview_spec.resolve(self.project, packaged=True)[0]["install"][0]["command"], "npm ci")
+
+    def test_an_unusable_package_json_is_not_an_error(self):
+        for scripts in (["dev"], "dev", 3):
+            (self.project / "package.json").write_text(json.dumps({"scripts": scripts}))
+            self.assertIsNone(preview_spec.detect(self.project))
+        (self.project / "package.json").write_text(json.dumps(["not", "an", "object"]))
+        self.assertIsNone(preview_spec.detect(self.project))
 
     def test_local_steps(self):
         self.declare(FULL)

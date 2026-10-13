@@ -1,6 +1,8 @@
 """Bearer-authenticated Team API; native browser login is an explicit no-store exchange."""
+from http.client import HTTPException
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 import json
+import logging
 import hashlib
 import hmac
 import os
@@ -12,6 +14,7 @@ import time
 import base64
 import secrets
 import sqlite3
+import struct
 from urllib.parse import parse_qs, quote, unquote, urlsplit
 
 from . import __version__
@@ -100,6 +103,24 @@ def archive_run(ticket, key, now=None):
         "下载链接无效，请在控制台重新下载", 403, "archive_invalid")
     require(int(parts[3]) >= (now or time.time()), "下载链接已过期（10 分钟有效），请重新下载", 403, "archive_expired")
     return parts[0], parts[1], parts[2]
+
+
+def zip_complete(tail, total):
+    """Whether a zip stream of ``total`` bytes ending in ``tail`` (its last 256 bytes or more) was written to its end:
+    the end record closes the stream (no comment) and the central directory it names ends right before it, or right
+    before the zip64 records. An archive nested in the stream has the signature too, but not at offsets that fit."""
+    end = tail[-22:]
+    if len(end) < 22 or end[:4] != b"PK\x05\x06" or end[20:22] != b"\0\0":
+        return False
+    size, offset = struct.unpack("<II", end[12:20])
+    if offset + size + 22 == total:
+        return True
+    locator, record = tail[-42:-22], tail[-98:-42]
+    if len(record) < 56 or locator[:4] != b"PK\x06\x07" or record[:4] != b"PK\x06\x06":
+        return False
+    start = struct.unpack("<Q", locator[8:16])[0]
+    size, offset = struct.unpack("<QQ", record[40:56])
+    return start == total - 98 and offset + size == start
 
 
 READ_POSTS = {"/v1/workflows/resolve", "/v1/workflows/parse"}
@@ -211,15 +232,19 @@ def server(database, port=8918, host="127.0.0.1", allowed_hosts=(), origin_secre
                 with response:
                     while chunk := response.read(65536):
                         self.wfile.write(b"%X\r\n%s\r\n" % (len(chunk), chunk))
-                        total, tail = total + len(chunk), (tail + chunk)[-65558:]
-            except OSError:
+                        total, tail = total + len(chunk), (tail + chunk)[-256:]
+            except (OSError, HTTPException):   # HTTPException: a chunked upstream (a Worker host's nginx) cut short
                 self.close_connection = True
                 return
-            if b"PK\x05\x06" not in tail:   # the Worker stopped before the end of central directory
+            if not zip_complete(tail, total):   # the Worker stopped before the end of the archive
                 self.close_connection = True
                 return
             self.wfile.write(b"0\r\n\r\n")
-            service.record_download(rid, reader, client, total)
+            try:   # the download is complete; a failed record must not write a second response into it
+                service.record_download(rid, reader, client, total)
+            except Exception as exc:
+                self.close_connection = True
+                logging.error("Download of %s not recorded (%s)", rid, type(exc).__name__)
 
         def identity(self):
             header = self.headers.get("Authorization", "")
@@ -383,9 +408,10 @@ def server(database, port=8918, host="127.0.0.1", allowed_hosts=(), origin_secre
                     return self.respond(service.resolve_workflow(actor, body))
                 if len(segments) == 4 and segments[:2] == ["v1", "runs"] and segments[3] == "archive":
                     require(method == "POST", "Method not allowed", 405)
-                    service.archive_entry(actor, segments[2])
+                    estimate = service.archive_entry(actor, segments[2])
                     ticket = archive_ticket(segments[2], actor["id"], actor.get("client", "api"), signing_key)
-                    return self.respond({"url": f"/archive/{ticket}/{segments[2]}.zip", "expires_in": PREVIEW_TTL})
+                    return self.respond({"url": f"/archive/{ticket}/{segments[2]}.zip", "expires_in": PREVIEW_TTL,
+                                         "bytes_estimate": estimate["bytes"], "files": estimate["files"]})
                 if len(segments) == 4 and segments[:2] == ["v1", "runs"] and segments[3] == "preview" and method == "POST":
                     entry = service.preview_entry(actor, segments[2])
                     return self.respond({"url": "/preview/" + preview_ticket(segments[2], actor["id"], signing_key) + "/" + entry,
