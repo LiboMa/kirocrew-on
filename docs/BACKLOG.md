@@ -1,6 +1,6 @@
 # 后续排期（Backlog）
 
-整理日期：2026-10-11（2026-10-13 补充）。当前目标是**最小 MVP**：Coding Agent 连接后台 → 提交任务 → 查看任务 → 更新优化应用。
+整理日期：2026-10-11（2026-10-13、10-14 补充）。当前目标是**最小 MVP**：Coding Agent 连接后台 → 提交任务 → 查看任务 → 更新优化应用。
 以下事项不阻塞该闭环，按负责人要求延后（与分支开发相关的 M2 / M3 内容整体后排）。
 
 ## 分支与仓库闭环（原 M2 / M3 / M5）
@@ -79,6 +79,26 @@
   `.envrc`、`.npmrc`（可能含 `_authToken`）与名为 `.env/` 的虚拟环境目录会被打包，已提交到 Git 的 `.env` 仍在 `.git` 对象中；
   同一链接 10 分钟内可反复下载、每次重新打包并写记录；`run.downloaded` 未记 commit；`OCTOPUS-ARCHIVE.txt` 在解压的仓库中显示为未跟踪；
   不支持 HEAD 与 Range；`test_errors_before_streaming_stay_json_and_auth_is_required` 的第一条断言恒成立；此前已准备的新建项目没有 `.git`。
+- 远程预览（D36 第 2 期审查延后项）：预览 Cookie 会转发给应用；只有 WebSocket 的页面 30 分钟后按空闲停止（只计 HTTP 请求）；
+  以 `setsid` 启动的子进程在停止后存活（直到 Worker 的 cgroup 结束）；`app.log` 不限大小；打开链接的一次性票据进入预览访问日志（`$uri`）；
+  管理员预览他人会话未审计；Worker 主机安装在没有 Token 时静默跳过，且 `nginx -t` 失败发生在切换之后；两个会话声明同一固定后端端口时，
+  后一个只显示「已退出（代码 1）」。
+- 代码仓库凭证（D35 第 1 期审查延后项）：开发默认的密钥文件非原子创建（安装脚本的是原子的）；HMAC 不覆盖行的 id / kind / host
+  （能写数据库者可互换行）；克隆中被 SIGKILL 时 `.askpass` 不清理；`git_auth` 也发给不支持它的旧 Worker（其匿名克隆）；
+  更换凭证没有 `expected_version`、不写监督审计、不检查已归档 Team；`covers()` 把 `a/b/c/*` 与 `a/b/*` 视为同级、匹配区分大小写；
+  `_git` 先截断 stderr 再隐去，跨截断点的秘密可能留下片段；向导列出该空间不可用的凭证；凭证对话框（自动填充、轮换失败清空输入、
+  无授权界面、无到期字段）；工作流 GET 不返回其默认凭证（控制台编辑会丢失）；授予用户的平台凭证在 Team 会话中只能显式指定，
+  停用后对被授权者不可见；内网自建 GitLab 在允许列表外被 SSRF 防护拒绝（设计 §9.2）。
+- 代码仓库凭证（D35 第 2 期「发布」审查延后项）：
+  - 没有按会话的发布锁，发布期间可续作 / 关闭 / 删除；发布是同步请求（CloudFront 60 秒）。
+  - 发布不检查退役 Worker（`unserved`），已归档的 Team 仍可发布；`X-Publish-Base` 取自 Agent 可写的 `project.json`（应存平台侧的准备基线）。
+  - 进行中的合并、未合并条目与新的 gitlink 按原样提交；`ls-remote` 按尾部匹配 ref；主分支前进后仍发送完整历史。
+  - GitLab 沿用 MR 时不核对 `source_project_id`；PR URL 未校验为该主机的 https 地址；分支名上限 120（计划为 100），`octopus/a.lock/b` 可通过检查。
+  - 控制台对会得到 403 的成员也显示「发布」，未绑定凭证时没有提示；发布中的 `git add` / `reset` 遵从项目本地 git 配置（clean filter、fsmonitor），
+    只在 Worker 与 Agent 不是同一系统用户时构成越权。
+  - 测试：`test_the_write_credential_never_reaches_the_worker` 的临时仓库检查在删除之后；没有真实的截断 / 篡改 / 外来基线 bundle 测试。
+  - 平台升级的最后一步「注册执行边界 Worker」以管理员密码登录：控制台改密码后须同步 `/etc/kirocrew-on/admin-password`，否则每次 `push`
+    以 401 结束（其余各步已完成）；可改为不依赖管理员密码的本机注册。
 - 源码准备失败时控制台只显示 `Worker 操作未完成 (ValueError)`：`octopus/worker.py:488` 只透传 `security.Error`，`octopus/sources.py` 的提示均为 `ValueError`（Connector 设计 §7 P1）。
 - 向导：导入 / 推荐后切换到模板时来源提示未更新；切换空间未重置推荐 Worker；推荐轮询遇 403 / 404 不停止；提交瞬间在途轮询可能回写草稿。
 - 原生入口弹窗缺少账户切换保护；`crew_url` 公网来源未规范化 `:443` 写法。
