@@ -3,12 +3,14 @@ like a credential) and exports a bundle on top of the clone's baseline; the plat
 draft pull / merge request with the bound write credential, which never reaches the execution environment."""
 import json
 from pathlib import Path
+import shutil
 import subprocess
 import tempfile
 import threading
 import unittest
 import urllib.error
 import urllib.request
+from unittest.mock import patch
 
 from octopus import sources
 from octopus.worker import serve
@@ -88,6 +90,134 @@ class WorkerBundleTests(unittest.TestCase):
     def test_a_worker_needs_its_token(self):
         self.assertEqual(self.call({"run_id": RID}, token="y" * 40)[0], 401)
 
+    # --- final review: the bundle carries every commit, so everything new since the baseline is checked -----------------
+    def agent_commit(self, message="agent"):
+        subprocess.run(["git", "-C", str(self.project), "add", "-A", "-f"], check=True)
+        subprocess.run(["git", "-C", str(self.project), "-c", "user.email=a@a", "-c", "user.name=agent", "commit", "-q",
+                        "--allow-empty", "-m", message], check=True)
+
+    def published_bytes(self, bundle):
+        """Every object of a bundle, decompressed, as one byte string."""
+        saved, bare = self.root / "seen.bundle", self.root / "seen"
+        shutil.rmtree(bare, ignore_errors=True)
+        saved.write_bytes(bundle)
+        subprocess.run(["git", "init", "-q", "--bare", str(bare)], check=True)
+        subprocess.run(["git", "-C", str(bare), "fetch", "-q", str(saved), f"refs/heads/octopus/{RID}:refs/heads/x"], check=True)
+        return subprocess.run(["git", "-C", str(bare), "cat-file", "--batch-all-objects", "--batch"], capture_output=True,
+                              check=True).stdout
+
+    def test_a_refused_secret_is_not_left_in_the_branch(self):
+        token = "ghp_" + "A1b2C3d4" * 5
+        self.write({"src/config.js": f"const token = '{token}';"})
+        self.assertEqual(json.loads(self.call({"run_id": RID})[2])["code"], "publish_secret_found")
+        self.assertEqual(git(self.project, "rev-parse", "HEAD"), self.base)   # nothing committed on refusal
+        self.write({"src/config.js": "const token = process.env.TOKEN;"})   # what the refusal tells the person to do
+        status, _, bundle = self.call({"run_id": RID})
+        self.assertEqual(status, 200, bundle[:300])
+        self.assertNotIn(token.encode(), self.published_bytes(bundle))
+        self.assertEqual(git(self.project, "status", "--porcelain"), "")   # the workspace's index matches the new HEAD
+
+    def test_what_the_agent_committed_is_checked_too(self):
+        token = "glpat-" + "Z9y8X7w6" * 3
+        self.write({"src/a.js": f"key = '{token}'"})
+        self.agent_commit("add key")
+        self.write({"src/a.js": "key = env('KEY')"})
+        self.agent_commit("remove key")   # gone from the tree, still in the history the bundle carries
+        status, _, body = self.call({"run_id": RID})
+        answer = json.loads(body)
+        self.assertEqual((status, answer["code"]), (409, "publish_secret_found"), answer)
+        self.assertIn("src/a.js", answer["error"])
+        self.assertNotIn(token, answer["error"])
+        self.assertIn("git reset --soft", answer["error"])   # how to get it out of the history
+
+        subprocess.run(["git", "-C", str(self.project), "reset", "-q", "--soft", self.base], check=True)
+        subprocess.run(["git", "-C", str(self.project), "reset", "-q"], check=True)
+        self.write({"config/.env": "DB_PASSWORD=hunter2", "web/.env.local": "X=1"})
+        self.agent_commit("env files")   # an agent may commit what the automatic commit leaves out
+        status, _, body = self.call({"run_id": RID})
+        answer = json.loads(body)
+        self.assertEqual((status, answer["code"]), (409, "publish_secret_found"), answer)
+        self.assertIn("config/.env", answer["error"])
+        self.assertIn("web/.env.local", answer["error"])
+
+    def test_every_file_is_read_as_it_is_stored(self):
+        token = "github_pat_" + "Q1w2E3r4T5" * 3
+        cases = {
+            "配置/密钥.txt": token.encode(),                       # a name git quotes in a diff
+            "assets/blob.bin": b"\x00\x01binary\x00" + token.encode(),   # a file git calls binary
+            "notes/plus.md": b"++ " + token.encode(),               # an added line that reads like a diff header
+            "app/settings.cfg": token.encode(),                      # marked -diff below
+        }
+        (self.project / ".gitattributes").write_text("*.cfg -diff\n")
+        subprocess.run(["git", "-C", str(self.project), "config", "diff.noprefix", "true"], check=True)
+        for name, data in cases.items():
+            with self.subTest(name):
+                (self.project / name).parent.mkdir(parents=True, exist_ok=True)
+                (self.project / name).write_bytes(data)
+                status, _, body = self.call({"run_id": RID})
+                answer = json.loads(body)
+                self.assertEqual((status, answer["code"]), (409, "publish_secret_found"), answer)
+                self.assertIn(name, answer["error"])
+                (self.project / name).unlink()
+
+    def test_a_secret_in_a_commit_message_is_refused(self):
+        self.write({"src/a.js": "a"})
+        key = "AKIA" + "ABCDEFGHIJKLMNOP"   # a made-up key: a secret scanner on this machine may need telling so
+        subprocess.run(["git", "-C", str(self.project), "config", "--add", "secrets.allowed", key], check=True)
+        self.agent_commit("deploy with " + key)
+        status, _, body = self.call({"run_id": RID})
+        self.assertEqual((status, json.loads(body)["code"]), (409, "publish_secret_found"))
+
+    def test_folders_left_out_are_never_read_into_git(self):
+        content = "module.exports = 'only-in-node-modules-7f3a';\n"
+        self.write({"node_modules/pkg/index.js": content, "src/app.js": "app", ".env/credentials": "x",
+                    "deploy/.env.prod/key": "k"})
+        status, headers, _ = self.call({"run_id": RID})
+        self.assertEqual(status, 200)
+        files = set(git(self.project, "ls-tree", "-r", "--name-only", headers["X-Publish-Commit"]).splitlines())
+        self.assertIn("src/app.js", files)
+        self.assertFalse({".env/credentials", "deploy/.env.prod/key"} & files, files)
+        blob = subprocess.run(["git", "hash-object", "--stdin"], input=content, capture_output=True, text=True).stdout.strip()
+        self.assertNotEqual(subprocess.run(["git", "-C", str(self.project), "cat-file", "-e", blob]).returncode, 0,
+                            "an excluded file was hashed into the object store")
+        self.assertFalse((self.project / ".git/index.lock").exists())
+
+    def test_a_bundle_too_large_is_not_left_behind(self):
+        self.write({"src/app.js": "app" * 100})
+        with patch("octopus.worker.PUBLISH_LIMIT", 10):
+            status, _, body = self.call({"run_id": RID})
+        self.assertEqual((status, json.loads(body)["code"]), (413, "publish_too_large"))
+        self.assertFalse((self.node.path(RID) / ".publish.bundle").exists())
+
+    def test_a_failure_after_the_header_only_ends_the_connection(self):
+        import socket
+        self.write({"src/app.js": "app"})
+
+        def broken(source, target, length=0):
+            target.write(source.read(10))
+            raise OSError("the disk went away")
+        server = serve(self.node, 0)
+        threading.Thread(target=server.serve_forever, daemon=True).start()
+        self.addCleanup(server.server_close)
+        self.addCleanup(server.shutdown)
+        body = json.dumps({"run_id": RID}).encode()
+        with patch("octopus.worker.shutil.copyfileobj", broken), \
+                socket.create_connection(("127.0.0.1", server.server_address[1]), timeout=30) as sock:
+            sock.sendall(b"POST /publish/bundle HTTP/1.1\r\nHost: w\r\nAuthorization: Bearer " + TOKEN.encode()
+                         + b"\r\nContent-Type: application/json\r\nContent-Length: " + str(len(body)).encode()
+                         + b"\r\n\r\n" + body)
+            data = b""
+            while chunk := sock.recv(65536):
+                data += chunk
+        self.assertTrue(data.startswith(b"HTTP/1.0 200"), data[:100])
+        self.assertEqual(data.count(b"HTTP/1."), 1, data[-300:])   # no error answer written into the bundle
+        self.assertFalse((self.node.path(RID) / ".publish.bundle").exists())
+
+    def test_a_git_timeout_is_an_error_not_a_crash(self):
+        with patch("octopus.sources.subprocess.run", side_effect=subprocess.TimeoutExpired("git", 180)):
+            with self.assertRaises(ValueError):
+                sources._git(self.project, "status")
+
 
 if __name__ == "__main__":
     unittest.main()
@@ -112,7 +242,7 @@ from tests.test_private_clone import BACKEND, GitHost, TOKEN as SECRET   # the t
 
 class FakeApi(BaseHTTPRequestHandler):
     """GitHub's repository and pulls endpoints, and GitLab's project and merge requests, kept in memory."""
-    pulls, created, seen = [], [], []
+    pulls, created, seen, refuse = [], [], [], None
 
     def answer(self, status, body):
         data = json.dumps(body).encode()
@@ -140,6 +270,8 @@ class FakeApi(BaseHTTPRequestHandler):
         FakeApi.seen.append(("POST", self.path))
         if not self.authorized():
             return self.answer(401, {"message": "Bad credentials"})
+        if FakeApi.refuse:
+            return self.answer(FakeApi.refuse, {"message": "Resource not accessible by personal access token"})
         FakeApi.created.append(body)
         number = len(FakeApi.pulls) + 1
         branch = body.get("head") or body.get("source_branch")
@@ -159,7 +291,7 @@ import urllib.parse
 class PublishCase(AccessCase):
     def setUp(self):
         super().setUp()
-        FakeApi.pulls, FakeApi.created, FakeApi.seen = [], [], []
+        FakeApi.pulls, FakeApi.created, FakeApi.seen, FakeApi.refuse = [], [], [], None
         root = Path(self.tmp.name)
         GitHost.root = root / "repos"
         self.remote = GitHost.root / "owner/app.git"
@@ -281,6 +413,32 @@ class PublishTests(PublishCase):
             self.service.publish(self.b, rid, {})
         self.assertEqual((caught.exception.status, caught.exception.code), (409, "publish_conflict"))
         self.assertEqual(self.remote_head("octopus/" + rid), theirs)
+        self.assertEqual([u["result"] for u in self.uses(rid)], ["published", "publish_conflict"])   # each use audited
+
+    def uses(self, rid):
+        with self.db.read() as db:
+            rows = db.execute("SELECT detail FROM audit WHERE action='credential.use' ORDER BY id").fetchall()
+        return [d for d in (json.loads(r["detail"]) for r in rows) if d.get("run_id") == rid and d.get("access") == "write"]
+
+    def test_a_request_that_fails_after_the_push_is_recorded(self):
+        rid, project = self.session(cred=self.cred["id"])
+        (project / "a.txt").write_text("1")
+        FakeApi.refuse = 403   # e.g. a fine-grained token without "Pull requests: write"
+        with self.assertRaises(Error) as caught:
+            self.service.publish(self.b, rid, {})
+        self.assertEqual(caught.exception.code, "credential_permission")
+        self.assertIn("octopus/" + rid, str(caught.exception))   # it says the branch is there
+        commit = self.remote_head("octopus/" + rid)
+        self.assertIsNotNone(commit)
+        published = self.service.run(self.b, rid)["publish"]
+        self.assertEqual((published["branch"], published["commit"], published["url"]), ("octopus/" + rid, commit, None))
+        self.assertIn("403", published["request_error"])
+        with self.db.read() as db:
+            self.assertIn("run.published", [r[0] for r in db.execute("SELECT kind FROM events WHERE run_id=?", (rid,))])
+        self.assertEqual([u["result"] for u in self.uses(rid)], ["pushed"])
+        FakeApi.refuse = None
+        record = self.service.publish(self.b, rid, {})   # fixed: publishing again opens the request on the same branch
+        self.assertEqual((record["commit"], record["number"], record.get("request_error")), (commit, 1, None))
 
     def test_who_and_when_one_may_publish(self):
         rid, project = self.session(cred=self.cred["id"])
@@ -386,12 +544,40 @@ class PublishHardeningTests(PublishCase):
 
 
 class ReceiveTests(unittest.TestCase):
+    def test_an_oversized_bundle_is_refused_before_it_is_stored(self):
+        class Untouched(io.RawIOBase):
+            def read(self, size=-1):
+                raise AssertionError("read before the size was checked")
+        with tempfile.TemporaryDirectory() as directory:
+            with self.assertRaises(Error) as caught:
+                publish.receive(Untouched(), publish.LIMIT + 1, Path(directory) / "bare", "octopus/run-x", "0" * 40, "0" * 40)
+            self.assertEqual((caught.exception.status, caught.exception.code), (413, "publish_too_large"))
+            self.assertEqual(list(Path(directory).rglob("*.bundle")), [])
+
+    def test_only_the_commit_the_worker_checked_is_accepted(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            subprocess.run(["git", "init", "-q", "-b", "octopus/run-x", str(root / "w")], check=True)
+            for name in ("one", "two"):
+                (root / "w" / name).write_text(name)
+                subprocess.run(["git", "-C", str(root / "w"), "add", "."], check=True)
+                subprocess.run(["git", "-C", str(root / "w"), "-c", "user.email=t@t", "-c", "user.name=t", "commit", "-q",
+                                "-m", name], check=True)
+            first = git(root / "w", "rev-parse", "HEAD~1")
+            head = git(root / "w", "rev-parse", "HEAD")
+            subprocess.run(["git", "-C", str(root / "w"), "bundle", "create", "-q", str(root / "b"), "octopus/run-x"], check=True)
+            data = (root / "b").read_bytes()
+            self.assertEqual(publish.receive(io.BytesIO(data), len(data), root / "ok", "octopus/run-x", first, head), head)
+            with self.assertRaises(Error) as caught:   # the scanned commit was HEAD~1; the bundle says otherwise
+                publish.receive(io.BytesIO(data), len(data), root / "other", "octopus/run-x", first, first)
+            self.assertEqual(caught.exception.code, "publish_invalid")
+
     def test_a_broken_bundle_publishes_nothing(self):
         with tempfile.TemporaryDirectory() as directory:
             work = Path(directory)
             for data, length in ((b"# v2 git bundle\n" + b"x" * 100, 400), (b"not a bundle at all" * 10, 190)):
                 with self.assertRaises(Error) as caught:
-                    publish.receive(io.BytesIO(data), length, work / f"bare-{length}", "octopus/run-x", "0" * 40)
+                    publish.receive(io.BytesIO(data), length, work / f"bare-{length}", "octopus/run-x", "0" * 40, "0" * 40)
                 self.assertEqual(caught.exception.code, "publish_invalid")
 
     def test_gitlab_gets_a_draft_merge_request(self):

@@ -213,6 +213,14 @@ describe("session detail", () => {
       expect(document.querySelector("#run-publish")).toHaveTextContent("已发布：octopus/run-pub · PR #7");
     });
 
+    test("a branch pushed without its pull request says so instead of linking nothing", async () => {
+      open(done({ publish: { branch: "octopus/run-pub", url: null, number: null, kind: null, reused: false, commit: "abc", at: 1,
+        by: { id: "u1", username: "fixture-owner" }, request_error: "凭证没有此操作的权限（HTTP 403）" } } as Partial<Run>));
+      await screen.findByRole("button", { name: /再次发布到仓库/ });
+      expect(document.querySelector("#run-publish")).toHaveTextContent("已推送：octopus/run-pub（拉取请求未创建：凭证没有此操作的权限（HTTP 403））");
+      expect(screen.queryByRole("link", { name: /#/ })).not.toBeInTheDocument();
+    });
+
     test("a read-only credential cannot publish, and says so", async () => {
       open(done({ credentials: { source: { ...writable, access: "read" } } } as Partial<Run>));
       expect(await screen.findByText(/凭证为只读，无法发布/)).toBeInTheDocument();

@@ -427,9 +427,11 @@ export interface CredentialBinding {
 export interface PublishRecord {
   branch: string;
   commit: string;
-  url: string;
-  number: number;
-  kind: "pull_request" | "merge_request";
+  /** null when the branch was pushed but the pull / merge request was not created (see request_error). */
+  url: string | null;
+  number: number | null;
+  kind: "pull_request" | "merge_request" | null;
+  request_error?: string;
   reused: boolean;
   at: number;
   by: { id: string; username?: string | null };

@@ -4,6 +4,7 @@ Session's repository with the bound write credential and opens a draft pull requ
 The Worker exports the branch as a bundle; the platform checks it in a temporary bare repository of its own, pushes only
 that branch and only as a fast-forward (no force, never the default branch), and reuses an open request for the branch.
 """
+import http.client
 import json
 from pathlib import Path
 import re
@@ -17,6 +18,7 @@ from . import sources
 from .security import Error, require
 
 BRANCH = re.compile(r"octopus/[A-Za-z0-9._-]+(/[A-Za-z0-9._-]+)*")
+LIMIT = 100 * 1024 * 1024   # D35 §5.2: one bundle (as the Worker's PUBLISH_LIMIT)
 
 
 def check_branch(branch, ref=None):
@@ -34,27 +36,32 @@ def _git(cwd, *args, env=None, secret=None):
         raise Error(409, "publish_failed", sources.scrub(exc, secret)) from None
 
 
-def receive(stream, length, workdir, branch, base):
+def receive(stream, length, workdir, branch, base, commit):
     """Store exactly ``length`` bytes of the Worker's bundle and fetch ``branch`` from it into a new bare repository at
-    ``workdir``; the bundle must be complete, valid, and built on the clone's baseline ``base``."""
+    ``workdir``; the bundle must be at most LIMIT, complete, valid, built on the clone's baseline ``base``, and end at the
+    ``commit`` the Worker checked."""
+    require(length > 0, "待发布的内容没有完整收到", 409, "publish_invalid")
+    require(length <= LIMIT, f"待发布的内容超过 {LIMIT // 1048576} MB", 413, "publish_too_large")
     workdir = Path(workdir)
     workdir.mkdir(parents=True)
     _git(workdir, "init", "-q", "--bare")
     bundle, remaining = workdir / "incoming.bundle", length
-    with open(bundle, "wb") as sink:
-        while remaining > 0:
-            chunk = stream.read(min(remaining, 1 << 20))
-            if not chunk:
-                break
-            sink.write(chunk)
-            remaining -= len(chunk)
-    require(remaining == 0, "待发布的内容没有完整收到", 409, "publish_invalid")
     try:
+        with open(bundle, "wb") as sink:
+            while remaining > 0:
+                chunk = stream.read(min(remaining, 1 << 20))
+                if not chunk:
+                    break
+                sink.write(chunk)
+                remaining -= len(chunk)
+        require(remaining == 0, "待发布的内容没有完整收到", 409, "publish_invalid")
         sources._git(workdir, "bundle", "verify", "-q", str(bundle))
         sources._git(workdir, "fetch", "-q", str(bundle), f"refs/heads/{branch}:refs/heads/{branch}")
         head = sources._git(workdir, "rev-parse", "--verify", f"refs/heads/{branch}^{{commit}}")
         sources._git(workdir, "merge-base", "--is-ancestor", base, head)
-    except ValueError:
+        if head != commit:
+            raise ValueError("not the commit the Worker checked")
+    except (ValueError, OSError, http.client.HTTPException):   # a connection that broke off reads as an incomplete bundle
         raise Error(409, "publish_invalid", "待发布的内容无效（不完整、被改动或不基于会话克隆时的提交）") from None
     finally:
         bundle.unlink(missing_ok=True)
@@ -93,8 +100,12 @@ def _api(method, url, secret, kind, body=None):
     except urllib.error.HTTPError as exc:
         with exc:
             detail = exc.read()[:500].decode(errors="replace")
-        if exc.code in (401, 403):
-            raise Error(409, "credential_rejected", f"托管方拒绝了凭证（HTTP {exc.code}）") from None
+        if exc.code == 401:
+            raise Error(409, "credential_rejected", "托管方拒绝了凭证（HTTP 401）") from None
+        if exc.code == 403:   # a valid token without this permission (or the host's rate limit)
+            raise Error(409, "credential_permission", sources.scrub(
+                f"凭证没有此操作的权限（HTTP 403：{detail[:200]}）：GitHub 细粒度令牌需对该仓库有 Pull requests 读写权限，"
+                "GitLab 令牌需 api 范围", secret)) from None
         raise Error(409, "publish_failed", sources.scrub(f"托管方返回 HTTP {exc.code}：{detail}", secret)) from None
     except (urllib.error.URLError, OSError, ValueError):
         raise Error(502, "publish_failed", "无法连接托管方的 API") from None

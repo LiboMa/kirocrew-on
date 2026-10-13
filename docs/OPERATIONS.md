@@ -240,12 +240,17 @@ CloudFront 只使用 us-east-1 的证书）：分发加上别名与证书（SNI�
 Draft PR（GitHub）/ Draft MR（GitLab）。
 
 - **前提**：会话绑定一枚写权限（`access: write`）、仍可用于该会话的凭证。只有会话创建者、Team owner 或管理员可以发布。
-- **Worker**：把工作区未提交的改动提交到会话分支（作者 `KiroCrew ON`；不含 `.env` 与依赖、缓存目录，即使未被 `.gitignore` 忽略），
-  新增内容中有疑似凭证（GitHub / GitLab Token、AWS Key、私钥）时拒绝并列出文件，然后导出带完整历史的 bundle（≤ 100 MB）。
-  写凭证不交给 Worker。
-- **平台**：在数据目录的临时裸仓库中核对 bundle（完整、基于会话克隆时的提交），只推送这一个分支：不 force，远端分支被他人改动时
-  拒绝（409 `publish_conflict`）。推送与托管方 API 用同一套加固：不读全局 git 配置、只走 HTTPS、不跟随跳转。
-  结果写入会话（`publish`）与变更记录 `run.published`，审计 `credential.use`（`access: write`）。
+- **Worker**：在临时索引中把工作区未提交的改动做成一个提交（作者 `KiroCrew ON`；不含 `.env` 文件或目录与依赖、缓存目录，即使未被
+  `.gitignore` 忽略——这些目录也不会被读入 Git）。bundle 带克隆以来的全部提交，所以检查的是克隆以来新增的每个对象的原始内容
+  （任何文件名与文件类型、二进制、提交说明）和新提交引入的每个路径：有疑似凭证（GitHub / GitLab Token、AWS Key、私钥）或提交了
+  `.env` 时拒绝并列出文件（不回显内容），会话分支与工作区索引都不动；在已提交历史中的，需改写这些提交后再发布。检查通过后才把
+  提交放到会话分支上，导出带完整历史的 bundle（≤ 100 MB）。写凭证不交给 Worker。
+- **平台**：先按 Content-Length 拒绝超过 100 MB 的 bundle（413，不写盘）；在数据目录的临时裸仓库中核对 bundle（完整、基于会话
+  克隆时的提交、正是 Worker 检查过的提交），只推送这一个分支：不 force，远端分支被他人改动时拒绝（409 `publish_conflict`）。
+  推送与托管方 API 用同一套加固：不读全局 git 配置、只走 HTTPS、不跟随跳转。
+  结果写入会话（`publish`）与变更记录 `run.published`；每次使用写凭证都审计 `credential.use`（`access: write`，`result`：
+  `published` / `pushed` / 失败的错误码）。分支已推送而 PR / MR 未创建时（如令牌缺 Pull requests 权限，409 `credential_permission`），
+  会话记下分支与原因（`publish.request_error`），处理后再次发布即沿用该分支。
 
 ### 远程预览（D36 第 2 期）
 

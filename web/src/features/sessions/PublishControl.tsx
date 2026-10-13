@@ -29,9 +29,9 @@ export function PublishControl({ run }: { run: Run }) {
   };
   return (
     <p id="run-publish" className="text-xs text-muted-foreground">
-      {published && (
+      {published?.url ? (
         <>已发布：{published.branch} · <a className="underline" href={published.url} target="_blank" rel="noreferrer">{label(published)}</a>{" "}</>
-      )}
+      ) : published && <>已推送：{published.branch}（拉取请求未创建：{published.request_error}）{" "}</>}
       {source.access === "read" ? <span>凭证为只读，无法发布。</span>
         : !source.unavailable && run.lifecycle === "open" && SETTLED.has(run.status) && (
           <Button type="button" size="xs" variant="outline" disabled={busy} onClick={publish}>

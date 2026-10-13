@@ -97,8 +97,10 @@ KiroCrew ON 在远端执行开发任务：KiroCrew 的 Kiro Agent 先识别意�
   或用 `octopus_continue` 的 `credentials: {"source": "<ID>"}` 先换凭证再续作。
 - 发布：会话结束后，用户同意时调用 `octopus_publish`（`run_id`，可选 `branch`、`title`），把成果推送到 `octopus/<run-id>` 并创建或沿用
   Draft PR / MR，把返回的链接告诉用户。需要会话绑定一枚写权限的凭证（409 `credential_read_only` 时请用户换一枚）；
-  409 `publish_secret_found` 表示改动中有疑似凭证，按列出的文件处理后再发布；409 `publish_conflict` 表示远端分支被他人改动，
-  不要强推，改用新的 `branch` 或请用户合并。
+  409 `publish_secret_found` 表示改动或已提交的历史中有疑似凭证（或提交了 `.env`），按列出的文件处理后再发布——在历史中的
+  需改写这些提交（错误里给出做法）；409 `publish_conflict` 表示远端分支被他人改动，不要强推，改用新的 `branch` 或请用户合并。
+  错误写着「分支 … 已推送，但 Draft PR / MR 未创建」时，分支已在远端：请用户补上凭证权限（GitHub 细粒度令牌需 Pull requests
+  读写）后再次发布，会沿用该分支。
 
 ## 5．预览产出
 

@@ -45,7 +45,7 @@ def write(path, value):
 ARCHIVE_LIMIT = 200 * 1024 * 1024   # D36 §4.2: before compression
 ARCHIVE_SKIP = workspace.SKIP_DIRS
 ENV_KEPT = workspace.ENV_KEPT
-PUBLISH_LIMIT = 100 * 1024 * 1024   # D35 §5.2: one bundle
+PUBLISH_LIMIT = 100 * 1024 * 1024   # D35 §5.2: one bundle (as publish.LIMIT on the platform)
 
 
 def briefing(requirement, contract):
@@ -297,32 +297,49 @@ class Worker:
                 "links": sorted(links), "skipped": skipped}
 
     def publish_plan(self, body):
-        """What a publish exports (D35 §5.2): pending changes committed on the Session's branch (without what a download
-        leaves out), refused when nothing is new or when a credential seems to be in it."""
+        """What a publish exports (D35 §5.2): the Session's branch, with the workspace's pending changes committed (without
+        what a download leaves out). The bundle carries every commit, so everything new since the clone's baseline is
+        checked first, and the branch moves only when nothing in it looks like a credential or a .env file."""
         run = self.path(body["run_id"])
         project, record = workspace.project_dir(run), workspace.read_record(run)
         base, branch = record.get("commit"), record.get("branch")
         require(base and branch, "此会话的项目没有 Git 基线，无法发布", 409, "nothing_to_publish")
         message = str(body.get("message") or "KiroCrew ON：发布会话成果")[:300]
         try:
-            workspace.commit_pending(project, message, branch)
+            old = workspace._git(project, "rev-parse", "--verify", "HEAD^{commit}")
+            head = workspace.publish_candidate(project, message, branch, run)
+            require(head != base, "没有可发布的改动：工作区与克隆时相同", 409, "nothing_to_publish")
+            committed = workspace.unpublishable(project, base, old) if old != base else []
+            pending = workspace.unpublishable(project, old, head) if head != old else []
+            if committed or pending:
+                raise Error(409, "publish_secret_found", "未发布：" + "；".join(
+                    ([f"工作区的这些文件中有疑似凭证（移除后再发布）：{'、'.join(pending[:20])}"] if pending else [])
+                    + ([f"已提交的历史中有疑似凭证或 .env 文件：{'、'.join(committed[:20])}（需改写这些提交后再发布，例如让 Agent "
+                        f"执行 git reset --soft {base[:12]} 后去掉它们重新提交）"] if committed else [])))
+            workspace.advance(project, branch, head, old)
         except ValueError as exc:
             raise Error(409, "publish_failed", workspace.scrub(exc)) from None
-        head = workspace._git(project, "rev-parse", "HEAD")
-        require(head != base, "没有可发布的改动：工作区与克隆时相同", 409, "nothing_to_publish")
-        found = workspace.suspicious(project, base)
-        require(not found, "检测到疑似凭证，未发布（请从这些文件中移除后再发布）：" + "、".join(found[:20]), 409,
-                "publish_secret_found")
         return {"project": project, "base": base, "head": head, "branch": branch, "run": run}
 
     def publish_bundle(self, plan):
         """The bundle file of ``plan``: the branch with its whole history — the platform holds no copy of the repository
-        to satisfy a baseline prerequisite; it checks the baseline is an ancestor, and the push sends only what is new.
-        The caller streams and removes it."""
+        to satisfy a baseline prerequisite; it checks the baseline is an ancestor, and the push sends only what is new —
+        and exactly the commit that was checked. The caller streams and removes it."""
         bundle = plan["run"] / ".publish.bundle"
         bundle.unlink(missing_ok=True)
-        workspace._git(plan["project"], "bundle", "create", "-q", str(bundle), plan["branch"])
-        require(bundle.stat().st_size <= PUBLISH_LIMIT, f"待发布的内容超过 {PUBLISH_LIMIT // 1048576} MB", 413, "publish_too_large")
+        try:
+            ref = "refs/heads/" + plan["branch"]
+            workspace._git(plan["project"], "bundle", "create", "-q", str(bundle), ref)
+            require(workspace._git(plan["project"], "bundle", "list-heads", str(bundle)).split() == [plan["head"], ref],
+                    "发布期间工作区的分支被改动，未发布，请重试", 409, "publish_failed")
+            require(bundle.stat().st_size <= PUBLISH_LIMIT, f"待发布的内容超过 {PUBLISH_LIMIT // 1048576} MB", 413,
+                    "publish_too_large")
+        except ValueError as exc:
+            bundle.unlink(missing_ok=True)
+            raise Error(409, "publish_failed", workspace.scrub(exc)) from None
+        except BaseException:
+            bundle.unlink(missing_ok=True)
+            raise
         return bundle
 
     def archive_summary(self, body):
@@ -837,9 +854,13 @@ def serve(worker, port=8928, host="127.0.0.1"):
                         self.send_header("X-Publish-Base", plan["base"])
                         self.send_header("X-Publish-Branch", plan["branch"])
                         self.send_header("Cache-Control", "no-store")
+                        self.send_header("Connection", "close")
                         self.end_headers()
+                        self.close_connection = True
                         with open(bundle, "rb") as source:
                             shutil.copyfileobj(source, self.wfile, 1 << 20)
+                    except Exception:   # after the 200 header only the connection can end: the platform sees a short bundle
+                        pass
                     finally:
                         bundle.unlink(missing_ok=True)
                     return

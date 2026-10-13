@@ -926,25 +926,45 @@ class Service:
         response = worker_stream(config, "/publish/bundle", {"run_id": rid, "message": f"KiroCrew ON：{title}（{rid}）"},
                                  timeout=120)
         with response, tempfile.TemporaryDirectory(dir=self.db.root, prefix=".publish-") as work:
-            commit = publishing.receive(response, int(response.headers.get("Content-Length") or 0), Path(work) / "repo",
-                                        response.headers["X-Publish-Branch"], response.headers["X-Publish-Base"])
-            pushed = publishing.push(Path(work) / "repo", source["url"], branch, commit, auth)
-        request = publishing.pull_request(row["kind"], host, path, branch, source.get("ref"), title,
-                                          f"由 KiroCrew ON 会话 {rid} 发布。", secret)
+            headers = response.headers
+            commit = publishing.receive(response, int(headers.get("Content-Length") or 0), Path(work) / "repo",
+                                        headers.get("X-Publish-Branch") or "", headers.get("X-Publish-Base") or "",
+                                        headers.get("X-Publish-Commit") or "")
+            try:
+                pushed = publishing.push(Path(work) / "repo", source["url"], branch, commit, auth)
+            except Error as exc:   # the credential was used all the same
+                with self.db.transaction() as db:
+                    self._used(db, actor, row["id"], rid, path, branch, exc.code)
+                raise
+        # From here the branch is on the remote: what follows is recorded whatever the pull / merge request does.
+        failure, request = None, {"url": None, "number": None, "kind": None, "reused": False}
+        try:
+            request = publishing.pull_request(row["kind"], host, path, branch, source.get("ref"), title,
+                                              f"由 KiroCrew ON 会话 {rid} 发布。", secret)
+        except Error as exc:
+            failure = exc
         record = {"branch": branch, "commit": commit, "url": request["url"], "number": request["number"],
                   "kind": request["kind"], "reused": request["reused"], "created_branch": pushed["created"], "at": time.time(),
-                  "by": {"id": actor["id"], "username": actor.get("username")}}
+                  "by": {"id": actor["id"], "username": actor.get("username")}, **({"request_error": str(failure)} if failure else {})}
         with self.db.transaction() as db:
             snapshot = json.loads(db.execute("SELECT snapshot FROM runs WHERE id=?", (rid,)).fetchone()["snapshot"])
             snapshot["publish"] = record
             journal.change(db, "runs", rid, journal.person(actor), "run.published",
                            event={**{k: record[k] for k in ("branch", "commit", "url", "number", "reused")},
-                                  "request": record["kind"]},
+                                  "request": record["kind"], **({"error": record["request_error"]} if failure else {})},
                            snapshot=dumps(snapshot))
-            db.execute("UPDATE credentials SET last_used=? WHERE id=?", (time.time(), row["id"]))
-            audit(db, actor, "credential.use", "credential", row["id"],
-                  {"run_id": rid, "repo": path, "access": "write", "branch": branch})
+            self._used(db, actor, row["id"], rid, path, branch, "pushed" if failure else "published")
+        if failure:
+            what = "Draft PR" if row["kind"] == "github_pat" else "Draft MR"
+            raise Error(failure.status, failure.code, f"分支 {branch} 已推送，但 {what} 未创建：{failure}。处理后再次发布即可（沿用该分支）")
         return record
+
+    @staticmethod
+    def _used(db, actor, credential, rid, repo, branch, result):
+        """Every use of a write credential is audited, whatever came of it (D35 §6)."""
+        db.execute("UPDATE credentials SET last_used=? WHERE id=?", (time.time(), credential))
+        audit(db, actor, "credential.use", "credential", credential,
+              {"run_id": rid, "repo": repo, "access": "write", "branch": branch, "result": result})
 
     def rebind(self, actor, rid, body):
         """Change or remove a Session's source credential (spec §4): its creator, a Team owner or an admin, with a

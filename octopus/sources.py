@@ -15,6 +15,7 @@ import re
 import shlex
 import shutil
 import subprocess
+import threading
 import time
 from urllib.parse import urlsplit
 import uuid
@@ -30,44 +31,129 @@ SUSPICIOUS = re.compile(rb"github_pat_[A-Za-z0-9_]{20,}|gh[pousr]_[A-Za-z0-9]{30
                         rb"|-----BEGIN [A-Z ]*PRIVATE KEY-----")
 
 
+def env_file(name):
+    """A .env file or folder (or .env.<anything>), which holds secrets; the examples stay."""
+    return (name == ".env" or name.startswith(".env.")) and name not in ENV_KEPT
+
+
 def left_out(path):
-    """Whether a project path is never packed or published: a dependency or cache folder, or a .env file."""
+    """Whether a project path is never packed or published: a dependency or cache folder, or a .env file or folder."""
     parts = path.split("/")
-    name = parts[-1]
-    return any(part in SKIP_DIRS for part in parts[:-1]) \
-        or any(parts[i:i + 2] == [".next", "cache"] for i in range(len(parts) - 1)) \
-        or ((name == ".env" or name.startswith(".env.")) and name not in ENV_KEPT)
+    return any(part in SKIP_DIRS or env_file(part) for part in parts[:-1]) or env_file(parts[-1]) \
+        or any(parts[i:i + 2] == [".next", "cache"] for i in range(len(parts) - 1))
 
 
-def commit_pending(project, message, branch):
-    """Commit the workspace's pending changes on ``branch`` for publishing, without what a download leaves out (a .env
-    or dependency folder the project forgot to ignore stays in the workspace, uncommitted). The new commit, or None."""
+# The same rules as git pathspecs: excluded folders are never even read into git's object store.
+LEFT_OUT = tuple(f":(exclude,glob)**/{name}/**" for name in sorted(SKIP_DIRS)) + (
+    ":(exclude,glob)**/.next/cache/**", ":(exclude,glob)**/.env", ":(exclude,glob)**/.env/**",
+    ":(exclude,glob)**/.env.*", ":(exclude,glob)**/.env.*/**")
+KEPT = tuple(f":(glob)**/{name}" for name in sorted(ENV_KEPT))
+COMMITTER = ("-c", "user.name=KiroCrew ON", "-c", "user.email=kirocrew-on@localhost", "-c", "commit.gpgsign=false")
+OVERLAP = 4096   # longer than any match SUSPICIOUS needs, so a match across two read chunks is still found
+
+
+def publish_candidate(project, message, branch, scratch):
+    """The commit a publish offers: HEAD plus the workspace's pending changes, without what a download leaves out (a .env
+    or dependency folder the project forgot to ignore stays in the workspace, uncommitted). Built in a temporary index in
+    ``scratch`` (outside the project) and not yet on any branch: the workspace's branch and index move only once the
+    commit has been checked (``advance``). HEAD itself when nothing is pending."""
     current = _git(project, "rev-parse", "--abbrev-ref", "HEAD")
     if current != branch:
         raise ValueError(f"工作区不在分支 {branch}（当前 {current}），未发布")
-    _git(project, "add", "-A")
-    staged = [p for p in _git(project, "diff", "--cached", "--name-only", "-z").split("\0") if p]
-    dropped = [p for p in staged if left_out(p)]
-    for start in range(0, len(dropped), 200):
-        _git(project, "reset", "-q", "--", *dropped[start:start + 200])   # back to HEAD's version (or unstaged)
-    if not _git(project, "diff", "--cached", "--name-only"):
-        return None
-    _git(project, "-c", "user.name=KiroCrew ON", "-c", "user.email=kirocrew-on@localhost", "-c", "commit.gpgsign=false",
-         "commit", "-q", "--no-verify", "-m", message)
-    return _git(project, "rev-parse", "HEAD")
+    head = _git(project, "rev-parse", "--verify", "HEAD^{commit}")
+    index = Path(scratch) / ".publish-index"
+    env = {"GIT_INDEX_FILE": str(index)}
+    for leftover in (index, index.with_name(index.name + ".lock")):   # from an interrupted publish
+        leftover.unlink(missing_ok=True)
+    try:
+        _git(project, "read-tree", head, env=env)
+        _git(project, "add", "-A", "--", ".", *LEFT_OUT, env=env)
+        kept = [path for path in _git_bytes(project, "ls-files", "-z", "-o", "-m", "-d", "--exclude-standard", "--", *KEPT,
+                                            env=env).split(b"\0") if path and not left_out(path.decode(errors="replace"))]
+        if kept:
+            _git(project, "add", "-A", "--", *(b":(literal)" + path for path in kept), env=env)
+        tree = _git(project, "write-tree", env=env)
+    finally:
+        for leftover in (index, index.with_name(index.name + ".lock")):
+            leftover.unlink(missing_ok=True)
+    if tree == _git(project, "rev-parse", head + "^{tree}"):
+        return head
+    return _git(project, *COMMITTER, "commit-tree", tree, "-p", head, "-m", message)   # no hooks, no signing
 
 
-def suspicious(project, base):
-    """Files whose added lines since ``base`` look like a credential (only the names, never the content)."""
-    diff = subprocess.run(["git", "diff", "--no-color", "--no-ext-diff", "-U0", f"{base}..HEAD"], cwd=project,
-                          capture_output=True, timeout=120, stdin=subprocess.DEVNULL).stdout
-    found, current = [], None
-    for line in diff.split(b"\n"):
-        if line.startswith(b"+++ "):
-            current = line[6:].decode(errors="replace") if line.startswith(b"+++ b/") else None
-        elif line.startswith(b"+") and current and current not in found and SUSPICIOUS.search(line):
-            found.append(current)
-    return found
+def unpublishable(project, base, head):
+    """What in ``base..head`` must not be published, as names to show (never content): every object new since ``base`` is
+    read as git stores it — any file type, any name, every commit message — and every path a new commit introduces is
+    checked for a .env, so a secret committed and later removed is found in the history the bundle carries. Fails
+    closed: any git failure is an error, not a pass."""
+    commits = _git(project, "rev-list", head, "--not", base).split()
+    objects = _git(project, "rev-list", "--objects", "--no-object-names", head, "--not", base).split()
+    if not commits:
+        return []
+    new, introduced, found = set(objects), {}, []   # introduced: new blob → the paths new commits put it at
+    tokens = _git_bytes(project, "diff-tree", "--stdin", "-r", "-z", "-m", "--root", "--no-renames", "--no-commit-id",
+                        stdin="".join(c + "\n" for c in commits).encode()).split(b"\0")
+    i = 0
+    while i < len(tokens):
+        fields = tokens[i][1:].split(b" ") if tokens[i].startswith(b":") else []
+        if len(fields) == 5 and i + 1 < len(tokens):   # ":<mode> <mode> <sha> <sha> <status>", then the path
+            sha, path = fields[3].decode(), tokens[i + 1].decode(errors="replace")
+            if sha in new:
+                introduced.setdefault(sha, set()).add(path)
+                if any(env_file(part) for part in path.split("/")):
+                    found.append(path)
+            i += 2
+        else:
+            i += 1
+    for sha, kind in _suspicious_objects(project, objects):
+        found.extend([f"提交 {sha[:7]} 的说明"] if kind == "commit" else sorted(introduced.get(sha) or {sha[:12]}))
+    return list(dict.fromkeys(found))
+
+
+def _suspicious_objects(project, objects):
+    """(sha, type) of the blobs and commits among ``objects`` whose stored bytes match SUSPICIOUS, read through one
+    ``git cat-file --batch`` in chunks (a large file is never held whole)."""
+    hits = []
+    with subprocess.Popen(["git", "cat-file", "--batch"], cwd=project, stdin=subprocess.PIPE, stdout=subprocess.PIPE,
+                          stderr=subprocess.DEVNULL, env={**os.environ, "GIT_TERMINAL_PROMPT": "0"}) as process:
+        def feed():
+            try:
+                process.stdin.write("".join(o + "\n" for o in objects).encode())
+                process.stdin.close()
+            except (OSError, ValueError):   # git ended, or the pipe was closed after a failure
+                pass
+        threading.Thread(target=feed, daemon=True).start()
+        try:
+            for _ in objects:
+                header = process.stdout.readline().split()
+                if len(header) != 3:
+                    raise ValueError("Git 对象读取失败：" + b" ".join(header).decode(errors="replace")[:200])
+                sha, kind, remaining = header[0].decode(), header[1].decode(), int(header[2])
+                tail, hit = b"", False
+                while remaining:
+                    chunk = process.stdout.read(min(remaining, 1 << 20))
+                    if not chunk:
+                        raise ValueError("Git 对象读取中断")
+                    remaining -= len(chunk)
+                    window = tail + chunk
+                    hit = hit or (kind != "tree" and SUSPICIOUS.search(window) is not None)
+                    tail = window[-OVERLAP:]
+                process.stdout.read(1)   # the newline after each object
+                if hit:
+                    hits.append((sha, kind))
+        finally:
+            process.kill()
+    return hits
+
+
+def advance(project, branch, commit, old):
+    """Put the checked ``commit`` on ``branch`` (still at ``old``) and the workspace's index to match; files untouched."""
+    if commit == old:
+        return
+    if _git(project, "rev-parse", "--verify", "HEAD^{commit}") != old \
+            or _git(project, "rev-parse", "--abbrev-ref", "HEAD") != branch:
+        raise ValueError("发布期间工作区的分支被改动，未发布，请重试")
+    _git(project, "reset", "-q", "--mixed", commit)
 
 
 def scrub(text, secret=None):
@@ -126,13 +212,20 @@ def _write(run, value):
 
 
 def _git(cwd, *args, env=None):
+    return _git_bytes(cwd, *args, env=env).decode(errors="replace").strip()
+
+
+def _git_bytes(cwd, *args, env=None, stdin=None):
     env = {**os.environ, "GIT_TERMINAL_PROMPT": "0", **(env or {})}
-    result = subprocess.run(["git", *args], cwd=cwd, stdin=subprocess.DEVNULL,
-                            capture_output=True, text=True, timeout=180, env=env)
+    try:
+        result = subprocess.run(["git", *args], cwd=cwd, input=stdin, stdin=None if stdin is not None else subprocess.DEVNULL,
+                                capture_output=True, timeout=180, env=env)
+    except subprocess.TimeoutExpired:
+        raise ValueError(f"Git 操作超时（{args[0] if args else 'git'}，180 秒）") from None
     if result.returncode:
         raise ValueError(f"Git 操作失败（exit {result.returncode}）："
-                         + (result.stderr.strip() or result.stdout.strip())[-3000:])
-    return result.stdout.strip()
+                         + (result.stderr.strip() or result.stdout.strip())[-3000:].decode(errors="replace"))
+    return result.stdout
 
 
 def normalize_source(source):
