@@ -6,9 +6,11 @@ Claude Code 与 Kiro CLI 用 `octopus connect` 自动配置（§2），其他客
 ## 1．共同部分
 
 - **平台地址**：`https://<分发域名>.cloudfront.net`（`deploy/aws/deploy.sh status` 显示），或 SSM 隧道 `http://localhost:18918`。
-- **Token**：`octopus connect` 会提示输入密码，登录后创建一枚 30 天有效、只有「读取与提交开发」权限的 Token。
-  也可以先在控制台右上角菜单「API 与 Coding Agent 接入」创建（权限选「读取与提交开发」），设为环境变量 `OCTOPUS_API_TOKEN`。
-  不要使用管理员 Token。
+- **Token**：`octopus connect --username <你的用户名>` 提示输入密码，以本人账号登录后创建一枚 30 天有效的 Token
+  （`read, execute, manage`：查看、提交、管理自己的工作流），随后登出这次登录。未给 `--username` 时交互询问。
+  也可以先在控制台右上角菜单「API 与 Coding Agent 接入」创建，设为环境变量 `OCTOPUS_API_TOKEN`。
+  平台管理员需要经 Agent 管理用户、Team、执行环境时加 `--admin`：Token 另含 `admin`、7 天有效，MCP 才会列出管理员工具；
+  这枚 Token 能停用用户、更换执行环境，只在本人设备上使用。
 - **MCP 服务器**（stdio，所有客户端相同）：
 
   | 字段 | 值 |
@@ -28,9 +30,9 @@ Claude Code 与 Kiro CLI 用 `octopus connect` 自动配置（§2），其他客
 
 ```bash
 # Claude Code：MCP 服务器写入 user 范围，Skill 写入 ~/.claude/skills/kirocrew-on/
-.venv/bin/python -m octopus connect claude --url <平台地址>
+.venv/bin/python -m octopus connect claude --url <平台地址> --username <你的用户名>
 # Kiro CLI：默认 workspace 范围，MCP 写入 <项目>/.kiro/settings/mcp.json，Skill 写入 <项目>/.kiro/skills/kirocrew-on/
-.venv/bin/python -m octopus connect kiro --url <平台地址> --project <项目目录>
+.venv/bin/python -m octopus connect kiro --url <平台地址> --username <你的用户名> --project <项目目录>
 ```
 
 Kiro 默认用 workspace 范围：本机上 KiroCrew 自己的 kiro Agent 共用 `~/.kiro`，全局配置会让它们也加载这个服务器。
@@ -88,4 +90,5 @@ env = { OCTOPUS_API_TOKEN = "<Token>", PYTHONPATH = "<kirocrew-on>" }
 ## 5．安全
 
 - Token 以明文保存在客户端配置中。项目内的配置（`.kiro/settings/mcp.json`、`opencode.json`）要加入项目的 `.gitignore`。
-- Token 30 天有效，可在控制台「API 与 Coding Agent 接入」撤销；不再使用的客户端及时撤销其 Token。
+- Token 30 天有效（`--admin` 为 7 天），可在控制台「API 与 Coding Agent 接入」撤销；不再使用的客户端及时撤销其 Token。
+- MCP 工具出错时返回结构化的 `{status, code, error}`（401 重新连接、403 缺角色或 scope、404 不存在或无权查看、409 状态不允许）。

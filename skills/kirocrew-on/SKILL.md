@@ -19,19 +19,21 @@ KiroCrew ON 在远端执行开发任务：KiroCrew 的 Kiro Agent 先识别意�
 能看到 `octopus_status`、`octopus_start` 等工具时，跳到第 2 节。看不到时，当前客户端还没连接：
 
 1. 不要自己读取密码文件或创建 Token。连接要用用户的账号，由用户输入密码或提供 Token。
-2. 请用户在终端执行与当前客户端对应的命令（命令会登录并创建一枚 30 天有效、只有读取与执行权限的 Token，
-   写入 MCP 配置并安装本 Skill）：
+2. 请用户在终端执行与当前客户端对应的命令（命令以用户本人的账号登录，创建一枚 30 天有效的 Token
+   ——查看、提交与管理自己的工作流——然后登出这次登录，写入 MCP 配置并安装本 Skill）：
 
    ```bash
    cd {{KIROCREW_ON_REPO}}
    # Claude Code（user 范围，所有目录可用）
-   .venv/bin/python -m octopus connect claude --url {{OCTOPUS_URL}}
+   .venv/bin/python -m octopus connect claude --url {{OCTOPUS_URL}} --username <用户名>
    # Kiro CLI（workspace 范围，只在该项目目录生效）
-   .venv/bin/python -m octopus connect kiro --url {{OCTOPUS_URL}} --project <项目目录>
+   .venv/bin/python -m octopus connect kiro --url {{OCTOPUS_URL}} --username <用户名> --project <项目目录>
    ```
 
-   - 命令会提示输入密码。不便交互时，用户可先在控制台右上角菜单「API 与 Coding Agent 接入」创建 Token
-     （权限选「读取与提交开发」），设为环境变量 `OCTOPUS_API_TOKEN` 后再执行，命令直接使用该 Token。
+   - 命令会提示输入密码。不便交互时，用户可先在控制台右上角菜单「API 与 Coding Agent 接入」创建 Token，
+     设为环境变量 `OCTOPUS_API_TOKEN` 后再执行，命令直接使用该 Token。
+   - 平台管理员需要经 Agent 管理用户、Team 或执行环境时，可加 `--admin`：Token 额外含 admin、7 天有效。
+     这枚 Token 能停用用户、更换 Team 的执行环境，只在本人设备上使用；不需要管理时用普通连接。
    - 在 Claude Code 中，可以建议用户输入 `! <命令>` 在当前会话里运行。
    - Codex、OpenCode、Kiro IDE 或其他 MCP 客户端：按 `{{KIROCREW_ON_REPO}}/docs/CONNECT.md` 手动配置。
 3. 连接后要**新开一个会话（或重启客户端）**才会加载这些工具；告诉用户这一点，不要假装已经可以调用。
@@ -57,7 +59,9 @@ KiroCrew ON 在远端执行开发任务：KiroCrew 的 Kiro Agent 先识别意�
   `recovery.latest`（最近一次纠错决定）、各任务 `status` 与最近一次尝试 `latest`（`decision`、`summary`、`findings`、交接文件），以及最近 10 条事件。
 - 需要某次尝试的原始输出或完整证据时才传 `detail: true`；完整记录可能有十几万字符，超出客户端的输出上限。
 - 任务通常需要几分钟到几十分钟；每 30–60 秒查询一次，向用户汇报真实状态。状态不是 `completed` 时不要宣称完成。
-- `octopus_runs` 列出用户可见的全部会话。
+- `octopus_runs` 列出用户可见的全部会话；`octopus_me` 返回当前身份、是否管理员、Token scope 与所在 Team。
+- `octopus_changes`（传 `run_id`）列出会话的变更记录：谁（用户与客户端，或 Engine / Worker / KiroCrew / 协调者）在什么时候改了什么、
+  前后值与原因；`who: "user"` 只看人的操作。用户问“谁停止了这个会话”“上一轮改了什么设置”时用它。
 - `octopus_revisions`（传 `run_id`）列出修订历史（创建、规划、续作、自动纠错）；加 `to`（以及可选的 `from`）返回两版之间需求与各任务的变化：工具、模型等字段的前后值，以及 Prompt 新增（+）与删除（-）的行。用户问“上一轮改了什么”时用它。
 - `octopus_observe`（传 `run_id`）读取原生 KiroCrew 会话里协调者与子 Agent 的最近对话（默认 20 条，单条超过 4000 字截断；`has_more` 为 true 时传 `before: next_before` 读更早的），用来向用户说明 Agent 正在做什么；不需要打开 KiroCrew。
 
@@ -66,7 +70,7 @@ KiroCrew ON 在远端执行开发任务：KiroCrew 的 Kiro Agent 先识别意�
 | 状态 | 含义与处理 |
 |---|---|
 | `running` / `diagnosing` | 正在执行或自动诊断返工，继续等待 |
-| `waiting_worker` | 还没有 Worker 执行，或原来的执行环境已更换、已移出该空间、已停用或已退役（`error` 写明原因）：把 `attention.title` / `attention.action` 告诉用户。`attention.workers` 为 0 时该空间没有可用的执行环境（尚未分配或已停用），请管理员分配或启用，或改在个人空间重新提交；大于 0 时请用户选择，或在 `octopus_start` 中指定 `worker_id` |
+| `waiting_worker` | 还没有 Worker 执行，或原来的执行环境已更换、已移出该空间、已停用或已退役（`error` 写明原因）：把 `attention.title` / `attention.action` 告诉用户。`attention.workers` 为 0 时该空间没有可用的执行环境（尚未分配或已停用），请管理员分配或启用，或改在个人空间重新提交；大于 0 时用 `octopus_environments`（Team 会话传 `team_id`）列出可用环境，经用户确认后用 `octopus_assign_worker` 分配 |
 | `blocked` / `failed` | 读 `attention.title` / `attention.action` 告诉用户；可用 `octopus_recover` 诊断修复，或用 `octopus_continue` 修改后重跑 |
 | `completed` | 完成；用 `octopus_preview` 给出预览 |
 
@@ -94,5 +98,13 @@ KiroCrew ON 在远端执行开发任务：KiroCrew 的 Kiro Agent 先识别意�
 
 - 停止、关闭、删除会话前先征得用户同意（`octopus_control`）。
 - 只报告工具返回的真实状态与证据，不编造执行结果；工具报错时原样说明错误。
-- 返回 401 / Token 失效时，请用户重新执行第 1 节的连接命令；返回「API 暂不可用」时，说明是平台不可达，稍后重试。
-- 返回 404 表示对象不存在或你无权查看；返回 403 表示能看到但当前角色或 Token scope 不允许此操作——把消息原样告诉用户（例如「只有 Team owner 可以删除他人创建的会话」），不要换个方式重试。
+- 工具出错时返回结构化的 `{status, code, error}`：
+  - 401：Token 失效或已撤销，请用户重新执行第 1 节的连接命令；
+  - 403：能看到但当前角色或 Token scope 不允许——把 `error` 原样告诉用户，并说明需要谁授权（Team owner、平台管理员，
+    或用 `--admin` 重新连接），不要换个方式重试；
+  - 404：对象不存在或你无权查看，不要猜测其他 ID；
+  - 409：状态不允许（如 `team_archived`、`environment_changed`、`busy`），按 `error` 与会话的 `attention` 处理；
+  - 502 / 503 / 504 或 `http_error`：平台暂不可达，稍后重试。
+- 管理员工具（`octopus_admin_users`、`octopus_admin_teams`、`octopus_admin_environments`）只在 Token 含 admin 时出现；
+  只在用户明确要求时使用，执行前复述影响并征得同意（停用用户会立即吊销其全部 Token；设为共享环境后环境内会话互相可读）。
+  这些工具不创建用户、不设置密码，需要时请用户在控制台「用户管理」操作。

@@ -317,6 +317,13 @@ M4（共享与组织）、M5（仓库闭环）在 MVP 之后分别立项，各�
 ✅ EC2（2026-10-12，`436233b`）：线上已有会话的旧修订按记录还原（`run-690b49c1…` 9 条：创建、续作、自动纠错；`run-63b33288…`
 v4 → v6 显示规划 Prompt 新增的行）；控制台「修订历史」在改动处保留 2 行上下文、其余折叠。离线：Python 322、控制台 91、旧版回归 92。
 
+### 14.9 访问管理第 3 期「MCP 与角色调用」（D31）
+
+离线完成（2026-10-13）：`octopus connect` 以本人账号签发 30 天 Token（`read, execute, manage`），`--admin` 另含 admin、7 天，
+完成后登出临时登录；MCP 新增 `octopus_me`、`octopus_environments`、`octopus_assign_worker`、`octopus_changes` 与三个管理员工具
+（用户启停与升降、Team 管理、执行环境管理；不创建用户、不设密码），按 Token scope 列出；提交不再在客户端预选 Worker；
+错误以 `{status, code, error}` 返回。EC2 验收待进行。
+
 ### 14.8 会话变更记录与运行优化（D34）
 
 ✅ EC2（2026-10-13，`2ea7dd0`，平台与 `w1`）：不执行任务的验收 15 项通过——两台主机可达且 kiro-cli 登录为 ok；现有会话的变更记录

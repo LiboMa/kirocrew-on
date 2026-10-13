@@ -22,7 +22,7 @@ class ConnectTest(unittest.TestCase):
             for path in (Path(home, ".claude/skills/kirocrew-on/SKILL.md"), Path(project, ".kiro/skills/kirocrew-on/SKILL.md")):
                 text = path.read_text()
                 self.assertTrue(text.startswith("---\nname: kirocrew-on\n"))
-                self.assertIn("connect kiro --url https://on.example --project", text)
+                self.assertIn("connect kiro --url https://on.example --username <用户名> --project", text)
                 self.assertNotIn("{{OCTOPUS_URL}}", text)
                 self.assertNotIn(token, text)
             kiro = next(command for command, _ in calls if command[0] == "kiro-cli")
