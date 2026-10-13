@@ -128,6 +128,11 @@ TOOLS += [
                     "可按 host 过滤。私有仓库提交时以 octopus_start 的 credentials.source 指定其 ID，不指定时平台按仓库自动匹配。"
                     "凭证只能由用户在控制台「设置 → 代码仓库凭证」创建：不要向用户索要 Token。",
      "inputSchema": object_schema({"host": STRING}), "annotations": READ},
+    {"name": "octopus_publish",
+     "description": "把会话成果发布到它的源仓库：推送分支（默认 octopus/<run-id>）并创建或沿用 Draft PR（GitHub）/ Draft MR（GitLab）。"
+                    "需要会话绑定一枚有写权限的凭证，且会话已结束执行；工作区未提交的改动会先提交（不含 .env 与依赖目录），"
+                    "含疑似凭证时拒绝（409 publish_secret_found）。远端分支被他人改动时 409 publish_conflict，不会覆盖。",
+     "inputSchema": object_schema({"run_id": STRING, "branch": STRING, "title": STRING}, ["run_id"])},
     {"name": "octopus_app",
      "description": "Session 的远程预览（在执行环境中运行应用，经独立的预览域名在浏览器中打开）：start 启动（按 .octopus/preview.json "
                     "或自动识别；会话执行中不能启动；每个执行环境最多 3 个）；status 查看状态与最近日志（installing / starting / "
@@ -411,6 +416,9 @@ def call(client, name, args):
         return download(client, args)
     if name == "octopus_app":
         return app(client, args)
+    if name == "octopus_publish":
+        rid = args.pop("run_id")
+        return client.request("POST", "/v1/runs/" + quote(rid, safe="") + "/publish", args)
     if name == "octopus_credentials":
         query = ("?" + urlencode({"host": args["host"]})) if args.get("host") else ""
         return {"credentials": client.request("GET", "/v1/credentials" + query)}

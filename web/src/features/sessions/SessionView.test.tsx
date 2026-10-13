@@ -191,6 +191,35 @@ describe("session detail", () => {
       .toEqual({ source: "cred-2" }));
   });
 
+  describe("publishing", () => {
+    const writable = { id: "cred-1", name: "bob 写", kind: "github_pat", scope: "user", owner: { id: "u1", username: "fixture-owner" },
+      hint: "…1a2b", bound_by: { id: "u1", username: "fixture-owner" }, at: 1, access: "write" };
+    const done = (extra: Partial<Run> = {}) => makeRun({ id: "run-pub", status: "completed", worker_id: "w1", owner_id: "u1",
+      source: { type: "git", url: "https://github.com/kirocrew/app.git" }, created_by: { id: "u1", username: "fixture-owner" },
+      credentials: { source: writable }, ...extra } as Partial<Run>);
+
+    test("a finished Session with a write credential is published as a draft pull request", async () => {
+      const calls = open(done(), { "POST /runs/run-pub/publish": { branch: "octopus/run-pub", url: "https://github.com/kirocrew/app/pull/7",
+        number: 7, kind: "pull_request", reused: false } });
+      await userEvent.click(await screen.findByRole("button", { name: /发布到仓库/ }));
+      await waitFor(() => expect(calls.some((c) => c.method === "POST" && c.path === "/v1/runs/run-pub/publish")).toBe(true));
+    });
+
+    test("a published Session links its pull request", async () => {
+      open(done({ publish: { branch: "octopus/run-pub", url: "https://github.com/kirocrew/app/pull/7", number: 7,
+        kind: "pull_request", reused: false, commit: "abc", at: 1, by: { id: "u1", username: "fixture-owner" } } } as Partial<Run>));
+      const link = await screen.findByRole("link", { name: /PR #7/ });
+      expect(link).toHaveAttribute("href", "https://github.com/kirocrew/app/pull/7");
+      expect(document.querySelector("#run-publish")).toHaveTextContent("已发布：octopus/run-pub · PR #7");
+    });
+
+    test("a read-only credential cannot publish, and says so", async () => {
+      open(done({ credentials: { source: { ...writable, access: "read" } } } as Partial<Run>));
+      expect(await screen.findByText(/凭证为只读，无法发布/)).toBeInTheDocument();
+      expect(screen.queryByRole("button", { name: /发布到仓库/ })).not.toBeInTheDocument();
+    });
+  });
+
   test("a credential that was disabled or deleted is shown as unavailable", async () => {
     const source = { id: "cred-2", name: "Team GitLab", kind: "gitlab_token", scope: "team", owner: { id: "t1", name: "平台组" },
       hint: "…0000", bound_by: { id: "u1", username: "fixture-owner" }, at: 1, unavailable: true };

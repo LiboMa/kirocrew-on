@@ -189,6 +189,7 @@ export interface Run {
   /** Who submitted the Session (D35 §4). */
   created_by?: { id: string; username?: string | null };
   /** The source credential pinned at submission (D35 §4); never the secret. */
+  publish?: PublishRecord | null;
   credentials?: { source: CredentialBinding | null; removed?: { id: string; name: string; hint: string; by: { username?: string | null } } } | null;
   /** Tasks the latest continue left as they were, still carrying that version's result (D34). */
   kept?: { version: number; tasks: string[] };
@@ -418,4 +419,18 @@ export interface CredentialBinding {
   bound_by: { id: string; username?: string | null };
   at: number;
   unavailable?: boolean;
+  /** What the credential may do now (publishing needs write). */
+  access?: "read" | "write" | null;
+}
+
+/** Where a Session's work was published (D35 §5.2). */
+export interface PublishRecord {
+  branch: string;
+  commit: string;
+  url: string;
+  number: number;
+  kind: "pull_request" | "merge_request";
+  reused: boolean;
+  at: number;
+  by: { id: string; username?: string | null };
 }

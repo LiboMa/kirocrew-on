@@ -93,7 +93,12 @@ KiroCrew ON 在远端执行开发任务：KiroCrew 的 Kiro Agent 先识别意�
   指定；不指定时，平台按仓库自动匹配：Team 会话依次为 Team 凭证、授权给 Team 的平台凭证、提交者个人凭证。
 - 409 `credential_ambiguous`：有多枚同样适用的凭证，`error` 里列出了名称，请用户选一枚后用 `credentials.source` 重新提交。
 - 403 `credential_forbidden` / 409 `credential_scope`：指定的凭证不能用于这个仓库（不是你的、未授权、主机或仓库范围不符）。
-- 会话停在「仓库凭证不可用」：绑定的凭证被停用或删除，请用户在会话页更换凭证（`POST /v1/runs/<id>/credentials`）后续作。
+- 会话停在「仓库凭证不可用」：绑定的凭证被停用、删除、授权撤销或所有者已离开，请用户在会话页「更换凭证」，
+  或用 `octopus_continue` 的 `credentials: {"source": "<ID>"}` 先换凭证再续作。
+- 发布：会话结束后，用户同意时调用 `octopus_publish`（`run_id`，可选 `branch`、`title`），把成果推送到 `octopus/<run-id>` 并创建或沿用
+  Draft PR / MR，把返回的链接告诉用户。需要会话绑定一枚写权限的凭证（409 `credential_read_only` 时请用户换一枚）；
+  409 `publish_secret_found` 表示改动中有疑似凭证，按列出的文件处理后再发布；409 `publish_conflict` 表示远端分支被他人改动，
+  不要强推，改用新的 `branch` 或请用户合并。
 
 ## 5．预览产出
 

@@ -20,6 +20,7 @@ import { NativeSessionPanel } from "@/features/sessions/NativeSessionPanel";
 import { AppPreviewPanel } from "@/features/sessions/AppPreviewPanel";
 import { ChangesPanel } from "@/features/sessions/ChangesPanel";
 import { CredentialControl } from "@/features/sessions/CredentialControl";
+import { PublishControl } from "@/features/sessions/PublishControl";
 import { RevisionsPanel } from "@/features/sessions/RevisionsPanel";
 import { RecoveryPanel } from "@/features/sessions/RecoveryPanel";
 import { TaskList } from "@/features/sessions/TaskList";
@@ -83,6 +84,7 @@ export function SessionView({ id }: { id: string }) {
                 <CredentialControl run={run} />
               </p>
             )}
+            <PublishControl run={run} />
           </div>
           <div className="flex flex-col items-end gap-2">
             <StatusBadge status={run.lifecycle === "closed" ? "stopped" : run.status} label={statusText(run)} className="text-xs" />

@@ -168,6 +168,12 @@ class CredentialToolTests(unittest.TestCase):
         continue_tool = next(tool for tool in mcp.TOOLS if tool["name"] == "octopus_continue")
         self.assertIn("credentials", continue_tool["inputSchema"]["properties"])
 
+    def test_publish_posts_the_session(self):
+        client = Fake({("POST", "/v1/runs/r1/publish"): {"branch": "octopus/r1", "url": "https://x/pull/1"}})
+        result = mcp.call(client, "octopus_publish", {"run_id": "r1", "title": "订单系统"})
+        self.assertEqual(client.calls[-1], ("POST", "/v1/runs/r1/publish", {"title": "订单系统"}))
+        self.assertEqual(result["url"], "https://x/pull/1")
+
     def test_no_tool_creates_a_credential_or_takes_a_secret(self):
         names = {tool["name"] for tool in mcp.TOOLS}
         self.assertIn("octopus_credentials", names)

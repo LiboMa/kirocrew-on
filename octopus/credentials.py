@@ -465,4 +465,5 @@ def availability(db, bound, run):
     if not bound:
         return bound
     row = db.execute("SELECT * FROM credentials WHERE id=?", (bound["id"],)).fetchone()
-    return {**bound, **({} if bound_usable(db, row, run) else {"unavailable": True})}
+    return {**bound, "access": row["access"] if row else None,   # what it may do now (publishing needs write)
+            **({} if bound_usable(db, row, run) else {"unavailable": True})}

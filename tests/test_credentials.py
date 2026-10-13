@@ -323,6 +323,13 @@ class BindingTests(CredentialCase):
         self.service.membership(self.a, self.tid, {"username": "bob"}, remove=True)   # bob's own credential, bob gone
         self.assertTrue(self.bound(rid)["unavailable"])
 
+    def test_the_session_shows_the_credentials_current_access(self):
+        mine = self.make(self.b, name="bob 的", access="write")
+        rid = self.submit(self.b, credentials={"source": mine["id"]})["id"]
+        self.assertEqual(self.bound(rid, self.b)["access"], "write")
+        self.store.update(self.b, mine["id"], {"access": "read"})
+        self.assertEqual(self.bound(rid, self.b)["access"], "read")
+
     def test_a_disabled_binding_shows_as_unavailable(self):
         mine = self.make(self.b, name="bob 的")
         rid = self.submit(self.b, credentials={"source": mine["id"]})["id"]
