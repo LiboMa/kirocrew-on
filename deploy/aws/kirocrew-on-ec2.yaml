@@ -42,6 +42,21 @@ Parameters:
     MinValue: 1024
     MaxValue: 65535
     Description: 安全组规则的上限端口；NativePort + 1 起至此为 Worker 主机原生入口的中转端口（每台 Worker 主机一个，D28）
+  ConsoleDomain:
+    Type: String
+    Default: ""
+    AllowedPattern: "^$|^([a-z0-9]([a-z0-9-]*[a-z0-9])?\\.)+[a-z]{2,}$"
+    Description: 控制台的自定义域名（可选，如 kirocrew-on.example.com；cloudfront.net 域名继续可用）；deploy.sh 按 stack.env 的 CONSOLE_DOMAIN 查找下面两项
+  ConsoleCertificateArn:
+    Type: String
+    Default: ""
+    AllowedPattern: "^$|^arn:aws:acm:us-east-1:[0-9]{12}:certificate/[0-9a-f-]+$"
+    Description: us-east-1 中覆盖 ConsoleDomain 的已签发 ACM 证书（CloudFront 只使用 us-east-1 的证书）
+  ConsoleHostedZoneId:
+    Type: String
+    Default: ""
+    AllowedPattern: "^$|^Z[A-Z0-9]+$"
+    Description: 写入 ConsoleDomain 别名记录（A / AAAA）的 Route 53 公有托管区；留空时不写 DNS 记录
   VpcCidr:
     Type: String
     Default: 10.42.0.0/16
@@ -61,6 +76,8 @@ Parameters:
 Conditions:
   HasAlarmEmail: !Not [!Equals [!Ref AlarmEmail, ""]]
   IsUsEast1: !Equals [!Ref "AWS::Region", us-east-1]
+  HasConsoleDomain: !Not [!Equals [!Ref ConsoleDomain, ""]]
+  HasConsoleRecord: !And [!Condition HasConsoleDomain, !Not [!Equals [!Ref ConsoleHostedZoneId, ""]]]
 
 Resources:
   Vpc:
@@ -251,6 +268,7 @@ Resources:
       DistributionConfig:
         Enabled: true
         Comment: !Sub "KiroCrew ON console and API (${AWS::StackName})"
+        Aliases: !If [HasConsoleDomain, [!Ref ConsoleDomain], !Ref "AWS::NoValue"]
         HttpVersion: http2and3
         IPV6Enabled: true
         PriceClass: PriceClass_100
@@ -277,9 +295,36 @@ Resources:
           CachePolicyId: 4135ea2d-6df8-44a3-9df3-4b5a84be39ad        # Managed-CachingDisabled
           OriginRequestPolicyId: 33f36d7e-f396-46d9-90e0-52428a34d9dc # Managed-AllViewerAndCloudFrontHeaders-2022-06
           Compress: false
-        ViewerCertificate:
-          CloudFrontDefaultCertificate: true
+        ViewerCertificate: !If
+          - HasConsoleDomain
+          - AcmCertificateArn: !Ref ConsoleCertificateArn
+            SslSupportMethod: sni-only
+            MinimumProtocolVersion: TLSv1.2_2021
+          - CloudFrontDefaultCertificate: true
       Tags: [{Key: Project, Value: kirocrew-on}]
+
+  # The console domain's alias records, in the public zone deploy.sh found for it (stack.env CONSOLE_DOMAIN).
+  ConsoleRecord:
+    Type: AWS::Route53::RecordSet
+    Condition: HasConsoleRecord
+    Properties:
+      HostedZoneId: !Ref ConsoleHostedZoneId
+      Name: !Ref ConsoleDomain
+      Type: A
+      AliasTarget:
+        HostedZoneId: Z2FDTNDATAQYW2   # every CloudFront distribution's hosted zone
+        DNSName: !GetAtt Distribution.DomainName
+
+  ConsoleRecordIpv6:
+    Type: AWS::Route53::RecordSet
+    Condition: HasConsoleRecord
+    Properties:
+      HostedZoneId: !Ref ConsoleHostedZoneId
+      Name: !Ref ConsoleDomain
+      Type: AAAA
+      AliasTarget:
+        HostedZoneId: Z2FDTNDATAQYW2
+        DNSName: !GetAtt Distribution.DomainName
 
   NativeDistribution:
     Type: AWS::CloudFront::Distribution
@@ -381,7 +426,10 @@ Outputs:
   CloudFrontDomain:
     Value: !GetAtt Distribution.DomainName
   ConsoleUrl:
-    Value: !Sub "https://${Distribution.DomainName}/"
+    Value: !If [HasConsoleDomain, !Sub "https://${ConsoleDomain}/", !Sub "https://${Distribution.DomainName}/"]
+  # The console's own domain when it has one, otherwise its cloudfront.net name (push adds it to allowed_hosts).
+  ConsoleDomain:
+    Value: !If [HasConsoleDomain, !Ref ConsoleDomain, !GetAtt Distribution.DomainName]
   NativeDomain:
     Value: !GetAtt NativeDistribution.DomainName
   NativeUrl:

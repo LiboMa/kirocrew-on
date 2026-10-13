@@ -89,7 +89,41 @@ class TemplateTests(unittest.TestCase):
         self.assertEqual(behavior["OriginRequestPolicyId"], ALL_VIEWER_AND_CLOUDFRONT_HEADERS)
         self.assertEqual(set(behavior["AllowedMethods"]), {"GET", "HEAD", "OPTIONS", "PUT", "PATCH", "POST", "DELETE"})
         self.assertFalse(behavior["Compress"], "SSE must not be buffered for compression")
-        self.assertTrue(config["ViewerCertificate"]["CloudFrontDefaultCertificate"])
+
+    def test_the_console_can_have_its_own_domain(self):
+        # Optional: with ConsoleDomain the console distribution answers on it too (its cloudfront.net name stays), with
+        # an issued us-east-1 certificate and alias records in the zone deploy.sh found (stack.env CONSOLE_DOMAIN).
+        p = self.t["Parameters"]
+        for name in ("ConsoleDomain", "ConsoleCertificateArn", "ConsoleHostedZoneId"):
+            self.assertEqual(p[name]["Default"], "", name)
+        config = self.distribution("ApiPort")
+        self.assertEqual(config["Aliases"], {"If": ["HasConsoleDomain", [{"Ref": "ConsoleDomain"}], {"Ref": "AWS::NoValue"}]})
+        condition, custom, default = config["ViewerCertificate"]["If"]
+        self.assertEqual(condition, "HasConsoleDomain")
+        self.assertEqual(custom, {"AcmCertificateArn": {"Ref": "ConsoleCertificateArn"}, "SslSupportMethod": "sni-only",
+                                  "MinimumProtocolVersion": "TLSv1.2_2021"})
+        self.assertEqual(default, {"CloudFrontDefaultCertificate": True})
+        records = of_type(self.r, "AWS::Route53::RecordSet")
+        self.assertEqual(sorted(r["Properties"]["Type"] for r in records), ["A", "AAAA"])
+        for record in records:
+            self.assertEqual(record["Condition"], "HasConsoleRecord")
+            self.assertEqual(record["Properties"]["HostedZoneId"], {"Ref": "ConsoleHostedZoneId"})
+            self.assertEqual(record["Properties"]["Name"], {"Ref": "ConsoleDomain"})
+            self.assertEqual(record["Properties"]["AliasTarget"], {"HostedZoneId": "Z2FDTNDATAQYW2",   # CloudFront's zone
+                                                                    "DNSName": {"GetAtt": "Distribution.DomainName"}})
+        native = self.distribution("NativePort")
+        self.assertNotIn("Aliases", native)
+        self.assertTrue(native["ViewerCertificate"]["CloudFrontDefaultCertificate"])
+        self.assertIn("ConsoleDomain", self.t["Outputs"])
+        self.assertEqual(self.t["Outputs"]["ConsoleUrl"]["Value"]["If"][0], "HasConsoleDomain")
+
+    def test_push_and_the_installer_admit_the_console_domain(self):
+        deploy = (ROOT / "deploy/aws/deploy.sh").read_text()
+        installer = (ROOT / "deploy/install/al2023.sh").read_text()
+        self.assertIn('console="$(output ConsoleDomain)"', deploy)
+        self.assertIn("CONSOLE_DOMAIN={console}", deploy)
+        self.assertIn('merge_hosts /etc/kirocrew-on/platform.toml "$CF_DOMAIN" ${CONSOLE_DOMAIN:+"$CONSOLE_DOMAIN"} localhost:18918',
+                      installer)
 
     def test_role_grants_ssm_bedrock_and_scoped_storage(self):
         role = of_type(self.r, "AWS::IAM::Role")

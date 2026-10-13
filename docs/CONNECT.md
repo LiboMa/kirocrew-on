@@ -5,7 +5,8 @@ Claude Code 与 Kiro CLI 用 `octopus connect` 自动配置（§2），其他客
 
 ## 1．共同部分
 
-- **平台地址**：`https://<分发域名>.cloudfront.net`（`deploy/aws/deploy.sh status` 显示），或 SSM 隧道 `http://localhost:18918`。
+- **平台地址**：`https://<分发域名>.cloudfront.net`（`deploy/aws/deploy.sh status` 显示）、配置的控制台自定义域名（如
+  `https://kirocrew-on.tinyboat.blog`），或 SSM 隧道 `http://localhost:18918`。
 - **Token**：`octopus connect --username <你的用户名>` 提示输入密码，以本人账号登录后创建一枚 30 天有效的 Token
   （`read, execute, manage`：查看、提交、管理自己的工作流），随后登出这次登录。未给 `--username` 时交互询问。
   也可以先在控制台右上角菜单「API 与 Coding Agent 接入」创建，设为环境变量 `OCTOPUS_API_TOKEN`。

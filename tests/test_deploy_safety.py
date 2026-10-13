@@ -98,6 +98,12 @@ class InstallerSafetyTests(unittest.TestCase):
             merged = config.read_text()
         self.assertIn('allowed_hosts = ["ops.example", "d1.cloudfront.net", "localhost:18918"]', merged)
         self.assertIn('[tools]\nx = "y"', merged)
+        with tempfile.TemporaryDirectory() as directory:   # the console domain, or its cloudfront.net name once more
+            config = Path(directory) / "platform.toml"
+            config.write_text('api_host = "0.0.0.0"\n')
+            subprocess.run(["bash", "-c", script + f'\nPYTHON=python3 merge_hosts "{config}" d1.cloudfront.net '
+                            'd1.cloudfront.net on.example on.example localhost:18918'], check=True)
+            self.assertIn('allowed_hosts = ["d1.cloudfront.net", "on.example", "localhost:18918"]', config.read_text())
 
 
 FAKE_AWS = r'''#!/usr/bin/env python3
@@ -143,6 +149,11 @@ elif "describe-change-set" in args:
         print(os.environ.get("FAKE_REASON", ""))
     else:
         print(os.environ.get("FAKE_REPLACED", ""))
+elif "list-hosted-zones" in args:
+    print("/hostedzone/ZOTHER000\texample.org.\n/hostedzone/ZPUBLIC00\ttinyboat.example.\n"
+          "/hostedzone/ZDEEP0000\tsub.tinyboat.example.\n/hostedzone/ZBLOG0000\ttinyboat.blog.")   # stack.env's own
+elif "list-certificates" in args:
+    print(os.environ.get("FAKE_CERTIFICATE", "arn:aws:acm:us-east-1:111111111111:certificate/abc"))
 elif "wait" in args and "change-set-create-complete" in args:
     sys.exit(255 if os.environ.get("FAKE_REASON") else 0)
 '''
@@ -215,6 +226,35 @@ class DeployUpTests(unittest.TestCase):
         self.assertNotEqual(result.returncode, 0)
         self.assertFalse(self.made(calls, "put-parameter"))
         self.assertFalse(self.made(calls, "create-change-set"))
+
+    def parameters(self, calls):
+        return {p["ParameterKey"]: p["ParameterValue"] for p in self.made(calls, "create-change-set")[0]["parameters"]}
+
+    def test_without_a_console_domain_the_console_keeps_its_cloudfront_name(self):
+        result, calls = self.up(stack_env={"CONSOLE_DOMAIN": ""})
+        self.assertEqual(result.returncode, 0, result.stderr)
+        parameters = self.parameters(calls)
+        self.assertEqual([parameters[k] for k in ("ConsoleDomain", "ConsoleHostedZoneId", "ConsoleCertificateArn")], ["", "", ""])
+        self.assertFalse(self.made(calls, "list-hosted-zones") or self.made(calls, "list-certificates"))
+
+    def test_a_console_domain_finds_its_zone_and_certificate(self):
+        result, calls = self.up(stack_env={"CONSOLE_DOMAIN": "on.sub.tinyboat.example"})
+        self.assertEqual(result.returncode, 0, result.stderr)
+        parameters = self.parameters(calls)
+        self.assertEqual([parameters[k] for k in ("ConsoleDomain", "ConsoleHostedZoneId", "ConsoleCertificateArn")],
+                         ["on.sub.tinyboat.example", "ZDEEP0000", "arn:aws:acm:us-east-1:111111111111:certificate/abc"])
+        (lookup,) = self.made(calls, "list-certificates")
+        self.assertEqual(lookup["args"][:2], ["--region", "us-east-1"])   # CloudFront only uses us-east-1 certificates
+        self.assertIn("ISSUED", lookup["args"])
+        self.assertIn("*.sub.tinyboat.example", " ".join(lookup["args"]))
+
+    def test_a_console_domain_without_a_zone_or_certificate_stops_before_any_change(self):
+        for stack_env, fake in (({"CONSOLE_DOMAIN": "on.elsewhere.test"}, {}),
+                                ({"CONSOLE_DOMAIN": "on.tinyboat.example"}, {"certificate": "None"})):
+            result, calls = self.up(stack_env=stack_env, **fake)
+            self.assertNotEqual(result.returncode, 0, stack_env)
+            self.assertFalse(self.made(calls, "create-change-set"))
+            self.assertIn("on.", result.stderr)
 
     def test_a_missing_origin_secret_is_created_once(self):
         result, calls = self.up(ssm_error="ParameterNotFound")

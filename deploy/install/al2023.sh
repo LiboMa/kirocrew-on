@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Idempotent host preparation for Amazon Linux 2023 x86_64. deploy/aws/deploy.sh runs it as root through SSM:
-#   KIROCREW_ON_RELEASE=<commit> CF_DOMAIN=<dxxxx.cloudfront.net> ORIGIN_SECRET_PARAM=/kirocrew-on/<stack>/origin-secret \
+#   KIROCREW_ON_RELEASE=<commit> CF_DOMAIN=<dxxxx.cloudfront.net> [CONSOLE_DOMAIN=<控制台自定义域名>] ORIGIN_SECRET_PARAM=/kirocrew-on/<stack>/origin-secret \
 #   AWS_REGION=us-east-1 bash <release>/deploy/install/al2023.sh <boundary>
 # Writes no tool credentials: Claude Code and Codex use Amazon Bedrock through the instance role; kiro-cli needs a
 # one-time device-flow login as crew-<boundary> (docs/OPERATIONS.md). Every download is pinned or checksum-verified.
@@ -31,7 +31,7 @@ import re, sys, tomllib
 path, *required = sys.argv[1:]
 text = open(path).read()
 hosts = tomllib.loads(text).get("allowed_hosts", [])
-line = "allowed_hosts = [" + ", ".join('"%s"' % h for h in hosts + [h for h in required if h not in hosts]) + "]"
+line = "allowed_hosts = [" + ", ".join('"%s"' % h for h in dict.fromkeys(hosts + required)) + "]"
 text = re.sub(r"(?m)^allowed_hosts[ \t]*=.*$", lambda _: line, text, count=1) if re.search(r"(?m)^allowed_hosts", text) \
     else line + "\n" + text
 open(path, "w").write(text)
@@ -181,7 +181,7 @@ if [ ! -f /etc/kirocrew-on/platform.toml ]; then
   install -m 0640 -o root -g octopus "$TARGET/deploy/config/platform.toml.example" /etc/kirocrew-on/platform.toml
 fi
 if [ -n "${CF_DOMAIN:-}" ]; then
-  merge_hosts /etc/kirocrew-on/platform.toml "$CF_DOMAIN" localhost:18918
+  merge_hosts /etc/kirocrew-on/platform.toml "$CF_DOMAIN" ${CONSOLE_DOMAIN:+"$CONSOLE_DOMAIN"} localhost:18918
 fi
 # Private CA for Worker hosts (D28): the key never leaves this host (root 0600); the platform trusts only its certificate.
 if [ ! -s /etc/kirocrew-on/worker-ca.key ]; then

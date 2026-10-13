@@ -101,6 +101,34 @@ change_stack() {  # change_stack STACK TEMPLATE PARAMETERS_FILE CREATE|UPDATE: a
     --stack-name "$stack"
 }
 
+console_zone() {  # console_zone NAME: the public Route 53 zone holding NAME (the longest matching suffix)
+  local zones zone name best="" id=""
+  zones="$(query "/hostedzone/ZDRYRUN"$'\t'"${1#*.}." route53 list-hosted-zones \
+    --query 'HostedZones[?Config.PrivateZone==`false`].[Id,Name]' --output text)" || return 1
+  while read -r zone name; do
+    name="${name%.}"
+    if [ -n "$name" ] && { [ "$1" = "$name" ] || [[ "$1" == *".$name" ]]; } && [ ${#name} -gt ${#best} ]; then
+      best="$name"; id="${zone##*/}"
+    fi
+  done <<<"$zones"
+  [ -n "$id" ] || { echo "Route 53 中没有包含 $1 的公有托管区：先创建托管区，或清空 stack.env 的 CONSOLE_DOMAIN" >&2; return 1; }
+  echo "$id"
+}
+
+console_certificate() {  # console_certificate NAME: an issued certificate naming NAME or *.<parent>, in us-east-1 (the
+  # only region CloudFront takes certificates from, whatever REGION is)
+  local wildcard="*.${1#*.}" filter arn
+  filter="CertificateSummaryList[?DomainName=='$1' || DomainName=='$wildcard' || contains(SubjectAlternativeNameSummaries || \`[]\`, '$1') || contains(SubjectAlternativeNameSummaries || \`[]\`, '$wildcard')].CertificateArn | [0]"
+  if [ -n "$DRY" ]; then
+    printf 'aws --region us-east-1 acm list-certificates --certificate-statuses ISSUED --query %s\n' "$filter" >&2
+    echo "arn:aws:acm:us-east-1:000000000000:certificate/dry-run"; return
+  fi
+  arn="$(aws --region us-east-1 acm list-certificates --certificate-statuses ISSUED --query "$filter" --output text)" || return 1
+  [[ "$arn" == arn:aws:acm:us-east-1:* ]] || {
+    echo "us-east-1 没有覆盖 $1 的已签发 ACM 证书（${1} 或 ${wildcard}）：先申请证书并完成 DNS 验证" >&2; return 1; }
+  echo "$arn"
+}
+
 up() {
   run cloudformation validate-template --template-body "file://$TEMPLATE" >/dev/null
   local status prefix_list zone="${AVAILABILITY_ZONE:-}" image="${IMAGE_ID:-}" current origin type
@@ -122,13 +150,20 @@ up() {
   [ -n "$image" ] || image="$(query ami-dryrun ssm get-parameter \
     --name /aws/service/ami-amazon-linux-latest/al2023-ami-kernel-default-x86_64 --query Parameter.Value --output text)"
   [ -n "$status" ] || echo "首次创建：可用区 ${zone}，AMI ${image}；创建后写入 deploy/aws/stack.env 的 AVAILABILITY_ZONE 与 IMAGE_ID" >&2
+  # The console's own domain (optional): its zone and certificate are looked up, never kept in the repository.
+  local console="${CONSOLE_DOMAIN:-}" console_zone_id="" console_certificate_arn=""
+  if [ -n "$console" ]; then
+    console_zone_id="$(console_zone "$console")" || exit 2
+    console_certificate_arn="$(console_certificate "$console")" || exit 2
+  fi
   origin="$(secret origin-secret)"
   # Parameters go through a 0600 file: the origin secret never appears on a command line.
   (umask 077; ORIGIN_VALUE="$origin" python3 - "$INSTANCE_TYPE" "$VOLUME_SIZE_GIB" "$zone" "$image" "$prefix_list" \
-    "$API_PORT" "$NATIVE_PORT" "$NATIVE_RELAY_END" "$ALARM_EMAIL" > "$WORK/parameters.json" <<'PY'
+    "$API_PORT" "$NATIVE_PORT" "$NATIVE_RELAY_END" "$ALARM_EMAIL" "$console" "$console_certificate_arn" "$console_zone_id" \
+    > "$WORK/parameters.json" <<'PY'
 import json, os, sys
 keys = ["InstanceType", "VolumeSizeGiB", "AvailabilityZone", "ImageId", "CloudFrontPrefixListId", "ApiPort", "NativePort",
-        "NativeRelayEnd", "AlarmEmail"]
+        "NativeRelayEnd", "AlarmEmail", "ConsoleDomain", "ConsoleCertificateArn", "ConsoleHostedZoneId"]
 values = dict(zip(keys, sys.argv[1:]), OriginSecret=os.environ["ORIGIN_VALUE"])
 print(json.dumps([{"ParameterKey": k, "ParameterValue": v} for k, v in values.items()]))
 PY
@@ -142,20 +177,23 @@ PY
 
 push() {
   [ -z "$(git status --porcelain)" ] || { echo "工作区有未提交改动；push 只发布已提交的 commit" >&2; exit 2; }
-  local sha bucket instance domain native archive command_id
+  local sha bucket instance domain native console archive command_id
   sha="$(git rev-parse HEAD)"
   bucket="$(output ArtifactBucket)"; instance="$(output InstanceId)"; domain="$(output CloudFrontDomain)"
-  native="$(output NativeDomain)"
+  native="$(output NativeDomain)"; console="$(output ConsoleDomain)"
+  [ "$console" != "None" ] || console=""   # a stack from before ConsoleDomain
   archive="$WORK/kirocrew-on-$sha.tar.gz"
   git archive --format=tar.gz --prefix="kirocrew-on-$sha/" -o "$archive" HEAD
   run s3 cp "$archive" "s3://$bucket/releases/$sha.tar.gz" --only-show-errors
-  python3 - "$sha" "$bucket" "$domain" "$PARAMS" "$REGION" "$BOUNDARY" "$native" "$NATIVE_PORT" > "$WORK/commands.json" <<'PY'
+  python3 - "$sha" "$bucket" "$domain" "$PARAMS" "$REGION" "$BOUNDARY" "$native" "$NATIVE_PORT" "$console" \
+    > "$WORK/commands.json" <<'PY'
 import json, sys
-sha, bucket, domain, params, region, boundary, native, native_port = sys.argv[1:]
+sha, bucket, domain, params, region, boundary, native, native_port, console = sys.argv[1:]
 d = "/opt/kirocrew-on/incoming"
 script = (f"set -euo pipefail; mkdir -p {d}; aws s3 cp s3://{bucket}/releases/{sha}.tar.gz {d}/{sha}.tar.gz "
           f"--region {region} --only-show-errors; rm -rf {d}/kirocrew-on-{sha}; tar -xzf {d}/{sha}.tar.gz -C {d}; "
-          f"KIROCREW_ON_RELEASE={sha} CF_DOMAIN={domain} NATIVE_DOMAIN={native} NATIVE_PORT={native_port} "
+          f"KIROCREW_ON_RELEASE={sha} CF_DOMAIN={domain} CONSOLE_DOMAIN={console} NATIVE_DOMAIN={native} "
+          f"NATIVE_PORT={native_port} "
           f"ORIGIN_SECRET_PARAM={params}/origin-secret "
           f"AWS_REGION={region} "
           f"bash {d}/kirocrew-on-{sha}/deploy/install/al2023.sh {boundary}")
@@ -165,7 +203,7 @@ PY
     --comment "kirocrew-on $sha" --parameters "file://$WORK/commands.json" --query Command.CommandId --output text)"
   [ -n "$DRY" ] && return
   wait_command "$instance" "$command_id"
-  echo "控制台：https://$domain/"
+  echo "控制台：https://${console:-$domain}/"
 }
 
 wait_command() {  # wait_command INSTANCE COMMAND_ID: wait for an install command, print its tail, fail unless it succeeded
