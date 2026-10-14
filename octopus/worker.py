@@ -139,9 +139,11 @@ class Worker:
         self.approval_mode = approval_mode
         self.kiro_cli, self._login = kiro_cli, (0.0, None)
         from .apps import Apps
+        from .checks import Checks
         # Remote preview (D36 §5): on a Worker host the platform reaches the apps through this host's nginx preview
         # port (TLS, preview_tls_name in its certificate); without one, on the platform host's loopback.
         self.apps = Apps(path_prepend)
+        self.checks = Checks(path_prepend)   # a task's verify commands (D37 §5)
         self.preview_tls_port, self.preview_tls_name = preview_tls_port, preview_tls_name
 
     @staticmethod
@@ -295,6 +297,18 @@ class Worker:
                         "请在交付任务中清理产物，或改用远程预览")
         return {"files": files, "dirs": folders, "configs": configs, "bytes": total, "excluded": sorted(excluded),
                 "links": sorted(links), "skipped": skipped}
+
+    def verify_start(self, body):
+        """Run a task's verify commands in its Session's project (D37 §5); the same Attempt gets the same job."""
+        commands = body.get("commands")
+        require(isinstance(commands, list) and 0 < len(commands) <= 10 and
+                all(isinstance(c, str) and c.strip() and len(c) <= 500 for c in commands), "检查命令须为 1–10 条、每条 ≤ 500 字符")
+        require(isinstance(body.get("attempt_id"), str) and body["attempt_id"], "需要 attempt_id")
+        project = workspace.project_dir(self.path(body["run_id"]))
+        return self.checks.start(body["run_id"], body["attempt_id"], project, commands)
+
+    def verify_status(self, body):
+        return self.checks.status(str(body.get("job", "")))
 
     def candidate(self, body):
         """A task's candidate commit (D37 §3, ``mode: commit``), or a review's check that the workspace is still the
@@ -739,6 +753,8 @@ class Worker:
     def _control(self, body):
         action = body["action"]
         require(action in {"stop", "close", "delete", "reopen"}, "操作无效")
+        if action != "reopen":
+            self.checks.cancel(body["run_id"])   # its verify commands end with it (D37 §5)
         run = self.path(body["run_id"])
         if not (run / "parent.json").exists():
             slot = "octopus-" + body["run_id"]
@@ -895,7 +911,8 @@ def serve(worker, port=8928, host="127.0.0.1"):
                                "/inspect": worker.inspect, "/control": worker.control,
                                "/crew-entry": worker.crew_entry, "/files": worker.files, "/observe": worker.observe,
                                "/archive/plan": worker.archive_summary, "/app": worker.app,
-                               "/candidate": worker.candidate}
+                               "/candidate": worker.candidate, "/verify/start": worker.verify_start,
+                               "/verify/status": worker.verify_status}
                     require(self.path in methods and self.command == "POST", "接口不存在", 404, "not_found")
                     result = methods[self.path](body)
                 status = 200
