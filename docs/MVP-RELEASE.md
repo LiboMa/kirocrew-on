@@ -329,7 +329,21 @@ v4 → v6 显示规划 Prompt 新增的行）；控制台「修订历史」在�
 - 新 Attempt 的证据带 `switched_from`，控制台、MCP 状态与报告写明「由协调者从 X 换为 Y」；修订历史与变更记录（`task.tool_switched`）同步。
 - 规划提示列出工具可用性与已知限制（K01），不再由代码把 OpenCode 改派 Claude。
 
-待做：EC2 验收（见计划 `docs/superpowers/plans/2026-10-14-agent-fallback-phase1.md` 末尾）。第 2 期为批准代理（K04）。
+✅ EC2（2026-10-14，567e331，测试仓库 `LiboMa/bedrock-claude-call`）16/16：
+- 刷新能力后，平台主机与 w1 的 Worker 都报告了四个工具（均可用，Kiro 已登录）。
+- **换工具**（`run-c5ebe889…`，实现 claude + 未发布的模型 `claude-not-published`，审查 codex）：
+  - 实现的第 1 次派发被拒（`model_unavailable`，`failure_type: tool`）；协调者推荐 `switch_tool` claude / auto，
+    理由中写明不选 codex（其后审查所用）与 opencode（K01）；实现以 claude / auto 完成。
+  - 审查（codex）两次被运行时取消（自动重试后再现）；第 2 轮协调者按「native_error 且有 transient_retry_of」推荐换为 kiro
+    （与被审查代码的 claude 不同），审查通过，会话完成。
+  - 控制台 Attempt、MCP `latest.switched_from`、报告的「换工具」行、修订历史与变更记录 `task.tool_switched` 一致。
+- **关闭换工具**（`run-ec6135df…`，`recovery.switch_tools: false`）：协调者被告知不可换工具，给出 `wait_for_user` 与恢复办法，
+  `attention.title` 为「需要换用工具或模型」，没有应用换工具。
+- **规划**：规划任务的提示列出各工具是否可用与已知限制（K01），不再有代码改派。
+- 最终审查（opus）：1 项重要（换用后的实现与其后的审查同一工具；模板中未标 kind 的审查）与 5 项升级为重要的问题已修复
+  （重试后仍标注换用来源、协调者提示如实写明原生错误重试后再现、过期能力的提示、未核实的后端仍等待用户、控制台纠错记录）。
+
+第 2 期为批准代理（K04），已按 EC2 实测修订设计 §4.1。
 
 ### 14.13 候选提交与命名门禁（D37 第 1 期，M2）
 
