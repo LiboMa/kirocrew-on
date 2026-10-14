@@ -1,8 +1,10 @@
 """The remote preview's platform side (D36 §5.2): how a browser on the preview domain reaches a Session's app.
 
-- ``POST /v1/runs/<id>/app/open`` gives an opening link ``<preview_url>/_kirocrew/open/<ticket>``: ten minutes, single
-  use, signed for this purpose only. Following it clears the preview domain's earlier data and sets a cookie for that
-  domain alone (HttpOnly, eight hours); one browser previews one Session at a time.
+- ``POST /v1/runs/<id>/app/open`` gives an opening link ``<origin>/_kirocrew/open/<ticket>``: ten minutes, single use,
+  signed for this purpose only. The origin is the Session's own, ``https://<run-id>.<preview_domain>`` (phase 3: several
+  previews side by side, each app's cookies and storage its own), or the one shared ``preview_url``, where following the
+  link first clears what an earlier Session's app left. Either way it sets a cookie for that origin alone (HttpOnly,
+  eight hours) naming the Session, and a per-session host accepts only its own Session's cookie and links.
 - The preview domain's nginx asks ``/v1/preview-auth`` before every request (auth_request): the cookie's holder must
   still be allowed to read the Session and its app must run; the answer says where the app is.
 - On the platform host the app is reached over loopback; on a Worker host through that host's nginx preview port (TLS
@@ -28,6 +30,27 @@ LIVE = ("installing", "starting", "running")
 LOOPBACK = frozenset({"127.0.0.1", "localhost", "::1"})
 APP_PORTS = range(47000, 48000)   # what a Worker may report, as its host's nginx forwards only these
 NAME = re.compile(r"[a-z0-9]([a-z0-9-]*[a-z0-9])?(\.[a-z0-9]([a-z0-9-]*[a-z0-9])?)+")
+RUN_LABEL = re.compile(r"run-[0-9a-f]{32}")
+
+
+def session_host(host, domain):
+    """The Session a per-session preview host names (D36 phase 3: ``<run-id>.<domain>``, one wildcard certificate), or
+    None when the host is not under ``domain`` — the distribution's own cloudfront.net name keeps the single-origin mode.
+    Anything else under ``domain`` is no preview: 404."""
+    if not domain or not host:
+        return None
+    name, domain = host.strip().lower(), domain.lower().strip(".")
+    if re.fullmatch(r".+:\d{1,5}", name):
+        name = name.rsplit(":", 1)[0]
+    if name != domain and not name.endswith("." + domain):
+        return None
+    label = name[:-len(domain) - 1] if name != domain else ""
+    require(RUN_LABEL.fullmatch(label), "预览地址无效", 404, "not_found")
+    return label
+
+
+def session_url(domain, rid):
+    return f"https://{rid}.{domain}"
 
 
 def _sign(key, payload):

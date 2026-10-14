@@ -323,6 +323,81 @@ class PreviewDomainTests(PreviewCase):
         self.assertEqual(self.row()["last_access"], now + 61)
 
 
+class SessionOriginTests(PreviewCase):
+    """D36 phase 3: each Session's preview on its own origin, https://<run-id>.<preview_domain>/ (one wildcard certificate);
+    the host names the Session, and the cookie and the opening link must name the same one."""
+    DOMAIN = "preview.example"
+
+    def host(self, rid=None):
+        return f"{rid or self.rid}.{self.DOMAIN}"
+
+    def test_the_host_names_the_session(self):
+        rid = self.rid
+        self.assertEqual(remote_preview.session_host(f"{rid}.preview.example", self.DOMAIN), rid)
+        self.assertEqual(remote_preview.session_host(f"{rid.upper()}.Preview.Example:443", self.DOMAIN), rid)
+        for other in ("d12ngj1vip1ugn.cloudfront.net", "", None, "preview.example.evil.test", "xpreview.example"):
+            self.assertIsNone(remote_preview.session_host(other, self.DOMAIN), other)
+        self.assertIsNone(remote_preview.session_host(f"{rid}.preview.example", ""))   # no per-session origins configured
+        for wrong in (f"a.{rid}.preview.example", "run-zz.preview.example", "preview.example", ".preview.example"):
+            with self.assertRaises(Error, msg=wrong) as caught:
+                remote_preview.session_host(wrong, self.DOMAIN)
+            self.assertEqual(caught.exception.status, 404, wrong)
+        self.assertEqual(remote_preview.session_url(self.DOMAIN, rid), f"https://{rid}.preview.example")
+
+    def test_the_preview_domain_is_a_plain_lowercase_name(self):
+        from pathlib import Path
+        from octopus.config import ConfigError, _layer
+        self.assertEqual(_layer({"preview_domain": "preview.tinyboat.blog"}, Path("/")), {"preview_domain": "preview.tinyboat.blog"})
+        for wrong in ("https://preview.tinyboat.blog", "*.preview.tinyboat.blog", "Preview.Example", "preview", "a..b"):
+            with self.assertRaises(ConfigError, msg=wrong):
+                _layer({"preview_domain": wrong}, Path("/"))
+
+    def test_the_opening_link_goes_to_the_sessions_own_origin(self):
+        FakeAppWorker.state = {**FakeAppWorker.state, "status": "running"}
+        self.service.app_start(self.b, self.rid)
+        FakeAppWorker.state = {**FakeAppWorker.state, "status": "running"}
+        with self.platform(preview_domain=self.DOMAIN) as port:
+            status, _, body = self.raw(port, "POST", f"/v1/runs/{self.rid}/app/open",
+                                       {"Authorization": "Bearer " + self.tokens["bob"]}, {})
+        self.assertEqual(status, 200, body)
+        self.assertTrue(json.loads(body)["url"].startswith(f"https://{self.host()}/_kirocrew/open/"), body)
+
+    def test_the_cookie_works_only_on_its_sessions_host(self):
+        self.running()
+        other = self.start(self.a, request="start-0000000077", team_id=self.tid, worker_id="w-z", name="别的")["id"]
+        value = remote_preview.cookie(self.rid, self.b["id"], self.key)
+        cookie = {"Cookie": "__Host-kirocrew_preview=" + value}
+        with self.platform(preview_domain=self.DOMAIN) as port:
+            self.assertEqual(self.raw(port, "GET", "/v1/preview-auth", {**cookie, "X-Preview-Host": self.host()})[0], 204)
+            self.assertEqual(self.raw(port, "GET", "/v1/preview-auth", {**cookie, "X-Preview-Host": self.host(other)})[0], 403)
+            self.assertEqual(self.raw(port, "GET", "/v1/preview-auth",
+                                      {**cookie, "X-Preview-Host": "a." + self.host()})[0], 403)
+            # the distribution's own cloudfront.net name keeps the single-origin mode
+            self.assertEqual(self.raw(port, "GET", "/v1/preview-auth",
+                                      {**cookie, "X-Preview-Host": "d12ngj1vip1ugn.cloudfront.net"})[0], 204)
+
+    def test_an_opening_link_is_followed_only_on_its_sessions_host(self):
+        self.running()
+        other = self.start(self.a, request="start-0000000078", team_id=self.tid, worker_id="w-z", name="别的")["id"]
+        ticket = remote_preview.open_ticket(self.rid, self.b["id"], self.key)
+        with self.platform(preview_domain=self.DOMAIN) as port:
+            for path in ("/_kirocrew/open/", "/_kirocrew/enter/"):
+                status, headers, _ = self.raw(port, "GET", path + ticket, {"X-Preview-Host": self.host(other)})
+                self.assertEqual(status, 403, path)
+                self.assertNotIn("set-cookie", headers)
+            status, headers, page = self.raw(port, "GET", "/_kirocrew/open/" + ticket, {"X-Preview-Host": self.host()})
+            self.assertEqual(status, 200)
+            self.assertNotIn("clear-site-data", headers)   # the origin is this Session's own: its app keeps its storage
+            status, headers, _ = self.raw(port, "GET", "/_kirocrew/enter/" + ticket, {"X-Preview-Host": self.host()})
+            self.assertEqual(status, 302)
+            self.assertTrue(headers["set-cookie"].startswith("__Host-kirocrew_preview="))
+            ticket = remote_preview.open_ticket(self.rid, self.b["id"], self.key)   # the shared origin still clears
+            status, headers, _ = self.raw(port, "GET", "/_kirocrew/open/" + ticket,
+                                          {"X-Preview-Host": "d12ngj1vip1ugn.cloudfront.net"})
+            self.assertEqual(status, 200)
+            self.assertIn("storage", headers["clear-site-data"])
+
+
 class LifecycleTests(PreviewCase):
     def test_an_idle_preview_is_stopped(self):
         self.running()

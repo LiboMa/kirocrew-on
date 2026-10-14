@@ -180,7 +180,7 @@ PREVIEW_PAGE = ("<!doctype html><html lang=\"zh-CN\"><head><meta charset=\"utf-8
                 "</style></head><body><h1 style=\"font-size:1.2rem\">KiroCrew ON 远程预览</h1><p>{text}</p></body></html>")
 
 
-def server(database, port=8918, host="127.0.0.1", allowed_hosts=(), origin_secret=None, preview_url="",
+def server(database, port=8918, host="127.0.0.1", allowed_hosts=(), origin_secret=None, preview_url="", preview_domain="",
            credentials_key_file=None, credentials_private_hosts=()):
     if origin_secret is not None and len(origin_secret) < 32:
         # An empty or truncated secret file must fail closed instead of turning origin enforcement off.
@@ -237,10 +237,16 @@ def server(database, port=8918, host="127.0.0.1", allowed_hosts=(), origin_secre
         def preview_gate(self, path):
             """The preview domain's nginx (on this host) asking: who may see the app (auth_request), opening links, and
             the page shown when it may not."""
+            try:   # a per-session host (phase 3) names its Session; the distribution's own name names none
+                own = remote_preview.session_host(self.headers.get("X-Preview-Host"), preview_domain)
+            except Error as exc:
+                return self.respond_status(403) if path == "/v1/preview-auth" else self.respond_page(str(exc), 404)
+            mine = lambda rid: require(own is None or rid == own, "此链接或 Cookie 属于另一个会话的远程预览", 403, "app_other_session")
             if path == "/v1/preview-auth":
                 try:
                     rid, holder = remote_preview.cookie_run(remote_preview.cookie_value(self.headers.get("Cookie")),
                                                             signing_key)
+                    mine(rid)
                     target = service.app_auth(rid, holder)
                 except Error as exc:
                     return self.respond_status(401 if exc.status == 401 else 403)
@@ -251,14 +257,15 @@ def server(database, port=8918, host="127.0.0.1", allowed_hosts=(), origin_secre
             try:
                 if path.startswith("/_kirocrew/open/"):
                     ticket = path[len("/_kirocrew/open/"):]
-                    remote_preview.open_run(ticket, signing_key)   # checked here, spent on the next step
-                    # Another Session's app may have used this domain before: its cookies, storage (service workers
-                    # included), cached responses and open pages go first.
+                    mine(remote_preview.open_run(ticket, signing_key)[0])   # checked here, spent on the next step
+                    # On the shared origin another Session's app may have used it before: its cookies, storage (service
+                    # workers included), cached responses and open pages go first. A Session's own origin keeps its app's.
                     target = "/_kirocrew/enter/" + ticket
                     return self.respond_page("正在打开远程预览…", head=f'<meta http-equiv="refresh" content="0;url={html.escape(target)}">',
-                                             headers=[("Clear-Site-Data", '"cache", "cookies", "storage", "executionContexts"')])
+                                             headers=[] if own else [("Clear-Site-Data", '"cache", "cookies", "storage", "executionContexts"')])
                 if path.startswith("/_kirocrew/enter/"):
                     rid, holder, nonce = remote_preview.open_run(path[len("/_kirocrew/enter/"):], signing_key)
+                    mine(rid)
                     entry = service.app_enter(rid, holder, nonce)
                     value = remote_preview.cookie(rid, holder, signing_key)
                     self.send_response(302)
@@ -522,10 +529,12 @@ def server(database, port=8918, host="127.0.0.1", allowed_hosts=(), origin_secre
                         return self.respond(service.app_start(actor, rid) if body["action"] == "start"
                                             else service.app_stop(actor, rid))
                     require(segments[4:] == ["open"] and method == "POST", "接口不存在", 404, "not_found")
-                    require(preview_url, "平台尚未配置预览域名（preview_url），远程预览暂不可用", 409, "app_preview_unconfigured")
+                    require(preview_url or preview_domain, "平台尚未配置预览域名（preview_url / preview_domain），远程预览暂不可用",
+                            409, "app_preview_unconfigured")
                     service.app_ready(actor, rid)
                     ticket = remote_preview.open_ticket(rid, actor["id"], signing_key)
-                    return self.respond({"url": preview_url.rstrip("/") + "/_kirocrew/open/" + ticket,
+                    origin = remote_preview.session_url(preview_domain, rid) if preview_domain else preview_url.rstrip("/")
+                    return self.respond({"url": origin + "/_kirocrew/open/" + ticket,
                                          "expires_in": remote_preview.TICKET_TTL})
                 if len(segments) == 4 and segments[:2] == ["v1", "runs"] and segments[3] == "archive":
                     require(method == "POST", "Method not allowed", 405)
