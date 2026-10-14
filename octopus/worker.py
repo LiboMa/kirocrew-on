@@ -340,6 +340,19 @@ class Worker:
         base, branch = record.get("commit"), record.get("branch")
         require(base and branch, "此会话的项目没有 Git 基线，无法发布", 409, "nothing_to_publish")
         message = str(body.get("message") or "KiroCrew ON：发布会话成果")[:300]
+        commit = body.get("commit")
+        if commit is not None:   # D37 §7: the verified candidate, exactly, or nothing
+            require(isinstance(commit, str) and workspace.SHA.fullmatch(commit), "commit 须为完整的提交 ID")
+            try:
+                state = workspace.clean_against(project, commit)
+                found = workspace.unpublishable(project, base, commit) if state["clean"] else []
+            except ValueError as exc:
+                raise Error(409, "publish_failed", workspace.scrub(exc)) from None
+            require(state["clean"], "这些改动尚未经过门禁与审查，未发布：" + (
+                "、".join(state["changed_files"][:20]) if state["changed_files"] else f"会话分支已不在已验证的候选 {commit[:12]}")
+                + "。请续作会话，让改动经过门禁与审查后再发布", 409, "publish_unverified")
+            require(not found, "未发布：已提交的历史中有疑似凭证或 .env 文件：" + "、".join(found[:20]), 409, "publish_secret_found")
+            return {"project": project, "base": base, "head": commit, "branch": branch, "run": run}
         try:
             old = workspace._git(project, "rev-parse", "--verify", "HEAD^{commit}")
             head = workspace.publish_candidate(project, message, branch, run)

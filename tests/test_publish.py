@@ -440,6 +440,40 @@ class PublishTests(PublishCase):
         record = self.service.publish(self.b, rid, {})   # fixed: publishing again opens the request on the same branch
         self.assertEqual((record["commit"], record["number"], record.get("request_error")), (commit, 1, None))
 
+    def verified(self, rid, project, files, review=False):
+        """A candidate made by the Worker and recorded as the accepted Attempt of the Session's task (D37)."""
+        for name, text in files.items():
+            (project / name).parent.mkdir(parents=True, exist_ok=True)
+            (project / name).write_text(text)
+        candidate = self.node.candidate({"run_id": rid, "attempt_id": "attempt-v", "mode": "commit", "message": "KiroCrew ON：实现"})
+        gates = [{"name": n, "status": "pass"} for n in ("native_completed", "identity_match", "handoff_present",
+                                                         "outcome_valid", "outcome_pass", "diff_present", "no_secrets")]
+        with self.db.transaction() as db:
+            db.execute("INSERT INTO attempts(id,run_id,task_id,number,spec,status,evidence,created,updated) "
+                       "VALUES('attempt-v',?,'code',1,'{}','accepted',?,0,0)",
+                       (rid, dumps({"candidate": {"sha": candidate["sha"], "parent": candidate["parent"]}, "gates": gates})))
+            db.execute("UPDATE tasks SET status='accepted',current_attempt='attempt-v' WHERE run_id=? AND id='code'", (rid,))
+        return candidate["sha"]
+
+    def test_only_the_verified_candidate_is_published(self):
+        rid, project = self.session(cred=self.cred["id"])
+        sha = self.verified(rid, project, {"src/feature.js": "export const x = 1;"})
+        self.assertEqual(self.service.run(self.b, rid)["verified"], {"sha": sha, "task_id": "code"})
+        record = self.service.publish(self.b, rid, {})
+        self.assertEqual((record["commit"], self.remote_head("octopus/" + rid)), (sha, sha))
+        self.assertEqual(self.worker_bodies[-1]["commit"], sha)
+
+    def test_changes_after_the_verified_candidate_are_refused(self):
+        rid, project = self.session(cred=self.cred["id"])
+        self.verified(rid, project, {"src/feature.js": "export const x = 1;"})
+        (project / "src/feature.js").write_text("export const x = 2;   // after the gates")
+        with self.assertRaises(Error) as caught:
+            self.service.publish(self.b, rid, {})
+        self.assertEqual((caught.exception.status, caught.exception.code), (409, "publish_unverified"))
+        self.assertIn("续作", str(caught.exception))
+        self.assertIn("src/feature.js", str(caught.exception))
+        self.assertIsNone(self.remote_head("octopus/" + rid))
+
     def test_who_and_when_one_may_publish(self):
         rid, project = self.session(cred=self.cred["id"])
         (project / "a.txt").write_text("1")

@@ -918,13 +918,14 @@ class Service:
                 raise Error(409, "credential_https_only", str(exc)) from None
             require(row["host"] == host and repo_credentials.covers(json.loads(row["repos"]), path) is not None,
                     f"凭证「{row['name']}」不覆盖仓库 {path}", 409, "credential_unavailable")
+            verified = self._verified(db, rid)   # D37 §7: only what passed the gates and the review is pushed
             config = json.loads(db.execute("SELECT config FROM workers WHERE id=?", (run["worker_id"],)).fetchone()["config"])
         branch = publishing.check_branch(body.get("branch") or "octopus/" + rid, source.get("ref"))
         title = text(body.get("title") or snapshot.get("name") or run["input"][:60], "标题", 200)
         secret = self.credentials.secret(row["id"])
         auth = {"kind": row["kind"], "host": row["host"], "username": repo_credentials.username(row["kind"]), "secret": secret}
-        response = worker_stream(config, "/publish/bundle", {"run_id": rid, "message": f"KiroCrew ON：{title}（{rid}）"},
-                                 timeout=120)
+        response = worker_stream(config, "/publish/bundle", {"run_id": rid, "message": f"KiroCrew ON：{title}（{rid}）",
+                                                             **({"commit": verified["sha"]} if verified else {})}, timeout=120)
         with response, tempfile.TemporaryDirectory(dir=self.db.root, prefix=".publish-") as work:
             headers = response.headers
             commit = publishing.receive(response, int(headers.get("Content-Length") or 0), Path(work) / "repo",
@@ -1199,6 +1200,23 @@ class Service:
         self.audit_read(actor, rid, "view")
         return value
 
+    @staticmethod
+    def _verified(db, rid):
+        """The Session's verified candidate (D37 §7): with review tasks, the one the last passing review was bound to;
+        without, the last code task's candidate whose gates all passed. None before D37 (no candidates)."""
+        rows = [(json.loads(r["spec"]), r["id"], json.loads(r["evidence"] or "{}")) for r in db.execute(
+            "SELECT t.id,t.spec,a.evidence FROM tasks t JOIN attempts a ON a.id=t.current_attempt "
+            "WHERE t.run_id=? AND t.status='accepted' ORDER BY t.ordinal", (rid,))]
+        reviews = any(json.loads(r["spec"]).get("kind") == "review" for r in db.execute("SELECT spec FROM tasks WHERE run_id=?", (rid,)))
+        found = None
+        for spec, task, evidence in rows:
+            failed = any(g.get("status") == "fail" for g in evidence.get("gates", []))
+            if reviews and spec.get("kind") == "review" and evidence.get("reviewed") and not failed:
+                found = {"sha": evidence["reviewed"], "task_id": task}
+            elif not reviews and (evidence.get("candidate") or {}).get("sha") and not failed:
+                found = {"sha": evidence["candidate"]["sha"], "task_id": task}
+        return found
+
     def _view(self, db, run, actor, detail=True):
         value = {k: v for k, v in run.items() if k != "snapshot"}
         value["permissions"] = run_permissions(db, actor, run)
@@ -1214,6 +1232,7 @@ class Service:
         value["credentials"] = ({"source": repo_credentials.availability(db, pinned["source"], run)} if pinned.get("source")
                                 else {"source": None, "removed": pinned["removed"]} if pinned.get("removed") else None)
         value["publish"] = snapshot.get("publish")
+        value["verified"] = self._verified(db, run["id"])
         value["tasks"] = []
         for row in db.execute("SELECT * FROM tasks WHERE run_id=? ORDER BY ordinal", (run["id"],)):
             task = dict(row)
