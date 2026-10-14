@@ -319,6 +319,20 @@ M4（共享与组织）、M5（仓库闭环）在 MVP 之后分别立项，各�
 ✅ EC2（2026-10-12，`436233b`）：线上已有会话的旧修订按记录还原（`run-690b49c1…` 9 条：创建、续作、自动纠错；`run-63b33288…`
 v4 → v6 显示规划 Prompt 新增的行）；控制台「修订历史」在改动处保留 2 行上下文、其余折叠。离线：Python 322、控制台 91、旧版回归 92。
 
+### 14.12 会话独立预览域名（D36 第 3 期）
+
+✅ EC2（2026-10-14，be34901）：负责人选定 `*.preview.tinyboat.blog`（通配证书）。
+- **部署**：`deploy.sh up` 申请 `*.preview.tinyboat.blog` 证书并在 Route 53 完成 DNS 验证（1 分钟内签发），预览分发原地更新为通配别名并写入
+  A / AAAA 记录；`push` 写入 `preview_domain`，并完成全部步骤。
+- **打开链接**：直接指向会话自己的域名（`https://run-e769393d….preview.tinyboat.blog/…`），证书为 `CN=*.preview.tinyboat.blog`。
+- **浏览器（Playwright）**：同一浏览器的两个标签页同时打开两个会话的 Vite 预览，B 读不到 A 的 `localStorage`；打开 B 之后 A 仍可访问，
+  存储仍在（共用域名时打开 B 会替换 A 的 Cookie）。
+- **拒绝**：A 的链接用在 B 的域名上 403、无 Cookie 403、未知会话的域名 403、非会话的名字 404。
+- **平台主机实测**：新的 nginx 配置通过 `nginx -t`；应用为 `tinyboat.blog` / `.preview.tinyboat.blog` 设置的 Cookie 被改回会话自己的主机名。
+- **审查与取舍**：最终审查（opus）的 2 项重要问题已修复（旧版本可回滚、证书等待与沿用待验证的证书），另把主机检查的回退加固为不退回共用模式。
+  负责人知悉的取舍：应用的 JavaScript 仍可为 `.tinyboat.blog` 写 Cookie；预览与 `*.tinyboat.blog` 的站点同站，SameSite 不再隔开它们；
+  专用域名只需改 `PREVIEW_SESSION_DOMAIN`。
+
 ### 14.11 代码仓库凭证第 1 期（D35）
 
 离线完成（2026-10-13，分支 `feat/m8-repo-credentials`）：
