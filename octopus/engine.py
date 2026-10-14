@@ -9,16 +9,15 @@ import time
 
 from .db import dumps, uid
 from .transport import worker_request
-from . import journal, planning, recovery
+from . import gates, journal, planning, recovery
 from .security import Error
 from .domain import CONTRACT, unserved
+from .gates import BLOCKED
 
 LEGACY = ("id", "name", "tool", "model", "effort", "prompt")
 
 
-BLOCKED = "工作者未完成任务或报告 BLOCKED"
 CANCELLED = re.compile(r"stop_reason=cancelled|turn cancelled by the runtime", re.I)
-EXPIRED = re.compile(r"session (?:has )?expired|not logged in", re.I)
 
 
 def transient(native, error, missing, blocked_line):
@@ -311,10 +310,6 @@ class Engine:
         state, error = ("waiting_approval" if native.get("awaiting_approval") else "running"), None
         retry = None
         if native.get("done"):
-            error = native.get("error") or ("原生任务已停止" if native.get("stopped") else None)
-            failure_type = "native_stopped" if native.get("stopped") else "native_error"
-            if EXPIRED.search(native.get("error") or ""):
-                failure_type = "auth"   # needs an administrator's login; no automatic recovery (NEEDS_INPUT)
             text = str(native.get("result", "")).strip()
             missing = text in {"", "_No response._", "_No result._"}
             blocked_line = bool(re.search(r"(?im)^\s*(?:[-*]\s*)?BLOCKED\b", text))
@@ -329,25 +324,9 @@ class Engine:
             # done (D34 §5.1); judge it on the evidence like any other Attempt.
             lost = missing and not blocked_line and report is not None and report["decision"] == "pass" \
                 and bool(result.get("handoff", "").strip())
-            if not error and (missing or blocked_line) and not lost:
-                error = BLOCKED
-            if not error and not result.get("handoff", "").strip():
-                error = "缺少本次交接文件"
-                failure_type = "contract"
-            if not error and evidence.get("actual_backend") != spec["tool"]:
-                error = "实际 ACP 后端未核实或与配置不匹配"
-                failure_type = "model"
-            actual = re.sub(r"\[(low|medium|high|xhigh|max)\]$", "", evidence.get("actual_model") or "")
-            if not error and spec["model"] not in {"auto", "default"} and actual != spec["model"]:
-                error = "实际模型未核实或与本次配置不匹配"
-                failure_type = "model"
-            if not error and spec["effort"] and evidence.get("actual_effort") and evidence["actual_effort"] != spec["effort"]:
-                error = "实际 Effort 与本次配置不匹配"
-                failure_type = "model"
-            if report is not None and report["decision"] != "pass" and (not error or error == BLOCKED):
-                error, failure_type = report["summary"], report["failure_type"]
-            if invalid and not error:
-                error, failure_type = invalid, "contract"
+            # The five checks every Attempt passes, named and recorded (D37 §4).
+            error, failure_type, evidence["gates"] = gates.basic(native, result, spec, evidence, report, invalid, lost,
+                                                                 missing, blocked_line)
             if lost and not error:
                 evidence["result_missing"] = True
             if error:
