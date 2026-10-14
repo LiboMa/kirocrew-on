@@ -94,7 +94,13 @@ Worker 的 `/health` 增加 `tools`：
 ### 4.1 来源
 
 KiroCrew Gateway 的 `GET /api/approvals`（列出待批准：`id`、`source`、`tool`、`tool_input`、`tool_purpose`、`slot`、`ts`）与 `POST /api/approvals/{id}/{approve|reject|reject_once}`。
-- 实施前先在 EC2 的 KiroCrew 版本上核实这两个接口与「运行中工具请求」是否出现在列表中（本机 0.8.0 只在派生批准时设置 `awaiting_approval`）；不一致时以实测为准修订本节。
+- EC2 实测（2026-10-14，KiroCrew `57df464…`，`dashboard/handlers/sessions.py`）：
+  - `GET /api/approvals` 只列出**状态级**批准（cron、autonudge、subagent、taskrunner），即 `state._pending_approvals`；当时列表为空。
+  - 会话（slot）内的工具批准在各 slot 的 `_approval_futures` 中，由 `POST /api/chat/slots/{slot}/approve` 答复，不在上面的列表里。
+  - 按 id 答复（`POST /api/approvals/{id}/{action}`）时，要么带上列表记录的 `origin=coordinator&slot=…&instance=…`，
+    要么必须是 Dashboard owner 的浏览器会话（`bare_approval_decide_allowed`）。
+  - 第 2 期据此设计：Worker 同时读两处（状态级列表中属于本会话 slot 的项；本会话父 slot 与子 Agent 的 slot 内待批准项），
+    答复时带上记录的目标（`origin` / `slot` / `instance`）或走 slot 路由。实施前在一个真实的待批准请求上再核对一次记录的字段。
 
 ### 4.2 接口
 
