@@ -21,6 +21,7 @@
 | A3 | 可以答复批准请求的人：会话创建者、Team owner、管理员（与发布相同），每次答复写审计。 |
 | A4 | 先做第 1 期（换工具），再做第 2 期（批准代理）。 |
 | A5 | 规划阶段把 OpenCode 换成 Claude 的内置对照（`planning.REASSIGN`）一并去掉：规划时 Kiro 看到各工具在执行环境中是否可用，自行选择。 |
+| A6 | Coding Agent 可以经 MCP 答复批准（`octopus_approve`）：调用前向用户展示内容并得到同意（负责人，2026-10-14）。 |
 
 ## 3．第 1 期：由协调者推荐换工具
 
@@ -104,19 +105,32 @@ KiroCrew Gateway 的 `GET /api/approvals`（列出待批准：`id`、`source`、
 
 ### 4.2 接口
 
+- **两类待批准项**（EC2 实测的字段）：
+  - `native`：本会话父 slot 的会话内工具请求，来自 `GET /api/chat/slots` 中该 slot 的 `pending_approval_info`
+    （`tool`、`tool_input`、`tool_kind`、`tool_purpose`、`request_id`、`request_mid`）；
+  - `coordinator`：`GET /api/approvals` 中 `slot` 为本会话父 slot 的状态级记录（`id`、`instance`、`source`、`tool`、`tool_input`、
+    `tool_purpose`、`ts`）。`pending_approval_info` 为 `coordinator` 时与其中一条相同，不重复列出。
 - **Worker**：
-  - `POST /approvals {run_id}`：返回本会话（其父会话与子 Agent 的 slot）的待批准项；
-  - `POST /approvals/answer {run_id, id, decision}`：核对该项属于本会话后转交 Gateway。
+  - `POST /approvals {run_id}`：只返回本会话父 slot 的待批准项，每项带 `origin`、`request_id`，以及 `request_mid`（native）或 `instance`（coordinator）；
+  - `POST /approvals/answer {run_id, origin, request_id, request_mid | instance, decision: approve | reject}`：
+    先重新列出本会话的待批准项，所答复的一项必须在其中（标识完全一致），否则 404 `approval_not_pending`；
+    - native：`POST /api/chat/slots/{slot}/approve {"origin":"native","request_id","request_mid","action":"approved|rejected"}`；
+    - coordinator：`POST /api/approvals/{id}/{approve|reject}?origin=coordinator&slot=<slot>&instance=<instance>`。
 - **平台**：
-  - `GET /v1/runs/<id>/approvals`（`read`）；
-  - `POST /v1/runs/<id>/approvals/<aid> {decision: approve|reject}`（`execute`，人员见 A3）。
-  - 答复写审计 `approval.answer`（会话、工具、命令摘要、决定、答复人）与变更记录。
-- **Engine**：Attempt 为 `waiting_approval`，或巡检发现待批准项时，会话的 `attention` 为「等待批准：<工具> <用途>」，并给出操作。
+  - `GET /v1/runs/<id>/approvals`（`read`）：Worker 的列表；Worker 版本不支持时返回空列表与 `supported: false`；
+  - `POST /v1/runs/<id>/approvals/answer {origin, request_id, request_mid | instance, decision}`（`execute`，人员见 A3）；
+  - 答复写审计 `approval.answer`（会话、来源、工具、命令摘要、决定、答复人）与变更记录 `approval.answered`。
+- **Engine / 会话视图**：会话为 `waiting_approval` 时，`attention` 为「等待批准」，操作为在会话页或经 MCP 查看并答复。
 
 ### 4.3 界面
 
-- **控制台**：会话页「待批准」卡片，列出工具、命令或文件（截断显示）、用途、剩余时间，提供「批准」与「拒绝」。批准前展开完整内容。
-- **MCP**：`octopus_approvals {run_id}` 列出待批准项。是否提供 `octopus_approve` 由负责人在第 2 期开始前决定（见 §6）。
+- **控制台**：会话打开且未结束时，会话页每 10 秒读取待批准项；有待批准项时显示「待批准」卡片：
+  - 列出来源、工具、命令或文件（截断显示，可展开完整内容）、用途；
+  - 「批准」与「拒绝」，批准前展开完整内容并确认。
+- **MCP**：
+  - `octopus_approvals {run_id}` 列出待批准项；
+  - `octopus_approve {run_id, origin, request_id, request_mid | instance, decision}`（A6）。工具说明与 Skill 要求：调用前向用户展示工具、命令或文件与用途，
+    得到用户的明确同意；不替用户决定。
 
 ## 5．测试与验收
 
@@ -131,9 +145,10 @@ KiroCrew Gateway 的 `GET /api/approvals`（列出待批准：`id`、`source`、
   - EC2：在 `LiboMa/bedrock-claude-call` 上提交一个请求的工具在执行环境中不可用的任务（或其模型未发布），会话经协调者推荐换工具后完成，记录可见。
 - **第 2 期**：
   - 本机：Worker 只返回本会话的待批准项；答复他人会话的项被拒；人员权限；审计。
-  - EC2：一个需要批准的任务在控制台批准后继续。
+  - EC2：在一个会话的原生父会话中触发一次工具请求（K20 的情形：全局批准为 interactive），控制台出现「待批准」卡片，
+    批准后该请求被执行；另一次请求被拒绝，原生侧收到拒绝；MCP 列出并答复一项。
 
-## 6．待第 2 期开始前确认
+## 6．已确认
 
-- Coding Agent 是否可以经 MCP 答复批准（`octopus_approve`）：Coding 客户端在调用前会询问用户；或只列出、答复只在控制台。
-- KiroCrew 批准接口在 EC2 版本上的实测结果（§4.1）。
+- `octopus_approve`：提供（A6）。
+- KiroCrew 批准接口：EC2 实测见 §4.1、§4.2。
