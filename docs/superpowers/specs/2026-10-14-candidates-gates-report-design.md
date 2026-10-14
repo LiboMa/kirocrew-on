@@ -1,0 +1,145 @@
+# 候选提交、命名门禁与 Feature 报告（D37，M2）
+
+## 1．目标
+
+1. 每个改代码的任务结束时，平台在会话分支 `octopus/<run>` 上留下一个**候选提交**，记录它改了什么。
+2. 每个 Attempt 的验收由一组**命名门禁**判定，结果逐条入库，并在控制台、MCP 与报告中展示。
+   - 现有的隐式检查得到名字。
+   - 新增 `diff_present`、`no_secrets`、`checks_pass`、`review_bound`。
+   - `checks_pass` 由平台**亲自运行**任务的检查命令，不再只信任 Agent 的自述。
+3. 发布只推送**已验证的候选**（`candidate_unchanged`）：推送的提交就是通过门禁与审查的那一个。
+4. 第 2 期：**Feature 报告**汇总需求、计划、各任务门禁、候选、审查结论、纠错与 PR 链接。
+
+成功标准：在 EC2 上对 `LiboMa/bedrock-claude-call` 的一个会话完成以下流程。
+
+1. 实现任务产生候选 `abc1234`。
+2. 平台运行它的检查命令，一次失败，触发自动返工，返工后通过。
+3. 审查任务写明审查的是哪个提交，`review_bound` 通过。
+4. 会话页逐条显示门禁。
+5. 「发布到仓库」推送的提交就是那个候选，PR 中能看到每个任务的提交。
+
+## 2．已确定（负责人，2026-10-14）
+
+| 编号 | 决定 |
+|---|---|
+| G1 | `checks_pass` 由平台运行任务的 `verify` 命令。<br>执行环境、执行用户、会话工作区；每条命令 10 分钟，每个任务合计 20 分钟；输出末尾作为证据保留。<br>失败即该 Attempt 失败。 |
+| G2 | 分期：<br>第 1 期：候选 + 命名门禁 + 只发布已验证候选；<br>第 2 期：Feature 报告；<br>第 3 期：`tests_fail_on_baseline` 与 `artifacts_locked`（任务 `paths` 的执行）。 |
+| G3 | 门禁失败等同 Attempt 失败，沿用现有恢复：瞬时重试、协调者诊断、返工与轮数上限。门禁的详情作为返工反馈。 |
+
+## 3．候选提交
+
+- **范围**：`kind` 为 `implement`、`test`、`deliver` 的任务，以及没有 `kind` 的旧式任务。`review` 与 `design` 不产生候选。
+- **时机**：原生任务完成、前五个门禁通过之后，Engine 请 Worker 生成候选（`POST /candidate`），再运行检查命令。
+- **做法**：与发布（D35 §5.2）同一套机制。
+  1. 在临时索引中暂存工作区改动，排除 `.env` 与依赖、缓存目录（不读入 Git）。
+  2. 用 `commit-tree` 生成提交：作者 `KiroCrew ON`，信息为 `KiroCrew ON：<任务名>（<run>/<task> 第 <n> 次）`。不运行钩子，不签名。
+  3. 检查自上一个候选以来新增的每个对象：疑似凭证与 `.env` 路径。
+  4. 检查通过才移动会话分支、让工作区索引一致。检出秘密时分支不动，门禁 `no_secrets` 失败。
+- **Agent 自己的提交**：保留。候选就是自动提交之后的 HEAD；没有任何改动时，候选等于上一个候选，`changed: false`。
+- **记录**：Attempt 证据 `candidate: {sha, parent, changed, files, insertions, deletions}`，其中 `parent` 是上一个候选或克隆基线。
+
+## 4．门禁目录（第 1 期）
+
+按下表顺序判定。第一个失败的门禁决定 Attempt 失败；之前判定过的都记录结果（`pass`、`fail` 或 `skip` 及原因）。
+
+| 门禁 | 适用 | 判定 | 失败类型 |
+|---|---|---|---|
+| `native_completed` | 全部 | 原生任务完成，未出错、未被停止 | `native_error` / `native_stopped` / `auth`（现行） |
+| `identity_match` | 全部 | 实际 backend、模型、effort 与任务规格一致 | `model`（现行） |
+| `handoff_present` | 全部 | 交接文件存在 | `contract`（现行） |
+| `outcome_valid` | `execution_contract ≥ 2` | `outcome.json` 合法 | `contract`（现行） |
+| `outcome_pass` | 全部 | 结论为 `pass` | 报告中的类型（现行） |
+| `diff_present` | `implement`、`deliver`、`test` | 候选相对 `parent` 有改动 | `gate` |
+| `no_secrets` | 产生候选的任务 | 新增内容中没有疑似凭证与 `.env` | `gate` |
+| `checks_pass` | 有 `verify` 的任务 | 平台运行全部检查命令，退出码均为 0 | `gate` |
+| `review_bound` | `review` | 见 §6 | `gate` |
+
+- 前五个是现有检查，行为不变，只是命名并记录。
+- 结果写入 Attempt 证据：`gates: [{name, status, detail, at}]`。
+- `detail` 不含秘密：疑似凭证只列文件；命令输出经与发布相同的规则隐去凭证。
+
+## 5．运行检查命令（`checks_pass`，G1）
+
+- **命令来源**：任务契约的 `verify`，为字符串列表（D34，规划或用户给出）。
+- **执行**：Worker 在会话的项目目录中逐条运行。
+  - 以 Worker 的系统用户运行：它与 Agent 是同一执行用户，权限没有扩大。
+  - Shell 为 `bash -lc`；`PATH` 与远程预览相同（含 Node 等运行时）。
+  - 标准输入为空。
+  - 超时：每条 10 分钟，合计 20 分钟。超时按失败处理，并结束整个进程组。
+- **异步**：`POST /verify/start {run_id, attempt_id, commands}` 返回任务号；Engine 在推进循环中用 `POST /verify/status` 查询。
+  - 期间 Attempt 状态为 `checking`，控制台显示「正在运行检查命令（2/3）」。
+- **证据**：每条命令记录退出码、耗时与输出末尾 4 KB（已隐去凭证）。
+- **返工反馈**：写明失败的命令、退出码与输出末尾。
+
+## 6．审查绑定（`review_bound`）
+
+- **派发**：审查任务派发时，`context.json` 与 Prompt 带上最新候选，说明「审查提交 `<sha>`（相对 `<parent>` 的改动）」。
+- **报告**：`quality_instructions` 要求审查任务在 `outcome.json` 中写 `reviewed_commit`。
+- **判定**：以下全部成立时通过：
+  1. `reviewed_commit` 等于派发时的最新候选；
+  2. 审查结束时 HEAD 未变；
+  3. 工作区没有未提交的改动（排除的文件除外）。
+
+  审查改了代码时失败，反馈为「审查不应修改代码，修改应交给实现任务」。
+
+## 7．只发布已验证的候选（`candidate_unchanged`）
+
+- **已验证候选**：
+  - 有审查任务时：最后一个审查通过（`review_bound` 通过且结论为 `pass`）所绑定的候选；
+  - 没有审查任务时：最后一个门禁全部通过的候选。
+  - 会话页与 API 的 `verified` 字段显示它。
+- **发布**：只推送已验证候选。Worker 核对 HEAD 等于它、且之后没有未提交的改动（排除的文件除外），否则返回 409 `publish_unverified`，说明「这些改动尚未经过门禁与审查：请续作会话」。
+- **旧会话**：D37 之前的会话没有候选，发布保持现行行为（自动提交、检查全部历史）。
+
+## 8．恢复
+
+- 门禁失败的 Attempt 为 `failed`，`failure_type: gate`，证据带失败门禁的名称与详情。
+- `recovery.schedule` 照常处理：门禁失败不属于需要用户输入的类型。
+- 协调者的上下文包含门禁详情（失败的命令与输出末尾、疑似凭证的文件、空改动、审查绑定不符），可选择重试或返工上游任务。
+- 返工的 Attempt 产生新候选，`parent` 为上一个候选；被返工任务之后的审查重新绑定新候选。
+
+## 9．兼容与版本
+
+- **适用会话**：新会话的 `execution_contract` 为 3，新门禁只对 3 及以上生效。已有会话，包括续作，行为不变。
+- **旧 Worker**：Worker 在能力中声明 `candidates: 1`。不支持的 Worker 上，`diff_present`、`no_secrets`、`checks_pass`、`review_bound` 记录为 `skip`（原因：Worker 版本不支持），发布保持现行行为。
+- **旧代码**：旧版 `pipeline.py` 的门禁不复用。
+
+## 10．界面与接口
+
+- **Worker**：`POST /candidate`、`POST /verify/start`、`POST /verify/status`；发布的 `POST /publish/bundle` 增加 `commit`（期望的已验证候选）。
+- **API**：会话详情中每个 Attempt 带 `gates` 与 `candidate`，会话带 `verified`。
+- **控制台**：任务列表中每个 Attempt 显示门禁行（✓ ✗ –，点开看详情）与候选（短 sha 与增删行数）；会话页显示「已验证候选」；发布按钮写明将推送的提交。
+- **MCP**：`octopus_status` 的精简结果带门禁摘要与已验证候选。
+- **第 2 期**：`GET /v1/runs/<id>/report?format=md|html`、控制台「报告」、MCP `octopus_report`。
+
+## 11．分期
+
+- **第 1 期**：§3–§10。
+- **第 2 期**：Feature 报告。
+  - 模板化 Markdown 与 HTML；HTML 自带样式，无外部资源。
+  - 内容：需求与计划（任务及契约）、各任务的最终 Attempt（工具、模型、门禁表、候选与增删行数）、审查结论、纠错记录、发布的分支与 PR。
+- **第 3 期**：
+  - `tests_fail_on_baseline`：测试任务新增的测试在其 `parent` 上失败、在候选上通过；
+  - `artifacts_locked`：已验收任务的交付物在之后的任务中只能由在 `paths` 中列出它们的任务修改。
+
+## 12．测试与验收
+
+- **本机**：
+  - 候选：有改动、无改动、Agent 自己提交、检出秘密时分支不动；
+  - 检查命令：退出码、超时并结束进程组、输出末尾与隐去凭证、合计超时；
+  - 门禁：判定顺序与记录（纯函数）；
+  - 审查绑定：sha 不符、审查改了代码；
+  - Engine：门禁失败进入恢复、返工产生新候选、审查重新绑定；
+  - 发布：只推已验证候选，有未验证改动时 409；
+  - 旧 Worker 与旧会话行为不变。
+- **EC2**：
+  1. 在 `LiboMa/bedrock-claude-call` 上运行一个实现加审查的会话，实现任务的 `verify` 第一次失败（如缺少的测试），自动返工后通过；
+  2. 会话页显示门禁与候选；
+  3. 发布推送的提交等于已验证候选；
+  4. PR 中能看到各任务的提交。
+
+## 13．风险
+
+- 检查命令与 Agent 同权限运行，来源是规划或用户：信任程度与 Agent 相同，不另外放宽。
+- 检查命令可能很慢，例如首次安装依赖；合计 20 分钟的上限可能不够。超时会写明原因，可在任务的 `verify` 中拆分或缩短命令。
+- 候选让会话分支在每个任务后前进；Agent 若执行 `git reset` 改写历史，下一个候选的 `parent` 不再是其祖先。此时记录 `rewritten: true`，按新的 HEAD 继续，并在报告中标出。
