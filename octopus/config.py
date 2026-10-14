@@ -26,6 +26,7 @@ FLOATS = {"retry_unavailable": (0.0, 600.0), "shutdown_grace": (0.0, 300.0)}
 STRINGS = {"api_host", "worker_host", "public_url", "crew_url", "worker_isolation", "approval_mode", "crew_entry_ttl",
            "preview_tls_name", "preview_url", "preview_domain"}
 APPROVAL = ("", "auto", "interactive")
+BOOLS = {"crew_yolo"}
 # Lifetime of the native browser login minted for "open in KiroCrew": 1–480 minutes or 1–8 hours (K03).
 ENTRY_TTL = re.compile(r"(?:[1-9]|[1-9][0-9]|[1-3][0-9]{2}|4[0-7][0-9]|480)m|[1-8]h")
 HOST = re.compile(r"^[A-Za-z0-9.\-]+(:\d{1,5})?$|^\[[0-9A-Fa-f:]+\](:\d{1,5})?$")
@@ -64,6 +65,9 @@ class Settings:
     crew_url: str = ""
     # KiroCrew native tool/spawn approval for this boundary; "" keeps the legacy seed default.
     approval_mode: str = ""
+    # KiroCrew's standing YOLO on this boundary (agent.dangerously_skip_permissions, re-applied at every Gateway start):
+    # on by the owner's direction (2026-10-15); false returns to approving each tool request (D38 phase 2 then has work).
+    crew_yolo: bool = True
     crew_entry_ttl: str = "8h"
     # A Worker host's nginx preview port and the name its certificate carries (D36 §5.2); unset on the platform host.
     preview_tls_port: int = 0
@@ -89,7 +93,7 @@ def _path(value, base):
 
 def _layer(values, base):
     """Validate one layer's raw values and resolve its relative paths against ``base``."""
-    known = PATHS | set(INTS) | set(FLOATS) | STRINGS | {"allowed_hosts", "path_prepend", "tools", "kirocrew_versions",
+    known = PATHS | set(INTS) | set(FLOATS) | STRINGS | BOOLS | {"allowed_hosts", "path_prepend", "tools", "kirocrew_versions",
                                                          "credentials_private_hosts"}
     unknown = set(values) - known
     if unknown:
@@ -118,6 +122,14 @@ def _layer(values, base):
             if not low <= number <= high:
                 raise ConfigError(f"{key} 须在 {low}–{high} 之间")
             result[key] = number
+        elif key in BOOLS:
+            words = {"true": True, "1": True, "yes": True, "on": True, "false": False, "0": False, "no": False, "off": False}
+            if isinstance(value, bool):
+                result[key] = value
+            elif isinstance(value, str) and value.strip().lower() in words:
+                result[key] = words[value.strip().lower()]
+            else:
+                raise ConfigError(f"{key} 必须为 true 或 false")
         elif key in ("allowed_hosts", "credentials_private_hosts"):
             hosts = tuple(h.strip() for h in (value.split(",") if isinstance(value, str) else value) if h.strip())
             if not all(HOST.match(h) for h in hosts):
@@ -156,7 +168,7 @@ def _layer(values, base):
 def _environment(environ):
     # Only known settings are read: the OCTOPUS_ namespace is shared with secrets passed by name
     # (e.g. `init --password-env OCTOPUS_ADMIN_PASSWORD`). Unknown keys are still errors in files.
-    known = PATHS | set(INTS) | set(FLOATS) | STRINGS | {"allowed_hosts", "path_prepend", "kirocrew_versions",
+    known = PATHS | set(INTS) | set(FLOATS) | STRINGS | BOOLS | {"allowed_hosts", "path_prepend", "kirocrew_versions",
                                                          "credentials_private_hosts"}
     values, tools = {}, {}
     for key, value in environ.items():

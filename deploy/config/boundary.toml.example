@@ -11,6 +11,9 @@ worker_port = 8928
 worker_isolation = "trusted-local"
 # 仅平台派发的 spawn 请求原生 auto 批准（D14）；全局工具批准保持 interactive
 approval_mode = "auto"
+# KiroCrew 的常驻 YOLO（agent.dangerously_skip_permissions，每次 Gateway 启动时写入并生效，不随重启失效）：默认开启；
+# false 时恢复逐项批准，待批准项出现在控制台「待批准」与 MCP octopus_approvals 中（D38 第 2 期）
+# crew_yolo = true
 # 安装后经原生契约检查确认的 KiroCrew 版本（D18）
 kirocrew_versions = []
 gateway_port = 5476

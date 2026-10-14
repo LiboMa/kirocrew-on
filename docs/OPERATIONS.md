@@ -292,8 +292,11 @@ CloudFront 只使用 us-east-1 的证书）：分发加上别名与证书（SNI�
   答复前 Worker 重新核对该请求仍在等待且属于本会话。
 - **记录**：审计 `approval.answer`（来源、工具、命令前 200 字符、决定、答复人），会话变更记录 `approval.answered`。
 - **旧 Worker**：列表为空并标明不支持（`supported: false`），在原生 KiroCrew 中处理。
-- **YOLO**：KiroCrew Dashboard 中开启的 YOLO（`crew/config.json` 的 `yolo_duration`）对整个 Gateway 生效，期间所有工具与派生都直接执行，
-  这里不会出现待批准项。在 Dashboard 中切回 Normal 即结束 YOLO（对该 Gateway 上的所有会话生效）。
+- **YOLO（默认开启）**：执行边界配置 `crew_yolo` 默认为 `true`（负责人 2026-10-15）。每次 Gateway 启动时，平台把
+  `agent.dangerously_skip_permissions` 写入 `crew/config.json`，KiroCrew 据此建立常驻 YOLO，不随重启失效，期间所有工具与派生都直接执行，
+  这里不会出现待批准项。
+  - 关闭：边界配置写 `crew_yolo = false`（或环境变量 `OCTOPUS_CREW_YOLO=false`），重启该边界的 Gateway 后恢复逐项批准。
+  - 在 Dashboard 中切回 Normal 会立即结束 YOLO（对该 Gateway 上的所有会话生效），到下次 Gateway 启动时按 `crew_yolo` 恢复。
 
 ### 发布到仓库（D35 第 2 期）
 

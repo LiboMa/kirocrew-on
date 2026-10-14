@@ -63,6 +63,14 @@ class ConfigTests(unittest.TestCase):
         s = load(path, environ={**self.env, "OCTOPUS_TOOL_CODEX": "/opt/tools/codex"}, cwd=self.cwd)
         self.assertEqual(s.tools, {"claude": Path("/opt/tools/claude"), "codex": Path("/opt/tools/codex")})
 
+    def test_crew_yolo_is_on_unless_turned_off(self):
+        self.assertIs(load(environ=self.env, cwd=self.cwd).crew_yolo, True)
+        self.assertIs(load(self.write("crew_yolo = false\n"), environ=self.env, cwd=self.cwd).crew_yolo, False)
+        self.assertIs(load(environ={**self.env, "OCTOPUS_CREW_YOLO": "false"}, cwd=self.cwd).crew_yolo, False)
+        self.assertIs(load(environ={**self.env, "OCTOPUS_CREW_YOLO": "1"}, cwd=self.cwd).crew_yolo, True)
+        with self.assertRaises(ConfigError):
+            load(self.write('crew_yolo = "maybe"\n'), environ=self.env, cwd=self.cwd)
+
     def test_invalid_values_are_rejected(self):
         for text in ('api_port = 0\n', 'unknown_key = 1\n', 'worker_isolation = "shared"\n',
                      'engine_workers = 99\n', '[tools]\ngemini = "/x"\n', 'allowed_hosts = ["bad host"]\n'):

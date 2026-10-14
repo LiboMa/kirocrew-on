@@ -9,7 +9,7 @@ LEGACY_COMMON = ("这是用户授权的本地多 ACP PoC。只操作明确指定
                  "不读取凭据，不联网安装依赖，不发布、不提交。报告实际执行结果，不编造。")
 
 
-def seed(*, crew_home, kiro_home, allowed_roots, port, legacy_pipeline):
+def seed(*, crew_home, kiro_home, allowed_roots, port, legacy_pipeline, yolo=True):
     from kiro_crew.agent import managed_mcp_spec_entry
     crew_home.mkdir(parents=True, exist_ok=True)
     (kiro_home / "agents").mkdir(parents=True, exist_ok=True)
@@ -17,7 +17,7 @@ def seed(*, crew_home, kiro_home, allowed_roots, port, legacy_pipeline):
         "agent": {
             "provider": "acp", "acp_backend": "", "default_agent": "poc-coordinator",
             # Global tool approval stays interactive even for auto boundaries: only platform-dispatched spawns
-            # request native auto approval (D14), so owner and parent chats keep prompting.
+            # request native auto approval (D14). The standing YOLO below (crew_yolo) overrides it while on.
             "model": "auto", "sandbox": "auto", "approval_mode": "interactive",
             "session_sharing": False, "max_subagents": 3, "log_level": "INFO",
             "subagent_cwd_allowed_roots": [str(root) for root in allowed_roots],
@@ -32,6 +32,15 @@ def seed(*, crew_home, kiro_home, allowed_roots, port, legacy_pipeline):
     path = crew_home / "config.json"
     if not path.exists():
         path.write_text(json.dumps(config, ensure_ascii=False, indent=2) + "\n")
+    # The boundary's standing YOLO (crew_yolo): the one key written into an existing config, so it holds across
+    # Gateway restarts (a Dashboard grant ends at shutdown) and the setting can turn it off again.
+    current = json.loads(path.read_text())
+    agent = current.setdefault("agent", {})
+    if agent.get("dangerously_skip_permissions") is not yolo:
+        agent["dangerously_skip_permissions"] = bool(yolo)
+        staged = path.with_name(path.name + ".tmp")
+        staged.write_text(json.dumps(current, ensure_ascii=False, indent=2) + "\n")
+        staged.replace(path)
     routes = {**BACKENDS, **(LEGACY_BACKENDS if legacy_pipeline else {})}
     written = []
     for name, backend in routes.items():

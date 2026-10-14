@@ -50,7 +50,7 @@ def main(argv=None):
         print(f"注意：KiroCrew {__version__} 尚未验证，本次仅做契约检查", file=sys.stderr)
     templates.seed(crew_home=settings.crew_home, kiro_home=settings.kiro_home,
                    allowed_roots=[settings.worker_data_dir], port=settings.gateway_port,
-                   legacy_pipeline=args.legacy_pipeline)
+                   legacy_pipeline=args.legacy_pipeline, yolo=settings.crew_yolo)
     cfg = KiroCrewConfig.load()
     if cfg.agent.session_sharing or cfg.session.pool_size:
         raise SystemExit("组合要求 session_sharing=false 且 pool_size=0；请检查 KIROCREW_HOME/config.json")
