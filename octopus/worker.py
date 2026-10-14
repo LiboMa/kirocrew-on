@@ -320,6 +320,7 @@ class Worker:
 
     def files(self, body):
         """Read-only project files for the console preview: never outside the project, never hidden files (.env, .git)."""
+        self._undo_baseline(self.path(body.get("run_id")))
         project = workspace.project_dir(self.path(body.get("run_id"))).resolve()
         relative = body.get("path") or ""
         require(isinstance(relative, str) and len(relative) <= 500 and "\x00" not in relative, "路径无效")
@@ -341,6 +342,7 @@ class Worker:
         """What a download of the run's project contains (D36 §4.2): every file and directory and .git, without
         dependency and cache directories, .env files, symlinks (never followed) or git hooks; .git config files are
         packed cleaned (safe_git_config). 413 above the size limit, naming the largest parts."""
+        self._undo_baseline(self.path(run_id))
         project = workspace.project_dir(self.path(run_id))
         files, folders, configs, links, skipped, excluded, sizes, total = [], [], [], [], [], set(), {}, 0
         for current, dirs, names in os.walk(project, followlinks=False):
@@ -396,16 +398,48 @@ class Worker:
         require(isinstance(commands, list) and 0 < len(commands) <= 10 and
                 all(isinstance(c, str) and c.strip() and len(c) <= 500 for c in commands), "检查命令须为 1–10 条、每条 ≤ 500 字符")
         require(isinstance(body.get("attempt_id"), str) and body["attempt_id"], "需要 attempt_id")
-        project = workspace.project_dir(self.path(body["run_id"]))
-        return self.checks.start(body["run_id"], body["attempt_id"], project, commands)
+        run = self.path(body["run_id"])
+        self._undo_baseline(run)
+        project = workspace.project_dir(run)
+        baseline = body.get("baseline")
+        if baseline is None:
+            return self.checks.start(body["run_id"], body["attempt_id"], project, commands)
+        # tests_fail_on_baseline (D37 §11.1): the same commands, in place, on the Session's baseline with the test task's
+        # changes laid on top; the workspace is put back on the candidate whatever happens.
+        require(isinstance(baseline, dict) and all(isinstance(baseline.get(k), str) and workspace.SHA.fullmatch(baseline[k])
+                                                   for k in ("candidate", "parent")), "基线检查须给出完整的提交 ID")
+        base = workspace.read_record(run).get("commit")
+        require(base, "此会话的项目没有 Git 基线", 409, "candidate_unsupported")
+        marker = run / "baseline.json"
+
+        def prepare():
+            write(marker, {"candidate": baseline["candidate"]})
+            workspace.baseline_apply(project, base, baseline["parent"], baseline["candidate"])
+
+        def restore():
+            workspace.baseline_restore(project, baseline["candidate"])
+            marker.unlink(missing_ok=True)
+        started = self.checks.start(body["run_id"], body["attempt_id"], project, commands, kind="baseline",
+                                    around=(prepare, restore))
+        return {**started, "baseline": True, "base": base}
 
     def verify_status(self, body):
         return self.checks.status(str(body.get("job", "")))
+
+    def _undo_baseline(self, run):
+        """A baseline run the Worker did not finish (it restarted): the workspace back on the candidate first (D37 §11.1)."""
+        marker = run / "baseline.json"
+        if marker.is_file() and not self.checks.running(run.name, "baseline"):   # a live run puts it back itself
+            candidate = json.loads(marker.read_text()).get("candidate")
+            if isinstance(candidate, str) and workspace.SHA.fullmatch(candidate):
+                workspace.baseline_restore(workspace.project_dir(run), candidate)
+            marker.unlink(missing_ok=True)
 
     def candidate(self, body):
         """A task's candidate commit (D37 §3, ``mode: commit``), or a review's check that the workspace is still the
         candidate it reviewed (§6, ``mode: check``)."""
         run = self.path(body["run_id"])
+        self._undo_baseline(run)
         project, record = workspace.project_dir(run), workspace.read_record(run)
         base, branch = record.get("commit"), record.get("branch")
         require(base and branch, "此会话的项目没有 Git 基线，无法生成候选", 409, "candidate_unsupported")
@@ -428,6 +462,7 @@ class Worker:
         what a download leaves out). The bundle carries every commit, so everything new since the clone's baseline is
         checked first, and the branch moves only when nothing in it looks like a credential or a .env file."""
         run = self.path(body["run_id"])
+        self._undo_baseline(run)
         project, record = workspace.project_dir(run), workspace.read_record(run)
         base, branch = record.get("commit"), record.get("branch")
         require(base and branch, "此会话的项目没有 Git 基线，无法发布", 409, "nothing_to_publish")
@@ -546,6 +581,7 @@ class Worker:
         action, rid = body.get("action"), body["run_id"]
         require(action in {"start", "stop", "status"}, "操作无效")
         run = self.path(rid)
+        self._undo_baseline(run)
         if action == "stop":
             return self.apps.stop(rid)
         if action == "start":
@@ -570,7 +606,7 @@ class Worker:
                 "spawn_approval": "auto" if self.approval_mode == "auto" else "interactive",
                 "crew_entry": True, "crew_origin": self.crew_origin, "observe": True, "app_preview": True,
                 "tool_auth": {"kiro": self.tool_auth()}, "tools": self.tools(),
-                "coordinator_recovery": True, "quality_outcome": True,
+                "coordinator_recovery": True, "quality_outcome": True, "baseline_checks": True,
                 "boundary": hashlib.sha256(boundary.encode()).hexdigest(),
                 "host_principal": hashlib.sha256(f"{socket.gethostname()}:{os.getuid()}".encode()).hexdigest(),
                 "routing_evidence": bool(self.routing_log and self.routing_log.is_file()),
@@ -665,6 +701,7 @@ class Worker:
 
     def dispatch(self, body):
         run, parent = self.binding(body["run_id"])
+        self._undo_baseline(run)   # the next task's Agent must see the candidate, never a baseline left by a restart
         attempt = body["attempt_id"]
         require(isinstance(attempt, str) and re.fullmatch(r"attempt-[a-f0-9]{32}", attempt), "Attempt ID 无效")
         spec = steps([body["spec"]])[0]

@@ -51,6 +51,11 @@ class Checks:
             return {key: value[key] for key in ("state", "passed", "failed", "error")} | \
                 {"results": [dict(r) for r in value["results"]]}
 
+    def running(self, run_id, kind):
+        """Whether a job of ``kind`` is running for the Session (its baseline run restores the workspace itself)."""
+        with self.lock:
+            return any(v["run_id"] == run_id and v["kind"] == kind and v["state"] == "running" for v in self.jobs.values())
+
     def cancel(self, run_id):
         """End the Session's running checks (its stop, close or delete)."""
         with self.lock:

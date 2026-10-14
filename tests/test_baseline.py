@@ -87,3 +87,43 @@ class BaselineTests(unittest.TestCase):
         first = checks.start(RID, "attempt-1", self.project, ["exit 0"])["job"]
         second = checks.start(RID, "attempt-1", self.project, ["exit 0"], kind="baseline")["job"]
         self.assertNotEqual(first, second)
+
+    def baseline(self, tests, commands):
+        return self.node.verify_start({"run_id": RID, "attempt_id": "attempt-t", "commands": commands,
+                                       "baseline": {"candidate": tests["sha"], "parent": tests["parent"]}})
+
+    def test_the_worker_runs_a_baseline_job_and_says_so(self):
+        code = self.candidate({"src/a.py": "a = 1\n"})
+        tests = self.candidate({"tests/test_a.py": "t\n"}, parent=code["sha"])
+        started = self.baseline(tests, ["test -f src/a.py"])   # the implementation is missing on the baseline
+        self.assertTrue(started["baseline"])
+        while (status := self.node.verify_status({"job": started["job"]}))["state"] != "done":
+            time.sleep(0.05)
+        self.assertFalse(status["passed"])
+        self.assertTrue((self.project / "src/a.py").exists())
+        self.assertFalse((self.node.path(RID) / "baseline.json").exists())
+        self.assertTrue(self.node.health()["baseline_checks"])
+
+    def test_a_leftover_baseline_is_undone_before_the_next_dispatch(self):
+        code = self.candidate({"src/a.py": "a = 1\n"})
+        sources.baseline_apply(self.project, self.base, self.base, code["sha"])   # a Worker that died mid-run
+        (self.node.path(RID) / "baseline.json").write_text('{"candidate": "%s"}' % code["sha"])
+        self.node._undo_baseline(self.node.path(RID))
+        self.assertTrue((self.project / "src/a.py").exists())
+        self.assertFalse((self.node.path(RID) / "baseline.json").exists())
+
+    def test_a_baseline_needs_full_commit_ids(self):
+        with self.assertRaises(Exception):
+            self.node.verify_start({"run_id": RID, "attempt_id": "attempt-t", "commands": ["true"],
+                                    "baseline": {"candidate": "abc", "parent": "def"}})
+
+    def test_a_running_baseline_is_not_undone_by_another_request(self):
+        code = self.candidate({"src/a.py": "a = 1\n"})
+        tests = self.candidate({"tests/test_a.py": "t\n"}, parent=code["sha"])
+        started = self.baseline(tests, ["sleep 1"])
+        time.sleep(0.3)
+        self.node._undo_baseline(self.node.path(RID))   # e.g. the console polling the preview meanwhile
+        self.assertFalse((self.project / "src/a.py").exists())   # still on the baseline: the job puts it back itself
+        while self.node.verify_status({"job": started["job"]})["state"] != "done":
+            time.sleep(0.05)
+        self.assertTrue((self.project / "src/a.py").exists())
