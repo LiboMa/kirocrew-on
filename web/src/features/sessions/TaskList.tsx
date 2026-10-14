@@ -68,7 +68,23 @@ export function TaskList({ run, onContinue }: { run: Run; onContinue: (taskId: s
                           <Meta label="原生 Task" value={attempt.native_id ?? "待核实"} />
                           <Meta label="工具 Session" value={attempt.evidence.native_session_id} />
                           <Meta label="Context SHA-256" value={attempt.context_hash ?? "未形成"} />
+                          {attempt.evidence.candidate && (
+                            <Meta label="候选" value={`${attempt.evidence.candidate.sha.slice(0, 7)} · ${attempt.evidence.candidate.files} 个文件 `
+                              + `+${attempt.evidence.candidate.insertions} −${attempt.evidence.candidate.deletions}`} />
+                          )}
                         </dl>
+                        {attempt.evidence.checks && !("check_results" in attempt.evidence) && (
+                          <p className="mt-2 text-muted-foreground">正在运行检查命令（{attempt.evidence.checks.commands} 条）</p>
+                        )}
+                        {!!attempt.evidence.gates?.length && (
+                          <ul aria-label="门禁" className="mt-2 space-y-0.5">
+                            {attempt.evidence.gates.map((gate, index) => (
+                              <li key={index} className={gate.status === "fail" ? "text-destructive" : gate.status === "skip" ? "text-muted-foreground" : undefined}>
+                                {{ pass: "✓", fail: "✗", skip: "–" }[gate.status]} {gate.name}{gate.detail ? " · " + gate.detail : ""}
+                              </li>
+                            ))}
+                          </ul>
+                        )}
                         {!!attempt.evidence.outcome?.acceptance?.length && (
                           <ul aria-label="验收项" className="mt-2 space-y-0.5">
                             {attempt.evidence.outcome.acceptance.map((check, index) => (

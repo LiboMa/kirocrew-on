@@ -68,6 +68,28 @@ describe("session detail", () => {
     expect(screen.getByRole("list", { name: "建议" })).toHaveTextContent("补 CHANGELOG");
   });
 
+  test("an attempt lists its gates and the candidate it left (D37)", async () => {
+    const evidence = { ...blocked.tasks[0].attempts![0].evidence,
+      candidate: { sha: "abc1234def5678abc1234def5678abc1234def56", parent: "b".repeat(40), changed: true, files: 2, insertions: 12, deletions: 3 },
+      gates: [{ name: "native_completed", status: "pass" }, { name: "diff_present", status: "pass", detail: "2 个文件" },
+        { name: "checks_pass", status: "fail", detail: "检查命令失败：npm test（退出码 1）" }, { name: "review_bound", status: "skip", detail: "此前没有候选" }] };
+    const task = blocked.tasks[0];
+    open({ ...blocked, tasks: [{ ...task, attempts: [{ ...task.attempts![0], evidence }] }, blocked.tasks[1]] } as Run);
+    await userEvent.click(await screen.findByText("执行证据与历史 Attempt"));
+    const gates = screen.getByRole("list", { name: "门禁" });
+    expect(within(gates).getAllByRole("listitem").map((item) => item.textContent)).toEqual(
+      ["✓ native_completed", "✓ diff_present · 2 个文件", "✗ checks_pass · 检查命令失败：npm test（退出码 1）", "– review_bound · 此前没有候选"]);
+    expect(screen.getByText("abc1234 · 2 个文件 +12 −3")).toBeInTheDocument();
+  });
+
+  test("an attempt whose checks are running says so", async () => {
+    const task = blocked.tasks[0];
+    const evidence = { ...task.attempts![0].evidence, checks: { job: "j", started: 1, commands: 3 } };
+    open({ ...blocked, tasks: [{ ...task, attempts: [{ ...task.attempts![0], status: "running", evidence }] }, blocked.tasks[1]] } as Run);
+    await userEvent.click(await screen.findByText("执行证据与历史 Attempt"));
+    expect(screen.getByText("正在运行检查命令（3 条）")).toBeInTheDocument();
+  });
+
   test("continue lets the user choose which later tasks rerun, the rules adding those that must", async () => {
     const step = (id: string, name: string, extra: Record<string, unknown>) => ({ ...spec(id, name, "claude"), ...extra });
     const run = makeRun({ id: "run-k", status: "completed", worker_id: "w1", version: 3, tasks: [
@@ -219,6 +241,12 @@ describe("session detail", () => {
       await screen.findByRole("button", { name: /再次发布到仓库/ });
       expect(document.querySelector("#run-publish")).toHaveTextContent("已推送：octopus/run-pub（拉取请求未创建：凭证没有此操作的权限（HTTP 403））");
       expect(screen.queryByRole("link", { name: /#/ })).not.toBeInTheDocument();
+    });
+
+    test("the verified candidate is what will be pushed", async () => {
+      open(done({ verified: { sha: "abc1234def5678abc1234def5678abc1234def56", task_id: "review" } } as Partial<Run>));
+      await screen.findByRole("button", { name: /发布到仓库/ });
+      expect(document.querySelector("#run-publish")).toHaveTextContent("将推送已验证的候选 abc1234");
     });
 
     test("a read-only credential cannot publish, and says so", async () => {

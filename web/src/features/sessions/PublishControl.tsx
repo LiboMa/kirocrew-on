@@ -34,9 +34,12 @@ export function PublishControl({ run }: { run: Run }) {
       ) : published && <>已推送：{published.branch}（拉取请求未创建：{published.request_error}）{" "}</>}
       {source.access === "read" ? <span>凭证为只读，无法发布。</span>
         : !source.unavailable && run.lifecycle === "open" && SETTLED.has(run.status) && (
-          <Button type="button" size="xs" variant="outline" disabled={busy} onClick={publish}>
-            {busy ? "正在发布…" : published ? "再次发布到仓库" : "发布到仓库"}
-          </Button>
+          <>
+            <Button type="button" size="xs" variant="outline" disabled={busy} onClick={publish}>
+              {busy ? "正在发布…" : published ? "再次发布到仓库" : "发布到仓库"}
+            </Button>
+            {run.verified && <span> 将推送已验证的候选 {run.verified.sha.slice(0, 7)}</span>}
+          </>
         )}
     </p>
   );

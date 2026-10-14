@@ -121,7 +121,29 @@ export interface AttemptEvidence {
   actual_effort?: string | null;
   native_session_id?: string | null;
   outcome?: { decision?: string; acceptance?: AcceptanceCheck[]; suggestions?: string[]; [key: string]: unknown } | null;
+  /** Named gates (D37 §4), in the order they were judged. */
+  gates?: Gate[];
+  /** The task's candidate commit on the Session's branch (D37 §3). */
+  candidate?: Candidate | null;
+  /** Verify commands still running (D37 §5). */
+  checks?: { job: string; started: number; commands: number } | null;
   [key: string]: unknown;
+}
+
+export interface Gate {
+  name: string;
+  status: "pass" | "fail" | "skip";
+  detail?: string;
+}
+
+export interface Candidate {
+  sha: string;
+  parent: string;
+  changed: boolean;
+  files: number;
+  insertions: number;
+  deletions: number;
+  rewritten?: boolean;
 }
 
 export interface Attempt {
@@ -190,6 +212,8 @@ export interface Run {
   created_by?: { id: string; username?: string | null };
   /** The source credential pinned at submission (D35 §4); never the secret. */
   publish?: PublishRecord | null;
+  /** What a publish pushes: the candidate that passed the gates and the review (D37 §7). */
+  verified?: { sha: string; task_id: string } | null;
   credentials?: { source: CredentialBinding | null; removed?: { id: string; name: string; hint: string; by: { username?: string | null } } } | null;
   /** Tasks the latest continue left as they were, still carrying that version's result (D34). */
   kept?: { version: number; tasks: string[] };

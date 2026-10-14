@@ -237,6 +237,26 @@ CloudFront 只使用 us-east-1 的证书）：分发加上别名与证书（SNI�
   运行目录内 0600 的临时文件，克隆完立即删除；remote 不含凭证，push 地址为 `DISABLED_NO_PUSH`；git 报错去除凭证后显示。
   每次使用审计 `credential.use`。停用、删除或范围不再覆盖时会话停在「仓库凭证不可用」，改绑后续作。
 
+### 候选提交与命名门禁（D37 第 1 期）
+
+新会话（`execution_contract` 3）中，每个 Attempt 由命名门禁判定，结果逐条写入 Attempt 证据 `gates`，控制台任务列表与 MCP 状态展示它们。
+- **前五个门禁**：`native_completed`、`identity_match`、`handoff_present`、`outcome_valid`、`outcome_pass`，即原有的五项检查。
+- **候选**（`implement` / `test` / `deliver` 与未标类别的任务）：
+  - Worker 以发布同样的方式（临时索引、排除 `.env` 与依赖目录）在 `octopus/<run>` 上提交 `KiroCrew ON：<任务>（<run>/<task> 第 n 次）`。
+  - 检查自上一个候选以来新增的内容：有疑似凭证或 `.env` 时分支不动，`no_secrets` 失败。
+  - `implement` / `deliver` 没有改动时 `diff_present` 失败；`test` 与未标类别的任务没有改动时记为跳过。
+- **检查命令**（`checks_pass`）：
+  - Worker 在会话的项目目录中以执行用户运行任务的 `verify`：`bash -lc`，`PATH` 同远程预览。
+  - 顺序执行，第一条失败即停；每条 10 分钟、合计 20 分钟，超时结束整个进程组。
+  - 每条记录退出码、耗时与输出末尾 4 KB（隐去凭证）。
+  - 运行期间 Attempt 仍为 `running`，控制台显示「正在运行检查命令」。停止、关闭或删除会话时结束；Worker 重启后重新运行一次。
+- **审查**（`review_bound`）：审查任务派发时带上最新候选；`outcome.json` 须写 `reviewed_commit`，审查结束时 HEAD 不变、
+  除排除的文件外没有改动。
+- **失败与恢复**：任何门禁失败即 Attempt `blocked`（`failure_type: gate`），照常进入自动纠错，协调者看到门禁详情与命令输出。
+- **发布**：只推送已验证的候选（有审查任务时为最后一个通过审查绑定的候选，否则为最后一个门禁全部通过的候选）。之后有改动时
+  409 `publish_unverified`，请续作会话。
+- **兼容**：已有会话与旧 Worker（对新接口回答 404）行为不变：新门禁记为跳过。
+
 ### 发布到仓库（D35 第 2 期）
 
 会话页「发布到仓库」或 MCP `octopus_publish`：会话结束后，把成果推送到源仓库的分支（默认 `octopus/<run-id>`），并创建或沿用

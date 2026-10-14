@@ -280,12 +280,12 @@ M4（共享与组织）、M5（仓库闭环）在 MVP 之后分别立项，各�
 |---|---|---|---|
 | 1 | Request | ○ | Session 的 `request_id` 提供幂等登记；Request 表、来源客户端与仓库字段、与 Session 的关联未建 |
 | 2 | Pipeline 生成 | ◐ EC2 | 已有：Kiro Agent 规划（D26：意图、补全、1–7 个任务与 Agent 映射，追加到同一 Session）、`plan=match` 规则匹配、工作流文档（JSON / YAML / Markdown）解析与规范化。剩余：schema 2、规划阶段的只读源码检查 |
-| 3 | 门禁目录 | ◐ | 已有：交接文件与 `outcome.json` 校验、确定性审查返工。剩余：命名门禁目录（`tests_fail_on_baseline`、`diff_present`、`checks_pass`、`review_bound`、`candidate_unchanged` 等）及其入库与展示 |
+| 3 | 门禁目录 | ◐ | D37 第 1 期（分支 `feat/m11-gates`，EC2 待验收）：命名门禁 `native_completed`、`identity_match`、`handoff_present`、`outcome_valid`、`outcome_pass`、`diff_present`、`no_secrets`、`checks_pass`（平台运行 `verify`）、`review_bound`，逐条入库并在控制台与 MCP 展示；发布只推送已验证候选（`candidate_unchanged`）。剩余：`tests_fail_on_baseline`、`artifacts_locked`（第 3 期）、Feature 报告（第 2 期） |
 | 4 | 映射策略 | ◐ | 已有：Prompt / 工作流显式指定、K01 期间 OpenCode 由代码改派 Claude Code。剩余：个人 / Team 策略、能力校验后的通用回退链、映射来源记录 |
 | 5 | 准入 | ○ | 确认模式与按仓库范围的自动准入 |
 | 6 | 恢复阶梯 | ◐ EC2 | 已有：Worker / Gateway 不可用退避（M1）、协调者诊断（重试、退回上游返工、复审）与轮数上限。剩余：L0 瞬时重试、工具回退、重规划、预算、看门狗、条件满足后自动恢复 |
 | 7 | 批准代理 | ○ | 现以 D14（仅平台派发的 spawn 原生 auto）运行；交互式批准请求在控制台 / MCP 中不可见 |
-| 8 | 候选与分支 | ○ | 后排（D25，`docs/BACKLOG.md`） |
+| 8 | 候选与分支 | ◐ | D37 第 1 期：每个改代码的任务在 `octopus/<run>` 上留下候选提交（检出秘密时分支不动），审查绑定候选；D35 的发布推送已验证候选并创建 Draft PR / MR |
 | 9 | 远端分支推送 | ○ | 依赖仓库写凭据（GitHub Connector 写权限，M5 设计草案） |
 | 10 | Feature 报告 | ○ | |
 | 11 | Claude Code 基础 Skill | ✅ EC2 | D27：同一份 Skill 也安装到 Kiro CLI |

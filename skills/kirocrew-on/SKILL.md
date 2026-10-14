@@ -65,6 +65,12 @@ KiroCrew ON 在远端执行开发任务：KiroCrew 的 Kiro Agent 先识别意�
 - `octopus_revisions`（传 `run_id`）列出修订历史（创建、规划、续作、自动纠错）；加 `to`（以及可选的 `from`）返回两版之间需求与各任务的变化：工具、模型等字段的前后值，以及 Prompt 新增（+）与删除（-）的行。用户问“上一轮改了什么”时用它。
 - `octopus_observe`（传 `run_id`）读取原生 KiroCrew 会话里协调者与子 Agent 的最近对话（默认 20 条，单条超过 4000 字截断；`has_more` 为 true 时传 `before: next_before` 读更早的），用来向用户说明 Agent 正在做什么；不需要打开 KiroCrew。
 
+- 门禁（D37，新会话）：每个任务的 `latest.gates` 给出通过的个数、失败的门禁（`failed`，带原因首行）与跳过的门禁。
+  - 改代码的任务结束后，平台在会话分支上留下候选提交（`latest.candidate`）。
+  - 平台亲自运行任务的 `verify` 检查命令：`checks_pass` 失败时会自动返工，把失败的命令与原因告诉用户。
+  - 审查任务须在 `outcome.json` 写 `reviewed_commit`，且不修改代码（`review_bound`）。
+  - `session.verified` 是将被发布的已验证候选。
+
 常见状态：
 
 | 状态 | 含义与处理 |

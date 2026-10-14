@@ -328,7 +328,7 @@ def admin_environments(client, args):
 
 
 SESSION_FIELDS = ("id", "name", "status", "desired", "lifecycle", "version", "error", "attention", "progress", "input",
-                  "planning", "team_id", "worker_id", "workflow_name", "match_mode", "created", "updated", "kept")
+                  "planning", "team_id", "worker_id", "workflow_name", "match_mode", "created", "updated", "kept", "verified")
 
 
 def compact_status(session, events):
@@ -340,10 +340,21 @@ def compact_status(session, events):
         attempt = max(attempts, key=lambda a: a.get("number") or 0)
         evidence = attempt.get("evidence") or {}
         outcome = evidence.get("outcome") or {}
-        return {"number": attempt.get("number"), "status": attempt.get("status"), "error": attempt.get("error"),
-                "backend": evidence.get("actual_backend"), "model": evidence.get("actual_model"),
-                "decision": outcome.get("decision"), "summary": outcome.get("summary"),
-                "findings": outcome.get("findings") or [], "handoff": evidence.get("handoff_path")}
+        value = {"number": attempt.get("number"), "status": attempt.get("status"), "error": attempt.get("error"),
+                 "backend": evidence.get("actual_backend"), "model": evidence.get("actual_model"),
+                 "decision": outcome.get("decision"), "summary": outcome.get("summary"),
+                 "findings": outcome.get("findings") or [], "handoff": evidence.get("handoff_path")}
+        if evidence.get("gates"):   # D37: passed as a count, failures with their first line, skipped by name
+            records = evidence["gates"]
+            value["gates"] = {"passed": sum(g.get("status") == "pass" for g in records),
+                              "failed": [{"name": g["name"], "detail": str(g.get("detail") or "").split("\n")[0][:300]}
+                                         for g in records if g.get("status") == "fail"],
+                              "skipped": [g["name"] for g in records if g.get("status") == "skip"]}
+        if evidence.get("candidate"):
+            candidate = evidence["candidate"]
+            value["candidate"] = {"sha": str(candidate.get("sha", ""))[:12],
+                                  **{k: candidate.get(k) for k in ("files", "insertions", "deletions")}}
+        return value
 
     view = {key: session[key] for key in SESSION_FIELDS if key in session}
     if session.get("recovery"):

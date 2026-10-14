@@ -72,6 +72,27 @@ class CompactStatusTests(unittest.TestCase):
         self.assertNotIn("poc-kiro", text)
         self.assertLess(len(text), 4000)
 
+    def test_gates_candidates_and_the_verified_candidate_are_summarised(self):
+        gated = attempt(5, "blocked", "pass", "实现完成")
+        gated["evidence"].update(candidate={"sha": "abc1234" + "0" * 33, "parent": "b" * 40, "changed": True, "files": 2,
+                                            "insertions": 12, "deletions": 3},
+                                 gates=[{"name": "native_completed", "status": "pass"}, {"name": "diff_present", "status": "pass"},
+                                        {"name": "checks_pass", "status": "fail", "detail": "检查命令失败：npm test（退出码 1）\n" + RAW},
+                                        {"name": "review_bound", "status": "skip", "detail": "此前没有候选"}])
+        session = {**SESSION, "verified": {"sha": "abc1234" + "0" * 33, "task_id": "implement"},
+                   "tasks": [{**SESSION["tasks"][0], "attempts": [gated]}]}
+
+        class One:
+            def request(self, method, path, body=None):
+                return {f"/v1/runs/{RID}": session, f"/v1/runs/{RID}/events": []}[path]
+        view = mcp.call(One(), "octopus_status", {"run_id": RID})
+        latest = view["session"]["tasks"][0]["latest"]
+        self.assertEqual(latest["gates"], {"passed": 2, "failed": [{"name": "checks_pass", "detail": "检查命令失败：npm test（退出码 1）"}],
+                                           "skipped": ["review_bound"]})
+        self.assertEqual(latest["candidate"], {"sha": "abc1234" + "0" * 5, "files": 2, "insertions": 12, "deletions": 3})
+        self.assertEqual(view["session"]["verified"]["task_id"], "implement")
+        self.assertNotIn("原始输出", json.dumps(view, ensure_ascii=False))
+
     def test_detail_returns_the_full_record(self):
         view = mcp.call(Client(), "octopus_status", {"run_id": RID, "detail": True})
         self.assertEqual(view, {"session": SESSION, "events": EVENTS})
