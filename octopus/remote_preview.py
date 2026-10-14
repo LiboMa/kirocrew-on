@@ -39,14 +39,20 @@ def session_host(host, domain):
     Anything else under ``domain`` is no preview: 404."""
     if not domain or not host:
         return None
-    name, domain = host.strip().lower(), domain.lower().strip(".")
-    if re.fullmatch(r".+:\d{1,5}", name):
-        name = name.rsplit(":", 1)[0]
+    name, domain = plain_host(host), domain.lower().strip(".")
     if name != domain and not name.endswith("." + domain):
         return None
     label = name[:-len(domain) - 1] if name != domain else ""
     require(RUN_LABEL.fullmatch(label), "预览地址无效", 404, "not_found")
     return label
+
+
+def plain_host(host):
+    """A Host header as a bare name: lowercase, without a port or the trailing dot of a fully qualified name."""
+    name = (host or "").strip().lower()
+    if re.fullmatch(r".+:\d{1,5}", name):
+        name = name.rsplit(":", 1)[0]
+    return name.rstrip(".")
 
 
 def session_url(domain, rid):

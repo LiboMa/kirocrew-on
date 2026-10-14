@@ -178,6 +178,9 @@ sudo ln -sfn /opt/kirocrew-on/releases/<旧版本> /opt/kirocrew-on/current
 sudo systemctl restart octopus-api octopus-worker@personal octopus-gateway@personal
 ```
 
+旧版本不认识新版本写入 `platform.toml` 的配置项时拒绝启动（“未知配置项”）：回滚到会话独立预览域名（D36 第 3 期）之前的版本，
+先删除 `platform.toml` 中的 `preview_domain` 一行。
+
 若新版本已执行 schema 迁移，旧版本会拒绝打开更高版本的数据库（“数据库 schema 版本 N 高于程序支持的 M”）。
 此时先用升级前备份在独立目录执行 `restore-verify`，确认后停服替换数据库文件。
 回滚记录必须写明原因与已执行的代码和数据变更；不通过回滚元数据掩盖已执行的变更。
@@ -277,8 +280,9 @@ Draft PR（GitHub）/ Draft MR（GitLab）。
     `preview_tls_port` / `preview_tls_name`。
   - 首次写入边界配置会让该主机的 Gateway 重启一次（指纹包含边界配置），部署前确认没有进行中的会话。
 - **会话独立预览域名**（D36 第 3 期，`stack.env` 的 `PREVIEW_SESSION_DOMAIN`，现为 `preview.tinyboat.blog`）：
-  - 每个会话的预览在 `https://<run-id>.preview.tinyboat.blog/`：同一浏览器可同时打开多个会话的预览，各应用的 Cookie、存储、
-    缓存互不可见。控制台与 MCP 取得的打开链接直接指向该会话的域名。
+  - 每个会话的预览在 `https://<run-id>.preview.tinyboat.blog/`：同一浏览器可同时打开多个会话的预览，各应用读不到其他会话的
+    Cookie、存储与缓存（但应用的 JavaScript 可以写 `Domain=preview.tinyboat.blog` 的 Cookie，其他会话的应用会收到；写给
+    `.tinyboat.blog` 的大量 Cookie 也会让控制台的请求头过大而失败）。控制台与 MCP 取得的打开链接直接指向该会话的域名。
   - `deploy.sh up` 在 Route 53 找到托管区，在 us-east-1 找到 `*.preview.tinyboat.blog` 通配证书；没有时申请，把 DNS 验证记录写入
     托管区并等待签发（几分钟）。随后为预览分发加通配别名与 A / AAAA 别名记录。`push` 把 `preview_domain` 写入 `platform.toml`。
   - CloudFront 把访问的主机名交给源站，nginx 以 `X-Preview-Host` 转给 API：主机名指明会话，Cookie 与打开链接必须属于同一会话，

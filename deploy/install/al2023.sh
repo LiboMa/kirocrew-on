@@ -64,6 +64,14 @@ if len(token) < 32:
 print(open(template).read().replace("__PREVIEW_VERIFY__", verify_value(token)).replace("__PREVIEW_TLS_PORT__", port), end="")
 PY
 }
+toml_unset() {  # toml_unset FILE KEY: remove a top-level key (an older release rejects keys it does not know)
+  "$PYTHON" - "$1" "$2" <<'PY'
+import re, sys
+path, key = sys.argv[1:]
+text = open(path).read()
+open(path, "w").write(re.sub(rf"(?m)^{re.escape(key)}[ \t]*=.*\n?", "", text, count=1))
+PY
+}
 toml_set() {  # top-level TOML key: replace its line, or insert it before the first table so it never lands in [tools]
   "$PYTHON" - "$1" "$2" "$3" <<'PY'
 import re, sys
@@ -348,8 +356,13 @@ if [ -z "$WORKER_HOST" ]; then
 # After the switch: a release before worker_ca_file would refuse to load platform.toml with the key (unknown keys fail).
 toml_set /etc/kirocrew-on/platform.toml worker_ca_file '"/etc/kirocrew-on/worker-ca.pem"'
 toml_set /etc/kirocrew-on/platform.toml credentials_key_file '"/etc/kirocrew-on/credentials.key"'
-# Each Session's preview on its own origin, https://<run-id>.<PREVIEW_SESSION_DOMAIN>/ (empty: the shared origin only).
-toml_set /etc/kirocrew-on/platform.toml preview_domain "\"${PREVIEW_SESSION_DOMAIN:-}\""
+# Each Session's preview on its own origin, https://<run-id>.<PREVIEW_SESSION_DOMAIN>/ (empty: the shared origin only;
+# the key is then removed, so a rollback to a release before D36 phase 3 still starts).
+if [ -n "${PREVIEW_SESSION_DOMAIN:-}" ]; then
+  toml_set /etc/kirocrew-on/platform.toml preview_domain "\"$PREVIEW_SESSION_DOMAIN\""
+else
+  toml_unset /etc/kirocrew-on/platform.toml preview_domain
+fi
 if [ -n "${PREVIEW_DOMAIN:-}" ]; then
   toml_set /etc/kirocrew-on/platform.toml preview_url "\"https://$PREVIEW_DOMAIN\""
 fi

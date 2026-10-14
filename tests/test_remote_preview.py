@@ -335,6 +335,8 @@ class SessionOriginTests(PreviewCase):
         rid = self.rid
         self.assertEqual(remote_preview.session_host(f"{rid}.preview.example", self.DOMAIN), rid)
         self.assertEqual(remote_preview.session_host(f"{rid.upper()}.Preview.Example:443", self.DOMAIN), rid)
+        self.assertEqual(remote_preview.session_host(f"{rid}.preview.example.", self.DOMAIN), rid)        # FQDN dot
+        self.assertEqual(remote_preview.session_host(f"{rid}.preview.example.:443", self.DOMAIN), rid)
         for other in ("d12ngj1vip1ugn.cloudfront.net", "", None, "preview.example.evil.test", "xpreview.example"):
             self.assertIsNone(remote_preview.session_host(other, self.DOMAIN), other)
         self.assertIsNone(remote_preview.session_host(f"{rid}.preview.example", ""))   # no per-session origins configured
@@ -367,8 +369,12 @@ class SessionOriginTests(PreviewCase):
         other = self.start(self.a, request="start-0000000077", team_id=self.tid, worker_id="w-z", name="别的")["id"]
         value = remote_preview.cookie(self.rid, self.b["id"], self.key)
         cookie = {"Cookie": "__Host-kirocrew_preview=" + value}
-        with self.platform(preview_domain=self.DOMAIN) as port:
+        with self.platform(preview_domain=self.DOMAIN, preview_url="https://d12ngj1vip1ugn.cloudfront.net") as port:
             self.assertEqual(self.raw(port, "GET", "/v1/preview-auth", {**cookie, "X-Preview-Host": self.host()})[0], 204)
+            # a per-session host is never downgraded into the shared mode: odd spellings, unknown hosts, no host at all
+            for host in (self.host(other) + ".", self.host(other) + ".:443", "evil.example", None):
+                self.assertEqual(self.raw(port, "GET", "/v1/preview-auth",
+                                          {**cookie, **({"X-Preview-Host": host} if host else {})})[0], 403, host)
             self.assertEqual(self.raw(port, "GET", "/v1/preview-auth", {**cookie, "X-Preview-Host": self.host(other)})[0], 403)
             self.assertEqual(self.raw(port, "GET", "/v1/preview-auth",
                                       {**cookie, "X-Preview-Host": "a." + self.host()})[0], 403)
@@ -380,7 +386,7 @@ class SessionOriginTests(PreviewCase):
         self.running()
         other = self.start(self.a, request="start-0000000078", team_id=self.tid, worker_id="w-z", name="别的")["id"]
         ticket = remote_preview.open_ticket(self.rid, self.b["id"], self.key)
-        with self.platform(preview_domain=self.DOMAIN) as port:
+        with self.platform(preview_domain=self.DOMAIN, preview_url="https://d12ngj1vip1ugn.cloudfront.net") as port:
             for path in ("/_kirocrew/open/", "/_kirocrew/enter/"):
                 status, headers, _ = self.raw(port, "GET", path + ticket, {"X-Preview-Host": self.host(other)})
                 self.assertEqual(status, 403, path)

@@ -408,8 +408,9 @@ class ScriptTests(unittest.TestCase):
 
     def test_the_installer_turns_on_per_session_preview_origins(self):
         text = (ROOT / "deploy/install/al2023.sh").read_text()
-        self.assertGreater(text.index('toml_set /etc/kirocrew-on/platform.toml preview_domain "\\"${PREVIEW_SESSION_DOMAIN:-}\\""'),
+        self.assertGreater(text.index('toml_set /etc/kirocrew-on/platform.toml preview_domain "\\"$PREVIEW_SESSION_DOMAIN\\""'),
                            text.index('ln -sfn "$TARGET" /opt/kirocrew-on/current'))
+        self.assertIn("toml_unset /etc/kirocrew-on/platform.toml preview_domain", text)   # unset: no key an older release rejects
         deploy = (ROOT / "deploy/aws/deploy.sh").read_text()
         self.assertIn('session="$(output PreviewSessionDomain)"', deploy)
         self.assertIn("PREVIEW_SESSION_DOMAIN={session}", deploy)

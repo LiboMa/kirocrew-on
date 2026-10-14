@@ -192,6 +192,8 @@ def server(database, port=8918, host="127.0.0.1", allowed_hosts=(), origin_secre
     hosts, local_hosts = set(), set()
     failures, limiter_lock = {}, threading.Lock()
 
+    shared = remote_preview.plain_host(urlsplit(preview_url).hostname) if preview_url else ""   # the preview distribution's own name
+
     class Handler(BaseHTTPRequestHandler):
         protocol_version = "HTTP/1.1"
 
@@ -239,6 +241,10 @@ def server(database, port=8918, host="127.0.0.1", allowed_hosts=(), origin_secre
             the page shown when it may not."""
             try:   # a per-session host (phase 3) names its Session; the distribution's own name names none
                 own = remote_preview.session_host(self.headers.get("X-Preview-Host"), preview_domain)
+                # With per-session hosts configured, the shared mode is for the distribution's own name alone: no
+                # other spelling, unknown host or missing header falls back to it.
+                require(own or not preview_domain or remote_preview.plain_host(self.headers.get("X-Preview-Host")) == shared,
+                        "预览地址无效", 404, "not_found")
             except Error as exc:
                 return self.respond_status(403) if path == "/v1/preview-auth" else self.respond_page(str(exc), 404)
             mine = lambda rid: require(own is None or rid == own, "此链接或 Cookie 属于另一个会话的远程预览", 403, "app_other_session")

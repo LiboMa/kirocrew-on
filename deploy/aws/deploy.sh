@@ -132,20 +132,27 @@ console_certificate() {  # console_certificate NAME: an issued certificate namin
 }
 
 preview_certificate() {  # preview_certificate DOMAIN ZONE_ID: the us-east-1 certificate for *.DOMAIN (each Session's
-  # preview host, D36 phase 3) — an issued one, else one requested here and validated through a CNAME in ZONE_ID
-  local name="*.$1" found arn state record
+  # preview host, D36 phase 3) — an issued one, else a pending or newly requested one validated through a CNAME in ZONE_ID
+  local name="*.$1" found arn state record waited=0 limit="${DEPLOY_CERT_WAIT_SECONDS:-2400}"
   if [ -n "$DRY" ]; then
     printf 'aws --region us-east-1 acm list-certificates --certificate-statuses ISSUED PENDING_VALIDATION（%s；没有时 request-certificate 并在 %s 写验证记录）\n' \
       "$name" "$2" >&2
     echo "arn:aws:acm:us-east-1:000000000000:certificate/dry-run-preview"; return
   fi
+  # JSON, not text: the CLI applies --query to each page of text output separately.
   found="$(aws --region us-east-1 acm list-certificates --certificate-statuses ISSUED PENDING_VALIDATION \
-    --query "CertificateSummaryList[?DomainName=='$name'].[CertificateArn,Status] | [0]" --output text)" || return 1
-  arn="${found%%$'\t'*}"; state="${found##*$'\t'}"
+    --query "CertificateSummaryList[?DomainName=='$name'].[CertificateArn,Status]" --output json)" || return 1
+  read -r arn state <<<"$(python3 -c '
+import json, sys
+rows = [r for r in (json.loads(sys.stdin.read() or "[]") or []) if isinstance(r, list) and len(r) == 2]
+rows.sort(key=lambda r: r[1] != "ISSUED")   # an issued certificate before one an earlier run left pending
+print(*(rows[0] if rows else []))' <<<"$found")"
   if [[ "$arn" != arn:aws:acm:us-east-1:* ]]; then
     echo "申请 us-east-1 通配证书 ${name}（DNS 验证，记录写入托管区 ${2}）" >&2
+    # One token per domain: ACM returns the same certificate for the same token within an hour.
     arn="$(aws --region us-east-1 acm request-certificate --domain-name "$name" --validation-method DNS \
-      --idempotency-token kirocrewpreview --query CertificateArn --output text)" || return 1
+      --idempotency-token "$(python3 -c 'import hashlib, sys; print(hashlib.sha256(sys.argv[1].encode()).hexdigest()[:32])' "$1")" \
+      --query CertificateArn --output text)" || return 1
     state=PENDING_VALIDATION
   fi
   if [ "$state" != ISSUED ]; then
@@ -163,8 +170,16 @@ print(json.dumps({"Changes": [{"Action": "UPSERT", "ResourceRecordSet": {"Name":
                                                                           "ResourceRecords": [{"Value": value}]}}]}))
 PY
     aws route53 change-resource-record-sets --hosted-zone-id "$2" --change-batch "file://$WORK/validation.json" >/dev/null || return 1
-    echo "等待证书 ${name} 完成验证（通常几分钟）" >&2
-    aws --region us-east-1 acm wait certificate-validated --certificate-arn "$arn" || return 1
+    echo "等待证书 ${name} 完成验证（通常几分钟，最多等 $((limit / 60)) 分钟）" >&2
+    while :; do
+      state="$(aws --region us-east-1 acm describe-certificate --certificate-arn "$arn" --query 'Certificate.Status' \
+        --output text)" || return 1
+      [ "$state" = ISSUED ] && break
+      [ "$state" = PENDING_VALIDATION ] || { echo "证书 ${name} 验证失败（${state}）" >&2; return 1; }
+      [ "$waited" -lt "$limit" ] || {
+        echo "证书 ${name} 尚未验证完成：DNS 验证记录已写入，栈未改动；稍后重新运行 up 即可（沿用这张证书）" >&2; return 1; }
+      sleep 20; waited=$((waited + 20))
+    done
   fi
   echo "$arn"
 }
