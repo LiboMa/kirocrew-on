@@ -116,6 +116,8 @@ def record(extra=None):
 joined = " ".join(args)
 if "--parameters" in args and args[args.index("--parameters") + 1].startswith("file://"):
     record({"parameters": json.load(open(args[args.index("--parameters") + 1][7:]))})
+elif "--change-batch" in args and args[args.index("--change-batch") + 1].startswith("file://"):
+    record({"batch": json.load(open(args[args.index("--change-batch") + 1][7:]))})
 else:
     record()
 def query():
@@ -152,8 +154,14 @@ elif "describe-change-set" in args:
 elif "list-hosted-zones" in args:
     print("/hostedzone/ZOTHER000\texample.org.\n/hostedzone/ZPUBLIC00\ttinyboat.example.\n"
           "/hostedzone/ZDEEP0000\tsub.tinyboat.example.\n/hostedzone/ZBLOG0000\ttinyboat.blog.")   # stack.env's own
+elif "list-certificates" in args and "*.preview." in joined:   # the per-session preview certificate (D36 phase 3)
+    print(os.environ.get("FAKE_PREVIEW_CERTIFICATE", "arn:aws:acm:us-east-1:111111111111:certificate/preview\tISSUED"))
 elif "list-certificates" in args:
     print(os.environ.get("FAKE_CERTIFICATE", "arn:aws:acm:us-east-1:111111111111:certificate/abc"))
+elif "request-certificate" in args:
+    print("arn:aws:acm:us-east-1:111111111111:certificate/requested")
+elif "describe-certificate" in args:
+    print("_abc.preview.tinyboat.example.\t_def.acm-validations.aws.")
 elif "wait" in args and "change-set-create-complete" in args:
     sys.exit(255 if os.environ.get("FAKE_REASON") else 0)
 '''
@@ -236,7 +244,7 @@ class DeployUpTests(unittest.TestCase):
         self.assertEqual(self.parameters(calls)["PreviewPort"], env_file(ROOT / "deploy/aws/stack.env")["PREVIEW_PORT"])
 
     def test_without_a_console_domain_the_console_keeps_its_cloudfront_name(self):
-        result, calls = self.up(stack_env={"CONSOLE_DOMAIN": ""})
+        result, calls = self.up(stack_env={"CONSOLE_DOMAIN": "", "PREVIEW_SESSION_DOMAIN": ""})
         self.assertEqual(result.returncode, 0, result.stderr)
         parameters = self.parameters(calls)
         self.assertEqual([parameters[k] for k in ("ConsoleDomain", "ConsoleHostedZoneId", "ConsoleCertificateArn")], ["", "", ""])
@@ -248,7 +256,7 @@ class DeployUpTests(unittest.TestCase):
         parameters = self.parameters(calls)
         self.assertEqual([parameters[k] for k in ("ConsoleDomain", "ConsoleHostedZoneId", "ConsoleCertificateArn")],
                          ["on.sub.tinyboat.example", "ZDEEP0000", "arn:aws:acm:us-east-1:111111111111:certificate/abc"])
-        (lookup,) = self.made(calls, "list-certificates")
+        (lookup,) = [c for c in self.made(calls, "list-certificates") if "*.preview." not in " ".join(c["args"])]
         self.assertEqual(lookup["args"][:2], ["--region", "us-east-1"])   # CloudFront only uses us-east-1 certificates
         self.assertIn("ISSUED", lookup["args"])
         self.assertIn("*.sub.tinyboat.example", " ".join(lookup["args"]))
@@ -260,6 +268,43 @@ class DeployUpTests(unittest.TestCase):
             self.assertNotEqual(result.returncode, 0, stack_env)
             self.assertFalse(self.made(calls, "create-change-set"))
             self.assertIn("on.", result.stderr)
+
+    def test_without_a_preview_session_domain_previews_keep_one_origin(self):
+        result, calls = self.up(stack_env={"PREVIEW_SESSION_DOMAIN": ""})
+        self.assertEqual(result.returncode, 0, result.stderr)
+        parameters = self.parameters(calls)
+        self.assertEqual([parameters[k] for k in ("PreviewSessionDomain", "PreviewHostedZoneId", "PreviewCertificateArn")],
+                         ["", "", ""])
+        self.assertFalse([c for c in calls if "*.preview." in " ".join(c["args"])] or self.made(calls, "request-certificate"))
+
+    def test_a_preview_session_domain_finds_its_zone_and_wildcard_certificate(self):
+        result, calls = self.up(stack_env={"PREVIEW_SESSION_DOMAIN": "preview.tinyboat.example"})
+        self.assertEqual(result.returncode, 0, result.stderr)
+        parameters = self.parameters(calls)
+        self.assertEqual([parameters[k] for k in ("PreviewSessionDomain", "PreviewHostedZoneId", "PreviewCertificateArn")],
+                         ["preview.tinyboat.example", "ZPUBLIC00", "arn:aws:acm:us-east-1:111111111111:certificate/preview"])
+        (lookup,) = [c for c in self.made(calls, "list-certificates") if "*.preview." in " ".join(c["args"])]
+        self.assertEqual(lookup["args"][:2], ["--region", "us-east-1"])
+        self.assertIn("DomainName=='*.preview.tinyboat.example'", " ".join(lookup["args"]))
+        self.assertFalse(self.made(calls, "request-certificate"))
+
+    def test_a_missing_preview_certificate_is_requested_and_validated_in_its_zone(self):
+        result, calls = self.up(stack_env={"PREVIEW_SESSION_DOMAIN": "preview.tinyboat.example"}, preview_certificate="None")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        (request,) = self.made(calls, "request-certificate")
+        joined = " ".join(request["args"])
+        for part in ("--region us-east-1", "--domain-name *.preview.tinyboat.example", "--validation-method DNS"):
+            self.assertIn(part, joined)
+        (change,) = self.made(calls, "change-resource-record-sets")
+        self.assertIn("ZPUBLIC00", change["args"])
+        record = change["batch"]["Changes"][0]
+        self.assertEqual((record["Action"], record["ResourceRecordSet"]["Type"], record["ResourceRecordSet"]["Name"],
+                          record["ResourceRecordSet"]["ResourceRecords"]),
+                         ("UPSERT", "CNAME", "_abc.preview.tinyboat.example.", [{"Value": "_def.acm-validations.aws."}]))
+        self.assertTrue([c for c in calls if "certificate-validated" in c["args"]])
+        self.assertLess(calls.index([c for c in calls if "certificate-validated" in c["args"]][0]),
+                        calls.index(self.made(calls, "create-change-set")[0]))   # issued before the stack uses it
+        self.assertEqual(self.parameters(calls)["PreviewCertificateArn"], "arn:aws:acm:us-east-1:111111111111:certificate/requested")
 
     def test_a_missing_origin_secret_is_created_once(self):
         result, calls = self.up(ssm_error="ParameterNotFound")

@@ -113,7 +113,7 @@ console_zone() {  # console_zone NAME: the public Route 53 zone holding NAME (th
       best="$name"; id="${zone##*/}"
     fi
   done <<<"$zones"
-  [ -n "$id" ] || { echo "Route 53 中没有包含 $1 的公有托管区：先创建托管区，或清空 stack.env 的 CONSOLE_DOMAIN" >&2; return 1; }
+  [ -n "$id" ] || { echo "Route 53 中没有包含 $1 的公有托管区：先创建托管区，或清空 stack.env 的 CONSOLE_DOMAIN / PREVIEW_SESSION_DOMAIN" >&2; return 1; }
   echo "$id"
 }
 
@@ -128,6 +128,44 @@ console_certificate() {  # console_certificate NAME: an issued certificate namin
   arn="$(aws --region us-east-1 acm list-certificates --certificate-statuses ISSUED --query "$filter" --output text)" || return 1
   [[ "$arn" == arn:aws:acm:us-east-1:* ]] || {
     echo "us-east-1 没有覆盖 $1 的已签发 ACM 证书（${1} 或 ${wildcard}）：先申请证书并完成 DNS 验证" >&2; return 1; }
+  echo "$arn"
+}
+
+preview_certificate() {  # preview_certificate DOMAIN ZONE_ID: the us-east-1 certificate for *.DOMAIN (each Session's
+  # preview host, D36 phase 3) — an issued one, else one requested here and validated through a CNAME in ZONE_ID
+  local name="*.$1" found arn state record
+  if [ -n "$DRY" ]; then
+    printf 'aws --region us-east-1 acm list-certificates --certificate-statuses ISSUED PENDING_VALIDATION（%s；没有时 request-certificate 并在 %s 写验证记录）\n' \
+      "$name" "$2" >&2
+    echo "arn:aws:acm:us-east-1:000000000000:certificate/dry-run-preview"; return
+  fi
+  found="$(aws --region us-east-1 acm list-certificates --certificate-statuses ISSUED PENDING_VALIDATION \
+    --query "CertificateSummaryList[?DomainName=='$name'].[CertificateArn,Status] | [0]" --output text)" || return 1
+  arn="${found%%$'\t'*}"; state="${found##*$'\t'}"
+  if [[ "$arn" != arn:aws:acm:us-east-1:* ]]; then
+    echo "申请 us-east-1 通配证书 ${name}（DNS 验证，记录写入托管区 ${2}）" >&2
+    arn="$(aws --region us-east-1 acm request-certificate --domain-name "$name" --validation-method DNS \
+      --idempotency-token kirocrewpreview --query CertificateArn --output text)" || return 1
+    state=PENDING_VALIDATION
+  fi
+  if [ "$state" != ISSUED ]; then
+    for _ in $(seq 1 30); do   # ACM fills in the validation record a few seconds after the request
+      record="$(aws --region us-east-1 acm describe-certificate --certificate-arn "$arn" \
+        --query 'Certificate.DomainValidationOptions[0].ResourceRecord.[Name,Value]' --output text)" || return 1
+      [[ "$record" == *$'\t'* && "$record" != None* ]] && break
+      sleep 2
+    done
+    [[ "$record" == *$'\t'* && "$record" != None* ]] || { echo "ACM 未给出 ${name} 的验证记录" >&2; return 1; }
+    python3 - "${record%%$'\t'*}" "${record##*$'\t'}" > "$WORK/validation.json" <<'PY'
+import json, sys
+name, value = sys.argv[1:]
+print(json.dumps({"Changes": [{"Action": "UPSERT", "ResourceRecordSet": {"Name": name, "Type": "CNAME", "TTL": 300,
+                                                                          "ResourceRecords": [{"Value": value}]}}]}))
+PY
+    aws route53 change-resource-record-sets --hosted-zone-id "$2" --change-batch "file://$WORK/validation.json" >/dev/null || return 1
+    echo "等待证书 ${name} 完成验证（通常几分钟）" >&2
+    aws --region us-east-1 acm wait certificate-validated --certificate-arn "$arn" || return 1
+  fi
   echo "$arn"
 }
 
@@ -158,14 +196,21 @@ up() {
     console_zone_id="$(console_zone "$console")" || exit 2
     console_certificate_arn="$(console_certificate "$console")" || exit 2
   fi
+  # Each Session's preview on its own origin (optional, D36 phase 3): one wildcard certificate, found or requested.
+  local session="${PREVIEW_SESSION_DOMAIN:-}" session_zone_id="" session_certificate_arn=""
+  if [ -n "$session" ]; then
+    session_zone_id="$(console_zone "$session")" || exit 2
+    session_certificate_arn="$(preview_certificate "$session" "$session_zone_id")" || exit 2
+  fi
   origin="$(secret origin-secret)"
   # Parameters go through a 0600 file: the origin secret never appears on a command line.
   (umask 077; ORIGIN_VALUE="$origin" python3 - "$INSTANCE_TYPE" "$VOLUME_SIZE_GIB" "$zone" "$image" "$prefix_list" \
     "$API_PORT" "$NATIVE_PORT" "$NATIVE_RELAY_END" "$ALARM_EMAIL" "$console" "$console_certificate_arn" "$console_zone_id" \
-    "$PREVIEW_PORT" > "$WORK/parameters.json" <<'PY'
+    "$PREVIEW_PORT" "$session" "$session_certificate_arn" "$session_zone_id" > "$WORK/parameters.json" <<'PY'
 import json, os, sys
 keys = ["InstanceType", "VolumeSizeGiB", "AvailabilityZone", "ImageId", "CloudFrontPrefixListId", "ApiPort", "NativePort",
-        "NativeRelayEnd", "AlarmEmail", "ConsoleDomain", "ConsoleCertificateArn", "ConsoleHostedZoneId", "PreviewPort"]
+        "NativeRelayEnd", "AlarmEmail", "ConsoleDomain", "ConsoleCertificateArn", "ConsoleHostedZoneId", "PreviewPort",
+        "PreviewSessionDomain", "PreviewCertificateArn", "PreviewHostedZoneId"]
 values = dict(zip(keys, sys.argv[1:]), OriginSecret=os.environ["ORIGIN_VALUE"])
 print(json.dumps([{"ParameterKey": k, "ParameterValue": v} for k, v in values.items()]))
 PY

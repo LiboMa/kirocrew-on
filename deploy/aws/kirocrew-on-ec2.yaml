@@ -63,6 +63,21 @@ Parameters:
     Default: ""
     AllowedPattern: "^$|^Z[A-Z0-9]+$"
     Description: 写入 ConsoleDomain 别名记录（A / AAAA）的 Route 53 公有托管区；留空时不写 DNS 记录
+  PreviewSessionDomain:
+    Type: String
+    Default: ""
+    AllowedPattern: "^$|^([a-z0-9]([a-z0-9-]*[a-z0-9])?\\.)+[a-z]{2,}$"
+    Description: 会话独立预览域名的上级域（可选，如 preview.example.com；每个会话在 <run-id>.<此域>，D36 第 3 期）；deploy.sh 按 stack.env 的 PREVIEW_SESSION_DOMAIN 查找或申请下面两项
+  PreviewCertificateArn:
+    Type: String
+    Default: ""
+    AllowedPattern: "^$|^arn:aws:acm:us-east-1:[0-9]{12}:certificate/[0-9a-f-]+$"
+    Description: us-east-1 中 *.<PreviewSessionDomain> 的已签发 ACM 通配证书
+  PreviewHostedZoneId:
+    Type: String
+    Default: ""
+    AllowedPattern: "^$|^Z[A-Z0-9]+$"
+    Description: 写入 *.<PreviewSessionDomain> 别名记录（A / AAAA）的 Route 53 公有托管区；留空时不写 DNS 记录
   VpcCidr:
     Type: String
     Default: 10.42.0.0/16
@@ -84,6 +99,8 @@ Conditions:
   IsUsEast1: !Equals [!Ref "AWS::Region", us-east-1]
   HasConsoleDomain: !Not [!Equals [!Ref ConsoleDomain, ""]]
   HasConsoleRecord: !And [!Condition HasConsoleDomain, !Not [!Equals [!Ref ConsoleHostedZoneId, ""]]]
+  HasPreviewSessionDomain: !Not [!Equals [!Ref PreviewSessionDomain, ""]]
+  HasPreviewSessionRecord: !And [!Condition HasPreviewSessionDomain, !Not [!Equals [!Ref PreviewHostedZoneId, ""]]]
 
 Resources:
   Vpc:
@@ -374,6 +391,8 @@ Resources:
       DistributionConfig:
         Enabled: true
         Comment: !Sub "KiroCrew ON remote preview (${AWS::StackName})"
+        # D36 phase 3: each Session on its own origin, <run-id>.<PreviewSessionDomain>; its cloudfront.net name stays.
+        Aliases: !If [HasPreviewSessionDomain, [!Sub "*.${PreviewSessionDomain}"], !Ref "AWS::NoValue"]
         HttpVersion: http2and3
         IPV6Enabled: true
         PriceClass: PriceClass_100
@@ -399,9 +418,36 @@ Resources:
           CachePolicyId: 4135ea2d-6df8-44a3-9df3-4b5a84be39ad        # Managed-CachingDisabled
           OriginRequestPolicyId: 33f36d7e-f396-46d9-90e0-52428a34d9dc # Managed-AllViewerAndCloudFrontHeaders-2022-06
           Compress: false
-        ViewerCertificate:
-          CloudFrontDefaultCertificate: true
+        ViewerCertificate: !If
+          - HasPreviewSessionDomain
+          - AcmCertificateArn: !Ref PreviewCertificateArn
+            SslSupportMethod: sni-only
+            MinimumProtocolVersion: TLSv1.2_2021
+          - CloudFrontDefaultCertificate: true
       Tags: [{Key: Project, Value: kirocrew-on}]
+
+  # The per-session preview hosts' wildcard alias records (stack.env PREVIEW_SESSION_DOMAIN).
+  PreviewSessionRecord:
+    Type: AWS::Route53::RecordSet
+    Condition: HasPreviewSessionRecord
+    Properties:
+      HostedZoneId: !Ref PreviewHostedZoneId
+      Name: !Sub "*.${PreviewSessionDomain}"
+      Type: A
+      AliasTarget:
+        HostedZoneId: Z2FDTNDATAQYW2
+        DNSName: !GetAtt PreviewDistribution.DomainName
+
+  PreviewSessionRecordIpv6:
+    Type: AWS::Route53::RecordSet
+    Condition: HasPreviewSessionRecord
+    Properties:
+      HostedZoneId: !Ref PreviewHostedZoneId
+      Name: !Sub "*.${PreviewSessionDomain}"
+      Type: AAAA
+      AliasTarget:
+        HostedZoneId: Z2FDTNDATAQYW2
+        DNSName: !GetAtt PreviewDistribution.DomainName
 
   SnapshotRole:
     Type: AWS::IAM::Role
@@ -480,6 +526,9 @@ Outputs:
     Value: !GetAtt PreviewDistribution.DomainName
   PreviewUrl:
     Value: !Sub "https://${PreviewDistribution.DomainName}/"
+  PreviewSessionDomain:
+    Condition: HasPreviewSessionDomain
+    Value: !Ref PreviewSessionDomain
   ArtifactBucket:
     Value: !Ref ArtifactBucket
   ApiPort:

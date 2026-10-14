@@ -103,7 +103,7 @@ class TemplateTests(unittest.TestCase):
         self.assertEqual(custom, {"AcmCertificateArn": {"Ref": "ConsoleCertificateArn"}, "SslSupportMethod": "sni-only",
                                   "MinimumProtocolVersion": "TLSv1.2_2021"})
         self.assertEqual(default, {"CloudFrontDefaultCertificate": True})
-        records = of_type(self.r, "AWS::Route53::RecordSet")
+        records = [r for r in of_type(self.r, "AWS::Route53::RecordSet") if r["Condition"] == "HasConsoleRecord"]
         self.assertEqual(sorted(r["Properties"]["Type"] for r in records), ["A", "AAAA"])
         for record in records:
             self.assertEqual(record["Condition"], "HasConsoleRecord")
@@ -117,6 +117,29 @@ class TemplateTests(unittest.TestCase):
         self.assertIn("ConsoleDomain", self.t["Outputs"])
         self.assertEqual(self.t["Outputs"]["ConsoleUrl"]["Value"]["If"][0], "HasConsoleDomain")
 
+    def test_each_session_can_have_its_own_preview_origin(self):
+        # D36 phase 3: *.<PreviewSessionDomain> on the preview distribution (its cloudfront.net name stays), one wildcard
+        # certificate, wildcard alias records; deploy.sh finds the zone and finds or requests the certificate.
+        p = self.t["Parameters"]
+        for name in ("PreviewSessionDomain", "PreviewCertificateArn", "PreviewHostedZoneId"):
+            self.assertEqual(p[name]["Default"], "", name)
+        wildcard = {"Sub": "*.${PreviewSessionDomain}"}
+        preview = self.distribution("PreviewPort")
+        self.assertEqual(preview["Aliases"], {"If": ["HasPreviewSessionDomain", [wildcard], {"Ref": "AWS::NoValue"}]})
+        condition, custom, default = preview["ViewerCertificate"]["If"]
+        self.assertEqual((condition, default), ("HasPreviewSessionDomain", {"CloudFrontDefaultCertificate": True}))
+        self.assertEqual(custom, {"AcmCertificateArn": {"Ref": "PreviewCertificateArn"}, "SslSupportMethod": "sni-only",
+                                  "MinimumProtocolVersion": "TLSv1.2_2021"})
+        records = [r for r in of_type(self.r, "AWS::Route53::RecordSet") if r["Condition"] == "HasPreviewSessionRecord"]
+        self.assertEqual(sorted(r["Properties"]["Type"] for r in records), ["A", "AAAA"])
+        for record in records:
+            self.assertEqual(record["Properties"]["HostedZoneId"], {"Ref": "PreviewHostedZoneId"})
+            self.assertEqual(record["Properties"]["Name"], wildcard)
+            self.assertEqual(record["Properties"]["AliasTarget"], {"HostedZoneId": "Z2FDTNDATAQYW2",
+                                                                    "DNSName": {"GetAtt": "PreviewDistribution.DomainName"}})
+        output = self.t["Outputs"]["PreviewSessionDomain"]
+        self.assertEqual((output["Condition"], output["Value"]), ("HasPreviewSessionDomain", {"Ref": "PreviewSessionDomain"}))
+
     def test_the_remote_preview_has_its_own_distribution_inside_the_existing_rule(self):
         # D36 §5.2. Its port is the last of the one prefix-list rule, so the rule (quota-weighted) is not touched.
         p = self.t["Parameters"]
@@ -129,7 +152,7 @@ class TemplateTests(unittest.TestCase):
         self.assertEqual((behavior["CachePolicyId"], behavior["OriginRequestPolicyId"], behavior["ViewerProtocolPolicy"]),
                          (CACHING_DISABLED, ALL_VIEWER_AND_CLOUDFRONT_HEADERS, "redirect-to-https"))
         self.assertFalse(behavior["Compress"])
-        self.assertTrue(preview["ViewerCertificate"]["CloudFrontDefaultCertificate"])
+        self.assertEqual(preview["ViewerCertificate"]["If"][2], {"CloudFrontDefaultCertificate": True})
         ingress = of_type(self.r, "AWS::EC2::SecurityGroup")[0]["Properties"]["SecurityGroupIngress"]
         self.assertEqual((len(ingress), ingress[0]["ToPort"]), (1, {"Ref": "NativeRelayEnd"}))
         self.assertTrue({"PreviewDomain", "PreviewUrl"} <= set(self.t["Outputs"]))
