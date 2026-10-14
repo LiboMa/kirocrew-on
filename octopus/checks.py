@@ -22,21 +22,24 @@ class Checks:
         self.path_prepend, self.per_command, self.total = tuple(str(p) for p in path_prepend), per_command, total
         self.jobs, self.by_attempt, self.lock = {}, {}, threading.Lock()
 
-    def start(self, run_id, attempt_id, project, commands):
-        """The job running ``commands`` for this Attempt; asking again returns the same job."""
+    def start(self, run_id, attempt_id, project, commands, kind="verify", around=None):
+        """The job running ``commands`` for this Attempt; asking again returns the same job. ``kind`` tells an Attempt's
+        jobs apart (its checks, its baseline run); ``around`` is (prepare, restore): run before the commands, and after
+        them whatever happened (D37 §11.1)."""
         with self.lock:
             now = time.time()
             for job, value in list(self.jobs.items()):
                 if value["state"] == "done" and now - value["ended"] > KEEP:
-                    self.by_attempt.pop((value["run_id"], value["attempt_id"]), None)
+                    self.by_attempt.pop((value["run_id"], value["attempt_id"], value["kind"]), None)
                     del self.jobs[job]
-            if (run_id, attempt_id) in self.by_attempt:
-                return {"job": self.by_attempt[(run_id, attempt_id)]}
+            if (run_id, attempt_id, kind) in self.by_attempt:
+                return {"job": self.by_attempt[(run_id, attempt_id, kind)]}
             job = uuid.uuid4().hex
-            self.jobs[job] = {"run_id": run_id, "attempt_id": attempt_id, "state": "running", "results": [],
-                              "passed": None, "failed": None, "current": None, "cancelled": False, "ended": None}
-            self.by_attempt[(run_id, attempt_id)] = job
-        threading.Thread(target=self._run, args=(job, project, list(commands)), daemon=True,
+            self.jobs[job] = {"run_id": run_id, "attempt_id": attempt_id, "kind": kind, "state": "running", "results": [],
+                              "passed": None, "failed": None, "current": None, "cancelled": False, "ended": None,
+                              "error": None}
+            self.by_attempt[(run_id, attempt_id, kind)] = job
+        threading.Thread(target=self._run, args=(job, project, list(commands), around), daemon=True,
                          name="octopus-checks").start()
         return {"job": job}
 
@@ -45,7 +48,8 @@ class Checks:
             value = self.jobs.get(job)
             if value is None:   # unknown, or the Worker restarted since: the platform starts the checks again
                 raise Error(404, "check_unknown", "检查任务不存在（Worker 可能已重启）")
-            return {key: value[key] for key in ("state", "passed", "failed")} | {"results": [dict(r) for r in value["results"]]}
+            return {key: value[key] for key in ("state", "passed", "failed", "error")} | \
+                {"results": [dict(r) for r in value["results"]]}
 
     def cancel(self, run_id):
         """End the Session's running checks (its stop, close or delete)."""
@@ -57,13 +61,21 @@ class Checks:
             if value["current"] is not None:
                 self._end(value["current"])
 
-    def _run(self, job, project, commands):
+    def _run(self, job, project, commands, around=None):
         value, started = self.jobs[job], time.monotonic()
         # The Worker's own modules (its unit sets PYTHONPATH to the release) are not the project's (as apps.py).
         env = {key: item for key, item in os.environ.items() if key != "PYTHONPATH"}
         env["PATH"] = os.pathsep.join([*self.path_prepend, os.environ.get("PATH", "/usr/bin:/bin")])
         passed, failed = True, None
+        prepare, restore = around or (None, None)
         try:
+            if prepare:
+                try:
+                    prepare()
+                except Exception as exc:   # never judged as a failing run: the platform skips the gate
+                    with self.lock:
+                        value["error"] = "无法切换到基线：" + sources.scrub(exc)
+                    passed, commands = False, []
             for index, command in enumerate(commands):
                 left = self.total - (time.monotonic() - started)
                 if value["cancelled"] or left <= 0:
@@ -79,6 +91,12 @@ class Checks:
                     passed, failed = False, index
                     break
         finally:
+            if restore:
+                try:
+                    restore()
+                except Exception as exc:
+                    with self.lock:
+                        value["error"] = (value["error"] + "；" if value["error"] else "") + "恢复失败：" + sources.scrub(exc)
             with self.lock:
                 value.update(state="done", passed=passed and not value["cancelled"] and len(value["results"]) == len(commands),
                              failed=failed, current=None, ended=time.time())

@@ -166,16 +166,45 @@ def task_candidate(project, message, branch, scratch, parent, base):
     known = subprocess.run(["git", "cat-file", "-e", parent + "^{commit}"], cwd=project, capture_output=True,
                            stdin=subprocess.DEVNULL, timeout=60).returncode == 0
     files = insertions = deletions = 0
+    names = []   # what the task delivered: artifacts_locked compares later tasks' changes with it (D37 §11.2)
     for entry in _git_bytes(project, "diff", "--numstat", "-z", "--no-renames", parent if known else since,
                             candidate).split(b"\0"):
         fields = entry.split(b"\t", 2)
         if len(fields) == 3:
             files += 1
+            names.append(fields[2].decode(errors="replace"))
             insertions += int(fields[0]) if fields[0].isdigit() else 0   # "-" for a binary file
             deletions += int(fields[1]) if fields[1].isdigit() else 0
     changed = _git(project, "rev-parse", candidate + "^{tree}") != _git(project, "rev-parse", (parent if known else since) + "^{tree}")
     return {"sha": candidate, "parent": parent, "changed": changed, "files": files, "insertions": insertions,
-            "deletions": deletions, "rewritten": rewritten, "secrets": secrets}
+            "deletions": deletions, "rewritten": rewritten, "secrets": secrets, "names": names[:200],
+            **({"names_truncated": True} if len(names) > 200 else {})}
+
+
+def baseline_apply(project, base, parent, candidate):
+    """Lay a test task's changes on the Session's baseline, in place (D37 §11.1): tracked files become ``base`` (the
+    untracked ones — dependencies, virtual environments — stay), then the files the task changed between ``parent`` and
+    ``candidate`` are taken from the candidate, or removed where it deleted them. ``baseline_restore`` undoes it."""
+    changes = _git_bytes(project, "diff", "--name-status", "--no-renames", "-z", parent, candidate).split(b"\0")
+    _git(project, "read-tree", "-u", "--reset", base)
+    taken = []
+    for status, path in zip(changes[0::2], changes[1::2]):
+        name = path.decode(errors="surrogateescape")
+        if not name:
+            continue
+        if status.startswith(b"D"):
+            target = Path(project) / name
+            if target.is_file() or target.is_symlink():
+                target.unlink()
+        else:
+            taken.append(":(literal)" + name)   # a name is never read as pathspec magic
+    for start in range(0, len(taken), 100):
+        _git(project, "checkout", candidate, "--", *taken[start:start + 100])
+
+
+def baseline_restore(project, candidate):
+    """Tracked files and the index back to ``candidate``; untracked files untouched (D37 §11.1)."""
+    _git(project, "read-tree", "-u", "--reset", candidate)
 
 
 def clean_against(project, expected):
