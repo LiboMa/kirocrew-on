@@ -31,11 +31,14 @@ Worker 的 `/health` 增加 `tools`：
 {"kiro": {"available": true}, "claude": {"available": true},
  "codex": {"available": false, "reason": "codex 命令不存在"}, "opencode": {"available": true}}
 ```
-- `available`：该工具的命令在 Worker 的 `PATH` 中存在（`kiro-cli` / `claude` / `codex` / `opencode`）；Kiro 还要求登录有效（现有 `tool_auth`）。
-- 平台连接或刷新 Worker 时随能力一起保存。
+- `available`：该工具的命令可以找到：
+  - 先找 Worker 配置 `[tools]` 中的路径（`kiro_cli` / `claude` / `codex` / `opencode`）；
+  - 再在 Gateway 使用的搜索路径中找（`adapters_dir`、`path_prepend`、`PATH`）。
+- Kiro 另报 `login`（`ok` / `expired` / `unknown`，即现有 `tool_auth`）。登录过期仍按现状等待管理员处理（`auth`），不换工具。
+- 平台登记或刷新 Worker 时，随能力一起保存（`capabilities.tools`）。
 - 规划与诊断时传给 Kiro：
-  - 规划提示中写明哪些工具可用；
-  - 协调者上下文带上 `tools` 与已发布的模型。
+  - 规划提示中写明各工具是否可用，以及 Worker 的已知限制（`limitations`）；
+  - 协调者上下文的 `environment`：`tools`、已发布的模型、`limitations`、是否允许换工具。它随诊断记录保存，平台按同一份核对。
 
 ### 3.2 何时交给协调者
 
@@ -44,7 +47,7 @@ Worker 的 `/health` 增加 `tools`：
 |---|---|---|
 | 派发被拒：`model_unavailable` / `model_transport_unsupported` | 会话 `blocked`，等用户改配置 | 进入诊断（`failure_type: tool`） |
 | 实际后端与请求不符（`identity_match` 失败） | `failure_type: model`，不诊断 | `failure_type: tool`，进入诊断 |
-| 请求的工具在 `tools` 中不可用 | 派发后以原生错误失败 | 派发前就进入诊断，不派发 |
+| 请求的工具在平台保存的 `tools` 中不可用 | 派发后以原生错误失败 | 平台派发前就进入诊断，不派发 |
 | 同一任务、同一工具，自动重试之后仍为 `native_error` | 诊断，但协调者只能在原工具上重试 | 诊断，可推荐换工具 |
 - `auth`（Kiro 登录过期，需管理员）与 `native_stopped`（有人在原生页面停止）仍属于需要人处理的类型。
 
@@ -62,9 +65,10 @@ Worker 的 `/health` 增加 `tools`：
   - 不确定时用 `wait_for_user`。
 - **平台核对**（不通过时会话 `blocked` 并写明原因，与现有无效决定相同）：
   - `target_task_id` 是失败的任务；
-  - `tool` 在 `TOOLS` 中、`available` 为真，且不是刚失败的工具；
-  - `model` 为 `auto` / `default` 或已发布，`effort` 合法；
-  - 审查任务的 `tool` 不是其被审查任务最终实际所用的后端；
+  - `tool` 在 `TOOLS` 中，且在 `environment.tools` 中 `available` 为真；
+  - 工具、模型与 Effort 不能与失败的那次完全相同（模型未发布时，同一工具改用 `auto` 是有效的推荐）；
+  - `model` 为 `auto` / `default` 或在 `environment.models` 中已发布，`effort` 合法；
+  - 审查任务的 `tool` 不是被审查代码的实际后端（会话分支当前候选所属的 Attempt；没有候选时取最近完成的上游实现任务）；
   - 会话的 `recovery.switch_tools` 未关闭。
 - **生效**：
   - 该任务的 `spec` 改为新的工具 / 模型 / effort，任务与其后的任务照常重置；
@@ -81,8 +85,9 @@ Worker 的 `/health` 增加 `tools`：
 
 ### 3.5 关闭
 
-- 会话：`recovery.switch_tools: false`（启动或续作时设置），协调者的上下文中写明不可换工具，`switch_tool` 被拒。
-- 工作流：版本中的 `recovery` 默认值随之保存。
+- 会话：`recovery.switch_tools: false`（启动或续作时设置；控制台的自动纠错设置中有对应选项）。
+  - 协调者的上下文写明不可换工具，`switch_tool` 被拒。
+  - 默认开启；关闭时才在 `recovery` 中保存 `switch_tools: false`，已有会话的设置形状不变。
 
 ## 4．第 2 期：批准代理（K04）
 
