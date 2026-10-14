@@ -107,6 +107,8 @@
   - 已验证候选等于克隆基线时不按 `nothing_to_publish` 拒绝；平台不核对推送的 `X-Publish-Commit` 等于已验证候选。
   - 检查命令路径上不设置 `result_missing`；列表视图（`detail=False`）也逐行计算已验证候选。
   - 测试：没有对真实 Worker 运行 Engine 的端到端测试；`check_unknown` 与返工后审查重新绑定只由探针覆盖。
+- Feature 报告（D37 第 2 期审查延后项）：OpenAPI 中 `/report` 写成 JSON 回答且缺少 `format` 参数；HTML 中执行次数未经转义
+  （整数，纵深防御）；测试未覆盖多任务、验收项 / 建议的上限、转义带来的体积增长与控制台的出错路径。
 - 源码准备失败时控制台只显示 `Worker 操作未完成 (ValueError)`：`octopus/worker.py:488` 只透传 `security.Error`，`octopus/sources.py` 的提示均为 `ValueError`（Connector 设计 §7 P1）。
 - 向导：导入 / 推荐后切换到模板时来源提示未更新；切换空间未重置推荐 Worker；推荐轮询遇 403 / 404 不停止；提交瞬间在途轮询可能回写草稿。
 - 原生入口弹窗缺少账户切换保护；`crew_url` 公网来源未规范化 `:443` 写法。
