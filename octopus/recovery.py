@@ -16,11 +16,12 @@ NEEDS_INPUT = {"input", "auth", "model", "native_stopped"}
 def policy(value=None, *, legacy=False):
     if value is None:
         return {"enabled": not legacy, "max_cycles": 2}
-    require(isinstance(value, dict) and set(value) <= {"enabled", "max_cycles"}, "自动纠错配置无效")
-    enabled, limit = value.get("enabled", True), value.get("max_cycles", 2)
-    require(isinstance(enabled, bool) and type(limit) is int and 1 <= limit <= 5,
-            "自动纠错次数须为 1–5，enabled 须为布尔值")
-    return {"enabled": enabled, "max_cycles": limit}
+    require(isinstance(value, dict) and set(value) <= {"enabled", "max_cycles", "switch_tools"}, "自动纠错配置无效")
+    enabled, limit, switch = value.get("enabled", True), value.get("max_cycles", 2), value.get("switch_tools", True)
+    require(isinstance(enabled, bool) and type(limit) is int and 1 <= limit <= 5 and isinstance(switch, bool),
+            "自动纠错次数须为 1–5，enabled 与 switch_tools 须为布尔值")
+    # Switching tools is on by default (D38 A2); only turning it off is stored, so existing settings keep their shape.
+    return {"enabled": enabled, "max_cycles": limit, **({} if switch else {"switch_tools": False})}
 
 
 def outcome(text):
@@ -95,7 +96,14 @@ def coordinator_instructions(context, folder):
 ## 你是此 Run 的诊断与纠错 Coordinator
 完整读取 context.json、失败任务的真实返回、交接路径及当前源码，判断可执行恢复办法。
 只诊断和提出修复指令；不要自己实现业务修复或派生任务。Engine 会按决定派发所选 Coding Agent。
-保留工作流和工具配置，不迁移源码、不换模型、不删除历史。不要把停止或权限拒绝当作可绕过的失败。
+保留工作流配置，不迁移源码、不删除历史。不要把停止或权限拒绝当作可绕过的失败。
+失败原因在于工具本身时（failure_type 为 tool：工具在执行环境中不可用、模型未公布或不受支持、实际运行的后端与请求不符，
+或同一工具的原生错误在自动重试后再次发生），可以用 switch_tool 推荐换用的工具与模型：
+- 只从 context.environment.tools 中 available 为 true 的工具、environment.models 中该工具公布的模型（或 auto）中选择；
+- 工具、模型与 Effort 不能与失败的那次完全相同；模型未公布时，同一工具改用 auto 也是有效的推荐；
+- 审查类任务选择与被审查代码实际所用不同的工具；参考 environment.limitations 中的已知问题；
+- environment.switch_tools 为 false 时不能换工具：用 wait_for_user，并说明可换用哪个工具；不确定时也用 wait_for_user。
+实现、测试、契约或门禁本身的问题仍用 retry 或 rework，不换工具。
 判断是否已有足够源码、依赖与输入；缺少仓库、需要用户授权或认证时 wait_for_user，不猜测项目地址。
 若是当前任务可自行修复的问题用 retry；若审查问题需要上游实现者修复用 rework。
 目标只能是失败步骤或其上游步骤。把失败反馈、所需改动与重新验证条件写具体。
@@ -109,7 +117,10 @@ def coordinator_instructions(context, folder):
 把唯一有效的处置写到 {folder / 'decision.json'}，严格 JSON：
 {{"action":"retry","target_task_id":"当前或上游 Task ID",
   "reason":"真实根因与判断依据","instructions":"具体修复动作、输入与复验要求"}}
-action 只能为 retry、rework、wait_for_user；wait_for_user 不需 target_task_id，
+换工具时：
+{{"action":"switch_tool","target_task_id":"失败的 Task ID","tool":"codex","model":"auto","effort":"",
+  "reason":"为什么原工具不能完成、为什么选这个工具","instructions":"以新工具重新执行本任务的要求"}}
+action 只能为 retry、rework、switch_tool、wait_for_user；wait_for_user 不需 target_task_id，
 instructions 要说明缺少什么、用户下一步如何补充。
 同时写 handoff.md，最后汇总判断。提出 wait_for_user 是诊断完成，不是诊断 Agent 自身执行失败。
 """
@@ -147,6 +158,12 @@ def schedule(db, database, run, task, attempt, *, manual=False, actor=None):
                "tasks": [{**t, "spec": json.loads(t["spec"])} for t in ordered],
                "previous_decisions": [json.loads(r["decision"]) for r in rows if r["decision"]],
                "manual": manual}
+    worker = db.execute("SELECT config FROM workers WHERE id=?", (run["worker_id"],)).fetchone() if run["worker_id"] else None
+    capabilities = (json.loads(worker["config"]).get("capabilities") or {}) if worker else {}
+    # What the Coordinator may switch to, saved with the diagnosis: its recommendation is checked against the same (D38 §3.1).
+    context["environment"] = {"tools": capabilities.get("tools") or {}, "models": capabilities.get("models") or {},
+                              "limitations": capabilities.get("limitations") or [],
+                              "switch_tools": settings.get("switch_tools", True)}
     planned = json.loads(run["snapshot"]).get("planning") or {}
     if planned.get("applied"):   # what the tasks are judged against (D34 §6.2)
         context["requirement"] = {"intent": planned.get("intent", ""), "summary": planned.get("summary", "")}

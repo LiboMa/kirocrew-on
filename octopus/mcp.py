@@ -19,7 +19,8 @@ def object_schema(properties=None, required=()):
 STRING = {"type": "string"}
 OBSERVE_TEXT = 4000  # per message in octopus_observe: keeps a page well inside an agent's tool output limit
 RECOVERY = object_schema({"enabled": {"type": "boolean"},
-                          "max_cycles": {"type": "integer", "minimum": 1, "maximum": 5}})
+                          "max_cycles": {"type": "integer", "minimum": 1, "maximum": 5},
+                          "switch_tools": {"type": "boolean"}})
 TOOLS = [
     {"name": "octopus_workflows", "description": "列出当前用户可访问的工作流", "inputSchema": object_schema()},
     {"name": "octopus_match_workflow",
