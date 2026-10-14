@@ -99,6 +99,14 @@
   - 测试：`test_the_write_credential_never_reaches_the_worker` 的临时仓库检查在删除之后；没有真实的截断 / 篡改 / 外来基线 bundle 测试。
   - 平台升级的最后一步「注册执行边界 Worker」以管理员密码登录：控制台改密码后须同步 `/etc/kirocrew-on/admin-password`，否则每次 `push`
     以 401 结束（其余各步已完成）；可改为不依赖管理员密码的本机注册。
+- 会话独立预览域名（D36 第 3 期审查延后项）：没有测试固定 `__main__` 把 `preview_domain` 传给 API（EC2 验收覆盖）。
+- 候选提交与命名门禁（D37 第 1 期审查延后项）：
+  - 已停止的 Attempt 仍显示「正在运行检查命令」；检查进度只显示条数，不显示「2/3」。
+  - 「已验证候选」只在发布按钮旁显示；控制台与 MCP 不显示检查命令的输出末尾；带 `verify` 的审查任务不记录 `checks_pass`。
+  - Worker 上的 `/candidate` 与发布没有按会话的锁（180 秒超时后两次调用可能共用 `.publish-index`）。
+  - 已验证候选等于克隆基线时不按 `nothing_to_publish` 拒绝；平台不核对推送的 `X-Publish-Commit` 等于已验证候选。
+  - 检查命令路径上不设置 `result_missing`；列表视图（`detail=False`）也逐行计算已验证候选。
+  - 测试：没有对真实 Worker 运行 Engine 的端到端测试；`check_unknown` 与返工后审查重新绑定只由探针覆盖。
 - 源码准备失败时控制台只显示 `Worker 操作未完成 (ValueError)`：`octopus/worker.py:488` 只透传 `security.Error`，`octopus/sources.py` 的提示均为 `ValueError`（Connector 设计 §7 P1）。
 - 向导：导入 / 推荐后切换到模板时来源提示未更新；切换空间未重置推荐 Worker；推荐轮询遇 403 / 404 不停止；提交瞬间在途轮询可能回写草稿。
 - 原生入口弹窗缺少账户切换保护；`crew_url` 公网来源未规范化 `:443` 写法。
