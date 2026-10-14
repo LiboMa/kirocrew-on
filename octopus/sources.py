@@ -146,6 +146,48 @@ def _suspicious_objects(project, objects):
     return hits
 
 
+SHA = re.compile(r"[0-9a-f]{40}")
+
+
+def task_candidate(project, message, branch, scratch, parent, base):
+    """A task's candidate commit (D37 §3): the workspace's pending changes committed the way a publish commits them,
+    everything new since ``parent`` (the previous candidate, else the clone's baseline) checked, and the branch moved only
+    when nothing in it looks like a credential or a .env. An Agent that rewrote history leaves ``parent`` behind: the
+    candidate is then marked ``rewritten`` and checked from the baseline."""
+    parent = parent or base
+    head = _git(project, "rev-parse", "--verify", "HEAD^{commit}")
+    candidate = publish_candidate(project, message, branch, scratch)
+    rewritten = subprocess.run(["git", "merge-base", "--is-ancestor", parent, candidate], cwd=project,
+                               capture_output=True, stdin=subprocess.DEVNULL, timeout=60).returncode != 0
+    since = base if rewritten else parent
+    secrets = unpublishable(project, since, candidate) if candidate != since else []
+    if not secrets:
+        advance(project, branch, candidate, head)
+    known = subprocess.run(["git", "cat-file", "-e", parent + "^{commit}"], cwd=project, capture_output=True,
+                           stdin=subprocess.DEVNULL, timeout=60).returncode == 0
+    files = insertions = deletions = 0
+    for entry in _git_bytes(project, "diff", "--numstat", "-z", "--no-renames", parent if known else since,
+                            candidate).split(b"\0"):
+        fields = entry.split(b"\t", 2)
+        if len(fields) == 3:
+            files += 1
+            insertions += int(fields[0]) if fields[0].isdigit() else 0   # "-" for a binary file
+            deletions += int(fields[1]) if fields[1].isdigit() else 0
+    changed = _git(project, "rev-parse", candidate + "^{tree}") != _git(project, "rev-parse", (parent if known else since) + "^{tree}")
+    return {"sha": candidate, "parent": parent, "changed": changed, "files": files, "insertions": insertions,
+            "deletions": deletions, "rewritten": rewritten, "secrets": secrets}
+
+
+def clean_against(project, expected):
+    """Whether the workspace is still ``expected`` (D37 §6, a review must not change code): HEAD, and the uncommitted
+    changes outside what a download and a publish leave out."""
+    head = _git(project, "rev-parse", "--verify", "HEAD^{commit}")
+    raw = _git_bytes(project, "status", "--porcelain=v1", "-z", "--no-renames", "--untracked-files=normal")
+    changed = [path for path in (entry[3:].decode(errors="replace") for entry in raw.split(b"\0") if len(entry) > 3)
+               if not left_out(path.rstrip("/") + ("/x" if path.endswith("/") else ""))]
+    return {"head": head, "clean": head == expected and not changed, "changed_files": changed}
+
+
 def advance(project, branch, commit, old):
     """Put the checked ``commit`` on ``branch`` (still at ``old``) and the workspace's index to match; files untouched."""
     if commit == old:

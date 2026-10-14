@@ -296,6 +296,27 @@ class Worker:
         return {"files": files, "dirs": folders, "configs": configs, "bytes": total, "excluded": sorted(excluded),
                 "links": sorted(links), "skipped": skipped}
 
+    def candidate(self, body):
+        """A task's candidate commit (D37 §3, ``mode: commit``), or a review's check that the workspace is still the
+        candidate it reviewed (§6, ``mode: check``)."""
+        run = self.path(body["run_id"])
+        project, record = workspace.project_dir(run), workspace.read_record(run)
+        base, branch = record.get("commit"), record.get("branch")
+        require(base and branch, "此会话的项目没有 Git 基线，无法生成候选", 409, "candidate_unsupported")
+        mode = body.get("mode")
+        require(mode in {"commit", "check"}, "mode 只能是 commit 或 check")
+        for key in ("parent", "expected"):
+            require(body.get(key) is None or (isinstance(body[key], str) and workspace.SHA.fullmatch(body[key])),
+                    f"{key} 须为完整的提交 ID")
+        try:
+            if mode == "check":
+                require(body.get("expected"), "check 需要 expected")
+                return workspace.clean_against(project, body["expected"])
+            message = str(body.get("message") or "KiroCrew ON：任务候选")[:300]
+            return workspace.task_candidate(project, message, branch, run, body.get("parent"), base)
+        except ValueError as exc:
+            raise Error(409, "candidate_failed", workspace.scrub(exc)) from None
+
     def publish_plan(self, body):
         """What a publish exports (D35 §5.2): the Session's branch, with the workspace's pending changes committed (without
         what a download leaves out). The bundle carries every commit, so everything new since the clone's baseline is
@@ -873,7 +894,8 @@ def serve(worker, port=8928, host="127.0.0.1"):
                     methods = {"/prepare": worker.prepare, "/dispatch": worker.dispatch,
                                "/inspect": worker.inspect, "/control": worker.control,
                                "/crew-entry": worker.crew_entry, "/files": worker.files, "/observe": worker.observe,
-                               "/archive/plan": worker.archive_summary, "/app": worker.app}
+                               "/archive/plan": worker.archive_summary, "/app": worker.app,
+                               "/candidate": worker.candidate}
                     require(self.path in methods and self.command == "POST", "接口不存在", 404, "not_found")
                     result = methods[self.path](body)
                 status = 200
