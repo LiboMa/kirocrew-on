@@ -12,9 +12,6 @@ from .security import Error, require
 from .workflow_import import import_workflow
 
 PLAN_ID = "plan"
-# Tools the planner may propose but that have not passed acceptance on the execution boundary yet (K01: OpenCode's shell
-# writes are refused by KiroCrew's tool gate). Code reassigns them so a generated plan does not end on a known failure.
-REASSIGN = {"opencode": "claude"}
 EXAMPLE = {"intent": "一句话：用户真正要完成什么、属于哪类工作（新功能 / 缺陷修复 / 审查 / 原型 / 其他）",
            "summary": "补全后的需求（Markdown）：目标、范围与不做什么、可验证的验收标准、关键假设与待确认问题",
            "name": "针对本次需求的简短名称",
@@ -25,7 +22,7 @@ EXAMPLE = {"intent": "一句话：用户真正要完成什么、属于哪类工�
                       "depends_on": [], "paths": ["本任务可改动的路径或 glob"]}]}
 
 
-def plan_step(models=None):
+def plan_step(models=None, tools=None, limitations=None):
     """The first task of an Agent-planned Session (always Kiro; it plans and does not change business code)."""
     prompt = intent_prompt(dumps(EXAMPLE), "（见上方完整用户需求）", "本任务的工作目录（即本 Session 的源码检出）") + f"""
 
@@ -43,6 +40,12 @@ def plan_step(models=None):
    （processes：命令、cwd、端口或 "$PORT"、哪个是入口；install：依赖安装；前后端分开时各写一个进程），
    并把「.octopus/preview.json 能按声明启动应用」列为该任务的验收项；用户据此下载到本机或远程预览。
 本任务只做分析与规划，不修改业务代码。
+
+## 此执行环境的 Coding 工具
+{dumps(tools or {})}
+available 为 false 的工具不要选择（reason 为原因）；没有列出时表示执行环境未报告。
+执行环境的已知限制：{dumps(limitations or [])}
+按任务性质与这些事实选择工具，并在交接文件中说明选择依据。
 
 ## 此执行环境公布的模型
 {dumps(models or {})}
@@ -71,10 +74,6 @@ def expand(db, rid, text, models=None):
         if step["id"] != base:
             notes.append(f"任务 ID {base} 与已有任务重复，改为 {step['id']}")
         taken.add(step["id"])
-        if step["tool"] in REASSIGN:
-            replacement = REASSIGN[step["tool"]]
-            notes.append(f"{step['name']}：{step['tool']} 尚未通过执行边界验收（K01），改由 {replacement} 执行")
-            step.update(tool=replacement, model="auto", effort="")
         if step["model"] not in {"auto", "default"} and step["model"] not in (published.get(step["tool"]) or []):
             notes.append(f"{step['name']}：模型 {step['model']} 不在执行环境公布的列表中，改为 auto")
             step["model"] = "auto"

@@ -703,12 +703,14 @@ class Service:
         if planning:
             # A real KiroCrew Agent recognises the intent, enriches the requirement and plans the tasks (planning.py).
             from .planning import plan_step
-            models = {}
+            capabilities = {}
             if body.get("worker_id"):
                 with self.db.read() as db:
                     row = db.execute("SELECT config FROM workers WHERE id=?", (body["worker_id"],)).fetchone()
-                models = json.loads(row["config"]).get("capabilities", {}).get("models", {}) if row else {}
-            body = {**{k: v for k, v in body.items() if k != "plan"}, "steps": [plan_step(models)]}
+                capabilities = json.loads(row["config"]).get("capabilities", {}) if row else {}
+            # The planner sees which tools this environment can start and its known limits, and chooses (D38 A5).
+            body = {**{k: v for k, v in body.items() if k != "plan"},
+                    "steps": [plan_step(capabilities.get("models", {}), capabilities.get("tools"), capabilities.get("limitations"))]}
         resolved = self.resolve_workflow(actor, {k: v for k, v in body.items() if k != "plan"})
         with self.db.transaction() as db:
             wid = resolved["selection"].get("workflow_id")

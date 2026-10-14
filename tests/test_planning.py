@@ -51,8 +51,8 @@ class PlanningTests(unittest.TestCase):
             applied = planning.expand(db, rid, PLAN, {"claude": ["auto", "sonnet"]})
         run = self.service.run(self.actor, rid)
         self.assertEqual([t["id"] for t in run["tasks"]], ["plan", "plan-2", "task-2", "task-3"])
-        self.assertEqual([t["spec"]["tool"] for t in run["tasks"]], ["kiro", "claude", "codex", "claude"])
-        self.assertTrue(any("K01" in note for note in applied["notes"]))
+        self.assertEqual([t["spec"]["tool"] for t in run["tasks"]], ["kiro", "claude", "codex", "opencode"])
+        self.assertFalse(any("K01" in note for note in applied["notes"]))   # no built-in swap (D38 A5)
         self.assertEqual(run["tasks"][1]["spec"]["model"], "auto")
         self.assertEqual(run["version"], 2)
         self.assertTrue(run["planning"]["applied"])
@@ -64,6 +64,14 @@ class PlanningTests(unittest.TestCase):
         prompt = planning.plan_step()["prompt"]
         self.assertIn(".octopus/preview.json", prompt)
         self.assertIn("验收", prompt[prompt.index(".octopus/preview.json") - 200:prompt.index(".octopus/preview.json") + 200])
+
+    def test_the_planner_sees_which_tools_this_environment_can_start(self):
+        tools = {"claude": {"available": True}, "opencode": {"available": False, "reason": "opencode 命令不存在"}}
+        prompt = planning.plan_step({"claude": ["auto"]}, tools, ["已知问题 K01：OpenCode …"])["prompt"]
+        self.assertIn('"opencode":{"available":false,"reason":"opencode 命令不存在"}', prompt)
+        self.assertIn("已知问题 K01", prompt)
+        self.assertIn("available 为 false 的工具不要选择", prompt)
+        self.assertFalse(hasattr(planning, "REASSIGN"))
 
     def test_planned_tasks_need_their_contract(self):
         rid = self.start()["id"]
