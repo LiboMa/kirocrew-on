@@ -63,6 +63,17 @@ TOOLS = [
      "description": "Session 的 Feature 报告（Markdown）：需求与计划、每个任务最终一次执行的工具与结论、门禁（通过 / 失败 / 跳过）、"
                     "候选提交、检查命令结果、审查绑定、纠错记录与发布的 PR / MR。用户要「报告」「总结这个会话」或交付说明时用它。",
      "inputSchema": object_schema({"run_id": STRING}, ["run_id"]), "annotations": {"readOnlyHint": True}},
+    {"name": "octopus_approvals",
+     "description": "列出会话中等待批准的原生工具请求（工具、命令或文件、用途；origin 与标识用于答复）。会话为 waiting_approval，"
+                    "或原生父会话想运行工具时用它。",
+     "inputSchema": object_schema({"run_id": STRING}, ["run_id"]), "annotations": {"readOnlyHint": True}},
+    {"name": "octopus_approve",
+     "description": "答复一个待批准请求（approve 或 reject）。调用前必须把工具、完整的命令或文件与用途展示给用户，并得到用户明确同意；"
+                    "不要替用户决定。origin、request_id 与 request_mid / instance 取自 octopus_approvals。",
+     "inputSchema": object_schema({"run_id": STRING, "origin": {"type": "string", "enum": ["native", "coordinator"]},
+                                   "request_id": STRING, "request_mid": STRING, "instance": STRING,
+                                   "decision": {"type": "string", "enum": ["approve", "reject"]}},
+                                  ["run_id", "origin", "request_id", "decision"])},
     {"name": "octopus_parse_workflow",
      "description": "校验并规范化一个由 Agent 预先生成的工作流（JSON / YAML / 含一个代码块的 Markdown；新版导出或旧版 schema 1），返回 name、steps 与规范化说明；仅预览，不执行。",
      "inputSchema": object_schema({"content": STRING, "format": {"type": "string", "enum": ["json", "yaml", "markdown"]}},
@@ -393,6 +404,11 @@ def call(client, name, args):
         return client.request("POST", "/v1/workflows/parse", args)
     if name == "octopus_report":
         return {"markdown": client.text("GET", "/v1/runs/" + quote(args["run_id"], safe="") + "/report?format=md")}
+    if name == "octopus_approvals":
+        return client.request("GET", "/v1/runs/" + quote(args["run_id"], safe="") + "/approvals")
+    if name == "octopus_approve":
+        rid = args.pop("run_id")
+        return client.request("POST", "/v1/runs/" + quote(rid, safe="") + "/approvals/answer", args)
     if name == "octopus_revisions":
         base = "/v1/runs/" + args["run_id"] + "/revisions"
         if "from" not in args and "to" not in args:

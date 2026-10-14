@@ -81,6 +81,7 @@ KiroCrew ON 在远端执行开发任务：KiroCrew 的 Kiro Agent 先识别意�
 | `running` / `diagnosing` | 正在执行或自动诊断返工，继续等待 |
 | `waiting_worker` | 还没有 Worker 执行，或原来的执行环境已更换、已移出该空间、已停用或已退役（`error` 写明原因）：把 `attention.title` / `attention.action` 告诉用户。`attention.workers` 为 0 时该空间没有可用的执行环境（尚未分配或已停用），请管理员分配或启用，或改在个人空间重新提交；大于 0 时用 `octopus_environments`（Team 会话传 `team_id`）列出可用环境，经用户确认后用 `octopus_assign_worker` 分配 |
 | `blocked` / `failed` | 读 `attention.title` / `attention.action` 告诉用户；可用 `octopus_recover` 诊断修复，或用 `octopus_continue` 修改后重跑。`attention.title` 为「需要换用工具或模型」时，向用户说明原因（`attention.detail`）并建议换用一个可用的工具；经用户同意后用 `octopus_continue` 的 `execution.tool` / `execution.model` 续作，不要自行决定 |
+| `waiting_approval` | 原生任务在等待批准一次工具调用：用 `octopus_approvals` 列出，把工具、完整的命令或文件与用途告诉用户；用户同意后用 `octopus_approve` 答复（approve），不同意则 reject。不要替用户决定 |
 | `completed` | 完成；用 `octopus_preview` 给出预览 |
 
 ## 4．迭代：`octopus_continue` / `octopus_recover`
@@ -94,6 +95,14 @@ KiroCrew ON 在远端执行开发任务：KiroCrew 的 Kiro Agent 先识别意�
   依赖重跑任务的任务、其后的审查 / 测试任务、尚未完成的任务会由平台自动一并重跑；其余沿用上一版结果。
   回复用户时说明重跑了哪些任务、沿用了哪些（`octopus_status` 的修订摘要与 `kept`）。
 - 任务暂停（`blocked` / `failed` / `stopped`）时，可用 `octopus_recover` 请 KiroCrew 协调者按失败证据诊断并安排修复。
+
+## 批准原生工具请求
+
+- 会话为 `waiting_approval`，或原生父会话想运行工具时，`octopus_approvals {run_id}` 列出待批准项（`origin`、`tool`、`tool_input`、`tool_purpose`）。
+- 先把工具、**完整的**命令或文件与用途展示给用户，得到明确同意后再调用
+  `octopus_approve {run_id, origin, request_id, request_mid | instance, decision: "approve" | "reject"}`（标识取自列表）。
+- 答复只能由会话创建者、Team owner 或管理员做出，并写入审计；`409 approval_not_pending` 表示该请求已被答复或过期，重新列出。
+- 用户也可以在控制台会话页的「待批准」卡片中答复。
 
 ## 私有仓库与凭证
 
