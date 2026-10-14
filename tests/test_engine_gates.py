@@ -94,7 +94,8 @@ class EngineGateTests(TeamsWorkersCase):
         self.assertEqual(attempt["status"], "accepted")
         self.assertEqual(self.gates(evidence), {"native_completed": "pass", "identity_match": "pass", "handoff_present": "pass",
                                                 "outcome_valid": "pass", "outcome_pass": "pass", "diff_present": "pass",
-                                                "no_secrets": "pass", "checks_pass": "pass"})
+                                                "no_secrets": "pass", "artifacts_locked": "skip",   # this fake names no files
+                                                "checks_pass": "pass"})
         self.assertEqual(evidence["candidate"]["sha"], C1)
         self.assertEqual(evidence["check_results"][0]["command"], "npm test")
         message = [b for p, b in worker.calls if p == "/candidate"][0]["message"]
@@ -278,6 +279,75 @@ class EngineGateTests(TeamsWorkersCase):
                                                         "task_id": "code", "recovery": {"enabled": True, "max_cycles": 2}})
         self.assertEqual(self.snapshot(rid)["execution_contract"], 3)
 
+    def test_a_later_task_may_not_change_an_accepted_tasks_files_unless_its_paths_say_so(self):
+        worker = FakeWorker()
+        names = {"code": ["src/a.py"], "docs": ["src/a.py", "README.md"]}
+        shas = {"code": C1, "docs": "d" * 40}
+        def candidate(body):
+            task = "code" if worker.dispatched[body["attempt_id"]]["spec"]["id"] == "code" else "docs"
+            return {"sha": shas[task], "parent": body.get("parent", BASE), "changed": True, "files": len(names[task]),
+                    "insertions": 1, "deletions": 0, "rewritten": False, "secrets": [], "names": names[task]}
+        worker.candidate = candidate
+        docs = {"id": "docs", "name": "文档", "tool": "claude", "prompt": "写文档", "kind": "deliver",
+                "acceptance": ["有文档"], "paths": ["README.md"]}
+        rid = self.session([IMPLEMENT, docs])
+        self.run_engine(worker, ticks=20)
+        _, evidence = self.attempt(rid, "docs")
+        self.assertEqual(self.gates(evidence).get("artifacts_locked"), "fail")
+        failed = [g for g in evidence["gates"] if g["name"] == "artifacts_locked"][0]
+        self.assertIn("「实现」的交付物：src/a.py", failed["detail"])
+
+    def test_a_task_without_paths_is_not_locked(self):
+        worker = FakeWorker()
+        worker.candidate = lambda body: {"sha": C1, "parent": body.get("parent", BASE), "changed": True, "files": 1,
+                                         "insertions": 1, "deletions": 0, "rewritten": False, "secrets": [], "names": ["src/a.py"]}
+        deliver = {"id": "deliver", "name": "交付", "tool": "claude", "prompt": "交付", "kind": "deliver", "acceptance": ["可交付"]}
+        rid = self.session([IMPLEMENT, deliver])
+        self.run_engine(worker, ticks=20)
+        _, evidence = self.attempt(rid, "deliver")
+        self.assertEqual(self.gates(evidence).get("artifacts_locked"), "skip")
+
+    def test_a_test_tasks_tests_must_fail_on_the_baseline(self):
+        for baseline_passed, verdict in ((True, "fail"), (False, "pass")):
+            with self.subTest(baseline_passed=baseline_passed):
+                worker = FakeWorker()
+                checks = {"state": "done", "passed": True, "failed": None, "error": None,
+                          "results": [{"command": "npm test", "exit": 0, "seconds": 1.0, "tail": "ok"}]}
+                baseline = {"state": "done", "passed": baseline_passed, "failed": None if baseline_passed else 0, "error": None,
+                            "results": [{"command": "npm test", "exit": 0 if baseline_passed else 1, "seconds": 1.0, "tail": ""}]}
+                jobs = {}
+                original = worker.__call__
+                def call(config, path, body=None, **kwargs):
+                    if path == "/verify/start":
+                        worker.calls.append((path, body))
+                        job = ("base-" if body.get("baseline") else "job-") + body["attempt_id"]
+                        jobs[job] = baseline if body.get("baseline") else checks
+                        return {"job": job, **({"baseline": True, "base": BASE} if body.get("baseline") else {})}
+                    if path == "/verify/status":
+                        worker.calls.append((path, body))
+                        return jobs[body["job"]]
+                    return original(config, path, body, **kwargs)
+                test = {"id": "test", "name": "测试", "tool": "claude", "prompt": "补测试", "kind": "test",
+                        "acceptance": ["测试覆盖新行为"], "verify": ["npm test"]}
+                rid = self.session([test], request="start-%016d" % (2 + baseline_passed))
+                self.run_engine(call, ticks=16)
+                attempt, evidence = self.attempt(rid, "test")
+                self.assertEqual(self.gates(evidence).get("tests_fail_on_baseline"), verdict)
+                self.assertEqual(attempt["status"], "blocked" if verdict == "fail" else "accepted")
+                started = [b for p, b in worker.calls if p == "/verify/start" and b.get("baseline")]
+                self.assertEqual(started[0]["baseline"], {"candidate": C1, "parent": BASE})
+
+    def test_an_old_worker_skips_the_baseline_gate(self):
+        worker = FakeWorker()   # its /verify/start does not echo "baseline": it ran the commands on the candidate
+        worker.verify = [{"state": "done", "passed": True, "failed": None,
+                          "results": [{"command": "npm test", "exit": 0, "seconds": 1.0, "tail": "ok"}]}]
+        test = {"id": "test", "name": "测试", "tool": "claude", "prompt": "补测试", "kind": "test",
+                "acceptance": ["测试覆盖新行为"], "verify": ["npm test"]}
+        rid = self.session([test])
+        self.run_engine(worker, ticks=16)
+        attempt, evidence = self.attempt(rid, "test")
+        self.assertEqual(self.gates(evidence).get("tests_fail_on_baseline"), "skip")
+        self.assertEqual(attempt["status"], "accepted")
 
 class WorkerReviewTests(unittest.TestCase):
     def test_a_review_is_told_which_commit_to_review(self):

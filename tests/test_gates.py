@@ -66,3 +66,13 @@ class BasicGateTests(unittest.TestCase):
         error, failure, records = judge(report=None)
         self.assertIsNone(error)
         self.assertEqual(self.names(records)[-2:], [("outcome_valid", "skip"), ("outcome_pass", "skip")])
+
+
+class CoveredTests(unittest.TestCase):
+    def test_paths_match_directories_globs_and_exact_files(self):
+        for path, globs, expected in (("src/a/b.py", ["src/"], True), ("src/a/b.py", ["src/**"], True),
+                                      ("src/a/b.py", ["src/*.py"], True), ("src/a/b.py", ["src"], True),
+                                      ("./README.md", ["README.md"], True), ("README.md", ["./README.md"], True),
+                                      ("docs/a.md", ["src/"], False), ("srcx/a.py", ["src"], False)):
+            with self.subTest(path=path, globs=globs):
+                self.assertIs(gates.covered(path, globs), expected)

@@ -1,5 +1,6 @@
 """Named gates (D37 §4): each Attempt's acceptance as a list of recorded verdicts. The first five are the checks the
 Engine always made; their messages and failure types are unchanged."""
+import fnmatch
 import re
 import time
 
@@ -55,3 +56,23 @@ def basic(native, result, spec, evidence, report, invalid, lost, missing, blocke
         return report["summary"], report["failure_type"], records
     records.append(record("outcome_pass", "pass"))
     return None, None, records
+
+
+def covered(path, globs):
+    """Whether a task's ``paths`` cover ``path`` (D37 §11.2): a directory (trailing / or /**), a glob, or the path itself
+    and everything under it."""
+    path = path[2:] if path.startswith("./") else path
+    for item in globs or []:
+        item = str(item).strip()
+        item = item[2:] if item.startswith("./") else item
+        if not item:
+            continue
+        if item.endswith("/**"):
+            item = item[:-2]
+        if item.endswith("/"):
+            if path.startswith(item):
+                return True
+            continue
+        if path == item or path.startswith(item + "/") or fnmatch.fnmatchcase(path, item):
+            return True
+    return False
