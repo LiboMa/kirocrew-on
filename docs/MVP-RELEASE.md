@@ -280,7 +280,7 @@ M4（共享与组织）、M5（仓库闭环）在 MVP 之后分别立项，各�
 |---|---|---|---|
 | 1 | Request | ○ | Session 的 `request_id` 提供幂等登记；Request 表、来源客户端与仓库字段、与 Session 的关联未建 |
 | 2 | Pipeline 生成 | ◐ EC2 | 已有：Kiro Agent 规划（D26：意图、补全、1–7 个任务与 Agent 映射，追加到同一 Session）、`plan=match` 规则匹配、工作流文档（JSON / YAML / Markdown）解析与规范化。剩余：schema 2、规划阶段的只读源码检查 |
-| 3 | 门禁目录 | ◐ | D37 第 1 期（分支 `feat/m11-gates`，EC2 待验收）：命名门禁 `native_completed`、`identity_match`、`handoff_present`、`outcome_valid`、`outcome_pass`、`diff_present`、`no_secrets`、`checks_pass`（平台运行 `verify`）、`review_bound`，逐条入库并在控制台与 MCP 展示；发布只推送已验证候选（`candidate_unchanged`）。剩余：`tests_fail_on_baseline`、`artifacts_locked`（第 3 期）、Feature 报告（第 2 期） |
+| 3 | 门禁目录 | ◐ EC2 | D37 第 1 期（分支 `feat/m11-gates`，✅ EC2 2026-10-14，见 §14.13）：命名门禁 `native_completed`、`identity_match`、`handoff_present`、`outcome_valid`、`outcome_pass`、`diff_present`、`no_secrets`、`checks_pass`（平台运行 `verify`）、`review_bound`，逐条入库并在控制台与 MCP 展示；发布只推送已验证候选（`candidate_unchanged`）。剩余：`tests_fail_on_baseline`、`artifacts_locked`（第 3 期）、Feature 报告（第 2 期） |
 | 4 | 映射策略 | ◐ | 已有：Prompt / 工作流显式指定、K01 期间 OpenCode 由代码改派 Claude Code。剩余：个人 / Team 策略、能力校验后的通用回退链、映射来源记录 |
 | 5 | 准入 | ○ | 确认模式与按仓库范围的自动准入 |
 | 6 | 恢复阶梯 | ◐ EC2 | 已有：Worker / Gateway 不可用退避（M1）、协调者诊断（重试、退回上游返工、复审）与轮数上限。剩余：L0 瞬时重试、工具回退、重规划、预算、看门狗、条件满足后自动恢复 |
@@ -318,6 +318,26 @@ M4（共享与组织）、M5（仓库闭环）在 MVP 之后分别立项，各�
 
 ✅ EC2（2026-10-12，`436233b`）：线上已有会话的旧修订按记录还原（`run-690b49c1…` 9 条：创建、续作、自动纠错；`run-63b33288…`
 v4 → v6 显示规划 Prompt 新增的行）；控制台「修订历史」在改动处保留 2 行上下文、其余折叠。离线：Python 322、控制台 91、旧版回归 92。
+
+### 14.13 候选提交与命名门禁（D37 第 1 期，M2）
+
+✅ EC2（2026-10-14，c9881d3，测试仓库 `LiboMa/bedrock-claude-call`）：
+- **成功路径**（`run-6de37646…`，实现 + 审查）：
+  - 实现任务全部九个门禁中的八个通过（`review_bound` 属审查任务）；平台在 Worker 上运行 `verify`（退出码 0）。
+  - 留下候选提交；审查任务写明 `reviewed_commit`，`review_bound` 通过，会话显示该候选为已验证候选。
+  - 发布推送的正是它（Draft PR #3）；之后在工作区改动已跟踪文件时，发布 409 `publish_unverified`。
+- **失败路径**（`run-3662576a…`）：
+  - 一条在 Agent 看来通过、在平台提交候选后失败的检查（依赖文件尚未提交）：Agent 报告 pass，平台运行的检查退出码 1，`checks_pass` 失败。
+  - 失败按门禁失败进入自动纠错，协调者如实诊断出检查与提交行为的矛盾；没有已验证候选的会话发布 409。
+- **另见**（`run-56a21673…`）：任务的检查命令与 Prompt 互相矛盾时，Agent 报告 BLOCKED，协调者请用户二选一，不擅自决定。
+- **最终审查**（opus）：1 项严重（检查命令留下后台进程时会话挂起）、5 项重要问题已修复：
+  - Worker 拒绝生成候选不再挂起，按门禁失败进入纠错；
+  - 检查留下的未跟踪文件不算改动；
+  - 审查后的交付改动仍可发布；
+  - 按时间取会话分支所在的候选；
+  - 新会话没有已验证候选时不发布。
+  
+  另把检查命令不带 Worker 的 `PYTHONPATH`、无法启动时失败而不挂起列为重要并修复。
 
 ### 14.12 会话独立预览域名（D36 第 3 期）
 
