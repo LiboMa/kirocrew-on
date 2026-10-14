@@ -289,6 +289,19 @@ def server(database, port=8918, host="127.0.0.1", allowed_hosts=(), origin_secre
                 return self.respond_page(str(exc), exc.status if exc.status in (401, 403, 404, 409) else 403)
             return self.respond_page("页面不存在", 404)
 
+        def respond_report(self, data, rid, fmt):
+            """A Session's Feature report (D37 phase 2): HTML shown as a page with nothing it may load or run, Markdown as
+            a file."""
+            self.send_response(200)
+            self.send_header("Content-Type", "text/html; charset=utf-8" if fmt == "html" else "text/markdown; charset=utf-8")
+            self.send_header("Content-Disposition", f'{"inline" if fmt == "html" else "attachment"}; filename="{rid}-report.{fmt}"')
+            self.send_header("Content-Length", str(len(data)))
+            self.send_header("Cache-Control", "no-store")
+            self.send_header("X-Content-Type-Options", "nosniff")
+            self.send_header("Content-Security-Policy", "default-src 'none'; style-src 'unsafe-inline'; img-src data:")
+            self.end_headers()
+            self.wfile.write(data)
+
         def respond_preview(self, data, kind, status=200):
             # The previewed app runs sandboxed in an opaque origin: it cannot read the console's storage or call its API
             # as the user. Module scripts from that origin are cross-origin requests, hence the CORS header.
@@ -730,6 +743,12 @@ def server(database, port=8918, host="127.0.0.1", allowed_hosts=(), origin_secre
                         return self.respond(service.revision_diff(actor, rid, versions.get("from"), versions.get("to")))
                     require(segments[4].isdigit(), "修订版本号无效", 404, "not_found")
                     return self.respond(service.revision(actor, rid, int(segments[4])))
+                if len(segments) == 4 and segments[:2] == ["v1", "runs"] and segments[3] == "report":
+                    require(method == "GET", "Method not allowed", 405)
+                    fmt = query.get("format", ["md"])[0]
+                    require(fmt in {"md", "html"}, "format 只能是 md 或 html")
+                    text = service.report(actor, segments[2], fmt).encode()
+                    return self.respond_report(text, segments[2], fmt)
                 if len(segments) == 4 and segments[:2] == ["v1", "runs"] and segments[3] == "changes":
                     require(method == "GET", "Method not allowed", 405)
                     paging = {}

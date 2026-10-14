@@ -1,9 +1,14 @@
 """D37 phase 2: a Session's Feature report — the request and plan, each task's gates and candidate, the review, recovery
 and the published pull request; session text escaped, no external resources, bounded in size."""
 import re
+import threading
 import unittest
+import urllib.error
+import urllib.request
 
 from octopus import report
+from octopus.server import required_scope, server
+from tests.test_access import AccessCase
 
 RID = "run-" + "5" * 32
 IMPLEMENT = {"id": "code", "name": "实现登录", "tool": "claude", "model": "auto", "effort": "", "prompt": "实现", "kind": "implement"}
@@ -106,6 +111,44 @@ class ReportTests(unittest.TestCase):
         self.assertIn("尚未发布", text)
         self.assertIn("无纠错", text)
         report.html(old)
+
+
+class ReportApiTests(AccessCase):
+    def fetch(self, path, token):
+        app = server(self.db, 0)
+        threading.Thread(target=app.serve_forever, daemon=True).start()
+        try:
+            request = urllib.request.Request(f"http://127.0.0.1:{app.server_address[1]}{path}",
+                                             headers={"Authorization": "Bearer " + token})
+            try:
+                with urllib.request.urlopen(request, timeout=10) as response:
+                    return response.status, {k.lower(): v for k, v in response.headers.items()}, response.read().decode()
+            except urllib.error.HTTPError as exc:
+                with exc:
+                    return exc.code, {k.lower(): v for k, v in exc.headers.items()}, exc.read().decode()
+        finally:
+            app.shutdown()
+            app.server_close()
+
+    def test_who_may_read_the_report(self):
+        rid = self.start(self.b, name="订单系统")["id"]
+        status, headers, body = self.fetch(f"/v1/runs/{rid}/report?format=md", self.tokens["bob"])
+        self.assertEqual(status, 200, body)
+        self.assertTrue(headers["content-type"].startswith("text/markdown"))
+        self.assertIn(f'attachment; filename="{rid}-report.md"', headers["content-disposition"])
+        self.assertIn("# 订单系统", body)
+        status, headers, body = self.fetch(f"/v1/runs/{rid}/report?format=html", self.token("bob", ["read"]))
+        self.assertEqual(status, 200)
+        self.assertTrue(headers["content-type"].startswith("text/html"))
+        self.assertEqual(headers["content-security-policy"], "default-src 'none'; style-src 'unsafe-inline'; img-src data:")
+        self.assertEqual((headers["x-content-type-options"], headers["cache-control"]), ("nosniff", "no-store"))
+        self.assertIn("<h1>订单系统</h1>", body)
+        self.assertEqual(self.fetch(f"/v1/runs/{rid}/report", self.tokens["bob"])[0], 200)   # Markdown by default
+        self.assertEqual(self.fetch(f"/v1/runs/{rid}/report?format=md", self.tokens["eve"])[0], 404)
+        self.assertEqual(self.fetch(f"/v1/runs/{rid}/report?format=pdf", self.tokens["bob"])[0], 400)
+
+    def test_the_report_route_needs_read_scope(self):
+        self.assertEqual(required_scope("GET", "/v1/runs/r1/report"), "read")
 
 
 if __name__ == "__main__":

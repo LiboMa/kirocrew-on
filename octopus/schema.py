@@ -128,6 +128,7 @@ def openapi():
         "/v1/runs/{id}/crew-entry": {"post": "Empty"}, "/v1/runs/{id}/preview": {"post": "Empty"},
         "/v1/runs/{id}/observe": {"get": None},
         "/v1/runs/{id}/revisions": {"get": None}, "/v1/runs/{id}/revisions/diff": {"get": None},
+        "/v1/runs/{id}/report": {"get": None},
         "/v1/runs/{id}/revisions/{version}": {"get": None},
         "/v1/runs/{id}/changes": {"get": None},
         "/v1/runs/{id}/archive": {"post": "Empty"},

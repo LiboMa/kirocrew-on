@@ -1197,6 +1197,12 @@ class Service:
                     pass
             return result
 
+    def report(self, actor, rid, fmt):
+        """The Session's Feature report (D37 phase 2), as it can be seen: the same access and read audit as its detail."""
+        from . import report
+        view = self.run(actor, rid)
+        return report.html(view) if fmt == "html" else report.markdown(view)
+
     def run(self, actor, rid):
         with self.db.read() as db:
             value = self._view(db, run_access(db, actor, rid), actor)
