@@ -406,8 +406,11 @@ class Engine:
             if attempt is None:
                 aid, now = uid("attempt"), time.time()
                 number = db.execute("SELECT count(*) FROM attempts WHERE run_id=? AND task_id=?", (rid, task["id"])).fetchone()[0] + 1
-                db.execute("INSERT INTO attempts(id,run_id,task_id,number,spec,status,created,updated) VALUES(?,?,?,?,?,'dispatching',?,?)",
-                           (aid, rid, task["id"], number, task["spec"], now, now))
+                switched = recovery.switched_from(db, rid, task["id"], json.loads(task["spec"]))
+                db.execute("INSERT INTO attempts(id,run_id,task_id,number,spec,status,evidence,created,updated) "
+                           "VALUES(?,?,?,?,?,'dispatching',?,?,?)",
+                           (aid, rid, task["id"], number, task["spec"], dumps({"switched_from": switched} if switched else {}),
+                            now, now))
                 journal.change(db, "tasks", (rid, task["id"]), journal.ENGINE, "attempt.created",
                                event={"id": aid, "task_id": task["id"], "number": number}, current_attempt=aid, status="dispatching")
                 attempt = db.execute("SELECT * FROM attempts WHERE id=?", (aid,)).fetchone()
@@ -469,10 +472,11 @@ class Engine:
             self.update(rid, "running", actor=journal.WORKER)
             return
         evidence = result.get("evidence", {})
-        # An automatic retry keeps its mark through every evidence update: it is not retried again (D34 §5.1).
-        retry_of = json.loads(attempt["evidence"] or "{}").get("transient_retry_of")
-        if retry_of:
-            evidence["transient_retry_of"] = retry_of
+        # An automatic retry and a Coordinator's switch keep their marks through every evidence update (D34 §5.1, D38 §3.3).
+        retry_of = prior.get("transient_retry_of")
+        for key in ("transient_retry_of", "switched_from"):
+            if prior.get(key):
+                evidence[key] = prior[key]
         state, error = ("waiting_approval" if native.get("awaiting_approval") else "running"), None
         retry = None
         if native.get("done"):
@@ -536,7 +540,9 @@ class Engine:
                 db.execute("INSERT INTO attempts(id,run_id,task_id,number,spec,status,evidence,created,updated) "
                            "VALUES(?,?,?,?,?,'dispatching',?,?,?)",
                            (aid, rid, task["id"], attempt["number"] + 1, current["spec"],
-                            dumps({"transient_retry_of": attempt["id"]}), now, now))
+                            dumps({"transient_retry_of": attempt["id"],
+                                   **({"switched_from": evidence["switched_from"]} if evidence.get("switched_from") else {})}),
+                            now, now))
                 journal.change(db, "tasks", (rid, task["id"]), journal.ENGINE, "attempt.retry", f"{why}，自动重试一次",
                                event={"attempt": attempt["id"], "retry": aid, "transient": retry},
                                status="dispatching", current_attempt=aid)

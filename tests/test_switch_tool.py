@@ -65,7 +65,8 @@ class SwitchCase(unittest.TestCase):
         if record.get("coordination"):
             result["decision"] = dumps(self.decisions.pop(0))
             return result
-        number = sum(1 for b in self.bodies.values() if not b.get("coordination") and b["spec"]["id"] == record["spec"]["id"])
+        number = sum(1 for b in self.bodies.values() if not b.get("coordination") and b["run_id"] == record["run_id"]
+                     and b["spec"]["id"] == record["spec"]["id"])
         if (record["spec"]["id"], number) in self.mismatch_rounds:
             result["evidence"]["actual_backend"] = "kiro"
         failed = (record["spec"]["id"], number) in self.fail_rounds
@@ -159,3 +160,91 @@ class OldWorkerTests(SwitchCase):
         run = self.tick(self.start([step("code", "opencode", "implement")])["id"])
         self.assertTrue([b for p, b in self.calls if p == "/dispatch" and b["spec"]["tool"] == "opencode"])
         self.assertEqual(run["status"], "completed")
+
+
+class SwitchTests(SwitchCase):
+    def switch(self, tool="claude", model="auto", target="code", **extra):
+        return {"action": "switch_tool", "target_task_id": target, "tool": tool, "model": model, "effort": "",
+                "reason": "原工具在此执行环境不可用", "instructions": "以新工具重新执行", **extra}
+
+    def test_an_unavailable_tool_is_diagnosed_before_dispatch_and_the_switch_completes(self):
+        self.decisions = [self.switch()]
+        rid = self.start([step("code", "opencode", "implement"), step("review", "codex", "review")])["id"]
+        run = self.tick(rid)
+        self.assertEqual(run["status"], "completed")
+        code = run["tasks"][0]
+        self.assertEqual(code["spec"]["tool"], "claude")
+        second = code["attempts"][-1]
+        self.assertEqual(second["spec"]["tool"], "claude")
+        self.assertEqual(second["evidence"]["switched_from"],
+                         {"tool": "opencode", "model": "auto", "effort": "", "reason": "原工具在此执行环境不可用",
+                          "by": "coordinator", "recovery": 1})
+        self.assertNotIn("switched_from", run["tasks"][1]["attempts"][-1]["evidence"])
+        revisions = self.service.revisions(self.actor, rid)
+        self.assertEqual(revisions[-1]["summary"], "自动纠错：「实现」由 opencode / auto 换为 claude / auto（原工具在此执行环境不可用）")
+        self.assertIn("task.tool_switched", [e["kind"] for e in self.service.events(self.actor, rid)])
+
+    def test_a_refused_model_is_fixed_on_the_same_tool(self):
+        self.decisions, self.refuse_models = [self.switch(model="auto")], {"unpublished-x"}
+        run = self.tick(self.start([step("code", "claude", "implement", model="unpublished-x")])["id"])
+        self.assertEqual(run["status"], "completed")
+        self.assertEqual(run["tasks"][0]["attempts"][-1]["evidence"]["switched_from"]["model"], "unpublished-x")
+
+    def test_switch_validation_explains_each_refusal(self):
+        cases = [("unavailable", [step("code", "opencode", "implement")], self.switch(tool="opencode", model="auto"), "不可用"),
+                 ("same", [step("code", "claude", "implement")], self.switch(tool="claude"), "相同"),
+                 ("model", [step("code", "claude", "implement")], self.switch(tool="codex", model="gpt-x"), "未由 codex 公布"),
+                 ("target", [step("code", "claude", "implement"), step("review", "codex", "review")],
+                  self.switch(tool="codex", target="code"), "失败的任务"),
+                 ("review", [step("code", "claude", "implement"), step("review", "opencode", "review")],
+                  self.switch(tool="claude", target="review"), "审查须使用与被审查代码（claude）不同的工具"),
+                 ("effort", [step("code", "claude", "implement")], self.switch(tool="codex", model="auto", effort="ultra"), "Effort")]
+        for name, steps, decision, words in cases:
+            with self.subTest(name):
+                self.decisions = [decision]
+                self.mismatch_rounds = {("code", 1)} if name in {"same", "model", "effort"} else set()
+                self.fail_rounds = {("review", 1)} if name == "target" else set()
+                run = self.tick(self.start(steps)["id"])
+                self.assertEqual(run["status"], "blocked")
+                self.assertTrue(run["error"].startswith("协调者换工具的推荐未通过核对："), run["error"])
+                self.assertIn(words, run["error"])
+
+    def test_switching_turned_off_is_refused(self):
+        self.decisions = [self.switch()]
+        run = self.tick(self.start([step("code", "opencode", "implement")],
+                                   recovery={"enabled": True, "max_cycles": 2, "switch_tools": False})["id"])
+        self.assertEqual(run["status"], "blocked")
+        self.assertIn("已关闭换工具", run["error"])
+
+    def test_switches_are_bounded_by_the_cycle_limit(self):
+        self.decisions = [self.switch(tool="claude"), self.switch(tool="codex")]
+        self.mismatch_rounds = {("code", 1), ("code", 2), ("code", 3)}
+        run = self.tick(self.start([step("code", "codex", "implement")],
+                                   recovery={"enabled": True, "max_cycles": 2})["id"])
+        self.assertEqual(run["status"], "blocked")
+        self.assertEqual(run["recovery"]["used"], 2)
+        self.assertIn("2 轮上限", run["attention"]["action"])
+
+    def test_a_continue_after_a_switch_is_not_labelled_a_switch(self):
+        rid = self.start([step("code", "claude", "implement")])["id"]   # not ticked: no Attempt yet
+        with self.db.transaction() as db:
+            for number, aid in enumerate(("attempt-a", "attempt-b"), 1):   # created before the diagnosis was applied
+                db.execute("INSERT INTO attempts(id,run_id,task_id,number,spec,status,created,updated) "
+                           "VALUES(?,?,'code',?,'{}','blocked',0,0)", (aid, rid, number))
+            db.execute("INSERT INTO recoveries(id,run_id,number,failed_task_id,failed_attempt_id,attempt_id,status,context,"
+                       "decision,created,updated) VALUES('r',?,1,'code','attempt-a','attempt-b','applied','{}',?,1,1)",
+                       (rid, dumps({**self.switch(tool="claude"), "switched_from": {"tool": "codex", "model": "auto", "effort": ""}})))
+            # the task still runs the Coordinator's choice: labelled; the user picked another since: not
+            self.assertEqual(recovery.switched_from(db, rid, "code", {"tool": "claude", "model": "auto", "effort": ""})["tool"], "codex")
+            self.assertIsNone(recovery.switched_from(db, rid, "code", {"tool": "codex", "model": "auto", "effort": ""}))
+
+
+class SwitchWithoutToolsTests(SwitchCase):
+    capabilities = {"models": MODELS}   # a Worker from before D38: models but no tools
+
+    def test_switch_is_refused_without_reported_tools(self):
+        self.decisions, self.mismatch_rounds = [{"action": "switch_tool", "target_task_id": "code", "tool": "codex",
+                                                 "model": "auto", "effort": "", "reason": "r", "instructions": "i"}], {("code", 1)}
+        run = self.tick(self.start([step("code", "claude", "implement")])["id"])
+        self.assertEqual(run["status"], "blocked")
+        self.assertIn("未报告可用性", run["error"])

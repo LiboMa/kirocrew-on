@@ -4,7 +4,7 @@ import time
 
 from . import journal
 from .db import dumps, uid
-from .domain import unserved
+from .domain import TOOLS, steps, unserved
 from .security import Error, require
 
 LIVE = {"pending", "dispatching", "dispatch_unknown", "running", "waiting_approval"}
@@ -124,6 +124,62 @@ action 只能为 retry、rework、switch_tool、wait_for_user；wait_for_user �
 instructions 要说明缺少什么、用户下一步如何补充。
 同时写 handoff.md，最后汇总判断。提出 wait_for_user 是诊断完成，不是诊断 Agent 自身执行失败。
 """
+
+
+def reviewed_backend(db, run_id, ordinal):
+    """The backend that wrote the code a review at ``ordinal`` reviews: the newest accepted Attempt of an earlier task
+    that is not itself a review or a design (D38 §3.3)."""
+    for row in db.execute("SELECT a.spec, a.evidence FROM attempts a JOIN tasks t ON t.run_id=a.run_id AND t.id=a.task_id "
+                          "WHERE a.run_id=? AND t.ordinal<? AND a.status='accepted' ORDER BY a.updated DESC, a.created DESC",
+                          (run_id, ordinal)):
+        spec = json.loads(row["spec"])
+        if spec.get("kind") in {"review", "design"} or spec.get("id") == "plan":
+            continue
+        return json.loads(row["evidence"] or "{}").get("actual_backend") or spec["tool"]
+    return None
+
+
+def switch(db, run, failed, decision, context):
+    """The Coordinator's recommended tool, checked against the environment it was shown (D38 §3.3): the task's new spec
+    and the (tool, model, effort) it replaces, or ``Error`` with the reason."""
+    environment = context.get("environment") or {}
+    require(environment.get("switch_tools", True), "此会话已关闭换工具")
+    require(decision.get("target_task_id") == failed["id"], "换工具的目标必须是失败的任务")
+    tool, model, effort = decision.get("tool"), decision.get("model") or "auto", decision.get("effort") or ""
+    require(tool in TOOLS, f"不支持的工具 {tool}")
+    state = (environment.get("tools") or {}).get(tool)
+    require(isinstance(state, dict), f"此执行环境未报告可用性（{tool}；Worker 版本较旧或尚未刷新执行环境能力）")
+    require(state.get("available") is True, f"{tool} 在此执行环境不可用：{state.get('reason') or '原因未报告'}")
+    require(model in {"auto", "default"} or model in ((environment.get("models") or {}).get(tool) or []),
+            f"模型 {model} 未由 {tool} 公布")
+    row = db.execute("SELECT spec FROM attempts WHERE id=?", (failed["current_attempt"],)).fetchone()
+    old = json.loads(row["spec"] if row else failed["spec"])
+    before = {"tool": old["tool"], "model": old.get("model", "auto"), "effort": old.get("effort", "")}
+    require((tool, model, effort) != (before["tool"], before["model"], before["effort"]),
+            "推荐的工具、模型与 Effort 与失败的那次相同")
+    spec = json.loads(failed["spec"])
+    if spec.get("kind") == "review":
+        reviewed = reviewed_backend(db, run["id"], failed["ordinal"])
+        require(tool != reviewed, f"审查须使用与被审查代码（{reviewed}）不同的工具")
+    earlier = [r["id"] for r in db.execute("SELECT id FROM tasks WHERE run_id=? AND ordinal<? ORDER BY ordinal",
+                                          (run["id"], failed["ordinal"]))]
+    return steps([{**spec, "tool": tool, "model": model, "effort": effort}], known=earlier)[0], before
+
+
+def switched_from(db, run_id, task_id, spec):
+    """What an Attempt about to be created was switched from (D38 §3.3): the latest applied diagnosis switched this task,
+    the task still runs that tool, and no Attempt of it was created since."""
+    row = db.execute("SELECT number, decision, updated FROM recoveries WHERE run_id=? AND status='applied' "
+                     "ORDER BY number DESC LIMIT 1", (run_id,)).fetchone()
+    decision = json.loads(row["decision"] or "{}") if row else {}
+    if decision.get("action") != "switch_tool" or decision.get("target_task_id") != task_id:
+        return None
+    if (spec.get("tool"), spec.get("model", "auto"), spec.get("effort", "")) != \
+            (decision["tool"], decision.get("model") or "auto", decision.get("effort") or ""):
+        return None   # the user changed the task since (a continue): not the Coordinator's switch any more
+    if db.execute("SELECT 1 FROM attempts WHERE run_id=? AND task_id=? AND created>=?", (run_id, task_id, row["updated"])).fetchone():
+        return None
+    return {**decision["switched_from"], "reason": decision.get("reason"), "by": "coordinator", "recovery": row["number"]}
 
 
 def summary(db, run):
@@ -276,11 +332,15 @@ class Coordinator:
             raw = result.get("decision", "")
             require(isinstance(raw, str) and len(raw) <= 64000, "协调者决定缺失或过大")
             decision = json.loads(raw)
-            require(isinstance(decision, dict) and set(decision) <= {"action", "target_task_id", "reason", "instructions"},
-                    "协调者决定字段无效")
-            require(decision.get("action") in {"retry", "rework", "wait_for_user"}, "协调者动作无效")
+            fields = {"action", "target_task_id", "reason", "instructions", "tool", "model", "effort"}
+            require(isinstance(decision, dict) and set(decision) <= fields, "协调者决定字段无效")
+            require(decision.get("action") in {"retry", "rework", "switch_tool", "wait_for_user"}, "协调者动作无效")
             require(all(isinstance(decision.get(k), str) and 0 < len(decision[k]) <= 8000
                         for k in ("reason", "instructions")), "协调者必须给出原因与具体操作")
+            if decision["action"] == "switch_tool":
+                require(all(isinstance(decision.get(k, ""), str) for k in ("tool", "model", "effort")), "换工具的字段须为字符串")
+            else:
+                decision = {k: v for k, v in decision.items() if k not in {"tool", "model", "effort"}}
             self.finish(run, item, decision=decision)
         except (Error, ValueError, TypeError) as exc:
             self.finish(run, item, error="自动诊断未形成可执行决定：" + str(exc))
@@ -304,8 +364,14 @@ class Coordinator:
                     # "retry" of an upstream Task has exactly rework's effect (target and downstream rerun with
                     # the repair instructions); normalize the label instead of blocking a correct diagnosis.
                     decision = {**decision, "action": "rework", "normalized_from": "retry"}
-                if (not target or target["ordinal"] > failed["ordinal"] or
-                        decision["action"] == "retry" and target["id"] != failed["id"]):
+                if decision["action"] == "switch_tool":
+                    try:
+                        switched, before = switch(db, fresh, failed, decision, json.loads(item["context"]))
+                        decision = {**decision, "switched_from": before}
+                    except Error as exc:
+                        error = "协调者换工具的推荐未通过核对：" + str(exc)
+                if not error and (not target or target["ordinal"] > failed["ordinal"] or
+                                  decision["action"] == "retry" and target["id"] != failed["id"]):
                     error = "协调者返工目标必须是失败 Task 或其上游；retry 必须重试当前 Task"
             if error or decision["action"] == "wait_for_user":
                 message = error or (decision["reason"] + "；" + decision["instructions"])
@@ -318,6 +384,11 @@ class Coordinator:
                 "SELECT id FROM tasks WHERE run_id=? AND ordinal>=? ORDER BY ordinal", (run["id"], target["ordinal"]))]
             journal.change_rows(db, "tasks", "run_id=? AND ordinal>=?", (run["id"], target["ordinal"]), journal.RECOVERY,
                                 "task.reset", decision.get("reason"), status="pending", current_attempt=None)
+            if decision["action"] == "switch_tool":
+                journal.change(db, "tasks", (run["id"], target["id"]), journal.RECOVERY, "task.tool_switched", decision["reason"],
+                               event={"task_id": target["id"], "from": decision["switched_from"],
+                                      "to": {k: switched[k] for k in ("tool", "model", "effort")}},
+                               spec=dumps(switched))
             version = fresh["version"] + 1
             journal.change(db, "recoveries", item["id"], journal.RECOVERY, "recovery.state", event={"id": item["id"]},
                            status="applied", decision=dumps(decision), error=None, updated=now)
@@ -327,5 +398,11 @@ class Coordinator:
             from .revisions import record
             name = json.loads(target["spec"]).get("name", target["id"])
             reason = decision.get("reason")
-            record(db, run["id"], version, "recovered", f"自动纠错：退回「{name}」" + (f"（{reason}）" if reason else ""),
-                   fresh["owner_id"], now, recovery_id=item["id"], decision=decision, invalidated=invalidated)
+            if decision["action"] == "switch_tool":
+                was = decision["switched_from"]
+                title = (f"自动纠错：「{name}」由 {was['tool']} / {was['model']} 换为 {switched['tool']} / {switched['model']}"
+                         + (f"（{reason}）" if reason else ""))
+            else:
+                title = f"自动纠错：退回「{name}」" + (f"（{reason}）" if reason else "")
+            record(db, run["id"], version, "recovered", title, fresh["owner_id"], now, recovery_id=item["id"],
+                   decision=decision, invalidated=invalidated)
