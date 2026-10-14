@@ -280,7 +280,7 @@ M4（共享与组织）、M5（仓库闭环）在 MVP 之后分别立项，各�
 |---|---|---|---|
 | 1 | Request | ○ | Session 的 `request_id` 提供幂等登记；Request 表、来源客户端与仓库字段、与 Session 的关联未建 |
 | 2 | Pipeline 生成 | ◐ EC2 | 已有：Kiro Agent 规划（D26：意图、补全、1–7 个任务与 Agent 映射，追加到同一 Session）、`plan=match` 规则匹配、工作流文档（JSON / YAML / Markdown）解析与规范化。剩余：schema 2、规划阶段的只读源码检查 |
-| 3 | 门禁目录 | ◐ EC2 | D37 第 1 期（分支 `feat/m11-gates`，✅ EC2 2026-10-14，见 §14.13）：命名门禁 `native_completed`、`identity_match`、`handoff_present`、`outcome_valid`、`outcome_pass`、`diff_present`、`no_secrets`、`checks_pass`（平台运行 `verify`）、`review_bound`，逐条入库并在控制台与 MCP 展示；发布只推送已验证候选（`candidate_unchanged`）。剩余：`tests_fail_on_baseline`、`artifacts_locked`（第 3 期）、Feature 报告（第 2 期） |
+| 3 | 门禁目录 | ◐ EC2 | D37 第 1 期（分支 `feat/m11-gates`，✅ EC2 2026-10-14，见 §14.13）：命名门禁 `native_completed`、`identity_match`、`handoff_present`、`outcome_valid`、`outcome_pass`、`diff_present`、`no_secrets`、`checks_pass`（平台运行 `verify`）、`review_bound`，逐条入库并在控制台与 MCP 展示；发布只推送已验证候选（`candidate_unchanged`）。第 3 期（本机完成，见 §14.13）：`artifacts_locked`、`tests_fail_on_baseline`。剩余：EC2 验收第 3 期 |
 | 4 | 映射策略 | ◐ | 已有：Prompt / 工作流显式指定；D38 第 1 期（分支 `feat/m11-gates`，见 §14.14）：工具层失败由 KiroCrew 协调者推荐换用的工具与模型（`switch_tool`），平台按执行环境核对并记录，规划时 Kiro 看到各工具是否可用；不内置回退链（原 OpenCode→Claude 的代码改派已去掉）。剩余：映射来源记录、个人 / Team 偏好 |
 | 5 | 准入 | ○ | 确认模式与按仓库范围的自动准入 |
 | 6 | 恢复阶梯 | ◐ EC2 | 已有：Worker / Gateway 不可用退避（M1）、协调者诊断（重试、退回上游返工、复审、换工具（D38））与轮数上限。剩余：L0 瞬时重试、重规划、预算、看门狗、条件满足后自动恢复 |
@@ -380,6 +380,12 @@ EC2（2026-10-15，a402caa）部分验收 6/6：
   - 新会话没有已验证候选时不发布。
   
   另把检查命令不带 Worker 的 `PYTHONPATH`、无法启动时失败而不挂起列为重要并修复。
+
+第 3 期「`artifacts_locked` 与 `tests_fail_on_baseline`」本机完成（2026-10-15）：
+- 候选记录改动的文件名；声明了 `paths` 的任务修改此前已验收任务的交付物时须被 `paths` 覆盖，否则门禁失败并进入纠错。
+- `test` 任务在 `checks_pass` 之后，在项目目录中原地切到会话基线并叠加测试文件再运行一次 `verify`：在改动之前也通过的测试不被接受。
+  运行结束后必定恢复到候选；Worker 中途重启留下的基线在下一次操作前恢复；运行中的基线不被预览或下载请求打断。
+- Agent 的任务说明与规划提示写明这两条门禁。待做：EC2 验收（见计划 `docs/superpowers/plans/2026-10-15-gates-phase3.md` 末尾）。
 
 第 2 期「Feature 报告」✅ EC2（2026-10-14，2aa3941）12/12：
 - `run-6de37646…` 的 Markdown 报告含计划、`checks_pass` / `review_bound`、候选、审查绑定、已验证候选与 PR #3 链接。

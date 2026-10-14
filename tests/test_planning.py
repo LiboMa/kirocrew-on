@@ -73,6 +73,11 @@ class PlanningTests(unittest.TestCase):
         self.assertIn("available 为 false 的工具不要选择", prompt)
         self.assertFalse(hasattr(planning, "REASSIGN"))
 
+    def test_the_planner_knows_the_gates_its_tasks_meet(self):
+        prompt = planning.plan_step()["prompt"]
+        self.assertIn("会话基线", prompt)       # tests_fail_on_baseline
+        self.assertIn("paths 中列出", prompt)   # artifacts_locked
+
     def test_planned_tasks_need_their_contract(self):
         rid = self.start()["id"]
         missing = [('{"name": "x", "steps": [{"name": "实现", "tool": "claude", "prompt": "实现", "kind": "implement", '

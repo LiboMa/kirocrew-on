@@ -127,3 +127,21 @@ class BaselineTests(unittest.TestCase):
         while self.node.verify_status({"job": started["job"]})["state"] != "done":
             time.sleep(0.05)
         self.assertTrue((self.project / "src/a.py").exists())
+
+
+class GateInstructionTests(unittest.TestCase):
+    """The Agent is told about the gates its work is judged by, before its first Attempt (D37 §11)."""
+
+    def test_a_test_task_is_told_its_tests_must_fail_on_the_baseline(self):
+        from pathlib import Path as P
+        from octopus.recovery import quality_instructions
+        text = quality_instructions(P("/f"), {"kind": "test", "acceptance": ["a"], "verify": ["npm test"]})
+        self.assertIn("基线", text)
+        self.assertNotIn("基线", quality_instructions(P("/f"), {"kind": "implement", "acceptance": ["a"]}))
+
+    def test_a_task_with_paths_is_told_earlier_deliverables_are_locked(self):
+        from pathlib import Path as P
+        from octopus.recovery import quality_instructions
+        text = quality_instructions(P("/f"), {"kind": "deliver", "acceptance": ["a"], "paths": ["docs/"]})
+        self.assertIn("paths", text)
+        self.assertIn("此前任务", text)

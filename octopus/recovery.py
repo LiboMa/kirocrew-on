@@ -75,6 +75,17 @@ def quality_instructions(folder, contract=None):
 result 只能是 pass、fail 或 n/a。验收标准之外、且不是必须修复的缺陷或安全问题的改进，写入
 "suggestions"（字符串列表），不作为 changes_requested 的理由；必须修复的问题仍按上面的规则判定。
 """
+    gates = ""
+    if contract and contract.get("kind") == "test" and contract.get("verify"):
+        gates += """
+平台在通过检查之后，还会在会话基线（第一个任务改动之前的源码）上叠加本任务改动的文件，再运行一次本任务的检查命令：
+新增或修改的测试必须在那里失败，才能证明它们测试了新行为（tests_fail_on_baseline）；在改动之前也能通过的测试不被接受。
+"""
+    if contract and contract.get("paths"):
+        gates += """
+此前任务已验收的交付物，只能修改本任务 paths 中列出的那些（artifacts_locked）；需要改动其他此前任务的文件时，
+在 outcome.json 中说明原因并使用 blocked，不要直接修改。
+"""
     return f"""
 
 ## 必须交付可判定的任务结论
@@ -88,7 +99,7 @@ findings 使用字符串列表，或带 issue/message/description/title 之一�
 failure_type 可选 implementation/tests/environment/input/auth/model/native_error/contract/none。
 缺少源码、仓库来源或需求信息归为 input；权限、认证、额度归为 auth。
 本文件是本次 Attempt 的真实结论，不能复制旧结论或编造命令输出。
-""" + accept
+""" + accept + gates
 
 
 def coordinator_instructions(context, folder):
