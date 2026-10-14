@@ -165,6 +165,7 @@ def main(argv=None):
         node = Worker(args.data, token_path.read_text().strip(), args.gateway_port, args.crew_home,
                       args.isolation, args.routing_log, args.crew_url, args.approval_mode, settings.crew_entry_ttl,
                       kiro_cli=settings.tools.get("kiro_cli"), path_prepend=settings.path_prepend,
+                      tool_paths=settings.tools, adapters_dir=settings.adapters_dir,
                       preview_tls_port=settings.preview_tls_port, preview_tls_name=settings.preview_tls_name)
         httpd = serve(node, args.port, args.host)
         signal.signal(signal.SIGTERM, lambda *_: threading.Thread(target=httpd.shutdown, daemon=True).start())

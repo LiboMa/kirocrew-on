@@ -116,10 +116,15 @@ def pack_file(archive, relative, path):
     return True
 
 
+# The command each Coding tool is started with, and its [tools] setting (composition/environment.py starts them the same way).
+TOOL_COMMANDS = {"kiro": ("kiro_cli", "kiro-cli"), "claude": ("claude", "claude"), "codex": ("codex", "codex"),
+                 "opencode": ("opencode", "opencode")}
+
+
 class Worker:
     def __init__(self, root, token, gateway_port=5476, crew_home=None, isolation="trusted-local", routing_log=None,
                  crew_url=None, approval_mode="", crew_entry_ttl="8h", kiro_cli=None, path_prepend=(),
-                 preview_tls_port=0, preview_tls_name=""):
+                 tool_paths=None, adapters_dir=None, preview_tls_port=0, preview_tls_name=""):
         self.root = Path(root).resolve()
         self.root.mkdir(parents=True, exist_ok=True, mode=0o700)
         self.token, self.port = token, gateway_port
@@ -138,6 +143,8 @@ class Worker:
         # "auto": this unattended boundary asks KiroCrew for native auto approval on platform spawns (D14).
         self.approval_mode = approval_mode
         self.kiro_cli, self._login = kiro_cli, (0.0, None)
+        self.tool_paths = {**(tool_paths or {}), **({"kiro_cli": kiro_cli} if kiro_cli else {})}
+        self.search = [*([adapters_dir] if adapters_dir else []), *path_prepend]
         from .apps import Apps
         from .checks import Checks
         # Remote preview (D36 §5): on a Worker host the platform reaches the apps through this host's nginx preview
@@ -177,6 +184,23 @@ class Worker:
                 state = "unknown"
         self._login = (now, state)
         return state
+
+    def tools(self):
+        """Whether each Coding tool can be started on this boundary (D38 §3.1): its configured path, else its command on
+        the search path the Gateway uses. Kiro's login is reported beside it: an expired login waits for an
+        administrator and is not a reason to switch tools."""
+        search = os.pathsep.join([str(p) for p in self.search] + [os.environ.get("PATH", ""), str(Path.home() / ".local/bin")])
+        result = {}
+        for tool, (setting, command) in TOOL_COMMANDS.items():
+            configured = self.tool_paths.get(setting)
+            if configured:
+                found = os.access(configured, os.X_OK)
+                reason = f"配置的 {configured} 不存在或不可执行"
+            else:
+                found, reason = bool(shutil.which(command, path=search)), f"{command} 命令不存在"
+            result[tool] = {"available": found, **({} if found else {"reason": reason})}
+        result["kiro"]["login"] = self.tool_auth() if result["kiro"]["available"] else "unknown"
+        return result
 
     def native(self, path, body=None, method=None):
         return crew_api.request(path, body, method, port=self.port, home=self.home)
@@ -477,7 +501,7 @@ class Worker:
         return {"version": __version__, "isolation": self.isolation, "workflow_design": True,
                 "spawn_approval": "auto" if self.approval_mode == "auto" else "interactive",
                 "crew_entry": True, "crew_origin": self.crew_origin, "observe": True, "app_preview": True,
-                "tool_auth": {"kiro": self.tool_auth()},
+                "tool_auth": {"kiro": self.tool_auth()}, "tools": self.tools(),
                 "coordinator_recovery": True, "quality_outcome": True,
                 "boundary": hashlib.sha256(boundary.encode()).hexdigest(),
                 "host_principal": hashlib.sha256(f"{socket.gethostname()}:{os.getuid()}".encode()).hexdigest(),
@@ -487,7 +511,8 @@ class Worker:
                 "models": {tool: list(dict.fromkeys(["auto"] + [m for m in ids if re.fullmatch(r"[a-zA-Z0-9][a-zA-Z0-9._-]*", m)]))
                            for tool, ids in advertised.items()},
                 "limitations": ["当前原生 spawn 模型格式不支持 /、:、[]；这些已公布的 ID 不列为可直接派发模型。",
-                                "OpenCode Effort 覆盖未验证。实际模型与实际 Effort 仅按原生证据报告。"]}
+                                "OpenCode Effort 覆盖未验证。实际模型与实际 Effort 仅按原生证据报告。",
+                                "已知问题 K01：OpenCode 在 EC2 执行边界上以 shell 写文件曾被 KiroCrew 工具门禁拒绝，实现类任务可能失败。"]}
 
     def prepare(self, body):
         rid = body["run_id"]
