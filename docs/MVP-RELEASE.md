@@ -357,6 +357,9 @@ EC2（2026-10-15，a402caa）部分验收 6/6：
   Gateway 重启前一直有效）。父会话自己运行的 shell 命令（`run-287fe39b…` 写出 `kc-approval-1.txt`）与父会话自行派生的子 Agent 都直接执行，
   没有任何待批准项。关闭 YOLO 影响该边界上的所有会话，留待负责人决定；关闭后按计划末尾的步骤补测批准与拒绝。
 - 最终审查（opus）：1 项重要（控制台的确认可能答复被替换的同 id 请求）与 9 项升级为重要的问题已修复；4 项次要记入 BACKLOG。
+- **YOLO 常驻**（负责人 2026-10-15「务必自动保持 YOLO 模式开启」）：执行边界配置 `crew_yolo` 默认开启，Gateway 启动时写入
+  `agent.dangerously_skip_permissions`（eb28bc0）。部署后平台主机与 w1 的 KiroCrew `yolo-status` 均为
+  `active: true, source: config, permanent: true`，不再依赖 Dashboard 中手动开启、也不随重启失效；`crew_yolo = false` 恢复逐项批准。
 
 ### 14.13 候选提交与命名门禁（D37 第 1 期，M2）
 
