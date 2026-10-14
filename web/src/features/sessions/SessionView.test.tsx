@@ -112,6 +112,20 @@ describe("session detail", () => {
     expect(screen.getByText("由协调者从 opencode / auto 换为 claude / auto：opencode 不可用")).toBeInTheDocument();
   });
 
+  test("a recovery round that switched tools says so, and a refused switch shows why (D38)", async () => {
+    const switched = { action: "switch_tool", target_task_id: "code", tool: "codex", model: "auto", reason: "claude 不可用",
+      instructions: "以 codex 重新执行", switched_from: { tool: "claude", model: "auto", effort: "" } };
+    open({ ...blocked, status: "running", recovery: { ...blocked.recovery!, used: 2,
+      latest: { number: 2, status: "applied", failed_task_id: "code", decision: switched },
+      history: [{ number: 1, status: "blocked", failed_task_id: "code", decision: { ...switched, tool: "opencode" },
+                  error: "协调者换工具的推荐未通过核对：opencode 在此执行环境不可用" },
+                { number: 2, status: "applied", failed_task_id: "code", decision: switched }] } } as Run);
+    expect(await screen.findByText("第 2 轮 · 已换用 codex / auto 重跑")).toBeInTheDocument();
+    await userEvent.click(screen.getByText("第 2 轮 · 已换用 codex / auto 重跑"));
+    expect(screen.getByText("协调者换工具的推荐未通过核对：opencode 在此执行环境不可用")).toBeInTheDocument();
+    expect(screen.getAllByText(/换工具 Task：code（claude \/ auto → codex \/ auto）/)).toHaveLength(1);
+  });
+
   test("a Session that may not switch tools says so", async () => {
     open({ ...blocked, recovery: { ...blocked.recovery!, policy: { enabled: true, max_cycles: 2, switch_tools: false } } } as Run);
     expect(await screen.findByText("自动纠错已开启 · 最多 2 轮 · 不换工具")).toBeInTheDocument();

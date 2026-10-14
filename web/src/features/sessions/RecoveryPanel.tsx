@@ -1,14 +1,23 @@
 import { ChevronDown } from "lucide-react";
-import type { Run } from "@/api/types";
+import type { RecoveryRecord, Run } from "@/api/types";
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible";
 import { RECOVERY_STATES } from "@/lib/labels";
+
+/** Where the round sent the work: the task reworked, or the task rerun on another tool (D38). */
+function target(decision: NonNullable<RecoveryRecord["decision"]>) {
+  if (decision.action !== "switch_tool") return " → 返工 Task：" + decision.target_task_id;
+  const was = decision.switched_from;
+  return ` → 换工具 Task：${decision.target_task_id}（${was ? `${was.tool} / ${was.model} → ` : ""}${decision.tool} / ${decision.model ?? "auto"}）`;
+}
 
 export function RecoveryPanel({ run }: { run: Run }) {
   const data = run.recovery;
   if (!data?.history?.length) return null;
   const last = data.latest;
   const summary = run.status === "diagnosing" ? `第 ${last?.number ?? 1} 轮 · Coordinator 正在诊断`
-    : last?.status === "applied" && run.status !== "completed" ? `第 ${last.number} 轮 · 已安排返工与复审`
+    : last?.status === "applied" && run.status !== "completed"
+      ? last.decision?.action === "switch_tool" ? `第 ${last.number} 轮 · 已换用 ${last.decision.tool} / ${last.decision.model ?? "auto"} 重跑`
+        : `第 ${last.number} 轮 · 已安排返工与复审`
       : `纠错记录 · ${data.used} 轮`;
   return (
     <Collapsible className="rounded-xl border bg-card px-4 py-3" id="recovery-history">
@@ -22,8 +31,10 @@ export function RecoveryPanel({ run }: { run: Run }) {
             <strong>第 {row.number} 轮 · {RECOVERY_STATES[row.status] ?? row.status}</strong>
             <p className="mt-1 text-muted-foreground">{row.decision?.reason ?? row.error ?? "等待真实诊断结果"}</p>
             {row.decision?.instructions && <p className="mt-1 whitespace-pre-wrap">{row.decision.instructions}</p>}
+            {row.status === "blocked" && row.decision && row.error && <p className="mt-1 text-destructive">{row.error}</p>}
             <small className="mt-1 block text-xs text-muted-foreground">
-              失败 Task：{row.failed_task_id}{row.decision?.target_task_id ? " → 返工 Task：" + row.decision.target_task_id : ""}
+              失败 Task：{row.failed_task_id}{row.decision?.target_task_id && (row.decision.action !== "switch_tool" || row.status === "applied")
+                ? target(row.decision) : ""}
               {" · "}原生诊断 Task：{row.native_id ?? "待派发"}
             </small>
           </article>

@@ -108,7 +108,8 @@ class EnvironmentTests(SwitchCase):
     def test_the_coordinator_prompt_offers_a_switch_and_its_rules(self):
         prompt = recovery.coordinator_instructions({"environment": {"tools": TOOLS}}, __import__("pathlib").Path("/f"))
         self.assertNotIn("不换模型", prompt)
-        for words in ("switch_tool", "available", "完全相同", "审查", "wait_for_user"):
+        # a repeated native error is native_error with transient_retry_of, not tool: the prompt names what it really sees
+        for words in ("switch_tool", "available", "完全相同", "审查", "wait_for_user", "transient_retry_of", "其后的审查"):
             self.assertIn(words, prompt)
 
 
@@ -121,7 +122,8 @@ class ToolFailureTests(SwitchCase):
         self.assertFalse([b for p, b in self.calls if p == "/dispatch" and not b.get("coordination")])
         attempt = run["tasks"][0]["attempts"][0]
         self.assertEqual(attempt["status"], "blocked")
-        self.assertEqual(attempt["error"], "opencode 在此执行环境不可用：opencode 命令不存在")
+        self.assertEqual(attempt["error"], "opencode 在此执行环境不可用：opencode 命令不存在"
+                                           "（平台保存的执行环境能力；已安装时请在「执行环境」中刷新模型）")
         self.assertEqual((attempt["evidence"]["failure_type"], attempt["evidence"]["refused"]), ("tool", "tool_unavailable"))
         self.assertEqual(run["recovery"]["used"], 1)
         self.assertEqual(self.coordination()[0]["failure_type"], "tool")
@@ -248,3 +250,36 @@ class SwitchWithoutToolsTests(SwitchCase):
         run = self.tick(self.start([step("code", "claude", "implement")])["id"])
         self.assertEqual(run["status"], "blocked")
         self.assertIn("未报告可用性", run["error"])
+
+
+class ReviewAndVisibilityTests(SwitchCase):
+    def switch(self, tool, target="code", model="auto"):
+        return {"action": "switch_tool", "target_task_id": target, "tool": tool, "model": model, "effort": "",
+                "reason": "原工具不可用", "instructions": "以新工具重新执行"}
+
+    def test_a_switched_implementation_may_not_take_its_reviewers_tool(self):
+        self.decisions = [self.switch("claude")]
+        run = self.tick(self.start([step("code", "opencode", "implement"), step("review", "claude", "review")])["id"])
+        self.assertEqual(run["status"], "blocked")
+        self.assertIn("其后的审查「审查」使用 claude", run["error"])
+
+    def test_a_template_review_without_kind_is_still_a_review(self):
+        code = {"id": "code", "name": "实现", "tool": "claude", "prompt": "实现并自测"}
+        review = {"id": "review", "name": "独立测试与审查", "tool": "opencode", "prompt": "独立审查"}
+        self.decisions = [self.switch("claude", target="review")]
+        run = self.tick(self.start([code, review])["id"])
+        self.assertEqual(run["status"], "blocked")
+        self.assertIn("审查须使用与被审查代码（claude）不同的工具", run["error"])
+
+    def test_the_switch_stays_visible_after_a_later_retry(self):
+        self.decisions = [self.switch("claude"), {"action": "retry", "target_task_id": "code", "reason": "测试未过",
+                                                   "instructions": "修复后复跑"}]
+        self.fail_rounds = {("code", 1)}   # the first claude Attempt fails on the work itself
+        rid = self.start([step("code", "opencode", "implement")])["id"]
+        run = self.tick(rid)
+        self.assertEqual(run["status"], "completed")
+        attempts = sorted(run["tasks"][0]["attempts"], key=lambda a: a["number"])
+        self.assertEqual([a["spec"]["tool"] for a in attempts], ["opencode", "claude", "claude"])
+        self.assertEqual(attempts[-1]["evidence"]["switched_from"]["tool"], "opencode")
+        latest = __import__("octopus.mcp", fromlist=["mcp"]).compact_status(run, [])["session"]["tasks"][0]["latest"]
+        self.assertEqual(latest["switched_from"]["tool"], "opencode")

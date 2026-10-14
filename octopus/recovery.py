@@ -97,11 +97,13 @@ def coordinator_instructions(context, folder):
 完整读取 context.json、失败任务的真实返回、交接路径及当前源码，判断可执行恢复办法。
 只诊断和提出修复指令；不要自己实现业务修复或派生任务。Engine 会按决定派发所选 Coding Agent。
 保留工作流配置，不迁移源码、不删除历史。不要把停止或权限拒绝当作可绕过的失败。
-失败原因在于工具本身时（failure_type 为 tool：工具在执行环境中不可用、模型未公布或不受支持、实际运行的后端与请求不符，
-或同一工具的原生错误在自动重试后再次发生），可以用 switch_tool 推荐换用的工具与模型：
+失败原因在于工具本身时，可以用 switch_tool 推荐换用的工具与模型。工具本身的失败是：failure_type 为 tool
+（工具在执行环境中不可用、模型未公布或不受支持、实际运行的后端与请求不符），或 failure_type 为 native_error
+且 evidence.transient_retry_of 存在（同一工具的原生错误在自动重试后再次发生）。
 - 只从 context.environment.tools 中 available 为 true 的工具、environment.models 中该工具公布的模型（或 auto）中选择；
 - 工具、模型与 Effort 不能与失败的那次完全相同；模型未公布时，同一工具改用 auto 也是有效的推荐；
-- 审查类任务选择与被审查代码实际所用不同的工具；参考 environment.limitations 中的已知问题；
+- 审查类任务选择与被审查代码实际所用不同的工具；换用后的实现工具也不能是其后的审查任务所用的工具；
+- 参考 environment.limitations 中的已知问题；
 - environment.switch_tools 为 false 时不能换工具：用 wait_for_user，并说明可换用哪个工具；不确定时也用 wait_for_user。
 实现、测试、契约或门禁本身的问题仍用 retry 或 rework，不换工具。
 判断是否已有足够源码、依赖与输入；缺少仓库、需要用户授权或认证时 wait_for_user，不猜测项目地址。
@@ -126,6 +128,11 @@ instructions 要说明缺少什么、用户下一步如何补充。
 """
 
 
+def is_review(spec):
+    """A review task: its contract says so, or — the built-in templates carry no kind — its id is "review"."""
+    return spec.get("kind") == "review" or (not spec.get("kind") and spec.get("id") == "review")
+
+
 def reviewed_backend(db, run_id, ordinal):
     """The backend that wrote the code a review at ``ordinal`` reviews: the newest accepted Attempt of an earlier task
     that is not itself a review or a design (D38 §3.3)."""
@@ -133,7 +140,7 @@ def reviewed_backend(db, run_id, ordinal):
                           "WHERE a.run_id=? AND t.ordinal<? AND a.status='accepted' ORDER BY a.updated DESC, a.created DESC",
                           (run_id, ordinal)):
         spec = json.loads(row["spec"])
-        if spec.get("kind") in {"review", "design"} or spec.get("id") == "plan":
+        if is_review(spec) or spec.get("kind") == "design" or spec.get("id") == "plan":
             continue
         return json.loads(row["evidence"] or "{}").get("actual_backend") or spec["tool"]
     return None
@@ -158,9 +165,14 @@ def switch(db, run, failed, decision, context):
     require((tool, model, effort) != (before["tool"], before["model"], before["effort"]),
             "推荐的工具、模型与 Effort 与失败的那次相同")
     spec = json.loads(failed["spec"])
-    if spec.get("kind") == "review":
+    if is_review(spec):
         reviewed = reviewed_backend(db, run["id"], failed["ordinal"])
         require(tool != reviewed, f"审查须使用与被审查代码（{reviewed}）不同的工具")
+    else:   # the reviews that follow must stay independent of the code this task will now write
+        for row in db.execute("SELECT spec FROM tasks WHERE run_id=? AND ordinal>? ORDER BY ordinal", (run["id"], failed["ordinal"])):
+            later = json.loads(row["spec"])
+            require(not (is_review(later) and later["tool"] == tool),
+                    f"其后的审查「{later.get('name') or later['id']}」使用 {tool}，审查须与被审查代码的工具不同；请换用其他工具")
     earlier = [r["id"] for r in db.execute("SELECT id FROM tasks WHERE run_id=? AND ordinal<? ORDER BY ordinal",
                                           (run["id"], failed["ordinal"]))]
     return steps([{**spec, "tool": tool, "model": model, "effort": effort}], known=earlier)[0], before
@@ -173,13 +185,25 @@ def switched_from(db, run_id, task_id, spec):
                      "ORDER BY number DESC LIMIT 1", (run_id,)).fetchone()
     decision = json.loads(row["decision"] or "{}") if row else {}
     if decision.get("action") != "switch_tool" or decision.get("target_task_id") != task_id:
-        return None
+        return _still_switched(db, run_id, task_id, spec)
     if (spec.get("tool"), spec.get("model", "auto"), spec.get("effort", "")) != \
             (decision["tool"], decision.get("model") or "auto", decision.get("effort") or ""):
         return None   # the user changed the task since (a continue): not the Coordinator's switch any more
     if db.execute("SELECT 1 FROM attempts WHERE run_id=? AND task_id=? AND created>=?", (run_id, task_id, row["updated"])).fetchone():
-        return None
+        return _still_switched(db, run_id, task_id, spec)
     return {**decision["switched_from"], "reason": decision.get("reason"), "by": "coordinator", "recovery": row["number"]}
+
+
+def _still_switched(db, run_id, task_id, spec):
+    """A later Attempt of a switched task (e.g. a retry) that still runs the switched configuration keeps the label, so
+    the session, MCP and the report go on saying where the tool came from."""
+    row = db.execute("SELECT spec, evidence FROM attempts WHERE run_id=? AND task_id=? ORDER BY number DESC LIMIT 1",
+                     (run_id, task_id)).fetchone()
+    if not row:
+        return None
+    before, mark = json.loads(row["spec"]), json.loads(row["evidence"] or "{}").get("switched_from")
+    same = all(before.get(k, d) == spec.get(k, d) for k, d in (("tool", None), ("model", "auto"), ("effort", "")))
+    return mark if mark and same else None
 
 
 def summary(db, run):

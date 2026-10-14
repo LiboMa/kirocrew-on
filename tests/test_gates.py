@@ -23,6 +23,17 @@ class BasicGateTests(unittest.TestCase):
         self.assertEqual(self.names(records), [("native_completed", "pass"), ("identity_match", "pass"),
                                                ("handoff_present", "pass"), ("outcome_valid", "pass"), ("outcome_pass", "pass")])
 
+    def test_an_unverified_identity_waits_but_a_mismatch_is_the_tools(self):
+        for evidence, failure in (({"actual_backend": None}, "model"), ({"actual_backend": "codex"}, "tool")):
+            with self.subTest(evidence=evidence):
+                self.assertEqual(judge(evidence=evidence)[1], failure)
+        explicit = {**SPEC, "model": "sonnet"}
+        for actual, failure in (("", "model"), ("opus", "tool")):
+            with self.subTest(actual=actual):
+                result = gates.basic(DONE, {"handoff": "交接"}, explicit, {"actual_backend": "claude", "actual_model": actual},
+                                     None, None, False, False, False)
+                self.assertEqual(result[1], failure)
+
     def test_each_failure_keeps_todays_message_and_type(self):
         cases = [
             (dict(native={**DONE, "error": "boom"}), ("boom", "native_error", "native_completed")),

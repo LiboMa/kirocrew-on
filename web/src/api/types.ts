@@ -188,7 +188,12 @@ export interface RecoveryRecord {
   failed_task_id: string;
   native_id?: string | null;
   error?: string | null;
-  decision?: { reason?: string; instructions?: string; target_task_id?: string; [key: string]: unknown } | null;
+  decision?: {
+    reason?: string; instructions?: string; target_task_id?: string; action?: string;
+    /** switch_tool (D38): the recommended tool and model, and what they replaced once applied. */
+    tool?: string; model?: string; switched_from?: { tool: string; model: string; effort: string };
+    [key: string]: unknown;
+  } | null;
 }
 
 export interface RecoveryPolicy {

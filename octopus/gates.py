@@ -32,13 +32,16 @@ def basic(native, result, spec, evidence, report, invalid, lost, missing, blocke
         return "缺少本次交接文件", "contract", records
     actual = EFFORT.sub("", evidence.get("actual_model") or "")
     # A backend, model or effort that is not the one requested is the tool's failure: recovery may switch (D38 §3.2).
-    for wrong, message in ((evidence.get("actual_backend") != spec["tool"], "实际 ACP 后端未核实或与配置不匹配"),
-                           (spec["model"] not in {"auto", "default"} and actual != spec["model"], "实际模型未核实或与本次配置不匹配"),
-                           (bool(spec["effort"] and evidence.get("actual_effort") and evidence["actual_effort"] != spec["effort"]),
-                            "实际 Effort 与本次配置不匹配")):
+    # One the evidence does not show (no routing record) is not: switching cannot fix it, it waits for the user as before.
+    for wrong, seen, message in ((evidence.get("actual_backend") != spec["tool"], bool(evidence.get("actual_backend")),
+                                  "实际 ACP 后端未核实或与配置不匹配"),
+                                 (spec["model"] not in {"auto", "default"} and actual != spec["model"], bool(actual),
+                                  "实际模型未核实或与本次配置不匹配"),
+                                 (bool(spec["effort"] and evidence.get("actual_effort") and evidence["actual_effort"] != spec["effort"]),
+                                  True, "实际 Effort 与本次配置不匹配")):
         if wrong:
             records += [record("handoff_present", "pass"), record("identity_match", "fail", message)]
-            return message, "tool", records
+            return message, "tool" if seen else "model", records
     records += [record("identity_match", "pass"), record("handoff_present", "pass")]
     if report is None and invalid is None:
         records += [record("outcome_valid", "skip"), record("outcome_pass", "skip")]

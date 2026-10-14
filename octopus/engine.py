@@ -201,16 +201,16 @@ class Engine:
         else:
             self.update(run["id"], "blocked", message)
 
-    def _refused(self, run, attempt_id, evidence, message, code):
+    def _refused(self, run, attempt_id, evidence, message, code, actor=journal.WORKER):
         """A tool the task cannot run on (D38 §3.2): the Attempt is blocked as the tool's failure and goes to diagnosis,
         where the Coordinator may recommend another tool."""
         with self.db.transaction() as db:
-            journal.change(db, "attempts", attempt_id, journal.WORKER, "attempt.state",
+            journal.change(db, "attempts", attempt_id, actor, "attempt.state",
                            event={"id": attempt_id, "status": "blocked", "error": message},
                            status="blocked", error=message, evidence=dumps({**evidence, "failure_type": "tool", "refused": code}),
                            updated=time.time())
-            journal.change_rows(db, "tasks", "current_attempt=?", (attempt_id,), journal.WORKER, "task.state", status="blocked")
-        self.update(run["id"], "blocked", message, actor=journal.WORKER)
+            journal.change_rows(db, "tasks", "current_attempt=?", (attempt_id,), actor, "task.state", status="blocked")
+        self.update(run["id"], "blocked", message, actor=actor)
         recovery.automatic(self.db, run["id"], attempt_id)
 
     @staticmethod
@@ -428,7 +428,9 @@ class Engine:
             state = ((config.get("capabilities") or {}).get("tools") or {}).get(spec["tool"])
             if task["id"] != planning.PLAN_ID and isinstance(state, dict) and state.get("available") is False:
                 return self._refused(run, attempt["id"], json.loads(attempt["evidence"] or "{}"),
-                                     f"{spec['tool']} 在此执行环境不可用：{state.get('reason') or '原因未报告'}", "tool_unavailable")
+                                     f"{spec['tool']} 在此执行环境不可用：{state.get('reason') or '原因未报告'}"
+                                     "（平台保存的执行环境能力；已安装时请在「执行环境」中刷新模型）", "tool_unavailable",
+                                     actor=journal.ENGINE)
             # The spec a Worker validates keeps its six fields (a Worker not yet upgraded runs it as before); the task
             # contract and the requirement KiroCrew completed travel beside it (D34 §6.2).
             contract = {key: spec[key] for key in CONTRACT if key in spec}
