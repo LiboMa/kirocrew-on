@@ -536,6 +536,12 @@ def server(database, port=8918, host="127.0.0.1", allowed_hosts=(), origin_secre
                 if len(segments) == 4 and segments[:2] == ["v1", "runs"] and segments[3] == "publish":
                     require(method == "POST", "Method not allowed", 405)
                     return self.respond(service.publish(actor, segments[2], body))
+                if len(segments) in (4, 5) and segments[:2] == ["v1", "runs"] and segments[3] == "approvals":
+                    if len(segments) == 4:
+                        require(method == "GET", "Method not allowed", 405)
+                        return self.respond(service.approvals(actor, segments[2]))
+                    require(segments[4] == "answer" and method == "POST", "Method not allowed", 405)
+                    return self.respond(service.answer_approval(actor, segments[2], body))
                 if len(segments) == 4 and segments[:2] == ["v1", "runs"] and segments[3] == "credentials":
                     require(method == "POST", "Method not allowed", 405)
                     return self.respond(service.rebind(actor, segments[2], body))

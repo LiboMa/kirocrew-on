@@ -890,6 +890,59 @@ class Service:
         row = db.execute("SELECT config,retired FROM workers WHERE id=?", (wid,)).fetchone() if wid else None
         return (json.loads(row["config"]), bool(row["retired"])) if row else (None, False)
 
+    def _may_publish(self, db, actor, run):
+        """The creator, a Team owner or an admin (D35 §5.2): who may publish a Session and answer its approvals (D38 A3)."""
+        team_owner = bool(run["team_id"]) and db.execute(
+            "SELECT 1 FROM members WHERE team_id=? AND user_id=? AND role='owner'", (run["team_id"], actor["id"])).fetchone()
+        return run["owner_id"] == actor["id"] or bool(team_owner) or elevated(actor)
+
+    def approvals(self, actor, rid):
+        """The Session's pending native approvals as its Worker reports them (D38 §4.2)."""
+        with self.db.read() as db:
+            run = run_access(db, actor, rid)
+            config, retired = self._app_worker(db, run["worker_id"])
+        if not config or retired or not run["native_parent"]:
+            return {"approvals": [], "supported": bool(config) and not retired}
+        from . import transport
+        try:
+            return {"approvals": transport.worker_request(config, "/approvals", {"run_id": rid}, timeout=10)["approvals"],
+                    "supported": True}
+        except Error as exc:
+            if exc.status == 404 and exc.code == "not_found":
+                return {"approvals": [], "supported": False}
+            raise
+
+    def answer_approval(self, actor, rid, body):
+        """Answer one pending approval (D38 §4.2): the people who may publish the Session, audited."""
+        require(isinstance(body, dict) and set(body) <= {"origin", "request_id", "request_mid", "instance", "decision"},
+                "只接受 origin、request_id、request_mid、instance 与 decision")
+        require(body.get("decision") in {"approve", "reject"}, "decision 只能是 approve 或 reject")
+        with self.db.read() as db:
+            run = run_access(db, actor, rid)
+            require(self._may_publish(db, actor, run), "只有会话创建者、Team owner 或管理员可以答复批准请求", 403, "forbidden")
+            config, retired = self._app_worker(db, run["worker_id"])
+        require(config and not retired and run["native_parent"], "会话没有可用的执行环境", 409, "approvals_unsupported")
+        from . import transport
+        listed = self.approvals(actor, rid)
+        require(listed["supported"], "执行环境的 Worker 尚未升级，暂不支持答复批准请求", 409, "approvals_unsupported")
+        pending = listed["approvals"]
+        key = "request_mid" if body.get("origin") == "native" else "instance"
+        item = next((i for i in pending if (i["origin"], i["request_id"], i.get(key)) ==
+                     (body.get("origin"), body.get("request_id"), body.get(key))), None)
+        require(item is not None, "该批准请求已不在等待中（已被答复、过期或不属于此会话）", 409, "approval_not_pending")
+        try:
+            result = transport.worker_request(config, "/approvals/answer", {"run_id": rid, **body}, timeout=15)
+        except Error as exc:
+            if exc.status == 404 and exc.code == "not_found":
+                raise Error(409, "approvals_unsupported", "执行环境的 Worker 尚未升级，暂不支持答复批准请求") from None
+            raise
+        detail = {"origin": item["origin"], "request_id": item["request_id"], "tool": item.get("tool"),
+                  "input": str(item.get("tool_input") or "")[:200], "decision": body["decision"]}
+        with self.db.transaction() as db:
+            audit(db, actor, "approval.answer", "run", rid, detail)
+            journal.record(db, rid, "approval.answered", journal.person(actor), **detail)   # an event, not a row change
+        return {**result, "ok": True}
+
     def publish(self, actor, rid, body):
         """Push the Session's work as one branch and open (or reuse) a draft pull / merge request with the bound write
         credential (D35 §5.2): its creator, a Team owner or an admin, once its tasks have ended."""
@@ -899,10 +952,7 @@ class Service:
         require(isinstance(body, dict) and set(body) <= {"branch", "title"}, "只接受 branch 与 title")
         with self.db.read() as db:
             run = run_access(db, actor, rid)
-            team_owner = bool(run["team_id"]) and db.execute(
-                "SELECT 1 FROM members WHERE team_id=? AND user_id=? AND role='owner'", (run["team_id"], actor["id"])).fetchone()
-            require(run["owner_id"] == actor["id"] or team_owner or elevated(actor),
-                    "只有会话创建者、Team owner 或管理员可以发布", 403, "forbidden")
+            require(self._may_publish(db, actor, run), "只有会话创建者、Team owner 或管理员可以发布", 403, "forbidden")
             require(run["lifecycle"] == "open" and run["status"] in SETTLED and run["workspace"],
                     "会话执行结束后才能发布", 409, "publish_busy")
             snapshot, source = json.loads(run["snapshot"]), json.loads(run["source"])
@@ -1325,6 +1375,10 @@ class Service:
                 title, detail = f"{where}没有可用 Worker", "尚未为你登记执行环境。"
                 action = "请平台管理员为你登记执行环境后分配 Worker。"
             return {"title": title, "detail": detail, "action": action, "workers": space["workers"], "task_id": None}
+        if run["status"] == "waiting_approval":
+            return {"title": "等待批准", "detail": run["error"] or "原生任务正在等待批准一次工具调用。",
+                    "action": "在会话页「待批准」中查看工具与命令后批准或拒绝；Coding Agent 可用 octopus_approvals 查看、"
+                              "经用户同意后用 octopus_approve 答复。", "task_id": task["id"] if task else None}
         if run["status"] == "diagnosing":
             return {"title": "协调者正在诊断与安排修复", "detail": run["error"] or "正在读取失败证据，等待原生诊断结果。",
                     "action": "等待诊断结果；也可停止本 Session", "task_id": task["id"] if task else None}
