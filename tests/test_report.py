@@ -58,6 +58,15 @@ def outside_fences(lines):
 
 
 class ReportTests(unittest.TestCase):
+    def test_a_switch_is_written_in_the_task_section(self):
+        value = view()
+        value["tasks"][0]["attempts"][-1]["evidence"]["switched_from"] = {
+            "tool": "opencode", "model": "auto", "effort": "", "reason": "opencode <不可用>", "by": "coordinator", "recovery": 1}
+        md, page = report.markdown(value), report.html(value)
+        self.assertIn("- 换工具：opencode / auto → claude / auto（协调者推荐）：opencode \\<不可用\\>", md)
+        self.assertIn("换工具：opencode / auto → claude / auto（协调者推荐）：opencode &lt;不可用&gt;", page)
+        self.assertNotIn("换工具", report.markdown(view()))
+
     def test_the_markdown_report_has_every_section(self):
         text = report.markdown(view())
         order = ["# 登录功能", "## 需求", "新增登录", "## 计划", "## 任务", "## 纠错记录", "## 发布"]

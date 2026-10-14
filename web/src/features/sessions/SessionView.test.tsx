@@ -103,6 +103,20 @@ describe("session detail", () => {
     expect(screen.getByText("abc1234 · 2 个文件 +12 −3")).toBeInTheDocument();
   });
 
+  test("an attempt the Coordinator switched says from which tool and why (D38)", async () => {
+    const task = blocked.tasks[0];
+    const evidence = { ...task.attempts![0].evidence,
+      switched_from: { tool: "opencode", model: "auto", effort: "", reason: "opencode 不可用", by: "coordinator", recovery: 1 } };
+    open({ ...blocked, tasks: [{ ...task, attempts: [{ ...task.attempts![0], evidence }] }, blocked.tasks[1]] } as Run);
+    await userEvent.click(await screen.findByText("执行证据与历史 Attempt"));
+    expect(screen.getByText("由协调者从 opencode / auto 换为 claude / auto：opencode 不可用")).toBeInTheDocument();
+  });
+
+  test("a Session that may not switch tools says so", async () => {
+    open({ ...blocked, recovery: { ...blocked.recovery!, policy: { enabled: true, max_cycles: 2, switch_tools: false } } } as Run);
+    expect(await screen.findByText("自动纠错已开启 · 最多 2 轮 · 不换工具")).toBeInTheDocument();
+  });
+
   test("an attempt whose checks are running says so", async () => {
     const task = blocked.tasks[0];
     const evidence = { ...task.attempts![0].evidence, checks: { job: "j", started: 1, commands: 3 } };

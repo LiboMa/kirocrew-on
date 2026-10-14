@@ -125,6 +125,8 @@ export interface AttemptEvidence {
   gates?: Gate[];
   /** The task's candidate commit on the Session's branch (D37 §3). */
   candidate?: Candidate | null;
+  /** The Coordinator recommended this Attempt's tool instead of the one that failed (D38 §3.3). */
+  switched_from?: { tool: string; model: string; effort: string; reason?: string | null; by: string; recovery: number } | null;
   /** Verify commands still running (D37 §5). */
   checks?: { job: string; started: number; commands: number } | null;
   [key: string]: unknown;
@@ -192,6 +194,8 @@ export interface RecoveryRecord {
 export interface RecoveryPolicy {
   enabled: boolean;
   max_cycles: number;
+  /** false: the Coordinator may not recommend another tool (D38 §3.5); absent means allowed. */
+  switch_tools?: boolean;
 }
 
 export interface Recovery {

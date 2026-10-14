@@ -93,6 +93,14 @@ class CompactStatusTests(unittest.TestCase):
         self.assertEqual(view["session"]["verified"]["task_id"], "implement")
         self.assertNotIn("原始输出", json.dumps(view, ensure_ascii=False))
 
+    def test_a_switched_attempt_says_what_it_was_switched_from(self):
+        session = json.loads(json.dumps(SESSION))
+        switched = {"tool": "opencode", "model": "auto", "effort": "", "reason": "opencode 不可用", "by": "coordinator", "recovery": 1}
+        session["tasks"][0]["attempts"][-1]["evidence"]["switched_from"] = switched
+        tasks = mcp.compact_status(session, [])["session"]["tasks"]
+        self.assertEqual(tasks[0]["latest"]["switched_from"], switched)
+        self.assertNotIn("switched_from", tasks[1]["latest"])
+
     def test_detail_returns_the_full_record(self):
         view = mcp.call(Client(), "octopus_status", {"run_id": RID, "detail": True})
         self.assertEqual(view, {"session": SESSION, "events": EVENTS})

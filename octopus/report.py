@@ -55,6 +55,7 @@ def _attempt(attempt, spec):
     evidence = attempt.get("evidence") or {}
     outcome = evidence.get("outcome") or {}
     candidate = evidence.get("candidate")
+    switched = evidence.get("switched_from")
     checks = []
     for result in evidence.get("check_results") or []:
         exit_code = result.get("exit")
@@ -65,6 +66,9 @@ def _attempt(attempt, spec):
         "number": attempt.get("number"), "status": attempt.get("status"), "error": _line(attempt.get("error")),
         "requested": f"{spec.get('tool') or '—'} / {spec.get('model') or 'auto'}",
         "actual": f"{evidence.get('actual_backend') or '—'} / {evidence.get('actual_model') or '—'}",
+        "switched": (f"{_line(switched.get('tool'), 40)} / {_line(switched.get('model'), 80)} → "
+                     f"{spec.get('tool') or '—'} / {spec.get('model') or 'auto'}（协调者推荐）：{_line(switched.get('reason'))}")
+                    if isinstance(switched, dict) else None,
         "decision": outcome.get("decision"), "summary": _clip(outcome.get("summary"), SUMMARY),
         "gates": [{"name": _line(g.get("name"), 60), "status": g.get("status"), "detail": _line(g.get("detail"))}
                   for g in evidence.get("gates") or []],
@@ -152,6 +156,8 @@ def markdown(view, now=None):
         contract = final["contract"]
         out += [f"- 执行 {task['attempts']} 次；最终第 {final['number']} 次：{_md(final['status'])}",
                 f"- 请求：{_md(final['requested'])}；实际：{_md(final['actual'])}"]
+        if final["switched"]:
+            out.append(f"- 换工具：{_md(final['switched'])}")
         if contract["deliverables"]:
             out.append("- 交付物：" + "、".join(_md(x) for x in contract["deliverables"]))
         if contract["verify"]:
@@ -225,6 +231,8 @@ def html(view, now=None):
             continue
         items = [f"执行 {task['attempts']} 次；最终第 {final['number']} 次：{e(final['status'])}",
                  f"请求：{e(final['requested'])}；实际：{e(final['actual'])}"]
+        if final["switched"]:
+            items.append(f"换工具：{e(final['switched'])}")
         contract = final["contract"]
         for label, values in (("交付物", contract["deliverables"]), ("检查命令（契约）", contract["verify"]),
                               ("可改动", contract["paths"])):

@@ -210,7 +210,9 @@ export function SessionView({ id }: { id: string }) {
       )}
       {run.recovery && (
         <p id="recovery-policy" className="text-xs text-muted-foreground">
-          {run.recovery.policy.enabled ? `自动纠错已开启 · 最多 ${run.recovery.policy.max_cycles} 轮` : "自动纠错未开启 · 可手动诊断"}
+          {run.recovery.policy.enabled
+            ? `自动纠错已开启 · 最多 ${run.recovery.policy.max_cycles} 轮${run.recovery.policy.switch_tools === false ? " · 不换工具" : ""}`
+            : "自动纠错未开启 · 可手动诊断"}
         </p>
       )}
       <RecoveryPanel run={run} />

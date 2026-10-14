@@ -80,7 +80,7 @@ KiroCrew ON 在远端执行开发任务：KiroCrew 的 Kiro Agent 先识别意�
 |---|---|
 | `running` / `diagnosing` | 正在执行或自动诊断返工，继续等待 |
 | `waiting_worker` | 还没有 Worker 执行，或原来的执行环境已更换、已移出该空间、已停用或已退役（`error` 写明原因）：把 `attention.title` / `attention.action` 告诉用户。`attention.workers` 为 0 时该空间没有可用的执行环境（尚未分配或已停用），请管理员分配或启用，或改在个人空间重新提交；大于 0 时用 `octopus_environments`（Team 会话传 `team_id`）列出可用环境，经用户确认后用 `octopus_assign_worker` 分配 |
-| `blocked` / `failed` | 读 `attention.title` / `attention.action` 告诉用户；可用 `octopus_recover` 诊断修复，或用 `octopus_continue` 修改后重跑 |
+| `blocked` / `failed` | 读 `attention.title` / `attention.action` 告诉用户；可用 `octopus_recover` 诊断修复，或用 `octopus_continue` 修改后重跑。`attention.title` 为「需要换用工具或模型」时，向用户说明原因（`attention.detail`）并建议换用一个可用的工具；经用户同意后用 `octopus_continue` 的 `execution.tool` / `execution.model` 续作，不要自行决定 |
 | `completed` | 完成；用 `octopus_preview` 给出预览 |
 
 ## 4．迭代：`octopus_continue` / `octopus_recover`
@@ -88,7 +88,8 @@ KiroCrew ON 在远端执行开发任务：KiroCrew 的 Kiro Agent 先识别意�
 - 在原 Session 与原 Workspace 上修改需求或某个任务，并重跑该任务及其后续任务：
   `run_id`、新的 `request_id`、`expected_version`（取自最近一次 `octopus_status` 的 `session.version`）、`task_id`、
   更新后的 `input`；可选 `execution`（`name`、`prompt`、`tool`、`model`、`effort`，以及任务契约 `acceptance`、`verify` 等），
-  例如某个工具失败时换用 `claude`。
+  工具本身失败时，自动纠错会请 KiroCrew 协调者推荐换用的工具（`octopus_status` 的 `latest.switched_from` 写明从哪个工具换来、原因）；
+  会话关闭了换工具（`recovery.switch_tools: false`）或协调者等待用户时，由你向用户建议并经同意后续作。
 - 只重跑受影响的任务：用 `rerun` 列出这次修改会影响的后续任务（例如只改前端时不列后端），省略则重跑之后的全部任务。
   依赖重跑任务的任务、其后的审查 / 测试任务、尚未完成的任务会由平台自动一并重跑；其余沿用上一版结果。
   回复用户时说明重跑了哪些任务、沿用了哪些（`octopus_status` 的修订摘要与 `kept`）。
