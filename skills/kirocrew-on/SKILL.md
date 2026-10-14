@@ -99,8 +99,9 @@ KiroCrew ON 在远端执行开发任务：KiroCrew 的 Kiro Agent 先识别意�
   Draft PR / MR，把返回的链接告诉用户。需要会话绑定一枚写权限的凭证（409 `credential_read_only` 时请用户换一枚）；
   409 `publish_secret_found` 表示改动或已提交的历史中有疑似凭证（或提交了 `.env`），按列出的文件处理后再发布——在历史中的
   需改写这些提交（错误里给出做法）；409 `publish_conflict` 表示远端分支被他人改动，不要强推，改用新的 `branch` 或请用户合并。
-  错误写着「分支 … 已推送，但 Draft PR / MR 未创建」时，分支已在远端：请用户补上凭证权限（GitHub 细粒度令牌需 Pull requests
-  读写）后再次发布，会沿用该分支。
+  409 `credential_permission` 表示令牌缺少权限：请用户在托管方给令牌补上（GitHub 细粒度令牌需对该仓库有 Contents 与 Pull requests
+  读写，GitLab 需 `api` / `write_repository`），令牌值不变，无需重新录入；错误写着「分支 … 已推送，但 Draft PR / MR 未创建」时，
+  分支已在远端，补上权限后再次发布会沿用该分支。
 
 ## 5．预览产出
 

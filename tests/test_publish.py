@@ -520,6 +520,16 @@ class PublishHardeningTests(PublishCase):
         self.assertEqual(self.remote_head("octopus/" + rid), record["commit"])
         self.assertEqual(caught, [])
 
+    def test_a_token_that_may_not_push_says_which_permission_is_missing(self):
+        subprocess.run(["git", "-C", str(self.remote), "config", "http.receivepack", "false"], check=True)   # 403 to pushes
+        rid, project = self.session(cred=self.cred["id"])
+        (project / "a.txt").write_text("1")
+        with self.assertRaises(Error) as caught:
+            self.service.publish(self.b, rid, {})
+        self.assertEqual(caught.exception.code, "credential_permission")
+        self.assertIn("Contents", str(caught.exception))
+        self.assertIsNone(self.remote_head("octopus/" + rid))
+
     def test_the_hosts_api_is_never_followed_through_a_redirect(self):
         hits = []
 

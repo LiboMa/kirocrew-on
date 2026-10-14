@@ -80,8 +80,14 @@ def push(workdir, url, branch, commit, auth):
             require(ahead, f"远端分支 {branch} 已被他人改动：未覆盖。请合并后再发布，或改用新的分支名", 409, "publish_conflict")
         if theirs != commit:
             # A plain refspec (no +, no --force): git itself also refuses anything but a fast-forward.
-            _git(workdir, *sources.SAFE_GIT_ARGS, "push", "-q", url, f"{commit}:refs/heads/{branch}",
-                 env=env, secret=auth["secret"])
+            try:
+                _git(workdir, *sources.SAFE_GIT_ARGS, "push", "-q", url, f"{commit}:refs/heads/{branch}",
+                     env=env, secret=auth["secret"])
+            except Error as exc:
+                if "error: 403" not in str(exc):
+                    raise
+                raise Error(409, "credential_permission", "凭证可以读取但不能推送（HTTP 403）：GitHub 细粒度令牌需对该仓库有 "
+                            "Contents 读写权限，GitLab 令牌需 write_repository 范围") from None
     return {"created": theirs is None}
 
 

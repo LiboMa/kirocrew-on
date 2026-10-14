@@ -249,7 +249,8 @@ Draft PR（GitHub）/ Draft MR（GitLab）。
   克隆时的提交、正是 Worker 检查过的提交），只推送这一个分支：不 force，远端分支被他人改动时拒绝（409 `publish_conflict`）。
   推送与托管方 API 用同一套加固：不读全局 git 配置、只走 HTTPS、不跟随跳转。
   结果写入会话（`publish`）与变更记录 `run.published`；每次使用写凭证都审计 `credential.use`（`access: write`，`result`：
-  `published` / `pushed` / 失败的错误码）。分支已推送而 PR / MR 未创建时（如令牌缺 Pull requests 权限，409 `credential_permission`），
+  `published` / `pushed` / 失败的错误码）。令牌能读不能推送时为 409 `credential_permission`（GitHub 细粒度令牌需 Contents 读写，GitLab 需 `write_repository`）。
+  分支已推送而 PR / MR 未创建时（如令牌缺 Pull requests 权限，同为 409 `credential_permission`），
   会话记下分支与原因（`publish.request_error`），处理后再次发布即沿用该分支。
 
 ### 远程预览（D36 第 2 期）
