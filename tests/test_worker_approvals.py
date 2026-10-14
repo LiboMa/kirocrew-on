@@ -65,6 +65,9 @@ class WorkerApprovalsTests(unittest.TestCase):
         item = self.node.approvals({"run_id": RID})["approvals"][0]
         self.assertEqual(len(item["tool_input"]), 4001)
         self.assertTrue(item["tool_input"].endswith("…"))
+        self.assertTrue(item["truncated"])
+        self.gateway.slots[0]["pending_approval_info"]["tool_input"] = "npm test"
+        self.assertNotIn("truncated", self.node.approvals({"run_id": RID})["approvals"][0])
 
     def test_a_native_answer_goes_to_the_slot_route(self):
         self.gateway.slots = [{"key": SLOT, "pending_approval": True, "pending_approval_info": self.native}]
@@ -87,7 +90,7 @@ class WorkerApprovalsTests(unittest.TestCase):
         with self.assertRaises(Error) as caught:
             self.node.approvals_answer({"run_id": RID, "origin": "coordinator", "request_id": "spawn:42",
                                         "instance": "inst-42", "decision": "approve"})
-        self.assertEqual((caught.exception.status, caught.exception.code), (404, "approval_not_pending"))
+        self.assertEqual((caught.exception.status, caught.exception.code), (409, "approval_not_pending"))
 
     def test_a_replaced_request_is_not_answered(self):
         self.gateway.slots = [{"key": SLOT, "pending_approval": True,
@@ -115,6 +118,23 @@ class WorkerApprovalsTests(unittest.TestCase):
         with self.assertRaises(Error):
             self.node.approvals_answer({"run_id": RID, "origin": "native", "request_id": "7", "request_mid": "mid-7",
                                         "decision": "yolo"})
+
+
+    def test_a_coordinator_instance_that_changed_is_not_answered(self):
+        self.gateway.records = [{**self.record, "instance": "inst-new"}]
+        with self.assertRaises(Error) as caught:
+            self.node.approvals_answer({"run_id": RID, "origin": "coordinator", "request_id": "spawn:42",
+                                        "instance": "inst-42", "decision": "approve"})
+        self.assertEqual(caught.exception.code, "approval_not_pending")
+
+    def test_a_gateway_refusing_the_listing_is_not_passed_on(self):
+        # M2: a Gateway 401 reaching the browser as 401 would sign the user out of the console on every poll
+        def refuse(path, body=None, method=None):
+            raise gateway_client.GatewayError(401, '{"error":"unauthorized"}')
+        self.node.native = refuse
+        with self.assertRaises(Error) as caught:
+            self.node.approvals({"run_id": RID})
+        self.assertEqual((caught.exception.status, caught.exception.code), (502, "native_error"))
 
 
 if __name__ == "__main__":

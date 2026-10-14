@@ -102,6 +102,8 @@ KiroCrew ON 在远端执行开发任务：KiroCrew 的 Kiro Agent 先识别意�
 - 先把工具、**完整的**命令或文件与用途展示给用户，得到明确同意后再调用
   `octopus_approve {run_id, origin, request_id, request_mid | instance, decision: "approve" | "reject"}`（标识取自列表）。
 - 答复只能由会话创建者、Team owner 或管理员做出，并写入审计；`409 approval_not_pending` 表示该请求已被答复或过期，重新列出。
+- `truncated: true` 的内容已截断：告诉用户看到的不是全部，需要时请其在原生 KiroCrew 中查看完整内容后再决定。
+- `supported: false` 表示执行环境的 Worker 尚未升级、看不到待批准项（不代表没有）：请用户在原生 KiroCrew 中处理。
 - 用户也可以在控制台会话页的「待批准」卡片中答复。
 
 ## 私有仓库与凭证

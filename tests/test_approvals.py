@@ -102,6 +102,32 @@ class ApprovalsTests(unittest.TestCase):
         self.assertTrue(self.service.run(self.actors["owner"], rid)["permissions"]["publish"])
         self.assertFalse(self.service.run(self.actors["member"], rid)["permissions"]["publish"])
 
+    def test_an_answer_without_its_identity_says_what_is_missing(self):
+        rid = self.session()
+        for body, word in (({"origin": "native", "request_id": "7", "decision": "approve"}, "request_mid"),
+                           ({"origin": "coordinator", "request_id": "7", "decision": "approve"}, "instance"),
+                           ({"origin": "slot", "request_id": "7", "decision": "approve"}, "origin")):
+            with self.subTest(word), self.assertRaises(Error) as caught:
+                self.call("answer_approval", self.actors["owner"], rid, body)
+            self.assertEqual(caught.exception.status, 400)
+            self.assertIn(word, str(caught.exception))
+
+    def test_a_worker_refusing_the_platform_does_not_sign_the_user_out(self):
+        rid = self.session()
+        self.answers["/approvals"] = Error(401, "unauthorized", "Worker Token 无效")
+        with self.assertRaises(Error) as caught:
+            self.call("approvals", self.actors["owner"], rid)
+        self.assertEqual(caught.exception.status, 502)
+
+    def test_an_answer_during_a_gateway_restart_says_it_was_not_answered(self):
+        rid = self.session()
+        self.answers["/approvals/answer"] = Error(503, "native_unavailable", "KiroCrew Gateway 暂不可用，稍后自动重试")
+        with self.assertRaises(Error) as caught:
+            self.call("answer_approval", self.actors["owner"], rid,
+                      {"origin": "native", "request_id": "7", "request_mid": "mid-7", "decision": "approve"})
+        self.assertIn("未答复", str(caught.exception))
+        self.assertNotIn("自动重试", str(caught.exception))
+
     def test_waiting_for_approval_says_where_to_answer(self):
         rid = self.session()
         with self.db.transaction() as db:

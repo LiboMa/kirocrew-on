@@ -206,9 +206,20 @@ class Worker:
 
     def _pending(self, slot):
         """The approvals pending on this slot (D38 §4.2): its native tool request and the state-level records it owns."""
-        clip = lambda text, limit: (lambda s: s if len(s) <= limit else s[:limit] + "…")(str(text or ""))
+        clipped = []
+        def clip(text, limit):
+            text = str(text or "")
+            if len(text) <= limit:
+                return text
+            clipped.append(True)
+            return text[:limit] + "…"
+        def read(path):   # a Gateway refusal must not reach the console as a 401 (it signs the user out) or a 404
+            try:
+                return self.native(path) or []
+            except crew_api.GatewayError as exc:
+                raise Error(502, "native_error", "读取 KiroCrew 待批准项失败：" + str(exc).splitlines()[0][:200]) from None
         items = []
-        for view in self.native("/api/chat/slots") or []:
+        for view in read("/api/chat/slots"):
             info = view.get("pending_approval_info") if isinstance(view, dict) and view.get("key") == slot else None
             if isinstance(info, dict) and info.get("origin") == "native" and info.get("request_mid"):
                 items.append({"origin": "native", "request_id": str(info.get("request_id") or ""),
@@ -216,7 +227,9 @@ class Worker:
                               "tool_input": clip(info.get("tool_input"), self.APPROVAL_INPUT),
                               "tool_kind": clip(info.get("tool_kind"), 40),
                               "tool_purpose": clip(info.get("tool_purpose"), self.APPROVAL_PURPOSE)})
-        for record in self.native("/api/approvals") or []:
+                if clipped:   # what is shown is not all of it: the console and the Skill say so
+                    items[-1]["truncated"], clipped[:] = True, []
+        for record in read("/api/approvals"):
             if isinstance(record, dict) and record.get("slot") == slot and record.get("instance"):
                 items.append({"origin": "coordinator", "request_id": str(record.get("id") or ""),
                               "instance": str(record["instance"]), "source": clip(record.get("source"), 40),
@@ -224,6 +237,8 @@ class Worker:
                               "tool_input": clip(record.get("tool_input"), self.APPROVAL_INPUT),
                               "tool_purpose": clip(record.get("tool_purpose"), self.APPROVAL_PURPOSE),
                               "ts": record.get("ts")})
+                if clipped:
+                    items[-1]["truncated"], clipped[:] = True, []
         return items
 
     def approvals(self, body):
@@ -240,7 +255,7 @@ class Worker:
         key = "request_mid" if origin == "native" else "instance"
         wanted = (origin, str(body.get("request_id") or ""), str(body.get(key) or ""))
         require(any((i["origin"], i["request_id"], i.get(key, "")) == wanted for i in self._pending(slot)),
-                "该批准请求已不在等待中（已被答复、过期或不属于此会话）", 404, "approval_not_pending")
+                "该批准请求已不在等待中（已被答复、过期或不属于此会话）", 409, "approval_not_pending")
         try:
             if origin == "native":
                 self.native("/api/chat/slots/" + quote(slot, safe="") + "/approve",

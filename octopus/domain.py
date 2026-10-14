@@ -912,13 +912,25 @@ class Service:
         except Error as exc:
             if exc.status == 404 and exc.code == "not_found":
                 return {"approvals": [], "supported": False}
-            raise
+            raise self._worker_refusal(exc) from None
+
+    @staticmethod
+    def _worker_refusal(exc):
+        """A Worker's 401 / 403 is about the platform's own credentials, not the user's: passed on as such, the console
+        would sign the user out on its next poll."""
+        if exc.status in {401, 403}:
+            return Error(502, "worker_error", "执行环境拒绝了平台的请求（Worker Token 或 Gateway 登录需要更新）")
+        return exc
 
     def answer_approval(self, actor, rid, body):
         """Answer one pending approval (D38 §4.2): the people who may publish the Session, audited."""
         require(isinstance(body, dict) and set(body) <= {"origin", "request_id", "request_mid", "instance", "decision"},
                 "只接受 origin、request_id、request_mid、instance 与 decision")
         require(body.get("decision") in {"approve", "reject"}, "decision 只能是 approve 或 reject")
+        require(body.get("origin") in {"native", "coordinator"}, "origin 只能是 native 或 coordinator")
+        key = "request_mid" if body["origin"] == "native" else "instance"
+        require(isinstance(body.get("request_id"), str) and body["request_id"] and isinstance(body.get(key), str) and body[key],
+                f"{body['origin']} 的批准须带 request_id 与 {key}（取自 octopus_approvals 的列表）")
         with self.db.read() as db:
             run = run_access(db, actor, rid)
             require(may_publish(db, actor, run), "只有会话创建者、Team owner 或管理员可以答复批准请求", 403, "forbidden")
@@ -928,7 +940,6 @@ class Service:
         listed = self.approvals(actor, rid)
         require(listed["supported"], "执行环境的 Worker 尚未升级，暂不支持答复批准请求", 409, "approvals_unsupported")
         pending = listed["approvals"]
-        key = "request_mid" if body.get("origin") == "native" else "instance"
         item = next((i for i in pending if (i["origin"], i["request_id"], i.get(key)) ==
                      (body.get("origin"), body.get("request_id"), body.get(key))), None)
         require(item is not None, "该批准请求已不在等待中（已被答复、过期或不属于此会话）", 409, "approval_not_pending")
@@ -937,7 +948,9 @@ class Service:
         except Error as exc:
             if exc.status == 404 and exc.code == "not_found":
                 raise Error(409, "approvals_unsupported", "执行环境的 Worker 尚未升级，暂不支持答复批准请求") from None
-            raise
+            if exc.code in {"native_unavailable", "worker_unavailable"}:   # nothing retries an answer: say so
+                raise Error(503, exc.code, "未答复：KiroCrew Gateway 或执行环境暂不可用，请稍后重新答复") from None
+            raise self._worker_refusal(exc) from None
         detail = {"origin": item["origin"], "request_id": item["request_id"], "tool": item.get("tool"),
                   "input": str(item.get("tool_input") or "")[:200], "decision": body["decision"]}
         with self.db.transaction() as db:

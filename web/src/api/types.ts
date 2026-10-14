@@ -483,5 +483,7 @@ export interface PendingApproval {
   tool_kind?: string;
   tool_purpose?: string;
   ts?: number;
+  /** The content was clipped by the Worker: what is shown is not all of it. */
+  truncated?: boolean;
 }
 export interface ApprovalList { approvals: PendingApproval[]; supported: boolean }

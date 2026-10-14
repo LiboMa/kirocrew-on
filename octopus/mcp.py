@@ -65,7 +65,8 @@ TOOLS = [
      "inputSchema": object_schema({"run_id": STRING}, ["run_id"]), "annotations": {"readOnlyHint": True}},
     {"name": "octopus_approvals",
      "description": "列出会话中等待批准的原生工具请求（工具、命令或文件、用途；origin 与标识用于答复）。会话为 waiting_approval，"
-                    "或原生父会话想运行工具时用它。",
+                    "或原生父会话想运行工具时用它。supported 为 false 时执行环境的 Worker 尚未升级、看不到待批准项（不代表没有），"
+                    "请用户在原生 KiroCrew 中处理；truncated 为 true 的内容已截断。",
      "inputSchema": object_schema({"run_id": STRING}, ["run_id"]), "annotations": {"readOnlyHint": True}},
     {"name": "octopus_approve",
      "description": "答复一个待批准请求（approve 或 reject）。调用前必须把工具、完整的命令或文件与用途展示给用户，并得到用户明确同意；"
@@ -73,7 +74,8 @@ TOOLS = [
      "inputSchema": object_schema({"run_id": STRING, "origin": {"type": "string", "enum": ["native", "coordinator"]},
                                    "request_id": STRING, "request_mid": STRING, "instance": STRING,
                                    "decision": {"type": "string", "enum": ["approve", "reject"]}},
-                                  ["run_id", "origin", "request_id", "decision"])},
+                                  ["run_id", "origin", "request_id", "decision"]),
+     "annotations": {"destructiveHint": True}},
     {"name": "octopus_parse_workflow",
      "description": "校验并规范化一个由 Agent 预先生成的工作流（JSON / YAML / 含一个代码块的 Markdown；新版导出或旧版 schema 1），返回 name、steps 与规范化说明；仅预览，不执行。",
      "inputSchema": object_schema({"content": STRING, "format": {"type": "string", "enum": ["json", "yaml", "markdown"]}},

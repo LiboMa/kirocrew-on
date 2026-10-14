@@ -21,6 +21,8 @@ class McpApprovalsTests(unittest.TestCase):
         self.assertTrue(tools["octopus_approvals"]["annotations"]["readOnlyHint"])
         self.assertIn("用户", tools["octopus_approve"]["description"])
         self.assertIn("同意", tools["octopus_approve"]["description"])
+        self.assertTrue(tools["octopus_approve"]["annotations"]["destructiveHint"])   # clients confirm it (A6)
+        self.assertIn("supported", tools["octopus_approvals"]["description"])
         schema = tools["octopus_approve"]["inputSchema"]
         self.assertEqual(set(schema["required"]), {"run_id", "origin", "request_id", "decision"})
 
