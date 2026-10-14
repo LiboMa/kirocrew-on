@@ -268,7 +268,7 @@ CloudFront 只使用 us-east-1 的证书）：分发加上别名与证书（SNI�
   验收项与建议、审查绑定）、纠错记录、已验证候选与发布的分支 / PR / MR。
 - **大小**：其余 Attempt 只计次数；结论最多 2000 字符，门禁详情与命令只取首行；检查命令的输出不进入报告。
 - **安全**：
-  - 会话中的所有文字都转义。HTML 不含脚本与外部资源（`Content-Security-Policy: default-src 'none'; style-src 'unsafe-inline'`），
+  - 会话中的所有文字都转义（Markdown 中多行文字放在代码块里、单行文字转义标点，不会变成标题、链接或图片）。HTML 不含脚本与外部资源（`Content-Security-Policy: default-src 'none'; style-src 'unsafe-inline'; img-src data:`），
     只有 https 的 PR 链接是链接。
   - 控制台在不允许脚本的 iframe 中显示，可下载 Markdown / HTML。
 - **权限**：与查看会话相同（`read`），看不到会话时 404。

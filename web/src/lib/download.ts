@@ -1,5 +1,10 @@
 export function downloadJson(filename: string, value: unknown) {
-  const url = URL.createObjectURL(new Blob([JSON.stringify(value, null, 2)], { type: "application/json" }));
+  downloadText(filename, JSON.stringify(value, null, 2), "application/json");
+}
+
+/** Save text as a file. The object URL is revoked a moment later: Safari starts the download after click() returns. */
+export function downloadText(filename: string, text: string, kind: string) {
+  const url = URL.createObjectURL(new Blob([text], { type: kind }));
   const link = document.createElement("a");
   link.href = url;
   link.download = filename;

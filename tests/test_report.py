@@ -43,6 +43,20 @@ def view(**extra):
             **extra}
 
 
+def outside_fences(lines):
+    """The Markdown lines outside fenced code blocks."""
+    fence, out = None, []
+    for line in lines:
+        opening = re.match(r"^(`{3,})", line)
+        if fence is None and opening:
+            fence = opening.group(1)
+        elif fence is not None and line.rstrip() == fence:
+            fence = None
+        elif fence is None:
+            out.append(line)
+    return out
+
+
 class ReportTests(unittest.TestCase):
     def test_the_markdown_report_has_every_section(self):
         text = report.markdown(view())
@@ -57,7 +71,7 @@ class ReportTests(unittest.TestCase):
         self.assertIn("绑定 abc1234", text)
         self.assertIn("第 1 轮 · code · retry · 测试失败", text)
         self.assertIn("octopus/" + RID, text)
-        self.assertIn("[PR #3](https://github.com/o/r/pull/3)", text)
+        self.assertIn("[PR #3](<https://github.com/o/r/pull/3>)", text)
         self.assertIn("✓ 登录成功", text)
         self.assertIn("补 CHANGELOG", text)
 
@@ -90,6 +104,51 @@ class ReportTests(unittest.TestCase):
         self.assertEqual(len(row), 1)
         self.assertEqual(row[0].count(" | "), 2)
         self.assertIn("| 1 | 实现\\|登录 | implement |", text)   # a name keeps its first line too
+
+    def test_markdown_keeps_its_structure_whatever_the_agent_writes(self):
+        hostile = view()
+        fence = "```python\n" + "x = 1\n" * 600 + "```"          # crosses the summary limit: the clip must not leave it open
+        hostile["tasks"][0]["attempts"][1]["evidence"]["outcome"]["summary"] = (
+            "## 改动\n<!-- hidden\n[PR #3](https://evil.example/pull/3) <img src=https://evil.example/t.gif>\n" + fence)
+        hostile["tasks"][0]["spec"] = {**IMPLEMENT, "name": "实现 ## [x](https://evil.example)"}
+        text = report.markdown(hostile)
+        lines = text.splitlines()
+        outside = "\n".join(outside_fences(lines))   # inside a code block, headings, links and HTML are inert
+        self.assertEqual([l for l in outside.splitlines() if l.startswith("## ")], ["## 需求", "## 计划", "## 任务", "## 纠错记录", "## 发布"])
+        self.assertEqual(re.findall(r"(?<!\\)\[[^\]]*\]\(", outside), ["[PR #3]("])   # the only link the report makes
+        self.assertEqual(re.findall(r"(?<!\\)<(?:img|!--)", outside), [])
+        start = next(i for i, l in enumerate(lines) if "## 改动" in l)
+        opener = lines[start - 1]
+        self.assertTrue(opener.startswith("````"), opener)   # longer than any backtick run inside
+        close = lines.index(opener.rstrip("text").rstrip(), start)
+        self.assertLess(close, lines.index("| 门禁 | 结果 | 详情 |"))   # the gate table is outside the block
+
+    def test_the_task_contract_and_unreported_acceptance_items_are_shown(self):
+        contracted = view()
+        contracted["tasks"][0]["spec"] = {**IMPLEMENT, "deliverables": ["src/login.ts"], "acceptance": ["登录成功", "错误提示清晰"],
+                                          "verify": ["npm test"], "paths": ["src/**"]}
+        contracted["tasks"][0]["attempts"][1]["spec"] = contracted["tasks"][0]["spec"]   # what the Attempt was asked to do
+        text = report.markdown(contracted)
+        for part in ("交付物：src/login.ts", "检查命令（契约）：`npm test`", "可改动：src/\\*\\*", "✓ 登录成功", "— 错误提示清晰（未报告）"):
+            self.assertIn(part, text)
+        self.assertIn("错误提示清晰（未报告）", report.html(contracted))
+
+    def test_the_small_things_a_reader_relies_on(self):
+        v = view(input="需求" * 5000)
+        v["tasks"][0]["attempts"][1]["spec"] = {**IMPLEMENT, "tool": "codex"}          # what this Attempt really ran with
+        v["tasks"][0]["attempts"][1]["evidence"]["candidate"]["rewritten"] = True
+        v["tasks"][0]["attempts"][1]["evidence"]["check_results"] = [{"command": "npm ci", "exit": None, "seconds": 0.0, "tail": ""}]
+        v["recovery"]["history"].append({"number": 2, "failed_task_id": "review", "status": "blocked", "decision": None})
+        v["publish"]["commit"] = "fedcba9" + "0" * 33
+        text = report.markdown(v)
+        self.assertIn("需求" * 5000, text)                       # the request is not cut short
+        self.assertIn("请求：codex / auto", text)
+        self.assertIn("（历史已改写）", text)
+        self.assertIn("`npm ci` · 无法运行", text)
+        self.assertIn("第 2 轮 · review · 未决定（blocked）", text)
+        self.assertIn("推送的提交：fedcba9", text)
+        self.assertNotIn("None", text)
+        self.assertIn("<pre>实现登录并补测试</pre>", report.html(view()))
 
     def test_a_large_session_stays_small(self):
         big = view()

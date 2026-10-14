@@ -5,15 +5,7 @@ import { apiText } from "@/api/client";
 import type { Run } from "@/api/types";
 import { Button } from "@/components/ui/button";
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
-
-function save(text: string, name: string, kind: string) {
-  const url = URL.createObjectURL(new Blob([text], { type: kind }));
-  const link = document.createElement("a");
-  link.href = url;
-  link.download = name;
-  link.click();
-  URL.revokeObjectURL(url);
-}
+import { downloadText } from "@/lib/download";
 
 /** The Session's Feature report (D37 phase 2): shown sandboxed (no scripts; its pull-request link opens a new tab), and
  * downloadable as Markdown or as one HTML file. */
@@ -34,7 +26,7 @@ export function ReportButton({ run }: { run: Run }) {
   const download = async (format: "md" | "html") => {
     try {
       const text = format === "html" && page !== null ? page : await apiText(path(format));
-      save(text, `${run.id}-report.${format}`, format === "html" ? "text/html" : "text/markdown");
+      downloadText(`${run.id}-report.${format}`, text, format === "html" ? "text/html" : "text/markdown");
     } catch (error) {
       toast.error((error as Error).message);
     }

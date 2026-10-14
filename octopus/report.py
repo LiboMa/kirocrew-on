@@ -3,10 +3,12 @@ candidate, checks, acceptance, review binding — the recovery rounds and the pu
 or as one self-contained HTML page. Every text from the Session is escaped (it may come from an Agent), only an https
 pull-request URL becomes a link, and long texts are clipped so a large Session stays a readable report."""
 import html as markup
+import re
 import time
 
 MARK = {"pass": "✓", "fail": "✗", "skip": "–"}
-SUMMARY, DETAIL = 2000, 300
+SUMMARY, DETAIL, INPUT, PLAN = 2000, 300, 12000, 8000   # the request and the plan keep their own limits (domain, planning)
+SPECIAL = str.maketrans({c: "\\" + c for c in "\\`*_[]<>!#|~"})
 STYLE = """
 body{font:14px/1.6 system-ui,-apple-system,"Segoe UI",sans-serif;color:#1f2328;max-width:62rem;margin:2rem auto;padding:0 1.25rem}
 h1{font-size:1.6rem;margin-bottom:.25rem}h2{margin-top:2rem;border-bottom:1px solid #d0d7de;padding-bottom:.3rem}
@@ -23,7 +25,30 @@ def _clip(text, limit):
 
 
 def _line(text, limit=DETAIL):
-    return _clip(str(text or "").split("\n")[0], limit)
+    lines = str(text or "").splitlines()
+    return _clip(lines[0] if lines else "", limit)
+
+
+def _md(text):
+    """One line of Session text in Markdown: CommonMark punctuation escaped, so it cannot become a heading, link,
+    image, HTML or table cell break."""
+    return str(text or "").translate(SPECIAL)
+
+
+def _block(text):
+    """Multi-line Session text in Markdown: a fenced block longer than any backtick run inside, so neither its content
+    nor a clip in the middle of it can reach the rest of the report."""
+    runs = [len(run) for run in re.findall(r"`+", text)]
+    fence = "`" * max(3, max(runs, default=0) + 1)
+    return [fence + "text", *text.splitlines(), fence]
+
+
+def _acceptance(contract, reported):
+    """The contract's acceptance items with what the Agent reported for each — an item it did not report is shown as
+    such — then anything else it reported (D37 phase 2: the reader sees what was skipped)."""
+    results = {str(a.get("item")): a.get("result") for a in reported if isinstance(a, dict)}
+    items = [{"item": _line(item), "result": results.pop(str(item), None)} for item in contract][:30]
+    return items + [{"item": _line(item), "result": result} for item, result in results.items()][:30 - len(items)]
 
 
 def _attempt(attempt, spec):
@@ -33,7 +58,8 @@ def _attempt(attempt, spec):
     checks = []
     for result in evidence.get("check_results") or []:
         exit_code = result.get("exit")
-        state = f"退出码 {exit_code}" if exit_code is not None else ("超时" if result.get("timeout") else "已停止")
+        state = (f"退出码 {exit_code}" if exit_code is not None else "超时" if result.get("timeout")
+                 else "已停止" if result.get("stopped") else "无法运行")
         checks.append({"command": _line(result.get("command")), "state": state, "seconds": result.get("seconds")})
     return {
         "number": attempt.get("number"), "status": attempt.get("status"), "error": _line(attempt.get("error")),
@@ -43,9 +69,14 @@ def _attempt(attempt, spec):
         "gates": [{"name": _line(g.get("name"), 60), "status": g.get("status"), "detail": _line(g.get("detail"))}
                   for g in evidence.get("gates") or []],
         "candidate": (f"{str(candidate.get('sha', ''))[:7]} · {candidate.get('files', 0)} 个文件 "
-                      f"+{candidate.get('insertions', 0)} −{candidate.get('deletions', 0)}") if candidate else None,
+                      f"+{candidate.get('insertions', 0)} −{candidate.get('deletions', 0)}"
+                      + ("（历史已改写）" if candidate.get("rewritten") else "")
+                      + ("（含疑似凭证，未采用）" if candidate.get("moved") is False else "")) if candidate else None,
         "checks": checks,
-        "acceptance": [{"item": _line(a.get("item")), "result": a.get("result")} for a in outcome.get("acceptance") or []][:30],
+        "acceptance": _acceptance(spec.get("acceptance") or [], outcome.get("acceptance") or []),
+        "contract": {"deliverables": [_line(x) for x in spec.get("deliverables") or []][:20],
+                     "verify": [_line(x) for x in spec.get("verify") or []][:10],
+                     "paths": [_line(x) for x in spec.get("paths") or []][:20]},
         "suggestions": [_line(s) for s in outcome.get("suggestions") or []][:20],
         "reviewed": str(evidence["reviewed"])[:7] if evidence.get("reviewed") else None,
     }
@@ -59,20 +90,22 @@ def model(view, now=None):
         attempts = sorted(task.get("attempts") or [], key=lambda a: a.get("number") or 0)
         tasks.append({"ordinal": ordinal, "id": task.get("id"), "name": _line(spec.get("name") or task.get("id"), 200),
                       "kind": spec.get("kind") or "—", "tool": spec.get("tool") or "—", "status": task.get("status"),
-                      "attempts": len(attempts), "final": _attempt(attempts[-1], spec) if attempts else None})
+                      "attempts": len(attempts),
+                      "final": _attempt(attempts[-1], attempts[-1].get("spec") or spec) if attempts else None})
     planning = view.get("planning") or {}
-    recovery = [{"number": r.get("number"), "task": r.get("failed_task_id"), "action": (r.get("decision") or {}).get("action"),
-                 "reason": _line((r.get("decision") or {}).get("reason"))}
+    recovery = [{"number": r.get("number"), "task": r.get("failed_task_id") or "—", "status": r.get("status"),
+                 "action": (r.get("decision") or {}).get("action"), "reason": _line((r.get("decision") or {}).get("reason"))}
                 for r in (view.get("recovery") or {}).get("history") or []]
     publish = view.get("publish") or None
     return {"title": _line(view.get("name") or view.get("input") or view.get("id"), 200), "id": view.get("id"),
             "status": view.get("status"), "creator": (view.get("created_by") or {}).get("username") or "—",
             "generated": time.strftime("%Y-%m-%d %H:%M UTC", time.gmtime(now or time.time())),
-            "request": {"input": _clip(view.get("input"), SUMMARY), "intent": _line(planning.get("intent"), 500),
-                        "summary": _clip(planning.get("summary"), SUMMARY)},
+            "request": {"input": _clip(view.get("input"), INPUT), "intent": _line(planning.get("intent"), 500),
+                        "summary": _clip(planning.get("summary"), PLAN)},
             "tasks": tasks, "recovery": recovery,
             "verified": str((view.get("verified") or {}).get("sha") or "")[:7] or None,
             "publish": publish and {"branch": _line(publish.get("branch"), 200), "url": str(publish.get("url") or ""),
+                                    "commit": str(publish.get("commit") or "")[:7],
                                     "number": publish.get("number"), "kind": publish.get("kind"),
                                     "error": _line(publish.get("request_error"))}}
 
@@ -82,7 +115,15 @@ def _label(publish):
 
 
 def _link(publish):
-    return publish["url"].startswith("https://") and publish["number"] is not None
+    url = publish["url"]
+    return url.startswith("https://") and publish["number"] is not None and not any(c in url for c in "<> \t\n")
+
+
+def _round(r):
+    if r["action"]:
+        return f"第 {r['number']} 轮 · {r['task']} · {r['action']} · {r['reason']}" + (
+            f"（{r['status']}）" if r["status"] not in (None, "applied") else "")
+    return f"第 {r['number']} 轮 · {r['task']} · 未决定（{r['status'] or '—'}）"
 
 
 def _cell(text):
@@ -91,55 +132,71 @@ def _cell(text):
 
 def markdown(view, now=None):
     m = model(view, now)
-    out = [f"# {m['title']}", "", f"- 会话：`{m['id']}` · 状态：{m['status']} · 创建者：{m['creator']} · 生成：{m['generated']}",
-           "", "## 需求", "", m["request"]["input"] or "—"]
+    out = [f"# {_md(m['title'])}", "",
+           f"- 会话：`{m['id']}` · 状态：{_md(m['status'])} · 创建者：{_md(m['creator'])} · 生成：{m['generated']}",
+           "", "## 需求", ""] + (_block(m["request"]["input"]) if m["request"]["input"] else ["—"])
     if m["request"]["intent"]:
-        out += ["", f"**意图**：{m['request']['intent']}"]
+        out += ["", f"**意图**：{_md(m['request']['intent'])}"]
     if m["request"]["summary"]:
-        out += ["", m["request"]["summary"]]
+        out += [""] + _block(m["request"]["summary"])
     out += ["", "## 计划", "", "| # | 任务 | 类别 | 工具 | 状态 | 执行次数 |", "|---|---|---|---|---|---|"]
-    out += [f"| {t['ordinal']} | {_cell(t['name'])} | {t['kind']} | {t['tool']} | {t['status']} | {t['attempts']} |"
+    out += [f"| {t['ordinal']} | {_md(t['name'])} | {_md(t['kind'])} | {_md(t['tool'])} | {_md(t['status'])} | {t['attempts']} |"
             for t in m["tasks"]]
     out += ["", "## 任务"]
     for task in m["tasks"]:
-        out += ["", f"### {task['ordinal']}. {task['name']}", ""]
+        out += ["", f"### {task['ordinal']}\\. {_md(task['name'])}", ""]
         final = task["final"]
         if final is None:
             out.append("- 尚未执行")
             continue
-        out += [f"- 执行 {task['attempts']} 次；最终第 {final['number']} 次：{final['status']}",
-                f"- 请求：{final['requested']}；实际：{final['actual']}"]
-        if final["decision"]:
-            out.append(f"- 结论：{final['decision']} — {final['summary']}")
+        contract = final["contract"]
+        out += [f"- 执行 {task['attempts']} 次；最终第 {final['number']} 次：{_md(final['status'])}",
+                f"- 请求：{_md(final['requested'])}；实际：{_md(final['actual'])}"]
+        if contract["deliverables"]:
+            out.append("- 交付物：" + "、".join(_md(x) for x in contract["deliverables"]))
+        if contract["verify"]:
+            out.append("- 检查命令（契约）：" + "、".join(f"`{x.replace('`', '')}`" for x in contract["verify"]))
+        if contract["paths"]:
+            out.append("- 可改动：" + "、".join(_md(x) for x in contract["paths"]))
         if final["error"]:
-            out.append(f"- 未通过：{final['error']}")
+            out.append(f"- 未通过：{_md(final['error'])}")
         if task["kind"] == "review":
             out.append(f"- 审查：绑定 {final['reviewed']}" if final["reviewed"] else "- 审查：未绑定候选")
         else:
-            out.append(final["candidate"] and f"- 候选 {final['candidate']}" or "- 候选：—")
+            out.append(f"- 候选 {_md(final['candidate'])}" if final["candidate"] else "- 候选：—")
+        if final["decision"]:
+            out.append(f"- 结论：{_md(final['decision'])}")
+            if final["summary"]:
+                out += [""] + _block(final["summary"])
         if final["gates"]:
             out += ["", "| 门禁 | 结果 | 详情 |", "|---|---|---|"]
-            out += [f"| {g['name']} | {MARK.get(g['status'], g['status'])} | {_cell(g['detail'])} |" for g in final["gates"]]
+            # gate names are the platform's own identifiers, kept readable; their details may carry Agent text
+            out += [f"| {g['name'] if re.fullmatch(r'[a-z_]+', g['name']) else _md(g['name'])} | "
+                    f"{MARK.get(g['status'], _md(g['status']))} | {_md(g['detail'])} |" for g in final["gates"]]
         else:
             out += ["", "门禁：无记录"]
         if final["checks"]:
             out += ["", "检查命令："] + [f"- `{c['command'].replace('`', '')}` · {c['state']} · {c['seconds']} s" for c in final["checks"]]
         if final["acceptance"]:
-            out += ["", "验收项："] + [f"- {MARK.get(a['result'], '—')} {a['item']}" for a in final["acceptance"]]
+            out += ["", "验收项："] + [f"- {MARK.get(a['result'], '—')} {_md(a['item'])}" + ("（未报告）" if a["result"] is None else "")
+                                       for a in final["acceptance"]]
         if final["suggestions"]:
-            out += ["", "建议："] + [f"- {s}" for s in final["suggestions"]]
+            out += ["", "建议："] + [f"- {_md(s)}" for s in final["suggestions"]]
     out += ["", "## 纠错记录", ""]
-    out += [f"- 第 {r['number']} 轮 · {r['task']} · {r['action']} · {r['reason']}" for r in m["recovery"]] or ["无纠错"]
+    out += [f"- {_md(_round(r))}" for r in m["recovery"]] or ["无纠错"]
     out += ["", "## 发布", ""]
     if m["verified"]:
         out.append(f"- 已验证候选：{m['verified']}")
     publish = m["publish"]
     if publish:
-        out.append(f"- 分支：{publish['branch']}")
+        out.append(f"- 分支：{_md(publish['branch'])}")
+        if publish["commit"]:
+            out.append(f"- 推送的提交：{publish['commit']}")
         if publish["number"] is not None:
-            out.append(f"- [{_label(publish)}]({publish['url']})" if _link(publish) else f"- {_label(publish)}：{publish['url']}")
+            out.append(f"- [{_label(publish)}](<{publish['url']}>)" if _link(publish)
+                       else f"- {_label(publish)}：{_md(publish['url'])}")
         if publish["error"]:
-            out.append(f"- 拉取请求未创建：{publish['error']}")
+            out.append(f"- 拉取请求未创建：{_md(publish['error'])}")
     else:
         out.append("尚未发布")
     return "\n".join(out) + "\n"
@@ -168,8 +225,13 @@ def html(view, now=None):
             continue
         items = [f"执行 {task['attempts']} 次；最终第 {final['number']} 次：{e(final['status'])}",
                  f"请求：{e(final['requested'])}；实际：{e(final['actual'])}"]
+        contract = final["contract"]
+        for label, values in (("交付物", contract["deliverables"]), ("检查命令（契约）", contract["verify"]),
+                              ("可改动", contract["paths"])):
+            if values:
+                items.append(f"{label}：" + "、".join(f"<code>{e(v)}</code>" for v in values))
         if final["decision"]:
-            items.append(f"结论：{e(final['decision'])} — {e(final['summary'])}")
+            items.append(f"结论：{e(final['decision'])}")
         if final["error"]:
             items.append(f"<span class=\"fail\">未通过：{e(final['error'])}</span>")
         if task["kind"] == "review":
@@ -177,6 +239,8 @@ def html(view, now=None):
         else:
             items.append(f"候选 {e(final['candidate'])}" if final["candidate"] else "候选：—")
         out.append("<ul>" + "".join(f"<li>{item}</li>" for item in items) + "</ul>")
+        if final["decision"] and final["summary"]:
+            out.append(f"<pre>{e(final['summary'])}</pre>")
         if final["gates"]:
             out.append("<table><tr><th>门禁</th><th>结果</th><th>详情</th></tr>" + "".join(
                 f"<tr class=\"{e(g['status'])}\"><td>{e(g['name'])}</td><td>{e(MARK.get(g['status'], g['status']))}</td>"
@@ -184,19 +248,21 @@ def html(view, now=None):
         else:
             out.append("<p>门禁：无记录</p>")
         for title, rows in (("检查命令", [f"<code>{e(c['command'])}</code> · {e(c['state'])} · {e(c['seconds'])} s" for c in final["checks"]]),
-                            ("验收项", [f"{e(MARK.get(a['result'], '—'))} {e(a['item'])}" for a in final["acceptance"]]),
+                            ("验收项", [f"{e(MARK.get(a['result'], '—'))} {e(a['item'])}" + ("（未报告）" if a["result"] is None else "")
+                                      for a in final["acceptance"]]),
                             ("建议", [e(s) for s in final["suggestions"]])):
             if rows:
                 out.append(f"<p>{title}：</p><ul>" + "".join(f"<li>{row}</li>" for row in rows) + "</ul>")
     out.append("<h2>纠错记录</h2>")
-    out.append("<ul>" + "".join(f"<li>第 {e(r['number'])} 轮 · {e(r['task'])} · {e(r['action'])} · {e(r['reason'])}</li>"
-                                for r in m["recovery"]) + "</ul>" if m["recovery"] else "<p>无纠错</p>")
+    out.append("<ul>" + "".join(f"<li>{e(_round(r))}</li>" for r in m["recovery"]) + "</ul>" if m["recovery"] else "<p>无纠错</p>")
     out.append("<h2>发布</h2>")
     items, publish = [], m["publish"]
     if m["verified"]:
         items.append(f"已验证候选：{e(m['verified'])}")
     if publish:
         items.append(f"分支：{e(publish['branch'])}")
+        if publish["commit"]:
+            items.append(f"推送的提交：{e(publish['commit'])}")
         if publish["number"] is not None:
             items.append(f"<a href=\"{e(publish['url'])}\">{e(_label(publish))}</a>" if _link(publish)
                          else f"{e(_label(publish))}：{e(publish['url'])}")

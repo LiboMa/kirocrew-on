@@ -72,7 +72,8 @@ describe("session detail", () => {
     const formats: string[] = [];
     const create = vi.fn(() => "blob:report");
     Object.defineProperty(URL, "createObjectURL", { value: create, configurable: true });
-    Object.defineProperty(URL, "revokeObjectURL", { value: vi.fn(), configurable: true });
+    const revoke = vi.fn();
+    Object.defineProperty(URL, "revokeObjectURL", { value: revoke, configurable: true });
     open(blocked, { "GET /runs/run-a/report": (_body: unknown, url: URL) => {
       const format = url.searchParams.get("format") ?? "";
       formats.push(format);
@@ -84,6 +85,7 @@ describe("session detail", () => {
     await waitFor(() => expect(frame.getAttribute("srcdoc")).toContain("<h1>修复登录失败</h1>"));
     await userEvent.click(screen.getByRole("button", { name: "下载 Markdown" }));
     await waitFor(() => expect(create).toHaveBeenCalledTimes(1));
+    expect(revoke).not.toHaveBeenCalled();   // Safari starts the download after click(): the URL must outlive it
     expect(formats).toEqual(["html", "md"]);
   });
 
