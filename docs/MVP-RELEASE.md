@@ -350,7 +350,13 @@ v4 → v6 显示规划 Prompt 新增的行）；控制台「修订历史」在�
   审计 `approval.answer`，变更记录 `approval.answered`；旧 Worker 说明不支持；会话为 `waiting_approval` 时 `attention` 写明。
 - 控制台「待批准」卡片（确认前展开完整内容）；MCP `octopus_approvals` / `octopus_approve`（工具说明与 Skill 要求先得到用户同意）。
 
-待做：EC2 验收（见计划 `docs/superpowers/plans/2026-10-14-approvals-phase2.md` 末尾）。
+EC2（2026-10-15，a402caa）部分验收 6/6：
+- 列表经 Worker 读到真实 Gateway（`supported: true`）；答复已不在等待中的请求得到 409 `approval_not_pending`；缺少标识时 400 写明缺少的字段；
+  MCP `octopus_approvals` / `octopus_approve` 经平台调用；会话视图对管理员 `permissions.publish` 为真。
+- **未能实测真实的批准与拒绝**：此执行边界的 KiroCrew 处于 YOLO（`config.json` 的 `yolo_duration: until_shutdown`，在 Dashboard 中开启，
+  Gateway 重启前一直有效）。父会话自己运行的 shell 命令（`run-287fe39b…` 写出 `kc-approval-1.txt`）与父会话自行派生的子 Agent 都直接执行，
+  没有任何待批准项。关闭 YOLO 影响该边界上的所有会话，留待负责人决定；关闭后按计划末尾的步骤补测批准与拒绝。
+- 最终审查（opus）：1 项重要（控制台的确认可能答复被替换的同 id 请求）与 9 项升级为重要的问题已修复；4 项次要记入 BACKLOG。
 
 ### 14.13 候选提交与命名门禁（D37 第 1 期，M2）
 
