@@ -1339,6 +1339,10 @@ class Service:
             title, action = "仓库凭证不可用", "在会话页更换凭证（或请凭证管理者重新启用），再续作。"
         elif not task and not run.get("native_parent"):
             title, action = "项目准备未完成", "检查仓库来源、访问权限和 Worker，处理具体错误后重跑。"
+        elif failure == "tool":
+            title = "需要换用工具或模型"
+            action = ("协调者可推荐换用可用的工具（自动纠错开启且允许换工具时）；也可在「配置并续作」中换用可用的工具或模型后重跑，"
+                      "详情中是失败原因或协调者的建议。")
         elif failure == "input":
             title, action = "等待补充项目或任务信息", "补充缺少的源码来源或需求，再继续同一 Session。"
         elif failure in {"auth", "model"}:

@@ -178,7 +178,9 @@ class Engine:
                                    event={"id": current["id"], "status": "dispatch_unknown"},
                                    status="dispatch_unknown", updated=time.time())
                 return self.update(run["id"], "dispatch_unknown", message, actor=journal.WORKER)
-            if code in {"model_unavailable", "model_transport_unsupported", "invalid_request", "not_prepared"}:
+            if code in {"model_unavailable", "model_transport_unsupported"}:
+                return self._refused(run, current["id"], json.loads(current["evidence"] or "{}"), message, code)
+            if code in {"invalid_request", "not_prepared"}:
                 with self.db.transaction() as db:
                     journal.change(db, "attempts", current["id"], journal.WORKER, "attempt.state",
                                    event={"id": current["id"], "status": "blocked", "error": message},
@@ -198,6 +200,18 @@ class Engine:
             self.update(run["id"], run["status"], message)
         else:
             self.update(run["id"], "blocked", message)
+
+    def _refused(self, run, attempt_id, evidence, message, code):
+        """A tool the task cannot run on (D38 §3.2): the Attempt is blocked as the tool's failure and goes to diagnosis,
+        where the Coordinator may recommend another tool."""
+        with self.db.transaction() as db:
+            journal.change(db, "attempts", attempt_id, journal.WORKER, "attempt.state",
+                           event={"id": attempt_id, "status": "blocked", "error": message},
+                           status="blocked", error=message, evidence=dumps({**evidence, "failure_type": "tool", "refused": code}),
+                           updated=time.time())
+            journal.change_rows(db, "tasks", "current_attempt=?", (attempt_id,), journal.WORKER, "task.state", status="blocked")
+        self.update(run["id"], "blocked", message, actor=journal.WORKER)
+        recovery.automatic(self.db, run["id"], attempt_id)
 
     @staticmethod
     def _head_candidate(db, rid):
@@ -407,6 +421,11 @@ class Engine:
         snapshot = json.loads(run["snapshot"])
         gated = snapshot.get("execution_contract", 1) >= 3 and task["id"] != planning.PLAN_ID   # D37
         if attempt["status"] == "dispatching":
+            # The platform's record of this Worker's tools (D38 §3.1): a tool it cannot start is not dispatched.
+            state = ((config.get("capabilities") or {}).get("tools") or {}).get(spec["tool"])
+            if task["id"] != planning.PLAN_ID and isinstance(state, dict) and state.get("available") is False:
+                return self._refused(run, attempt["id"], json.loads(attempt["evidence"] or "{}"),
+                                     f"{spec['tool']} 在此执行环境不可用：{state.get('reason') or '原因未报告'}", "tool_unavailable")
             # The spec a Worker validates keeps its six fields (a Worker not yet upgraded runs it as before); the task
             # contract and the requirement KiroCrew completed travel beside it (D34 §6.2).
             contract = {key: spec[key] for key in CONTRACT if key in spec}

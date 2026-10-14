@@ -29,7 +29,7 @@ class BasicGateTests(unittest.TestCase):
             (dict(native={**DONE, "stopped": True}), ("原生任务已停止", "native_stopped", "native_completed")),
             (dict(missing=True), (BLOCKED, "native_error", "native_completed")),
             (dict(handoff=""), ("缺少本次交接文件", "contract", "handoff_present")),
-            (dict(evidence={"actual_backend": "codex"}), ("实际 ACP 后端未核实或与配置不匹配", "model", "identity_match")),
+            (dict(evidence={"actual_backend": "codex"}), ("实际 ACP 后端未核实或与配置不匹配", "tool", "identity_match")),
             (dict(invalid="outcome.json 无效"), ("outcome.json 无效", "contract", "outcome_valid")),
             (dict(report={"decision": "changes_requested", "summary": "缺测试", "failure_type": "tests"}),
              ("缺测试", "tests", "outcome_pass")),

@@ -109,3 +109,53 @@ class EnvironmentTests(SwitchCase):
         self.assertNotIn("不换模型", prompt)
         for words in ("switch_tool", "available", "完全相同", "审查", "wait_for_user"):
             self.assertIn(words, prompt)
+
+
+class ToolFailureTests(SwitchCase):
+    WAIT = {"action": "wait_for_user", "reason": "需要换用工具", "instructions": "请换用可用的工具后续作"}
+
+    def test_an_unavailable_tool_goes_to_diagnosis_without_being_dispatched(self):
+        self.decisions = [self.WAIT]
+        run = self.tick(self.start([step("code", "opencode", "implement")])["id"])
+        self.assertFalse([b for p, b in self.calls if p == "/dispatch" and not b.get("coordination")])
+        attempt = run["tasks"][0]["attempts"][0]
+        self.assertEqual(attempt["status"], "blocked")
+        self.assertEqual(attempt["error"], "opencode 在此执行环境不可用：opencode 命令不存在")
+        self.assertEqual((attempt["evidence"]["failure_type"], attempt["evidence"]["refused"]), ("tool", "tool_unavailable"))
+        self.assertEqual(run["recovery"]["used"], 1)
+        self.assertEqual(self.coordination()[0]["failure_type"], "tool")
+
+    def test_a_refused_model_goes_to_diagnosis(self):
+        self.decisions, self.refuse_models = [self.WAIT], {"unpublished-x"}
+        run = self.tick(self.start([step("code", "claude", "implement", model="unpublished-x")])["id"])
+        evidence = run["tasks"][0]["attempts"][0]["evidence"]
+        self.assertEqual((evidence["failure_type"], evidence["refused"]), ("tool", "model_unavailable"))
+        self.assertEqual(run["recovery"]["used"], 1)
+        self.assertEqual(run["attention"]["title"], "需要换用工具或模型")
+
+    def test_a_backend_that_is_not_the_requested_one_goes_to_diagnosis(self):
+        self.decisions, self.mismatch_rounds = [self.WAIT], {("code", 1)}
+        run = self.tick(self.start([step("code", "claude", "implement")])["id"])
+        self.assertEqual(run["tasks"][0]["attempts"][0]["evidence"]["failure_type"], "tool")
+        self.assertEqual(run["recovery"]["used"], 1)
+
+    def test_an_unprepared_workspace_is_not_a_tool_failure(self):
+        def refuse(config, path, body, **kwargs):
+            if path == "/dispatch" and not body.get("coordination"):
+                raise Error(409, "not_prepared", "工作区未准备")
+            return self.request(config, path, body, **kwargs)
+        self.engine.request, self.decisions = refuse, [self.WAIT]
+        run = self.tick(self.start([step("code", "claude", "implement")])["id"])
+        evidence = run["tasks"][0]["attempts"][0]["evidence"]
+        self.assertNotIn("refused", evidence)
+        self.assertNotEqual(evidence.get("failure_type"), "tool")
+        self.assertEqual(self.coordination()[0]["failure_type"], "native_error")   # as before: reconcile diagnoses it
+
+
+class OldWorkerTests(SwitchCase):
+    capabilities = None   # registered before D38: no tools in its capabilities
+
+    def test_an_old_worker_without_tools_dispatches_as_before(self):
+        run = self.tick(self.start([step("code", "opencode", "implement")])["id"])
+        self.assertTrue([b for p, b in self.calls if p == "/dispatch" and b["spec"]["tool"] == "opencode"])
+        self.assertEqual(run["status"], "completed")
