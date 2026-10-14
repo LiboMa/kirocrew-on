@@ -202,6 +202,59 @@ class Worker:
         result["kiro"]["login"] = self.tool_auth() if result["kiro"]["available"] else "unknown"
         return result
 
+    APPROVAL_INPUT, APPROVAL_PURPOSE = 4000, 1000
+
+    def _pending(self, slot):
+        """The approvals pending on this slot (D38 §4.2): its native tool request and the state-level records it owns."""
+        clip = lambda text, limit: (lambda s: s if len(s) <= limit else s[:limit] + "…")(str(text or ""))
+        items = []
+        for view in self.native("/api/chat/slots") or []:
+            info = view.get("pending_approval_info") if isinstance(view, dict) and view.get("key") == slot else None
+            if isinstance(info, dict) and info.get("origin") == "native" and info.get("request_mid"):
+                items.append({"origin": "native", "request_id": str(info.get("request_id") or ""),
+                              "request_mid": str(info["request_mid"]), "tool": clip(info.get("tool"), 200),
+                              "tool_input": clip(info.get("tool_input"), self.APPROVAL_INPUT),
+                              "tool_kind": clip(info.get("tool_kind"), 40),
+                              "tool_purpose": clip(info.get("tool_purpose"), self.APPROVAL_PURPOSE)})
+        for record in self.native("/api/approvals") or []:
+            if isinstance(record, dict) and record.get("slot") == slot and record.get("instance"):
+                items.append({"origin": "coordinator", "request_id": str(record.get("id") or ""),
+                              "instance": str(record["instance"]), "source": clip(record.get("source"), 40),
+                              "tool": clip(record.get("tool"), 200),
+                              "tool_input": clip(record.get("tool_input"), self.APPROVAL_INPUT),
+                              "tool_purpose": clip(record.get("tool_purpose"), self.APPROVAL_PURPOSE),
+                              "ts": record.get("ts")})
+        return items
+
+    def approvals(self, body):
+        _, parent = self.binding(body["run_id"])
+        return {"approvals": self._pending(parent["slot"])}
+
+    def approvals_answer(self, body):
+        """Answer one approval of this Session (D38 §4.2): it must still be pending on the Session's own slot, with the
+        same identity the caller was shown, so a replaced or another Session's request is never answered."""
+        _, parent = self.binding(body["run_id"])
+        slot, origin, decision = parent["slot"], body.get("origin"), body.get("decision")
+        require(decision in {"approve", "reject"}, "decision 只能是 approve 或 reject")
+        require(origin in {"native", "coordinator"}, "origin 只能是 native 或 coordinator")
+        key = "request_mid" if origin == "native" else "instance"
+        wanted = (origin, str(body.get("request_id") or ""), str(body.get(key) or ""))
+        require(any((i["origin"], i["request_id"], i.get(key, "")) == wanted for i in self._pending(slot)),
+                "该批准请求已不在等待中（已被答复、过期或不属于此会话）", 404, "approval_not_pending")
+        try:
+            if origin == "native":
+                self.native("/api/chat/slots/" + quote(slot, safe="") + "/approve",
+                            {"origin": "native", "request_id": wanted[1], "request_mid": wanted[2],
+                             "action": "approved" if decision == "approve" else "rejected"})
+            else:
+                query = urlencode({"origin": "coordinator", "slot": slot, "instance": wanted[2]})
+                self.native(f"/api/approvals/{quote(wanted[1], safe='')}/{decision}?{query}", {}, "POST")
+        except crew_api.GatewayError as exc:   # the platform reads a Worker 404 as "not supported": never pass one on
+            if exc.status == 404:
+                raise Error(409, "approval_not_pending", "该批准请求已不在等待中（已被答复或过期）") from None
+            raise Error(502, "native_error", "KiroCrew 未接受答复：" + str(exc).splitlines()[0][:200]) from None
+        return {"ok": True, "origin": origin, "request_id": wanted[1], "decision": decision}
+
     def native(self, path, body=None, method=None):
         return crew_api.request(path, body, method, port=self.port, home=self.home)
 
@@ -958,7 +1011,8 @@ def serve(worker, port=8928, host="127.0.0.1"):
                                "/crew-entry": worker.crew_entry, "/files": worker.files, "/observe": worker.observe,
                                "/archive/plan": worker.archive_summary, "/app": worker.app,
                                "/candidate": worker.candidate, "/verify/start": worker.verify_start,
-                               "/verify/status": worker.verify_status}
+                               "/verify/status": worker.verify_status, "/approvals": worker.approvals,
+                               "/approvals/answer": worker.approvals_answer}
                     require(self.path in methods and self.command == "POST", "接口不存在", 404, "not_found")
                     result = methods[self.path](body)
                 status = 200
