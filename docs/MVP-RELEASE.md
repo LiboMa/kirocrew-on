@@ -281,9 +281,9 @@ M4（共享与组织）、M5（仓库闭环）在 MVP 之后分别立项，各�
 | 1 | Request | ○ | Session 的 `request_id` 提供幂等登记；Request 表、来源客户端与仓库字段、与 Session 的关联未建 |
 | 2 | Pipeline 生成 | ◐ EC2 | 已有：Kiro Agent 规划（D26：意图、补全、1–7 个任务与 Agent 映射，追加到同一 Session）、`plan=match` 规则匹配、工作流文档（JSON / YAML / Markdown）解析与规范化。剩余：schema 2、规划阶段的只读源码检查 |
 | 3 | 门禁目录 | ◐ EC2 | D37 第 1 期（分支 `feat/m11-gates`，✅ EC2 2026-10-14，见 §14.13）：命名门禁 `native_completed`、`identity_match`、`handoff_present`、`outcome_valid`、`outcome_pass`、`diff_present`、`no_secrets`、`checks_pass`（平台运行 `verify`）、`review_bound`，逐条入库并在控制台与 MCP 展示；发布只推送已验证候选（`candidate_unchanged`）。剩余：`tests_fail_on_baseline`、`artifacts_locked`（第 3 期）、Feature 报告（第 2 期） |
-| 4 | 映射策略 | ◐ | 已有：Prompt / 工作流显式指定、K01 期间 OpenCode 由代码改派 Claude Code。剩余：个人 / Team 策略、能力校验后的通用回退链、映射来源记录 |
+| 4 | 映射策略 | ◐ | 已有：Prompt / 工作流显式指定；D38 第 1 期（分支 `feat/m11-gates`，见 §14.14）：工具层失败由 KiroCrew 协调者推荐换用的工具与模型（`switch_tool`），平台按执行环境核对并记录，规划时 Kiro 看到各工具是否可用；不内置回退链（原 OpenCode→Claude 的代码改派已去掉）。剩余：映射来源记录、个人 / Team 偏好 |
 | 5 | 准入 | ○ | 确认模式与按仓库范围的自动准入 |
-| 6 | 恢复阶梯 | ◐ EC2 | 已有：Worker / Gateway 不可用退避（M1）、协调者诊断（重试、退回上游返工、复审）与轮数上限。剩余：L0 瞬时重试、工具回退、重规划、预算、看门狗、条件满足后自动恢复 |
+| 6 | 恢复阶梯 | ◐ EC2 | 已有：Worker / Gateway 不可用退避（M1）、协调者诊断（重试、退回上游返工、复审、换工具（D38））与轮数上限。剩余：L0 瞬时重试、重规划、预算、看门狗、条件满足后自动恢复 |
 | 7 | 批准代理 | ○ | 现以 D14（仅平台派发的 spawn 原生 auto）运行；交互式批准请求在控制台 / MCP 中不可见 |
 | 8 | 候选与分支 | ◐ | D37 第 1 期：每个改代码的任务在 `octopus/<run>` 上留下候选提交（检出秘密时分支不动），审查绑定候选；D35 的发布推送已验证候选并创建 Draft PR / MR |
 | 9 | 远端分支推送 | ○ | 依赖仓库写凭据（GitHub Connector 写权限，M5 设计草案） |
@@ -318,6 +318,18 @@ M4（共享与组织）、M5（仓库闭环）在 MVP 之后分别立项，各�
 
 ✅ EC2（2026-10-12，`436233b`）：线上已有会话的旧修订按记录还原（`run-690b49c1…` 9 条：创建、续作、自动纠错；`run-63b33288…`
 v4 → v6 显示规划 Prompt 新增的行）；控制台「修订历史」在改动处保留 2 行上下文、其余折叠。离线：Python 322、控制台 91、旧版回归 92。
+
+### 14.14 换工具第 1 期（D38，M2）
+
+本机完成（分支 `feat/m11-gates`）：
+- Worker `/health` 的 `tools` 报告每个 Coding 工具能否启动（配置路径或 Gateway 的搜索路径；Kiro 另报登录），平台登记或「刷新模型」时保存。
+- 工具层失败（平台记录中不可用的工具不派发、`model_unavailable` / `model_transport_unsupported`、实际后端不符）记为
+  `failure_type: tool` 并进入诊断；协调者可给出 `switch_tool`。
+- 平台按诊断时的执行环境核对：工具可用、模型已发布、与失败的配置不同、审查与被审查代码的工具不同、会话未关闭换工具（`recovery.switch_tools: false`）。
+- 新 Attempt 的证据带 `switched_from`，控制台、MCP 状态与报告写明「由协调者从 X 换为 Y」；修订历史与变更记录（`task.tool_switched`）同步。
+- 规划提示列出工具可用性与已知限制（K01），不再由代码把 OpenCode 改派 Claude。
+
+待做：EC2 验收（见计划 `docs/superpowers/plans/2026-10-14-agent-fallback-phase1.md` 末尾）。第 2 期为批准代理（K04）。
 
 ### 14.13 候选提交与命名门禁（D37 第 1 期，M2）
 

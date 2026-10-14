@@ -273,6 +273,16 @@ CloudFront 只使用 us-east-1 的证书）：分发加上别名与证书（SNI�
   - 控制台在不允许脚本的 iframe 中显示，可下载 Markdown / HTML。
 - **权限**：与查看会话相同（`read`），看不到会话时 404。
 
+### 换工具（D38 第 1 期）
+
+- **工具是否可用**：Worker `/health` 的 `tools`（`available`、`reason`；Kiro 另有 `login`）。平台只在登记 Worker 或「执行环境 · Worker」
+  中「刷新模型」时保存它；**升级 Worker 后刷新一次**。未刷新时派发照旧，协调者的换工具推荐因「未报告可用性」被拒。
+- **何时换**：任务因工具本身失败（平台记录中不可用、模型未公布或不受支持、实际后端不符、原生错误在自动重试后再现）时，
+  自动纠错请 KiroCrew 协调者诊断；协调者可推荐 `switch_tool`，平台核对通过后改写该任务的工具 / 模型并重跑。
+  Kiro 登录过期仍等待管理员执行 `deploy.sh kiro-login`，不换工具。
+- **关闭**：启动或续作时 `recovery.switch_tools: false`（控制台自动纠错设置中的对应选项）。
+- **记录**：Attempt 证据的 `switched_from`；变更记录 `task.tool_switched`；修订摘要「自动纠错：「任务」由 X 换为 Y（原因）」。
+
 ### 发布到仓库（D35 第 2 期）
 
 会话页「发布到仓库」或 MCP `octopus_publish`：会话结束后，把成果推送到源仓库的分支（默认 `octopus/<run-id>`），并创建或沿用
