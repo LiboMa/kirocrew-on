@@ -283,6 +283,16 @@ CloudFront 只使用 us-east-1 的证书）：分发加上别名与证书（SNI�
 - **关闭**：启动或续作时 `recovery.switch_tools: false`（控制台自动纠错设置中的对应选项）。
 - **记录**：Attempt 证据的 `switched_from`；变更记录 `task.tool_switched`；修订摘要「自动纠错：「任务」由 X 换为 Y（原因）」。
 
+### 批准代理（D38 第 2 期）
+
+- **来源**：会话原生父 slot 中等待批准的工具请求（`GET /api/chat/slots` 的 `pending_approval_info`），以及 KiroCrew 状态级批准中属于该 slot 的记录
+  （`GET /api/approvals`）。平台派发的 spawn 在 `approval_mode = "auto"` 的边界上自动批准，不出现在这里；全局批准为 interactive 时，
+  原生父会话想运行的工具（K20）与 interactive 边界上的任务会出现。
+- **答复**：会话页「待批准」卡片，或 MCP `octopus_approve`（客户端须先征得用户同意）。只有会话创建者、Team owner、管理员可以答复；
+  答复前 Worker 重新核对该请求仍在等待且属于本会话。
+- **记录**：审计 `approval.answer`（来源、工具、命令前 200 字符、决定、答复人），会话变更记录 `approval.answered`。
+- **旧 Worker**：列表为空并标明不支持（`supported: false`），在原生 KiroCrew 中处理。
+
 ### 发布到仓库（D35 第 2 期）
 
 会话页「发布到仓库」或 MCP `octopus_publish`：会话结束后，把成果推送到源仓库的分支（默认 `octopus/<run-id>`），并创建或沿用

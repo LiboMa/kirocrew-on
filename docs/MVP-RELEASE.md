@@ -213,7 +213,7 @@ M4（共享与组织）、M5（仓库闭环）在 MVP 之后分别立项，各�
 | K01 | OpenCode 执行曾返回空结果或不完整交付，需原生续接补齐（M1 本地与 EC2 均复现；EC2 上 shell 写文件被 KiroCrew 工具门禁拒绝） | M2 |
 | K02 | 含 `/`、`:`、`[]` 的模型 ID 被原生 spawn 格式拒绝（影响 OpenCode `provider/model` 与部分 Codex 模型 ID） | M1 |
 | K03 | 原生浏览器登录覆盖整个 Gateway，不是单 Session 票据；平台撤权不会使其失效 | M1 / M4 |
-| K04 | 新版 Web 未代理原生权限批准；存在待批准项时停止可能挂起 | M2 |
+| K04 | 新版 Web 未代理原生权限批准；存在待批准项时停止可能挂起 | M2（D38 第 2 期：控制台与 MCP 代理批准，见 §14.14） |
 | K05 | Kiro 不报告实际模型；模型目录依赖 ACP 缓存，公布的模型不代表有配额 | M1 |
 | K06 | 父会话 note 上限约 4000 字符，Worker 截断到 3800；截断不能当作完整交接 | M2 |
 | K07 | 原生 continue 不读取 `reasoning_effort`；原生 spawn 没有 HTTP 幂等键 | M1 |
@@ -284,7 +284,7 @@ M4（共享与组织）、M5（仓库闭环）在 MVP 之后分别立项，各�
 | 4 | 映射策略 | ◐ | 已有：Prompt / 工作流显式指定；D38 第 1 期（分支 `feat/m11-gates`，见 §14.14）：工具层失败由 KiroCrew 协调者推荐换用的工具与模型（`switch_tool`），平台按执行环境核对并记录，规划时 Kiro 看到各工具是否可用；不内置回退链（原 OpenCode→Claude 的代码改派已去掉）。剩余：映射来源记录、个人 / Team 偏好 |
 | 5 | 准入 | ○ | 确认模式与按仓库范围的自动准入 |
 | 6 | 恢复阶梯 | ◐ EC2 | 已有：Worker / Gateway 不可用退避（M1）、协调者诊断（重试、退回上游返工、复审、换工具（D38））与轮数上限。剩余：L0 瞬时重试、重规划、预算、看门狗、条件满足后自动恢复 |
-| 7 | 批准代理 | ○ | 现以 D14（仅平台派发的 spawn 原生 auto）运行；交互式批准请求在控制台 / MCP 中不可见 |
+| 7 | 批准代理 | ◐ | D38 第 2 期（本机完成，见 §14.14）：会话父 slot 的原生工具请求与状态级批准在控制台「待批准」卡片与 MCP（`octopus_approvals`、`octopus_approve`，答复前须用户同意）中可见并可答复；创建者、Team owner、管理员可答复，写审计。剩余：EC2 验收、CLI |
 | 8 | 候选与分支 | ◐ | D37 第 1 期：每个改代码的任务在 `octopus/<run>` 上留下候选提交（检出秘密时分支不动），审查绑定候选；D35 的发布推送已验证候选并创建 Draft PR / MR |
 | 9 | 远端分支推送 | ○ | 依赖仓库写凭据（GitHub Connector 写权限，M5 设计草案） |
 | 10 | Feature 报告 | ✅ EC2 | D37 第 2 期（2026-10-14，2aa3941，见 §14.13）：Markdown / HTML 报告（需求与计划、门禁、候选、检查、审查、纠错、PR），控制台「报告」、`GET /v1/runs/<id>/report`、MCP `octopus_report` |
@@ -343,7 +343,14 @@ v4 → v6 显示规划 Prompt 新增的行）；控制台「修订历史」在�
 - 最终审查（opus）：1 项重要（换用后的实现与其后的审查同一工具；模板中未标 kind 的审查）与 5 项升级为重要的问题已修复
   （重试后仍标注换用来源、协调者提示如实写明原生错误重试后再现、过期能力的提示、未核实的后端仍等待用户、控制台纠错记录）。
 
-第 2 期为批准代理（K04），已按 EC2 实测修订设计 §4.1。
+第 2 期「批准代理」（K04）本机完成：
+- Worker 只读本会话父 slot 的两类待批准项：会话内工具请求（`pending_approval_info`）与状态级批准（`/api/approvals` 中属于该 slot 的记录）。
+  答复前重新核对标识（`request_mid` / `instance`），他人会话、已答复或已被替换的请求一律 `approval_not_pending`。
+- 平台 `GET /v1/runs/<id>/approvals`、`POST /v1/runs/<id>/approvals/answer`：创建者、Team owner、管理员可答复（与发布相同），
+  审计 `approval.answer`，变更记录 `approval.answered`；旧 Worker 说明不支持；会话为 `waiting_approval` 时 `attention` 写明。
+- 控制台「待批准」卡片（确认前展开完整内容）；MCP `octopus_approvals` / `octopus_approve`（工具说明与 Skill 要求先得到用户同意）。
+
+待做：EC2 验收（见计划 `docs/superpowers/plans/2026-10-14-approvals-phase2.md` 末尾）。
 
 ### 14.13 候选提交与命名门禁（D37 第 1 期，M2）
 
