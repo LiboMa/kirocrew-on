@@ -199,6 +199,139 @@ class Engine:
         else:
             self.update(run["id"], "blocked", message)
 
+    @staticmethod
+    def _last_candidate(db, rid, ordinal):
+        """The candidate of the last accepted code task before ``ordinal`` (D37 §3): the next candidate's parent, and
+        what a review is bound to."""
+        for row in db.execute("SELECT a.evidence FROM tasks t JOIN attempts a ON a.id=t.current_attempt WHERE t.run_id=? "
+                              "AND t.ordinal<? AND t.status='accepted' ORDER BY t.ordinal DESC", (rid, ordinal)):
+            candidate = json.loads(row["evidence"] or "{}").get("candidate")
+            if candidate and candidate.get("sha"):
+                return candidate
+        return None
+
+    def _more_gates(self, run, config, task, attempt, spec, evidence, report, latest):
+        """diff_present, no_secrets and the start of checks_pass for a code task; review_bound for a review (D37 §4).
+        (error, failure_type, checking): ``checking`` when the verify commands were started."""
+        records, kind = evidence["gates"], spec.get("kind")
+
+        def fail(name, detail):
+            records.append(gates.record(name, "fail", detail))
+            evidence["gate"] = name
+            return detail, "gate", False
+        if kind == "design":
+            return None, None, False
+        if kind == "review":
+            if latest is None:
+                records.append(gates.record("review_bound", "skip", "此前没有候选"))
+                return None, None, False
+            try:
+                check = self.request(config, "/candidate", {"run_id": run["id"], "attempt_id": attempt["id"], "mode": "check",
+                                                            "expected": latest["sha"]})
+            except Error as exc:
+                if exc.status != 404:
+                    raise
+                records.append(gates.record("review_bound", "skip", gates.OLD_WORKER))
+                return None, None, False
+            sha, reviewed = latest["sha"], str((report or {}).get("reviewed_commit") or "")
+            if check["changed_files"]:
+                return fail("review_bound", "审查不应修改代码，修改应交给实现任务：" + "、".join(check["changed_files"][:10]))
+            if check["head"] != sha:
+                return fail("review_bound", f"审查期间会话分支被改动（HEAD 不是候选 {sha[:7]}）")
+            if not (len(reviewed) >= 7 and sha.startswith(reviewed)):
+                return fail("review_bound", f"审查报告的 reviewed_commit（{reviewed or '缺失'}）与候选 {sha[:7]} 不符")
+            records.append(gates.record("review_bound", "pass", sha[:12]))
+            evidence["reviewed"] = sha
+            return None, None, False
+        message = f"KiroCrew ON：{spec.get('name') or task['id']}（{run['id']}/{task['id']} 第 {attempt['number']} 次）"
+        try:
+            candidate = self.request(config, "/candidate", {"run_id": run["id"], "attempt_id": attempt["id"], "mode": "commit",
+                                                            "message": message, **({"parent": latest["sha"]} if latest else {})},
+                                     timeout=180)
+        except Error as exc:
+            if exc.status != 404:
+                raise
+            records.extend(gates.record(name, "skip", gates.OLD_WORKER) for name in ("diff_present", "no_secrets", "checks_pass"))
+            return None, None, False
+        evidence["candidate"] = {key: candidate.get(key) for key in
+                                 ("sha", "parent", "changed", "files", "insertions", "deletions", "rewritten")}
+        if not candidate["changed"]:
+            if kind in ("implement", "deliver"):
+                return fail("diff_present", "任务没有改动任何文件")
+            records.append(gates.record("diff_present", "skip", "没有改动（此类任务不要求）"))
+        else:
+            records.append(gates.record("diff_present", "pass", f"{candidate['files']} 个文件"))
+        if candidate["secrets"]:
+            return fail("no_secrets", "候选中有疑似凭证或 .env 文件（会话分支未移动）：" + "、".join(candidate["secrets"][:20]))
+        records.append(gates.record("no_secrets", "pass"))
+        commands = spec.get("verify") or []
+        if not commands:
+            records.append(gates.record("checks_pass", "skip", "任务没有检查命令"))
+            return None, None, False
+        try:
+            job = self.request(config, "/verify/start", {"run_id": run["id"], "attempt_id": attempt["id"],
+                                                         "commands": commands})["job"]
+        except Error as exc:
+            if exc.status != 404:
+                raise
+            records.append(gates.record("checks_pass", "skip", gates.OLD_WORKER))
+            return None, None, False
+        evidence["checks"] = {"job": job, "started": time.time(), "commands": len(commands)}
+        return None, None, True
+
+    def _poll_checks(self, run, config, task, attempt, evidence):
+        """The verify commands of the current Attempt (D37 §5): still running, or done and the Attempt judged."""
+        rid, checks = run["id"], evidence["checks"]
+        try:
+            status = self.request(config, "/verify/status", {"job": checks["job"]})
+        except Error as exc:
+            if exc.code != "check_unknown":
+                raise
+            if not checks.get("restarted"):   # the Worker restarted: once more, then a failure
+                job = self.request(config, "/verify/start", {"run_id": rid, "attempt_id": attempt["id"],
+                                                             "commands": json.loads(attempt["spec"]).get("verify", [])})["job"]
+                evidence["checks"] = {**checks, "job": job, "restarted": True}
+                with self.db.transaction() as db:
+                    journal.change(db, "attempts", attempt["id"], journal.WORKER, "attempt.checking", "检查命令中断，重新运行",
+                                   event={"id": attempt["id"], "task_id": task["id"]}, evidence=dumps(evidence), updated=time.time())
+                return
+            status = {"state": "done", "passed": False, "failed": None, "results": [], "lost": True}
+        if status["state"] != "done":
+            return
+        evidence["check_results"] = status["results"]
+        failed = status["results"][status["failed"]] if status.get("failed") is not None else None
+        if status["passed"]:
+            evidence["gates"].append(gates.record("checks_pass", "pass", f"{len(status['results'])} 条命令"))
+            error = None
+        else:
+            if status.get("lost"):
+                error = "检查命令中断（Worker 重启）"
+            elif failed is None:
+                error = "检查命令已停止"
+            elif failed.get("timeout"):
+                error = f"检查命令超时：{failed['command']}"
+            else:
+                error = f"检查命令失败：{failed['command']}（退出码 {failed['exit']}）"
+            evidence["gates"].append(gates.record("checks_pass", "fail", error))
+            evidence.update(failure_type="gate", gate="checks_pass")
+        self._settle(run, task, attempt, evidence, error)
+
+    def _settle(self, run, task, attempt, evidence, error):
+        """Accept or block an Attempt whose checks ended, like advance does for any other; recovery follows a block."""
+        rid, state = run["id"], "blocked" if error else "accepted"
+        with self.db.transaction() as db:
+            current = db.execute("SELECT * FROM tasks WHERE run_id=? AND id=?", (rid, task["id"])).fetchone()
+            active = db.execute("SELECT desired FROM runs WHERE id=?", (rid,)).fetchone()[0] == "active"
+            journal.change(db, "attempts", attempt["id"], journal.WORKER, "attempt.state",
+                           event={"id": attempt["id"], "task_id": task["id"], "status": state, "error": error,
+                                  "evidence": evidence},
+                           status=state, evidence=dumps(evidence), error=error, updated=time.time())
+            if current["current_attempt"] == attempt["id"] and active:
+                journal.change(db, "tasks", (rid, task["id"]), journal.WORKER, "task.state", status=state)
+        self.update(rid, "ready" if state == "accepted" else state, error, actor=journal.WORKER)
+        if state == "blocked":
+            recovery.automatic(self.db, rid, attempt["id"])
+
     def advance(self, run):
         rid, config = run["id"], json.loads(run["worker_config"])
         if run["desired"] != "active":
@@ -262,8 +395,10 @@ class Engine:
                 "SELECT t.id,a.result,a.evidence FROM tasks t JOIN attempts a ON a.id=t.current_attempt "
                 "WHERE t.run_id=? AND t.ordinal<? AND t.status='accepted' ORDER BY t.ordinal", (rid, task["ordinal"]))]
             repair = recovery.feedback(db, run, attempt)
+            latest = self._last_candidate(db, rid, task["ordinal"])
         spec = json.loads(attempt["spec"])
         snapshot = json.loads(run["snapshot"])
+        gated = snapshot.get("execution_contract", 1) >= 3 and task["id"] != planning.PLAN_ID   # D37
         if attempt["status"] == "dispatching":
             # The spec a Worker validates keeps its six fields (a Worker not yet upgraded runs it as before); the task
             # contract and the requirement KiroCrew completed travel beside it (D34 §6.2).
@@ -279,6 +414,8 @@ class Engine:
                    if plan.get("applied") else {}),
                 **({"quality": True} if snapshot.get("execution_contract", 1) >= 2 else {}),
                 **({"repair": repair} if repair else {}),
+                **({"candidate": {"sha": latest["sha"], "parent": latest["parent"]}}
+                   if gated and spec.get("kind") == "review" and latest else {}),
                 **({"design": snapshot["design"]} if snapshot.get("purpose") == "workflow_design" else {})})
             state = result["status"]
             with self.db.transaction() as db:
@@ -291,6 +428,9 @@ class Engine:
                                     (rid, task["id"], attempt["id"], rid), journal.WORKER, "task.state", status=state)
             self.update(rid, state, result.get("error"), actor=journal.WORKER)
             return
+        prior = json.loads(attempt["evidence"] or "{}")
+        if prior.get("checks") and "check_results" not in prior:
+            return self._poll_checks(run, config, task, attempt, prior)
         result = self.request(config, "/inspect", {"run_id": rid, "attempt_id": attempt["id"]})
         if result.get("status") == "dispatch_unknown":
             self.update(rid, "dispatch_unknown", result.get("error"))
@@ -327,6 +467,14 @@ class Engine:
             # The five checks every Attempt passes, named and recorded (D37 §4).
             error, failure_type, evidence["gates"] = gates.basic(native, result, spec, evidence, report, invalid, lost,
                                                                  missing, blocked_line)
+            if not error and gated:
+                error, failure_type, checking = self._more_gates(run, config, task, attempt, spec, evidence, report, latest)
+                if checking:   # the verify commands run; the Attempt is judged when they end
+                    with self.db.transaction() as db:
+                        journal.change(db, "attempts", attempt["id"], journal.WORKER, "attempt.checking",
+                                       event={"id": attempt["id"], "task_id": task["id"], "commands": evidence["checks"]["commands"]},
+                                       status="running", evidence=dumps(evidence), result=native.get("result"), updated=time.time())
+                    return self.update(rid, "running", actor=journal.WORKER)
             if lost and not error:
                 evidence["result_missing"] = True
             if error:

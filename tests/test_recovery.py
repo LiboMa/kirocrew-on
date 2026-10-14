@@ -11,6 +11,7 @@ from octopus.db import Database, dumps
 from octopus.domain import Service
 from octopus.engine import Engine
 from octopus.security import Error, authenticate, create_user, issue_token
+from tests.old_worker import as_old_worker
 
 
 SPEC = [
@@ -64,6 +65,7 @@ class RecoveryTests(unittest.TestCase):
                 raise Error(503, "worker_unavailable", "回执丢失")
             return {"status": "running", "native_id": hashlib.sha256(aid.encode()).hexdigest()[:8],
                     "context_hash": hashlib.sha256(dumps(body).encode()).hexdigest()}
+        as_old_worker(path)
         self.assertEqual(path, "/inspect")
         record = self.bodies[aid]
         result = {"native": {"done": True, "result": "已检查真实测试与交接"},

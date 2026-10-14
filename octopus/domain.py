@@ -759,7 +759,7 @@ class Service:
                             "selection": {k: v for k, v in resolved["selection"].items() if k != "steps"},
                             "match_mode": resolved["mode"], "match_reason": resolved["reason"]}
                 snapshot.update(recovery=policy(body.get("recovery")) if design is None else policy({"enabled": False}),
-                                execution_contract=2 if design is None else 1)
+                                execution_contract=3 if design is None else 1)
                 if bound:
                     snapshot["credentials"] = {"source": bound}
                 if design is not None:
@@ -1371,7 +1371,7 @@ class Service:
                         old = snapshot.get("recovery")
                         snapshot["recovery"] = policy(body["recovery"])
                         if snapshot["recovery"]["enabled"]:
-                            snapshot["execution_contract"] = 2
+                            snapshot["execution_contract"] = max(snapshot.get("execution_contract", 1), 2)
                         journal.change(db, "runs", rid, who, "run.settings", event={"recovery": [old, snapshot["recovery"]]},
                                        snapshot=dumps(snapshot))
                     later = {row["id"] for row in ordered[index + 1:]}
@@ -1407,8 +1407,8 @@ class Service:
                     require(attempt is not None, "尚无可诊断的失败执行；请补充输入并重跑", 409, "not_attempted")
                     snapshot = json.loads(run["snapshot"])
                     old = snapshot.get("execution_contract", 1)
-                    snapshot["execution_contract"] = 2
-                    journal.change(db, "runs", rid, who, "run.settings", event={"execution_contract": [old, 2]},
+                    snapshot["execution_contract"] = max(old, 2)
+                    journal.change(db, "runs", rid, who, "run.settings", event={"execution_contract": [old, snapshot["execution_contract"]]},
                                    snapshot=dumps(snapshot))
                     schedule(db, self.db, run, task, attempt, manual=True, actor=who)
                 elif action == "assign-worker":

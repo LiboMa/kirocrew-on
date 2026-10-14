@@ -12,6 +12,7 @@ from octopus.engine import Engine
 from octopus.security import Error
 from octopus.worker import Worker
 from tests.test_teams_workers import TeamsWorkersCase
+from tests.old_worker import as_old_worker
 
 CANCELLED = {"done": True, "result": "", "error": "cancelled (stop_reason=cancelled): turn cancelled by the runtime — partial result preserved"}
 
@@ -23,6 +24,7 @@ class RuntimeCase(TeamsWorkersCase):
         self.outcome, self.after_inspect = dumps({"decision": "pass", "summary": "通过"}), None
 
     def worker(self, config, path, body, **kwargs):
+        as_old_worker(path)
         self.calls.append(path)
         if path == "/prepare":
             return {"native_parent": "octopus-" + body["run_id"], "workspace": "/w/" + body["run_id"]}

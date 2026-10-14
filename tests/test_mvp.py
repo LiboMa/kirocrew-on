@@ -24,6 +24,7 @@ from octopus import designs
 from octopus.worker import write
 from octopus.schema import openapi
 import api as crew_api
+from tests.old_worker import as_old_worker
 
 
 SPEC = [{"id": "code", "name": "编码", "tool": "claude", "model": "auto", "effort": "", "prompt": "实现加法并运行真实测试"},
@@ -471,6 +472,7 @@ class MVPTests(unittest.TestCase):
             self.service.operate(self.a, run["id"], "continue", {**payload, "task_id": "code"})
 
     def fake_worker(self, path, body):
+        as_old_worker(path)
         if path == "/prepare":
             return {"native_parent": "native-" + body["run_id"], "workspace": "/same/workspace"}
         if path == "/dispatch":

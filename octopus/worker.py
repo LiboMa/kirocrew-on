@@ -606,6 +606,14 @@ class Worker:
                 from .recovery import quality_instructions
                 context["quality_contract"] = 2
                 extra_prompt += quality_instructions(folder, contract)
+            if body.get("candidate"):   # a review bound to the candidate it reviews (D37 §6)
+                target = body["candidate"]
+                require(isinstance(target, dict) and all(isinstance(target.get(k), str) and workspace.SHA.fullmatch(target[k])
+                                                         for k in ("sha", "parent")), "审查对象须为完整的提交 ID")
+                context["candidate"] = {"sha": target["sha"], "parent": target["parent"]}
+                extra_prompt += (f"\n\n## 审查对象\n审查提交 {target['sha']}（本轮改动：git diff {target['parent']} "
+                                 f"{target['sha']}）。审查不修改代码，修改交给实现任务；在 outcome.json 中写 "
+                                 f"\"reviewed_commit\": \"{target['sha']}\"。")
             if body.get("repair"):
                 context["repair"] = body["repair"]
                 extra_prompt += ("\n\n## 本轮协调者纠错与复审要求\n" + dumps(body["repair"]) +

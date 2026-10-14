@@ -7,6 +7,7 @@ from octopus.db import dumps
 from octopus.engine import Engine
 from octopus.security import Error, authenticate, create_user, issue_token
 from tests.test_access import PASSWORD, AccessCase
+from tests.old_worker import as_old_worker
 
 
 class TeamsWorkersCase(AccessCase):
@@ -280,6 +281,7 @@ class DispatchRecheckTests(TeamsWorkersCase):
         self.calls, self.done, self.broken = [], False, False
 
     def worker(self, config, path, body, **kwargs):
+        as_old_worker(path)
         self.calls.append(path)
         if path == "/prepare":
             return {"native_parent": "octopus-" + body["run_id"], "workspace": "/w/" + body["run_id"]}

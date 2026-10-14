@@ -6,6 +6,7 @@ import time
 EXPIRED = re.compile(r"session (?:has )?expired|not logged in", re.I)
 BLOCKED = "工作者未完成任务或报告 BLOCKED"
 EFFORT = re.compile(r"\[(low|medium|high|xhigh|max)\]$")
+OLD_WORKER = "Worker 版本不支持"
 
 
 def record(name, status, detail=None):

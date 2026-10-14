@@ -13,6 +13,7 @@ from octopus.security import Error
 from octopus.worker import Worker
 from octopus.workflow_import import import_workflow
 from tests.test_teams_workers import TeamsWorkersCase
+from tests.old_worker import as_old_worker
 
 LEGACY = {"id", "name", "tool", "model", "effort", "prompt"}
 FLOW = [{"id": "code", "name": "实现", "tool": "claude", "prompt": "实现", "kind": "implement",
@@ -69,6 +70,7 @@ class DispatchContractTests(TeamsWorkersCase):
             db.execute("UPDATE runs SET snapshot=? WHERE id=?", (dumps(snapshot), rid))
         sent = []
         def worker(config, path, body, **kwargs):
+            as_old_worker(path)
             if path == "/prepare":
                 return {"native_parent": "octopus-x", "workspace": "/w/x"}
             if path == "/dispatch":
