@@ -64,6 +64,7 @@ class ReportTests(unittest.TestCase):
     def test_the_html_report_is_self_contained(self):
         page = report.html(view())
         self.assertIn("<style>", page)
+        self.assertIn('<base target="_blank">', page)   # the PR link leaves the console's sandboxed frame
         for absent in ("<script", "src=", "http://"):
             self.assertNotIn(absent, page)
         self.assertEqual(re.findall(r'href="([^"]*)"', page), ["https://github.com/o/r/pull/3"])

@@ -261,6 +261,18 @@ CloudFront 只使用 us-east-1 的证书）：分发加上别名与证书（SNI�
   请续作会话。
 - **兼容**：已有会话与旧 Worker（对新接口回答 404）行为不变：新门禁记为跳过。
 
+### Feature 报告（D37 第 2 期）
+
+会话页「报告」、`GET /v1/runs/<id>/report?format=md|html` 或 MCP `octopus_report`：
+- **内容**：需求与计划（任务表）、每个任务最终一次 Attempt（请求与实际的工具 / 模型、结论、门禁表、候选、检查命令的退出码与耗时、
+  验收项与建议、审查绑定）、纠错记录、已验证候选与发布的分支 / PR / MR。
+- **大小**：其余 Attempt 只计次数；结论最多 2000 字符，门禁详情与命令只取首行；检查命令的输出不进入报告。
+- **安全**：
+  - 会话中的所有文字都转义。HTML 不含脚本与外部资源（`Content-Security-Policy: default-src 'none'; style-src 'unsafe-inline'`），
+    只有 https 的 PR 链接是链接。
+  - 控制台在不允许脚本的 iframe 中显示，可下载 Markdown / HTML。
+- **权限**：与查看会话相同（`read`），看不到会话时 404。
+
 ### 发布到仓库（D35 第 2 期）
 
 会话页「发布到仓库」或 MCP `octopus_publish`：会话结束后，把成果推送到源仓库的分支（默认 `octopus/<run-id>`），并创建或沿用

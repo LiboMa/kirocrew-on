@@ -49,6 +49,17 @@ class Client:
         except urllib.error.HTTPError as exc:
             raise http_error(exc) from None
 
+    def text(self, method, path, timeout=40):
+        """A text answer (a Session's Markdown report), read like request: a /v1/ path with the token."""
+        if not path.startswith("/v1/") or path.startswith("//"):
+            raise ValueError("Use a /v1/ API path")
+        req = urllib.request.Request(self.url + path, method=method, headers={"Authorization": "Bearer " + self.token})
+        try:
+            with urllib.request.urlopen(req, timeout=timeout) as response:
+                return response.read().decode("utf-8", errors="replace")
+        except urllib.error.HTTPError as exc:
+            raise http_error(exc) from None
+
     def download(self, path, file, timeout=300):
         """Write a signed download (``/archive/<ticket>/…``) to ``file``; returns the bytes written."""
         if not path.startswith("/archive/"):

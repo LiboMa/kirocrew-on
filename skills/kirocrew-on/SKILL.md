@@ -71,6 +71,9 @@ KiroCrew ON 在远端执行开发任务：KiroCrew 的 Kiro Agent 先识别意�
   - 审查任务须在 `outcome.json` 写 `reviewed_commit`，且不修改代码（`review_bound`）。
   - `session.verified` 是将被发布的已验证候选。
 
+- `octopus_report`（传 `run_id`）返回会话的 Feature 报告（Markdown）：需求与计划、各任务的工具与结论、门禁、候选、检查命令、
+  审查绑定、纠错记录与发布的 PR / MR。用户要「报告」「总结这个会话」或交付说明时，把它（或其中要点）交给用户。
+
 常见状态：
 
 | 状态 | 含义与处理 |

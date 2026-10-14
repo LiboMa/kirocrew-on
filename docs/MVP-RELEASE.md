@@ -287,7 +287,7 @@ M4（共享与组织）、M5（仓库闭环）在 MVP 之后分别立项，各�
 | 7 | 批准代理 | ○ | 现以 D14（仅平台派发的 spawn 原生 auto）运行；交互式批准请求在控制台 / MCP 中不可见 |
 | 8 | 候选与分支 | ◐ | D37 第 1 期：每个改代码的任务在 `octopus/<run>` 上留下候选提交（检出秘密时分支不动），审查绑定候选；D35 的发布推送已验证候选并创建 Draft PR / MR |
 | 9 | 远端分支推送 | ○ | 依赖仓库写凭据（GitHub Connector 写权限，M5 设计草案） |
-| 10 | Feature 报告 | ○ | |
+| 10 | Feature 报告 | ◐ | D37 第 2 期（分支 `feat/m11-gates`，EC2 待验收）：Markdown / HTML 报告（需求与计划、门禁、候选、检查、审查、纠错、PR），控制台「报告」、`GET /v1/runs/<id>/report`、MCP `octopus_report` |
 | 11 | Claude Code 基础 Skill | ✅ EC2 | D27：同一份 Skill 也安装到 Kiro CLI |
 
 §6 验收条件均未勾选：其中 1、2、4 项依赖 Request、门禁与回退链，3、6 项依赖候选 commit 与分支推送。

@@ -23,6 +23,7 @@ import { CredentialControl } from "@/features/sessions/CredentialControl";
 import { PublishControl } from "@/features/sessions/PublishControl";
 import { RevisionsPanel } from "@/features/sessions/RevisionsPanel";
 import { RecoveryPanel } from "@/features/sessions/RecoveryPanel";
+import { ReportButton } from "@/features/sessions/ReportDialog";
 import { TaskList } from "@/features/sessions/TaskList";
 import { useSessionActions } from "@/features/sessions/useSessionActions";
 import { bindingLabel } from "@/lib/credentials";
@@ -118,6 +119,7 @@ export function SessionView({ id }: { id: string }) {
             title={!run.worker_id || !run.workspace ? "源码尚未准备，暂无可下载的内容" : "下载源码（含 .git，不含依赖目录与 .env）"}>
             <FolderDown /> 下载源码
           </Button>
+          <ReportButton run={run} />
           {app?.openable && (
             <Button size="sm" onClick={actions.openApp} id="run-open-app">
               <MonitorPlay /> 打开远程预览

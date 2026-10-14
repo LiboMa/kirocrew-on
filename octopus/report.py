@@ -148,7 +148,7 @@ def markdown(view, now=None):
 def html(view, now=None):
     m, e = model(view, now), lambda text: markup.escape(str(text if text is not None else ""), quote=True)
     out = ["<!doctype html><html lang=\"zh\"><head><meta charset=\"utf-8\">",
-           f"<title>{e(m['title'])} · KiroCrew ON 报告</title><style>{STYLE}</style></head><body>",
+           f"<title>{e(m['title'])} · KiroCrew ON 报告</title><base target=\"_blank\"><style>{STYLE}</style></head><body>",
            f"<h1>{e(m['title'])}</h1>",
            f"<p class=\"meta\">会话 <code>{e(m['id'])}</code> · 状态 {e(m['status'])} · 创建者 {e(m['creator'])} · 生成 {e(m['generated'])}</p>",
            "<h2>需求</h2>", f"<pre>{e(m['request']['input'] or '—')}</pre>"]

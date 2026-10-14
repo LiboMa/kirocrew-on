@@ -58,6 +58,10 @@ TOOLS = [
      "inputSchema": object_schema({"run_id": STRING, "from": {"type": "integer", "minimum": 1},
                                    "to": {"type": "integer", "minimum": 1}}, ["run_id"]),
      "annotations": {"readOnlyHint": True}},
+    {"name": "octopus_report",
+     "description": "Session 的 Feature 报告（Markdown）：需求与计划、每个任务最终一次执行的工具与结论、门禁（通过 / 失败 / 跳过）、"
+                    "候选提交、检查命令结果、审查绑定、纠错记录与发布的 PR / MR。用户要「报告」「总结这个会话」或交付说明时用它。",
+     "inputSchema": object_schema({"run_id": STRING}, ["run_id"]), "annotations": {"readOnlyHint": True}},
     {"name": "octopus_parse_workflow",
      "description": "校验并规范化一个由 Agent 预先生成的工作流（JSON / YAML / 含一个代码块的 Markdown；新版导出或旧版 schema 1），返回 name、steps 与规范化说明；仅预览，不执行。",
      "inputSchema": object_schema({"content": STRING, "format": {"type": "string", "enum": ["json", "yaml", "markdown"]}},
@@ -384,6 +388,8 @@ def call(client, name, args):
         return {**result, "url": client.url + result["url"]}
     if name == "octopus_parse_workflow":
         return client.request("POST", "/v1/workflows/parse", args)
+    if name == "octopus_report":
+        return {"markdown": client.text("GET", "/v1/runs/" + quote(args["run_id"], safe="") + "/report?format=md")}
     if name == "octopus_revisions":
         base = "/v1/runs/" + args["run_id"] + "/revisions"
         if "from" not in args and "to" not in args:

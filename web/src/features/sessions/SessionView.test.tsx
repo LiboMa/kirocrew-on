@@ -68,6 +68,25 @@ describe("session detail", () => {
     expect(screen.getByRole("list", { name: "建议" })).toHaveTextContent("补 CHANGELOG");
   });
 
+  test("the report opens in a sandbox without scripts and downloads as Markdown", async () => {
+    const formats: string[] = [];
+    const create = vi.fn(() => "blob:report");
+    Object.defineProperty(URL, "createObjectURL", { value: create, configurable: true });
+    Object.defineProperty(URL, "revokeObjectURL", { value: vi.fn(), configurable: true });
+    open(blocked, { "GET /runs/run-a/report": (_body: unknown, url: URL) => {
+      const format = url.searchParams.get("format") ?? "";
+      formats.push(format);
+      return new Response(format === "html" ? "<h1>修复登录失败</h1>" : "# 修复登录失败\n", { status: 200 });
+    } });
+    await userEvent.click(await screen.findByRole("button", { name: /报告/ }));
+    const frame = await screen.findByTitle("会话报告");
+    expect(frame).toHaveAttribute("sandbox", "allow-popups allow-popups-to-escape-sandbox");
+    await waitFor(() => expect(frame.getAttribute("srcdoc")).toContain("<h1>修复登录失败</h1>"));
+    await userEvent.click(screen.getByRole("button", { name: "下载 Markdown" }));
+    await waitFor(() => expect(create).toHaveBeenCalledTimes(1));
+    expect(formats).toEqual(["html", "md"]);
+  });
+
   test("an attempt lists its gates and the candidate it left (D37)", async () => {
     const evidence = { ...blocked.tasks[0].attempts![0].evidence,
       candidate: { sha: "abc1234def5678abc1234def5678abc1234def56", parent: "b".repeat(40), changed: true, files: 2, insertions: 12, deletions: 3 },
