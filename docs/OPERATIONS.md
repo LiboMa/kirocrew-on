@@ -266,7 +266,8 @@ Draft PR（GitHub）/ Draft MR（GitLab）。
 - **访问**：浏览器 → CloudFront（源站密钥）→ 平台主机 nginx `:8929` → `auth_request` 问 API `/v1/preview-auth`（校验预览域
   Cookie、复核查看权限、记录最近访问）→ 平台主机回环端口，或经私网 TLS 到 Worker 主机 nginx `:8945` → 回环端口。
   - Worker 主机端口只接受平台安全组，并校验由该边界 Worker Token 派生的请求头（`HMAC-SHA256(token, "kirocrew-preview")`）。
-  - 打开链接 10 分钟内有效、只能用一次。打开时先清除预览域的旧 Cookie 与存储，再写入 8 小时的 `__Host-kirocrew_preview`。
+  - 打开链接 10 分钟内有效、只能用一次，写入 8 小时的 `__Host-kirocrew_preview`。共用的预览域上打开时先清除旧 Cookie 与存储；
+    会话自己的预览域（见下「会话独立预览域名」）不清除，应用保留自己的存储。
   - `/v1/preview-auth` 与 `/_kirocrew/*` 只接受本机 nginx 的请求。
 - **部署**（一次）：
   1. `deploy.sh up`：新增预览分发；端口取现有安全组规则的最后一个，规则本身不变。
@@ -275,16 +276,28 @@ Draft PR（GitHub）/ Draft MR（GitLab）。
   - 安装脚本渲染 nginx 配置（`nginx -t` 不通过时移除并退出），平台 `platform.toml` 写入 `preview_url`，Worker 主机边界配置写入
     `preview_tls_port` / `preview_tls_name`。
   - 首次写入边界配置会让该主机的 Gateway 重启一次（指纹包含边界配置），部署前确认没有进行中的会话。
-- **同源防护**：所有会话的应用共用预览域。
+- **会话独立预览域名**（D36 第 3 期，`stack.env` 的 `PREVIEW_SESSION_DOMAIN`，现为 `preview.tinyboat.blog`）：
+  - 每个会话的预览在 `https://<run-id>.preview.tinyboat.blog/`：同一浏览器可同时打开多个会话的预览，各应用的 Cookie、存储、
+    缓存互不可见。控制台与 MCP 取得的打开链接直接指向该会话的域名。
+  - `deploy.sh up` 在 Route 53 找到托管区，在 us-east-1 找到 `*.preview.tinyboat.blog` 通配证书；没有时申请，把 DNS 验证记录写入
+    托管区并等待签发（几分钟）。随后为预览分发加通配别名与 A / AAAA 别名记录。`push` 把 `preview_domain` 写入 `platform.toml`。
+  - CloudFront 把访问的主机名交给源站，nginx 以 `X-Preview-Host` 转给 API：主机名指明会话，Cookie 与打开链接必须属于同一会话，
+    其他会话的 Cookie 或链接得 403。预览分发的 cloudfront.net 域名保留为共用预览域。
+  - 应用为上级域设置的 Cookie（`Domain=tinyboat.blog` 等）由 nginx 改回该会话的主机名。**剩余风险**：应用在页面里用 JavaScript
+    设置的上级域 Cookie 不经过 nginx，会被浏览器发给 `tinyboat.blog` 的其他站点（如 `keycloak.tinyboat.blog`）。控制台的 Token
+    存在 `sessionStorage`，不受影响。负责人 2026-10-14 选择沿用 `tinyboat.blog`；改用专用域名只需改 `PREVIEW_SESSION_DOMAIN`
+    并重新 `up`、`push`。
+- **同源防护**（共用的 cloudfront.net 预览域：所有会话的应用同源）：
   - nginx 拒绝 Service Worker 脚本请求（`Service-Worker` 头），所以应用无法注册 Service Worker。
   - 代理的响应一律为 `Cache-Control: no-cache`，并忽略应用发出的 `X-Accel-*`。
   - 打开链接时清除预览域的缓存、Cookie、存储与已打开的页面（`Clear-Site-Data`）。
   - 本机接口要求 nginx 带上由源站密钥派生的 `X-Preview-Gate`，因此平台主机上的其他进程（如个人空间的 Agent）拿不到上游
     与 Worker 主机的校验头。
   - Worker 重启后，旧预览的记录在该执行环境下一次启动预览时，以及每分钟回收时停止（按 Worker 进程实例判断）。
-  - 剩余风险：浏览器中仍开着的旧预览页面，在打开另一个会话的预览后仍能以新 Cookie 访问预览域。只打开可信会话的预览，或预览
-    完关闭页面；按会话分开的预览域（`<会话>.preview.<域名>`，需要泛域名证书）可以彻底消除，待定。
-- **限制**：第一版不限 CPU / 内存；同一浏览器同时只预览一个会话；`/_kirocrew/` 路径保留给平台。
+  - 剩余风险：在共用预览域上，浏览器中仍开着的旧预览页面，在打开另一个会话的预览后仍能以新 Cookie 访问预览域。会话独立预览域名
+    消除了这一点（控制台与 MCP 默认使用它）。
+  - 两种域名都拒绝 Service Worker：它会在预览停止、权限撤销后继续留在浏览器中。
+- **限制**：不限 CPU / 内存；共用预览域上同一浏览器同时只预览一个会话；`/_kirocrew/` 路径保留给平台。
 
 ### 下载会话源码（D36）
 
