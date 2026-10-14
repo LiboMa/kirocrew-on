@@ -2,7 +2,7 @@ import { useEffect, useState } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { api } from "@/api/client";
 import { followRunEvents, type StreamState } from "@/api/events";
-import type { AppPreview, ChangeEntry, Credential, Environment, Me, Observation, RevisionDiff, RevisionEntry, Run, RunEvent, Team, Template, User, Worker, Workflow } from "@/api/types";
+import type { ApprovalList, AppPreview, ChangeEntry, Credential, Environment, Me, Observation, RevisionDiff, RevisionEntry, Run, RunEvent, Team, Template, User, Worker, Workflow } from "@/api/types";
 
 export const keys = {
   me: ["me"] as const,
@@ -81,6 +81,12 @@ export function useRunApp(id: string, enabled: boolean) {
     },
     refetchIntervalInBackground: false,
   });
+}
+
+/** The Session's pending native approvals, every 10 s while it is open and not finished (D38). */
+export function useApprovals(id: string, live: boolean) {
+  return useQuery({ queryKey: ["approvals", id], enabled: live, retry: false, placeholderData: (previous) => previous,
+    queryFn: () => api<ApprovalList>(`/runs/${encodeURIComponent(id)}/approvals`), ...every(10_000) });
 }
 
 /** The run's revisions; refetched when the run's version changes. */

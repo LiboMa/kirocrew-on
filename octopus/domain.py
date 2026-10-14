@@ -225,6 +225,13 @@ def _active_admins(db):
     return db.execute("SELECT count(*) FROM users WHERE admin=1 AND active=1").fetchone()[0]
 
 
+def may_publish(db, actor, run):
+    """The creator, a Team owner or an admin (D35 §5.2): who may publish a Session and answer its approvals (D38 A3)."""
+    team_owner = bool(run["team_id"]) and db.execute(
+        "SELECT 1 FROM members WHERE team_id=? AND user_id=? AND role='owner'", (run["team_id"], actor["id"])).fetchone()
+    return run["owner_id"] == actor["id"] or bool(team_owner) or elevated(actor)
+
+
 def run_permissions(db, actor, run):
     """What the console may offer on a run it shows (the server enforces the same rules). native: whether the
     actor's own access (never admin oversight, K03) lets them open its native KiroCrew entry."""
@@ -241,7 +248,8 @@ def run_permissions(db, actor, run):
     # An archived Team's Sessions can be read and stopped, not continued, diagnosed, reopened or reassigned (P3).
     archived = bool(run["team_id"]) and bool(
         (db.execute("SELECT archived FROM teams WHERE id=?", (run["team_id"],)).fetchone() or {"archived": 0})["archived"])
-    return {"operate": True, "delete": allowed(owner=True), "native": native, "resume": not archived}
+    return {"operate": True, "delete": allowed(owner=True), "native": native, "resume": not archived,
+            "publish": may_publish(db, actor, run)}
 
 
 def _probe(config):
@@ -890,12 +898,6 @@ class Service:
         row = db.execute("SELECT config,retired FROM workers WHERE id=?", (wid,)).fetchone() if wid else None
         return (json.loads(row["config"]), bool(row["retired"])) if row else (None, False)
 
-    def _may_publish(self, db, actor, run):
-        """The creator, a Team owner or an admin (D35 §5.2): who may publish a Session and answer its approvals (D38 A3)."""
-        team_owner = bool(run["team_id"]) and db.execute(
-            "SELECT 1 FROM members WHERE team_id=? AND user_id=? AND role='owner'", (run["team_id"], actor["id"])).fetchone()
-        return run["owner_id"] == actor["id"] or bool(team_owner) or elevated(actor)
-
     def approvals(self, actor, rid):
         """The Session's pending native approvals as its Worker reports them (D38 §4.2)."""
         with self.db.read() as db:
@@ -919,7 +921,7 @@ class Service:
         require(body.get("decision") in {"approve", "reject"}, "decision 只能是 approve 或 reject")
         with self.db.read() as db:
             run = run_access(db, actor, rid)
-            require(self._may_publish(db, actor, run), "只有会话创建者、Team owner 或管理员可以答复批准请求", 403, "forbidden")
+            require(may_publish(db, actor, run), "只有会话创建者、Team owner 或管理员可以答复批准请求", 403, "forbidden")
             config, retired = self._app_worker(db, run["worker_id"])
         require(config and not retired and run["native_parent"], "会话没有可用的执行环境", 409, "approvals_unsupported")
         from . import transport
@@ -952,7 +954,7 @@ class Service:
         require(isinstance(body, dict) and set(body) <= {"branch", "title"}, "只接受 branch 与 title")
         with self.db.read() as db:
             run = run_access(db, actor, rid)
-            require(self._may_publish(db, actor, run), "只有会话创建者、Team owner 或管理员可以发布", 403, "forbidden")
+            require(may_publish(db, actor, run), "只有会话创建者、Team owner 或管理员可以发布", 403, "forbidden")
             require(run["lifecycle"] == "open" and run["status"] in SETTLED and run["workspace"],
                     "会话执行结束后才能发布", 409, "publish_busy")
             snapshot, source = json.loads(run["snapshot"]), json.loads(run["source"])

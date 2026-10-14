@@ -22,6 +22,7 @@ import { ChangesPanel } from "@/features/sessions/ChangesPanel";
 import { CredentialControl } from "@/features/sessions/CredentialControl";
 import { PublishControl } from "@/features/sessions/PublishControl";
 import { RevisionsPanel } from "@/features/sessions/RevisionsPanel";
+import { ApprovalsCard } from "@/features/sessions/ApprovalsCard";
 import { RecoveryPanel } from "@/features/sessions/RecoveryPanel";
 import { ReportButton } from "@/features/sessions/ReportDialog";
 import { TaskList } from "@/features/sessions/TaskList";
@@ -215,6 +216,7 @@ export function SessionView({ id }: { id: string }) {
             : "自动纠错未开启 · 可手动诊断"}
         </p>
       )}
+      <ApprovalsCard run={run} canAnswer={run.permissions?.publish !== false} />
       <RecoveryPanel run={run} />
 
       <div className="grid gap-5 lg:grid-cols-[minmax(0,1fr)_22rem]">

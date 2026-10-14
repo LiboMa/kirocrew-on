@@ -97,6 +97,11 @@ class ApprovalsTests(unittest.TestCase):
                       {"origin": "native", "request_id": "7", "request_mid": "mid-7", "decision": "approve"})
         self.assertEqual((caught.exception.status, caught.exception.code), (409, "approval_not_pending"))
 
+    def test_the_session_says_who_may_answer(self):
+        rid = self.session()
+        self.assertTrue(self.service.run(self.actors["owner"], rid)["permissions"]["publish"])
+        self.assertFalse(self.service.run(self.actors["member"], rid)["permissions"]["publish"])
+
     def test_waiting_for_approval_says_where_to_answer(self):
         rid = self.session()
         with self.db.transaction() as db:

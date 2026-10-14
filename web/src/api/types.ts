@@ -252,7 +252,8 @@ export interface Run {
   recovery?: Recovery | null;
   /** What the server allows the current user on this Session; absent from older platforms. */
   /** resume: false for a Session of an archived Team (readable and stoppable only). */
-  permissions?: { operate: boolean; delete: boolean; native?: boolean; resume?: boolean };
+  /** publish: may publish the Session and answer its approvals (creator, Team owner, admin; D38 A3). */
+  permissions?: { operate: boolean; delete: boolean; native?: boolean; resume?: boolean; publish?: boolean };
   /** KiroCrew Agent planning: intent recognition, requirement enrichment and the generated tasks. */
   planning?: { mode: "agent"; applied: boolean; intent?: string; summary?: string; name?: string; tasks?: string[]; notes?: string[] } | null;
 }
@@ -469,3 +470,18 @@ export interface PublishRecord {
   at: number;
   by: { id: string; username?: string | null };
 }
+
+/** A native approval pending on the Session (D38 §4.2). */
+export interface PendingApproval {
+  origin: "native" | "coordinator";
+  request_id: string;
+  request_mid?: string;
+  instance?: string;
+  source?: string;
+  tool: string;
+  tool_input: string;
+  tool_kind?: string;
+  tool_purpose?: string;
+  ts?: number;
+}
+export interface ApprovalList { approvals: PendingApproval[]; supported: boolean }

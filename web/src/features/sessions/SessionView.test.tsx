@@ -126,6 +126,45 @@ describe("session detail", () => {
     expect(screen.getAllByText(/换工具 Task：code（claude \/ auto → codex \/ auto）/)).toHaveLength(1);
   });
 
+  describe("pending approvals (D38)", () => {
+    const item = { origin: "native", request_id: "7", request_mid: "mid-7", tool: "shell",
+      tool_input: "npm test -- --watch=false " + "x".repeat(300), tool_purpose: "运行测试" };
+
+    test("a pending approval shows what it would run and is approved after confirming", async () => {
+      const run = { ...blocked, status: "waiting_approval" } as Run;
+      const calls = open(run, { [`GET /runs/${run.id}/approvals`]: { approvals: [item], supported: true },
+        [`POST /runs/${run.id}/approvals/answer`]: { ok: true } });
+      const card = await screen.findByRole("region", { name: "待批准" });
+      expect(within(card).getByText("shell")).toBeInTheDocument();
+      expect(within(card).getByText("运行测试")).toBeInTheDocument();
+      await userEvent.click(within(card).getByRole("button", { name: "批准" }));
+      expect(within(card).getByText(item.tool_input)).toBeInTheDocument();   // the full input before confirming
+      await userEvent.click(within(card).getByRole("button", { name: "确认批准" }));
+      await waitFor(() => expect(calls.find((c) => c.path.endsWith("/approvals/answer"))?.body).toEqual(
+        { origin: "native", request_id: "7", request_mid: "mid-7", decision: "approve" }));
+    });
+
+    test("nothing pending shows no card, and an old Worker says it cannot list them", async () => {
+      open({ ...blocked, status: "running" } as Run);
+      await screen.findByText("实现与测试");
+      expect(screen.queryByRole("region", { name: "待批准" })).not.toBeInTheDocument();
+    });
+
+    test("an old Worker waiting for approval says where to answer it", async () => {
+      const run = { ...blocked, status: "waiting_approval" } as Run;
+      open(run, { [`GET /runs/${run.id}/approvals`]: { approvals: [], supported: false } });
+      expect(await screen.findByText("此执行环境的 Worker 尚未升级，请在原生 KiroCrew 中处理批准。")).toBeInTheDocument();
+    });
+
+    test("someone who may not answer sees the request without the buttons", async () => {
+      const run = { ...blocked, status: "waiting_approval", permissions: { operate: true, delete: false, publish: false } } as Run;
+      open(run, { [`GET /runs/${run.id}/approvals`]: { approvals: [item], supported: true } });
+      const card = await screen.findByRole("region", { name: "待批准" });
+      expect(within(card).getByText("只有会话创建者、Team owner 或管理员可以答复。")).toBeInTheDocument();
+      expect(within(card).queryByRole("button", { name: "批准" })).not.toBeInTheDocument();
+    });
+  });
+
   test("a Session that may not switch tools says so", async () => {
     open({ ...blocked, recovery: { ...blocked.recovery!, policy: { enabled: true, max_cycles: 2, switch_tools: false } } } as Run);
     expect(await screen.findByText("自动纠错已开启 · 最多 2 轮 · 不换工具")).toBeInTheDocument();
