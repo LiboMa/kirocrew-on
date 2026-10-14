@@ -348,6 +348,8 @@ if [ -z "$WORKER_HOST" ]; then
 # After the switch: a release before worker_ca_file would refuse to load platform.toml with the key (unknown keys fail).
 toml_set /etc/kirocrew-on/platform.toml worker_ca_file '"/etc/kirocrew-on/worker-ca.pem"'
 toml_set /etc/kirocrew-on/platform.toml credentials_key_file '"/etc/kirocrew-on/credentials.key"'
+# Each Session's preview on its own origin, https://<run-id>.<PREVIEW_SESSION_DOMAIN>/ (empty: the shared origin only).
+toml_set /etc/kirocrew-on/platform.toml preview_domain "\"${PREVIEW_SESSION_DOMAIN:-}\""
 if [ -n "${PREVIEW_DOMAIN:-}" ]; then
   toml_set /etc/kirocrew-on/platform.toml preview_url "\"https://$PREVIEW_DOMAIN\""
 fi

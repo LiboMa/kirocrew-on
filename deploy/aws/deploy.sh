@@ -179,24 +179,27 @@ PY
 
 push() {
   [ -z "$(git status --porcelain)" ] || { echo "工作区有未提交改动；push 只发布已提交的 commit" >&2; exit 2; }
-  local sha bucket instance domain native console preview archive command_id
+  local sha bucket instance domain native console preview session archive command_id
   sha="$(git rev-parse HEAD)"
   bucket="$(output ArtifactBucket)"; instance="$(output InstanceId)"; domain="$(output CloudFrontDomain)"
   native="$(output NativeDomain)"; console="$(output ConsoleDomain)"; preview="$(output PreviewDomain)"
+  session="$(output PreviewSessionDomain)"
   [ "$console" != "None" ] || console=""   # a stack from before ConsoleDomain
   [ "$preview" != "None" ] || preview=""   # a stack from before the remote preview (D36): no preview server
+  [ "$session" != "None" ] || session=""   # no per-session preview origins (D36 phase 3)
   archive="$WORK/kirocrew-on-$sha.tar.gz"
   git archive --format=tar.gz --prefix="kirocrew-on-$sha/" -o "$archive" HEAD
   run s3 cp "$archive" "s3://$bucket/releases/$sha.tar.gz" --only-show-errors
   python3 - "$sha" "$bucket" "$domain" "$PARAMS" "$REGION" "$BOUNDARY" "$native" "$NATIVE_PORT" "$console" "$preview" \
-    "$PREVIEW_PORT" > "$WORK/commands.json" <<'PY'
+    "$PREVIEW_PORT" "$session" > "$WORK/commands.json" <<'PY'
 import json, sys
-sha, bucket, domain, params, region, boundary, native, native_port, console, preview, preview_port = sys.argv[1:]
+sha, bucket, domain, params, region, boundary, native, native_port, console, preview, preview_port, session = sys.argv[1:]
 d = "/opt/kirocrew-on/incoming"
 script = (f"set -euo pipefail; mkdir -p {d}; aws s3 cp s3://{bucket}/releases/{sha}.tar.gz {d}/{sha}.tar.gz "
           f"--region {region} --only-show-errors; rm -rf {d}/kirocrew-on-{sha}; tar -xzf {d}/{sha}.tar.gz -C {d}; "
           f"KIROCREW_ON_RELEASE={sha} CF_DOMAIN={domain} CONSOLE_DOMAIN={console} NATIVE_DOMAIN={native} "
           f"NATIVE_PORT={native_port} PREVIEW_DOMAIN={preview} PREVIEW_PORT={preview_port} "
+          f"PREVIEW_SESSION_DOMAIN={session} "
           f"ORIGIN_SECRET_PARAM={params}/origin-secret "
           f"AWS_REGION={region} "
           f"bash {d}/kirocrew-on-{sha}/deploy/install/al2023.sh {boundary}")

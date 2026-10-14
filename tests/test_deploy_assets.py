@@ -334,6 +334,15 @@ class ScriptTests(unittest.TestCase):
         # The service-worker check comes before auth_request, so no script is ever fetched for a registration.
         self.assertLess(app.index("$http_service_worker"), app.index("auth_request /_kirocrew_auth;"))
 
+    def test_a_sessions_own_preview_host_reaches_the_api_and_keeps_cookies_to_itself(self):
+        # D36 phase 3: the API learns which host was asked (the host names the Session), and an app's cookies stay on
+        # its own host even when it names a parent domain (shared with other Sessions or other sites).
+        conf = (ROOT / "deploy/nginx/kirocrew-preview.conf").read_text()
+        self.assertEqual(conf.count("proxy_set_header X-Preview-Host $host;"), 3)
+        app = conf[conf.index("    location / {"):]
+        self.assertIn("proxy_cookie_domain ~.+ $host;", app)
+        self.assertIn('proxy_set_header X-Preview-Host "";', app)
+
     def test_a_worker_host_preview_port_reaches_only_preview_ports_with_the_check_header(self):
         conf = (ROOT / "deploy/nginx/kirocrew-worker-preview.conf").read_text()
         for part in ("listen __PREVIEW_TLS_PORT__ ssl;", "ssl_certificate /etc/kirocrew-on/worker-tls.crt;",
@@ -373,6 +382,14 @@ class ScriptTests(unittest.TestCase):
             secret.write_text("short")
             self.assertNotEqual(run("render_preview", str(ROOT / "deploy/nginx/kirocrew-preview.conf"), str(secret), "8929",
                                     "8918").returncode, 0)
+
+    def test_the_installer_turns_on_per_session_preview_origins(self):
+        text = (ROOT / "deploy/install/al2023.sh").read_text()
+        self.assertGreater(text.index('toml_set /etc/kirocrew-on/platform.toml preview_domain "\\"${PREVIEW_SESSION_DOMAIN:-}\\""'),
+                           text.index('ln -sfn "$TARGET" /opt/kirocrew-on/current'))
+        deploy = (ROOT / "deploy/aws/deploy.sh").read_text()
+        self.assertIn('session="$(output PreviewSessionDomain)"', deploy)
+        self.assertIn("PREVIEW_SESSION_DOMAIN={session}", deploy)
 
     def test_the_installer_publishes_the_remote_preview(self):
         text = (ROOT / "deploy/install/al2023.sh").read_text()
