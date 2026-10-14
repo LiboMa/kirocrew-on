@@ -179,10 +179,11 @@ def task_candidate(project, message, branch, scratch, parent, base):
 
 
 def clean_against(project, expected):
-    """Whether the workspace is still ``expected`` (D37 §6, a review must not change code): HEAD, and the uncommitted
-    changes outside what a download and a publish leave out."""
+    """Whether the workspace is still ``expected`` (D37 §6, a review must not change code): HEAD, and uncommitted changes
+    to tracked files outside what a download and a publish leave out."""
     head = _git(project, "rev-parse", "--verify", "HEAD^{commit}")
-    raw = _git_bytes(project, "status", "--porcelain=v1", "-z", "--no-renames", "--untracked-files=normal")
+    # Untracked files are what checks and test runs leave (.coverage, reports/, dist/): never part of a commit.
+    raw = _git_bytes(project, "status", "--porcelain=v1", "-z", "--no-renames", "--untracked-files=no")
     changed = [path for path in (entry[3:].decode(errors="replace") for entry in raw.split(b"\0") if len(entry) > 3)
                if not left_out(path.rstrip("/") + ("/x" if path.endswith("/") else ""))]
     return {"head": head, "clean": head == expected and not changed, "changed_files": changed}

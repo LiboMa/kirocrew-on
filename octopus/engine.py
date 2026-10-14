@@ -200,13 +200,13 @@ class Engine:
             self.update(run["id"], "blocked", message)
 
     @staticmethod
-    def _last_candidate(db, rid, ordinal):
-        """The candidate of the last accepted code task before ``ordinal`` (D37 §3): the next candidate's parent, and
-        what a review is bound to."""
-        for row in db.execute("SELECT a.evidence FROM tasks t JOIN attempts a ON a.id=t.current_attempt WHERE t.run_id=? "
-                              "AND t.ordinal<? AND t.status='accepted' ORDER BY t.ordinal DESC", (rid, ordinal)):
+    def _head_candidate(db, rid):
+        """The candidate the Session's branch holds (D37 §3): the newest that moved it, whichever task made it — the
+        next candidate's parent and what a review is bound to (task order would be wrong after a partial continue)."""
+        for row in db.execute("SELECT evidence FROM attempts WHERE run_id=? AND evidence LIKE '%\"candidate\"%' "
+                              "ORDER BY updated DESC, created DESC", (rid,)):
             candidate = json.loads(row["evidence"] or "{}").get("candidate")
-            if candidate and candidate.get("sha"):
+            if candidate and candidate.get("sha") and candidate.get("moved", True):
                 return candidate
         return None
 
@@ -229,10 +229,12 @@ class Engine:
                 check = self.request(config, "/candidate", {"run_id": run["id"], "attempt_id": attempt["id"], "mode": "check",
                                                             "expected": latest["sha"]})
             except Error as exc:
-                if exc.status != 404:
-                    raise
-                records.append(gates.record("review_bound", "skip", gates.OLD_WORKER))
-                return None, None, False
+                if exc.status == 404:
+                    records.append(gates.record("review_bound", "skip", gates.OLD_WORKER))
+                    return None, None, False
+                if 400 <= exc.status < 500:   # refused for this workspace: the Agent can fix it, recovery tells it how
+                    return fail("review_bound", f"无法核对审查的工作区：{exc}")
+                raise
             sha, reviewed = latest["sha"], str((report or {}).get("reviewed_commit") or "")
             if check["changed_files"]:
                 return fail("review_bound", "审查不应修改代码，修改应交给实现任务：" + "、".join(check["changed_files"][:10]))
@@ -249,12 +251,15 @@ class Engine:
                                                             "message": message, **({"parent": latest["sha"]} if latest else {})},
                                      timeout=180)
         except Error as exc:
-            if exc.status != 404:
-                raise
-            records.extend(gates.record(name, "skip", gates.OLD_WORKER) for name in ("diff_present", "no_secrets", "checks_pass"))
-            return None, None, False
-        evidence["candidate"] = {key: candidate.get(key) for key in
-                                 ("sha", "parent", "changed", "files", "insertions", "deletions", "rewritten")}
+            if exc.status == 404:
+                records.extend(gates.record(name, "skip", gates.OLD_WORKER) for name in ("diff_present", "no_secrets", "checks_pass"))
+                return None, None, False
+            if 400 <= exc.status < 500:   # e.g. the Agent left the Session's branch: a failure recovery can fix
+                return fail("diff_present", f"无法生成候选：{exc}")
+            raise
+        evidence["candidate"] = {**{key: candidate.get(key) for key in
+                                    ("sha", "parent", "changed", "files", "insertions", "deletions", "rewritten")},
+                                 "moved": not candidate["secrets"]}
         if not candidate["changed"]:
             if kind in ("implement", "deliver"):
                 return fail("diff_present", "任务没有改动任何文件")
@@ -272,10 +277,12 @@ class Engine:
             job = self.request(config, "/verify/start", {"run_id": run["id"], "attempt_id": attempt["id"],
                                                          "commands": commands})["job"]
         except Error as exc:
-            if exc.status != 404:
-                raise
-            records.append(gates.record("checks_pass", "skip", gates.OLD_WORKER))
-            return None, None, False
+            if exc.status == 404:
+                records.append(gates.record("checks_pass", "skip", gates.OLD_WORKER))
+                return None, None, False
+            if 400 <= exc.status < 500:
+                return fail("checks_pass", f"无法运行检查命令：{exc}")
+            raise
         evidence["checks"] = {"job": job, "started": time.time(), "commands": len(commands)}
         return None, None, True
 
@@ -395,7 +402,7 @@ class Engine:
                 "SELECT t.id,a.result,a.evidence FROM tasks t JOIN attempts a ON a.id=t.current_attempt "
                 "WHERE t.run_id=? AND t.ordinal<? AND t.status='accepted' ORDER BY t.ordinal", (rid, task["ordinal"]))]
             repair = recovery.feedback(db, run, attempt)
-            latest = self._last_candidate(db, rid, task["ordinal"])
+            latest = self._head_candidate(db, rid)
         spec = json.loads(attempt["spec"])
         snapshot = json.loads(run["snapshot"])
         gated = snapshot.get("execution_contract", 1) >= 3 and task["id"] != planning.PLAN_ID   # D37

@@ -200,6 +200,73 @@ class EngineGateTests(TeamsWorkersCase):
                          {"diff_present": "skip", "no_secrets": "skip", "checks_pass": "skip"})
         self.assertNotIn("/verify/start", worker.paths())
 
+    def test_a_worker_refusal_is_a_gate_failure_not_a_hang(self):
+        for failing, gate in (("candidate", "diff_present"), ("verify", "checks_pass")):
+            with self.subTest(failing=failing):
+                worker = FakeWorker()
+                rid = self.session([IMPLEMENT], recovery=True, request=f"start-00000003{len(failing)}")
+                refusal = Error(409, "candidate_failed", "工作区不在分支 octopus/x（当前 main），未发布")
+                if failing == "candidate":
+                    worker.candidate = lambda body: (_ for _ in ()).throw(refusal)
+                else:
+                    original = worker.__call__
+
+                    def refusing(config, path, body=None, **kwargs):
+                        if path == "/verify/start":
+                            raise refusal
+                        return original(config, path, body, **kwargs)
+                    worker.__call__ = refusing
+                engine = Engine(self.db, request=worker if failing == "candidate" else refusing)
+                for _ in range(6):
+                    engine.tick()
+                attempt, evidence = self.attempt(rid, "code")
+                self.assertEqual((attempt["status"], evidence.get("failure_type"), evidence.get("gate")), ("blocked", "gate", gate))
+                self.assertIn("工作区不在分支", attempt["error"])
+                with self.db.read() as db:
+                    self.assertTrue(db.execute("SELECT 1 FROM recoveries WHERE run_id=?", (rid,)).fetchone())
+
+    def accepted(self, rid, rows):
+        """Fixture: accepted Attempts with candidates / review bindings, in the order (and at the times) given."""
+        with self.db.transaction() as db:
+            for number, (task, evidence, updated) in enumerate(rows, 1):
+                aid = f"attempt-{rid[-8:]}-{number}"
+                db.execute("INSERT INTO attempts(id,run_id,task_id,number,spec,status,evidence,created,updated) "
+                           "VALUES(?,?,?,?,'{}','accepted',?,?,?)", (aid, rid, task, number, dumps(evidence), updated, updated))
+                db.execute("UPDATE tasks SET status='accepted',current_attempt=? WHERE run_id=? AND id=?", (aid, rid, task))
+
+    @staticmethod
+    def made(sha, ok=True):
+        return {"candidate": {"sha": sha, "parent": BASE, "changed": True, "moved": True},
+                "gates": [{"name": "checks_pass", "status": "pass" if ok else "fail"}]}
+
+    def test_the_latest_candidate_is_what_the_branch_holds_not_the_task_order(self):
+        second = {**IMPLEMENT, "id": "code2", "name": "实现二"}
+        rid = self.session([IMPLEMENT, second, REVIEW])
+        # code was rerun after code2 was kept: its candidate is the newer one on the branch
+        self.accepted(rid, [("code2", self.made("2" * 40), 10.0), ("code", self.made("3" * 40), 20.0)])
+        with self.db.read() as db:
+            self.assertEqual(Engine._head_candidate(db, rid)["sha"], "3" * 40)
+
+    def test_which_candidate_is_verified(self):
+        deliver = {**IMPLEMENT, "id": "deliver", "name": "交付", "kind": "deliver"}
+        second = {**IMPLEMENT, "id": "code2", "name": "实现二"}
+        reviewed = lambda sha: {"reviewed": sha, "gates": [{"name": "review_bound", "status": "pass"}]}
+        cases = [
+            ("no review: the latest passing candidate", [IMPLEMENT], [("code", self.made(C1), 1.0)], C1),
+            ("its gates failed: nothing", [IMPLEMENT], [("code", self.made(C1, ok=False), 1.0)], None),
+            ("delivery after the review counts", [IMPLEMENT, REVIEW, deliver],
+             [("code", self.made(C1), 1.0), ("review", reviewed(C1), 2.0), ("deliver", self.made("2" * 40), 3.0)], "2" * 40),
+            ("code after the review is unreviewed", [IMPLEMENT, REVIEW, second],
+             [("code", self.made(C1), 1.0), ("review", reviewed(C1), 2.0), ("code2", self.made("2" * 40), 3.0)], None),
+            ("a review not yet passed: nothing", [IMPLEMENT, REVIEW], [("code", self.made(C1), 1.0)], None),
+        ]
+        for index, (name, steps, rows, expected) in enumerate(cases):
+            with self.subTest(name):
+                rid = self.session(steps, request=f"start-00000004{index}")
+                self.accepted(rid, rows)
+                verified = self.service.run(self.c, rid)["verified"]
+                self.assertEqual(verified and verified["sha"], expected)
+
     def test_continue_and_recover_do_not_lower_the_contract(self):
         rid = self.session([IMPLEMENT])
         with self.db.transaction() as db:

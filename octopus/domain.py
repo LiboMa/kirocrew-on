@@ -919,6 +919,9 @@ class Service:
             require(row["host"] == host and repo_credentials.covers(json.loads(row["repos"]), path) is not None,
                     f"凭证「{row['name']}」不覆盖仓库 {path}", 409, "credential_unavailable")
             verified = self._verified(db, rid)   # D37 §7: only what passed the gates and the review is pushed
+            require(verified or snapshot.get("execution_contract", 1) < 3 or not db.execute(
+                "SELECT 1 FROM attempts WHERE run_id=? AND evidence LIKE '%\"candidate\"%' LIMIT 1", (rid,)).fetchone(),
+                "会话分支上最近的改动尚未通过门禁与审查，未发布：请续作会话，让改动通过后再发布", 409, "publish_unverified")
             config = json.loads(db.execute("SELECT config FROM workers WHERE id=?", (run["worker_id"],)).fetchone()["config"])
         branch = publishing.check_branch(body.get("branch") or "octopus/" + rid, source.get("ref"))
         title = text(body.get("title") or snapshot.get("name") or run["input"][:60], "标题", 200)
@@ -1202,20 +1205,26 @@ class Service:
 
     @staticmethod
     def _verified(db, rid):
-        """The Session's verified candidate (D37 §7): with review tasks, the one the last passing review was bound to;
-        without, the last code task's candidate whose gates all passed. None before D37 (no candidates)."""
-        rows = [(json.loads(r["spec"]), r["id"], json.loads(r["evidence"] or "{}")) for r in db.execute(
-            "SELECT t.id,t.spec,a.evidence FROM tasks t JOIN attempts a ON a.id=t.current_attempt "
-            "WHERE t.run_id=? AND t.status='accepted' ORDER BY t.ordinal", (rid,))]
-        reviews = any(json.loads(r["spec"]).get("kind") == "review" for r in db.execute("SELECT spec FROM tasks WHERE run_id=?", (rid,)))
-        found = None
-        for spec, task, evidence in rows:
-            failed = any(g.get("status") == "fail" for g in evidence.get("gates", []))
-            if reviews and spec.get("kind") == "review" and evidence.get("reviewed") and not failed:
-                found = {"sha": evidence["reviewed"], "task_id": task}
-            elif not reviews and (evidence.get("candidate") or {}).get("sha") and not failed:
-                found = {"sha": evidence["candidate"]["sha"], "task_id": task}
-        return found
+        """What a publish pushes (D37 §7): the candidate the Session's branch holds, when its own gates all passed and —
+        with review tasks — a passing review came after every code change except delivery. None otherwise, and for
+        Sessions from before D37 (no candidates)."""
+        kinds = {r["id"]: json.loads(r["spec"]).get("kind") for r in db.execute("SELECT id,spec FROM tasks WHERE run_id=?", (rid,))}
+        current = {r[0] for r in db.execute("SELECT current_attempt FROM tasks WHERE run_id=? AND status='accepted'", (rid,))}
+        head, sound, unreviewed, reviewed = None, False, False, False
+        for row in db.execute("SELECT id,task_id,evidence FROM attempts WHERE run_id=? ORDER BY updated, created", (rid,)):
+            evidence = json.loads(row["evidence"] or "{}")
+            passed = row["id"] in current and not any(g.get("status") == "fail" for g in evidence.get("gates", []))
+            candidate = evidence.get("candidate") or {}
+            if candidate.get("sha") and candidate.get("moved", True):
+                head, sound = {"sha": candidate["sha"], "task_id": row["task_id"]}, passed
+                unreviewed = unreviewed or kinds.get(row["task_id"]) != "deliver"
+            if kinds.get(row["task_id"]) == "review" and evidence.get("reviewed") and passed:
+                reviewed, unreviewed = True, False   # the review covers what the branch held before it
+        if head is None or not sound:
+            return None
+        if "review" in kinds.values() and (not reviewed or unreviewed):
+            return None
+        return head
 
     def _view(self, db, run, actor, detail=True):
         value = {k: v for k, v in run.items() if k != "snapshot"}

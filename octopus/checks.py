@@ -59,23 +59,29 @@ class Checks:
 
     def _run(self, job, project, commands):
         value, started = self.jobs[job], time.monotonic()
-        env = {**os.environ, "PATH": os.pathsep.join([*self.path_prepend, os.environ.get("PATH", "/usr/bin:/bin")])}
+        # The Worker's own modules (its unit sets PYTHONPATH to the release) are not the project's (as apps.py).
+        env = {key: item for key, item in os.environ.items() if key != "PYTHONPATH"}
+        env["PATH"] = os.pathsep.join([*self.path_prepend, os.environ.get("PATH", "/usr/bin:/bin")])
         passed, failed = True, None
-        for index, command in enumerate(commands):
-            left = self.total - (time.monotonic() - started)
-            if value["cancelled"] or left <= 0:
-                break
-            result = self._one(value, project, command, env, min(self.per_command, left))
+        try:
+            for index, command in enumerate(commands):
+                left = self.total - (time.monotonic() - started)
+                if value["cancelled"] or left <= 0:
+                    break
+                try:
+                    result = self._one(value, project, command, env, min(self.per_command, left))
+                except Exception as exc:   # e.g. the project is gone: a failed check, never a job left running
+                    result = {"command": command, "exit": None, "seconds": 0.0,
+                              "tail": f"无法运行检查命令（{type(exc).__name__}）"}
+                with self.lock:
+                    value["results"].append(result)
+                if result["exit"] != 0:
+                    passed, failed = False, index
+                    break
+        finally:
             with self.lock:
-                value["results"].append(result)
-            if result["exit"] != 0:
-                passed, failed = False, index
-                break
-        with self.lock:
-            if value["cancelled"] and passed:
-                passed = False
-            value.update(state="done", passed=passed and len(value["results"]) == len(commands), failed=failed,
-                         current=None, ended=time.time())
+                value.update(state="done", passed=passed and not value["cancelled"] and len(value["results"]) == len(commands),
+                             failed=failed, current=None, ended=time.time())
 
     def _one(self, value, project, command, env, limit):
         began = time.monotonic()
@@ -95,9 +101,12 @@ class Checks:
             proc.wait(timeout=limit)
         except subprocess.TimeoutExpired:
             timeout = True
-            self._end(proc)
+        # Whatever the command left behind in its process group (a server it started, "sleep &") ends with it: it would
+        # hold the output pipe open and keep its port.
+        self._end(proc)
         reader.join(timeout=GRACE)
-        proc.stdout.close()
+        if not reader.is_alive():
+            proc.stdout.close()
         value["current"] = None
         hidden = sources.SUSPICIOUS.sub(sources.HIDDEN.encode(), bytes(output))
         tail = sources.scrub(hidden[-TAIL:].decode(errors="replace"))
@@ -117,10 +126,18 @@ class Checks:
                 os.killpg(proc.pid, sig)
             except (ProcessLookupError, PermissionError):
                 break
-            try:
-                proc.wait(timeout=GRACE)
-                os.killpg(proc.pid, 0)   # the leader is gone; its children may not be
-            except subprocess.TimeoutExpired:
-                continue
-            except (ProcessLookupError, PermissionError):
+            deadline = time.monotonic() + GRACE
+            while time.monotonic() < deadline:
+                proc.poll()
+                try:
+                    os.killpg(proc.pid, 0)
+                except (ProcessLookupError, PermissionError):
+                    deadline = None
+                    break
+                time.sleep(0.05)
+            if deadline is None:
                 break
+        try:
+            proc.wait(timeout=GRACE)
+        except subprocess.TimeoutExpired:
+            pass

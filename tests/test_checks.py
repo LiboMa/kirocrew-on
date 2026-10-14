@@ -1,10 +1,12 @@
 """D37 §5 (G1): the platform runs a task's verify commands itself — in order, stopping at the first failure, each and all
 of them time-limited with their whole process group ended, the output's tail kept with credentials hidden."""
+import os
 from pathlib import Path
 import subprocess
 import tempfile
 import time
 import unittest
+from unittest.mock import patch
 
 from octopus import sources
 from octopus.checks import Checks
@@ -62,6 +64,29 @@ class CheckTests(unittest.TestCase):
         time.sleep(0.5)
         left = subprocess.run(["pgrep", "-f", "sleep 31.[56]"], capture_output=True, text=True).stdout.split()
         self.assertEqual(left, [])
+
+    def test_a_background_process_left_by_a_command_is_ended(self):
+        # e.g. "uvicorn app:app & sleep 3 && curl -f localhost:8000/health": the shell exits, its server must not stay
+        checks = Checks(per_command=30)
+        started = time.time()
+        value = finished(checks, checks.start("run-a", "attempt-1", self.project, ["sleep 31.7 & echo started"])["job"])
+        self.assertLess(time.time() - started, 10)
+        self.assertEqual((value["passed"], value["results"][0]["exit"]), (True, 0))
+        self.assertIn("started", value["results"][0]["tail"])
+        time.sleep(0.5)
+        self.assertEqual(subprocess.run(["pgrep", "-f", "sleep 31.7"], capture_output=True, text=True).stdout.split(), [])
+
+    def test_the_workers_pythonpath_is_not_the_projects(self):
+        with patch.dict(os.environ, {"PYTHONPATH": "/opt/kirocrew-on/current"}):
+            checks = Checks()
+            value = finished(checks, checks.start("run-a", "attempt-1", self.project, ['echo "[${PYTHONPATH:-}]"'])["job"])
+        self.assertIn("[]", value["results"][0]["tail"])
+
+    def test_a_command_that_cannot_start_fails_instead_of_running_forever(self):
+        checks = Checks()
+        value = finished(checks, checks.start("run-a", "attempt-1", self.project / "gone", ["true"])["job"], limit=10)
+        self.assertEqual((value["passed"], value["results"][0]["exit"]), (False, None))
+        self.assertIn("无法运行", value["results"][0]["tail"])
 
     def test_the_total_limit_ends_the_rest(self):
         checks = Checks(per_command=30, total=1)

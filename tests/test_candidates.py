@@ -93,6 +93,8 @@ class CandidateTests(unittest.TestCase):
         self.assertEqual(check(), {"head": sha, "clean": True, "changed_files": []})
         self.write({".env": "SECRET=1", "node_modules/y/i.js": "y"})
         self.assertTrue(check()["clean"])   # what a download and a publish leave out does not count
+        self.write({".coverage": "data", "reports/junit.xml": "<x/>", "dist/app.js": "built"})
+        self.assertTrue(check()["clean"])   # what checks and test runs leave untracked is not a change to the code
         self.write({"src/a.js": "changed by the review"})
         self.assertEqual(check()["changed_files"], ["src/a.js"])
         self.assertFalse(check()["clean"])

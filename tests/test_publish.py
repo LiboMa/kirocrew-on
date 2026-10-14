@@ -463,6 +463,22 @@ class PublishTests(PublishCase):
         self.assertEqual((record["commit"], self.remote_head("octopus/" + rid)), (sha, sha))
         self.assertEqual(self.worker_bodies[-1]["commit"], sha)
 
+    def test_untracked_artifacts_do_not_block_the_verified_candidate(self):
+        rid, project = self.session(cred=self.cred["id"])
+        sha = self.verified(rid, project, {"src/feature.js": "export const x = 1;"})
+        (project / ".coverage").write_text("coverage data")
+        self.assertEqual(self.service.publish(self.b, rid, {})["commit"], sha)
+
+    def test_a_new_session_without_a_verified_candidate_publishes_nothing(self):
+        rid, project = self.session(cred=self.cred["id"])
+        self.verified(rid, project, {"src/feature.js": "export const x = 1;"})
+        with self.db.transaction() as db:   # its checks failed: the candidate is not verified
+            db.execute("UPDATE attempts SET evidence=json_set(evidence,'$.gates[6].status','fail') WHERE id='attempt-v'")
+        with self.assertRaises(Error) as caught:
+            self.service.publish(self.b, rid, {})
+        self.assertEqual((caught.exception.status, caught.exception.code), (409, "publish_unverified"))
+        self.assertIsNone(self.remote_head("octopus/" + rid))
+
     def test_changes_after_the_verified_candidate_are_refused(self):
         rid, project = self.session(cred=self.cred["id"])
         self.verified(rid, project, {"src/feature.js": "export const x = 1;"})
