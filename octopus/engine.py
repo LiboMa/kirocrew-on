@@ -34,8 +34,9 @@ def transient(native, error, missing, blocked_line):
 
 class Engine:
     def __init__(self, database, request=worker_request, workers=1, retry_unavailable=0.0, clock=time.monotonic,
-                 credentials_key_file=None, credentials_private_hosts=()):
+                 credentials_key_file=None, credentials_private_hosts=(), wall=time.time):
         self.db, self.request = database, request
+        self.wall = wall   # Unix time, compared with KiroCrew's state.json and the Attempt's creation (D39)
         from .credentials import CredentialStore
         self.credentials = CredentialStore(database, credentials_key_file, credentials_private_hosts)   # opened only for a clone (D35 §5.1)
         self.stopping = threading.Event()
@@ -200,6 +201,70 @@ class Engine:
             self.update(run["id"], run["status"], message)
         else:
             self.update(run["id"], "blocked", message)
+
+    def _watchdog(self, run, config, task, attempt, result, snapshot):
+        """A native task with no progress for too long, or running too long (D39 §3.2): stopped, the Attempt judged here (a
+        stop seen later reads as someone's stop, never retried), retried once without a recovery cycle, then diagnosed.
+        True when it acted this time (or must not run the normal update)."""
+        prior = json.loads(attempt["evidence"] or "{}")
+        if (prior.get("watchdog") or {}).get("unsupported"):
+            return False
+        settings = recovery.policy(snapshot.get("recovery"), legacy=True)
+        idle = settings.get("idle_minutes", recovery.IDLE_MINUTES)
+        total = settings.get("attempt_minutes", recovery.ATTEMPT_MINUTES)
+        progress, now = result.get("progress") or {}, self.wall()
+        updated = progress.get("updated_at")
+        last = max(float(updated) if isinstance(updated, (int, float)) else 0.0, attempt["created"])
+        tool = str(progress.get("last_tool") or "")[:80]
+        if now - attempt["created"] > total * 60:
+            reason = f"原生任务运行超过 {total} 分钟，看门狗已停止"
+        elif now - last > idle * 60:
+            reason = (f"原生任务 {int((now - last) // 60)} 分钟没有进展" + (f"（最后工具：{tool}）" if tool else "")
+                      + "，看门狗已停止")
+        else:
+            return False
+        try:
+            self.request(config, "/attempt/stop", {"run_id": run["id"], "attempt_id": attempt["id"]})
+        except Error as exc:
+            if exc.status != 404:
+                return True   # not stopped: never start another Agent on the same workspace; try again next time
+            with self.db.transaction() as db:   # an older Worker: leave the task to finish or to someone's stop
+                journal.change(db, "attempts", attempt["id"], journal.ENGINE, "attempt.watchdog", "Worker 不支持停止单个任务",
+                               evidence=dumps({**prior, "watchdog": {"unsupported": True}}), updated=time.time())
+            return True
+        rid = run["id"]
+        retry = settings["enabled"] and not prior.get("transient_retry_of")
+        evidence = {**prior, **(result.get("evidence") or {}), "failure_type": "native_error",
+                    **({"transient": "stalled"} if retry else {}),
+                    "watchdog": {"reason": reason, "idle_minutes": idle, "attempt_minutes": total, "last_progress": last,
+                                 "turns": progress.get("turns"), "last_tool": tool, "stopped_at": now}}
+        with self.db.transaction() as db:
+            current = db.execute("SELECT * FROM tasks WHERE run_id=? AND id=?", (rid, task["id"])).fetchone()
+            active = db.execute("SELECT desired FROM runs WHERE id=?", (rid,)).fetchone()[0] == "active"
+            journal.change(db, "attempts", attempt["id"], journal.ENGINE, "attempt.state", reason,
+                           event={"id": attempt["id"], "task_id": task["id"], "status": "blocked", "error": reason},
+                           status="blocked", error=reason, evidence=dumps(evidence), updated=time.time())
+            if current["current_attempt"] != attempt["id"] or not active:
+                return True
+            if retry:
+                aid, created = uid("attempt"), time.time()
+                db.execute("INSERT INTO attempts(id,run_id,task_id,number,spec,status,evidence,created,updated) "
+                           "VALUES(?,?,?,?,?,'dispatching',?,?,?)",
+                           (aid, rid, task["id"], attempt["number"] + 1, current["spec"],
+                            dumps({"transient_retry_of": attempt["id"],
+                                   **({"switched_from": prior["switched_from"]} if prior.get("switched_from") else {})}),
+                            created, created))
+                journal.change(db, "tasks", (rid, task["id"]), journal.ENGINE, "attempt.retry", "原生任务卡住，自动重试一次",
+                               event={"attempt": attempt["id"], "retry": aid, "transient": "stalled"},
+                               status="dispatching", current_attempt=aid)
+            else:
+                journal.change(db, "tasks", (rid, task["id"]), journal.ENGINE, "task.state", status="blocked")
+        if retry:
+            self.update(rid, "ready", None, reason="原生任务卡住，自动重试一次")
+        else:
+            self.update(rid, "blocked", reason, actor=journal.ENGINE)
+            recovery.automatic(self.db, rid, attempt["id"])
+        return True
 
     def _refused(self, run, attempt_id, evidence, message, code, actor=journal.WORKER):
         """A tool the task cannot run on (D38 §3.2): the Attempt is blocked as the tool's failure and goes to diagnosis,
@@ -594,10 +659,13 @@ class Engine:
         evidence = result.get("evidence", {})
         # An automatic retry and a Coordinator's switch keep their marks through every evidence update (D34 §5.1, D38 §3.3).
         retry_of = prior.get("transient_retry_of")
-        for key in ("transient_retry_of", "switched_from"):
+        for key in ("transient_retry_of", "switched_from", "watchdog"):   # watchdog: e.g. "this Worker cannot stop it"
             if prior.get(key):
                 evidence[key] = prior[key]
         state, error = ("waiting_approval" if native.get("awaiting_approval") else "running"), None
+        if not native.get("done") and not native.get("awaiting_approval") and \
+                self._watchdog(run, config, task, attempt, result, snapshot):
+            return
         retry = None
         if native.get("done"):
             text = str(native.get("result", "")).strip()

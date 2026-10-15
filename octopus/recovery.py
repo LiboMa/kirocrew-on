@@ -11,17 +11,26 @@ LIVE = {"pending", "dispatching", "dispatch_unknown", "running", "waiting_approv
 FAILURES = {"implementation", "tests", "environment", "input", "auth", "model",
             "native_stopped", "native_error", "contract", "none"}
 NEEDS_INPUT = {"input", "auth", "model", "native_stopped"}
+# The watchdog's limits (D39 §3.2): minutes without native progress, and of one Attempt in all; a session may change them.
+IDLE_MINUTES, ATTEMPT_MINUTES = 30, 240
+LIMITS = {"idle_minutes": (IDLE_MINUTES, 5, 240), "attempt_minutes": (ATTEMPT_MINUTES, 30, 720)}
 
 
 def policy(value=None, *, legacy=False):
     if value is None:
         return {"enabled": not legacy, "max_cycles": 2}
-    require(isinstance(value, dict) and set(value) <= {"enabled", "max_cycles", "switch_tools"}, "自动纠错配置无效")
+    require(isinstance(value, dict) and set(value) <= {"enabled", "max_cycles", "switch_tools", *LIMITS}, "自动纠错配置无效")
     enabled, limit, switch = value.get("enabled", True), value.get("max_cycles", 2), value.get("switch_tools", True)
     require(isinstance(enabled, bool) and type(limit) is int and 1 <= limit <= 5 and isinstance(switch, bool),
             "自动纠错次数须为 1–5，enabled 与 switch_tools 须为布尔值")
-    # Switching tools is on by default (D38 A2); only turning it off is stored, so existing settings keep their shape.
-    return {"enabled": enabled, "max_cycles": limit, **({} if switch else {"switch_tools": False})}
+    minutes = {}
+    for key, (default, low, high) in LIMITS.items():
+        number = value.get(key, default)
+        require(type(number) is int and low <= number <= high, f"{key} 须为 {low}–{high} 的整数（分钟）")
+        if number != default:
+            minutes[key] = number
+    # Defaults (switching tools on, the watchdog's limits) are not stored, so existing settings keep their shape.
+    return {"enabled": enabled, "max_cycles": limit, **({} if switch else {"switch_tools": False}), **minutes}
 
 
 def outcome(text):
