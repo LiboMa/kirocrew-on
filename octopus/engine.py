@@ -32,10 +32,37 @@ def transient(native, error, missing, blocked_line):
     return None
 
 
+def handoff(row):
+    """What a task is told of an accepted task before it (D40): its conclusion and findings, its candidate and checks, and
+    where its full handoff is on the Worker — not its raw result and evidence (several KB each, mostly noise for the next
+    task). The Agent reads the handoff file when it needs the details."""
+    spec, evidence = json.loads(row.get("spec") or "{}"), json.loads(row.get("evidence") or "{}")
+    outcome = evidence.get("outcome") or {}
+    clip = lambda text, limit: (lambda s: s if len(s) <= limit else s[:limit] + "…")(str(text or ""))
+    item = {"id": row["id"], "name": spec.get("name") or row["id"], "kind": spec.get("kind"),
+            "backend": evidence.get("actual_backend"), "decision": outcome.get("decision"),
+            "summary": clip(outcome.get("summary") or row.get("result"), 1500)}
+    findings = [clip(f if isinstance(f, str) else json.dumps(f, ensure_ascii=False), 200) for f in outcome.get("findings") or []]
+    if findings:
+        item["findings"] = findings[:10]
+    if outcome.get("suggestions"):
+        item["suggestions"] = [clip(s, 200) for s in outcome["suggestions"][:5]]
+    if evidence.get("handoff_path"):
+        item["handoff"] = evidence["handoff_path"]
+    candidate = evidence.get("candidate") or {}
+    if candidate.get("sha"):
+        item["candidate"] = {"sha": str(candidate["sha"])[:12], "files": (candidate.get("names") or [])[:30]}
+    if evidence.get("check_results"):
+        item["checks"] = [{"command": clip(r.get("command"), 200), "exit": r.get("exit")} for r in evidence["check_results"][:10]]
+    return item
+
+
 class Engine:
     def __init__(self, database, request=worker_request, workers=1, retry_unavailable=0.0, clock=time.monotonic,
-                 credentials_key_file=None, credentials_private_hosts=(), wall=time.time):
+                 credentials_key_file=None, credentials_private_hosts=(), wall=time.time, poll_backoff=False):
         self.db, self.request = database, request
+        # A running Attempt is looked at less often the longer it runs (D40): not every second for an hour-long task.
+        self.poll_backoff, self.due = poll_backoff, {}
         self.wall = wall   # Unix time, compared with KiroCrew's state.json and the Attempt's creation (D39)
         from .credentials import CredentialStore
         self.credentials = CredentialStore(database, credentials_key_file, credentials_private_hosts)   # opened only for a clone (D35 §5.1)
@@ -581,6 +608,12 @@ class Engine:
                                         "('pending','dispatching','running','dispatch_unknown','waiting_approval')", (rid,),
                                         journal.WORKER, "recovery.state", status="cancelled", updated=now)
             return
+        if self.poll_backoff and run["status"] in {"running", "waiting_approval"}:
+            due = self.due.get(rid)
+            if due and self.clock() < due[0] and due[1] == run["version"]:
+                return
+        else:
+            self.due.pop(rid, None)
         if run["status"] in {"preparing", "ready"}:
             # Before preparing or dispatching a new Attempt, the Worker must still serve the run's space (§6.2);
             # an Attempt already running is left to finish.
@@ -624,8 +657,8 @@ class Engine:
                                event={"id": aid, "task_id": task["id"], "number": number}, current_attempt=aid, status="dispatching")
                 attempt = db.execute("SELECT * FROM attempts WHERE id=?", (aid,)).fetchone()
             task, attempt = dict(task), dict(attempt)
-            upstream = [dict(t) for t in db.execute(
-                "SELECT t.id,a.result,a.evidence FROM tasks t JOIN attempts a ON a.id=t.current_attempt "
+            upstream = [handoff(dict(t)) for t in db.execute(
+                "SELECT t.id,t.spec,a.result,a.evidence FROM tasks t JOIN attempts a ON a.id=t.current_attempt "
                 "WHERE t.run_id=? AND t.ordinal<? AND t.status='accepted' ORDER BY t.ordinal", (rid, task["ordinal"]))]
             repair = recovery.feedback(db, run, attempt)
             latest = self._head_candidate(db, rid)
@@ -779,3 +812,7 @@ class Engine:
         self.update(rid, "ready" if state == "accepted" else state, error, actor=journal.WORKER)
         if state == "blocked":
             recovery.automatic(self.db, rid, attempt["id"])
+        if self.poll_backoff and not native.get("done"):
+            age = self.wall() - attempt["created"]
+            pause = 2 if age < 120 else 5 if age < 600 else 10 if age < 1800 else 20
+            self.due[rid] = (self.clock() + pause, run["version"])

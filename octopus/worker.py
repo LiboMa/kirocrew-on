@@ -781,7 +781,8 @@ class Worker:
                                              self.health()["models"])
             instructions = (
                 "# 本次研发任务\n\n" + body["input"] + briefing(requirement, contract) + "\n\n## 任务\n" + spec["prompt"] +
-                "\n\n## 前序交接\n" + dumps(body.get("upstream", [])) +
+                "\n\n## 前序交接\n前序任务的结论、发现、候选与检查；handoff 是其完整交接文件的路径，需要细节时读取。\n" +
+                dumps(body.get("upstream", [])) +
                 f"\n\n源码目录：{workspace.project_dir(run)}\n交接文件：{handoff}\n"
                 "依据需求进行开发和真实验证，按项目既有依赖与规范工作。记录具体修改、测试命令、结果和限制。"
                 "若不能完成，最终回答单独一行写 BLOCKED 并说明恢复条件。"
