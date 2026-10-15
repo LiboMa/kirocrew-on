@@ -1,6 +1,5 @@
 """Named gates (D37 §4): each Attempt's acceptance as a list of recorded verdicts. The first five are the checks the
 Engine always made; their messages and failure types are unchanged."""
-import fnmatch
 import re
 import time
 
@@ -8,6 +7,11 @@ EXPIRED = re.compile(r"session (?:has )?expired|not logged in", re.I)
 BLOCKED = "工作者未完成任务或报告 BLOCKED"
 EFFORT = re.compile(r"\[(low|medium|high|xhigh|max)\]$")
 OLD_WORKER = "Worker 版本不支持"
+# Check commands that install dependencies: run on the baseline they would change the dependency folders to the base's
+# manifest, and the restored candidate would be left without its own (D37 §11.1).
+INSTALLS = re.compile(r"\b(?:npm|pnpm|yarn|bun)\s+(?:i|install|ci|add)\b|\bpip3?\s+install\b|\buv\s+(?:sync|pip\s+install|add)\b"
+                      r"|\bpoetry\s+(?:install|add)\b|\bbundle\s+install\b|\bcomposer\s+install\b|\bgo\s+mod\s+download\b"
+                      r"|\bcargo\s+fetch\b|\bmvn\b.*\binstall\b")
 
 
 def record(name, status, detail=None):
@@ -59,11 +63,15 @@ def basic(native, result, spec, evidence, report, invalid, lost, missing, blocke
 
 
 def covered(path, globs):
-    """Whether a task's ``paths`` cover ``path`` (D37 §11.2): a directory (trailing / or /**), a glob, or the path itself
-    and everything under it."""
+    """Whether a task's ``paths`` cover ``path`` (D37 §11.2): a directory (trailing / or /**), the whole project (".", "**"),
+    a glob — ``**/`` is zero or more directories, ``*`` may cross directories — or the path itself and everything under it."""
+    path = path.lstrip("/")
     path = path[2:] if path.startswith("./") else path
-    for item in globs or []:
-        item = str(item).strip()
+    for raw in globs or []:
+        raw = str(raw).strip()
+        if raw in {".", "./", "/", "*", "**", "**/*"}:   # the whole project
+            return True
+        item = raw.lstrip("/")
         item = item[2:] if item.startswith("./") else item
         if not item:
             continue
@@ -73,6 +81,27 @@ def covered(path, globs):
             if path.startswith(item):
                 return True
             continue
-        if path == item or path.startswith(item + "/") or fnmatch.fnmatchcase(path, item):
+        if path == item or path.startswith(item + "/") or _glob(item).fullmatch(path):
             return True
     return False
+
+
+def _glob(pattern):
+    out, i = [], 0
+    while i < len(pattern):
+        if pattern.startswith("**/", i):
+            out.append("(?:.*/)?")
+            i += 3
+        elif pattern.startswith("**", i):
+            out.append(".*")
+            i += 2
+        elif pattern[i] == "*":
+            out.append(".*")
+            i += 1
+        elif pattern[i] == "?":
+            out.append(".")
+            i += 1
+        else:
+            out.append(re.escape(pattern[i]))
+            i += 1
+    return re.compile("".join(out))

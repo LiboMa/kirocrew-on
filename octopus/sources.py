@@ -149,7 +149,7 @@ def _suspicious_objects(project, objects):
 SHA = re.compile(r"[0-9a-f]{40}")
 
 
-def task_candidate(project, message, branch, scratch, parent, base):
+def task_candidate(project, message, branch, scratch, parent, base, start=None):
     """A task's candidate commit (D37 §3): the workspace's pending changes committed the way a publish commits them,
     everything new since ``parent`` (the previous candidate, else the clone's baseline) checked, and the branch moved only
     when nothing in it looks like a credential or a .env. An Agent that rewrote history leaves ``parent`` behind: the
@@ -176,30 +176,68 @@ def task_candidate(project, message, branch, scratch, parent, base):
             insertions += int(fields[0]) if fields[0].isdigit() else 0   # "-" for a binary file
             deletions += int(fields[1]) if fields[1].isdigit() else 0
     changed = _git(project, "rev-parse", candidate + "^{tree}") != _git(project, "rev-parse", (parent if known else since) + "^{tree}")
+    if start and subprocess.run(["git", "cat-file", "-e", start + "^{commit}"], cwd=project, capture_output=True,
+                                stdin=subprocess.DEVNULL, timeout=60).returncode == 0:
+        # the task's deliverables are what it changed since it started (D37 §11.2): a retry's revert is not a change
+        names = changed_names(project, start, candidate)
     return {"sha": candidate, "parent": parent, "changed": changed, "files": files, "insertions": insertions,
             "deletions": deletions, "rewritten": rewritten, "secrets": secrets, "names": names[:200],
             **({"names_truncated": True} if len(names) > 200 else {})}
 
 
-def baseline_apply(project, base, parent, candidate):
-    """Lay a test task's changes on the Session's baseline, in place (D37 §11.1): tracked files become ``base`` (the
-    untracked ones — dependencies, virtual environments — stay), then the files the task changed between ``parent`` and
-    ``candidate`` are taken from the candidate, or removed where it deleted them. ``baseline_restore`` undoes it."""
-    changes = _git_bytes(project, "diff", "--name-status", "--no-renames", "-z", parent, candidate).split(b"\0")
-    _git(project, "read-tree", "-u", "--reset", base)
+def baseline_tree(project, base, start, candidate):
+    """The Session's base with the task's own change (``start`` → ``candidate``) applied three-way (D37 §11.1): what its
+    tests must fail on. ``ValueError`` (the gate is skipped, never judged) when there is no earlier change to compare with,
+    or the change does not apply cleanly — e.g. the test task also edited a file that the base does not have."""
+    tree = lambda commit: _git(project, "rev-parse", commit + "^{tree}")
+    if tree(base) == tree(start):
+        raise ValueError("会话中此前没有源码改动：测试无法与改动之前比较")
+    done = subprocess.run(["git", "merge-tree", "--write-tree", "--name-only", "--no-messages", "--merge-base=" + start,
+                           base, candidate], cwd=project, capture_output=True, stdin=subprocess.DEVNULL, timeout=120)
+    lines = done.stdout.decode(errors="replace").splitlines()
+    if done.returncode == 1:
+        conflicts = [line for line in lines[1:] if line.strip()][:10]
+        raise ValueError("测试任务的改动无法叠加到基线（与之冲突：" + "、".join(conflicts) + "），例如它同时修改了实现文件")
+    if done.returncode != 0 or not lines or not SHA.fullmatch(lines[0].strip()):
+        raise ValueError("无法生成基线：" + scrub(done.stderr.decode(errors="replace"))[:200])
+    return lines[0].strip()
+
+
+def baseline_apply(project, base, start, candidate):
+    """Switch the project's tracked files to ``baseline_tree``, in place (D37 §11.1): the untracked ones — dependencies,
+    virtual environments — stay. Refused (``ValueError``, nothing switched) when that would lose workspace state that is
+    not in the candidate: uncommitted edits to tracked files (e.g. a tracked .env.development left out of candidates), or a
+    local file where the baseline has one. ``baseline_restore`` undoes it."""
+    target = baseline_tree(project, base, start, candidate)
+    edited = [n for n in _git_bytes(project, "diff", "--name-only", "-z", "--no-renames", candidate).decode(
+        errors="replace").split("\0") if n]
+    if edited:
+        raise ValueError("工作区有未进入候选的已跟踪改动（" + "、".join(edited[:10]) + "），切到基线会覆盖它们")
+    added = [n for n in _git_bytes(project, "diff", "--name-only", "-z", "--no-renames", "--diff-filter=A", candidate,
+                                   target).decode(errors="replace").split("\0") if n]
     taken = []
-    for status, path in zip(changes[0::2], changes[1::2]):
-        name = path.decode(errors="surrogateescape")
-        if not name:
-            continue
-        if status.startswith(b"D"):
-            target = Path(project) / name
-            if target.is_file() or target.is_symlink():
-                target.unlink()
-        else:
-            taken.append(":(literal)" + name)   # a name is never read as pathspec magic
-    for start in range(0, len(taken), 100):
-        _git(project, "checkout", candidate, "--", *taken[start:start + 100])
+    for name in added:
+        parts = Path(name).parts
+        parents = [Path(project).joinpath(*parts[:k]) for k in range(1, len(parts))]   # a local file where it needs a folder
+        path = Path(project) / name
+        if path.exists() or path.is_symlink() or any(p.exists() and not p.is_dir() for p in parents):
+            taken.append(name)
+    if taken:
+        raise ValueError("工作区中的 " + "、".join(taken[:10]) + " 不在候选中，而基线有同名文件：切到基线会覆盖它")
+    _git(project, "read-tree", "-u", "--reset", target)
+
+
+def changed_names(project, since, candidate):
+    """The files ``candidate`` changes relative to ``since`` (where its task started; D37 §11.2)."""
+    raw = _git_bytes(project, "diff", "--name-only", "-z", "--no-renames", since, candidate).decode(errors="replace")
+    return [name for name in raw.split("\0") if name]
+
+
+def dirty_paths(project):
+    """What the workspace has beyond its HEAD — e.g. the files a check run wrote (.coverage, reports): they are the
+    platform's, not the next task's deliverables (D37 §11.2)."""
+    raw = _git_bytes(project, "status", "--porcelain=v1", "-z", "--untracked-files=all", "--no-renames")
+    return [entry[3:].decode(errors="replace") for entry in raw.split(b"\0") if len(entry) > 3][:200]
 
 
 def baseline_restore(project, candidate):

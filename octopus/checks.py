@@ -37,7 +37,7 @@ class Checks:
             job = uuid.uuid4().hex
             self.jobs[job] = {"run_id": run_id, "attempt_id": attempt_id, "kind": kind, "state": "running", "results": [],
                               "passed": None, "failed": None, "current": None, "cancelled": False, "ended": None,
-                              "error": None}
+                              "error": None, "artifacts": []}
             self.by_attempt[(run_id, attempt_id, kind)] = job
         threading.Thread(target=self._run, args=(job, project, list(commands), around), daemon=True,
                          name="octopus-checks").start()
@@ -48,7 +48,7 @@ class Checks:
             value = self.jobs.get(job)
             if value is None:   # unknown, or the Worker restarted since: the platform starts the checks again
                 raise Error(404, "check_unknown", "检查任务不存在（Worker 可能已重启）")
-            return {key: value[key] for key in ("state", "passed", "failed", "error")} | \
+            return {key: value[key] for key in ("state", "passed", "failed", "error", "artifacts")} | \
                 {"results": [dict(r) for r in value["results"]]}
 
     def running(self, run_id, kind):
@@ -102,7 +102,12 @@ class Checks:
                 except Exception as exc:
                     with self.lock:
                         value["error"] = (value["error"] + "；" if value["error"] else "") + "恢复失败：" + sources.scrub(exc)
+            try:   # what the commands left (.coverage, reports): the platform's, not the next task's deliverables (§11.2)
+                artifacts = sources.dirty_paths(project)
+            except Exception:
+                artifacts = []
             with self.lock:
+                value["artifacts"] = artifacts
                 value.update(state="done", passed=passed and not value["cancelled"] and len(value["results"]) == len(commands),
                              failed=failed, current=None, ended=time.time())
 

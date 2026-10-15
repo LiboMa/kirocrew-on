@@ -73,6 +73,12 @@ class CoveredTests(unittest.TestCase):
         for path, globs, expected in (("src/a/b.py", ["src/"], True), ("src/a/b.py", ["src/**"], True),
                                       ("src/a/b.py", ["src/*.py"], True), ("src/a/b.py", ["src"], True),
                                       ("./README.md", ["README.md"], True), ("README.md", ["./README.md"], True),
-                                      ("docs/a.md", ["src/"], False), ("srcx/a.py", ["src"], False)):
+                                      ("docs/a.md", ["src/"], False), ("srcx/a.py", ["src"], False),
+                                      # the globstar forms planners write
+                                      ("src/index.ts", ["src/**/*.ts"], True), ("src/a/b/c.ts", ["src/**/*.ts"], True),
+                                      ("tests/test_a.py", ["tests/**/*.py"], True), ("setup.py", ["**/*.py"], True),
+                                      ("src/a.py", ["src/**/*"], True), ("src/a.js", ["src/**/*.ts"], False),
+                                      ("a/b.py", ["."], True), ("a/b.py", ["./"], True), ("a/b.py", ["**"], True),
+                                      ("src/a.py", ["/src/"], True)):
             with self.subTest(path=path, globs=globs):
                 self.assertIs(gates.covered(path, globs), expected)

@@ -224,7 +224,18 @@ class Engine:
                 return candidate
         return None
 
-    def _more_gates(self, run, config, task, attempt, spec, evidence, report, latest):
+    @staticmethod
+    def _task_start(db, rid, task_id):
+        """Where a task started (D37 §11, review fix): the newest candidate another task left on the branch. Its own failed
+        Attempts move the branch too, so measuring from the previous Attempt would count a retry's revert as a change."""
+        for row in db.execute("SELECT evidence FROM attempts WHERE run_id=? AND task_id!=? AND evidence LIKE '%\"candidate\"%' "
+                              "ORDER BY updated DESC, created DESC", (rid, task_id)):
+            candidate = json.loads(row["evidence"] or "{}").get("candidate")
+            if candidate and candidate.get("sha") and candidate.get("moved", True):
+                return candidate["sha"]
+        return None
+
+    def _more_gates(self, run, config, task, attempt, spec, evidence, report, latest, start=None):
         """diff_present, no_secrets and the start of checks_pass for a code task; review_bound for a review (D37 §4).
         (error, failure_type, checking): ``checking`` when the verify commands were started."""
         records, kind = evidence["gates"], spec.get("kind")
@@ -262,7 +273,8 @@ class Engine:
         message = f"KiroCrew ON：{spec.get('name') or task['id']}（{run['id']}/{task['id']} 第 {attempt['number']} 次）"
         try:
             candidate = self.request(config, "/candidate", {"run_id": run["id"], "attempt_id": attempt["id"], "mode": "commit",
-                                                            "message": message, **({"parent": latest["sha"]} if latest else {})},
+                                                            "message": message, **({"parent": latest["sha"]} if latest else {}),
+                                                            **({"since": start} if start else {})},
                                      timeout=180)
         except Error as exc:
             if exc.status == 404:
@@ -273,7 +285,7 @@ class Engine:
             raise
         evidence["candidate"] = {**{key: candidate.get(key) for key in
                                     ("sha", "parent", "changed", "files", "insertions", "deletions", "rewritten")},
-                                 "moved": not candidate["secrets"],
+                                 "moved": not candidate["secrets"], "start": start,
                                  **{key: candidate[key] for key in ("names", "names_truncated") if key in candidate}}
         if not candidate["changed"]:
             if kind in ("implement", "deliver"):
@@ -315,19 +327,24 @@ class Engine:
             return "skip", gates.OLD_WORKER
         if not spec.get("paths"):
             return "skip", "任务未声明可改动路径（paths）"
-        owners = {}
+        owners, generated = {}, set()
         with self.db.read() as db:
+            # What the platform's own check runs left in the workspace (.coverage, reports) is nobody's deliverable.
+            for row in db.execute("SELECT evidence FROM attempts WHERE run_id=? AND evidence LIKE '%_artifacts\"%'", (run["id"],)):
+                value = json.loads(row["evidence"] or "{}")
+                generated.update(value.get("check_artifacts") or [], value.get("baseline_artifacts") or [])
             for row in db.execute("SELECT t.spec tspec, a.evidence FROM tasks t JOIN attempts a ON a.id=t.current_attempt "
                                   "WHERE t.run_id=? AND t.ordinal<? AND t.status='accepted' ORDER BY t.ordinal",
                                   (run["id"], task["ordinal"])):
                 names = (json.loads(row["evidence"] or "{}").get("candidate") or {}).get("names") or []
                 for name in names:
-                    owners.setdefault(name, json.loads(row["tspec"]).get("name") or "此前的任务")
+                    if name not in generated:
+                        owners.setdefault(name, json.loads(row["tspec"]).get("name") or "此前的任务")
         if not owners:
             return "skip", "此前的已验收任务没有记录文件"
         broken = {}
         for name in candidate["names"]:
-            if name in owners and not gates.covered(name, spec["paths"]):
+            if name in owners and name not in generated and not gates.covered(name, spec["paths"]):
                 broken.setdefault(owners[name], []).append(name)
         if not broken:
             return "pass", None
@@ -338,9 +355,15 @@ class Engine:
         """tests_fail_on_baseline (D37 §11.1): the second run of the verify commands, on the Session's baseline."""
         candidate = evidence["candidate"]
         commands = json.loads(attempt["spec"]).get("verify", [])
+        skip = lambda detail: (evidence["gates"].append(gates.record("tests_fail_on_baseline", "skip", detail)), False)[1]
+        if not candidate.get("start"):   # e.g. tests for code the Session found: nothing to compare with
+            return skip("会话中此前没有源码改动：测试无法与改动之前比较")
+        installing = [c for c in commands if gates.INSTALLS.search(c)]
+        if installing:
+            return skip(f"检查命令会安装依赖（{installing[0][:80]}）：在基线上运行会改动依赖目录，不在基线上运行")
         try:
             started = self.request(config, "/verify/start", {"run_id": run["id"], "attempt_id": attempt["id"], "commands": commands,
-                                                             "baseline": {"candidate": candidate["sha"], "parent": candidate["parent"]}})
+                                                             "baseline": {"candidate": candidate["sha"], "start": candidate["start"]}})
         except Error as exc:
             if not 400 <= exc.status < 500:
                 raise
@@ -362,10 +385,15 @@ class Engine:
         if status["state"] != "done":
             return
         evidence["baseline_results"] = status.get("results") or []
+        evidence["baseline_artifacts"] = status.get("artifacts") or []
         base = str(evidence["baseline"].get("base") or "")[:7]
-        if status.get("lost") or status.get("error"):
-            evidence["gates"].append(gates.record("tests_fail_on_baseline", "skip",
-                                                  status.get("error") or "基线检查中断（Worker 重启）"))
+        last = evidence["baseline_results"][-1] if evidence["baseline_results"] else {}
+        unjudged = (status.get("error") or ("基线检查中断（Worker 重启）" if status.get("lost") else None)
+                    or ("基线检查已停止" if last.get("stopped") or (not status.get("passed") and status.get("failed") is None) else None)
+                    or (f"基线上的检查命令超时：{last.get('command', '')}" if last.get("timeout") else None)
+                    or ("基线上的检查命令无法运行" if last and last.get("exit") is None else None))
+        if unjudged:   # nothing about the tests: never a pass or a fail
+            evidence["gates"].append(gates.record("tests_fail_on_baseline", "skip", unjudged))
             return self._settle(run, task, attempt, evidence, None)
         if status.get("passed"):
             error = f"新增的测试在改动之前（基线 {base}）也通过，不能证明新行为"
@@ -397,11 +425,14 @@ class Engine:
         if status["state"] != "done":
             return
         evidence["check_results"] = status["results"]
+        evidence["check_artifacts"] = status.get("artifacts") or []
         failed = status["results"][status["failed"]] if status.get("failed") is not None else None
         if status["passed"]:
             evidence["gates"].append(gates.record("checks_pass", "pass", f"{len(status['results'])} 条命令"))
             error = None
-            if json.loads(attempt["spec"]).get("kind") == "test" and (evidence.get("candidate") or {}).get("changed"):
+            if json.loads(attempt["spec"]).get("kind") == "test" and not (evidence.get("candidate") or {}).get("changed"):
+                evidence["gates"].append(gates.record("tests_fail_on_baseline", "skip", "测试任务没有改动"))
+            elif json.loads(attempt["spec"]).get("kind") == "test":
                 started = self._start_baseline(run, config, attempt, evidence)
                 if started:
                     with self.db.transaction() as db:
@@ -504,6 +535,7 @@ class Engine:
                 "WHERE t.run_id=? AND t.ordinal<? AND t.status='accepted' ORDER BY t.ordinal", (rid, task["ordinal"]))]
             repair = recovery.feedback(db, run, attempt)
             latest = self._head_candidate(db, rid)
+            start = self._task_start(db, rid, task["id"])
         spec = json.loads(attempt["spec"])
         snapshot = json.loads(run["snapshot"])
         gated = snapshot.get("execution_contract", 1) >= 3 and task["id"] != planning.PLAN_ID   # D37
@@ -586,7 +618,8 @@ class Engine:
             error, failure_type, evidence["gates"] = gates.basic(native, result, spec, evidence, report, invalid, lost,
                                                                  missing, blocked_line)
             if not error and gated:
-                error, failure_type, checking = self._more_gates(run, config, task, attempt, spec, evidence, report, latest)
+                error, failure_type, checking = self._more_gates(run, config, task, attempt, spec, evidence, report, latest,
+                                                                 start)
                 if checking:   # the verify commands run; the Attempt is judged when they end
                     with self.db.transaction() as db:
                         journal.change(db, "attempts", attempt["id"], journal.WORKER, "attempt.checking",

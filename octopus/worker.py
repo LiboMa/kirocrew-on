@@ -320,6 +320,7 @@ class Worker:
 
     def files(self, body):
         """Read-only project files for the console preview: never outside the project, never hidden files (.env, .git)."""
+        self._not_on_baseline(body.get("run_id"))
         self._undo_baseline(self.path(body.get("run_id")))
         project = workspace.project_dir(self.path(body.get("run_id"))).resolve()
         relative = body.get("path") or ""
@@ -342,6 +343,7 @@ class Worker:
         """What a download of the run's project contains (D36 §4.2): every file and directory and .git, without
         dependency and cache directories, .env files, symlinks (never followed) or git hooks; .git config files are
         packed cleaned (safe_git_config). 413 above the size limit, naming the largest parts."""
+        self._not_on_baseline(run_id)
         self._undo_baseline(self.path(run_id))
         project = workspace.project_dir(self.path(run_id))
         files, folders, configs, links, skipped, excluded, sizes, total = [], [], [], [], [], set(), {}, 0
@@ -407,14 +409,14 @@ class Worker:
         # tests_fail_on_baseline (D37 §11.1): the same commands, in place, on the Session's baseline with the test task's
         # changes laid on top; the workspace is put back on the candidate whatever happens.
         require(isinstance(baseline, dict) and all(isinstance(baseline.get(k), str) and workspace.SHA.fullmatch(baseline[k])
-                                                   for k in ("candidate", "parent")), "基线检查须给出完整的提交 ID")
+                                                   for k in ("candidate", "start")), "基线检查须给出完整的提交 ID")
         base = workspace.read_record(run).get("commit")
         require(base, "此会话的项目没有 Git 基线", 409, "candidate_unsupported")
         marker = run / "baseline.json"
 
         def prepare():
             write(marker, {"candidate": baseline["candidate"]})
-            workspace.baseline_apply(project, base, baseline["parent"], baseline["candidate"])
+            workspace.baseline_apply(project, base, baseline["start"], baseline["candidate"])
 
         def restore():
             workspace.baseline_restore(project, baseline["candidate"])
@@ -425,6 +427,11 @@ class Worker:
 
     def verify_status(self, body):
         return self.checks.status(str(body.get("job", "")))
+
+    def _not_on_baseline(self, rid):
+        """While a baseline run has the project on the base (D37 §11.1), what reads or serves its files waits: a download,
+        a preview start or a publish would otherwise take the baseline for the Session's work."""
+        require(not self.checks.running(rid, "baseline"), "正在会话基线上运行测试，稍后再试", 409, "baseline_running")
 
     def _undo_baseline(self, run):
         """A baseline run the Worker did not finish (it restarted): the workspace back on the candidate first (D37 §11.1)."""
@@ -445,7 +452,7 @@ class Worker:
         require(base and branch, "此会话的项目没有 Git 基线，无法生成候选", 409, "candidate_unsupported")
         mode = body.get("mode")
         require(mode in {"commit", "check"}, "mode 只能是 commit 或 check")
-        for key in ("parent", "expected"):
+        for key in ("parent", "expected", "since"):
             require(body.get(key) is None or (isinstance(body[key], str) and workspace.SHA.fullmatch(body[key])),
                     f"{key} 须为完整的提交 ID")
         try:
@@ -453,7 +460,7 @@ class Worker:
                 require(body.get("expected"), "check 需要 expected")
                 return workspace.clean_against(project, body["expected"])
             message = str(body.get("message") or "KiroCrew ON：任务候选")[:300]
-            return workspace.task_candidate(project, message, branch, run, body.get("parent"), base)
+            return workspace.task_candidate(project, message, branch, run, body.get("parent"), base, body.get("since"))
         except ValueError as exc:
             raise Error(409, "candidate_failed", workspace.scrub(exc)) from None
 
@@ -462,6 +469,7 @@ class Worker:
         what a download leaves out). The bundle carries every commit, so everything new since the clone's baseline is
         checked first, and the branch moves only when nothing in it looks like a credential or a .env file."""
         run = self.path(body["run_id"])
+        self._not_on_baseline(body["run_id"])
         self._undo_baseline(run)
         project, record = workspace.project_dir(run), workspace.read_record(run)
         base, branch = record.get("commit"), record.get("branch")
@@ -581,6 +589,8 @@ class Worker:
         action, rid = body.get("action"), body["run_id"]
         require(action in {"start", "stop", "status"}, "操作无效")
         run = self.path(rid)
+        if action == "start":
+            self._not_on_baseline(rid)
         self._undo_baseline(run)
         if action == "stop":
             return self.apps.stop(rid)

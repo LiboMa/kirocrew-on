@@ -37,7 +37,8 @@ def plan_step(models=None, tools=None, limitations=None):
    implement 与 test 任务必须给出至少 1 条 verify（实际可执行的验证命令）；depends_on 只列前序任务的 id；
    paths 写本任务可改动的路径，便于续作时判断哪些任务受影响。
    平台的门禁：test 任务新增的测试须在会话基线（实现之前的源码）上失败；后续任务若要修改此前任务交付的文件，
-   须在自己的 paths 中列出这些文件。
+   须在自己的 paths 中列出这些文件。test 任务只写测试、不改实现，其 verify 不安装依赖（不写 npm install / pip install 等）；
+   检查与测试生成的文件（覆盖率、报告、构建产物）应写入 .gitignore。
 5. 可运行的产出：交付物是可以运行的应用时，最后的交付任务须在项目根目录写 .octopus/preview.json
    （processes：命令、cwd、端口或 "$PORT"、哪个是入口；install：依赖安装；前后端分开时各写一个进程），
    并把「.octopus/preview.json 能按声明启动应用」列为该任务的验收项；用户据此下载到本机或远程预览。

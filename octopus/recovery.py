@@ -80,6 +80,8 @@ result 只能是 pass、fail 或 n/a。验收标准之外、且不是必须修�
         gates += """
 平台在通过检查之后，还会在会话基线（第一个任务改动之前的源码）上叠加本任务改动的文件，再运行一次本任务的检查命令：
 新增或修改的测试必须在那里失败，才能证明它们测试了新行为（tests_fail_on_baseline）；在改动之前也能通过的测试不被接受。
+测试任务只写测试，不修改实现文件（需要改实现时在 outcome.json 中说明并使用 changes_requested）；检查命令中不安装依赖
+（依赖已在工作区中），测试产生的文件（覆盖率、报告）写入 .gitignore。
 """
     if contract and contract.get("paths"):
         gates += """

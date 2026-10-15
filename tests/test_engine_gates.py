@@ -307,35 +307,103 @@ class EngineGateTests(TeamsWorkersCase):
         _, evidence = self.attempt(rid, "deliver")
         self.assertEqual(self.gates(evidence).get("artifacts_locked"), "skip")
 
+    TEST = {"id": "test", "name": "测试", "tool": "claude", "prompt": "补测试", "kind": "test", "acceptance": ["测试覆盖新行为"],
+            "verify": ["npm test"]}
+
+    def gate_worker(self, names=None, changed=None, artifacts=None, baseline=None):
+        """A FakeWorker for task chains: per-task candidates (sha, file names, changed), checks that pass leaving
+        ``artifacts[task]``, and the baseline run answering ``baseline``; it records what each request carried."""
+        worker, jobs = FakeWorker(), {}
+        names, changed, artifacts = names or {}, changed or {}, artifacts or {}
+        shas = {}
+        def task_of(body):
+            return worker.dispatched[body["attempt_id"]]["spec"]["id"]
+        def call(config, path, body=None, **kwargs):
+            if path == "/candidate" and body["mode"] == "commit":
+                worker.calls.append((path, body))
+                task = task_of(body)
+                sha = shas.setdefault(task, (str(len(shas) + 1) * 40)[:40])
+                return {"sha": sha, "parent": body.get("parent", BASE), "changed": changed.get(task, True), "files": 1,
+                        "insertions": 1, "deletions": 0, "rewritten": False, "secrets": [], "names": names.get(task, [task + ".py"])}
+            if path == "/verify/start":
+                worker.calls.append((path, body))
+                job = ("base-" if body.get("baseline") else "job-") + body["attempt_id"]
+                jobs[job] = baseline if body.get("baseline") else {
+                    "state": "done", "passed": True, "failed": None, "error": None, "artifacts": artifacts.get(task_of(body), []),
+                    "results": [{"command": c, "exit": 0, "seconds": 1.0, "tail": ""} for c in body["commands"]]}
+                return {"job": job, **({"baseline": True, "base": BASE} if body.get("baseline") else {})}
+            if path == "/verify/status":
+                worker.calls.append((path, body))
+                return jobs[body["job"]]
+            return worker(config, path, body, **kwargs)
+        call.worker, call.shas = worker, shas
+        return call
+
+    def baseline_answer(self, passed, **last):
+        return {"state": "done", "passed": passed, "failed": None if passed else 0, "error": None, "artifacts": [],
+                "results": [{"command": "npm test", "exit": 0 if passed else 1, "seconds": 1.0, "tail": "", **last}]}
+
     def test_a_test_tasks_tests_must_fail_on_the_baseline(self):
-        for baseline_passed, verdict in ((True, "fail"), (False, "pass")):
-            with self.subTest(baseline_passed=baseline_passed):
-                worker = FakeWorker()
-                checks = {"state": "done", "passed": True, "failed": None, "error": None,
-                          "results": [{"command": "npm test", "exit": 0, "seconds": 1.0, "tail": "ok"}]}
-                baseline = {"state": "done", "passed": baseline_passed, "failed": None if baseline_passed else 0, "error": None,
-                            "results": [{"command": "npm test", "exit": 0 if baseline_passed else 1, "seconds": 1.0, "tail": ""}]}
-                jobs = {}
-                original = worker.__call__
-                def call(config, path, body=None, **kwargs):
-                    if path == "/verify/start":
-                        worker.calls.append((path, body))
-                        job = ("base-" if body.get("baseline") else "job-") + body["attempt_id"]
-                        jobs[job] = baseline if body.get("baseline") else checks
-                        return {"job": job, **({"baseline": True, "base": BASE} if body.get("baseline") else {})}
-                    if path == "/verify/status":
-                        worker.calls.append((path, body))
-                        return jobs[body["job"]]
-                    return original(config, path, body, **kwargs)
-                test = {"id": "test", "name": "测试", "tool": "claude", "prompt": "补测试", "kind": "test",
-                        "acceptance": ["测试覆盖新行为"], "verify": ["npm test"]}
-                rid = self.session([test], request="start-%016d" % (2 + baseline_passed))
-                self.run_engine(call, ticks=16)
+        for passed, verdict in ((True, "fail"), (False, "pass")):
+            with self.subTest(baseline_passed=passed):
+                call = self.gate_worker(baseline=self.baseline_answer(passed))
+                rid = self.session([IMPLEMENT, self.TEST], request="start-%016d" % (2 + passed))
+                self.run_engine(call, ticks=24)
                 attempt, evidence = self.attempt(rid, "test")
                 self.assertEqual(self.gates(evidence).get("tests_fail_on_baseline"), verdict)
                 self.assertEqual(attempt["status"], "blocked" if verdict == "fail" else "accepted")
-                started = [b for p, b in worker.calls if p == "/verify/start" and b.get("baseline")]
-                self.assertEqual(started[0]["baseline"], {"candidate": C1, "parent": BASE})
+                started = [b for p, b in call.worker.calls if p == "/verify/start" and b.get("baseline")]
+                # measured from where the test task started: the implementation's candidate
+                self.assertEqual(started[0]["baseline"], {"candidate": call.shas["test"], "start": call.shas["code"]})
+
+    def test_tests_for_code_the_session_found_are_not_judged(self):
+        call = self.gate_worker(baseline=self.baseline_answer(True))
+        rid = self.session([self.TEST])
+        self.run_engine(call, ticks=16)
+        attempt, evidence = self.attempt(rid, "test")
+        skipped = [g for g in evidence["gates"] if g["name"] == "tests_fail_on_baseline"][0]
+        self.assertEqual((skipped["status"], attempt["status"]), ("skip", "accepted"))
+        self.assertIn("此前没有源码改动", skipped["detail"])
+        self.assertFalse([b for p, b in call.worker.calls if p == "/verify/start" and b.get("baseline")])
+
+    def test_a_baseline_that_says_nothing_about_the_tests_is_skipped(self):
+        cases = (("install", {**self.TEST, "verify": ["npm ci && npm test"]}, self.baseline_answer(True), "安装依赖"),
+                 ("timeout", self.TEST, {**self.baseline_answer(False, exit=None, timeout=True)}, "超时"),
+                 ("stopped", self.TEST, {**self.baseline_answer(False, exit=None, stopped=True)}, "已停止"),
+                 ("unchanged", self.TEST, self.baseline_answer(True), "没有改动"))
+        for number, (name, test, answer, words) in enumerate(cases):
+            with self.subTest(name):
+                call = self.gate_worker(baseline=answer, changed={"test": name != "unchanged"})
+                rid = self.session([IMPLEMENT, test], request="start-%016d" % (10 + number))
+                self.run_engine(call, ticks=24)
+                attempt, evidence = self.attempt(rid, "test")
+                skipped = [g for g in evidence["gates"] if g["name"] == "tests_fail_on_baseline"][0]
+                self.assertEqual(skipped["status"], "skip")
+                self.assertIn(words, skipped["detail"])
+                self.assertEqual(attempt["status"], "accepted")
+
+    def test_a_tasks_files_are_measured_from_where_it_started(self):
+        docs = {"id": "docs", "name": "文档", "tool": "claude", "prompt": "写文档", "kind": "deliver",
+                "acceptance": ["有文档"], "paths": ["README.md"]}
+        call = self.gate_worker(names={"code": ["src/a.py"], "docs": ["README.md"]})
+        rid = self.session([IMPLEMENT, docs])
+        self.run_engine(call, ticks=24)
+        sent = [b for p, b in call.worker.calls if p == "/candidate" and b["mode"] == "commit"
+                and call.worker.dispatched[b["attempt_id"]]["spec"]["id"] == "docs"]
+        self.assertEqual(sent[0]["since"], call.shas["code"])
+        self.assertNotIn("since", [b for p, b in call.worker.calls if p == "/candidate" and b["mode"] == "commit"][0])
+
+    def test_what_the_checks_left_is_nobodys_deliverable(self):
+        first = {"id": "notes", "name": "说明", "tool": "claude", "prompt": "写说明", "kind": "deliver",
+                 "acceptance": ["有说明"], "paths": ["docs/"]}
+        second = {"id": "readme", "name": "自述", "tool": "claude", "prompt": "写自述", "kind": "deliver",
+                  "acceptance": ["有自述"], "paths": ["README.md"]}
+        call = self.gate_worker(names={"code": ["src/a.py"], "notes": [".coverage", "docs/a.md"], "readme": [".coverage", "README.md"]},
+                                artifacts={"code": [".coverage"]})
+        rid = self.session([IMPLEMENT, first, second])
+        self.run_engine(call, ticks=30)
+        _, evidence = self.attempt(rid, "readme")
+        self.assertEqual(self.gates(evidence).get("artifacts_locked"), "pass")
 
     def test_an_old_worker_skips_the_baseline_gate(self):
         worker = FakeWorker()   # its /verify/start does not echo "baseline": it ran the commands on the candidate

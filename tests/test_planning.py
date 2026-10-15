@@ -77,6 +77,8 @@ class PlanningTests(unittest.TestCase):
         prompt = planning.plan_step()["prompt"]
         self.assertIn("会话基线", prompt)       # tests_fail_on_baseline
         self.assertIn("paths 中列出", prompt)   # artifacts_locked
+        self.assertIn("不安装依赖", prompt)
+        self.assertIn(".gitignore", prompt)
 
     def test_planned_tasks_need_their_contract(self):
         rid = self.start()["id"]
