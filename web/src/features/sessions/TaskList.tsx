@@ -65,6 +65,7 @@ export function TaskList({ run, onContinue }: { run: Run; onContinue: (taskId: s
                             <Meta label="换工具" value={`由协调者从 ${attempt.evidence.switched_from.tool} / ${attempt.evidence.switched_from.model} `
                               + `换为 ${attempt.spec.tool} / ${attempt.spec.model}：${attempt.evidence.switched_from.reason ?? "未说明原因"}`} />
                           )}
+                          {attempt.evidence.watchdog?.reason && <Meta label="看门狗" value={attempt.evidence.watchdog.reason} />}
                           <Meta label="实际后端" value={attempt.evidence.actual_backend} />
                           <Meta label="实际模型" value={attempt.evidence.actual_model} />
                           <Meta label="实际 Effort" value={attempt.evidence.actual_effort} />

@@ -165,6 +165,14 @@ describe("session detail", () => {
     });
   });
 
+  test("an attempt the watchdog stopped says why (D39)", async () => {
+    const task = blocked.tasks[0];
+    const evidence = { ...task.attempts![0].evidence, watchdog: { reason: "原生任务 31 分钟没有进展，看门狗已停止" } };
+    open({ ...blocked, tasks: [{ ...task, attempts: [{ ...task.attempts![0], evidence }] }, blocked.tasks[1]] } as Run);
+    await userEvent.click(await screen.findByText("执行证据与历史 Attempt"));
+    expect(screen.getByText("原生任务 31 分钟没有进展，看门狗已停止")).toBeInTheDocument();
+  });
+
   test("a Session that may not switch tools says so", async () => {
     open({ ...blocked, recovery: { ...blocked.recovery!, policy: { enabled: true, max_cycles: 2, switch_tools: false } } } as Run);
     expect(await screen.findByText("自动纠错已开启 · 最多 2 轮 · 不换工具")).toBeInTheDocument();

@@ -66,6 +66,7 @@ def _attempt(attempt, spec):
         "number": attempt.get("number"), "status": attempt.get("status"), "error": _line(attempt.get("error")),
         "requested": f"{spec.get('tool') or '—'} / {spec.get('model') or 'auto'}",
         "actual": f"{evidence.get('actual_backend') or '—'} / {evidence.get('actual_model') or '—'}",
+        "watchdog": _line((evidence.get("watchdog") or {}).get("reason")) or None,
         "switched": (f"{_line(switched.get('tool'), 40)} / {_line(switched.get('model'), 80)} → "
                      f"{spec.get('tool') or '—'} / {spec.get('model') or 'auto'}（协调者推荐）：{_line(switched.get('reason'))}")
                     if isinstance(switched, dict) else None,
@@ -158,6 +159,8 @@ def markdown(view, now=None):
                 f"- 请求：{_md(final['requested'])}；实际：{_md(final['actual'])}"]
         if final["switched"]:
             out.append(f"- 换工具：{_md(final['switched'])}")
+        if final["watchdog"]:
+            out.append(f"- 看门狗：{_md(final['watchdog'])}")
         if contract["deliverables"]:
             out.append("- 交付物：" + "、".join(_md(x) for x in contract["deliverables"]))
         if contract["verify"]:
@@ -233,6 +236,8 @@ def html(view, now=None):
                  f"请求：{e(final['requested'])}；实际：{e(final['actual'])}"]
         if final["switched"]:
             items.append(f"换工具：{e(final['switched'])}")
+        if final["watchdog"]:
+            items.append(f"看门狗：{e(final['watchdog'])}")
         contract = final["contract"]
         for label, values in (("交付物", contract["deliverables"]), ("检查命令（契约）", contract["verify"]),
                               ("可改动", contract["paths"])):

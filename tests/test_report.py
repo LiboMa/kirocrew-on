@@ -58,6 +58,12 @@ def outside_fences(lines):
 
 
 class ReportTests(unittest.TestCase):
+    def test_a_watchdog_stop_is_written_in_the_task_section(self):
+        value = view()
+        value["tasks"][0]["attempts"][-1]["evidence"]["watchdog"] = {"reason": "原生任务 31 分钟没有进展，看门狗已停止"}
+        self.assertIn("- 看门狗：原生任务 31 分钟没有进展，看门狗已停止", report.markdown(value))
+        self.assertIn("看门狗：原生任务 31 分钟没有进展，看门狗已停止", report.html(value))
+
     def test_a_switch_is_written_in_the_task_section(self):
         value = view()
         value["tasks"][0]["attempts"][-1]["evidence"]["switched_from"] = {

@@ -370,6 +370,8 @@ def compact_status(session, events):
                               "failed": [{"name": g["name"], "detail": str(g.get("detail") or "").split("\n")[0][:300]}
                                          for g in records if g.get("status") == "fail"],
                               "skipped": [g["name"] for g in records if g.get("status") == "skip"]}
+        if (evidence.get("watchdog") or {}).get("reason"):   # D39: stopped for making no progress
+            value["watchdog"] = evidence["watchdog"]["reason"]
         if evidence.get("switched_from"):   # D38: the Coordinator recommended this tool instead
             value["switched_from"] = evidence["switched_from"]
         if evidence.get("candidate"):

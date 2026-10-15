@@ -101,6 +101,13 @@ class CompactStatusTests(unittest.TestCase):
         self.assertEqual(tasks[0]["latest"]["switched_from"], switched)
         self.assertNotIn("switched_from", tasks[1]["latest"])
 
+    def test_a_stopped_stall_says_so(self):
+        session = json.loads(json.dumps(SESSION))
+        watchdog = json.loads('{"reason": "原生任务 31 分钟没有进展（最后工具：npm run build），看门狗已停止", "idle_minutes": 30, "attempt_minutes": 240, "last_progress": 1.0, "turns": 4, "last_tool": "npm run build", "stopped_at": 2.0}')
+        session["tasks"][0]["attempts"][-1]["evidence"]["watchdog"] = watchdog
+        latest = mcp.compact_status(session, [])["session"]["tasks"][0]["latest"]
+        self.assertEqual(latest["watchdog"], watchdog["reason"])
+
     def test_detail_returns_the_full_record(self):
         view = mcp.call(Client(), "octopus_status", {"run_id": RID, "detail": True})
         self.assertEqual(view, {"session": SESSION, "events": EVENTS})

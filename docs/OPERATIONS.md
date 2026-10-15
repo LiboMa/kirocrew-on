@@ -285,6 +285,16 @@ CloudFront 只使用 us-east-1 的证书）：分发加上别名与证书（SNI�
   - 控制台在不允许脚本的 iframe 中显示，可下载 Markdown / HTML。
 - **权限**：与查看会话相同（`read`），看不到会话时 404。
 
+### 看门狗（D39）
+
+- **判定**：运行中的 Attempt，最后进展（KiroCrew 子任务 `state.json` 的 `updated_at` 与 Attempt 创建时间中较晚的）超过
+  `idle_minutes`（默认 30）或 Attempt 总时长超过 `attempt_minutes`（默认 240）时，平台以 `DELETE /api/spawn/{id}` 停止该原生任务。
+  等待批准与检查命令运行期间不判定。
+- **之后**：Attempt `blocked`（原因写明分钟数与最后工具），自动重试一次（不消耗纠错轮次）；重试仍卡住时交给协调者诊断（可换工具）。
+  自动纠错关闭的会话只停止、不重试。
+- **长命令**：单个命令运行期间 `updated_at` 不更新；大型构建或完整测试较慢的项目，启动或续作时设 `recovery.idle_minutes`（5–240）。
+- **旧 Worker**（不支持停止单个任务）：不行动，任务继续，避免两个 Agent 同时修改同一工作区。
+
 ### 换工具（D38 第 1 期）
 
 - **工具是否可用**：Worker `/health` 的 `tools`（`available`、`reason`；Kiro 另有 `login`）。平台只在登记 Worker 或「执行环境 · Worker」

@@ -125,6 +125,8 @@ export interface AttemptEvidence {
   gates?: Gate[];
   /** The task's candidate commit on the Session's branch (D37 §3). */
   candidate?: Candidate | null;
+  /** The watchdog stopped this Attempt's native task for making no progress or running too long (D39). */
+  watchdog?: { reason?: string; unsupported?: boolean; [key: string]: unknown } | null;
   /** The Coordinator recommended this Attempt's tool instead of the one that failed (D38 §3.3). */
   switched_from?: { tool: string; model: string; effort: string; reason?: string | null; by: string; recovery: number } | null;
   /** Verify commands still running (D37 §5). */
