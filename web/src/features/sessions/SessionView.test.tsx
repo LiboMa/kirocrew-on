@@ -173,6 +173,12 @@ describe("session detail", () => {
     expect(screen.getByText("原生任务 31 分钟没有进展，看门狗已停止")).toBeInTheDocument();
   });
 
+  test("each task says where its tool came from", async () => {
+    const task = blocked.tasks[0];
+    open({ ...blocked, tasks: [{ ...task, mapping: { source: "planner", label: "KiroCrew 规划" } }, blocked.tasks[1]] } as Run);
+    expect(await screen.findByText("来源：KiroCrew 规划")).toBeInTheDocument();
+  });
+
   test("a Session that may not switch tools says so", async () => {
     open({ ...blocked, recovery: { ...blocked.recovery!, policy: { enabled: true, max_cycles: 2, switch_tools: false } } } as Run);
     expect(await screen.findByText("自动纠错已开启 · 最多 2 轮 · 不换工具")).toBeInTheDocument();

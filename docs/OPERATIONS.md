@@ -285,6 +285,12 @@ CloudFront 只使用 us-east-1 的证书）：分发加上别名与证书（SNI�
   - 控制台在不允许脚本的 iframe 中显示，可下载 Markdown / HTML。
 - **权限**：与查看会话相同（`read`），看不到会话时 404。
 
+### 任务的映射来源
+
+会话视图中每个任务带 `mapping: {source, label}`：`steps`（提交时指定）、`workflow`（工作流名称与版本）、`template`（模板，
+规则匹配时注明）、`document`（导入的工作流文档）、`platform`（规划任务本身）、`planner`（KiroCrew 规划）、`continue`
+（续作时由用户修改了工具 / 模型 / Effort）、`coordinator`（协调者换用，写明从哪个工具换来与原因）。控制台任务行、MCP 状态与报告的计划表显示它。
+
 ### 交接与轮询（D40）
 
 - **前序交接**：派发时每个已验收的前序任务（按 `depends_on`）只带名称、类别、实际后端、结论、摘要（≤ 1500 字符）、

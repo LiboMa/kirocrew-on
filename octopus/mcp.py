@@ -390,6 +390,7 @@ def compact_status(session, events):
             "reason": decision.get("reason")} if last else None}
     view["tasks"] = [{"id": task["id"], "name": task["spec"].get("name"), "status": task["status"],
                       "tool": task["spec"].get("tool"), "model": task["spec"].get("model"),
+                      **({"mapping": task["mapping"]["label"]} if (task.get("mapping") or {}).get("label") else {}),
                       "attempts": len(task.get("attempts") or []), "latest": latest(task.get("attempts"))}
                      for task in session.get("tasks", [])]
     recent = [{**event, "payload": {k: v for k, v in event["payload"].items() if k not in ("evidence", "context")}}

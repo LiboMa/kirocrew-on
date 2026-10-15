@@ -13,7 +13,7 @@
 ## 核心闭环的完整版（原 M2）
 - Request 数据表与 API、准入（确认模式 / 按仓库范围自动准入）与策略快照。
 - 门禁目录（`tests_fail_on_baseline`、`diff_present`、`checks_pass`、`review_bound` 等）与 Pipeline schema 2。
-- 映射策略（显式 → Workflow → 个人 / Team 偏好）与映射来源记录；回退由 KiroCrew 协调者推荐（D38 第 1 期），不内置回退链；`replan` 决定的代码校验。
+- 映射策略的个人 / Team 偏好（映射来源已记录并展示；回退由 KiroCrew 协调者推荐，不内置回退链）；`replan` 决定的代码校验。
 - 完整恢复阶梯 L0–L4、预算、看门狗、条件满足后自动恢复。
 - 原生权限批准代理（控制台 / CLI / MCP 可见并可处理，K04）。
 

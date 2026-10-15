@@ -108,6 +108,12 @@ class CompactStatusTests(unittest.TestCase):
         latest = mcp.compact_status(session, [])["session"]["tasks"][0]["latest"]
         self.assertEqual(latest["watchdog"], watchdog["reason"])
 
+    def test_each_task_says_where_its_tool_came_from(self):
+        session = json.loads(json.dumps(SESSION))
+        session["tasks"][0]["mapping"] = {"source": "planner", "label": "KiroCrew 规划"}
+        tasks = mcp.compact_status(session, [])["session"]["tasks"]
+        self.assertEqual(tasks[0]["mapping"], "KiroCrew 规划")
+
     def test_detail_returns_the_full_record(self):
         view = mcp.call(Client(), "octopus_status", {"run_id": RID, "detail": True})
         self.assertEqual(view, {"session": SESSION, "events": EVENTS})

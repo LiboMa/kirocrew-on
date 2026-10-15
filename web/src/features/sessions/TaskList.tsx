@@ -32,6 +32,7 @@ export function TaskList({ run, onContinue }: { run: Run; onContinue: (taskId: s
                   <h3 className="text-sm font-semibold">{spec.name}</h3>
                   <p className="mt-0.5 text-xs text-muted-foreground">
                     {TOOLS[spec.tool] ?? spec.tool} · {spec.model} · Effort {spec.effort || "继承默认"}
+                    {task.mapping && <>{" · "}<span>来源：{task.mapping.label}</span></>}
                   </p>
                 </div>
                 {run.kept?.tasks.includes(task.id) && (

@@ -95,6 +95,7 @@ def model(view, now=None):
         attempts = sorted(task.get("attempts") or [], key=lambda a: a.get("number") or 0)
         tasks.append({"ordinal": ordinal, "id": task.get("id"), "name": _line(spec.get("name") or task.get("id"), 200),
                       "kind": spec.get("kind") or "—", "tool": spec.get("tool") or "—", "status": task.get("status"),
+                      "mapping": _line((task.get("mapping") or {}).get("label"), 120) or "—",
                       "attempts": len(attempts),
                       "final": _attempt(attempts[-1], attempts[-1].get("spec") or spec) if attempts else None})
     planning = view.get("planning") or {}
@@ -144,9 +145,9 @@ def markdown(view, now=None):
         out += ["", f"**意图**：{_md(m['request']['intent'])}"]
     if m["request"]["summary"]:
         out += [""] + _block(m["request"]["summary"])
-    out += ["", "## 计划", "", "| # | 任务 | 类别 | 工具 | 状态 | 执行次数 |", "|---|---|---|---|---|---|"]
-    out += [f"| {t['ordinal']} | {_md(t['name'])} | {_md(t['kind'])} | {_md(t['tool'])} | {_md(t['status'])} | {t['attempts']} |"
-            for t in m["tasks"]]
+    out += ["", "## 计划", "", "| # | 任务 | 类别 | 工具 | 来源 | 状态 | 执行次数 |", "|---|---|---|---|---|---|---|"]
+    out += [f"| {t['ordinal']} | {_md(t['name'])} | {_md(t['kind'])} | {_md(t['tool'])} | {_md(t['mapping'])} | {_md(t['status'])} | "
+            f"{t['attempts']} |" for t in m["tasks"]]
     out += ["", "## 任务"]
     for task in m["tasks"]:
         out += ["", f"### {task['ordinal']}\\. {_md(task['name'])}", ""]
@@ -222,9 +223,9 @@ def html(view, now=None):
         out.append(f"<p><strong>意图</strong>：{e(m['request']['intent'])}</p>")
     if m["request"]["summary"]:
         out.append(f"<pre>{e(m['request']['summary'])}</pre>")
-    out += ["<h2>计划</h2>", "<table><tr><th>#</th><th>任务</th><th>类别</th><th>工具</th><th>状态</th><th>执行次数</th></tr>"]
+    out += ["<h2>计划</h2>", "<table><tr><th>#</th><th>任务</th><th>类别</th><th>工具</th><th>来源</th><th>状态</th><th>执行次数</th></tr>"]
     out += [f"<tr><td>{t['ordinal']}</td><td>{e(t['name'])}</td><td>{e(t['kind'])}</td><td>{e(t['tool'])}</td>"
-            f"<td>{e(t['status'])}</td><td>{t['attempts']}</td></tr>" for t in m["tasks"]]
+            f"<td>{e(t['mapping'])}</td><td>{e(t['status'])}</td><td>{t['attempts']}</td></tr>" for t in m["tasks"]]
     out += ["</table>", "<h2>任务</h2>"]
     for task in m["tasks"]:
         out.append(f"<h3>{task['ordinal']}. {e(task['name'])}</h3>")

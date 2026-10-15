@@ -172,6 +172,8 @@ export interface RunTask {
   spec: Step;
   current_attempt: string | null;
   attempts?: Attempt[];
+  /** Where its tool and model came from (M2: steps, workflow, template, document, planner, continue, coordinator). */
+  mapping?: { source: string; label: string };
 }
 
 export interface Attention {

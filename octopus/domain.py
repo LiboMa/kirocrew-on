@@ -225,6 +225,35 @@ def _active_admins(db):
     return db.execute("SELECT count(*) FROM users WHERE admin=1 AND active=1").fetchone()[0]
 
 
+def mapping(snapshot, task, evidence=None):
+    """Where a task's tool and model came from (M2 §6 acceptance 2): the Coordinator's switch, the user's continue (the
+    configuration differs from the one it was created or planned with), the KiroCrew planner, a saved workflow, a template,
+    an imported document, or the steps submitted with the request."""
+    switched = (evidence or {}).get("switched_from")
+    if switched:
+        reason = str(switched.get("reason") or "")[:120]
+        return {"source": "coordinator", "label": f"协调者从 {switched.get('tool')} / {switched.get('model') or 'auto'} 换来"
+                                                  + (f"：{reason}" if reason else "")}
+    spec, key = task["spec"], lambda s: (s.get("tool"), s.get("model") or "auto", s.get("effort") or "")
+    original = next((s for s in snapshot.get("steps") or [] if s.get("id") == task["id"]), None)
+    if original and key(original) != key(spec):
+        return {"source": "continue", "label": "续作时由用户修改"}
+    planned = snapshot.get("planning") or {}
+    if task["id"] == "plan" and planned.get("mode") == "agent":
+        return {"source": "platform", "label": "平台：需求分析与规划（Kiro）"}
+    if task["id"] in (planned.get("tasks") or []):
+        return {"source": "planner", "label": "KiroCrew 规划"}
+    if snapshot.get("origin") == "document":
+        return {"source": "document", "label": "导入的工作流文档"}
+    selection = snapshot.get("selection") or {}
+    if selection.get("workflow_id"):
+        return {"source": "workflow", "label": f"工作流「{snapshot.get('workflow_name')}」v{snapshot.get('workflow_version')}"}
+    if selection.get("template_id"):
+        kind = "规则匹配的模板" if snapshot.get("match_mode") == "rules" else "模板"
+        return {"source": "template", "label": f"{kind}「{snapshot.get('workflow_name')}」"}
+    return {"source": "steps", "label": "提交时指定"}
+
+
 def may_publish(db, actor, run):
     """The creator, a Team owner or an admin (D35 §5.2): who may publish a Session and answer its approvals (D38 A3)."""
     team_owner = bool(run["team_id"]) and db.execute(
@@ -765,6 +794,7 @@ class Service:
             def execute():
                 rid, now = uid("run"), time.time()
                 snapshot = {"workflow_id": wid, "workflow_version": version, "steps": spec,
+                            **({"origin": "document"} if body.get("document") is not None else {}),
                             "name": resolved["name"], "workflow_name": resolved["workflow_name"],
                             "selection": {k: v for k, v in resolved["selection"].items() if k != "steps"},
                             "match_mode": resolved["mode"], "match_reason": resolved["reason"]}
@@ -1320,6 +1350,9 @@ class Service:
             task = dict(row)
             task["spec"] = json.loads(task["spec"])
             task["task_id"] = run["id"] + "/" + task["id"]
+            current = db.execute("SELECT evidence FROM attempts WHERE id=?", (task["current_attempt"],)).fetchone() \
+                if task["current_attempt"] else None
+            task["mapping"] = mapping(snapshot, task, json.loads(current["evidence"] or "{}") if current else None)
             if detail:
                 task["attempts"] = []
                 for attempt in db.execute("SELECT * FROM attempts WHERE run_id=? AND task_id=? ORDER BY number",

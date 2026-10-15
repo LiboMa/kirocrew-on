@@ -58,6 +58,14 @@ def outside_fences(lines):
 
 
 class ReportTests(unittest.TestCase):
+    def test_the_plan_says_where_each_tool_came_from(self):
+        value = view()
+        value["tasks"][0]["mapping"] = {"source": "planner", "label": "KiroCrew 规划"}
+        md = report.markdown(value)
+        self.assertIn("| # | 任务 | 类别 | 工具 | 来源 | 状态 | 执行次数 |", md)
+        self.assertIn("| claude | KiroCrew 规划 |", md)
+        self.assertIn("<th>来源</th>", report.html(value))
+
     def test_a_watchdog_stop_is_written_in_the_task_section(self):
         value = view()
         value["tasks"][0]["attempts"][-1]["evidence"]["watchdog"] = {"reason": "原生任务 31 分钟没有进展，看门狗已停止"}
@@ -77,8 +85,8 @@ class ReportTests(unittest.TestCase):
         text = report.markdown(view())
         order = ["# 登录功能", "## 需求", "新增登录", "## 计划", "## 任务", "## 纠错记录", "## 发布"]
         self.assertEqual([text.index(part) for part in order], sorted(text.index(part) for part in order))
-        self.assertIn("| 1 | 实现登录 | implement | claude | accepted | 2 |", text)
-        self.assertIn("| 2 | 审查 | review | codex | accepted | 1 |", text)
+        self.assertIn("| 1 | 实现登录 | implement | claude | — | accepted | 2 |", text)
+        self.assertIn("| 2 | 审查 | review | codex | — | accepted | 1 |", text)
         self.assertEqual(text.count("| ✓ |"), 9)   # eight gates of the code task, review_bound
         self.assertIn("候选 abc1234 · 3 个文件 +40 −2", text)
         self.assertIn("`npm test` · 退出码 0 · 4.0 s", text)
