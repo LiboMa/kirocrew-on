@@ -665,7 +665,7 @@ class Engine:
             start = self._task_start(db, rid, task["id"])
         spec = json.loads(attempt["spec"])
         snapshot = json.loads(run["snapshot"])
-        gated = snapshot.get("execution_contract", 1) >= 3 and task["id"] != planning.PLAN_ID   # D37
+        gated = snapshot.get("execution_contract", 1) >= 3 and not planning.planning_task(task["id"])   # D37
         if attempt["status"] == "dispatching":
             # The platform's record of this Worker's tools (D38 §3.1): a tool it cannot start is not dispatched.
             state = ((config.get("capabilities") or {}).get("tools") or {}).get(spec["tool"])
@@ -774,11 +774,13 @@ class Engine:
             current = db.execute("SELECT * FROM tasks WHERE run_id=? AND id=?", (rid, task["id"])).fetchone()
             # Old observations cannot complete a newly retried task.
             active = db.execute("SELECT desired FROM runs WHERE id=?", (rid,)).fetchone()[0] == "active"
-            if state == "accepted" and current["current_attempt"] == attempt["id"] and active and task["id"] == planning.PLAN_ID:
+            if state == "accepted" and current["current_attempt"] == attempt["id"] and active and planning.planning_task(task["id"]):
                 fresh = json.loads(db.execute("SELECT snapshot FROM runs WHERE id=?", (rid,)).fetchone()["snapshot"])
-                if planning.pending(fresh):
+                replanning = task["id"] != planning.PLAN_ID   # D41: the Coordinator's replan
+                if planning.pending(fresh, task["id"]):
                     try:   # the KiroCrew plan is applied (or refused) before the planning Attempt's outcome is written
-                        planning.expand(db, rid, native.get("result") or "", config.get("capabilities", {}).get("models"))
+                        planning.expand(db, rid, native.get("result") or "", config.get("capabilities", {}).get("models"),
+                                        replan=replanning)
                     except (Error, ValueError, TypeError) as exc:
                         state, error = "blocked", "KiroCrew 规划结果未通过校验：" + str(exc)
                         evidence["failure_type"] = "contract"

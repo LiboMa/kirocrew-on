@@ -131,6 +131,9 @@ evidence.watchdog 存在时是看门狗停止了没有进展的任务：先判�
 - 参考 environment.limitations 中的已知问题；
 - environment.switch_tools 为 false 时不能换工具：用 wait_for_user，并说明可换用哪个工具；不确定时也用 wait_for_user。
 实现、测试、契约或门禁本身的问题仍用 retry 或 rework，不换工具。
+计划本身有问题时（任务拆分不当、缺少必要的步骤、顺序错误、任务目标与需求不符，在原任务上重试或返工无法完成需求）用 replan：
+平台保留已验收的任务，请 KiroCrew 重新规划失败的任务及其后的工作；写明原计划的问题与重新规划的要求。
+每个会话只能重新规划一次：environment.replanned 为 true 时不能再用 replan。
 判断是否已有足够源码、依赖与输入；缺少仓库、需要用户授权或认证时 wait_for_user，不猜测项目地址。
 若是当前任务可自行修复的问题用 retry；若审查问题需要上游实现者修复用 rework。
 目标只能是失败步骤或其上游步骤。把失败反馈、所需改动与重新验证条件写具体。
@@ -147,7 +150,9 @@ evidence.watchdog 存在时是看门狗停止了没有进展的任务：先判�
 换工具时：
 {{"action":"switch_tool","target_task_id":"失败的 Task ID","tool":"codex","model":"auto","effort":"",
   "reason":"为什么原工具不能完成、为什么选这个工具","instructions":"以新工具重新执行本任务的要求"}}
-action 只能为 retry、rework、switch_tool、wait_for_user；wait_for_user 不需 target_task_id，
+重新规划时：
+{{"action":"replan","reason":"原计划的问题","instructions":"重新规划的要求（需要哪些任务、注意什么）"}}
+action 只能为 retry、rework、switch_tool、replan、wait_for_user；wait_for_user 与 replan 不需 target_task_id，
 instructions 要说明缺少什么、用户下一步如何补充。
 同时写 handoff.md，最后汇总判断。提出 wait_for_user 是诊断完成，不是诊断 Agent 自身执行失败。
 """
@@ -268,7 +273,8 @@ def schedule(db, database, run, task, attempt, *, manual=False, actor=None):
     # What the Coordinator may switch to, saved with the diagnosis: its recommendation is checked against the same (D38 §3.1).
     context["environment"] = {"tools": capabilities.get("tools") or {}, "models": capabilities.get("models") or {},
                               "limitations": capabilities.get("limitations") or [],
-                              "switch_tools": settings.get("switch_tools", True)}
+                              "switch_tools": settings.get("switch_tools", True),
+                              "replanned": bool(json.loads(run["snapshot"]).get("replan"))}
     planned = json.loads(run["snapshot"]).get("planning") or {}
     if planned.get("applied"):   # what the tasks are judged against (D34 §6.2)
         context["requirement"] = {"intent": planned.get("intent", ""), "summary": planned.get("summary", "")}
@@ -383,7 +389,7 @@ class Coordinator:
             decision = json.loads(raw)
             fields = {"action", "target_task_id", "reason", "instructions", "tool", "model", "effort"}
             require(isinstance(decision, dict) and set(decision) <= fields, "协调者决定字段无效")
-            require(decision.get("action") in {"retry", "rework", "switch_tool", "wait_for_user"}, "协调者动作无效")
+            require(decision.get("action") in {"retry", "rework", "switch_tool", "replan", "wait_for_user"}, "协调者动作无效")
             require(all(isinstance(decision.get(k), str) and 0 < len(decision[k]) <= 8000
                         for k in ("reason", "instructions")), "协调者必须给出原因与具体操作")
             if decision["action"] == "switch_tool":
@@ -405,6 +411,8 @@ class Coordinator:
                 journal.change(db, "recoveries", item["id"], journal.RECOVERY, "recovery.state", "会话已变化，诊断结果不再适用",
                                event={"id": item["id"]}, status="cancelled", updated=now)
                 return
+            if decision and decision["action"] == "replan":
+                return self._replan(db, fresh, failed, item, decision, now)
             target = None
             if decision and decision["action"] != "wait_for_user":
                 target = db.execute("SELECT * FROM tasks WHERE run_id=? AND id=?",
@@ -455,3 +463,50 @@ class Coordinator:
                 title = f"自动纠错：退回「{name}」" + (f"（{reason}）" if reason else "")
             record(db, run["id"], version, "recovered", title, fresh["owner_id"], now, recovery_id=item["id"],
                    decision=decision, invalidated=invalidated)
+
+    def _replan(self, db, fresh, failed, item, decision, now):
+        """The Coordinator's replan (D41 §3.2): the failed task and those after it are replaced by a KiroCrew planning task;
+        accepted tasks stay. Once per Session; never for a design Session or for a planning task itself."""
+        from . import planning
+        from .engine import handoff
+        from .revisions import record
+        rid, snapshot = fresh["id"], json.loads(fresh["snapshot"])
+        refusal = ("已重新规划过一次，不能再次重新规划" if snapshot.get("replan") else
+                   "工作流设计会话不重新规划" if snapshot.get("purpose") == "workflow_design" else
+                   "失败的是规划任务本身，不能以重新规划替换" if planning.planning_task(failed["id"]) else None)
+        if refusal:
+            message = "协调者重新规划的决定未通过核对：" + refusal
+            journal.change(db, "recoveries", item["id"], journal.RECOVERY, "recovery.state", event={"id": item["id"]},
+                           status="blocked", decision=dumps(decision), error=message, updated=now)
+            journal.change(db, "runs", rid, journal.RECOVERY, "recovery.blocked", event={"id": item["id"], "error": message},
+                           status="blocked", error=message, updated=now)
+            return
+        context = json.loads(item["context"])
+        environment = context.get("environment") or {}
+        accepted = [handoff(dict(row)) for row in db.execute(
+            "SELECT t.id,t.spec,a.result,a.evidence FROM tasks t JOIN attempts a ON a.id=t.current_attempt "
+            "WHERE t.run_id=? AND t.ordinal<? AND t.status='accepted' ORDER BY t.ordinal", (rid, failed["ordinal"]))]
+        later = [dict(row) for row in db.execute("SELECT * FROM tasks WHERE run_id=? AND ordinal>=? ORDER BY ordinal",
+                                                 (rid, failed["ordinal"]))]
+        replaced = [{"id": row["id"], "name": json.loads(row["spec"]).get("name", row["id"]),
+                     "kind": json.loads(row["spec"]).get("kind")} for row in later]
+        failure = f"任务「{replaced[0]['name']}」：{str(context.get('error') or '')[:1500]}"
+        spec = planning.replan_step(fresh["input"], snapshot.get("planning") or {}, accepted, replaced, failure, decision,
+                                    environment.get("models"), environment.get("tools"), environment.get("limitations"))
+        db.execute("DELETE FROM tasks WHERE run_id=? AND ordinal>=?", (rid, failed["ordinal"]))
+        journal.record(db, rid, "task.replaced", journal.RECOVERY, None, decision.get("reason"), tasks=replaced)
+        db.execute("INSERT INTO tasks(run_id,id,ordinal,spec) VALUES(?,?,?,?)", (rid, spec["id"], failed["ordinal"], dumps(spec)))
+        snapshot["replan"] = {"task": spec["id"], "applied": False, "replaced": replaced, "reason": decision.get("reason"),
+                              "instructions": decision.get("instructions"), "recovery": item["number"]}
+        snapshot["steps"] = snapshot.get("steps", []) + [spec]
+        version = fresh["version"] + 1
+        journal.change(db, "recoveries", item["id"], journal.RECOVERY, "recovery.state", event={"id": item["id"]},
+                       status="applied", decision=dumps(decision), error=None, updated=now)
+        journal.change(db, "runs", rid, journal.RECOVERY, "recovery.applied", decision.get("reason"),
+                       event={"id": item["id"], "number": item["number"], "replan": True,
+                              "invalidated": [r["id"] for r in replaced]},
+                       status="ready", error=None, version=version, snapshot=dumps(snapshot), updated=now)
+        names = "、".join(r["name"] for r in replaced)
+        reason = decision.get("reason")
+        record(db, rid, version, "recovered", f"自动纠错：重新规划，替换「{names}」" + (f"（{reason}）" if reason else ""),
+               fresh["owner_id"], now, recovery_id=item["id"], decision=decision, invalidated=[r["id"] for r in replaced])

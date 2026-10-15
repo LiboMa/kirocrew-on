@@ -239,7 +239,11 @@ def mapping(snapshot, task, evidence=None):
     original = next((s for s in snapshot.get("steps") or [] if s.get("id") == task["id"]), None)
     if original and key(original) != key(spec):
         return {"source": "continue", "label": "续作时由用户修改"}
-    planned = snapshot.get("planning") or {}
+    planned, replan = snapshot.get("planning") or {}, snapshot.get("replan") or {}
+    if task["id"] == replan.get("task"):
+        return {"source": "platform", "label": "平台：重新规划（Kiro）"}
+    if task["id"] in (replan.get("tasks") or []):
+        return {"source": "planner", "label": "KiroCrew 重新规划"}
     if task["id"] == "plan" and planned.get("mode") == "agent":
         return {"source": "platform", "label": "平台：需求分析与规划（Kiro）"}
     if task["id"] in (planned.get("tasks") or []):
@@ -1335,7 +1339,7 @@ class Service:
         value["permissions"] = run_permissions(db, actor, run)
         snapshot = json.loads(run["snapshot"])
         value.update({key: snapshot.get(key) for key in ("name", "workflow_name", "workflow_version",
-                                                       "selection", "match_mode", "match_reason", "purpose", "planning")})
+                                                       "selection", "match_mode", "match_reason", "purpose", "planning", "replan")})
         value["source"] = json.loads(value["source"])
         value["session_id"] = run["id"]
         creator = db.execute("SELECT username FROM users WHERE id=?", (run["owner_id"],)).fetchone()
