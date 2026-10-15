@@ -270,8 +270,10 @@ class Worker:
             raise Error(502, "native_error", "KiroCrew 未接受答复：" + str(exc).splitlines()[0][:200]) from None
         return {"ok": True, "origin": origin, "request_id": wanted[1], "decision": decision}
 
-    def native(self, path, body=None, method=None):
-        return crew_api.request(path, body, method, port=self.port, home=self.home)
+    def native(self, path, body=None, method=None, timeout=None):
+        if timeout is None:
+            return crew_api.request(path, body, method, port=self.port, home=self.home)
+        return crew_api.request(path, body, method, port=self.port, home=self.home, timeout=timeout)
 
     def path(self, rid):
         require(isinstance(rid, str) and re.fullmatch(r"run-[a-f0-9]{32}", rid), "Run ID 无效")
@@ -906,9 +908,15 @@ class Worker:
             path = folder / (key + ".json")
             reports[key] = path.read_text() if path.is_file() and not path.is_symlink() and path.stat().st_size <= 64000 else ""
         progress = {}
-        if state and not native.get("done"):   # what the watchdog judges a running task by (D39 §3.1)
-            progress = {"progress": {"updated_at": state.get("updated_at"), "turns": state.get("turns"),
-                                     "last_tool": str(state.get("last_tool") or "")[:200], "status": state.get("status")}}
+        if not native.get("done") and (state or native.get("turns") is not None):
+            # What the watchdog judges a running task by (D39 §3.1): state.json's last write, its age on this host's clock
+            # (the platform's may differ), and the /api/spawn row's turns and redacted last tool (state.json's is raw).
+            updated = state.get("updated_at") if state else None
+            signal = {"turns": native.get("turns", state.get("turns") if state else None),
+                      "last_tool": str(native.get("last_tool") or "")[:200], "status": state.get("status") if state else None}
+            if isinstance(updated, (int, float)) and not isinstance(updated, bool):
+                signal.update(updated_at=updated, idle_seconds=max(0.0, time.time() - updated))
+            progress = {"progress": signal}
         return {**dispatch, "native": native, "evidence": evidence, "handoff": handoff_text, **reports, **progress}
 
     def attempt_stop(self, body):
@@ -921,10 +929,14 @@ class Worker:
         native_id = json.loads(record.read_text()).get("native_id") if record.is_file() else None
         if native_id:
             try:
-                self.native("/api/spawn/" + quote(native_id, safe=""), None, "DELETE")
+                # KiroCrew answers once the process tree is reaped: a graceful reset of up to 30 s, then SIGKILL.
+                answer = self.native("/api/spawn/" + quote(native_id, safe=""), None, "DELETE", timeout=150)
             except crew_api.GatewayError as exc:
                 if exc.status != 404:
                     raise
+                answer = {}
+            if isinstance(answer, dict) and answer.get("cancelled") is False:   # it had finished on its own: keep its result
+                return {"stopped": False, "finished": True}
         return {"stopped": True}
 
     def control(self, body):

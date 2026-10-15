@@ -12,7 +12,7 @@ FAILURES = {"implementation", "tests", "environment", "input", "auth", "model",
             "native_stopped", "native_error", "contract", "none"}
 NEEDS_INPUT = {"input", "auth", "model", "native_stopped"}
 # The watchdog's limits (D39 §3.2): minutes without native progress, and of one Attempt in all; a session may change them.
-IDLE_MINUTES, ATTEMPT_MINUTES = 30, 240
+IDLE_MINUTES, ATTEMPT_MINUTES = 30, 170   # below KiroCrew's own subagent deadline (180 min), which reaps without a retry
 LIMITS = {"idle_minutes": (IDLE_MINUTES, 5, 240), "attempt_minutes": (ATTEMPT_MINUTES, 30, 720)}
 
 
@@ -122,6 +122,9 @@ def coordinator_instructions(context, folder):
 失败原因在于工具本身时，可以用 switch_tool 推荐换用的工具与模型。工具本身的失败是：failure_type 为 tool
 （工具在执行环境中不可用、模型未公布或不受支持、实际运行的后端与请求不符），或 failure_type 为 native_error
 且 evidence.transient_retry_of 存在（同一工具的原生错误在自动重试后再次发生）。
+evidence.watchdog 存在时是看门狗停止了没有进展的任务：先判断是任务运行了不会结束、等待输入或过慢的命令（开发服务器、交互式提示、
+完整构建）——用 retry 并给出具体做法（后台运行并设超时、非交互参数、拆分步骤，或请用户调大 recovery.idle_minutes）——
+还是工具本身挂起；只有后者才用 switch_tool。
 - 只从 context.environment.tools 中 available 为 true 的工具、environment.models 中该工具公布的模型（或 auto）中选择；
 - 工具、模型与 Effort 不能与失败的那次完全相同；模型未公布时，同一工具改用 auto 也是有效的推荐；
 - 审查类任务选择与被审查代码实际所用不同的工具；换用后的实现工具也不能是其后的审查任务所用的工具；

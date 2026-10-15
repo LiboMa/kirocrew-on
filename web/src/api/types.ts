@@ -203,6 +203,9 @@ export interface RecoveryPolicy {
   max_cycles: number;
   /** false: the Coordinator may not recommend another tool (D38 §3.5); absent means allowed. */
   switch_tools?: boolean;
+  /** The watchdog's limits in minutes (D39); absent means the defaults (30 and 170). */
+  idle_minutes?: number;
+  attempt_minutes?: number;
 }
 
 export interface Recovery {

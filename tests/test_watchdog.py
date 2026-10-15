@@ -30,7 +30,8 @@ class WatchdogCase(unittest.TestCase):
                        (user["id"], dumps({"url": "fixture", "token": "fixture", "capabilities": {}})))
         self.calls = []
         self.idle = 31 * MINUTE        # how long ago the native task last made progress
-        self.stop_error, self.awaiting = None, False
+        self.stop_error, self.awaiting, self.stop_answer, self.signal = None, False, {"stopped": True}, True
+        self.native_stopped = False   # the stop finished after the platform stopped waiting for it
         self.engine = Engine(self.db, self.request)
 
     def start(self, recovery_policy=None, request="watchdog-fixture-1"):
@@ -46,8 +47,9 @@ class WatchdogCase(unittest.TestCase):
             return {"status": "running", "native_id": body["attempt_id"][-8:], "context_hash": "h"}
         if path == "/attempt/stop":
             if self.stop_error:
-                raise self.stop_error
-            return {"stopped": True}
+                error, self.stop_error = self.stop_error, (self.stop_error if getattr(self, "keep_failing", False) else None)
+                raise error
+            return self.stop_answer
         if path == "/control":
             return {"status": "stopped", "lifecycle": "open"}
         as_old_worker(path)
@@ -55,8 +57,14 @@ class WatchdogCase(unittest.TestCase):
                                       and b["attempt_id"] == body["attempt_id"]):
             return {"native": {"done": True, "result": "诊断"}, "evidence": {"actual_backend": "kiro"}, "handoff": "交接",
                     "decision": dumps({"action": "wait_for_user", "reason": "仍然卡住", "instructions": "检查环境后续作"})}
+        if getattr(self, "finished", False):
+            return {"native": {"done": True, "result": "完成"}, "evidence": {"actual_backend": "claude"}, "handoff": "交接",
+                    "outcome": dumps({"decision": "pass", "summary": "完成并验证", "failure_type": "none", "findings": []})}
+        if self.native_stopped:
+            return {"native": {"done": True, "stopped": True, "result": ""}, "evidence": {"actual_backend": "claude"}, "handoff": ""}
+        signal = {"updated_at": time.time() - self.idle, "idle_seconds": self.idle} if self.signal else {}
         return {"native": {"done": False, "awaiting_approval": self.awaiting}, "evidence": {"actual_backend": "claude"},
-                "progress": {"updated_at": time.time() - self.idle, "turns": 4, "last_tool": "npm run build", "status": "running"}}
+                "progress": {**signal, "turns": 4, "last_tool": "npm run build", "status": "running"}}
 
     def tick(self, rid, count=1):
         for _ in range(count):
@@ -125,10 +133,10 @@ class WatchdogTests(WatchdogCase):
         self.idle = 1 * MINUTE
         rid = self.start()
         self.tick(rid, 2)                 # dispatched and seen running
-        self.age(rid, 241 * MINUTE)       # four hours later, still making progress
+        self.age(rid, 171 * MINUTE)       # under three hours later, still making progress
         run = self.tick(rid, 1)
         first = sorted(run["tasks"][0]["attempts"], key=lambda a: a["number"])[0]
-        self.assertIn("运行超过 240 分钟", first["error"])
+        self.assertIn("运行超过 170 分钟", first["error"])
 
     def test_an_old_worker_is_never_doubled(self):
         self.stop_error = Error(404, "not_found", "接口不存在")
@@ -159,6 +167,81 @@ class WatchdogTests(WatchdogCase):
         rid = self.start({"enabled": True, "max_cycles": 2, "idle_minutes": 5})
         self.later(rid, 3)
         self.assertEqual(len(self.stops()), 1)
+
+
+class WatchdogReviewTests(WatchdogCase):
+    def test_a_slow_stop_is_still_judged_as_a_stall(self):
+        self.stop_error = Error(503, "native_unavailable", "KiroCrew Gateway 暂不可用")   # the reap outlived the request
+        rid = self.start()
+        self.later(rid, 1)
+        self.native_stopped = True        # KiroCrew finished the stop anyway: the next look sees a stopped task
+        run = self.tick(rid, 2)
+        attempts = sorted(run["tasks"][0]["attempts"], key=lambda a: a["number"])
+        self.assertIn("没有进展", attempts[0]["error"])
+        self.assertEqual(attempts[0]["evidence"]["failure_type"], "native_error")   # not native_stopped (someone's stop)
+        self.assertEqual(attempts[1]["evidence"].get("transient_retry_of"), attempts[0]["id"])
+
+    def test_time_waiting_for_approval_is_not_idle(self):
+        rid = self.start()
+        self.tick(rid, 2)
+        self.age(rid, 40 * MINUTE)
+        self.awaiting = True
+        self.idle = 40 * MINUTE
+        self.tick(rid, 1)                 # seen waiting for approval just now
+        self.awaiting = False             # approved: state.json has not been written since before the wait
+        run = self.tick(rid, 1)
+        self.assertEqual(self.stops(), [])
+        self.assertEqual(run["tasks"][0]["attempts"][0]["status"], "running")
+
+    def test_without_a_progress_signal_only_the_total_limit_applies(self):
+        self.signal = False               # no state.json: nothing tells how long it has been quiet
+        rid = self.start()
+        self.later(rid, 2)
+        self.assertEqual(self.stops(), [])
+        self.age(rid, 171 * MINUTE)
+        self.tick(rid, 1)
+        self.assertEqual(len(self.stops()), 1)
+
+    def test_a_task_that_finished_before_the_stop_keeps_its_result(self):
+        self.stop_answer = {"stopped": False, "finished": True}
+        rid = self.start()
+        run = self.later(rid, 1)
+        attempts = run["tasks"][0]["attempts"]
+        self.assertEqual((len(attempts), attempts[0]["status"]), (1, "running"))
+        self.assertFalse((attempts[0]["evidence"].get("watchdog") or {}).get("reason"))
+
+    def test_a_failing_stop_is_never_doubled_and_backs_off(self):
+        self.stop_error, self.keep_failing = Error(500, "worker_error", "Gateway 出错"), True
+        rid = self.start()
+        run = self.later(rid, 3)
+        attempts = run["tasks"][0]["attempts"]
+        self.assertEqual((len(attempts), attempts[0]["status"]), (1, "running"))
+        self.assertEqual(len(self.stops()), 1)           # tried again only after a minute
+        self.assertEqual(attempts[0]["evidence"]["watchdog"]["stop_errors"], 1)
+
+    def test_a_task_that_finishes_after_a_failed_stop_carries_no_watchdog_mark(self):
+        self.stop_error = Error(503, "native_unavailable", "KiroCrew Gateway 暂不可用")
+        self.finished = False
+        rid = self.start()
+        self.later(rid, 1)                # the stop failed; the intent mark is on the Attempt
+        self.finished = True              # the task ends on its own before the next try
+        run = self.tick(rid, 2)
+        attempt = run["tasks"][0]["attempts"][0]
+        self.assertEqual(attempt["status"], "accepted")
+        self.assertNotIn("watchdog", attempt["evidence"])
+
+    def test_the_default_total_limit_is_below_kirocrews_own_deadline(self):
+        self.assertLess(recovery.ATTEMPT_MINUTES, 180)   # KiroCrew reaps subagents at 180 min without our retry
+
+    def test_the_coordinator_tells_a_stall_from_a_tool_that_hangs(self):
+        prompt = recovery.coordinator_instructions({}, __import__("pathlib").Path("/f"))
+        self.assertIn("evidence.watchdog", prompt)
+        self.assertIn("不会结束", prompt)
+
+    def test_a_stall_without_recovery_says_so(self):
+        rid = self.start({"enabled": False, "max_cycles": 1})
+        run = self.later(rid, 2)
+        self.assertEqual(run["attention"]["title"], "原生任务卡住，看门狗已停止")
 
 
 if __name__ == "__main__":

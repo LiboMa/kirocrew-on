@@ -1410,6 +1410,10 @@ class Service:
             title, action = "仓库凭证不可用", "在会话页更换凭证（或请凭证管理者重新启用），再续作。"
         elif not task and not run.get("native_parent"):
             title, action = "项目准备未完成", "检查仓库来源、访问权限和 Worker，处理具体错误后重跑。"
+        elif ((attempt.get("evidence") or {}).get("watchdog") or {}).get("reason"):
+            title = "原生任务卡住，看门狗已停止"
+            action = ("检查任务是否在运行不会结束的命令（如开发服务器）或等待输入；可在续作时调整提示，"
+                      "或为较慢的构建与测试调大 recovery.idle_minutes 后重跑。")
         elif failure == "tool":
             title = "需要换用工具或模型"
             action = ("协调者可推荐换用可用的工具（自动纠错开启且允许换工具时）；也可在「配置并续作」中换用可用的工具或模型后重跑，"

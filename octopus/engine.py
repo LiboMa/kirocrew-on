@@ -207,37 +207,66 @@ class Engine:
         stop seen later reads as someone's stop, never retried), retried once without a recovery cycle, then diagnosed.
         True when it acted this time (or must not run the normal update)."""
         prior = json.loads(attempt["evidence"] or "{}")
-        if (prior.get("watchdog") or {}).get("unsupported"):
+        mark = prior.get("watchdog") or {}
+        if mark.get("unsupported"):
             return False
         settings = recovery.policy(snapshot.get("recovery"), legacy=True)
         idle = settings.get("idle_minutes", recovery.IDLE_MINUTES)
         total = settings.get("attempt_minutes", recovery.ATTEMPT_MINUTES)
         progress, now = result.get("progress") or {}, self.wall()
-        updated = progress.get("updated_at")
-        last = max(float(updated) if isinstance(updated, (int, float)) else 0.0, attempt["created"])
+        # Measured from when it last could make progress: its dispatch, or the end of a wait for approval (state.json is
+        # not written while it waits).
+        began = max(attempt["created"], float(prior.get("approval_seen") or 0))
+        quiet = None   # no progress signal (no state.json): only the total limit applies
+        if isinstance(progress.get("idle_seconds"), (int, float)):
+            quiet = min(progress["idle_seconds"], now - began)   # the Worker's own clock
+        elif isinstance(progress.get("updated_at"), (int, float)):
+            quiet = now - max(progress["updated_at"], began)
         tool = str(progress.get("last_tool") or "")[:80]
-        if now - attempt["created"] > total * 60:
+        if now - began > total * 60:
             reason = f"原生任务运行超过 {total} 分钟，看门狗已停止"
-        elif now - last > idle * 60:
-            reason = (f"原生任务 {int((now - last) // 60)} 分钟没有进展" + (f"（最后工具：{tool}）" if tool else "")
-                      + "，看门狗已停止")
+        elif quiet is not None and quiet > idle * 60:
+            reason = f"原生任务 {int(quiet // 60)} 分钟没有进展" + (f"（最后工具：{tool}）" if tool else "") + "，看门狗已停止"
         else:
             return False
+        if mark.get("stop_failed_at") and now - mark["stop_failed_at"] < 60:
+            return True   # a stop that failed is tried again a minute later, not on every poll
+        info = {"reason": reason, "idle_minutes": idle, "attempt_minutes": total, "turns": progress.get("turns"),
+                "last_tool": tool, "quiet_seconds": quiet, "stop_errors": mark.get("stop_errors", 0)}
+        # The intent first: a stop that outlives this request (KiroCrew reaps a wedged process for 30 s or more) or an
+        # Engine restart is still judged as the watchdog's when the stopped task is seen later.
+        self._mark_watchdog(attempt, prior, {**info, "stopping": True})
         try:
-            self.request(config, "/attempt/stop", {"run_id": run["id"], "attempt_id": attempt["id"]})
+            answer = self.request(config, "/attempt/stop", {"run_id": run["id"], "attempt_id": attempt["id"]}, timeout=180)
         except Error as exc:
-            if exc.status != 404:
-                return True   # not stopped: never start another Agent on the same workspace; try again next time
-            with self.db.transaction() as db:   # an older Worker: leave the task to finish or to someone's stop
-                journal.change(db, "attempts", attempt["id"], journal.ENGINE, "attempt.watchdog", "Worker 不支持停止单个任务",
-                               evidence=dumps({**prior, "watchdog": {"unsupported": True}}), updated=time.time())
+            if exc.status == 404 and exc.code == "not_found":   # an older Worker: leave the task to finish or someone's stop
+                self._mark_watchdog(attempt, prior, {"unsupported": True})
+                return True
+            # Not stopped: never start another Agent on the same workspace; try again a minute later.
+            self._mark_watchdog(attempt, prior, {**info, "stopping": True, "stop_errors": info["stop_errors"] + 1,
+                                                 "stop_failed_at": now, "stop_error": str(exc)[:200]})
             return True
-        rid = run["id"]
+        if answer.get("finished"):   # it ended on its own meanwhile: its result is judged as usual on the next look
+            self._mark_watchdog(attempt, prior, None)
+            return True
+        return self._stalled(run, task, attempt, {**prior, **(result.get("evidence") or {})}, info, settings)
+
+    def _mark_watchdog(self, attempt, prior, value):
+        evidence = {key: item for key, item in prior.items() if key != "watchdog"}
+        if value is not None:
+            evidence["watchdog"] = value
+        with self.db.transaction() as db:
+            journal.change(db, "attempts", attempt["id"], journal.ENGINE, "attempt.watchdog", quiet=("evidence",),
+                           evidence=dumps(evidence), updated=time.time())
+
+    def _stalled(self, run, task, attempt, evidence, info, settings):
+        """The Attempt the watchdog stopped: blocked as a native error, retried once, then diagnosed (D39 §3.2)."""
+        rid, reason = run["id"], info["reason"]
+        prior = json.loads(attempt["evidence"] or "{}")
         retry = settings["enabled"] and not prior.get("transient_retry_of")
-        evidence = {**prior, **(result.get("evidence") or {}), "failure_type": "native_error",
-                    **({"transient": "stalled"} if retry else {}),
-                    "watchdog": {"reason": reason, "idle_minutes": idle, "attempt_minutes": total, "last_progress": last,
-                                 "turns": progress.get("turns"), "last_tool": tool, "stopped_at": now}}
+        info = {key: item for key, item in info.items() if key not in {"stopping", "stop_failed_at", "stop_error"}}
+        evidence = {**evidence, "failure_type": "native_error", "watchdog": {**info, "stopped_at": self.wall()},
+                    **({"transient": "stalled"} if retry else {})}
         with self.db.transaction() as db:
             current = db.execute("SELECT * FROM tasks WHERE run_id=? AND id=?", (rid, task["id"])).fetchone()
             active = db.execute("SELECT desired FROM runs WHERE id=?", (rid,)).fetchone()[0] == "active"
@@ -659,13 +688,21 @@ class Engine:
         evidence = result.get("evidence", {})
         # An automatic retry and a Coordinator's switch keep their marks through every evidence update (D34 §5.1, D38 §3.3).
         retry_of = prior.get("transient_retry_of")
-        for key in ("transient_retry_of", "switched_from", "watchdog"):   # watchdog: e.g. "this Worker cannot stop it"
+        for key in ("transient_retry_of", "switched_from", "watchdog", "approval_seen"):   # marks kept across updates
             if prior.get(key):
                 evidence[key] = prior[key]
+        if native.get("done") and not native.get("stopped") and (evidence.get("watchdog") or {}).get("stopping"):
+            del evidence["watchdog"]   # its stop never took: it finished on its own and is judged as usual
         state, error = ("waiting_approval" if native.get("awaiting_approval") else "running"), None
-        if not native.get("done") and not native.get("awaiting_approval") and \
-                self._watchdog(run, config, task, attempt, result, snapshot):
+        if native.get("awaiting_approval"):
+            evidence["approval_seen"] = self.wall()   # the watchdog measures from the end of the wait (D39)
+        elif not native.get("done") and self._watchdog(run, config, task, attempt, result, snapshot):
             return
+        if native.get("done") and native.get("stopped") and (prior.get("watchdog") or {}).get("stopping"):
+            # the watchdog's stop, finished after the platform stopped waiting for it (or across a restart)
+            mark = prior["watchdog"]
+            return self._stalled(run, task, attempt, evidence, {k: v for k, v in mark.items()},
+                                 recovery.policy(snapshot.get("recovery"), legacy=True))
         retry = None
         if native.get("done"):
             text = str(native.get("result", "")).strip()
