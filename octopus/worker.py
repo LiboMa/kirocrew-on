@@ -616,7 +616,7 @@ class Worker:
                 "spawn_approval": "auto" if self.approval_mode == "auto" else "interactive",
                 "crew_entry": True, "crew_origin": self.crew_origin, "observe": True, "app_preview": True,
                 "tool_auth": {"kiro": self.tool_auth()}, "tools": self.tools(),
-                "coordinator_recovery": True, "quality_outcome": True, "baseline_checks": True,
+                "coordinator_recovery": True, "quality_outcome": True, "baseline_checks": True, "attempt_stop": True,
                 "boundary": hashlib.sha256(boundary.encode()).hexdigest(),
                 "host_principal": hashlib.sha256(f"{socket.gethostname()}:{os.getuid()}".encode()).hexdigest(),
                 "routing_evidence": bool(self.routing_log and self.routing_log.is_file()),
@@ -905,7 +905,27 @@ class Worker:
         for key in ("outcome", "decision"):
             path = folder / (key + ".json")
             reports[key] = path.read_text() if path.is_file() and not path.is_symlink() and path.stat().st_size <= 64000 else ""
-        return {**dispatch, "native": native, "evidence": evidence, "handoff": handoff_text, **reports}
+        progress = {}
+        if state and not native.get("done"):   # what the watchdog judges a running task by (D39 §3.1)
+            progress = {"progress": {"updated_at": state.get("updated_at"), "turns": state.get("turns"),
+                                     "last_tool": str(state.get("last_tool") or "")[:200], "status": state.get("status")}}
+        return {**dispatch, "native": native, "evidence": evidence, "handoff": handoff_text, **reports, **progress}
+
+    def attempt_stop(self, body):
+        """Stop one Attempt's native task (D39 §3.1, the watchdog): KiroCrew's own stop of a subagent. A task already gone
+        (404) is stopped as far as the platform is concerned."""
+        run, _ = self.binding(body["run_id"])
+        attempt = body.get("attempt_id")
+        require(isinstance(attempt, str) and re.fullmatch(r"attempt-[a-f0-9]{32}", attempt), "Attempt ID 无效")
+        record = run / "attempts" / attempt / "dispatch.json"
+        native_id = json.loads(record.read_text()).get("native_id") if record.is_file() else None
+        if native_id:
+            try:
+                self.native("/api/spawn/" + quote(native_id, safe=""), None, "DELETE")
+            except crew_api.GatewayError as exc:
+                if exc.status != 404:
+                    raise
+        return {"stopped": True}
 
     def control(self, body):
         with self.lock:
@@ -1074,7 +1094,7 @@ def serve(worker, port=8928, host="127.0.0.1"):
                                "/archive/plan": worker.archive_summary, "/app": worker.app,
                                "/candidate": worker.candidate, "/verify/start": worker.verify_start,
                                "/verify/status": worker.verify_status, "/approvals": worker.approvals,
-                               "/approvals/answer": worker.approvals_answer}
+                               "/approvals/answer": worker.approvals_answer, "/attempt/stop": worker.attempt_stop}
                     require(self.path in methods and self.command == "POST", "接口不存在", 404, "not_found")
                     result = methods[self.path](body)
                 status = 200
