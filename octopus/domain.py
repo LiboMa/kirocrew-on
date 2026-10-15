@@ -231,7 +231,8 @@ def mapping(snapshot, task, evidence=None):
     an imported document, or the steps submitted with the request."""
     switched = (evidence or {}).get("switched_from")
     if switched:
-        reason = str(switched.get("reason") or "")[:120]
+        reason = str(switched.get("reason") or "")
+        reason = reason if len(reason) <= 40 else reason[:40] + "…"   # the full reason is on the Attempt (switched_from)
         return {"source": "coordinator", "label": f"协调者从 {switched.get('tool')} / {switched.get('model') or 'auto'} 换来"
                                                   + (f"：{reason}" if reason else "")}
     spec, key = task["spec"], lambda s: (s.get("tool"), s.get("model") or "auto", s.get("effort") or "")
