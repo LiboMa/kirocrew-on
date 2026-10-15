@@ -92,6 +92,8 @@ class ReplanTests(ReplanCase):
         self.assertTrue(any(s.startswith("自动纠错：重新规划，替换「审查、交付」") for s in summaries), summaries)
         snapshot_replan = run.get("replan") or {}
         self.assertEqual([r["id"] for r in snapshot_replan.get("replaced", [])], ["review", "deliver"])
+        replaced = [e["payload"] for e in self.service.events(self.actor, rid) if e["kind"] == "task.replaced"]
+        self.assertEqual(replaced[0]["removed"], ["review", "deliver"])   # the change log says which tasks went
 
     def test_the_replan_adds_its_tasks_and_the_session_completes(self):
         rid = self.start()

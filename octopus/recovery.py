@@ -493,8 +493,8 @@ class Coordinator:
         failure = f"任务「{replaced[0]['name']}」：{str(context.get('error') or '')[:1500]}"
         spec = planning.replan_step(fresh["input"], snapshot.get("planning") or {}, accepted, replaced, failure, decision,
                                     environment.get("models"), environment.get("tools"), environment.get("limitations"))
-        db.execute("DELETE FROM tasks WHERE run_id=? AND ordinal>=?", (rid, failed["ordinal"]))
-        journal.record(db, rid, "task.replaced", journal.RECOVERY, None, decision.get("reason"), tasks=replaced)
+        journal.remove_rows(db, "tasks", "run_id=? AND ordinal>=?", (rid, failed["ordinal"]), journal.RECOVERY, "task.replaced",
+                            decision.get("reason"), event={"tasks": replaced})
         db.execute("INSERT INTO tasks(run_id,id,ordinal,spec) VALUES(?,?,?,?)", (rid, spec["id"], failed["ordinal"], dumps(spec)))
         snapshot["replan"] = {"task": spec["id"], "applied": False, "replaced": replaced, "reason": decision.get("reason"),
                               "instructions": decision.get("instructions"), "recovery": item["number"]}

@@ -179,6 +179,16 @@ describe("session detail", () => {
     expect(await screen.findByText("来源：KiroCrew 规划")).toBeInTheDocument();
   });
 
+  test("a recovery round that replanned says so (D41)", async () => {
+    const replan = { action: "replan", reason: "计划缺少测试步骤", instructions: "加入测试任务" };
+    open({ ...blocked, status: "running", recovery: { ...blocked.recovery!, used: 1,
+      latest: { number: 1, status: "applied", failed_task_id: "review", decision: replan },
+      history: [{ number: 1, status: "applied", failed_task_id: "review", decision: replan }] } } as Run);
+    expect(await screen.findByText("第 1 轮 · 已安排重新规划")).toBeInTheDocument();
+    await userEvent.click(screen.getByText("第 1 轮 · 已安排重新规划"));
+    expect(screen.getByText(/失败 Task：review → 重新规划其后的工作/)).toBeInTheDocument();
+  });
+
   test("a Session that may not switch tools says so", async () => {
     open({ ...blocked, recovery: { ...blocked.recovery!, policy: { enabled: true, max_cycles: 2, switch_tools: false } } } as Run);
     expect(await screen.findByText("自动纠错已开启 · 最多 2 轮 · 不换工具")).toBeInTheDocument();

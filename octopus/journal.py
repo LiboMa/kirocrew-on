@@ -70,3 +70,18 @@ def change_rows(db, table, where, params, actor, kind, reason=None, event=None, 
     for rid, items in by_run.items():
         record(db, rid, kind, actor, items, reason, **(event or {}))
     return [item for items in by_run.values() for item in items]
+
+
+def remove_rows(db, table, where, params, actor, kind, reason=None, event=None):
+    """Delete the rows matching ``where`` and record which went (D41: tasks replaced by a replan; their Attempts stay)."""
+    rows = db.execute(f"SELECT * FROM {table} WHERE {where}", params).fetchall()
+    if not rows:
+        return []
+    db.execute(f"DELETE FROM {table} WHERE {where}", params)
+    gone = [row["id"] for row in rows]
+    by_run = {}
+    for row in rows:
+        by_run.setdefault(_run(table, row), []).append(row["id"])
+    for rid, ids in by_run.items():
+        record(db, rid, kind, actor, None, reason, **{"removed": ids, **(event or {})})
+    return gone

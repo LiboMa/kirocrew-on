@@ -62,6 +62,19 @@ class MappingTests(unittest.TestCase):
             planning.expand(db, rid, PLAN, {"codex": ["auto"]})
         self.assertEqual(self.mapping(rid, 1), {"source": "planner", "label": "KiroCrew 规划"})
 
+    def test_a_replan_and_the_tasks_it_planned(self):
+        rid = self.start(steps=[STEP])
+        with self.db.transaction() as db:
+            snapshot = json.loads(db.execute("SELECT snapshot FROM runs WHERE id=?", (rid,)).fetchone()[0])
+            snapshot["replan"] = {"task": "replan-1", "applied": True, "tasks": ["code"]}
+            db.execute("UPDATE runs SET snapshot=? WHERE id=?", (dumps(snapshot), rid))
+            db.execute("INSERT INTO tasks(run_id,id,ordinal,spec) VALUES(?,?,?,?)",
+                       (rid, "replan-1", 99, dumps({"id": "replan-1", "name": "重新规划", "tool": "kiro", "model": "auto",
+                                                   "effort": "", "prompt": "规划"})))
+        run = self.service.run(self.actor, rid)
+        labels = {t["id"]: t["mapping"]["label"] for t in run["tasks"]}
+        self.assertEqual(labels, {"replan-1": "平台：重新规划（Kiro）", "code": "KiroCrew 重新规划"})
+
     def test_a_users_continue_and_the_coordinators_switch(self):
         rid = self.start(steps=[STEP])
         with self.db.transaction() as db:   # the user changed the tool on continue

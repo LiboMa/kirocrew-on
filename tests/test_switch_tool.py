@@ -102,7 +102,7 @@ class EnvironmentTests(SwitchCase):
         self.tick(off["id"])
         first, second = self.coordination()
         self.assertEqual(first["environment"], {"tools": TOOLS, "models": MODELS, "limitations": ["已知问题 K01：…"],
-                                                "switch_tools": True})
+                                                "switch_tools": True, "replanned": False})
         self.assertFalse(second["environment"]["switch_tools"])
 
     def test_the_coordinator_prompt_offers_a_switch_and_its_rules(self):
