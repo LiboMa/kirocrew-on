@@ -1466,6 +1466,9 @@ class Service:
                       "详情中是失败原因或协调者的建议。")
         elif failure == "input":
             title, action = "等待补充项目或任务信息", "补充缺少的源码来源或需求，再继续同一 Session。"
+        elif failure == "auth" and (attempt.get("spec") or task["spec"]).get("tool") == "kiro":
+            title = "等待 Kiro 登录恢复"   # the platform reads Kiro's login and continues on its own (D43)
+            action = "请管理员执行 deploy.sh kiro-login；登录恢复后自动继续（平台每分钟检查一次）。"
         elif failure in {"auth", "model"}:
             title, action = "等待处理认证、权限或模型配置", "在原生 KiroCrew 处理权限，或修改本任务配置后重跑。"
         elif latest and latest["status"] == "blocked":

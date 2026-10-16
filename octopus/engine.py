@@ -9,7 +9,7 @@ import time
 
 from .db import dumps, uid
 from .transport import worker_request
-from . import gates, journal, planning, recovery
+from . import gates, journal, planning, recovery, waiting
 from .security import Error
 from .domain import CONTRACT, unserved
 from .gates import BLOCKED
@@ -72,12 +72,52 @@ class Engine:
         self.inflight, self.futures, self.guard = set(), set(), threading.Lock()
         self.retry_unavailable, self.clock, self.backoff = retry_unavailable, clock, {}
         self.turns, self.turn = {}, 0  # last submission order per Session, for round-robin fairness
+        self.probed = {}   # Worker id → when its health was last read (D43)
     def start(self):
         self.lease = (self.db.root / "engine.lock").open("a")
         fcntl.flock(self.lease, fcntl.LOCK_EX | fcntl.LOCK_NB)
         thread = threading.Thread(target=self.loop, daemon=True, name="octopus-engine")
         thread.start()
+        # Health checks wait on the network: their own thread, so a slow Worker never holds up the Sessions' cycle.
+        threading.Thread(target=self.probe_loop, daemon=True, name="octopus-probe").start()
         return thread
+
+    def probe_loop(self):
+        while not self.stopping.is_set():
+            try:
+                self.probe()
+            except Exception as exc:
+                logging.error("Octopus health check cycle failed (%s)", type(exc).__name__)
+            self.stopping.wait(60)
+
+    PROBE_WAITING, PROBE_IDLE = 60, 600
+
+    def probe(self, now=None):
+        """Read each enabled Worker's health (D43 §3.1) — every minute where a Session waits for its Kiro login, every ten
+        minutes otherwise. The same boundary's health is saved as its capabilities, as a refresh does; another boundary is
+        the administrator's to check."""
+        now = self.wall() if now is None else now
+        with self.db.read() as db:
+            urgent = {item["worker_id"] for item in waiting.kiro_waiting(db)}
+            rows = [dict(r) for r in db.execute("SELECT id, config FROM workers WHERE enabled=1 AND retired=0")]
+        for row in rows:
+            last = self.probed.get(row["id"])
+            if last is not None and now - last < (self.PROBE_WAITING if row["id"] in urgent else self.PROBE_IDLE):
+                continue
+            self.probed[row["id"]] = now
+            try:
+                health = self.request(json.loads(row["config"]), "/health", None, timeout=5)
+            except Exception as exc:   # error class only: messages may carry transport details
+                logging.warning("Worker %s health check failed (%s)", row["id"], type(exc).__name__)
+                continue
+            with self.db.transaction() as db:
+                config = json.loads(db.execute("SELECT config FROM workers WHERE id=?", (row["id"],)).fetchone()["config"])
+                if health.get("boundary") != (config.get("capabilities") or {}).get("boundary"):
+                    logging.warning("Worker %s health check: another execution boundary, capabilities not saved", row["id"])
+                    continue
+                db.execute("UPDATE workers SET config=? WHERE id=?",
+                           (dumps({**config, "capabilities": {**health, "checked_at": now}}), row["id"]))
+                waiting.observe(db, row["id"], (health.get("tool_auth") or {}).get("kiro"), now)
 
     def loop(self):
         while not self.stopping.is_set():
@@ -117,6 +157,8 @@ class Engine:
         # Only this thread submits advances, and only after reconcile returns: in-flight Sessions are the
         # only ones an advance could be writing concurrently, so reconcile leaves them to their own advance.
         recovery.reconcile(self.db, skip=busy)
+        with self.db.transaction() as db:   # waits that are over continue (D43)
+            waiting.resume(db, skip=busy)
         with self.db.read() as db:
             ids = [r["id"] for r in db.execute(
                 "SELECT r.id FROM runs r "
