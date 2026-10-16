@@ -83,5 +83,80 @@ class SharedPromptTests(unittest.TestCase):
             self.assertIn("研发执行者", agent_prompt(name))
 
 
+class EnvelopeTests(unittest.TestCase):
+    def envelope(self, kind=None, stage=None, requirement=None, **contract):
+        from octopus.worker import envelope
+        return envelope("实现登录并验证", requirement, {**({"kind": kind} if kind else {}), **contract}, "完成本任务", [],
+                        "/w/project", "/w/attempt/handoff.md", stage=stage)
+
+    def test_planning_and_diagnosis_are_not_told_to_develop(self):
+        for stage in ("planning", "design", "coordination"):
+            text = self.envelope(stage=stage)
+            self.assertNotIn("依据需求修改源码", text, stage)
+            self.assertNotIn("依据需求进行开发", text, stage)
+        self.assertIn("只做分析与规划，不修改业务代码", self.envelope(stage="planning"))
+        self.assertIn("只诊断，不修改源码", self.envelope(stage="coordination"))
+
+    def test_each_kind_is_told_what_it_delivers(self):
+        self.assertIn("本任务须在源码目录中产生改动", self.envelope("implement"))
+        self.assertIn("本任务须在源码目录中产生改动", self.envelope("deliver"))
+        self.assertIn("只读审查，不修改代码", self.envelope("review"))
+        self.assertIn("只写测试与测试报告，不修改实现", self.envelope("test"))
+
+    def test_the_handoff_contents_are_in_the_instructions(self):
+        for kind in ("implement", "review", None):
+            self.assertIn("交接文件写：源码基线、改动文件、执行的命令与退出码", self.envelope(kind))
+
+    def test_checks_say_whether_the_platform_runs_them(self):
+        self.assertIn("检查命令（任务结束后平台运行，须通过）", self.envelope("implement", verify=["npm test"]))
+        self.assertIn("建议的检查命令（平台不运行）", self.envelope("review", verify=["npm test"]))
+
+    def test_a_delivery_task_gets_the_preview_format(self):
+        text = self.envelope("deliver")
+        for words in (".octopus/preview.json", '"$PORT"', "1–4 个进程", "ready"):
+            self.assertIn(words, text)
+        self.assertNotIn(".octopus/preview.json", self.envelope("implement"))
+
+    def test_an_outdated_requirement_says_so(self):
+        text = self.envelope("implement", requirement={"intent": "登录", "summary": "需求", "outdated": True})
+        self.assertIn("用户已在续作中修改需求，以「本次研发任务」为准", text)
+
+    def test_an_old_platform_dispatch_still_reads_well(self):
+        text = self.envelope()   # no kind, no stage: as before
+        self.assertIn("依据需求进行开发和真实验证", text)
+        self.assertIn("完成本任务", text)
+
+
+class DispatchTests(unittest.TestCase):
+    def setUp(self):
+        from tests.test_confirmation import ConfirmationCase
+        class Case(ConfirmationCase):
+            def runTest(self):
+                pass
+        self.case = Case()
+        self.case.setUp()
+        self.addCleanup(self.case.tmp.cleanup)
+
+    def bodies(self, task):
+        return [b for b in self.case.bodies.values() if not b.get("coordination") and b["spec"]["id"] == task]
+
+    def test_the_planning_task_is_dispatched_as_planning(self):
+        case = self.case
+        rid = case.start(steps=None, plan="agent")
+        case.tick(rid)
+        self.assertEqual(self.bodies("plan")[0].get("stage"), "planning")
+        self.assertNotIn("stage", self.bodies("code")[0])
+
+    def test_a_requirement_changed_by_a_continue_is_marked_outdated(self):
+        case = self.case
+        rid = case.start(steps=None, plan="agent")
+        run = case.tick(rid)
+        self.assertFalse(self.bodies("code")[0]["requirement"].get("outdated"))
+        case.service.operate(case.actor, rid, "continue", {"request_id": "p1-continue-1", "expected_version": run["version"],
+                                                           "task_id": "code", "input": "实现并验证，另外支持英文界面"})
+        case.tick(rid)
+        self.assertTrue(self.bodies("code")[-1]["requirement"].get("outdated"))
+
+
 if __name__ == "__main__":
     unittest.main()

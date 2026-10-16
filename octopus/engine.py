@@ -773,8 +773,11 @@ class Engine:
                 "run_id": rid, "attempt_id": attempt["id"], "input": run["input"], "upstream": upstream,
                 "spec": {key: spec[key] for key in LEGACY if key in spec},
                 **({"contract": contract} if contract else {}),
-                **({"requirement": {"intent": plan.get("intent", ""), "summary": plan.get("summary", "")}}
+                **({"requirement": {"intent": plan.get("intent", ""), "summary": plan.get("summary", ""),
+                                    **({"outdated": True} if plan.get("outdated") else {})}}
                    if plan.get("applied") else {}),
+                # D46: planning is analysis — its instructions do not tell it to develop
+                **({"stage": "planning"} if planning.planning_task(task["id"], snapshot) else {}),
                 **({"quality": True} if snapshot.get("execution_contract", 1) >= 2 else {}),
                 **({"repair": repair} if repair else {}),
                 **({"candidate": {"sha": latest["sha"], "parent": latest["parent"]}}

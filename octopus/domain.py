@@ -1608,6 +1608,11 @@ class Service:
                     journal.change(db, "tasks", (rid, current["id"]), who, "task.spec", spec=dumps(current))
                     reason = unserved(db, run) if run["worker_id"] else None
                     restart_budget(db, rid, who)
+                    if goal != run["input"]:   # D46: the plan's completion of the requirement no longer matches it
+                        fresh = json.loads(db.execute("SELECT snapshot FROM runs WHERE id=?", (rid,)).fetchone()["snapshot"])
+                        if (fresh.get("planning") or {}).get("applied"):
+                            fresh["planning"]["outdated"] = True
+                            journal.change(db, "runs", rid, who, "run.planning", quiet=("snapshot",), snapshot=dumps(fresh))
                     if run["status"] == "awaiting_confirmation":   # changing the plan and continuing confirms it (D44)
                         confirm_plan(db, rid, who, actor, "continue")
                     fields.update(input=goal, desired="active", status="ready" if run["worker_id"] and not reason else "waiting_worker",

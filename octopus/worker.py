@@ -48,22 +48,58 @@ ENV_KEPT = workspace.ENV_KEPT
 PUBLISH_LIMIT = 100 * 1024 * 1024   # D35 §5.2: one bundle (as publish.LIMIT on the platform)
 
 
+# What each kind of work is told at the end of its instructions (D46): planning, design and diagnosis are not development.
+TAILS = {
+    "planning": "只做分析与规划，不修改业务代码；按本任务要求输出 JSON。",
+    "design": "只做分析与规划，不修改业务代码；按本任务要求输出工作流 JSON。",
+    "coordination": "只诊断，不修改源码；按要求写 decision.json。",
+    "review": "只读审查，不修改代码；结论绑定审查对象，缺陷用 changes_requested。",
+    "test": "只写测试与测试报告，不修改实现；按项目既有依赖与规范工作。",
+    "implement": "依据需求修改源码并真实验证，按项目既有依赖与规范工作；本任务须在源码目录中产生改动（平台检查 diff_present）。",
+    "deliver": "依据需求完成交付并真实验证，按项目既有依赖与规范工作；本任务须在源码目录中产生改动（平台检查 diff_present）。",
+}
+DEFAULT_TAIL = "依据需求进行开发和真实验证，按项目既有依赖与规范工作。"
+COMMON_TAIL = ("记录具体修改、测试命令、结果和限制。若不能完成，最终回答单独一行写 BLOCKED 并说明恢复条件"
+               "（BLOCKED 只用于缺输入、认证或权限；缺陷用 changes_requested）。只执行当前任务，不派生其他子任务。"
+               "不读取平台或其他项目的凭据。不要编造测试结果或实际模型。")
+PREVIEW = ("\n\n## 可运行产出的声明\n交付物是可以运行的应用时，在项目根目录写 .octopus/preview.json："
+           '{"processes":[{"name":"web","command":"npm run dev -- --port $PORT","cwd":".","port":"$PORT","entry":true}],'
+           '"install":["npm ci"],"ready":{"path":"/","timeout":120}}。1–4 个进程（前后端分开时各一个），恰有一个 entry；'
+           'install 至多 4 条；远程预览要求入口进程的 port 为 "$PORT"。')
+
+
+def envelope(task_input, requirement, contract, prompt, upstream, project, handoff, stage=None, extra=""):
+    """The instructions an Attempt reads (D46): the requirement, the contract and the task, the upstream handoffs, then
+    what this kind of work does — planning, design and diagnosis are not told to develop — and the handoff it writes."""
+    from .prompts import HANDOFF
+    tail = TAILS.get(stage or (contract or {}).get("kind"), DEFAULT_TAIL)
+    return ("# 本次研发任务\n\n" + task_input + briefing(requirement, contract) + "\n\n## 任务\n" + prompt +
+            "\n\n## 前序交接\n前序任务的结论、发现、候选与检查；handoff 是其完整交接文件的路径，需要细节时读取。\n" +
+            dumps(upstream) + f"\n\n源码目录：{project}\n交接文件：{handoff}\n" + tail + COMMON_TAIL + HANDOFF + extra)
+
+
 def briefing(requirement, contract):
     """The requirement KiroCrew completed and this task's contract, ahead of the task itself (D34 §6.2)."""
     text = ""
     if requirement and (requirement.get("intent") or requirement.get("summary")):
         text += "\n\n## 需求与验收标准（KiroCrew 规划补全）\n"
+        if requirement.get("outdated"):   # D46: a continue changed the requirement after it was planned
+            text += "（以下为首次规划时的补全；用户已在续作中修改需求，以「本次研发任务」为准。）\n"
         if requirement.get("intent"):
             text += "意图：" + requirement["intent"] + "\n"
         text += requirement.get("summary", "")
     if contract:
-        labels = (("deliverables", "交付物"), ("acceptance", "验收项"), ("verify", "验证命令"), ("paths", "可改动路径"))
+        checks = ("建议的检查命令（平台不运行）" if contract.get("kind") in {"review", "design"}
+                  else "检查命令（任务结束后平台运行，须通过）")   # D46: say whether the platform runs them
+        labels = (("deliverables", "交付物"), ("acceptance", "验收项"), ("verify", checks), ("paths", "可改动路径"))
         text += "\n\n## 本任务契约\n" + (f"类别：{contract['kind']}\n" if contract.get("kind") else "")
         for key, label in labels:
             if contract.get(key):
                 text += label + "：\n" + "".join(f"- {item}\n" for item in contract[key])
         if contract.get("acceptance"):
             text += "逐项完成并核对上述验收项；审查与测试以它们为判定依据。\n"
+        if contract.get("kind") == "deliver":
+            text += PREVIEW.lstrip("\n") + "\n"
     return text
 
 
@@ -785,16 +821,11 @@ class Worker:
                 context["design"] = body["design"]
                 design_prompt = instructions(body["input"], body["design"], workspace.project_dir(run),
                                              self.health()["models"])
-            instructions = (
-                "# 本次研发任务\n\n" + body["input"] + briefing(requirement, contract) + "\n\n## 任务\n" + spec["prompt"] +
-                "\n\n## 前序交接\n前序任务的结论、发现、候选与检查；handoff 是其完整交接文件的路径，需要细节时读取。\n" +
-                dumps(body.get("upstream", [])) +
-                f"\n\n源码目录：{workspace.project_dir(run)}\n交接文件：{handoff}\n"
-                "依据需求进行开发和真实验证，按项目既有依赖与规范工作。记录具体修改、测试命令、结果和限制。"
-                "若不能完成，最终回答单独一行写 BLOCKED 并说明恢复条件。"
-                "只执行当前任务，不派生其他子任务。不读取平台或其他项目的凭据。"
-                "不要编造测试结果或实际模型。完成后写交接文件。" + extra_prompt +
-                ("\n\n" + design_prompt if design_prompt else ""))
+            stage = ("coordination" if body.get("coordination") else "design" if body.get("design")
+                     else body.get("stage") if body.get("stage") in {"planning"} else None)
+            instructions = envelope(body["input"], requirement, contract, spec["prompt"], body.get("upstream", []),
+                                    workspace.project_dir(run), handoff, stage=stage,
+                                    extra=extra_prompt + ("\n\n" + design_prompt if design_prompt else ""))
             (folder / "instructions.md").write_text(instructions)
             write(folder / "context.json", context)
             context_hash = hashlib.sha256(dumps(context).encode()).hexdigest()
