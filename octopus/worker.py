@@ -617,7 +617,7 @@ class Worker:
         return {"version": __version__, "isolation": self.isolation, "workflow_design": True,
                 "spawn_approval": "auto" if self.approval_mode == "auto" else "interactive",
                 "crew_entry": True, "crew_origin": self.crew_origin, "observe": True, "app_preview": True,
-                "tool_auth": {"kiro": self.tool_auth()}, "tools": self.tools(),
+                "tool_auth": {"kiro": self.tool_auth()}, "tools": self.tools(), "commands": self.checks.commands(),
                 "coordinator_recovery": True, "quality_outcome": True, "baseline_checks": True, "attempt_stop": True,
                 "boundary": hashlib.sha256(boundary.encode()).hexdigest(),
                 "host_principal": hashlib.sha256(f"{socket.gethostname()}:{os.getuid()}".encode()).hexdigest(),

@@ -23,7 +23,8 @@ def step(sid, tool, kind, **extra):
 
 
 class SwitchCase(unittest.TestCase):
-    capabilities = {"tools": TOOLS, "models": MODELS, "limitations": ["已知问题 K01：…"]}
+    capabilities = {"tools": TOOLS, "models": MODELS, "limitations": ["已知问题 K01：…"],
+                    "commands": {"available": ["python3"], "missing": ["python"]}}
 
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory()
@@ -102,14 +103,25 @@ class EnvironmentTests(SwitchCase):
         self.tick(off["id"])
         first, second = self.coordination()
         self.assertEqual(first["environment"], {"tools": TOOLS, "models": MODELS, "limitations": ["已知问题 K01：…"],
+                                                "commands": {"available": ["python3"], "missing": ["python"]},
                                                 "switch_tools": True, "replanned": False})
         self.assertFalse(second["environment"]["switch_tools"])
+
+    def test_the_planner_of_a_session_is_told_which_commands_a_check_can_run(self):
+        run = self.service.start(self.actor, {"request_id": "switch-plan-commands", "input": "实现并验证", "source": {"type": "new"},
+                                              "worker_id": "worker"})
+        with self.db.read() as db:
+            spec = json.loads(db.execute("SELECT spec FROM tasks WHERE run_id=? AND id='plan'", (run["id"],)).fetchone()["spec"])
+        self.assertIn("没有：python", spec["prompt"])
 
     def test_the_coordinator_prompt_offers_a_switch_and_its_rules(self):
         prompt = recovery.coordinator_instructions({"environment": {"tools": TOOLS}}, __import__("pathlib").Path("/f"))
         self.assertNotIn("不换模型", prompt)
         # a repeated native error is native_error with transient_retry_of, not tool: the prompt names what it really sees
         for words in ("switch_tool", "available", "完全相同", "审查", "wait_for_user", "transient_retry_of", "其后的审查"):
+            self.assertIn(words, prompt)
+        # a verify naming a command the host lacks cannot be fixed by retrying the task that carries it
+        for words in ("退出码 127", "environment.commands"):
             self.assertIn(words, prompt)
 
 

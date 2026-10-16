@@ -165,8 +165,21 @@ class ReplanReviewTests(ReplanCase):
         spec = planning.replan_step("replan-1",
                                     [{"id": "t%d" % i, "name": "任务" * 40, "kind": "implement"} for i in range(8)], long,
                                     {"reason": long, "instructions": long}, {"claude": ["m" * 60] * 30}, {"kiro": {"available": True}},
-                                    [long])
+                                    [long], {"available": ["c" * 40] * 30, "missing": ["d" * 40] * 30})
         steps([spec])   # the Worker refuses prompts over 8000 characters
+
+    def test_the_planners_are_told_which_commands_a_check_can_run(self):
+        commands = {"available": ["python3", "git"], "missing": ["python", "npm"]}
+        for spec in (planning.plan_step(commands=commands), planning.replan_step("replan-1", [], "审查未通过", REPLAN, commands=commands)):
+            self.assertIn("可用：python3、git", spec["prompt"])
+            self.assertIn("没有：python、npm", spec["prompt"])
+        self.assertNotIn("没有：", planning.plan_step()["prompt"])   # an older Worker that does not say
+
+    def test_the_replan_prompt_shows_every_field_a_planned_task_carries(self):
+        # EC2: without the example the planner left out each task's prompt and the plan failed validation
+        prompt = planning.replan_step("replan-1", [], "审查未通过", REPLAN)["prompt"]
+        for field in planning.EXAMPLE["steps"][0]:
+            self.assertIn(f'"{field}"', prompt, field)
 
     def test_depends_on_follows_a_renamed_task_and_may_name_a_kept_one(self):
         self.plan = """```json

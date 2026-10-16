@@ -23,7 +23,15 @@ EXAMPLE = {"intent": "一句话：用户真正要完成什么、属于哪类工�
                       "depends_on": [], "paths": ["本任务可改动的路径或 glob"]}]}
 
 
-def plan_step(models=None, tools=None, limitations=None):
+def commands_line(commands):
+    """What a verify may run on this environment, as the Worker reports it (none from an older Worker)."""
+    if not commands:
+        return ""
+    return (f"检查命令（verify）在此执行环境以 bash 运行，常见命令中可用：{'、'.join(commands.get('available') or []) or '无'}；"
+            f"没有：{'、'.join(commands.get('missing') or []) or '无'}。verify 只用可用的命令。\n")
+
+
+def plan_step(models=None, tools=None, limitations=None, commands=None):
     """The first task of an Agent-planned Session (always Kiro; it plans and does not change business code)."""
     prompt = intent_prompt(dumps(EXAMPLE), "（见上方完整用户需求）", "本任务的工作目录（即本 Session 的源码检出）") + f"""
 
@@ -49,7 +57,7 @@ def plan_step(models=None, tools=None, limitations=None):
 {dumps(tools or {})}
 available 为 false 的工具不要选择（reason 为原因）；没有列出时表示执行环境未报告。
 执行环境的已知限制：{dumps(limitations or [])}
-按任务性质与这些事实选择工具，并在交接文件中说明选择依据。
+{commands_line(commands)}按任务性质与这些事实选择工具，并在交接文件中说明选择依据。
 
 ## 此执行环境公布的模型
 {dumps(models or {})}
@@ -154,7 +162,7 @@ def _clip(text, limit):
     return text if len(text) <= limit else text[:limit] + "…"
 
 
-def replan_step(task_id, replaced, failure, decision, models=None, tools=None, limitations=None):
+def replan_step(task_id, replaced, failure, decision, models=None, tools=None, limitations=None, commands=None):
     """The Coordinator's replan (D41 §3.2): a Kiro task that plans only the remaining work. What the dispatch carries
     anyway is referred to, not copied — the requirement (本次研发任务), the first plan's (需求补全) and the accepted tasks'
     conclusions (前序交接) — so the prompt stays within the Worker's 8000 characters whatever the Session holds."""
@@ -182,13 +190,15 @@ paths 写本任务可改动的路径。平台的门禁：test 任务新增的测
 ## 此执行环境的 Coding 工具与已知限制
 {_clip(dumps(tools or {}), 500)}
 available 为 false 的工具不要选择。已知限制：{_clip(dumps(limitations or []), 500)}
+{_clip(commands_line(commands), 400)}
 
 ## 此执行环境公布的模型
 {_clip(dumps(models or {}), 800)}
 不在上面列表中的具体模型一律写 model=auto。
 
-最终回复必须包含且仅包含一个 JSON 代码块（字段：intent、summary、name、steps）；不要加入第二个 JSON/YAML 代码块。
-同时按本任务要求写交接文件，说明重新规划的依据。
+最终回复必须包含且仅包含一个 JSON 代码块（字段：intent、summary、name、steps），每个任务的字段与写法如下例，prompt 必须写出：
+{dumps(EXAMPLE["steps"])}
+不要加入第二个 JSON/YAML 代码块。同时按本任务要求写交接文件，说明重新规划的依据。
 """
     return {"id": task_id, "name": "重新规划剩余工作（KiroCrew）", "tool": "kiro", "model": "auto", "effort": "",
             "prompt": prompt}

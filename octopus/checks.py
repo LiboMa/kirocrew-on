@@ -3,6 +3,7 @@
 command and all of them together are time-limited; a command that overruns has its whole process group ended. What
 remains is the exit code, the time and the output's tail with credentials hidden."""
 import os
+import shutil
 import signal
 import subprocess
 import threading
@@ -15,12 +16,22 @@ from .security import Error
 TAIL = 4096
 GRACE = 5
 KEEP = 3600   # a finished job is answered for an hour
+# Commands a planned verify commonly names; which of them this host has is told to the planners (a verify that names a
+# missing one fails with exit code 127 and no recovery can change the command).
+COMMON = ("python3", "python", "pip3", "pip", "pytest", "uv", "node", "npm", "npx", "pnpm", "yarn", "go", "cargo",
+          "java", "mvn", "gradle", "make", "ruby", "bundle", "php", "dotnet", "deno", "bun", "git", "docker")
 
 
 class Checks:
     def __init__(self, path_prepend=(), per_command=600, total=1200):
         self.path_prepend, self.per_command, self.total = tuple(str(p) for p in path_prepend), per_command, total
         self.jobs, self.by_attempt, self.lock = {}, {}, threading.Lock()
+
+    def commands(self):
+        """Which common commands the checks find on their search path."""
+        search = os.pathsep.join([*self.path_prepend, os.environ.get("PATH", "/usr/bin:/bin")])
+        found = {command: bool(shutil.which(command, path=search)) for command in COMMON}
+        return {"available": [c for c in COMMON if found[c]], "missing": [c for c in COMMON if not found[c]]}
 
     def start(self, run_id, attempt_id, project, commands, kind="verify", around=None):
         """The job running ``commands`` for this Attempt; asking again returns the same job. ``kind`` tells an Attempt's

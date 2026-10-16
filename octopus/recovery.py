@@ -134,6 +134,8 @@ evidence.watchdog 存在时是看门狗停止了没有进展的任务：先判�
 计划本身有问题时（任务拆分不当、缺少必要的步骤、顺序错误、任务目标与需求不符，在原任务上重试或返工无法完成需求）用 replan：
 平台保留已验收的任务，请 KiroCrew 重新规划失败的任务及其后的工作；写明原计划的问题与重新规划的要求。
 每个会话只能重新规划一次：environment.replanned 为 true 时不能再用 replan。
+检查命令以退出码 127 失败表示命令在执行环境中不存在（environment.commands 列出常见命令中可用与没有的）：这是任务契约中 verify 的问题，
+重试或返工无法修改它——未重新规划过时用 replan 并写明改用的命令，否则用 wait_for_user，请用户续作时修改该任务的 verify。
 判断是否已有足够源码、依赖与输入；缺少仓库、需要用户授权或认证时 wait_for_user，不猜测项目地址。
 若是当前任务可自行修复的问题用 retry；若审查问题需要上游实现者修复用 rework。
 目标只能是失败步骤或其上游步骤。把失败反馈、所需改动与重新验证条件写具体。
@@ -276,6 +278,7 @@ def schedule(db, database, run, task, attempt, *, manual=False, actor=None):
     # What the Coordinator may switch to, saved with the diagnosis: its recommendation is checked against the same (D38 §3.1).
     context["environment"] = {"tools": capabilities.get("tools") or {}, "models": capabilities.get("models") or {},
                               "limitations": capabilities.get("limitations") or [],
+                              **({"commands": capabilities["commands"]} if capabilities.get("commands") else {}),
                               "switch_tools": settings.get("switch_tools", True),
                               "replanned": bool(json.loads(run["snapshot"]).get("replan"))}
     planned = json.loads(run["snapshot"]).get("planning") or {}
@@ -494,7 +497,7 @@ class Coordinator:
                                              (rid, rid))}
         task_id = next(planning.REPLAN_PREFIX + str(n) for n in range(1, 100) if planning.REPLAN_PREFIX + str(n) not in used)
         spec = planning.replan_step(task_id, replaced, failure, decision, environment.get("models"), environment.get("tools"),
-                                    environment.get("limitations"))
+                                    environment.get("limitations"), environment.get("commands"))
         journal.remove_rows(db, "tasks", "run_id=? AND ordinal>=?", (rid, failed["ordinal"]), journal.RECOVERY, "task.replaced",
                             decision.get("reason"), event={"tasks": replaced})
         db.execute("INSERT INTO tasks(run_id,id,ordinal,spec) VALUES(?,?,?,?)", (rid, spec["id"], failed["ordinal"], dumps(spec)))

@@ -60,6 +60,14 @@ class WorkerToolsTests(unittest.TestCase):
         self.assertTrue(health["tools"]["claude"]["available"])
         self.assertTrue(any("K01" in item for item in health["limitations"]))
 
+    def test_health_says_which_common_commands_the_checks_can_run(self):
+        # EC2: a planned verify used python on hosts with only python3 and failed with exit code 127
+        executable(self.bin / "python3")
+        commands = self.worker(path_prepend=(self.bin,)).health()["commands"]
+        self.assertIn("python3", commands["available"])
+        self.assertIn("python", commands["missing"])
+        self.assertIn("npm", commands["missing"])
+
 
 if __name__ == "__main__":
     unittest.main()
