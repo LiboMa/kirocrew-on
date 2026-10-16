@@ -156,7 +156,10 @@ evidence.watchdog 存在时是看门狗停止了没有进展的任务：先判�
 重试或返工无法修改它——未重新规划过时用 replan 并写明改用的命令，否则用 wait_for_user，请用户续作时修改该任务的 verify。
 判断是否已有足够源码、依赖与输入；缺少仓库、需要用户授权或认证时 wait_for_user，不猜测项目地址。
 若是当前任务可自行修复的问题用 retry；若审查问题需要上游实现者修复用 rework。
-目标只能是失败步骤或其上游步骤。把失败反馈、所需改动与重新验证条件写具体。
+目标只能是失败步骤或其上游步骤：target_task_id 只能取 context.allowed_targets 中的 id。排在失败任务之后的任务（例如计划中
+审查之后的「按审查修复」任务）不能作为目标——审查发现的问题交给产出该代码的上游任务 rework，其后的任务会自动重跑。
+context.previous_decisions 是此前各轮的决定及其结果（status）；带 refused 的是平台拒绝过的决定，refused 写明原因——不要重复同一决定。
+把失败反馈、所需改动与重新验证条件写具体。
 结果契约：decision 为 pass/changes_requested/blocked；summary 为具体结论；findings 为字符串列表，
 或具有 issue/message/description/title 之一的对象列表。pass 可以记录不阻断本步骤验收的观察项，
 不能从 findings 非空推断 JSON 格式错误。区分已核实原因和推测，不发明引擎的额外规则。
@@ -364,7 +367,14 @@ def schedule(db, database, run, task, attempt, *, manual=False, actor=None):
                "error": attempt["error"], "failure_type": failure,
                "failed_result": attempt["result"], "evidence": json.loads(attempt["evidence"]),
                "tasks": [{**t, "spec": json.loads(t["spec"])} for t in ordered],
-               "previous_decisions": [json.loads(r["decision"]) for r in rows if r["decision"]],
+               # each earlier round as it ended: a decision the platform refused carries why (EC2 run-40a1…: three
+               # identical refused decisions, the Coordinator never told)
+               "previous_decisions": [{**json.loads(r["decision"]), "round": r["number"], "status": r["status"]}
+                                      for r in rows if r["decision"]],
+               # the targets a retry / rework / switch_tool may name: the failed task and those before it
+               "allowed_targets": [{"id": t["id"], "name": json.loads(t["spec"]).get("name", t["id"]),
+                                    "kind": json.loads(t["spec"]).get("kind")}
+                                   for t in ordered if t["ordinal"] <= task["ordinal"]],
                "manual": manual}
     worker = db.execute("SELECT config FROM workers WHERE id=?", (run["worker_id"],)).fetchone() if run["worker_id"] else None
     capabilities = (json.loads(worker["config"]).get("capabilities") or {}) if worker else {}
@@ -551,7 +561,14 @@ class Coordinator:
                         error = "协调者换工具的推荐未通过核对：" + str(exc)
                 if not error and (not target or target["ordinal"] > failed["ordinal"] or
                                   decision["action"] == "retry" and target["id"] != failed["id"]):
-                    error = "协调者返工目标必须是失败 Task 或其上游；retry 必须重试当前 Task"
+                    allowed = "、".join(row["id"] for row in db.execute(
+                        "SELECT id FROM tasks WHERE run_id=? AND ordinal<=? ORDER BY ordinal", (run["id"], failed["ordinal"])))
+                    named = decision.get("target_task_id")
+                    where = ("不存在" if not target else f"排在失败任务 {failed['id']} 之后" if target["ordinal"] > failed["ordinal"]
+                             else f"不是失败任务 {failed['id']}（retry 只能重试失败的任务）")
+                    error = (f"协调者{decision['action']}的目标 {named} {where}：目标只能是 {allowed} 之一。"
+                             "问题出在上游产出的代码时用 rework 指向该上游任务，其后的任务会自动重跑。")
+                    decision = {**decision, "refused": error}   # the next diagnosis sees why (previous_decisions)
             if error or decision["action"] == "wait_for_user":
                 message = error or (decision["reason"] + "；" + decision["instructions"])
                 journal.change(db, "recoveries", item["id"], journal.RECOVERY, "recovery.state", event={"id": item["id"]},
