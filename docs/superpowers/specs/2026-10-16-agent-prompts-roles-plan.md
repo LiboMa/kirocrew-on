@@ -1,9 +1,9 @@
-# KiroCrew 通用 Agent Prompt 与角色体系：现状与优化计划（D46 草案，待负责人确认）
+# KiroCrew 通用 Agent Prompt 与角色体系：现状与优化计划（D46，负责人 2026-10-16 已确认方向）
 
 > 负责人 2026-10-16：「根据现在更新的 Feature，把 KiroCrew 通用型的 Agent Prompt 做一个 Plan，看看哪些点需要优化；每个 Coding 工具都可以有主角色，
 > 同时也可以辅助做其它之用：Spec 分析、集成测试、安全测试、SDE 开发、Challenge Agent、Evaluator Agent、Knowledge Agent，以及 Owner 观察员（Coordinator）。」
 >
-> 本文是计划草案：盘点现状、列出问题、提出角色模型与分期。实施前请负责人确认第 6 节的几个决定。
+> 本文盘点现状、列出问题、提出角色模型与分期；第 6 节为负责人的决定。
 
 ## 1．现状：一个 Attempt 收到什么
 
@@ -93,12 +93,12 @@
 | **P3 Challenge / Evaluator 闭环** | Challenge 的挑战清单交给 Evaluator；Evaluator 的逐项判定取代实现者自报，作为会话通过的依据 | 新门禁 `evaluated`、结果契约、报告的验收表 | 一个实现有隐患的会话：Challenge 找到问题 → Evaluator 判 fail → 返工 → 通过 |
 | **P4 Knowledge** | 会话结束时更新项目知识；规划者读取 | `.octopus/knowledge.md` 约定或 KiroCrew 记忆（待成员记忆分隔） | 第二个会话的规划引用第一个会话沉淀的约定 |
 
-## 6．请负责人确认
+## 6．负责人决定（2026-10-16）
 
-1. **`role` 与 `kind`**：新增 `role` 字段（推荐），还是扩展 `kind` 的取值（更简单，但门禁与角色绑死）？
-2. **Evaluator 的权威**：Evaluator 的判定是否取代实现者自报的 pass，作为会话通过的依据（推荐，P3）？
-3. **Knowledge 的存放**：项目内 `.octopus/knowledge.md`（随仓库，推荐先做）还是 KiroCrew 记忆（需成员记忆分隔，T7）？
-4. **先做 P1**：P1 只修矛盾与缺陷、不改角色模型，建议先做；P2–P4 在你确认上述决定后进行。
+1. **新增 `role` 字段**：`role` 决定角色卡片与输出契约，`kind` 继续决定门禁；角色由 KiroCrew 规划者按事实推荐工具，平台不内置对照表。
+2. **以 Evaluator 为准**：Evaluator（作者以外的工具）的逐项判定取代实现者自报的 pass，作为会话通过的依据；不通过即进入返工（P3）。
+3. **Knowledge 存放在项目内 `.octopus/knowledge.md`**（随仓库、可审查）。
+4. **先做 P1**（只修矛盾与缺陷、不改角色模型），再做 P2–P4。
 
 ## 附录 A：今天已有的「角色」痕迹
 
