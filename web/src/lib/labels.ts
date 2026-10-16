@@ -40,6 +40,7 @@ export const EVENT_LABELS: Record<string, string> = {
   "task.spec": "任务配置已修改", "task.state": "任务状态更新", "run.settings": "会话设置已修改",
   "recovery.state": "协调者记录更新", "plan.applied": "KiroCrew 规划已应用", "run.resumed": "条件满足，自动继续",
   "run.awaiting_confirmation": "计划待确认", "command.confirm": "收到确认请求", "run.confirmed": "已确认计划",
+  "run.publish_auto": "自动发布", "run.publish_policy": "发布设置已修改",
 };
 
 /** Change-log entries that repeat an Attempt or recovery event; shown in 「变更记录」, not in the timeline. */

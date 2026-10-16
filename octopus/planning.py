@@ -48,6 +48,7 @@ def rules(count, depends):
    检查与测试生成的文件（覆盖率、报告、构建产物）应写入 .gitignore。审查与测试的结论：缺陷用 changes_requested，
    blocked 只用于缺输入、认证或权限。推送与 PR / MR 由平台在审查通过后发布，任务中不安排推送。
    不要在审查之后另设「按审查修复」的任务：审查要求修改时，平台会自动安排上游任务返工并复审。
+   需求明确要求提交 PR / MR 时，在计划 JSON 顶层写 "publish": {{"quote": "需求原文片段"}}：会话完成并通过审查后平台自动发布 Draft PR。
 5. 可运行的产出：交付物是可以运行的应用时，最后的交付任务须在项目根目录写 .octopus/preview.json
    （processes：命令、cwd、端口或 "$PORT"、哪个是入口；install：依赖安装；前后端分开时各写一个进程），
    并把「.octopus/preview.json 能按声明启动应用」列为该任务的验收项；用户据此下载到本机或远程预览。
@@ -139,11 +140,18 @@ def expand(db, rid, text, models=None, replan=False, tools=None):
         require(not missing, f"任务「{step['name']}」缺少{'、'.join(missing)}", 409, "plan_invalid")
     if len(plan["steps"]) > limit:
         notes.append(f"规划给出 {len(plan['steps'])} 个任务，只保留前 {limit} 个")
+    from .domain import PUSHING
+    for step in steps:   # D47: publishing is the platform's; an Agent has no repository write credential
+        if PUSHING.search(step.get("prompt") or ""):
+            notes.append(f"任务「{step['name']}」要求推送或创建 PR：Agent 没有仓库写凭证，发布由平台在会话完成后进行")
     start = db.execute("SELECT COALESCE(MAX(ordinal), 0) FROM tasks WHERE run_id=?", (rid,)).fetchone()[0] + 1
     for offset, step in enumerate(steps):
         db.execute("INSERT INTO tasks(run_id,id,ordinal,spec) VALUES(?,?,?,?)", (rid, step["id"], start + offset, dumps(step)))
     row = db.execute("SELECT snapshot, version, owner_id FROM runs WHERE id=?", (rid,)).fetchone()
     snapshot = json.loads(row["snapshot"])
+    if plan.get("publish") and (snapshot.get("publish_policy") or {}).get("source") != "user":
+        # D47: the requirement asked for a pull / merge request — published on completion; the user's own setting wins
+        snapshot["publish_policy"] = {"auto": True, "source": "requested", "quote": plan["publish"].get("quote", "")}
     if replan:
         snapshot["replan"] = {**(snapshot.get("replan") or {}), "applied": True, "tasks": [s["id"] for s in steps], "notes": notes,
                               "intent": str(plan.get("intent") or "")[:500]}

@@ -96,7 +96,13 @@ TOOLS = [
          "source": {"type": "object"},
          "credentials": object_schema({"source": STRING}),
          "team_id": STRING, "worker_id": STRING, "recovery": RECOVERY,
-         "admission": {"type": "string", "enum": ["confirm", "auto"]}}, ["request_id", "input", "source"])},
+         "admission": {"type": "string", "enum": ["confirm", "auto"]},
+         "publish": object_schema({"auto": {"type": "boolean"}, "branch": STRING, "title": STRING})},
+                                 ["request_id", "input", "source"])},
+    {"name": "octopus_publish_policy",
+     "description": "设置会话完成后是否自动发布 Draft PR / MR（auto=true 自动发布；false 由人确认后用 octopus_publish 发布）。"
+                    "只在用户明确要求时开启。",
+     "inputSchema": object_schema({"run_id": STRING, "auto": {"type": "boolean"}}, ["run_id", "auto"])},
     {"name": "octopus_confirm",
      "description": "确认一个「计划待确认」（awaiting_confirmation）的 Session 的计划并开始执行。调用前必须把任务、各自的工具与模型（及来源）、"
                     "验收项与检查命令展示给用户，并得到用户明确同意；要修改时改用 octopus_continue（修改后续作即视为确认）。",
@@ -390,6 +396,9 @@ def compact_status(session, events):
         return value
 
     view = {key: session[key] for key in SESSION_FIELDS if key in session}
+    for key in ("publish_policy", "publish_auto"):   # D47
+        if session.get(key):
+            view[key] = session[key]
     if session.get("recovery"):
         recovery, last = session["recovery"], session["recovery"].get("latest") or {}
         decision = last.get("decision") or {}
@@ -486,6 +495,8 @@ def call(client, name, args):
         query = [(key, args[key]) for key in ("who", "kind", "before") if args.get(key) not in (None, "")]
         query.append(("limit", int(args.get("limit", 50))))
         return {"changes": client.request("GET", "/v1/runs/" + args["run_id"] + "/changes?" + urlencode(query))}
+    if name == "octopus_publish_policy":   # D47
+        return client.request("POST", "/v1/runs/" + quote(args["run_id"], safe="") + "/publish-policy", {"auto": args["auto"]})
     if name in {"octopus_continue", "octopus_recover", "octopus_control", "octopus_confirm"}:
         rid = args.pop("run_id")
         if name == "octopus_continue" and "credentials" in args:

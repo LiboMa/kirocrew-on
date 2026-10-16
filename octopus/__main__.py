@@ -141,6 +141,10 @@ def main(argv=None):
         def sweep():   # remote previews nobody used for 30 minutes, or whose Session closed (D36 §5.1)
             while not engine.stopping.wait(60):
                 try:
+                    httpd.service.auto_publish_pending()   # D47: Sessions that asked to be published on completion
+                except Exception as exc:
+                    logging.error("Octopus auto publish failed (%s)", type(exc).__name__)
+                try:
                     httpd.service.sweep_apps()
                 except Exception as exc:
                     print(f"KiroCrew ON API: 远程预览回收失败（{type(exc).__name__}）", file=sys.stderr, flush=True)

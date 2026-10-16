@@ -140,4 +140,6 @@ def import_workflow(content, format=None, known=(), planned=False):
     result = {"name": " ".join(name.split())[:80], "steps": normalized, "notes": notes}
     if isinstance(document, dict):
         result.update({key: document[key] for key in ("intent", "summary") if isinstance(document.get(key), str)})
+        if isinstance(document.get("publish"), dict):   # D47: the requirement asked for a pull / merge request
+            result["publish"] = {"quote": str(document["publish"].get("quote") or "")[:200]}
     return result

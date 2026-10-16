@@ -53,6 +53,9 @@ KiroCrew ON 在远端执行开发任务：KiroCrew 的 Kiro Agent 先识别意�
 - 返回 409 `team_archived` 时该 Team 已归档：不能提交新会话或续作，已有会话仍可查看与停止；告诉用户需要平台管理员恢复，或改在其他空间提交。
 - 用户想先看计划再执行时传 `admission: "confirm"`：规划照常完成，第一个执行任务开始前会话停在 `awaiting_confirmation`（见第 3 节）。
   不传时按平台默认（通常立即执行）。
+- 用户明确要求完成后提交 PR / MR 时传 `publish: {"auto": true}`：会话完成并通过审查后平台自动推送 `octopus/<run>` 分支并创建 Draft PR / MR
+  （需要绑定有写权限的凭证）。没有要求时不传，完成后先问用户，同意后再用 `octopus_publish`。不要安排 Agent 自己推送或建 PR 的任务——Agent 没有仓库写凭证。
+  会话中途可用 `octopus_publish_policy {run_id, auto}` 开关（用户同意后）。
 - 回执只代表登记成功。把 `run_id` 和会话链接告诉用户。
 
 ## 3．查看进度：`octopus_status`

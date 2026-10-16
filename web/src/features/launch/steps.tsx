@@ -431,6 +431,11 @@ function CredentialChoice({ draft, update }: { draft: Draft; update: Update }) {
         {options.map((c) => <option key={c.id} value={c.id}>{c.name} · {SCOPE_LABELS[c.scope]} · {c.hint}</option>)}
       </NativeSelect>
       <p className="text-xs text-muted-foreground">私有仓库需要凭证：在「设置 → 代码仓库凭证」中添加；公开仓库可以不选。</p>
+      <label className="flex items-center gap-2 text-xs">
+        <input type="checkbox" id="new-auto-publish" checked={draft.autoPublish}
+          onChange={(e) => update((d) => ({ ...d, autoPublish: e.target.checked }))} />
+        完成后自动发布 Draft PR（需要有写权限的凭证；不勾选时完成后由你确认发布）
+      </label>
     </div>
   );
 }

@@ -155,6 +155,23 @@ def space_workers(db, user, team):
     return db.execute(query + " ORDER BY w.name", (team or user, team or user)).fetchall()
 
 
+def publish_policy(value):
+    """A Session's publish policy (D47): ``auto`` publishes a Draft PR / MR on its own once the Session completes and passes
+    the same checks as the 「发布到仓库」 button; off, a person approves the publish."""
+    require(isinstance(value, dict) and set(value) <= {"auto", "branch", "title"} and isinstance(value.get("auto", False), bool),
+            "publish 须为 {auto: true|false, branch?, title?}")
+    if value.get("branch") is not None:
+        from .publish import check_branch
+        check_branch(value["branch"])
+    if value.get("title") is not None:
+        require(isinstance(value["title"], str) and 0 < len(value["title"].strip()) <= 200, "publish.title 须为 1–200 个字符")
+    return {"auto": bool(value.get("auto", False)), **{k: value[k] for k in ("branch", "title") if value.get(k)}}
+
+
+PUSHING = re.compile(r"git push|push(ed)? (failed|rejected)|推送|pull request|merge request|创建 PR|提交 PR|Authentication failed for",
+                     re.I)
+
+
 def confirm_plan(db, rid, who, actor, via):
     """The user confirmed the Session's plan (D44): it runs from here, and does not wait again."""
     snapshot = json.loads(db.execute("SELECT snapshot FROM runs WHERE id=?", (rid,)).fetchone()["snapshot"])
@@ -770,6 +787,8 @@ class Service:
         require(body.get("plan") in (None, "agent", "match"), "plan 只能是 agent 或 match")
         require(not (selected and body.get("plan") == "agent"), "plan=agent 时不要同时指定工作流、模板、steps 或 document")
         require(body.get("admission") in (None, "confirm", "auto"), "admission 须为 confirm 或 auto")
+        if "publish" in body:
+            publish_policy(body["publish"])
         if not body.get("worker_id"):
             # The space's only usable Worker runs it; a Team without an execution environment takes no new Sessions (D28).
             team = body.get("team_id") or None
@@ -853,6 +872,8 @@ class Service:
                                 execution_contract=3 if design is None else 1)
                 if design is None:   # D44: confirm = wait before the first working task
                     snapshot["admission"] = body.get("admission") or self.default_admission
+                if "publish" in body:   # D47: the user's own word on publishing comes first
+                    snapshot["publish_policy"] = {**publish_policy(body["publish"]), "source": "user"}
                 if bound:
                     snapshot["credentials"] = {"source": bound}
                 if design is not None:
@@ -1040,6 +1061,48 @@ class Service:
             audit(db, actor, "approval.answer", "run", rid, detail)
             journal.record(db, rid, "approval.answered", journal.person(actor), **detail)   # an event, not a row change
         return {**result, "ok": True}
+
+    def set_publish_policy(self, actor, rid, body):
+        """Switch a Session's automatic publish on or off (D47): those who may publish it."""
+        policy = publish_policy(body)
+        with self.db.transaction() as db:
+            run = run_access(db, actor, rid)
+            require(may_publish(db, actor, run), "只有会话创建者、Team owner 或管理员可以设置发布", 403, "forbidden")
+            snapshot = json.loads(run["snapshot"])
+            snapshot["publish_policy"] = {**policy, "source": "user"}
+            journal.change(db, "runs", rid, journal.person(actor), "run.publish_policy", quiet=("snapshot",), snapshot=dumps(snapshot))
+            journal.record(db, rid, "run.publish_policy", journal.person(actor), "完成后自动发布：" + ("开" if policy["auto"] else "关"),
+                           auto=policy["auto"])
+        return {"id": rid, "publish_policy": snapshot["publish_policy"]}
+
+    def auto_publish_pending(self):
+        """Publish, as their creator, the completed Sessions whose policy asks for it (D47) — once per version: a publish
+        that cannot happen is recorded with its reason and waits for a person, the Session stays completed."""
+        with self.db.read() as db:
+            rows = [dict(r) for r in db.execute("SELECT id, version, snapshot, owner_id FROM runs "
+                                                "WHERE status='completed' AND lifecycle='open'")]
+        for row in rows:
+            snapshot = json.loads(row["snapshot"])
+            policy, done = snapshot.get("publish_policy") or {}, snapshot.get("publish_auto") or {}
+            if not policy.get("auto") or done.get("version") == row["version"]:
+                continue
+            with self.db.read() as db:
+                user = db.execute("SELECT id, username, admin FROM users WHERE id=? AND active=1", (row["owner_id"],)).fetchone()
+            if user is None:
+                continue
+            actor = {**dict(user), "scopes": ["read", "execute", "manage"], "token_id": None, "client": "auto-publish"}
+            try:
+                record = self.publish(actor, row["id"], {k: policy[k] for k in ("branch", "title") if policy.get(k)})
+                result = {"ok": True, "url": record.get("url")}
+            except Error as exc:
+                result = {"ok": False, "code": exc.code, "error": str(exc)}
+            with self.db.transaction() as db:
+                current = db.execute("SELECT version, snapshot FROM runs WHERE id=?", (row["id"],)).fetchone()
+                fresh = json.loads(current["snapshot"])
+                fresh["publish_auto"] = {**result, "version": current["version"], "at": time.time()}
+                journal.change(db, "runs", row["id"], journal.ENGINE, "run.publish_auto", quiet=("snapshot",), snapshot=dumps(fresh))
+                journal.record(db, row["id"], "run.publish_auto", journal.ENGINE,
+                               "自动发布 Draft PR" if result["ok"] else "自动发布未完成：" + result["error"], **result)
 
     def publish(self, actor, rid, body):
         """Push the Session's work as one branch and open (or reuse) a draft pull / merge request with the bound write
@@ -1388,7 +1451,7 @@ class Service:
         snapshot = json.loads(run["snapshot"])
         value.update({key: snapshot.get(key) for key in ("name", "workflow_name", "workflow_version",
                                                        "selection", "match_mode", "match_reason", "purpose", "planning", "replan",
-                                                       "admission", "confirmed")})
+                                                       "admission", "confirmed", "publish_policy", "publish_auto")})
         value["source"] = json.loads(value["source"])
         value["session_id"] = run["id"]
         creator = db.execute("SELECT username FROM users WHERE id=?", (run["owner_id"],)).fetchone()
@@ -1481,6 +1544,9 @@ class Service:
             return {"title": "等待批准", "detail": run["error"] or "原生任务正在等待批准一次工具调用。",
                     "action": "在会话页「待批准」中查看工具与命令后批准或拒绝；Coding Agent 可用 octopus_approvals 查看、"
                               "经用户同意后用 octopus_approve 答复。", "task_id": task["id"] if task else None}
+        if run["status"] == "completed" and (run.get("publish_auto") or {}).get("ok") is False:
+            return {"title": "自动发布未完成", "detail": run["publish_auto"].get("error"),
+                    "action": "处理后在会话页点「发布到仓库」（例如绑定一枚有写权限的凭证）；会话的工作已完成。", "task_id": None}
         if run["status"] == "awaiting_confirmation":
             planned = (run.get("planning") or {}).get("applied")
             first = next((t for t in run["tasks"] if t["status"] == "pending"), None)
@@ -1495,7 +1561,14 @@ class Service:
         failure = attempt.get("evidence", {}).get("failure_type")
         from .waiting import handed_over, kiro_login_failure
         error = run.get("error") or attempt.get("error") or "尚无可核实的错误原因"
-        if run.get("error") == "Worker 已停用":   # D43: continues on its own once the Worker is enabled again
+        outcome = ((attempt.get("evidence") or {}).get("outcome") or {})
+        if failure in {"auth", "input", None, "native_error"} and PUSHING.search(" ".join(filter(None, [
+                error, outcome.get("summary"), " ".join(map(str, outcome.get("findings") or []))]))):
+            # D47: an Agent has no repository write credential by design; publishing is the platform's
+            title = "Agent 不能推送或创建 PR"
+            action = ("推送与 Draft PR 由平台完成：会话完成后在会话页点「发布到仓库」，或开启「完成后自动发布」；"
+                      "可续作去掉要求推送的任务。")
+        elif run.get("error") == "Worker 已停用":   # D43: continues on its own once the Worker is enabled again
             title, action = "执行环境已停用", "管理员重新启用后自动继续。"
         elif "原生任务已停止" in error:
             title = (task["spec"]["name"] + "：已停止") if task else "原生任务已停止，尚未完成"

@@ -242,6 +242,10 @@ export interface Run {
   created_by?: { id: string; username?: string | null };
   /** The source credential pinned at submission (D35 §4); never the secret. */
   publish?: PublishRecord | null;
+  /** D47: publish a Draft PR / MR on completion (the user's setting, or the requirement asked for it); off: a person approves. */
+  publish_policy?: { auto: boolean; source?: "user" | "requested"; quote?: string; branch?: string; title?: string } | null;
+  /** The automatic publish's outcome for the version it was tried at. */
+  publish_auto?: { ok: boolean; url?: string | null; code?: string; error?: string; version: number } | null;
   /** What a publish pushes: the candidate that passed the gates and the review (D37 §7). */
   verified?: { sha: string; task_id: string } | null;
   credentials?: { source: CredentialBinding | null; removed?: { id: string; name: string; hint: string; by: { username?: string | null } } } | null;

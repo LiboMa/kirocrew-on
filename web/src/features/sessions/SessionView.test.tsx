@@ -388,6 +388,19 @@ describe("session detail", () => {
       expect(screen.queryByRole("link", { name: /#/ })).not.toBeInTheDocument();
     });
 
+    test("the automatic publish is switched on from the session page (D47)", async () => {
+      const calls = open(done(), { "POST /runs/run-pub/publish-policy": { id: "run-pub", publish_policy: { auto: true, source: "user" } } });
+      await userEvent.click(await screen.findByRole("checkbox", { name: /完成后自动发布 Draft PR/ }));
+      await waitFor(() => expect(calls.find((c) => c.path === "/v1/runs/run-pub/publish-policy")?.body).toEqual({ auto: true }));
+    });
+
+    test("an automatic publish that did not happen says why (D47)", async () => {
+      open(done({ publish_policy: { auto: true, source: "requested", quote: "完成后提交 PR" },
+        publish_auto: { ok: false, code: "credential_read_only", error: "凭证「bob 写」为只读，无法发布", version: 3 } } as Partial<Run>));
+      expect(await screen.findByText(/自动发布未完成：凭证「bob 写」为只读，无法发布/)).toBeInTheDocument();
+      expect(screen.getByText(/需求中要求提交 PR/)).toBeInTheDocument();
+    });
+
     test("the verified candidate is what will be pushed", async () => {
       open(done({ verified: { sha: "abc1234def5678abc1234def5678abc1234def56", task_id: "review" } } as Partial<Run>));
       await screen.findByRole("button", { name: /发布到仓库/ });

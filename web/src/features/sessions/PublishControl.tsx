@@ -15,6 +15,18 @@ export function PublishControl({ run }: { run: Run }) {
   const published = run.publish;
   if (run.source.type !== "git" || !source) return null;
   const label = (record: PublishRecord) => `${record.kind === "merge_request" ? "MR" : "PR"} #${record.number}`;
+  const policy = run.publish_policy;
+  const automatic = async (auto: boolean) => {   // D47: publish on completion, or wait for a person
+    setBusy(true);
+    try {
+      await api("/runs/" + encodeURIComponent(run.id) + "/publish-policy", "POST", { auto });
+      await refresh(run.id);
+    } catch (error) {
+      toast.error((error as Error).message);
+    } finally {
+      setBusy(false);
+    }
+  };
   const publish = async () => {
     setBusy(true);
     try {
@@ -41,6 +53,13 @@ export function PublishControl({ run }: { run: Run }) {
             {run.verified && <span> 将推送已验证的候选 {run.verified.sha.slice(0, 7)}</span>}
           </>
         )}
+      {run.lifecycle === "open" && run.permissions?.publish !== false && (
+        <label className="ml-2 inline-flex items-center gap-1">
+          <input type="checkbox" checked={!!policy?.auto} disabled={busy} onChange={(e) => automatic(e.target.checked)} />
+          完成后自动发布 Draft PR{policy?.source === "requested" && "（需求中要求提交 PR）"}
+        </label>
+      )}
+      {run.publish_auto && !run.publish_auto.ok && <span className="ml-2 text-destructive">自动发布未完成：{run.publish_auto.error}</span>}
     </p>
   );
 }
