@@ -259,13 +259,38 @@ def budget(db, run, now=None):
                  if not json.loads(row["context"]).get("manual"))
     retries = sum(1 for row in db.execute("SELECT evidence FROM attempts WHERE run_id=? AND created>=?", (run["id"], since))
                   if json.loads(row["evidence"] or "{}").get("transient_retry_of"))
-    value = {"since": since,
+    value = {"since": since, "reset": bool(snapshot.get("budget_since")),
              "cycles": {"used": cycles, "limit": settings["max_cycles"]},
              "retries": {"used": retries, "limit": settings.get("max_retries", BUDGET["max_retries"][0])},
              "minutes": {"used": int(((now or time.time()) - since) // 60),
                          "limit": settings.get("budget_minutes", BUDGET["budget_minutes"][0])}}
     value["exhausted"] = next((key for key in ("cycles", "retries", "minutes") if value[key]["used"] >= value[key]["limit"]), None)
     return value
+
+
+LABELS = {"cycles": ("纠错", "轮"), "retries": ("自动重试", "次")}
+
+
+def _origin(value):
+    return "自上次续作 / 请求诊断起" if value.get("reset") else "自会话开始"
+
+
+def budget_line(value):
+    """The budget as the console, MCP readers and the report show it."""
+    parts = [f"{LABELS[key][0]} {value[key]['used']}/{value[key]['limit']} {LABELS[key][1]}" for key in ("cycles", "retries")]
+    parts.append(f"{value['minutes']['used']}/{value['minutes']['limit']} 分钟")
+    if value.get("exhausted"):
+        index = ("cycles", "retries", "minutes").index(value["exhausted"])
+        parts[index] += "（已用完）"
+    return f"预算（{_origin(value)}）：" + " · ".join(parts)
+
+
+def budget_note(value):
+    """What ran out, for a blocked Session's attention."""
+    limit = value[value["exhausted"]]["limit"]
+    what = {"cycles": f"自动纠错已达到 {limit} 轮上限", "retries": f"自动重试已达到 {limit} 次上限",
+            "minutes": f"自动纠错时长已超过 {limit} 分钟"}[value["exhausted"]]
+    return f"{what}（{_origin(value)}）；续作会重新计算预算，也可在续作时调大。"
 
 
 def allows(db, run, kind):
@@ -280,7 +305,7 @@ def summary(db, run):
     for row in rows:
         for key in ("context", "evidence", "decision"):
             row[key] = json.loads(row[key]) if row[key] else None
-    return {"policy": policy(snapshot.get("recovery"), legacy=True), "used": len(rows),
+    return {"policy": policy(snapshot.get("recovery"), legacy=True), "used": len(rows), "budget": budget(db, run),
             "latest": rows[-1] if rows else None, "history": rows}
 
 

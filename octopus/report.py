@@ -102,13 +102,17 @@ def model(view, now=None):
     recovery = [{"number": r.get("number"), "task": r.get("failed_task_id") or "—", "status": r.get("status"),
                  "action": (r.get("decision") or {}).get("action"), "reason": _line((r.get("decision") or {}).get("reason"))}
                 for r in (view.get("recovery") or {}).get("history") or []]
+    budget = (view.get("recovery") or {}).get("budget")
+    if budget:
+        from .recovery import budget_line
+        budget = budget_line(budget)
     publish = view.get("publish") or None
     return {"title": _line(view.get("name") or view.get("input") or view.get("id"), 200), "id": view.get("id"),
             "status": view.get("status"), "creator": (view.get("created_by") or {}).get("username") or "—",
             "generated": time.strftime("%Y-%m-%d %H:%M UTC", time.gmtime(now or time.time())),
             "request": {"input": _clip(view.get("input"), INPUT), "intent": _line(planning.get("intent"), 500),
                         "summary": _clip(planning.get("summary"), PLAN)},
-            "tasks": tasks, "recovery": recovery,
+            "tasks": tasks, "recovery": recovery, "budget": budget,
             "verified": str((view.get("verified") or {}).get("sha") or "")[:7] or None,
             "publish": publish and {"branch": _line(publish.get("branch"), 200), "url": str(publish.get("url") or ""),
                                     "commit": str(publish.get("commit") or "")[:7],
@@ -193,6 +197,7 @@ def markdown(view, now=None):
         if final["suggestions"]:
             out += ["", "建议："] + [f"- {_md(s)}" for s in final["suggestions"]]
     out += ["", "## 纠错记录", ""]
+    out += [_md(m["budget"]), ""] if m["budget"] else []
     out += [f"- {_md(_round(r))}" for r in m["recovery"]] or ["无纠错"]
     out += ["", "## 发布", ""]
     if m["verified"]:
@@ -268,6 +273,8 @@ def html(view, now=None):
             if rows:
                 out.append(f"<p>{title}：</p><ul>" + "".join(f"<li>{row}</li>" for row in rows) + "</ul>")
     out.append("<h2>纠错记录</h2>")
+    if m["budget"]:
+        out.append(f"<p>{e(m['budget'])}</p>")
     out.append("<ul>" + "".join(f"<li>{e(_round(r))}</li>" for r in m["recovery"]) + "</ul>" if m["recovery"] else "<p>无纠错</p>")
     out.append("<h2>发布</h2>")
     items, publish = [], m["publish"]

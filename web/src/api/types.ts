@@ -208,11 +208,25 @@ export interface RecoveryPolicy {
   /** The watchdog's limits in minutes (D39); absent means the defaults (30 and 170). */
   idle_minutes?: number;
   attempt_minutes?: number;
+  /** The automatic recovery budget (D42); absent means the defaults (4 retries, 720 minutes). */
+  max_retries?: number;
+  budget_minutes?: number;
+}
+
+/** What automatic recovery used since the Session began or the user's latest continue / requested diagnosis (D42). */
+export interface RecoveryBudget {
+  since: number;
+  reset: boolean;
+  cycles: { used: number; limit: number };
+  retries: { used: number; limit: number };
+  minutes: { used: number; limit: number };
+  exhausted: "cycles" | "retries" | "minutes" | null;
 }
 
 export interface Recovery {
   policy: RecoveryPolicy;
   used: number;
+  budget?: RecoveryBudget;
   latest: RecoveryRecord | null;
   history: RecoveryRecord[];
 }

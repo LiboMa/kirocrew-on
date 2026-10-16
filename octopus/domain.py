@@ -1465,9 +1465,10 @@ class Service:
             title, action = "协调者需要你处理具体阻塞", "按诊断说明补充条件，再请求诊断或原地重跑。"
         else:
             title, action = "任务未通过交接或质量检查", "查看失败证据，可请求协调者诊断并修复，或配置后原地重跑。"
-        settings = run["recovery"]["policy"]
-        if settings["enabled"] and run["recovery"]["used"] >= settings["max_cycles"]:
-            action += f" 自动纠错已达到 {settings['max_cycles']} 轮上限。"
+        settings, budget = run["recovery"]["policy"], run["recovery"].get("budget") or {}
+        if budget.get("exhausted") and (settings["enabled"] or budget["exhausted"] == "retries"):
+            from .recovery import budget_note
+            action += " " + budget_note(budget)
         return {"title": title, "detail": error, "action": action, "task_id": task["id"] if task else None,
                 "task_name": task["spec"]["name"] if task else None}
 

@@ -125,5 +125,49 @@ class BudgetTests(BudgetCase):
         self.assertEqual(self.budget(rid)["minutes"]["used"], 0)
 
 
+class BudgetVisibleTests(BudgetCase):
+    def test_the_summary_and_the_attention_say_the_rounds_ran_out(self):
+        self.failing = {("review", 1), ("review", 2)}
+        rid = self.start(STEPS, recovery={"enabled": True, "max_cycles": 1})
+        run = self.tick(rid, 40)
+        self.assertEqual(run["recovery"]["budget"]["exhausted"], "cycles")
+        self.assertEqual(run["recovery"]["budget"]["cycles"], {"used": 1, "limit": 1})
+        self.assertTrue(run["attention"]["action"].endswith(
+            "自动纠错已达到 1 轮上限（自会话开始）；续作会重新计算预算，也可在续作时调大。"), run["attention"]["action"])
+
+    def test_the_attention_says_the_retries_ran_out(self):
+        self.cancelled, self.decisions = {("code", 1)}, [WAIT]
+        rid = self.begin(max_retries=0)
+        run = self.tick(rid, 40)
+        self.assertEqual(run["status"], "blocked")
+        self.assertIn("自动重试已达到 0 次上限（自会话开始）", run["attention"]["action"])
+
+    def test_the_attention_says_the_time_ran_out(self):
+        self.cancelled = {("code", 1)}
+        rid = self.begin(budget_minutes=30)
+        with self.db.transaction() as db:
+            db.execute("UPDATE runs SET created=created-? WHERE id=?", (31 * 60, rid))
+        run = self.tick(rid, 40)
+        self.assertIn("自动纠错时长已超过 30 分钟（自会话开始）", run["attention"]["action"])
+
+    def test_the_line_says_where_the_budget_counts_from(self):
+        value = {"reset": False, "cycles": {"used": 1, "limit": 2}, "retries": {"used": 0, "limit": 4},
+                 "minutes": {"used": 35, "limit": 720}, "exhausted": None}
+        self.assertEqual(recovery.budget_line(value), "预算（自会话开始）：纠错 1/2 轮 · 自动重试 0/4 次 · 35/720 分钟")
+        value.update(reset=True, exhausted="cycles", cycles={"used": 2, "limit": 2})
+        self.assertEqual(recovery.budget_line(value),
+                         "预算（自上次续作 / 请求诊断起）：纠错 2/2 轮（已用完） · 自动重试 0/4 次 · 35/720 分钟")
+
+    def test_mcp_and_the_report_show_the_budget(self):
+        from octopus import mcp, report
+        self.failing = {("review", 1), ("review", 2)}
+        rid = self.start(STEPS, recovery={"enabled": True, "max_cycles": 1})
+        run = self.tick(rid, 40)
+        self.assertEqual(mcp.compact_status(run, [])["session"]["recovery"]["budget"], run["recovery"]["budget"])
+        line = recovery.budget_line(run["recovery"]["budget"])
+        self.assertIn(line, report.markdown(run))
+        self.assertIn(line, report.html(run))
+
+
 if __name__ == "__main__":
     unittest.main()

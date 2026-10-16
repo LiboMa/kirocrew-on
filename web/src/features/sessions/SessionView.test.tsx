@@ -189,6 +189,14 @@ describe("session detail", () => {
     expect(screen.getByText(/失败 Task：review → 重新规划其后的工作/)).toBeInTheDocument();
   });
 
+  test("the recovery record shows the budget and what ran out (D42)", async () => {
+    const budget = { since: 1, reset: true, cycles: { used: 2, limit: 2 }, retries: { used: 0, limit: 4 },
+      minutes: { used: 35, limit: 720 }, exhausted: "cycles" as const };
+    open({ ...blocked, recovery: { ...blocked.recovery!, budget } } as Run);
+    expect(await screen.findByText("预算（自上次续作 / 请求诊断起）：纠错 2/2 轮（已用完） · 自动重试 0/4 次 · 35/720 分钟"))
+      .toBeInTheDocument();
+  });
+
   test("a Session that may not switch tools says so", async () => {
     open({ ...blocked, recovery: { ...blocked.recovery!, policy: { enabled: true, max_cycles: 2, switch_tools: false } } } as Run);
     expect(await screen.findByText("自动纠错已开启 · 最多 2 轮 · 不换工具")).toBeInTheDocument();

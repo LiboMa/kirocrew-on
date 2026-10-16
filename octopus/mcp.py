@@ -22,7 +22,9 @@ RECOVERY = object_schema({"enabled": {"type": "boolean"},
                           "max_cycles": {"type": "integer", "minimum": 1, "maximum": 5},
                           "switch_tools": {"type": "boolean"},
                           "idle_minutes": {"type": "integer", "minimum": 5, "maximum": 240},
-                          "attempt_minutes": {"type": "integer", "minimum": 30, "maximum": 720}})
+                          "attempt_minutes": {"type": "integer", "minimum": 30, "maximum": 720},
+                          "max_retries": {"type": "integer", "minimum": 0, "maximum": 20},
+                          "budget_minutes": {"type": "integer", "minimum": 30, "maximum": 4320}})
 TOOLS = [
     {"name": "octopus_workflows", "description": "列出当前用户可访问的工作流", "inputSchema": object_schema()},
     {"name": "octopus_match_workflow",
@@ -384,7 +386,8 @@ def compact_status(session, events):
     if session.get("recovery"):
         recovery, last = session["recovery"], session["recovery"].get("latest") or {}
         decision = last.get("decision") or {}
-        view["recovery"] = {"used": recovery.get("used"), "policy": recovery.get("policy"), "latest": {
+        view["recovery"] = {"used": recovery.get("used"), "policy": recovery.get("policy"),
+                            **({"budget": recovery["budget"]} if recovery.get("budget") else {}), "latest": {
             "number": last.get("number"), "status": last.get("status"), "failed_task_id": last.get("failed_task_id"),
             "action": decision.get("action"), "target_task_id": decision.get("target_task_id"),
             "reason": decision.get("reason")} if last else None}

@@ -1,5 +1,5 @@
 import { ChevronDown } from "lucide-react";
-import type { RecoveryRecord, Run } from "@/api/types";
+import type { RecoveryBudget, RecoveryRecord, Run } from "@/api/types";
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible";
 import { RECOVERY_STATES } from "@/lib/labels";
 
@@ -11,9 +11,17 @@ function target(decision: NonNullable<RecoveryRecord["decision"]>) {
   return ` → 换工具 Task：${decision.target_task_id}（${was ? `${was.tool} / ${was.model} → ` : ""}${decision.tool} / ${decision.model ?? "auto"}）`;
 }
 
+/** The same line as the report and MCP readers get (recovery.budget_line). */
+export function budgetLine(value: RecoveryBudget) {
+  const parts = [`纠错 ${value.cycles.used}/${value.cycles.limit} 轮`, `自动重试 ${value.retries.used}/${value.retries.limit} 次`,
+    `${value.minutes.used}/${value.minutes.limit} 分钟`];
+  if (value.exhausted) parts[["cycles", "retries", "minutes"].indexOf(value.exhausted)] += "（已用完）";
+  return `预算（${value.reset ? "自上次续作 / 请求诊断起" : "自会话开始"}）：` + parts.join(" · ");
+}
+
 export function RecoveryPanel({ run }: { run: Run }) {
   const data = run.recovery;
-  if (!data?.history?.length) return null;
+  if (!data?.history?.length && !data?.budget?.exhausted) return null;
   const last = data.latest;
   const summary = run.status === "diagnosing" ? `第 ${last?.number ?? 1} 轮 · Coordinator 正在诊断`
     : last?.status === "applied" && run.status !== "completed"
@@ -27,6 +35,11 @@ export function RecoveryPanel({ run }: { run: Run }) {
         <span id="recovery-summary">{summary}</span>
         <ChevronDown className="size-4 transition-transform group-data-[state=open]:rotate-180" aria-hidden />
       </CollapsibleTrigger>
+      {data.budget && (
+        <p id="recovery-budget" className={"mt-1 text-xs " + (data.budget.exhausted ? "text-destructive" : "text-muted-foreground")}>
+          {budgetLine(data.budget)}
+        </p>
+      )}
       <CollapsibleContent id="recovery-records" className="mt-2 divide-y">
         {data.history.map((row) => (
           <article key={row.number} className="py-3 text-sm">
