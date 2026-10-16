@@ -494,6 +494,35 @@ Vite 客户端模块可用；打开链接第二次使用被拒、无 Cookie 时�
 不存在的用户名得结构化 404。验收后两枚 Token 已吊销、`e2e-member` 停用。独立审查 3 个 Important 与 4 个上调项修复后重跑 15/15；
 离线 Python 443、控制台 108、旧版回归 92。
 
+### 14.28 协调者的可选目标（EC2 run-40a1…）
+
+本机完成：协调者诊断时收到 `allowed_targets`（失败任务及其之前的任务）与此前各轮决定及其被拒原因（`previous_decisions[].refused`）；
+指向失败任务之后的任务时，拒绝信息写明可选目标并说明「问题出在上游产出的代码时用 rework 指向该上游任务，其后的任务会自动重跑」；
+规划者不再在审查之后另设「按审查修复」的任务。
+✅ EC2（2026-10-17，ed78aa6，`run-6d7c132b…`，公开测试仓库，只读、未推送）：复现 run-40a1 的结构（实现 → 审查 → 按审查修复），
+审查以日期不符 `changes_requested` → 协调者收到可选目标 `code`、`review`，依据 `allowed_targets` 返工上游的 `code`（未指向 `fix`，无被拒决定）
+→ 复审通过 → `fix` 执行 → 会话完成。同一会话中，返工后的实现任务答复完成后 KiroCrew 未能清理残留进程组（`kill failed: … process group …
+still has members`），被当成原生错误交给协调者，用掉一轮纠错；已改为与「ACP 进程退出」相同的 L0 自动重试（`runtime_cleanup`，不消耗纠错轮次）。
+
+### 14.27 发布：需求要求或会话页开启时自动发布 Draft PR（D47，EC2 run-361cd491…）
+
+本机完成：会话的发布策略 `publish: {auto}`——启动时（API / MCP / 控制台向导）或会话页随时开启；需求中明确要求提 PR / MR 时由 KiroCrew
+规划者标注，平台据此开启（用户启动时明确设置的优先）；默认仍由人确认发布。会话完成后平台以创建者身份自动发布（与「发布到仓库」同样的核对），
+同一版本只试一次；做不到时会话仍为完成，「需要处理」写明「自动发布未完成」与原因。规划中的推送任务记说明；任务因尝试推送失败时提示
+「Agent 不能推送或创建 PR」，不再误导为权限问题。
+✅ EC2（2026-10-17，ed78aa6，`run-d098543e…`，公开测试仓库 `LiboMa/bedrock-claude-call`，负责人同意建 Draft PR）：`publish: {auto: true}`
+的会话（实现 + 独立审查）完成后，平台推送 `octopus/run-d098543e…` 并自动建出 Draft PR #5（只改 README.md，指向 main）；会话页显示
+「已发布 · PR #5」与已勾选的「完成后自动发布 Draft PR」，时间线有「自动发布」。时间线中 `run.published` 等 15 种事件没有标题，已补齐，
+并加契约测试：后端写入的每种事件在控制台都有标题。
+
+### 14.26 KiroCrew 配置与隔离（D46 P0）
+
+本机完成：按 KiroCrew 0.10.0 的真实配置项修正——父会话以 `memory_mode: incognito` 建立，不再写 KiroCrew 不认识的 `memory.enabled`；
+协调者只能派生平台的工具 Agent（`toolsSettings.subagent.availableAgents`），并排除 monitor 工具；工具 Agent 用固定并发；不再传 KiroCrew 忽略的
+`solo_*` 字段；已有配置迁移时移除旧的允许列表。
+✅ EC2（2026-10-17，ed78aa6，`run-d098543e…`）：新的允许列表下实现与审查任务均正常派发并完成；新父会话没有在边界的全局记忆历史中留下记录。
+后续（负责人 2026-10-17）：每人独立 Worker 与记忆，只有 Team 共用 Worker 空间——`incognito` 只在一个 Worker 服务多个空间时需要，见 P4。
+
 ### 14.25 Agent 提示 P1：一致性与正确性（D46）
 
 KiroCrew 的通用 Agent 提示经盘点（25 处问题）后修正：统一规划者称呼、任务数与规则（首次与重新规划共用、环境事实截断，最大输入下不超 8000 字符）；
