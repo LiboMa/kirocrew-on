@@ -41,7 +41,7 @@ def step_id(value, index, seen):
     return candidate
 
 
-def normalize(raw, notes):
+def normalize(raw, notes, known=()):
     require(isinstance(raw, list), "工作流需要 steps 任务列表")
     require(1 <= len(raw) <= 8, "流程须包含 1–8 个顺序任务")
     seen, result, renamed = set(), [], {}
@@ -70,7 +70,7 @@ def normalize(raw, notes):
         # Dependencies by original id or by task name, on earlier tasks only; anything else is dropped with a note.
         if not isinstance(step.get("depends_on"), list):
             continue
-        earlier = {t["id"]: t["id"] for t in result[:index - 1]}
+        earlier = {**{k: k for k in known}, **{t["id"]: t["id"] for t in result[:index - 1]}}   # known: kept tasks (D41)
         names = {t["name"]: t["id"] for t in result[:index - 1]}
         kept = []
         for dep in step["depends_on"]:
@@ -86,8 +86,9 @@ def normalize(raw, notes):
     return result
 
 
-def import_workflow(content, format=None):
-    """Parse a workflow document into ``{"name", "steps", "notes"}``; raises ``Error`` (400) with the reason."""
+def import_workflow(content, format=None, known=()):
+    """Parse a workflow document into ``{"name", "steps", "notes"}``; raises ``Error`` (400) with the reason. ``known``:
+    ids of tasks already in the Session that its steps may depend on (a replan keeps the accepted ones, D41)."""
     require(isinstance(content, str) and content.strip(), "工作流内容应为非空文本")
     require(format in (None, "", "json", "yaml", "yml", "md", "markdown"), "格式只支持 json、yaml 或 markdown")
     try:
@@ -103,7 +104,7 @@ def import_workflow(content, format=None):
         title, raw = document.get("name"), document["steps"]
     else:
         title, raw = None, document
-    normalized = steps(normalize(raw, notes))
+    normalized = steps(normalize(raw, notes, known), known=known)
     name = title if isinstance(title, str) and title.strip() else "导入的工作流"
     result = {"name": " ".join(name.split())[:80], "steps": normalized, "notes": notes}
     if isinstance(document, dict):

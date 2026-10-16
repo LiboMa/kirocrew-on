@@ -119,6 +119,10 @@
 - 看门狗（D39 审查延后项）：报告与 MCP 只显示最终 Attempt 的看门狗记录（重试后恢复的卡住不出现）；旧 Worker 的 `unsupported`
   标记不显示；控制台的自动纠错设置与会话的设置行不显示 `idle_minutes` / `attempt_minutes`；协调者诊断的 Attempt 不受看门狗监视；
   自动重试不带「上次在 N 分钟时于某工具处被停止」的说明。
+- 重新规划（D41 审查延后项）：`snapshot.replan.notes`（改名的 ID、去掉的依赖、截到 6 个任务）控制台不显示，`types.ts` 无 `replan` 字段；
+  `_task_start` 把被删除的失败任务的候选算作其他任务的工作，只由失败 Attempt 改过的文件不受 `artifacts_locked` 保护；
+  缺少「重新规划之后续作依赖任务」的端到端测试（`depends_on` 改名与返工后不重跑规划已有单测）。
+- 测试依赖真实 DNS：`tests/test_credentials.py`、`tests/test_private_clone.py` 在本机代理 fake-IP（`198.18.0.0/15`）下全部被 `refused_address` 拒绝，应在测试中固定解析结果。
 - 源码准备失败时控制台只显示 `Worker 操作未完成 (ValueError)`：`octopus/worker.py:488` 只透传 `security.Error`，`octopus/sources.py` 的提示均为 `ValueError`（Connector 设计 §7 P1）。
 - 向导：导入 / 推荐后切换到模板时来源提示未更新；切换空间未重置推荐 Worker；推荐轮询遇 403 / 404 不停止；提交瞬间在途轮询可能回写草稿。
 - 原生入口弹窗缺少账户切换保护；`crew_url` 公网来源未规范化 `:443` 写法。

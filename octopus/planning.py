@@ -66,12 +66,17 @@ def expand(db, rid, text, models=None, replan=False):
     """Validate the plan in ``text`` and append its tasks after the planning task; raises ``Error`` with the reason.
     ``replan``: the Coordinator's replan (D41): at most 6 tasks, recorded under the snapshot's ``replan``."""
     require(isinstance(text, str) and text.strip(), "规划任务没有返回内容")
-    plan = import_workflow(text.strip())
+    current = json.loads(db.execute("SELECT snapshot FROM runs WHERE id=?", (rid,)).fetchone()["snapshot"])
+    # a replan's tasks may depend on the accepted tasks it keeps (D41)
+    kept = [row["id"] for row in db.execute("SELECT id FROM tasks WHERE run_id=? AND status='accepted' ORDER BY ordinal", (rid,))] \
+        if replan else []
+    plan = import_workflow(text.strip(), known=kept)
     notes = list(plan["notes"])
-    # ids of tasks that are, or were (replaced by a replan, their Attempts kept as history), in this Session
+    # ids of tasks that are, or were (replaced by a replan — run or not — their Attempts kept as history), in this Session
     taken = {row["id"] for row in db.execute("SELECT id FROM tasks WHERE run_id=?", (rid,))} | \
-        {row[0] for row in db.execute("SELECT DISTINCT task_id FROM attempts WHERE run_id=?", (rid,))}
-    limit = 6 if replan else 7
+        {row[0] for row in db.execute("SELECT DISTINCT task_id FROM attempts WHERE run_id=?", (rid,))} | \
+        {r.get("id") for r in (current.get("replan") or {}).get("replaced") or []}
+    limit, renames = (6 if replan else 7), {}
     published = models or {}
     steps = []
     for step in plan["steps"][:limit]:
@@ -80,12 +85,16 @@ def expand(db, rid, text, models=None, replan=False):
         while step["id"] in taken:
             step["id"], number = f"{base}-{number}", number + 1
         if step["id"] != base:
+            renames[base] = step["id"]
             notes.append(f"任务 ID {base} 与已有任务重复，改为 {step['id']}")
         taken.add(step["id"])
         if step["model"] not in {"auto", "default"} and step["model"] not in (published.get(step["tool"]) or []):
             notes.append(f"{step['name']}：模型 {step['model']} 不在执行环境公布的列表中，改为 auto")
             step["model"] = "auto"
         steps.append(step)
+    for step in steps:   # a dependency follows the task it named to its new id
+        if step.get("depends_on"):
+            step["depends_on"] = list(dict.fromkeys(renames.get(dep, dep) for dep in step["depends_on"]))
     for step in steps:   # every planned task carries its contract (D34 §6.1)
         missing = [label for label, ok in (("类别（kind）", "kind" in step), ("验收项（acceptance）", step.get("acceptance")),
                                            ("验证命令（verify）", step.get("kind") not in {"implement", "test"} or step.get("verify")))
@@ -134,53 +143,54 @@ def pending(snapshot, task_id=PLAN_ID):
     return planning.get("mode") == "agent" and not planning.get("applied")
 
 
-def planning_task(task_id):
-    """The KiroCrew planning tasks: the first plan and a replan (D41). They change no business code: no candidate, no gates."""
-    return task_id == PLAN_ID or str(task_id).startswith(REPLAN_PREFIX)
+def planning_task(task_id, snapshot=None):
+    """The KiroCrew planning tasks: the first plan, and the Coordinator's replan as the Session's snapshot names it (D41).
+    They change no business code: no candidate, no gates; a replan never replaces them."""
+    return task_id == PLAN_ID or bool(snapshot) and task_id == (snapshot.get("replan") or {}).get("task")
 
 
-def replan_step(requirement, planned, accepted, replaced, failure, decision, models=None, tools=None, limitations=None):
-    """The Coordinator's replan (D41 §3.2): a Kiro task that plans only the remaining work, knowing what is done, what the
-    old plan was and why it failed. Its reply is validated and appended like the first plan."""
+def _clip(text, limit):
+    text = str(text or "")
+    return text if len(text) <= limit else text[:limit] + "…"
+
+
+def replan_step(task_id, replaced, failure, decision, models=None, tools=None, limitations=None):
+    """The Coordinator's replan (D41 §3.2): a Kiro task that plans only the remaining work. What the dispatch carries
+    anyway is referred to, not copied — the requirement (本次研发任务), the first plan's (需求补全) and the accepted tasks'
+    conclusions (前序交接) — so the prompt stays within the Worker's 8000 characters whatever the Session holds."""
+    replaced = [{"id": r.get("id"), "name": _clip(r.get("name"), 60), "kind": r.get("kind")} for r in replaced][:12]
     prompt = f"""你是此 Session 的 KiroCrew 规划者。协调者判断原计划有问题，请重新规划剩余的工作。
-
-## 用户需求
-{requirement}
-
-## 已补全的需求（首次规划）
-意图：{planned.get("intent") or "—"}
-{planned.get("summary") or ""}
-
-## 已完成并验收的任务（保留，不要重复）
-{dumps(accepted)}
+用户需求见上方「本次研发任务」与「需求补全」；已完成并验收的任务及其结论见「前序交接」，它们保留，不要重复。
+失败任务已有的改动仍在会话分支上（工作区中），可在其基础上继续。
 
 ## 被替换的任务（原计划的剩余部分，不再执行）
-{dumps(replaced)}
+{_clip(dumps(replaced), 900)}
 
 ## 失败与协调者的判断
-失败：{failure}
-协调者的原因：{decision.get("reason")}
-协调者的要求：{decision.get("instructions")}
+失败：{_clip(failure, 800)}
+协调者的原因：{_clip(decision.get("reason"), 500)}
+协调者的要求：{_clip(decision.get("instructions"), 1200)}
 
 ## 本任务的交付
-只规划剩余的工作，不重复已完成的任务：steps 为 1–6 个顺序任务，后续任务在同一个 Session、同一份源码检出上依次执行。
+只规划剩余的工作：steps 为 1–6 个顺序任务，后续任务在同一个 Session、同一份源码检出上依次执行。
 每个任务必须给出 kind（implement / review / test / deliver / design）、deliverables、至少 1 条可检查的 acceptance；
-implement 与 test 任务必须给出至少 1 条 verify（实际可执行的验证命令）；depends_on 只列本计划中前面的任务；paths 写本任务可改动的路径。
-平台的门禁：test 任务新增的测试须在会话基线上失败；后续任务若要修改此前任务交付的文件，须在自己的 paths 中列出这些文件。
+implement 与 test 任务必须给出至少 1 条 verify（实际可执行的验证命令）；depends_on 可列本计划中前面的任务或前序交接中已验收任务的 id；
+paths 写本任务可改动的路径。平台的门禁：test 任务新增的测试须在会话基线上失败；后续任务若要修改此前任务交付的文件，
+须在自己的 paths 中列出这些文件；test 任务只写测试、不改实现，其 verify 不安装依赖。
 本任务只做分析与规划，不修改业务代码。
 
-## 此执行环境的 Coding 工具
-{dumps(tools or {})}
-available 为 false 的工具不要选择。执行环境的已知限制：{dumps(limitations or [])}
+## 此执行环境的 Coding 工具与已知限制
+{_clip(dumps(tools or {}), 500)}
+available 为 false 的工具不要选择。已知限制：{_clip(dumps(limitations or []), 500)}
 
 ## 此执行环境公布的模型
-{dumps(models or {})}
+{_clip(dumps(models or {}), 800)}
 不在上面列表中的具体模型一律写 model=auto。
 
 最终回复必须包含且仅包含一个 JSON 代码块（字段：intent、summary、name、steps）；不要加入第二个 JSON/YAML 代码块。
 同时按本任务要求写交接文件，说明重新规划的依据。
 """
-    return {"id": REPLAN_PREFIX + "1", "name": "重新规划剩余工作（KiroCrew）", "tool": "kiro", "model": "auto", "effort": "",
+    return {"id": task_id, "name": "重新规划剩余工作（KiroCrew）", "tool": "kiro", "model": "auto", "effort": "",
             "prompt": prompt}
 
 

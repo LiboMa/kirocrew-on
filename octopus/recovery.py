@@ -165,12 +165,15 @@ def is_review(spec):
 
 def reviewed_backend(db, run_id, ordinal):
     """The backend that wrote the code a review at ``ordinal`` reviews: the newest accepted Attempt of an earlier task
-    that is not itself a review or a design (D38 §3.3)."""
+    that is not itself a review, a design or a planning task (D38 §3.3, D41)."""
+    from .planning import planning_task as planner
+    snapshot = json.loads((db.execute("SELECT snapshot FROM runs WHERE id=?", (run_id,)).fetchone() or ["{}"])[0])
+    planning_task = lambda task_id: planner(task_id, snapshot)
     for row in db.execute("SELECT a.spec, a.evidence FROM attempts a JOIN tasks t ON t.run_id=a.run_id AND t.id=a.task_id "
                           "WHERE a.run_id=? AND t.ordinal<? AND a.status='accepted' ORDER BY a.updated DESC, a.created DESC",
                           (run_id, ordinal)):
         spec = json.loads(row["spec"])
-        if is_review(spec) or spec.get("kind") == "design" or spec.get("id") == "plan":
+        if is_review(spec) or spec.get("kind") == "design" or planning_task(spec.get("id")):
             continue
         return json.loads(row["evidence"] or "{}").get("actual_backend") or spec["tool"]
     return None
@@ -329,8 +332,8 @@ def reconcile(database, skip=frozenset()):
 def feedback(db, run, attempt):
     row = db.execute("SELECT * FROM recoveries WHERE run_id=? AND status='applied' AND updated<=? "
                      "ORDER BY number DESC LIMIT 1", (run["id"], attempt["created"])).fetchone()
-    if not row:
-        return None
+    if not row or json.loads(row["decision"] or "{}").get("action") == "replan":
+        return None   # a replan's instructions were for the planner; the new tasks are first runs (D41)
     return {"recovery_id": row["id"], "cycle": row["number"],
             "decision": json.loads(row["decision"]), "failure": json.loads(row["context"]),
             "instruction": "本轮为纠错后的重新执行；实施修复并重新验证，后续审查必须针对本轮源码。"}
@@ -468,12 +471,11 @@ class Coordinator:
         """The Coordinator's replan (D41 §3.2): the failed task and those after it are replaced by a KiroCrew planning task;
         accepted tasks stay. Once per Session; never for a design Session or for a planning task itself."""
         from . import planning
-        from .engine import handoff
         from .revisions import record
         rid, snapshot = fresh["id"], json.loads(fresh["snapshot"])
         refusal = ("已重新规划过一次，不能再次重新规划" if snapshot.get("replan") else
                    "工作流设计会话不重新规划" if snapshot.get("purpose") == "workflow_design" else
-                   "失败的是规划任务本身，不能以重新规划替换" if planning.planning_task(failed["id"]) else None)
+                   "失败的是规划任务本身，不能以重新规划替换" if planning.planning_task(failed["id"], snapshot) else None)
         if refusal:
             message = "协调者重新规划的决定未通过核对：" + refusal
             journal.change(db, "recoveries", item["id"], journal.RECOVERY, "recovery.state", event={"id": item["id"]},
@@ -483,16 +485,16 @@ class Coordinator:
             return
         context = json.loads(item["context"])
         environment = context.get("environment") or {}
-        accepted = [handoff(dict(row)) for row in db.execute(
-            "SELECT t.id,t.spec,a.result,a.evidence FROM tasks t JOIN attempts a ON a.id=t.current_attempt "
-            "WHERE t.run_id=? AND t.ordinal<? AND t.status='accepted' ORDER BY t.ordinal", (rid, failed["ordinal"]))]
         later = [dict(row) for row in db.execute("SELECT * FROM tasks WHERE run_id=? AND ordinal>=? ORDER BY ordinal",
                                                  (rid, failed["ordinal"]))]
         replaced = [{"id": row["id"], "name": json.loads(row["spec"]).get("name", row["id"]),
                      "kind": json.loads(row["spec"]).get("kind")} for row in later]
         failure = f"任务「{replaced[0]['name']}」：{str(context.get('error') or '')[:1500]}"
-        spec = planning.replan_step(fresh["input"], snapshot.get("planning") or {}, accepted, replaced, failure, decision,
-                                    environment.get("models"), environment.get("tools"), environment.get("limitations"))
+        used = {row[0] for row in db.execute("SELECT id FROM tasks WHERE run_id=? UNION SELECT task_id FROM attempts WHERE run_id=?",
+                                             (rid, rid))}
+        task_id = next(planning.REPLAN_PREFIX + str(n) for n in range(1, 100) if planning.REPLAN_PREFIX + str(n) not in used)
+        spec = planning.replan_step(task_id, replaced, failure, decision, environment.get("models"), environment.get("tools"),
+                                    environment.get("limitations"))
         journal.remove_rows(db, "tasks", "run_id=? AND ordinal>=?", (rid, failed["ordinal"]), journal.RECOVERY, "task.replaced",
                             decision.get("reason"), event={"tasks": replaced})
         db.execute("INSERT INTO tasks(run_id,id,ordinal,spec) VALUES(?,?,?,?)", (rid, spec["id"], failed["ordinal"], dumps(spec)))

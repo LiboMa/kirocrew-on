@@ -645,6 +645,16 @@ class Engine:
             if task["status"] in {"failed", "blocked", "stopped"}:
                 return
             attempt = db.execute("SELECT * FROM attempts WHERE id=?", (task["current_attempt"],)).fetchone()
+            replan = json.loads(fresh["snapshot"]).get("replan") or {}
+            if attempt is None and task["id"] == replan.get("task") and replan.get("applied"):
+                # A rework of an earlier task resets the replan task too; its plan is already applied: it stands as it was
+                # (D41) — a new planning run would only be discarded.
+                done = db.execute("SELECT id FROM attempts WHERE run_id=? AND task_id=? AND status='accepted' "
+                                  "ORDER BY number DESC LIMIT 1", (rid, task["id"])).fetchone()
+                if done:
+                    journal.change(db, "tasks", (rid, task["id"]), journal.ENGINE, "task.state", "重新规划已应用，不再运行",
+                                   status="accepted", current_attempt=done["id"])
+                    return
             if attempt is None:
                 aid, now = uid("attempt"), time.time()
                 number = db.execute("SELECT count(*) FROM attempts WHERE run_id=? AND task_id=?", (rid, task["id"])).fetchone()[0] + 1
@@ -665,7 +675,7 @@ class Engine:
             start = self._task_start(db, rid, task["id"])
         spec = json.loads(attempt["spec"])
         snapshot = json.loads(run["snapshot"])
-        gated = snapshot.get("execution_contract", 1) >= 3 and not planning.planning_task(task["id"])   # D37
+        gated = snapshot.get("execution_contract", 1) >= 3 and not planning.planning_task(task["id"], snapshot)   # D37
         if attempt["status"] == "dispatching":
             # The platform's record of this Worker's tools (D38 §3.1): a tool it cannot start is not dispatched.
             state = ((config.get("capabilities") or {}).get("tools") or {}).get(spec["tool"])
@@ -774,7 +784,8 @@ class Engine:
             current = db.execute("SELECT * FROM tasks WHERE run_id=? AND id=?", (rid, task["id"])).fetchone()
             # Old observations cannot complete a newly retried task.
             active = db.execute("SELECT desired FROM runs WHERE id=?", (rid,)).fetchone()[0] == "active"
-            if state == "accepted" and current["current_attempt"] == attempt["id"] and active and planning.planning_task(task["id"]):
+            if state == "accepted" and current["current_attempt"] == attempt["id"] and active and \
+                    planning.planning_task(task["id"], snapshot):
                 fresh = json.loads(db.execute("SELECT snapshot FROM runs WHERE id=?", (rid,)).fetchone()["snapshot"])
                 replanning = task["id"] != planning.PLAN_ID   # D41: the Coordinator's replan
                 if planning.pending(fresh, task["id"]):
