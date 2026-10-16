@@ -40,7 +40,12 @@ export const EVENT_LABELS: Record<string, string> = {
   "task.spec": "任务配置已修改", "task.state": "任务状态更新", "run.settings": "会话设置已修改",
   "recovery.state": "协调者记录更新", "plan.applied": "KiroCrew 规划已应用", "run.resumed": "条件满足，自动继续",
   "run.awaiting_confirmation": "计划待确认", "command.confirm": "收到确认请求", "run.confirmed": "已确认计划",
-  "run.publish_auto": "自动发布", "run.publish_policy": "发布设置已修改",
+  "run.publish_auto": "自动发布", "run.publish_policy": "发布设置已修改", "run.published": "已发布到仓库",
+  "run.credentials": "凭证已更换", "run.downloaded": "已下载源码", "run.planning": "需求已改，原规划已过期",
+  "run.budget": "等待时间不计入预算", "session.reopen": "原生会话已重新打开", "app.started": "远程预览已启动",
+  "app.stopped": "远程预览已停止", "approval.answered": "已答复工具审批", "attempt.checking": "正在运行检查命令",
+  "attempt.waiting": "等待条件满足", "attempt.watchdog": "无进展检查", "attempt.budget": "预算用完，未自动处理",
+  "task.replaced": "重新规划替换了后续任务", "task.tool_switched": "已切换执行工具",
 };
 
 /** Change-log entries that repeat an Attempt or recovery event; shown in 「变更记录」, not in the timeline. */
