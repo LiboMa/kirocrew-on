@@ -283,6 +283,47 @@ class EngineTests(AccessCase):
         attention = self.service.run(self.b, rid)["attention"]
         self.assertEqual(attention["title"], "仓库凭证不可用")
 
+    def test_a_credential_enabled_again_prepares_the_session_on_its_own(self):
+        from octopus import waiting
+        made = self.service.credentials.create(self.b, {"name": "bob 的", "kind": "github_pat", "host": "github.com",
+                                                        "scope": "user", "secret": TOKEN})
+        rid = self.submit("start-0000000404", credentials={"source": made["id"]})
+        self.service.credentials.update(self.b, made["id"], {"disabled": True})
+        self.assertEqual(self.advance(rid)["status"], "blocked")
+        self.service.credentials.update(self.b, made["id"], {"disabled": False})
+        with self.db.transaction() as db:
+            waiting.resume(db)
+        run = self.advance(rid)
+        self.assertIn("/prepare", [path for path, _ in self.calls])
+        self.assertNotEqual(run["status"], "blocked")
+        with self.db.read() as db:
+            reasons = [json.loads(r["payload"]).get("reason") for r in
+                       db.execute("SELECT payload FROM events WHERE run_id=? AND kind='run.resumed'", (rid,))]
+        self.assertEqual(reasons, ["仓库凭证已可用，自动继续"])
+
+    def test_a_credential_that_no_longer_covers_the_repository_is_not_retried_every_cycle(self):
+        from octopus import waiting
+        made = self.service.credentials.create(self.b, {"name": "bob 的", "kind": "github_pat", "host": "github.com",
+                                                        "scope": "user", "secret": TOKEN})
+        rid = self.submit("start-0000000406", credentials={"source": made["id"]})
+        self.service.credentials.update(self.b, made["id"], {"repos": ["other/repo"]})
+        for _ in range(3):
+            run = self.advance(rid)
+            with self.db.transaction() as db:
+                waiting.resume(db)
+        self.assertEqual(run["status"], "blocked")
+        self.assertNotIn("/prepare", [path for path, _ in self.calls])
+        with self.db.read() as db:
+            self.assertEqual(db.execute("SELECT COUNT(*) FROM events WHERE run_id=? AND kind='run.resumed'", (rid,)).fetchone()[0], 0)
+
+    def test_a_blocked_preparation_says_it_continues_once_the_credential_is_usable(self):
+        made = self.service.credentials.create(self.b, {"name": "bob 的", "kind": "github_pat", "host": "github.com",
+                                                        "scope": "user", "secret": TOKEN})
+        rid = self.submit("start-0000000405", credentials={"source": made["id"]})
+        self.service.credentials.update(self.b, made["id"], {"disabled": True})
+        self.advance(rid)
+        self.assertTrue(self.service.run(self.b, rid)["attention"]["action"].endswith("；凭证可用后自动继续。"))
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -139,6 +139,46 @@ class KiroLoginTests(WaitingCase):
         self.assertFalse(run["recovery"]["budget"]["reset"])   # the budget still counts from the start
 
 
+class WorkerTests(WaitingCase):
+    def enable(self, value):
+        with self.db.transaction() as db:
+            db.execute("UPDATE workers SET enabled=? WHERE id='worker'", (int(value),))
+
+    def test_a_worker_enabled_again_resumes_the_running_session(self):
+        self.running = {("code", 1)}
+        rid = self.start([step("code", "claude")])
+        self.assertEqual(self.tick(rid, 4)["status"], "running")
+        self.enable(False)
+        run = self.tick(rid, 2)
+        self.assertEqual((run["status"], run["error"]), ("blocked", "Worker 已停用"))
+        self.assertEqual(run["attention"]["title"], "执行环境已停用")
+        self.running = set()   # the native task went on while the platform could not look
+        self.enable(True)
+        run = self.tick(rid)
+        self.assertEqual(run["status"], "completed")
+        self.assertEqual(len(self.attempts(run, "code")), 1)   # the same Attempt, looked at again
+        self.assertEqual([e.get("reason") for e in self.events(rid, "run.resumed")], ["执行环境已重新启用，自动继续"])
+
+    def test_a_session_waiting_for_its_disabled_worker_continues_once_enabled(self):
+        rid = self.start([step("code", "claude")])
+        self.enable(False)
+        run = self.tick(rid, 2)
+        self.assertEqual(run["status"], "waiting_worker")
+        self.enable(True)
+        run = self.tick(rid)
+        self.assertEqual(run["status"], "completed")
+        self.assertEqual([e.get("reason") for e in self.events(rid, "run.resumed")], ["执行环境已重新服务此空间，自动继续"])
+
+    def test_a_session_without_a_worker_keeps_waiting_for_an_assignment(self):
+        self.enable(False)
+        rid = self.service.start(self.actor, {"request_id": "waiting-none-1", "input": "完成并验证", "steps": [step("code", "claude")],
+                                              "source": {"type": "new"}})["id"]
+        self.enable(True)
+        run = self.tick(rid)
+        self.assertEqual(run["status"], "waiting_worker")   # no environment of its own yet: a person assigns one
+        self.assertEqual(self.events(rid, "run.resumed"), [])
+
+
 class ProbeTests(WaitingCase):
     def test_the_probe_saves_capabilities_only_for_the_same_boundary(self):
         self.tools = {**TOOLS, "codex": {"available": True}}

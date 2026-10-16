@@ -460,6 +460,18 @@ def resolve(db, actor, source, team_id, explicit=None, default=None):
     return None
 
 
+def opens_for(db, row, run):
+    """Would ``material`` open this credential for the Session now — usable and still covering its repository? What lets a
+    Session blocked on it continue on its own (D43); anything else would be refused again on the next preparation."""
+    if not bound_usable(db, row, run):
+        return False
+    try:
+        host, path = repo_path(json.loads(run["source"]).get("url", ""))
+    except ValueError:
+        return False
+    return row["host"] == host and covers(json.loads(row["repos"]), path) is not None
+
+
 def availability(db, bound, run):
     """A pinned binding as the Session shows it: unavailable when its next use would be refused (bound_usable)."""
     if not bound:
