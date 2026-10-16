@@ -206,6 +206,16 @@ describe("session detail", () => {
     expect(screen.queryByText(/预算（/)).not.toBeInTheDocument();
   });
 
+  test("a plan waiting for confirmation is confirmed from the session page (D44)", async () => {
+    const waiting = { ...blocked, status: "awaiting_confirmation", error: null,
+      attention: { title: "计划待确认", detail: "规划已完成，任务尚未开始。", action: "核对任务、工具与检查命令后确认开始；也可修改后续作或关闭。" } } as Run;
+    const calls = open(waiting, { "POST /runs/run-a/confirm": { id: "run-a", status: "accepted" } });
+    expect(await screen.findByText("计划待确认", { selector: "#confirm-notice-title" })).toBeInTheDocument();
+    expect(screen.getAllByText("计划待确认").length).toBeGreaterThan(0);   // the status label too
+    await userEvent.click(screen.getByRole("button", { name: /确认并开始/ }));
+    await waitFor(() => expect(calls.find((c) => c.path === "/v1/runs/run-a/confirm")?.body).toMatchObject({ expected_version: 4 }));
+  });
+
   test("a Session that may not switch tools says so", async () => {
     open({ ...blocked, recovery: { ...blocked.recovery!, policy: { enabled: true, max_cycles: 2, switch_tools: false } } } as Run);
     expect(await screen.findByText("自动纠错已开启 · 最多 2 轮 · 不换工具")).toBeInTheDocument();

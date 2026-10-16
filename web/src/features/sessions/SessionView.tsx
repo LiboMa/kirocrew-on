@@ -1,5 +1,5 @@
 import {
-  CircleStop, Copy, Download, Eye, ExternalLink, FolderDown, ListRestart, MonitorPlay, MoreHorizontal, Power, RotateCcw, Stethoscope,
+  CircleStop, Copy, Download, Eye, ExternalLink, FolderDown, ListRestart, MonitorPlay, MoreHorizontal, Play, Power, RotateCcw, Stethoscope,
   Trash2,
   UserCog,
 } from "lucide-react";
@@ -161,7 +161,18 @@ export function SessionView({ id }: { id: string }) {
         )}
       </header>
 
-      {run.attention && run.status !== "waiting_worker" && (
+      {run.status === "awaiting_confirmation" && (
+        <Alert id="confirm-notice" className="border-warning/30 bg-warning/5">
+          <AlertTitle id="confirm-notice-title">{run.attention?.title ?? "计划待确认"}</AlertTitle>
+          <AlertDescription className="flex flex-wrap items-center gap-3">
+            <span>{[run.attention?.detail, run.attention?.action].filter(Boolean).join(" ")}</span>
+            <Button size="sm" onClick={actions.confirm} disabled={!!actions.busy || run.permissions?.operate === false} id="run-confirm">
+              <Play /> 确认并开始
+            </Button>
+          </AlertDescription>
+        </Alert>
+      )}
+      {run.attention && run.status !== "waiting_worker" && run.status !== "awaiting_confirmation" && (
         <Alert variant="destructive" id="run-attention" className="border-destructive/30 bg-destructive/5">
           <AlertTitle id="attention-title">{run.attention.title}</AlertTitle>
           <AlertDescription className="space-y-1">

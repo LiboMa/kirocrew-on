@@ -7,21 +7,23 @@ export const STATES: Record<string, string> = {
   pending: "待执行", preparing: "准备源码", ready: "准备派发", dispatching: "派发中", running: "执行中",
   accepted: "已交接", completed: "已完成", blocked: "流程已暂停", failed: "执行失败", diagnosing: "协调者诊断中",
   waiting_worker: "待分配 Worker", waiting_approval: "等待原生权限", dispatch_unknown: "派发待核实",
-  stopping: "停止中", stopped: "已停止", cancelled: "已取消", reopening: "重新打开中",
+  stopping: "停止中", stopped: "已停止", cancelled: "已取消", reopening: "重新打开中", awaiting_confirmation: "计划待确认",
 };
 
 export const ACTIVE_STATES = new Set([
   "preparing", "ready", "dispatching", "running", "waiting_approval", "dispatch_unknown", "stopping", "reopening", "diagnosing",
 ]);
 
-export const ATTENTION_STATES = new Set(["blocked", "failed", "waiting_worker", "waiting_approval", "dispatch_unknown"]);
+export const ATTENTION_STATES = new Set(["blocked", "failed", "waiting_worker", "waiting_approval", "dispatch_unknown",
+  "awaiting_confirmation"]);
 
 export type Tone = "neutral" | "active" | "success" | "warning" | "danger";
 
 export function stateTone(status: string): Tone {
   if (status === "accepted" || status === "completed") return "success";
   if (status === "blocked" || status === "failed") return "danger";
-  if (status === "waiting_worker" || status === "waiting_approval" || status === "dispatch_unknown" || status === "stopped") return "warning";
+  if (status === "waiting_worker" || status === "waiting_approval" || status === "dispatch_unknown" || status === "stopped" ||
+      status === "awaiting_confirmation") return "warning";
   if (ACTIVE_STATES.has(status)) return "active";
   return "neutral";
 }
@@ -37,13 +39,14 @@ export const EVENT_LABELS: Record<string, string> = {
   "attempt.running": "原生任务执行中", "attempt.retry": "瞬时失败，自动重试", "task.reset": "任务重置为待执行",
   "task.spec": "任务配置已修改", "task.state": "任务状态更新", "run.settings": "会话设置已修改",
   "recovery.state": "协调者记录更新", "plan.applied": "KiroCrew 规划已应用", "run.resumed": "条件满足，自动继续",
+  "run.awaiting_confirmation": "计划待确认", "command.confirm": "已确认计划",
 };
 
 /** Change-log entries that repeat an Attempt or recovery event; shown in 「变更记录」, not in the timeline. */
 export const TIMELINE_HIDDEN = new Set(["task.state", "recovery.state"]);
 
 const ADMIN_VERBS: Record<string, string> = {
-  stop: "停止", close: "关闭", delete: "删除", reopen: "重新打开", continue: "续作", recover: "请求诊断", "assign-worker": "分配 Worker",
+  confirm: "确认计划", stop: "停止", close: "关闭", delete: "删除", reopen: "重新打开", continue: "续作", recover: "请求诊断", "assign-worker": "分配 Worker",
 };
 
 /** An event's title; an administrator acting on someone else's Session is named (spec §3.4). */

@@ -51,6 +51,8 @@ KiroCrew ON 在远端执行开发任务：KiroCrew 的 Kiro Agent 先识别意�
 - 提交到 Team 返回 409 `team_without_worker`（该 Team 尚未分配执行环境）或 `environment_disabled`（执行环境已停用）时，
   原样告诉用户需要平台管理员在控制台分配或启用执行环境；也可以建议改在个人空间提交。不要换一个 Team 重试。
 - 返回 409 `team_archived` 时该 Team 已归档：不能提交新会话或续作，已有会话仍可查看与停止；告诉用户需要平台管理员恢复，或改在其他空间提交。
+- 用户想先看计划再执行时传 `admission: "confirm"`：规划照常完成，第一个执行任务开始前会话停在 `awaiting_confirmation`（见第 3 节）。
+  不传时按平台默认（通常立即执行）。
 - 回执只代表登记成功。把 `run_id` 和会话链接告诉用户。
 
 ## 3．查看进度：`octopus_status`
@@ -82,6 +84,7 @@ KiroCrew ON 在远端执行开发任务：KiroCrew 的 Kiro Agent 先识别意�
 | `waiting_worker` | 还没有 Worker 执行，或原来的执行环境已更换、已移出该空间、已停用或已退役（`error` 写明原因）：把 `attention.title` / `attention.action` 告诉用户。`attention.workers` 为 0 时该空间没有可用的执行环境（尚未分配或已停用），请管理员分配或启用，或改在个人空间重新提交；大于 0 时用 `octopus_environments`（Team 会话传 `team_id`）列出可用环境，经用户确认后用 `octopus_assign_worker` 分配 |
 | `blocked` / `failed` | 读 `attention.title` / `attention.action` 告诉用户；可用 `octopus_recover` 诊断修复，或用 `octopus_continue` 修改后重跑。`attention.title` 为「需要换用工具或模型」时，向用户说明原因（`attention.detail`）并建议换用一个可用的工具；经用户同意后用 `octopus_continue` 的 `execution.tool` / `execution.model` 续作，不要自行决定 |
 | `waiting_approval` | 原生任务在等待批准一次工具调用：用 `octopus_approvals` 列出，把工具、完整的命令或文件与用途告诉用户；用户同意后用 `octopus_approve` 答复（approve），不同意则 reject。不要替用户决定 |
+| `awaiting_confirmation` | 计划待确认：把各任务（名称、工具与模型及 `mapping` 来源、验收项、检查命令）列给用户；用户同意后用 `octopus_confirm {run_id, request_id, expected_version}` 开始执行，要修改时用 `octopus_continue`（修改后续作即视为确认），不要替用户确认 |
 | `completed` | 完成；用 `octopus_preview` 给出预览 |
 
 ## 4．迭代：`octopus_continue` / `octopus_recover`

@@ -95,7 +95,13 @@ TOOLS = [
          "plan": {"type": "string", "enum": ["agent", "match"]},
          "source": {"type": "object"},
          "credentials": object_schema({"source": STRING}),
-         "team_id": STRING, "worker_id": STRING, "recovery": RECOVERY}, ["request_id", "input", "source"])},
+         "team_id": STRING, "worker_id": STRING, "recovery": RECOVERY,
+         "admission": {"type": "string", "enum": ["confirm", "auto"]}}, ["request_id", "input", "source"])},
+    {"name": "octopus_confirm",
+     "description": "确认一个「计划待确认」（awaiting_confirmation）的 Session 的计划并开始执行。调用前必须把任务、各自的工具与模型（及来源）、"
+                    "验收项与检查命令展示给用户，并得到用户明确同意；要修改时改用 octopus_continue（修改后续作即视为确认）。",
+     "inputSchema": object_schema({"run_id": STRING, "request_id": STRING, "expected_version": {"type": "integer"}},
+                                 ["run_id", "request_id", "expected_version"])},
     {"name": "octopus_continue", "description": "原 Session 修订并重跑 Task；保留 Workspace；可覆盖模型/Effort/工具与任务契约。"
                                                 "rerun 只列出受本次修改影响的后续任务（省略则重跑所选任务之后的全部任务）；"
                                                 "依赖重跑任务的任务与其后的审查 / 测试任务会自动一并重跑，其余沿用上一版结果。",
@@ -476,13 +482,13 @@ def call(client, name, args):
         query = [(key, args[key]) for key in ("who", "kind", "before") if args.get(key) not in (None, "")]
         query.append(("limit", int(args.get("limit", 50))))
         return {"changes": client.request("GET", "/v1/runs/" + args["run_id"] + "/changes?" + urlencode(query))}
-    if name in {"octopus_continue", "octopus_recover", "octopus_control"}:
+    if name in {"octopus_continue", "octopus_recover", "octopus_control", "octopus_confirm"}:
         rid = args.pop("run_id")
         if name == "octopus_continue" and "credentials" in args:
             # A Session stopped on its credential: change (or remove) it first, then continue (D35 §4).
             client.request("POST", "/v1/runs/" + quote(rid, safe="") + "/credentials", {"source": args.pop("credentials").get("source")})
         action = args.pop("action") if name == "octopus_control" else name.removeprefix("octopus_")
-        if action not in {"continue", "recover", "stop", "close", "reopen", "delete"}:
+        if action not in {"continue", "recover", "stop", "close", "reopen", "delete", "confirm"}:
             raise ValueError("Invalid action")
         return client.request("POST", "/v1/runs/" + rid + "/" + action, args)
     if name in ADMIN:
