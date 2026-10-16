@@ -176,7 +176,7 @@ class MVPTests(unittest.TestCase):
         self.assertEqual(calls[0][1]["agent"],"poc-kiro")
         folder=node.path(body["run_id"])/"attempts"/body["attempt_id"]
         prompt=(folder/"instructions.md").read_text()
-        self.assertIn("你是 KiroCrew Octopus 研发平台的工作流设计者",prompt)
+        self.assertIn("你是此 Session 的 KiroCrew 规划者（工作流设计）",prompt)
         self.assertIn("当前模板 / 用户草稿基线",prompt)
         self.assertIn("不要只返回",prompt)
         self.assertEqual(json.loads((folder/"context.json").read_text())["design"],body["design"])

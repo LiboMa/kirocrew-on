@@ -35,38 +35,50 @@ def commands_line(commands):
             f"没有：{'、'.join(commands.get('missing') or []) or '无'}。verify 只用可用的命令。\n")
 
 
+def rules(count, depends):
+    """What every planned task carries and the gates it meets — the same for the first plan and a replan (D46)."""
+    return f"""3. 任务拆分与 Agent 映射：steps 为 {count} 个顺序任务，每个任务选择最合适的工具并写出具体 prompt；
+   后续任务将在同一个 Session、同一份源码检出上依次执行。
+4. 任务契约：每个任务必须给出 kind（implement / review / test / deliver / design）、deliverables、
+   至少 1 条可检查的 acceptance（审查与测试任务的验收项取自 summary 的验收标准，不另加要求）；
+   implement 与 test 任务必须给出至少 1 条 verify（实际可执行的验证命令）；{depends}
+   paths 写本任务可改动的路径，便于续作时判断哪些任务受影响。
+   平台的门禁：test 任务新增的测试须在会话基线（实现之前的源码）上失败；后续任务若要修改此前任务交付的文件，
+   须在自己的 paths 中列出这些文件。test 任务只写测试、不改实现，其 verify 不安装依赖（不写 npm install / pip install 等）；
+   检查与测试生成的文件（覆盖率、报告、构建产物）应写入 .gitignore。审查与测试的结论：缺陷用 changes_requested，
+   blocked 只用于缺输入、认证或权限。
+5. 可运行的产出：交付物是可以运行的应用时，最后的交付任务须在项目根目录写 .octopus/preview.json
+   （processes：命令、cwd、端口或 "$PORT"、哪个是入口；install：依赖安装；前后端分开时各写一个进程），
+   并把「.octopus/preview.json 能按声明启动应用」列为该任务的验收项；用户据此下载到本机或远程预览。
+本任务只做分析与规划，不修改业务代码。"""
+
+
+def environment(models, tools, limitations, commands):
+    """The execution environment's facts, clipped so the planning prompt fits the Worker's 8000 characters (D46)."""
+    return f"""## 此执行环境的 Coding 工具与已知限制
+{_clip(dumps(tools or {}), 700)}
+available 为 false 的工具不要选择（需求明确指定的除外，见下；reason 为原因）；没有列出时表示执行环境未报告。
+审查类任务（review）使用与被审查代码不同的工具。按任务性质与这些事实选择工具，并在交接文件中说明选择依据。
+已知限制：{_clip(dumps(limitations or []), 600)}
+{REQUESTED}
+{_clip(commands_line(commands), 400)}
+
+## 此执行环境公布的模型
+{_clip(dumps(models or {}), 1200)}
+不在上面列表中的具体模型一律写 model=auto（需求明确指定的除外，见上）。"""
+
+
 def plan_step(models=None, tools=None, limitations=None, commands=None):
     """The first task of an Agent-planned Session (always Kiro; it plans and does not change business code)."""
-    prompt = intent_prompt(dumps(EXAMPLE), "（见上方完整用户需求）", "本任务的工作目录（即本 Session 的源码检出）") + f"""
+    prompt = intent_prompt(dumps(EXAMPLE), "（见上方完整用户需求）", "本任务的工作目录（即本 Session 的源码检出）", prepared=True) + f"""
 
 ## 本任务的交付
 1. 意图识别：intent 一句话说明用户真正要完成什么、属于哪类工作。
 2. 需求补全：summary 写成 Markdown——目标、范围（含不做什么）、可验证的验收标准、关键假设与待确认问题；
    只补全用户没有说清但完成任务必需的内容，不改变用户的明确要求。
-3. 任务拆分与 Agent 映射：steps 为 1–7 个顺序任务，每个任务选择最合适的工具并写出具体 prompt；
-   后续任务将在同一个 Session、同一份源码检出上依次执行。
-4. 任务契约：每个任务必须给出 kind（implement / review / test / deliver / design）、deliverables、
-   至少 1 条可检查的 acceptance（审查与测试任务的验收项取自 summary 的验收标准，不另加要求）；
-   implement 与 test 任务必须给出至少 1 条 verify（实际可执行的验证命令）；depends_on 只列前序任务的 id；
-   paths 写本任务可改动的路径，便于续作时判断哪些任务受影响。
-   平台的门禁：test 任务新增的测试须在会话基线（实现之前的源码）上失败；后续任务若要修改此前任务交付的文件，
-   须在自己的 paths 中列出这些文件。test 任务只写测试、不改实现，其 verify 不安装依赖（不写 npm install / pip install 等）；
-   检查与测试生成的文件（覆盖率、报告、构建产物）应写入 .gitignore。
-5. 可运行的产出：交付物是可以运行的应用时，最后的交付任务须在项目根目录写 .octopus/preview.json
-   （processes：命令、cwd、端口或 "$PORT"、哪个是入口；install：依赖安装；前后端分开时各写一个进程），
-   并把「.octopus/preview.json 能按声明启动应用」列为该任务的验收项；用户据此下载到本机或远程预览。
-本任务只做分析与规划，不修改业务代码。
+{rules("1–7", "depends_on 只列前序任务的 id；")}
 
-## 此执行环境的 Coding 工具
-{dumps(tools or {})}
-available 为 false 的工具不要选择（需求明确指定的除外，见下；reason 为原因）；没有列出时表示执行环境未报告。
-{REQUESTED}
-执行环境的已知限制：{dumps(limitations or [])}
-{commands_line(commands)}按任务性质与这些事实选择工具，并在交接文件中说明选择依据。
-
-## 此执行环境公布的模型
-{dumps(models or {})}
-不在上面列表中的具体模型一律写 model=auto（需求明确指定的除外，见上）。
+{environment(models, tools, limitations, commands)}
 
 最终回复必须包含且仅包含一个 JSON 代码块（字段：intent、summary、name、steps）；不要加入第二个 JSON/YAML 代码块。
 同时按本任务要求写交接文件，说明规划依据与待用户核实的条件。
@@ -177,13 +189,13 @@ def _clip(text, limit):
 
 
 def replan_step(task_id, replaced, failure, decision, models=None, tools=None, limitations=None, commands=None):
-    """The Coordinator's replan (D41 §3.2): a Kiro task that plans only the remaining work. What the dispatch carries
-    anyway is referred to, not copied — the requirement (本次研发任务), the first plan's (需求补全) and the accepted tasks'
-    conclusions (前序交接) — so the prompt stays within the Worker's 8000 characters whatever the Session holds."""
+    """The Coordinator's replan (D41 §3.2): a Kiro task that plans only the remaining work, under the first plan's rules
+    (D46). What the dispatch carries anyway is referred to, not copied — the requirement, the first plan's completion and
+    the accepted tasks' conclusions — so the prompt stays within the Worker's 8000 characters whatever the Session holds."""
     replaced = [{"id": r.get("id"), "name": _clip(r.get("name"), 60), "kind": r.get("kind")} for r in replaced][:12]
     prompt = f"""你是此 Session 的 KiroCrew 规划者。协调者判断原计划有问题，请重新规划剩余的工作。
-用户需求见上方「本次研发任务」与「需求补全」；已完成并验收的任务及其结论见「前序交接」，它们保留，不要重复。
-失败任务已有的改动仍在会话分支上（工作区中），可在其基础上继续。
+用户需求见上方「本次研发任务」与「需求与验收标准（KiroCrew 规划补全）」；已完成并验收的任务及其结论见「前序交接」，它们保留，不要重复。
+失败任务已有的改动仍在会话分支上（工作区中），可在其基础上继续。保留用户只做分析、只审查、离线、标准库等明确约束。
 
 ## 被替换的任务（原计划的剩余部分，不再执行）
 {_clip(dumps(replaced), 900)}
@@ -194,22 +206,10 @@ def replan_step(task_id, replaced, failure, decision, models=None, tools=None, l
 协调者的要求：{_clip(decision.get("instructions"), 1200)}
 
 ## 本任务的交付
-只规划剩余的工作：steps 为 1–6 个顺序任务，后续任务在同一个 Session、同一份源码检出上依次执行。
-每个任务必须给出 kind（implement / review / test / deliver / design）、deliverables、至少 1 条可检查的 acceptance；
-implement 与 test 任务必须给出至少 1 条 verify（实际可执行的验证命令）；depends_on 可列本计划中前面的任务或前序交接中已验收任务的 id；
-paths 写本任务可改动的路径。平台的门禁：test 任务新增的测试须在会话基线上失败；后续任务若要修改此前任务交付的文件，
-须在自己的 paths 中列出这些文件；test 任务只写测试、不改实现，其 verify 不安装依赖。
-本任务只做分析与规划，不修改业务代码。
+只规划剩余的工作，不重复已完成的任务。
+{rules("1–6", "depends_on 可列本计划中前面的任务或前序交接中已验收任务的 id；")}
 
-## 此执行环境的 Coding 工具与已知限制
-{_clip(dumps(tools or {}), 500)}
-available 为 false 的工具不要选择（需求明确指定的除外，见下）。已知限制：{_clip(dumps(limitations or []), 500)}
-{REQUESTED}
-{_clip(commands_line(commands), 400)}
-
-## 此执行环境公布的模型
-{_clip(dumps(models or {}), 800)}
-不在上面列表中的具体模型一律写 model=auto（需求明确指定的除外，见上）。
+{environment(models, tools, limitations, commands)}
 
 最终回复必须包含且仅包含一个 JSON 代码块（字段：intent、summary、name、steps），每个任务的字段与写法如下例，prompt 必须写出：
 {dumps(EXAMPLE["steps"])}

@@ -9,6 +9,16 @@ LEGACY_COMMON = ("这是用户授权的本地多 ACP PoC。只操作明确指定
                  "不读取凭据，不联网安装依赖，不发布、不提交。报告实际执行结果，不编造。")
 
 
+def agent_prompt(name):
+    """A template's system prompt (D46): the parent Session's Owner observer, the platform Coordinator's diagnosis agent,
+    or the executor every Coding tool runs a task as."""
+    if name == "poc-diagnose":
+        return development.COMMON + development.DIAGNOSE
+    if name in {"poc-coordinator", "poc-pipeline-coordinator"}:
+        return development.COMMON + development.COORDINATOR
+    return development.COMMON + development.WORKER
+
+
 def seed(*, crew_home, kiro_home, allowed_roots, port, legacy_pipeline, yolo=True):
     from kiro_crew.agent import managed_mcp_spec_entry
     crew_home.mkdir(parents=True, exist_ok=True)
@@ -49,7 +59,7 @@ def seed(*, crew_home, kiro_home, allowed_roots, port, legacy_pipeline, yolo=Tru
             "name": name,
             "description": f"Octopus development / {backend or 'Kiro CLI'}" + (" coordinator" if coordinator else " worker"),
             "model": "auto",
-            "prompt": development.COMMON + (development.COORDINATOR if coordinator else development.WORKER),
+            "prompt": agent_prompt(name),
             "tools": ["read", "write", "shell"] + (["@kirocrew-core"] if coordinator else []),
             "allowedTools": [], "resources": [],
             # Derive the managed invocation from the installed release so AcpRuntime can attach identity.
