@@ -122,6 +122,9 @@
 - 重新规划（D41 审查延后项）：`snapshot.replan.notes`（改名的 ID、去掉的依赖、截到 6 个任务）控制台不显示，`types.ts` 无 `replan` 字段；
   `_task_start` 把被删除的失败任务的候选算作其他任务的工作，只由失败 Attempt 改过的文件不受 `artifacts_locked` 保护；
   缺少「重新规划之后续作依赖任务」的端到端测试（`depends_on` 改名与返工后不重跑规划已有单测）。
+- 会话预算（D42 审查延后项）：被阻塞的会话每次轮询都重新计算预算（逐条解析 Attempt 证据与纠错记录，可改为 SQL `json_extract` 计数）；
+  部署时已有会话按创建时间起算（可退而取最近一次续作的修订时间或手动诊断）；控制台续作对话框不能调整 `max_retries` / `budget_minutes`，
+  且续作带 `recovery` 时整体替换原设置。
 - 源码准备失败时控制台只显示 `Worker 操作未完成 (ValueError)`：`octopus/worker.py:488` 只透传 `security.Error`，`octopus/sources.py` 的提示均为 `ValueError`（Connector 设计 §7 P1）。
 - 向导：导入 / 推荐后切换到模板时来源提示未更新；切换空间未重置推荐 Worker；推荐轮询遇 403 / 404 不停止；提交瞬间在途轮询可能回写草稿。
 - 原生入口弹窗缺少账户切换保护；`crew_url` 公网来源未规范化 `:443` 写法。

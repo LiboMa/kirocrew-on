@@ -133,14 +133,78 @@ class BudgetVisibleTests(BudgetCase):
         self.assertEqual(run["recovery"]["budget"]["exhausted"], "cycles")
         self.assertEqual(run["recovery"]["budget"]["cycles"], {"used": 1, "limit": 1})
         self.assertTrue(run["attention"]["action"].endswith(
-            "自动纠错已达到 1 轮上限（自会话开始）；续作会重新计算预算，也可在续作时调大。"), run["attention"]["action"])
+            "自动纠错已达到 1 轮上限（自会话开始）；续作会重新计算预算。"), run["attention"]["action"])
 
     def test_the_attention_says_the_retries_ran_out(self):
-        self.cancelled, self.decisions = {("code", 1)}, [WAIT]
+        self.cancelled = {("code", 1), ("review", 1)}
+        rid = self.start(STEPS, recovery={"enabled": False, "max_cycles": 2, "max_retries": 1})
+        run = self.tick(rid, 40)
+        self.assertEqual(run["status"], "blocked")
+        self.assertEqual(len(self.attempts(run, "review")), 1)
+        self.assertIn("自动重试已达到 1 次上限（自会话开始）", run["attention"]["action"])
+
+    def test_the_note_names_what_refused_not_what_ran_out(self):
+        # the Coordinator waited for the user; hours later neither time nor retries are why the Session stopped
+        self.failing, self.decisions = {("review", 1)}, [WAIT]
         rid = self.begin(max_retries=0)
         run = self.tick(rid, 40)
         self.assertEqual(run["status"], "blocked")
-        self.assertIn("自动重试已达到 0 次上限（自会话开始）", run["attention"]["action"])
+        with self.db.transaction() as db:
+            db.execute("UPDATE runs SET created=created-? WHERE id=?", (13 * 3600, rid))
+        action = self.service.run(self.actor, rid)["attention"]["action"]
+        self.assertNotIn("自动纠错时长", action)
+        self.assertNotIn("自动重试", action)
+
+    def test_a_disabled_session_past_the_time_says_why_it_was_not_retried(self):
+        self.cancelled = {("code", 1)}
+        rid = self.start(STEPS, recovery={"enabled": False, "max_cycles": 2, "budget_minutes": 30})
+        with self.db.transaction() as db:
+            db.execute("UPDATE runs SET created=created-? WHERE id=?", (31 * 60, rid))
+        run = self.tick(rid, 40)
+        self.assertEqual(len(self.attempts(run, "code")), 1)
+        self.assertIn("自动纠错时长已超过 30 分钟", run["attention"]["action"])
+
+    def test_a_settled_session_stops_counting(self):
+        rid = self.begin()
+        run = self.tick(rid, 40)
+        self.assertEqual(run["status"], "completed")
+        with self.db.transaction() as db:
+            db.execute("UPDATE runs SET created=created-?, updated=created-? WHERE id=?", (13 * 3600, 13 * 3600 - 120, rid))
+        budget = self.budget(rid)
+        self.assertEqual(budget["minutes"]["used"], 2)    # the time it ran, not the time since
+        self.assertIsNone(budget["exhausted"])
+        from octopus import report
+        self.assertNotIn("预算（", report.markdown(self.service.run(self.actor, rid)))   # nothing recovered, nothing to show
+
+    def test_a_zero_limit_is_not_shown_as_used_up(self):
+        self.assertIsNone(self.budget(self.begin(max_retries=0))["exhausted"])
+
+    def test_assigning_a_worker_restarts_the_budget(self):
+        with self.db.transaction() as db:   # no environment to choose from: the Session waits for one
+            db.execute("UPDATE workers SET enabled=0")
+        rid = self.service.start(self.actor, {"request_id": "budget-unassigned-1", "input": "实现并验证", "steps": STEPS,
+                                              "source": {"type": "new"}, "recovery": {"enabled": True, "max_cycles": 2}})["id"]
+        run = self.service.run(self.actor, rid)
+        self.assertEqual(run["status"], "waiting_worker")
+        with self.db.transaction() as db:
+            db.execute("UPDATE runs SET created=created-? WHERE id=?", (13 * 3600, rid))
+            db.execute("UPDATE workers SET enabled=1")
+        self.service.operate(self.actor, rid, "assign-worker", {"request_id": "budget-assign-1", "expected_version": run["version"],
+                                                                "worker_id": "worker"})
+        self.assertEqual(self.budget(rid)["minutes"]["used"], 0)
+
+    def test_restarting_the_budget_is_not_logged_as_a_settings_change(self):
+        self.failing = {("review", 1), ("review", 2), ("review", 3)}
+        rid = self.start(STEPS, recovery={"enabled": True, "max_cycles": 1})
+        run = self.tick(rid, 40)
+        with self.db.read() as db:
+            before = db.execute("SELECT COUNT(*) FROM events WHERE run_id=? AND kind='run.settings'", (rid,)).fetchone()[0]
+        self.service.operate(self.actor, rid, "recover", {"request_id": "budget-recover-2", "expected_version": run["version"]})
+        with self.db.read() as db:
+            after = db.execute("SELECT COUNT(*) FROM events WHERE run_id=? AND kind='run.settings'", (rid,)).fetchone()[0]
+            command = db.execute("SELECT payload FROM events WHERE run_id=? AND kind='command.recover'", (rid,)).fetchone()
+        self.assertEqual(after, before)   # execution_contract was already 2: nothing about the settings changed
+        self.assertNotIn("snapshot", json.loads(command["payload"]).get("changes", {}))
 
     def test_the_attention_says_the_time_ran_out(self):
         self.cancelled = {("code", 1)}

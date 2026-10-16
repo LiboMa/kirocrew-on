@@ -21,7 +21,8 @@ export function budgetLine(value: RecoveryBudget) {
 
 export function RecoveryPanel({ run }: { run: Run }) {
   const data = run.recovery;
-  if (!data?.history?.length && !data?.budget?.exhausted) return null;
+  // Shown where it tells something: rounds happened, or the Session stopped with part of the budget used up (D42).
+  if (!data?.history?.length && !(run.status === "blocked" && data?.budget?.exhausted)) return null;
   const last = data.latest;
   const summary = run.status === "diagnosing" ? `第 ${last?.number ?? 1} 轮 · Coordinator 正在诊断`
     : last?.status === "applied" && run.status !== "completed"
@@ -35,7 +36,7 @@ export function RecoveryPanel({ run }: { run: Run }) {
         <span id="recovery-summary">{summary}</span>
         <ChevronDown className="size-4 transition-transform group-data-[state=open]:rotate-180" aria-hidden />
       </CollapsibleTrigger>
-      {data.budget && (
+      {data.budget && data.policy.enabled && (
         <p id="recovery-budget" className={"mt-1 text-xs " + (data.budget.exhausted ? "text-destructive" : "text-muted-foreground")}>
           {budgetLine(data.budget)}
         </p>

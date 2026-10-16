@@ -102,10 +102,14 @@ def model(view, now=None):
     recovery = [{"number": r.get("number"), "task": r.get("failed_task_id") or "—", "status": r.get("status"),
                  "action": (r.get("decision") or {}).get("action"), "reason": _line((r.get("decision") or {}).get("reason"))}
                 for r in (view.get("recovery") or {}).get("history") or []]
-    budget = (view.get("recovery") or {}).get("budget")
-    if budget:
+    summary = view.get("recovery") or {}
+    budget = summary.get("budget")
+    # Shown where it tells something: rounds happened, or the Session stopped with part of it used up.
+    if budget and (summary.get("policy") or {}).get("enabled") and (recovery or (view.get("status") == "blocked" and budget.get("exhausted"))):
         from .recovery import budget_line
         budget = budget_line(budget)
+    else:
+        budget = None
     publish = view.get("publish") or None
     return {"title": _line(view.get("name") or view.get("input") or view.get("id"), 200), "id": view.get("id"),
             "status": view.get("status"), "creator": (view.get("created_by") or {}).get("username") or "—",

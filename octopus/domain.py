@@ -141,6 +141,13 @@ def space_workers(db, user, team):
     return db.execute(query + " ORDER BY w.name", (team or user, team or user)).fetchall()
 
 
+def restart_budget(db, rid, who):
+    """The user's continue, requested diagnosis or Worker assignment authorises more automatic work: the recovery budget
+    counts from now (D42 B2). Written quietly — it is not a change of the Session's settings."""
+    snapshot = json.loads(db.execute("SELECT snapshot FROM runs WHERE id=?", (rid,)).fetchone()["snapshot"])
+    journal.change(db, "runs", rid, who, "run.budget", quiet=("snapshot",), snapshot=dumps({**snapshot, "budget_since": time.time()}))
+
+
 def unserved(db, run):
     """Why the run's Worker no longer runs it (spec §6.2): None while it is enabled and still serves the run's space."""
     row = db.execute("SELECT enabled,retired FROM workers WHERE id=?", (run["worker_id"],)).fetchone()
@@ -1465,10 +1472,11 @@ class Service:
             title, action = "协调者需要你处理具体阻塞", "按诊断说明补充条件，再请求诊断或原地重跑。"
         else:
             title, action = "任务未通过交接或质量检查", "查看失败证据，可请求协调者诊断并修复，或配置后原地重跑。"
-        settings, budget = run["recovery"]["policy"], run["recovery"].get("budget") or {}
-        if budget.get("exhausted") and (settings["enabled"] or budget["exhausted"] == "retries"):
+        # What refused automatic recovery of this failure (D42), unless a diagnosis ran for it after all.
+        refusal = (attempt.get("evidence") or {}).get("budget_refused")
+        if refusal and run["recovery"].get("budget") and not (latest and latest.get("failed_attempt_id") == attempt.get("id")):
             from .recovery import budget_note
-            action += " " + budget_note(budget)
+            action += " " + budget_note(run["recovery"]["budget"], refusal)
         return {"title": title, "detail": error, "action": action, "task_id": task["id"] if task else None,
                 "task_name": task["spec"]["name"] if task else None}
 
@@ -1537,10 +1545,9 @@ class Service:
                                         who, "task.reset", status="pending", current_attempt=None)
                     journal.change(db, "tasks", (rid, current["id"]), who, "task.spec", spec=dumps(current))
                     reason = unserved(db, run) if run["worker_id"] else None
-                    # The user's continue authorises more automatic work: the recovery budget counts from here (D42).
-                    fresh = json.loads(db.execute("SELECT snapshot FROM runs WHERE id=?", (rid,)).fetchone()["snapshot"])
+                    restart_budget(db, rid, who)
                     fields.update(input=goal, desired="active", status="ready" if run["worker_id"] and not reason else "waiting_worker",
-                                  error=reason, snapshot=dumps({**fresh, "budget_since": time.time()}))
+                                  error=reason)
                     commit()   # before the revision: its snapshot reads the new requirement
                     from .revisions import changes, record
                     detail = "、".join(filter(None, ["需求" if goal != run["input"] else "", changes(before, current)]))
@@ -1563,15 +1570,16 @@ class Service:
                     snapshot = json.loads(run["snapshot"])
                     old = snapshot.get("execution_contract", 1)
                     snapshot["execution_contract"] = max(old, 2)
-                    snapshot["budget_since"] = time.time()   # as a continue: the budget counts from the user's request (D42)
                     journal.change(db, "runs", rid, who, "run.settings", event={"execution_contract": [old, snapshot["execution_contract"]]},
                                    snapshot=dumps(snapshot))
+                    restart_budget(db, rid, who)   # as a continue: the budget counts from the user's request
                     schedule(db, self.db, run, task, attempt, manual=True, actor=who)
                 elif action == "assign-worker":
                     require(run["status"] == "waiting_worker" and run["lifecycle"] == "open",
                             "运行已分配 Worker 或已关闭", 409, "invalid_state")
                     # The Session's own space, not the operator's (an admin may assign for someone else).
                     self._worker(db, run["owner_id"], body.get("worker_id"), run["team_id"])
+                    restart_budget(db, rid, who)   # waiting for an environment is not automatic work
                     if run["worker_id"] not in (None, body["worker_id"]):
                         # Another environment has no native parent of this Session: prepare there afresh (P5).
                         fields.update(worker_id=body["worker_id"], native_parent=None, workspace=None, status="preparing", error=None)

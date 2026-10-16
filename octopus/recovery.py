@@ -255,6 +255,9 @@ def budget(db, run, now=None):
     snapshot = json.loads(run["snapshot"])
     settings = policy(snapshot.get("recovery"), legacy=True)
     since = snapshot.get("budget_since") or run["created"]
+    if now is None:   # a Session that stopped stops counting: the time it ran, not the time since
+        settled = run["status"] in {"failed", "blocked", "completed", "stopped", "waiting_worker"} or run["lifecycle"] != "open"
+        now = run["updated"] if settled else time.time()
     cycles = sum(1 for row in db.execute("SELECT context FROM recoveries WHERE run_id=? AND created>=?", (run["id"], since))
                  if not json.loads(row["context"]).get("manual"))
     retries = sum(1 for row in db.execute("SELECT evidence FROM attempts WHERE run_id=? AND created>=?", (run["id"], since))
@@ -262,9 +265,10 @@ def budget(db, run, now=None):
     value = {"since": since, "reset": bool(snapshot.get("budget_since")),
              "cycles": {"used": cycles, "limit": settings["max_cycles"]},
              "retries": {"used": retries, "limit": settings.get("max_retries", BUDGET["max_retries"][0])},
-             "minutes": {"used": int(((now or time.time()) - since) // 60),
+             "minutes": {"used": max(0, int((now - since) // 60)),
                          "limit": settings.get("budget_minutes", BUDGET["budget_minutes"][0])}}
-    value["exhausted"] = next((key for key in ("cycles", "retries", "minutes") if value[key]["used"] >= value[key]["limit"]), None)
+    value["exhausted"] = next((key for key in ("cycles", "retries", "minutes")
+                               if value[key]["limit"] and value[key]["used"] >= value[key]["limit"]), None)   # 0 is "off"
     return value
 
 
@@ -285,18 +289,29 @@ def budget_line(value):
     return f"预算（{_origin(value)}）：" + " · ".join(parts)
 
 
-def budget_note(value):
-    """What ran out, for a blocked Session's attention."""
-    limit = value[value["exhausted"]]["limit"]
-    what = {"cycles": f"自动纠错已达到 {limit} 轮上限", "retries": f"自动重试已达到 {limit} 次上限",
-            "minutes": f"自动纠错时长已超过 {limit} 分钟"}[value["exhausted"]]
-    return f"{what}（{_origin(value)}）；续作会重新计算预算，也可在续作时调大。"
+def budget_note(value, key):
+    """Why automatic recovery did not start (``key``: what refused it), for a blocked Session's attention."""
+    limit = value[key]["limit"]
+    what = {"cycles": f"自动纠错已达到 {limit} 轮上限",
+            "retries": f"自动重试已达到 {limit} 次上限" if limit else "自动重试已关闭（max_retries 为 0）",
+            "minutes": f"自动纠错时长已超过 {limit} 分钟"}[key]
+    return f"{what}（{_origin(value)}）；续作会重新计算预算。"
 
 
-def allows(db, run, kind):
-    """Whether the budget leaves room for an automatic ``retry`` or a diagnosis (``cycle``); the time limits both."""
+def refused(db, run, kind):
+    """What of the budget refuses an automatic ``retry`` or a diagnosis (``cycle``) — the time limits both — or None."""
     left = budget(db, run)
-    return all(left[key]["used"] < left[key]["limit"] for key in ("minutes", {"retry": "retries", "cycle": "cycles"}[kind]))
+    return next((key for key in ("minutes", {"retry": "retries", "cycle": "cycles"}[kind])
+                 if left[key]["used"] >= left[key]["limit"]), None)
+
+
+def mark_refused(db, attempt_id, key):
+    """Note on the failed Attempt what refused its automatic recovery: the attention says that, not whatever ran out."""
+    row = db.execute("SELECT evidence FROM attempts WHERE id=?", (attempt_id,)).fetchone()
+    evidence = json.loads(row["evidence"] or "{}") if row else {}
+    if row and evidence.get("budget_refused") != key:
+        journal.change(db, "attempts", attempt_id, journal.ENGINE, "attempt.budget", quiet=("evidence",),
+                       evidence=dumps({**evidence, "budget_refused": key}))
 
 
 def summary(db, run):
@@ -318,8 +333,12 @@ def schedule(db, database, run, task, attempt, *, manual=False, actor=None):
     failure = json.loads(attempt["evidence"]).get("failure_type", "native_error")
     if not manual:
         # An environment that no longer serves the run gets no new diagnosis (§6.2): continuing moves it to waiting.
-        if (not settings["enabled"] or not allows(db, run, "cycle") or failure in NEEDS_INPUT or
+        if (not settings["enabled"] or failure in NEEDS_INPUT or
                 any(r["failed_attempt_id"] == attempt["id"] for r in rows) or (run["worker_id"] and unserved(db, run))):
+            return None
+        key = refused(db, run, "cycle")   # last: the cheap checks above end most ticks of a blocked Session
+        if key:
+            mark_refused(db, attempt["id"], key)
             return None
     ordered = [dict(t) for t in db.execute("SELECT id,ordinal,spec FROM tasks WHERE run_id=? ORDER BY ordinal",
                                          (run["id"],))]

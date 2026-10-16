@@ -290,11 +290,15 @@ class Engine:
         """The Attempt the watchdog stopped: blocked as a native error, retried once, then diagnosed (D39 §3.2)."""
         rid, reason = run["id"], info["reason"]
         prior = json.loads(attempt["evidence"] or "{}")
-        with self.db.read() as db:   # D42: within the Session's automatic retries and time
-            retry = settings["enabled"] and not prior.get("transient_retry_of") and recovery.allows(db, run, "retry")
+        retry, over = settings["enabled"] and not prior.get("transient_retry_of"), None
+        if retry:
+            with self.db.read() as db:   # D42: within the Session's automatic retries and time
+                over = recovery.refused(db, run, "retry")
+            retry = not over
         info = {key: item for key, item in info.items() if key not in {"stopping", "stop_failed_at", "stop_error"}}
         evidence = {**evidence, "failure_type": "native_error", "watchdog": {**info, "stopped_at": self.wall()},
-                    **({"transient": "stalled"} if retry else {})}
+                    **({"transient": "stalled"} if retry else {}),
+                    **({"budget_refused": over} if over else {})}
         with self.db.transaction() as db:
             current = db.execute("SELECT * FROM tasks WHERE run_id=? AND id=?", (rid, task["id"])).fetchone()
             active = db.execute("SELECT desired FROM runs WHERE id=?", (rid,)).fetchone()[0] == "active"
@@ -796,9 +800,10 @@ class Engine:
                     except (Error, ValueError, TypeError) as exc:
                         state, error = "blocked", "KiroCrew 规划结果未通过校验：" + str(exc)
                         evidence["failure_type"] = "contract"
-            if not (retry and current["current_attempt"] == attempt["id"] and active) or retry_of or \
-                    not recovery.allows(db, run, "retry"):
-                retry = None   # not ours to retry, already the automatic retry, or past the budget (D42): recovery decides
+            if not (retry and current["current_attempt"] == attempt["id"] and active) or retry_of:
+                retry = None   # not ours to retry, or this Attempt already was the automatic retry: recovery decides
+            elif over := recovery.refused(db, run, "retry"):
+                retry, evidence["budget_refused"] = None, over   # past the budget (D42): recovery decides, and says why
             if retry:
                 evidence["transient"] = retry
             journal.change(db, "attempts", attempt["id"], journal.WORKER, "attempt.state",

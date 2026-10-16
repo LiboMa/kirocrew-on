@@ -197,6 +197,15 @@ describe("session detail", () => {
       .toBeInTheDocument();
   });
 
+  test("a Session that recovered nothing and is not held by the budget shows no budget (D42)", async () => {
+    const budget = { since: 1, reset: false, cycles: { used: 0, limit: 2 }, retries: { used: 0, limit: 4 },
+      minutes: { used: 780, limit: 720 }, exhausted: "minutes" as const };
+    open({ ...blocked, status: "completed", attention: null,
+      recovery: { ...blocked.recovery!, used: 0, latest: null, history: [], budget } } as Run);
+    expect(await screen.findByText(/自动纠错已开启/)).toBeInTheDocument();   // the detail has rendered
+    expect(screen.queryByText(/预算（/)).not.toBeInTheDocument();
+  });
+
   test("a Session that may not switch tools says so", async () => {
     open({ ...blocked, recovery: { ...blocked.recovery!, policy: { enabled: true, max_cycles: 2, switch_tools: false } } } as Run);
     expect(await screen.findByText("自动纠错已开启 · 最多 2 轮 · 不换工具")).toBeInTheDocument();
