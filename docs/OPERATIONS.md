@@ -371,6 +371,13 @@ CloudFront 只使用 us-east-1 的证书）：分发加上别名与证书（SNI�
 - **旧 Worker**（不支持停止单个任务）：不行动，任务继续，避免两个 Agent 同时修改同一工作区。停止失败时一分钟后再试，同样不重试。
 - 重试在被停止任务留下的工作区上开始（未提交的部分改动仍在）：与 D34 的自动重试相同；D37 的候选按任务起点计算改动。
 
+### 停用的 Coding 工具（K01）
+
+- Worker 配置 `disabled_tools`（默认 `["opencode"]`）：所列工具在 `/health` 的 `tools` 中报告为不可用，原因「已停用（K01…）」。
+  规划者不会选用、协调者不会换用；提交的 steps、模板或工作流中用到它的任务在派发前停下并写明原因，按 D38 由协调者推荐换用可用的工具。
+- 恢复：在 Worker 配置中写 `disabled_tools = []`（或去掉 opencode）后重启 Worker，平台 10 分钟内的健康检查即更新（急用时「刷新模型」）。
+- K01 复测（2026-10-16，YOLO 常驻）：OpenCode（`opencode/big-pickle`）两次 Attempt 均只返回 `_No response._`，仍未修复。
+
 ### 换工具（D38 第 1 期）
 
 - **工具是否可用**：Worker `/health` 的 `tools`（`available`、`reason`；Kiro 另有 `login`）。平台只在登记 Worker 或「执行环境 · Worker」

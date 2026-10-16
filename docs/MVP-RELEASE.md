@@ -210,7 +210,7 @@ M4（共享与组织）、M5（仓库闭环）在 MVP 之后分别立项，各�
 
 | # | 问题 | 影响的里程碑 |
 |---|---|---|
-| K01 | OpenCode 执行曾返回空结果或不完整交付，需原生续接补齐（M1 本地与 EC2 均复现；EC2 上 shell 写文件被 KiroCrew 工具门禁拒绝） | M2 |
+| K01 | OpenCode 执行曾返回空结果或不完整交付，需原生续接补齐（M1 本地与 EC2 均复现；EC2 上 shell 写文件被 KiroCrew 工具门禁拒绝；2026-10-16 YOLO 常驻下复测仍只返回 `_No response._`）。**负责人 2026-10-16：先停用**——Worker `disabled_tools` 默认 `["opencode"]` | M2 |
 | K02 | 含 `/`、`:`、`[]` 的模型 ID 被原生 spawn 格式拒绝（影响 OpenCode `provider/model` 与部分 Codex 模型 ID） | M1 |
 | K03 | 原生浏览器登录覆盖整个 Gateway，不是单 Session 票据；平台撤权不会使其失效 | M1 / M4 |
 | K04 | 新版 Web 未代理原生权限批准；存在待批准项时停止可能挂起 | M2（D38 第 2 期：控制台与 MCP 代理批准，见 §14.14） |

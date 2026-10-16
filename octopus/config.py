@@ -49,6 +49,7 @@ class Settings:
     api_host: str = "127.0.0.1"
     api_port: int = 8918
     allowed_hosts: tuple[str, ...] = ()
+    disabled_tools: tuple[str, ...] = ("opencode",)   # K01: OpenCode returns no result on EC2; disabled until it is fixed
     # Self-hosted Git instances on a private network that repository credentials may name (D35; others are refused).
     credentials_private_hosts: tuple[str, ...] = ()
     public_url: str = ""
@@ -95,7 +96,7 @@ def _path(value, base):
 def _layer(values, base):
     """Validate one layer's raw values and resolve its relative paths against ``base``."""
     known = PATHS | set(INTS) | set(FLOATS) | STRINGS | BOOLS | {"allowed_hosts", "path_prepend", "tools", "kirocrew_versions",
-                                                         "credentials_private_hosts"}
+                                                         "credentials_private_hosts", "disabled_tools"}
     unknown = set(values) - known
     if unknown:
         raise ConfigError("未知配置项：" + ", ".join(sorted(unknown)))
@@ -136,6 +137,11 @@ def _layer(values, base):
             if not all(HOST.match(h) for h in hosts):
                 raise ConfigError(f"{key} 只能包含 host[:port]")
             result[key] = hosts
+        elif key == "disabled_tools":   # Coding tools this boundary reports as unavailable (K01: OpenCode for now)
+            names = tuple(v.strip() for v in (value.split(",") if isinstance(value, str) else value) if str(v).strip())
+            if not set(names) <= {"kiro", "claude", "codex", "opencode"}:
+                raise ConfigError("disabled_tools 只能包含 kiro、claude、codex、opencode")
+            result[key] = names
         elif key == "kirocrew_versions":
             versions = tuple(v.strip() for v in (value.split(",") if isinstance(value, str) else value) if str(v).strip())
             if not all(re.fullmatch(r"[0-9][0-9A-Za-z.+-]*", v) for v in versions):
@@ -172,7 +178,7 @@ def _environment(environ):
     # Only known settings are read: the OCTOPUS_ namespace is shared with secrets passed by name
     # (e.g. `init --password-env OCTOPUS_ADMIN_PASSWORD`). Unknown keys are still errors in files.
     known = PATHS | set(INTS) | set(FLOATS) | STRINGS | BOOLS | {"allowed_hosts", "path_prepend", "kirocrew_versions",
-                                                         "credentials_private_hosts"}
+                                                         "credentials_private_hosts", "disabled_tools"}
     values, tools = {}, {}
     for key, value in environ.items():
         if key.startswith("OCTOPUS_TOOL_"):

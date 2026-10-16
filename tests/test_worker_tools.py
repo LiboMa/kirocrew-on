@@ -36,7 +36,7 @@ class WorkerToolsTests(unittest.TestCase):
         adapters.mkdir()
         executable(adapters / "codex")
         kiro = executable(self.root / "kiro-cli", "#!/bin/sh\necho 'Logged in as fixture'\n")
-        tools = self.worker(kiro_cli=kiro, path_prepend=(self.bin,), adapters_dir=adapters,
+        tools = self.worker(kiro_cli=kiro, path_prepend=(self.bin,), adapters_dir=adapters, disabled_tools=(),
                             tool_paths={"opencode": self.root / "missing-opencode"}).tools()
         self.assertEqual(tools["kiro"], {"available": True, "login": "ok"})
         self.assertEqual(tools["claude"], {"available": True})
@@ -59,6 +59,17 @@ class WorkerToolsTests(unittest.TestCase):
         health = self.worker(path_prepend=(self.bin,)).health()
         self.assertTrue(health["tools"]["claude"]["available"])
         self.assertTrue(any("K01" in item for item in health["limitations"]))
+
+    def test_a_disabled_tool_is_unavailable_even_when_installed(self):
+        executable(self.bin / "opencode")
+        tools = self.worker(path_prepend=(self.bin,), disabled_tools=("opencode",)).tools()
+        self.assertFalse(tools["opencode"]["available"])
+        self.assertIn("已停用", tools["opencode"]["reason"])
+        self.assertTrue(self.worker(path_prepend=(self.bin,), disabled_tools=()).tools()["opencode"]["available"])
+
+    def test_opencode_is_disabled_unless_configured_otherwise(self):
+        executable(self.bin / "opencode")
+        self.assertFalse(self.worker(path_prepend=(self.bin,)).tools()["opencode"]["available"])   # K01
 
     def test_health_says_which_common_commands_the_checks_can_run(self):
         # EC2: a planned verify used python on hosts with only python3 and failed with exit code 127

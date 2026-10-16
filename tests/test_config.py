@@ -85,6 +85,13 @@ class ConfigTests(unittest.TestCase):
         self.assertEqual(s.api_port, 9300)
         self.assertNotIn("secret-value-123", repr(s))
 
+    def test_disabled_tools_default_to_opencode_and_are_validated(self):
+        self.assertEqual(load(environ=self.env, cwd=self.cwd).disabled_tools, ("opencode",))   # K01
+        self.assertEqual(load(self.write('disabled_tools = []\n'), environ=self.env, cwd=self.cwd).disabled_tools, ())
+        self.assertEqual(load(self.write('disabled_tools = ["codex"]\n'), environ=self.env, cwd=self.cwd).disabled_tools, ("codex",))
+        with self.assertRaises(ConfigError):
+            load(self.write('disabled_tools = ["gemini"]\n'), environ=self.env, cwd=self.cwd)
+
     def test_default_admission_is_auto_and_validated(self):
         self.assertEqual(load(environ=self.env, cwd=self.cwd).default_admission, "auto")   # D44: running at once, as before
         self.assertEqual(load(self.write('default_admission = "confirm"\n'), environ=self.env, cwd=self.cwd).default_admission,

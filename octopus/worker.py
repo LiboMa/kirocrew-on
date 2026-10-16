@@ -117,6 +117,7 @@ def pack_file(archive, relative, path):
 
 
 # The command each Coding tool is started with, and its [tools] setting (composition/environment.py starts them the same way).
+DISABLED = {"opencode": "已停用（K01：OpenCode 在此执行环境写文件时被 KiroCrew 工具门禁拒绝、返回空结果；配置 disabled_tools 可恢复）"}
 TOOL_COMMANDS = {"kiro": ("kiro_cli", "kiro-cli"), "claude": ("claude", "claude"), "codex": ("codex", "codex"),
                  "opencode": ("opencode", "opencode")}
 
@@ -124,8 +125,9 @@ TOOL_COMMANDS = {"kiro": ("kiro_cli", "kiro-cli"), "claude": ("claude", "claude"
 class Worker:
     def __init__(self, root, token, gateway_port=5476, crew_home=None, isolation="trusted-local", routing_log=None,
                  crew_url=None, approval_mode="", crew_entry_ttl="8h", kiro_cli=None, path_prepend=(),
-                 tool_paths=None, adapters_dir=None, preview_tls_port=0, preview_tls_name=""):
+                 tool_paths=None, adapters_dir=None, preview_tls_port=0, preview_tls_name="", disabled_tools=("opencode",)):
         self.root = Path(root).resolve()
+        self.disabled_tools = frozenset(disabled_tools)   # reported unavailable, so nothing plans, switches to or runs them
         self.root.mkdir(parents=True, exist_ok=True, mode=0o700)
         self.token, self.port = token, gateway_port
         self.home = Path(crew_home or Path.home() / ".kiro/crew").resolve()
@@ -193,6 +195,9 @@ class Worker:
         result = {}
         for tool, (setting, command) in TOOL_COMMANDS.items():
             configured = self.tool_paths.get(setting)
+            if tool in self.disabled_tools:
+                result[tool] = {"available": False, "reason": DISABLED.get(tool, "已在此执行环境停用（disabled_tools）")}
+                continue
             if configured:
                 found = os.access(configured, os.X_OK)
                 reason = f"配置的 {configured} 不存在或不可执行"
@@ -628,7 +633,8 @@ class Worker:
                            for tool, ids in advertised.items()},
                 "limitations": ["当前原生 spawn 模型格式不支持 /、:、[]；这些已公布的 ID 不列为可直接派发模型。",
                                 "OpenCode Effort 覆盖未验证。实际模型与实际 Effort 仅按原生证据报告。",
-                                "已知问题 K01：OpenCode 在 EC2 执行边界上以 shell 写文件曾被 KiroCrew 工具门禁拒绝，实现类任务可能失败。"]}
+                                "已知问题 K01：OpenCode 在 EC2 执行边界上以 shell 写文件被 KiroCrew 工具门禁拒绝、返回空结果"
+                                + ("，已停用。" if "opencode" in self.disabled_tools else "，实现类任务可能失败。")]}
 
     def prepare(self, body):
         rid = body["run_id"]
