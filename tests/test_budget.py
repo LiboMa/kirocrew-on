@@ -115,13 +115,15 @@ class BudgetTests(BudgetCase):
     def test_a_continue_restarts_the_clock(self):
         rid = self.begin(budget_minutes=30)
         with self.db.transaction() as db:
-            db.execute("UPDATE runs SET created=created-? WHERE id=?", (31 * 60, rid))
+            db.execute("UPDATE runs SET created=created-?, snapshot=json_set(snapshot,'$.budget_waited',60) WHERE id=?",
+                       (31 * 60, rid))
         run = self.tick(rid, 40)
         self.assertEqual(run["status"], "completed")
         before = time.time()
         self.service.operate(self.actor, rid, "continue", {"request_id": "budget-continue-2", "expected_version": run["version"],
                                                            "task_id": "review"})
         self.assertGreaterEqual(json.loads(self.run_row(rid)["snapshot"])["budget_since"], before)
+        self.assertNotIn("budget_waited", json.loads(self.run_row(rid)["snapshot"]))   # a new window has waited for nothing
         self.assertEqual(self.budget(rid)["minutes"]["used"], 0)
 
 

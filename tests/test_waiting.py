@@ -33,8 +33,8 @@ class WaitingCase(unittest.TestCase):
                        (user["id"], dumps({"url": "fixture", "token": "fixture",
                                             "capabilities": {"boundary": "b1", "tools": TOOLS, "tool_auth": {"kiro": "ok"}}})))
         self.calls, self.bodies = [], {}
-        self.login, self.boundary, self.health_error, self.tools = "ok", "b1", None, TOOLS
-        self.expired, self.running = set(), set()
+        self.login, self.boundary, self.health_error, self.tools, self.health_extra = "ok", "b1", None, TOOLS, {}
+        self.expired, self.running, self.denied = set(), set(), set()
         self.now = 1_000_000.0
         self.engine = Engine(self.db, self.request, wall=lambda: self.now)
 
@@ -48,7 +48,7 @@ class WaitingCase(unittest.TestCase):
         if path == "/health":
             if self.health_error:
                 raise Error(503, "worker_unavailable", self.health_error)
-            return {"boundary": self.boundary, "tools": self.tools, "tool_auth": {"kiro": self.login}}
+            return {"boundary": self.boundary, "tools": self.tools, "tool_auth": {"kiro": self.login}, **self.health_extra}
         if path == "/prepare":
             return {"native_parent": "parent", "workspace": "/w"}
         if path == "/dispatch":
@@ -61,8 +61,11 @@ class WaitingCase(unittest.TestCase):
         if (spec["id"], number) in self.running:
             return {"native": {"done": False}, "evidence": {"actual_backend": spec["tool"]}}
         native = dict(EXPIRED) if (spec["id"], number) in self.expired else {"done": True, "result": "完成"}
+        outcome = {"decision": "pass", "summary": spec["id"] + " 完成", "failure_type": "none", "findings": []}
+        if (spec["id"], number) in self.denied:   # the Agent itself reports a permission problem, not a login
+            outcome = {"decision": "blocked", "summary": "GitHub token 无 push 权限", "failure_type": "auth", "findings": []}
         return {"native": native, "evidence": {"actual_backend": spec["tool"], "handoff_path": "/w/handoff.md"}, "handoff": "交接",
-                "outcome": dumps({"decision": "pass", "summary": spec["id"] + " 完成", "failure_type": "none", "findings": []})}
+                "outcome": dumps(outcome)}
 
     def tick(self, rid, count=20):
         for _ in range(count):
@@ -125,6 +128,46 @@ class KiroLoginTests(WaitingCase):
         self.engine.probe()
         run = self.tick(rid)
         self.assertEqual((run["status"], len(self.attempts(run, "code"))), ("blocked", 1))
+
+    def test_an_agent_reported_auth_failure_is_not_a_kiro_login(self):
+        self.denied = {("code", 1)}
+        rid = self.start([step("code", "kiro")])
+        run = self.tick(rid)
+        self.assertEqual(run["status"], "blocked")
+        self.assertEqual(run["attention"]["title"], "等待处理认证、权限或模型配置")
+        self.login = "expired"
+        self.engine.probe()
+        self.login, self.now = "ok", self.now + 61
+        self.engine.probe()
+        run = self.tick(rid)
+        self.assertEqual((run["status"], len(self.attempts(run, "code"))), ("blocked", 1))
+
+    def test_a_good_login_seen_after_the_failure_hands_it_to_a_person(self):
+        self.expired = {("code", 1)}
+        rid = self.start([step("code", "kiro")])
+        self.tick(rid)
+        self.engine.probe()                     # the login is fine already: fixed before the check, or never the cause
+        run = self.service.run(self.actor, rid)
+        self.assertEqual(run["attention"]["title"], "Kiro 登录正常，需要处理")
+        self.assertIn("不会自动重跑", run["attention"]["action"])
+        self.now += 61
+        self.engine.probe()
+        self.assertEqual(self.health_calls(), 1)   # nobody waits on it any more: the ten-minute rhythm
+
+    def test_a_long_wait_does_not_use_up_the_time_budget(self):
+        self.expired = {("code", 1)}
+        rid = self.start([step("code", "kiro"), step("deliver", "claude")], recovery={"enabled": True, "max_cycles": 2, "budget_minutes": 30})
+        self.tick(rid)
+        with self.db.transaction() as db:   # it started 40 minutes ago and has waited for the login for 35
+            db.execute("UPDATE runs SET created=created-?, updated=updated-? WHERE id=?", (40 * 60, 35 * 60, rid))
+        self.login = "expired"
+        self.engine.probe()
+        self.login, self.now = "ok", self.now + 61
+        self.engine.probe()
+        run = self.tick(rid)
+        self.assertEqual(run["status"], "completed")
+        self.assertLess(run["recovery"]["budget"]["minutes"]["used"], 30)
+        self.assertIsNone(run["recovery"]["budget"]["exhausted"])
 
     def test_resuming_is_not_a_users_word(self):
         self.expired = {("code", 1)}
@@ -190,6 +233,22 @@ class ProbeTests(WaitingCase):
         self.engine.probe()
         self.assertIn("codex", self.capabilities()["tools"])   # another boundary is the administrator's to check
 
+    def test_the_probe_does_not_save_another_isolation_or_host(self):
+        with self.db.transaction() as db:
+            config = json.loads(db.execute("SELECT config FROM workers WHERE id='worker'").fetchone()["config"])
+            config["capabilities"].update(isolation="dedicated", host_principal="p1")
+            db.execute("UPDATE workers SET config=? WHERE id='worker'", (dumps(config),))
+        self.health_extra = {"isolation": "trusted-local", "host_principal": "p1"}
+        self.tools = {**TOOLS, "codex": {"available": True}}
+        self.engine.probe()
+        self.assertNotIn("codex", self.capabilities()["tools"])   # the same boundary id, but no longer the same isolation
+        self.health_extra, self.now = {"isolation": "dedicated", "host_principal": "p2"}, self.now + 601
+        self.engine.probe()
+        self.assertNotIn("codex", self.capabilities()["tools"])
+        self.health_extra, self.now = {"isolation": "dedicated", "host_principal": "p1"}, self.now + 601
+        self.engine.probe()
+        self.assertIn("codex", self.capabilities()["tools"])
+
     def test_an_unreachable_worker_is_only_logged(self):
         self.health_error = "Worker 未返回可核实回执"
         with self.assertLogs(level="WARNING") as logs:
@@ -207,7 +266,7 @@ class ProbeTests(WaitingCase):
         self.assertEqual(self.health_calls(), 2)
 
     def test_a_worker_a_session_waits_on_is_checked_every_minute(self):
-        self.expired = {("code", 1)}
+        self.expired, self.login = {("code", 1)}, "expired"
         rid = self.start([step("code", "kiro")])
         self.tick(rid)
         self.engine.probe()

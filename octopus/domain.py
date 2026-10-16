@@ -145,6 +145,7 @@ def restart_budget(db, rid, who):
     """The user's continue, requested diagnosis or Worker assignment authorises more automatic work: the recovery budget
     counts from now (D42 B2). Written quietly — it is not a change of the Session's settings."""
     snapshot = json.loads(db.execute("SELECT snapshot FROM runs WHERE id=?", (rid,)).fetchone()["snapshot"])
+    snapshot = {key: value for key, value in snapshot.items() if key != "budget_waited"}   # a new window has waited for nothing
     journal.change(db, "runs", rid, who, "run.budget", quiet=("snapshot",), snapshot=dumps({**snapshot, "budget_since": time.time()}))
 
 
@@ -1447,6 +1448,7 @@ class Service:
             return None
         attempt = (task.get("attempts") or [{}])[-1] if task else {}
         failure = attempt.get("evidence", {}).get("failure_type")
+        from .waiting import handed_over, kiro_login_failure
         error = run.get("error") or attempt.get("error") or "尚无可核实的错误原因"
         if run.get("error") == "Worker 已停用":   # D43: continues on its own once the Worker is enabled again
             title, action = "执行环境已停用", "管理员重新启用后自动继续。"
@@ -1468,9 +1470,14 @@ class Service:
                       "详情中是失败原因或协调者的建议。")
         elif failure == "input":
             title, action = "等待补充项目或任务信息", "补充缺少的源码来源或需求，再继续同一 Session。"
-        elif failure == "auth" and (attempt.get("spec") or task["spec"]).get("tool") == "kiro":
-            title = "等待 Kiro 登录恢复"   # the platform reads Kiro's login and continues on its own (D43)
-            action = "请管理员执行 deploy.sh kiro-login；登录恢复后自动继续（平台每分钟检查一次）。"
+        elif task and kiro_login_failure(attempt.get("evidence") or {}, attempt.get("error"),
+                                         (attempt.get("spec") or task["spec"]).get("tool")):
+            if handed_over((attempt.get("evidence") or {}).get("waiting") or {}):
+                title = "Kiro 登录正常，需要处理"
+                action = "失败后检查到 Kiro 登录正常（未见过期，或检查前已恢复），平台不会自动重跑：确认后续作。"
+            else:   # the platform reads Kiro's login and continues on its own (D43)
+                title = "等待 Kiro 登录恢复"
+                action = "请管理员执行 deploy.sh kiro-login；登录恢复后自动继续（平台每分钟检查一次）。"
         elif failure in {"auth", "model"}:
             title, action = "等待处理认证、权限或模型配置", "在原生 KiroCrew 处理权限，或修改本任务配置后重跑。"
         elif latest and latest["status"] == "blocked":

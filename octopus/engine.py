@@ -98,7 +98,8 @@ class Engine:
         the administrator's to check."""
         now = self.wall() if now is None else now
         with self.db.read() as db:
-            urgent = {item["worker_id"] for item in waiting.kiro_waiting(db)}
+            urgent = {item["worker_id"] for item in waiting.kiro_waiting(db)
+                      if not waiting.handed_over(item["evidence"].get("waiting") or {})}
             rows = [dict(r) for r in db.execute("SELECT id, config FROM workers WHERE enabled=1 AND retired=0")]
         for row in rows:
             last = self.probed.get(row["id"])
@@ -112,7 +113,10 @@ class Engine:
                 continue
             with self.db.transaction() as db:
                 config = json.loads(db.execute("SELECT config FROM workers WHERE id=?", (row["id"],)).fetchone()["config"])
-                if health.get("boundary") != (config.get("capabilities") or {}).get("boundary"):
+                saved = config.get("capabilities") or {}
+                # The boundary's identity, as the native entry checks it: any of these changed is the administrator's to check.
+                if health.get("boundary") != saved.get("boundary") or any(
+                        key in saved and health.get(key) != saved[key] for key in ("host_principal", "isolation")):
                     logging.warning("Worker %s health check: another execution boundary, capabilities not saved", row["id"])
                     continue
                 db.execute("UPDATE workers SET config=? WHERE id=?",

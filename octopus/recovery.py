@@ -265,7 +265,7 @@ def budget(db, run, now=None):
     value = {"since": since, "reset": bool(snapshot.get("budget_since")),
              "cycles": {"used": cycles, "limit": settings["max_cycles"]},
              "retries": {"used": retries, "limit": settings.get("max_retries", BUDGET["max_retries"][0])},
-             "minutes": {"used": max(0, int((now - since) // 60)),
+             "minutes": {"used": max(0, int((now - since - (snapshot.get("budget_waited") or 0)) // 60)),   # D43: waits
                          "limit": settings.get("budget_minutes", BUDGET["budget_minutes"][0])}}
     value["exhausted"] = next((key for key in ("cycles", "retries", "minutes")
                                if value[key]["limit"] and value[key]["used"] >= value[key]["limit"]), None)   # 0 is "off"

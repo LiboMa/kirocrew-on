@@ -9,6 +9,7 @@ import time
 
 from . import journal
 from .db import dumps
+from .gates import EXPIRED
 
 KIRO_BACK = "Kiro 登录已恢复，自动继续"
 WORKER_BACK, PLACE_BACK = "执行环境已重新启用，自动继续", "执行环境已重新服务此空间，自动继续"
@@ -19,18 +20,29 @@ CREDENTIAL_REFUSED = "更换凭证后续作"
 RESUMABLE = {"preparing", "ready", "running", "waiting_approval", "dispatch_unknown"}
 
 
+def kiro_login_failure(evidence, error, tool):
+    """A Kiro task whose native run failed on an expired login — the one login the platform can read. An ``auth`` failure
+    the Agent reports itself (a token without push rights, a quota) is not one, and other tools' logins stay with a person."""
+    return evidence.get("failure_type") == "auth" and tool == "kiro" and bool(EXPIRED.search(error or ""))
+
+
+def handed_over(mark):
+    """A good login seen after the failure without an expiry first: fixed before the check, or never the cause — the
+    platform does not rerun it and stops watching (a person continues)."""
+    return bool(mark.get("ok_seen_at")) and not mark.get("expired_at")
+
+
 def kiro_waiting(db, run_id=None):
-    """Blocked Sessions whose failed Attempt is a Kiro task's login failure (failure_type ``auth``): only Kiro's login is
-    one the platform can read. Other tools' logins stay with a person."""
+    """Blocked Sessions whose failed Attempt is a Kiro login failure (``kiro_login_failure``)."""
     found = []
     for row in db.execute(
-            "SELECT r.id AS run_id, r.worker_id, t.id AS task_id, a.id AS attempt_id, a.evidence, a.spec FROM runs r "
+            "SELECT r.id AS run_id, r.worker_id, t.id AS task_id, a.id AS attempt_id, a.evidence, a.spec, a.error FROM runs r "
             "JOIN tasks t ON t.run_id=r.id AND t.status='blocked' AND t.current_attempt IS NOT NULL "
             "JOIN attempts a ON a.id=t.current_attempt "
             "WHERE r.status='blocked' AND r.lifecycle='open' AND r.desired='active' AND r.worker_id IS NOT NULL"
             + (" AND r.id=?" if run_id else ""), (run_id,) if run_id else ()):
         evidence = json.loads(row["evidence"] or "{}")
-        if evidence.get("failure_type") == "auth" and json.loads(row["spec"]).get("tool") == "kiro":
+        if kiro_login_failure(evidence, row["error"], json.loads(row["spec"]).get("tool")):
             found.append({**dict(row), "evidence": evidence})
     return found
 
@@ -42,10 +54,14 @@ def observe(db, worker_id, login, now):
         if item["worker_id"] != worker_id:
             continue
         mark = dict(item["evidence"].get("waiting") or {"for": "kiro_login"})
+        if handed_over(mark):
+            continue
         if login == "expired" and not mark.get("expired_at"):
             mark["expired_at"] = now
         elif login == "ok" and mark.get("expired_at") and not mark.get("recovered_at"):
             mark["recovered_at"] = now
+        elif login == "ok" and not mark.get("expired_at"):
+            mark["ok_seen_at"] = now
         else:
             continue
         journal.change(db, "attempts", item["attempt_id"], journal.ENGINE, "attempt.waiting", quiet=("evidence",),
@@ -58,8 +74,14 @@ def _continue(db, run_id, task_id, reason, condition):
 
 
 def _resumed(db, run_id, status, reason, condition):
+    # The time it waited is not automatic work: the time budget does not count it (D42), until the user's next word.
+    row = db.execute("SELECT snapshot, created, updated FROM runs WHERE id=?", (run_id,)).fetchone()
+    snapshot, now = json.loads(row["snapshot"]), time.time()
+    since = snapshot.get("budget_since") or row["created"]
+    snapshot["budget_waited"] = (snapshot.get("budget_waited") or 0) + max(0.0, now - max(row["updated"], since))
+    journal.change(db, "runs", run_id, journal.ENGINE, "run.budget", quiet=("snapshot",), snapshot=dumps(snapshot))
     journal.change(db, "runs", run_id, journal.ENGINE, "run.resumed", reason, event={"status": status, "condition": condition},
-                   status=status, error=None, updated=time.time())
+                   status=status, error=None, updated=now)
 
 
 def _before_disabled(db, run_id):
