@@ -15,6 +15,18 @@ from octopus.server import required_scope, server
 from tests.test_access import AccessCase
 
 SECRET = "github_pat_11ABCDEFG0123456789_secretvalue1a2b"
+PUBLIC_NAMES = {"github.com", "gitlab.example.com"}
+
+
+def public_dns(case):
+    """Resolve the hosts these tests name to a public address, whatever the local DNS says (a proxy's fake-IP range
+    198.18.0.0/15 would make refused_address refuse github.com); everything else resolves as usual."""
+    real = credentials.socket.getaddrinfo
+    def resolve(host, *args, **kwargs):
+        return [(2, 1, 6, "", ("140.82.112.3", 443))] if host in PUBLIC_NAMES else real(host, *args, **kwargs)
+    patcher = patch("octopus.credentials.socket.getaddrinfo", side_effect=resolve)
+    patcher.start()
+    case.addCleanup(patcher.stop)
 
 
 class FakeHost(BaseHTTPRequestHandler):
@@ -49,6 +61,7 @@ class FakeHost(BaseHTTPRequestHandler):
 class CredentialCase(AccessCase):
     def setUp(self):
         super().setUp()
+        public_dns(self)
         self.tid = self.team(environment=False)
         self.store = self.service.credentials
 

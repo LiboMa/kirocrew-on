@@ -19,6 +19,7 @@ from octopus.db import dumps
 from octopus.engine import Engine
 from octopus.security import Error
 from tests.test_access import AccessCase
+from tests.test_credentials import public_dns
 
 TOKEN = "github_pat_11PRIVATEclonetoken_9z9z"
 BACKEND = Path(subprocess.run(["git", "--exec-path"], capture_output=True, text=True).stdout.strip()) / "git-http-backend"
@@ -201,6 +202,7 @@ class EngineTests(AccessCase):
 
     def setUp(self):
         super().setUp()
+        public_dns(self)
         self.tid = self.team("凭证 Team")
         self.calls = []
 
