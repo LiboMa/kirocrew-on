@@ -777,7 +777,7 @@ class Engine:
                                     **({"outdated": True} if plan.get("outdated") else {})}}
                    if plan.get("applied") else {}),
                 # D46: planning is analysis — its instructions do not tell it to develop
-                **({"stage": "planning"} if planning.planning_task(task["id"], snapshot) else {}),
+                **({"stage": "planning"} if planning.planner_task(task["id"], snapshot) else {}),
                 **({"quality": True} if snapshot.get("execution_contract", 1) >= 2 else {}),
                 **({"repair": repair} if repair else {}),
                 **({"candidate": {"sha": latest["sha"], "parent": latest["parent"]}}

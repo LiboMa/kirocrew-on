@@ -63,7 +63,8 @@ def clip(text, limit):
     return text if len(text) <= limit else text[:limit] + "…"
 
 
-def instructions(intent, design, directory, models):
+def instructions(intent, design, directory, models, tools=None):
+    from .planning import environment
     from .prompts import intent_prompt
     example = {"name": "针对本次需求的工作流", "steps": [
         {"id": "task-1", "name": "任务名称", "tool": "kiro", "model": "auto", "effort": "",
@@ -78,8 +79,7 @@ def instructions(intent, design, directory, models):
 如果需要调整任务顺序或增加任务，在推荐中体现，用户会在采用前审阅。
 """ + dumps(design) + """
 
-## 此执行环境公布的模型
-""" + clip(dumps(models), 1200) + """
+""" + environment(models, tools, None, None) + """
 
 这里只交付工作流设计，不运行推荐工作流、不提交或发布业务代码。
 最终回复必须包含且仅包含一个完整的 JSON 工作流代码块；不要加入第二个 JSON/YAML 代码块。

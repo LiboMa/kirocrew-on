@@ -83,7 +83,16 @@ def outcome(text):
             **({"normalized": notes} if notes else {})}
 
 
-def quality_instructions(folder, contract=None):
+def quality_instructions(folder, contract=None, stage=None):
+    if stage == "planning":   # D46: the planner's conclusion is its plan, not a code verdict
+        return f"""
+
+## 必须交付可判定的任务结论
+除 handoff.md 外，将实际结论写到 {folder / 'outcome.json'}，严格 JSON：
+{{"decision":"pass","summary":"计划要点与依据","failure_type":"none","findings":[]}}
+decision=pass 表示已给出符合要求的计划 JSON；需求缺少必要信息、无法规划时用 blocked，failure_type 为 input，
+并在 findings 中写明缺少什么。本文件是本次 Attempt 的真实结论，不能复制旧结论。
+"""
     accept = ""
     if contract and contract.get("acceptance"):
         accept = """
@@ -431,14 +440,21 @@ def feedback(db, run, attempt):
                "failure_type": context.get("failure_type"), "findings": [f[:300] for f in findings[:10]],
                "summary": str(outcome.get("summary") or "")[:800]}
     target = decision.get("target_task_id") or context.get("failed_task_id")
-    if attempt["task_id"] == target:
+    spec = json.loads(attempt["spec"])
+    checking = is_review(spec) or spec.get("kind") == "test"
+    if attempt["task_id"] == target:   # what it is told to do follows what kind of work it is (D46)
+        instruction = ("本轮为纠错后的重新审查：只读审查本轮源码，逐条核对上一轮的问题与协调者的要求，不修改代码。" if is_review(spec) else
+                       "本轮为纠错后的重新分析：按协调者的要求补充或修正结论，不修改业务代码。" if spec.get("kind") == "design" else
+                       "本轮为纠错后的重新执行；实施修复并重新验证，后续审查必须针对本轮源码。")
         return {"recovery_id": row["id"], "cycle": row["number"],
                 "decision": {k: decision.get(k) for k in ("action", "target_task_id", "reason", "instructions") if decision.get(k)},
-                "failure": failure, "instruction": "本轮为纠错后的重新执行；实施修复并重新验证，后续审查必须针对本轮源码。"}
-    spec = json.loads(attempt["spec"])
-    if is_review(spec) or spec.get("kind") == "test":
+                "failure": failure, "instruction": instruction}
+    if checking:
         return {"recovery_id": row["id"], "cycle": row["number"], "recheck": True, "failure": failure,
                 "instruction": "本轮为返工后的复验：逐条核对上一轮的失败与发现是否已解决，结论只针对本轮源码。"}
+    if attempt["number"] > 1:   # reset by the rework upstream: it runs again on the changed source, knowing why
+        return {"recovery_id": row["id"], "cycle": row["number"], "rerun": True, "failure": failure,
+                "instruction": "上游任务已按纠错返工，本任务在新的源码上重新执行：确认上一轮的问题已随返工解决，必要时一并修正并重新验证。"}
     return None
 
 

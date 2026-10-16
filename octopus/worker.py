@@ -51,8 +51,9 @@ PUBLISH_LIMIT = 100 * 1024 * 1024   # D35 §5.2: one bundle (as publish.LIMIT on
 # What each kind of work is told at the end of its instructions (D46): planning, design and diagnosis are not development.
 TAILS = {
     "planning": "只做分析与规划，不修改业务代码；按本任务要求输出 JSON。",
-    "design": "只做分析与规划，不修改业务代码；按本任务要求输出工作流 JSON。",
+    "workflow_design": "只做分析与规划，不修改业务代码；按本任务要求输出工作流 JSON。",
     "coordination": "只诊断，不修改源码；按要求写 decision.json。",
+    "design": "只做分析，不修改业务代码；在交接中给出结论、依据与后续任务所需的输入。",
     "review": "只读审查，不修改代码；结论绑定审查对象，缺陷用 changes_requested。",
     "test": "只写测试与测试报告，不修改实现；按项目既有依赖与规范工作。",
     "implement": "依据需求修改源码并真实验证，按项目既有依赖与规范工作；本任务须在源码目录中产生改动（平台检查 diff_present）。",
@@ -62,6 +63,19 @@ DEFAULT_TAIL = "依据需求进行开发和真实验证，按项目既有依赖�
 COMMON_TAIL = ("记录具体修改、测试命令、结果和限制。若不能完成，最终回答单独一行写 BLOCKED 并说明恢复条件"
                "（BLOCKED 只用于缺输入、认证或权限；缺陷用 changes_requested）。只执行当前任务，不派生其他子任务。"
                "不读取平台或其他项目的凭据。不要编造测试结果或实际模型。")
+# Planning and diagnosis report their conclusion, not changes (D46): the Coordinator's way to ask is wait_for_user.
+STAGE_TAILS = {
+    "planning": "只执行当前任务，不派生其他子任务。不读取平台或其他项目的凭据。需求缺少必要信息、无法规划时，最终回答单独一行写 BLOCKED 并说明缺少什么。",
+    "workflow_design": "只执行当前任务，不派生其他子任务。不读取平台或其他项目的凭据。不要编造结论。",
+    "coordination": "只执行当前诊断，不派生其他子任务。不读取平台或其他项目的凭据。需要用户补充或决定时在 decision.json 中用 wait_for_user。",
+}
+# The parent Session's agent (D46): the Owner observer — it explains and points the user to a continue; it does not act.
+OBSERVER_CONTEXT = ("你是此 Octopus 研发会话的 Owner 观察员：向用户解释计划、进度、错误与修复决定。"
+                    "平台 Engine 统一派发已采纳的任务；失败诊断通过原生 poc-diagnose 子任务执行（不能再派生任务）。"
+                    "保持同一 Session 与工作区，使用平台给出的真实交接和纠错记录。"
+                    "不要自行派发子任务、执行旧 next/accept、修改源码或平台数据库。"
+                    "用户要修改需求或任务时，请其在控制台「续作」或经 octopus_continue 提交；需要用户补充项目来源或权限时具体说明；"
+                    "不要把未知原因说成已解决。")
 PREVIEW = ("\n\n## 可运行产出的声明\n交付物是可以运行的应用时，在项目根目录写 .octopus/preview.json："
            '{"processes":[{"name":"web","command":"npm run dev -- --port $PORT","cwd":".","port":"$PORT","entry":true}],'
            '"install":["npm ci"],"ready":{"path":"/","timeout":120}}。1–4 个进程（前后端分开时各一个），恰有一个 entry；'
@@ -73,9 +87,10 @@ def envelope(task_input, requirement, contract, prompt, upstream, project, hando
     what this kind of work does — planning, design and diagnosis are not told to develop — and the handoff it writes."""
     from .prompts import HANDOFF
     tail = TAILS.get(stage or (contract or {}).get("kind"), DEFAULT_TAIL)
+    common = STAGE_TAILS.get(stage, COMMON_TAIL)
     return ("# 本次研发任务\n\n" + task_input + briefing(requirement, contract) + "\n\n## 任务\n" + prompt +
             "\n\n## 前序交接\n前序任务的结论、发现、候选与检查；handoff 是其完整交接文件的路径，需要细节时读取。\n" +
-            dumps(upstream) + f"\n\n源码目录：{project}\n交接文件：{handoff}\n" + tail + COMMON_TAIL + HANDOFF + extra)
+            dumps(upstream) + f"\n\n源码目录：{project}\n交接文件：{handoff}\n" + tail + common + HANDOFF + extra)
 
 
 def briefing(requirement, contract):
@@ -711,11 +726,7 @@ class Worker:
                         "name": slot, "agent": "poc-coordinator", "agent_kind": "template", "model": "auto"})
                     require(present.get("key", present.get("slot")) == slot, "原生父 Session 身份不一致")
                 self.native("/api/chat/slots/" + slot + "/context", {
-                    "content": "你是此 Octopus 研发运行的用户交互协调者，负责解释计划、进度、错误与修复决定。"
-                               "平台 Engine 统一派发已采纳的任务；失败诊断通过原生 poc-diagnose 子任务执行（不能再派生任务）。"
-                               "保持同一 Session 与工作区，使用平台给出的真实交接和纠错记录。"
-                               "不要额外自行派发重复子任务、执行旧 next/accept 或修改平台数据库。"
-                               "需要用户补充项目来源或权限时具体说明；不要把未知原因说成已解决。",
+                    "content": OBSERVER_CONTEXT,
                     "source": "octopus-mvp-1.0.0", "ephemeral": True})
                 write(parent_file, {"slot": slot, "parent": "dashboard:" + slot})
             if not (run / "parent-note.json").exists():
@@ -802,7 +813,7 @@ class Worker:
             elif body.get("quality"):
                 from .recovery import quality_instructions
                 context["quality_contract"] = 2
-                extra_prompt += quality_instructions(folder, contract)
+                extra_prompt += quality_instructions(folder, contract, stage=body.get("stage"))
             if body.get("candidate"):   # a review bound to the candidate it reviews (D37 §6)
                 target = body["candidate"]
                 require(isinstance(target, dict) and all(isinstance(target.get(k), str) and workspace.SHA.fullmatch(target[k])
@@ -816,15 +827,19 @@ class Worker:
                 extra_prompt += (("\n\n## 本轮返工后的复验要求\n" + dumps(body["repair"]) +
                                   "\n逐条核对上一轮的失败与发现是否已解决；不能沿用旧结论。")
                                  if body["repair"].get("recheck") else
+                                 ("\n\n## 本轮返工后的重新执行\n" + dumps(body["repair"]) +
+                                  "\n上游已按纠错返工；确认上一轮的问题已解决，重新运行相关验证，不能沿用旧结论。")
+                                 if body["repair"].get("rerun") else
                                  ("\n\n## 本轮协调者纠错与复审要求\n" + dumps(body["repair"]) +
                                   "\n完整阅读失败证据，优先执行本轮具体修复要求；再次运行相关验证，不能沿用旧通过结论。"))
             if body.get("design"):
                 from .designs import instructions
                 require(spec["tool"] == "kiro", "工作流设计须使用 Kiro 后端")
                 context["design"] = body["design"]
+                health = self.health()
                 design_prompt = instructions(body["input"], body["design"], workspace.project_dir(run),
-                                             self.health()["models"])
-            stage = ("coordination" if body.get("coordination") else "design" if body.get("design")
+                                             health["models"], health["tools"])
+            stage = ("coordination" if body.get("coordination") else "workflow_design" if body.get("design")
                      else body.get("stage") if body.get("stage") in {"planning"} else None)
             instructions = envelope(body["input"], requirement, contract, spec["prompt"], body.get("upstream", []),
                                     workspace.project_dir(run), handoff, stage=stage,

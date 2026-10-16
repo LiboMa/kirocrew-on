@@ -37,7 +37,7 @@
         "tool": "claude",
         "model": "auto",
         "effort": "",
-        "prompt": "按目标创建 proof.mjs 和 tests/proof.test.mjs，运行 node --test，保存真实输出（候选提交由平台生成），不编造结果。",
+        "prompt": "按目标创建 proof.mjs 和 tests/proof.test.mjs，运行 node --test，保存真实输出，不编造结果（候选提交由平台生成）。",
         "kind": "implement",
         "acceptance": [
           "改动满足本次目标，并在交接中给出实际执行的验证命令与结果"
@@ -107,8 +107,11 @@
         "tool": "claude",
         "model": "auto",
         "effort": "",
-        "prompt": "核对前序实现和审查结果，确认网页位于 web/index.html，整理启动方式、已验证结果和限制。交付阶段不修改已审查业务代码；需要修改时给出 changes_requested；缺少输入、认证或权限时才用 BLOCKED。",
+        "prompt": "核对前序实现和审查结果，确认网页位于 web/index.html，整理启动方式、已验证结果和限制。交付阶段不修改已审查业务代码，只在 docs/DELIVERY.md 写交付说明（启动方式、已验证结果和限制）；需要修改时给出 changes_requested；缺少输入、认证或权限时才用 BLOCKED。",
         "kind": "deliver",
+        "deliverables": [
+          "docs/DELIVERY.md"
+        ],
         "acceptance": [
           "交付物可按交接中的说明运行或查看，并列出通过项与限制"
         ]
@@ -166,8 +169,11 @@
         "tool": "claude",
         "model": "auto",
         "effort": "",
-        "prompt": "核对前序实现和审查结果，确认网页位于 web/index.html，整理启动方式、已验证结果和限制。交付阶段不修改已审查业务代码；需要修改时给出 changes_requested；缺少输入、认证或权限时才用 BLOCKED。",
+        "prompt": "核对前序实现和审查结果，确认网页位于 web/index.html，整理启动方式、已验证结果和限制。交付阶段不修改已审查业务代码，只在 docs/DELIVERY.md 写交付说明（启动方式、已验证结果和限制）；需要修改时给出 changes_requested；缺少输入、认证或权限时才用 BLOCKED。",
         "kind": "deliver",
+        "deliverables": [
+          "docs/DELIVERY.md"
+        ],
         "acceptance": [
           "交付物可按交接中的说明运行或查看，并列出通过项与限制"
         ]
@@ -189,7 +195,7 @@
         "tool": "claude",
         "model": "auto",
         "effort": "",
-        "prompt": "创建合成样例和本地 CSV 概览页，显式校验约定格式。测试空数据、坏表头、非法数值及不支持的引号格式，保留真实 diff 和输出。",
+        "prompt": "创建合成样例和本地 CSV 概览页，显式校验约定格式。测试空数据、坏表头、非法数值及不支持的引号格式，保留实际输出。",
         "kind": "implement",
         "acceptance": [
           "改动满足本次目标，并在交接中给出实际执行的验证命令与结果"
@@ -213,8 +219,11 @@
         "tool": "claude",
         "model": "auto",
         "effort": "",
-        "prompt": "核对前序实现和审查结果，确认网页位于 web/index.html，整理启动方式、已验证结果和限制。交付阶段不修改已审查业务代码；需要修改时给出 changes_requested；缺少输入、认证或权限时才用 BLOCKED。",
+        "prompt": "核对前序实现和审查结果，确认网页位于 web/index.html，整理启动方式、已验证结果和限制。交付阶段不修改已审查业务代码，只在 docs/DELIVERY.md 写交付说明（启动方式、已验证结果和限制）；需要修改时给出 changes_requested；缺少输入、认证或权限时才用 BLOCKED。",
         "kind": "deliver",
+        "deliverables": [
+          "docs/DELIVERY.md"
+        ],
         "acceptance": [
           "交付物可按交接中的说明运行或查看，并列出通过项与限制"
         ]
@@ -236,7 +245,7 @@
         "tool": "claude",
         "model": "auto",
         "effort": "",
-        "prompt": "实现命令行工具、README 和 unittest；覆盖空文件、中文、末尾换行与异常路径。实际运行测试，记录输出和真实 diff。",
+        "prompt": "实现命令行工具、README 和 unittest；覆盖空文件、中文、末尾换行与异常路径。实际运行测试，记录实际输出。",
         "kind": "implement",
         "acceptance": [
           "改动满足本次目标，并在交接中给出实际执行的验证命令与结果"
@@ -283,7 +292,7 @@
         "tool": "claude",
         "model": "auto",
         "effort": "",
-        "prompt": "根据计划用标准库实现 API，提供可启动与关闭的服务接口。使用 node:test 实际验证正常请求、错误响应和请求大小限制，保存真实 diff 与运行输出。",
+        "prompt": "根据计划用标准库实现 API，提供可启动与关闭的服务接口。使用 node:test 实际验证正常请求、错误响应和请求大小限制，记录运行输出。",
         "kind": "implement",
         "acceptance": [
           "改动满足本次目标，并在交接中给出实际执行的验证命令与结果"
@@ -327,7 +336,7 @@
         "tool": "claude",
         "model": "auto",
         "effort": "",
-        "prompt": "按项目计划与接口契约实现功能，按锁文件准备依赖，执行已有构建、检查和测试脚本，保存真实 diff 与验证结果。",
+        "prompt": "按项目计划与接口契约实现功能，按锁文件准备依赖，执行已有构建、检查和测试脚本，保存 与验证结果。",
         "kind": "implement",
         "acceptance": [
           "改动满足本次目标，并在交接中给出实际执行的验证命令与结果"
@@ -386,7 +395,7 @@
         "tool": "claude",
         "model": "auto",
         "effort": "",
-        "prompt": "依据复现证据实现最小修复，添加必要回归测试，运行并保存结果与真实 diff。",
+        "prompt": "依据复现证据实现最小修复，添加必要回归测试，运行并保存实际结果。",
         "kind": "implement",
         "acceptance": [
           "改动满足本次目标，并在交接中给出实际执行的验证命令与结果"

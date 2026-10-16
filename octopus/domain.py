@@ -168,8 +168,8 @@ def awaits_confirmation(snapshot, task_id):
     first — its plan task and a replan task; a given plan's task that happens to be named ``plan`` waits like any other."""
     if snapshot.get("admission") != "confirm" or snapshot.get("confirmed"):
         return False
-    planning = task_id == "plan" and (snapshot.get("planning") or {}).get("mode") == "agent"
-    return not planning and task_id != (snapshot.get("replan") or {}).get("task")
+    from .planning import planner_task
+    return not planner_task(task_id, snapshot)
 
 
 def restart_budget(db, rid, who):

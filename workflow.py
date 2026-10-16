@@ -117,6 +117,9 @@ def assert_unique_name(name, workflow_id):
                 "请换一个名称，或编辑已有工作流。")
 
 
+CONTRACT_FIELDS = {"kind", "deliverables", "acceptance", "verify", "depends_on", "paths", "requested"}
+
+
 def validate(value):
     require(isinstance(value, dict), "Workflow 必须是 JSON 对象。")
     require(set(value) <= {"schema", "id", "name", "revision", "steps"},
@@ -126,6 +129,8 @@ def validate(value):
     require(isinstance(steps, list) and 1 <= len(steps) <= 8, "首版支持 1–8 个顺序步骤。")
     normalized = []
     for step in steps:
+        # The platform's templates also carry a task contract (kind, acceptance …, D46); this runtime does not use it.
+        step = {k: v for k, v in step.items() if k not in CONTRACT_FIELDS} if isinstance(step, dict) else step
         require(isinstance(step, dict) and set(step) <= {
             "id", "name", "tool", "model", "effort", "prompt"
         }, "步骤字段仅支持 id/name/tool/model/effort/prompt。")
@@ -445,7 +450,7 @@ def control_prompt(manifest):
 再运行 {command} save {shlex.quote(run + '/workflow-draft.json')} --expected-revision <当前版本>。
 保存成功后报告新版本，并明确只对下次运行生效。不得修改本次 workflow-run.json。
 用户无需自己写 Plan.md 或 Tasks；这些是工作者根据需求产生的输出。
-{development.COMMON}
+{development.LEGACY_COMMON}
 主协调者先确保环境与输入可用，再按任务职责推进；需要新增 Agent 时按原生调度契约安排并保留记录。
 权限请求保留在 KiroCrew App；遇到权限拒绝如实报告，不规避。
 看板：http://127.0.0.1:{PORT}/?run={manifest['id']}
@@ -549,7 +554,7 @@ def _next_step(run):
             f"你的任务：{journal.get('task_prompts', {}).get(step['id'], step['prompt'])}\n"
             f"实际项目目录（cwd）：{cwd}。交接目录：{run / 'workspace'}。\n"
             f"源码基线记录：{run / 'project.json'}（旧运行可能没有此文件）。\n"
-            f"{development.COMMON}\n{development.WORKER}\n"
+            f"{development.LEGACY_COMMON}\n{development.LEGACY_WORKER}\n"
             f"前序结果：\n{chr(10).join(history) if history else '无，这是第一步。'}\n"
             f"实际执行完成后，把交接说明写到 {output}，并在最终回答中报告文件和真实验证结果。"
             "交接写清实际源码版本、修改、测试命令与结果；尝试合理恢复后仍无法继续时明确写出 BLOCKED。"

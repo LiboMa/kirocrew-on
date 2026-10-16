@@ -46,25 +46,27 @@ def rules(count, depends):
    平台的门禁：test 任务新增的测试须在会话基线（实现之前的源码）上失败；后续任务若要修改此前任务交付的文件，
    须在自己的 paths 中列出这些文件。test 任务只写测试、不改实现，其 verify 不安装依赖（不写 npm install / pip install 等）；
    检查与测试生成的文件（覆盖率、报告、构建产物）应写入 .gitignore。审查与测试的结论：缺陷用 changes_requested，
-   blocked 只用于缺输入、认证或权限。
+   blocked 只用于缺输入、认证或权限。推送与 PR / MR 由平台在审查通过后发布，任务中不安排推送。
 5. 可运行的产出：交付物是可以运行的应用时，最后的交付任务须在项目根目录写 .octopus/preview.json
    （processes：命令、cwd、端口或 "$PORT"、哪个是入口；install：依赖安装；前后端分开时各写一个进程），
    并把「.octopus/preview.json 能按声明启动应用」列为该任务的验收项；用户据此下载到本机或远程预览。
 本任务只做分析与规划，不修改业务代码。"""
 
 
-def environment(models, tools, limitations, commands):
-    """The execution environment's facts, clipped so the planning prompt fits the Worker's 8000 characters (D46)."""
+def environment(models, tools, limitations, commands, compact=False):
+    """The execution environment's facts, clipped so the planning prompt fits the Worker's 8000 characters (D46);
+    ``compact`` for the replan, whose failure and decision take their own share."""
+    size = (450, 350, 300, 600) if compact else (700, 600, 400, 1200)
     return f"""## 此执行环境的 Coding 工具与已知限制
-{_clip(dumps(tools or {}), 700)}
+{_clip(dumps(tools or {}), size[0])}
 available 为 false 的工具不要选择（需求明确指定的除外，见下；reason 为原因）；没有列出时表示执行环境未报告。
 审查类任务（review）使用与被审查代码不同的工具。按任务性质与这些事实选择工具，并在交接文件中说明选择依据。
-已知限制：{_clip(dumps(limitations or []), 600)}
+已知限制：{_clip(dumps(limitations or []), size[1])}
 {REQUESTED}
-{_clip(commands_line(commands), 400)}
+{_clip(commands_line(commands), size[2])}
 
 ## 此执行环境公布的模型
-{_clip(dumps(models or {}), 1200)}
+{_clip(dumps(models or {}), size[3])}
 不在上面列表中的具体模型一律写 model=auto（需求明确指定的除外，见上）。"""
 
 
@@ -177,6 +179,13 @@ def pending(snapshot, task_id=PLAN_ID):
     return planning.get("mode") == "agent" and not planning.get("applied")
 
 
+def planner_task(task_id, snapshot):
+    """Whether the task is KiroCrew's own planner in this Session (D44, D46): the agent-planned Session's plan task or the
+    Coordinator's replan task — never a given plan's or a template's step that happens to be named ``plan``."""
+    return (task_id == PLAN_ID and (snapshot.get("planning") or {}).get("mode") == "agent") or \
+        task_id == (snapshot.get("replan") or {}).get("task")
+
+
 def planning_task(task_id, snapshot=None):
     """The KiroCrew planning tasks: the first plan, and the Coordinator's replan as the Session's snapshot names it (D41).
     They change no business code: no candidate, no gates; a replan never replaces them."""
@@ -201,15 +210,15 @@ def replan_step(task_id, replaced, failure, decision, models=None, tools=None, l
 {_clip(dumps(replaced), 900)}
 
 ## 失败与协调者的判断
-失败：{_clip(failure, 800)}
-协调者的原因：{_clip(decision.get("reason"), 500)}
-协调者的要求：{_clip(decision.get("instructions"), 1200)}
+失败：{_clip(failure, 600)}
+协调者的原因：{_clip(decision.get("reason"), 400)}
+协调者的要求：{_clip(decision.get("instructions"), 900)}
 
 ## 本任务的交付
 只规划剩余的工作，不重复已完成的任务。
 {rules("1–6", "depends_on 可列本计划中前面的任务或前序交接中已验收任务的 id；")}
 
-{environment(models, tools, limitations, commands)}
+{environment(models, tools, limitations, commands, compact=True)}
 
 最终回复必须包含且仅包含一个 JSON 代码块（字段：intent、summary、name、steps），每个任务的字段与写法如下例，prompt 必须写出：
 {dumps(EXAMPLE["steps"])}

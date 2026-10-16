@@ -153,7 +153,7 @@ class WorkspaceTests(unittest.TestCase):
         self.assertIn("--source", prompt)
         self.assertIn("已有授权", prompt)
         self.assertNotIn("当前 PoC 仅在指定工作目录", prompt)
-        design = prompts.intent_prompt("{}", "改进用户仓库", self.run / "design")
+        design = prompts.legacy_intent_prompt("{}", "改进用户仓库", self.run / "design")   # this runtime's own text (D46)
         self.assertIn("核实用户明确提供的仓库", design)
         self.assertIn("工作流设计者", design)
         self.assertNotIn("不要调用任何工具", design)
@@ -186,7 +186,8 @@ class AgentContractTests(unittest.TestCase):
                 if key not in {"prompt","description"}:
                     self.assertEqual(updated[key], value)
             self.assertIn("真实研发工作", updated["prompt"])
-            self.assertEqual(config.read_text(), '{"user_config":"preserve"}\n')
+            # the user's own config stays; the seed only adds KiroCrew's YOLO switch (crew_yolo, on by default)
+            self.assertEqual(json.loads(config.read_text()), {"user_config": "preserve", "agent": {"dangerously_skip_permissions": True}})
             self.assertEqual(session.read_text(), '{"history":"preserve"}\n')
             legacy = json.loads((kiro / "agents/poc-pipeline-code.json").read_text())
             self.assertIn("本地多 ACP PoC", legacy["prompt"])

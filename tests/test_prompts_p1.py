@@ -223,5 +223,113 @@ class TemplateTests(unittest.TestCase):
         self.assertIn("当前步骤：1/", prompt)
 
 
+class FixPassTests(unittest.TestCase):
+    def envelope(self, kind=None, stage=None):
+        from octopus.worker import envelope
+        return envelope("需求", None, {"kind": kind} if kind else {}, "任务", [], "/w/p", "/w/h.md", stage=stage)
+
+    def test_an_analysis_task_is_not_told_to_output_json(self):
+        self.assertNotIn("JSON", self.envelope("design"))
+        self.assertIn("只做分析，不修改业务代码", self.envelope("design"))
+        self.assertIn("工作流 JSON", self.envelope(stage="workflow_design"))
+
+    def test_a_template_step_named_plan_is_not_dispatched_as_planning(self):
+        from tests.test_confirmation import ConfirmationCase
+        class Case(ConfirmationCase):
+            def runTest(self):
+                pass
+        case = Case()
+        case.setUp()
+        self.addCleanup(case.tmp.cleanup)
+        rid = case.service.start(case.actor, {"request_id": "p1-chain-1", "input": "实现并验证", "source": {"type": "new"},
+                                              "worker_id": "worker", "template_id": "chain"})["id"]
+        case.tick(rid, 4)
+        plan = [b for b in case.bodies.values() if b["spec"]["id"] == "plan"]
+        self.assertTrue(plan)
+        self.assertNotIn("stage", plan[0])   # a template's own analysis step, not KiroCrew's planner
+
+    def test_diagnosis_and_planning_are_not_given_the_development_tail(self):
+        coordination = self.envelope(stage="coordination")
+        self.assertNotIn("BLOCKED", coordination)
+        self.assertNotIn("记录具体修改", coordination)
+        self.assertNotIn("记录具体修改", self.envelope(stage="planning"))
+
+    def test_the_designer_sees_which_tools_are_available(self):
+        tools = {"kiro": {"available": True}, "opencode": {"available": False, "reason": "已停用（K01）"}}
+        text = design_instructions("需求", {"steps": []}, "/w", {"kiro": ["auto"]}, tools)
+        self.assertIn("已停用（K01）", text)
+        self.assertIn("available 为 false 的工具不要选择", text)
+
+    def test_the_replan_fits_with_every_input_at_its_limit(self):
+        long = "很长" * 5000
+        spec = planning.replan_step("replan-1", [{"id": "t%d" % i, "name": "任务" * 40, "kind": "implement"} for i in range(12)], long,
+                                    {"reason": long, "instructions": long}, {"claude": ["m" * 60] * 60},
+                                    {t: {"available": True, "reason": long} for t in ("kiro", "claude", "codex", "opencode")},
+                                    [long] * 5, {"available": ["c" * 40] * 40, "missing": ["d" * 40] * 40})
+        steps([spec])
+
+    def test_the_plans_do_not_schedule_pushes(self):
+        for prompt in (first(), again()):
+            self.assertIn("不安排推送", prompt)
+
+    def test_the_planner_gets_a_planning_outcome_contract(self):
+        from pathlib import Path
+        from octopus.recovery import quality_instructions
+        text = quality_instructions(Path("/w/a"), {}, stage="planning")
+        self.assertIn("计划", text)
+        self.assertNotIn("发现必须修复的源码", text)
+
+    def test_the_session_observer_is_named_as_such_and_knows_where_changes_go(self):
+        from octopus.worker import OBSERVER_CONTEXT
+        self.assertIn("Owner 观察员", OBSERVER_CONTEXT)
+        self.assertNotIn("用户交互协调者", OBSERVER_CONTEXT)
+        self.assertIn("续作", OBSERVER_CONTEXT)
+
+    def test_template_steps_name_what_they_change(self):
+        import json
+        from octopus import intent
+        for template in json.loads(intent.LEGACY.read_text()):
+            for step in template["steps"]:
+                where = f"{template['id']}/{step['id']}"
+                if step["kind"] == "implement":
+                    self.assertNotRegex(step["prompt"], r"(保存|保留|记录)[^。；]*真实 diff", where)
+                if step["kind"] == "deliver" and "不修改已审查业务代码" in step["prompt"]:
+                    self.assertTrue(step.get("deliverables"), where)   # the change a delivery makes is named
+
+
+class RepairTargetTests(RepairTests):
+    def test_the_failed_task_rerun_after_an_upstream_rework_knows_why(self):
+        # code → test (fails) → the Coordinator sends code back: the test runs again knowing why it failed
+        case = self.case
+        case.failing = {("review", 1)}
+        rid = case.start(recovery={"enabled": True, "max_cycles": 2})
+        case.tick(rid, 60)
+        review = case.dispatched("review")
+        self.assertIn("recheck", review[1]["repair"])
+        self.assertEqual(review[1]["repair"]["failure"]["task"], "review")
+
+    def test_a_retried_review_is_told_to_review_again_not_to_repair(self):
+        case = self.case
+        case.decisions = [{"action": "retry", "target_task_id": "review", "reason": "审查未绑定候选", "instructions": "重新审查"}]
+        rid = case.start(recovery={"enabled": True, "max_cycles": 2})
+        case.tick(rid, 60)
+        review = case.dispatched("review")
+        self.assertNotIn("实施修复", review[1]["repair"]["instruction"])
+        self.assertIn("重新审查", review[1]["repair"]["instruction"])
+
+    def test_an_implement_task_rerun_but_not_targeted_gets_a_rerun_note(self):
+        from octopus import recovery
+        steps_ = [{"id": "base", "name": "底层", "tool": "claude", "prompt": "实现底层", "kind": "implement", "acceptance": ["可运行"]},
+                  {"id": "code", "name": "实现", "tool": "claude", "prompt": "实现", "kind": "implement", "acceptance": ["可运行"]},
+                  {"id": "review", "name": "审查", "tool": "codex", "prompt": "审查", "kind": "review", "acceptance": ["无阻断问题"]}]
+        case = self.case
+        case.decisions = [{"action": "rework", "target_task_id": "base", "reason": "底层缺陷", "instructions": "修底层"}]
+        rid = case.start(steps_, recovery={"enabled": True, "max_cycles": 2})
+        case.tick(rid, 80)
+        code = case.dispatched("code")
+        self.assertTrue(code[1]["repair"].get("rerun"))
+        self.assertNotIn("实施修复", code[1]["repair"]["instruction"])
+
+
 if __name__ == "__main__":
     unittest.main()
