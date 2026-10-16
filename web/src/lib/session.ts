@@ -12,7 +12,7 @@ export function canContinue(run: Run): boolean {
 
 /** Why continuing, diagnosing, reopening and reassigning are not offered (an archived Team, P3). */
 export function resumeReason(run: Run): string {
-  return resumable(run) ? "" : "Team 已归档：会话可查看与停止，不能续作、诊断、重新打开或重新分配 Worker。";
+  return resumable(run) ? "" : "Team 已归档：会话可查看与停止，不能续作、诊断、确认计划、重新打开或重新分配 Worker。";
 }
 
 export const RERUN_REASONS = { depends: "依赖重跑的任务", review: "审查 / 测试在改动后必须复验", pending: "尚未验收" } as const;

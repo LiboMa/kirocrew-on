@@ -4,7 +4,7 @@ import time
 
 from . import journal
 from .db import dumps, uid
-from .domain import TOOLS, steps, unserved
+from .domain import SETTLED, TOOLS, steps, unserved
 from .security import Error, require
 
 LIVE = {"pending", "dispatching", "dispatch_unknown", "running", "waiting_approval"}
@@ -256,7 +256,7 @@ def budget(db, run, now=None):
     settings = policy(snapshot.get("recovery"), legacy=True)
     since = snapshot.get("budget_since") or run["created"]
     if now is None:   # a Session that stopped stops counting: the time it ran, not the time since
-        settled = run["status"] in {"failed", "blocked", "completed", "stopped", "waiting_worker"} or run["lifecycle"] != "open"
+        settled = run["status"] in SETTLED or run["lifecycle"] != "open"
         now = run["updated"] if settled else time.time()
     cycles = sum(1 for row in db.execute("SELECT context FROM recoveries WHERE run_id=? AND created>=?", (run["id"], since))
                  if not json.loads(row["context"]).get("manual"))

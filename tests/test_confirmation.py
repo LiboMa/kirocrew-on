@@ -123,9 +123,57 @@ class ConfirmationTests(ConfirmationCase):
         rid = self.start(admission="confirm")
         run = self.tick(rid)
         self.service.operate(self.actor, rid, "continue", {"request_id": "confirm-continue-1", "expected_version": run["version"],
-                                                           "task_id": "code", "override": {"prompt": "实现（补充说明）"}})
-        self.assertEqual(self.tick(rid)["status"], "completed")
+                                                           "task_id": "code", "execution": {"prompt": "实现（补充说明）"}})
+        run = self.tick(rid)
+        self.assertEqual(run["status"], "completed")
         self.assertEqual(self.snapshot(rid)["confirmed"]["via"], "continue")
+        self.assertEqual(self.bodies[next(iter(self.bodies))]["spec"]["prompt"], "实现（补充说明）")   # the changed plan ran
+        self.assertIn("run.confirmed", [e["kind"] for e in self.service.events(self.actor, rid)])
+
+    def test_a_task_named_plan_in_a_given_plan_waits_too(self):
+        steps = [{"id": "plan", "name": "改代码", "tool": "claude", "prompt": "改代码", "kind": "deliver", "acceptance": ["完成"]}] + STEPS
+        rid = self.start(steps, admission="confirm")
+        run = self.tick(rid)
+        self.assertEqual(run["status"], "awaiting_confirmation")
+        self.assertEqual(self.dispatched(), [])   # only KiroCrew's own planning runs before the confirmation
+
+    def test_an_archived_teams_session_is_not_confirmed(self):
+        from octopus.security import create_user
+        with self.db.transaction() as db:
+            db.execute("INSERT INTO teams(id,name,created) VALUES('team-a','组',1)")
+            db.execute("INSERT INTO members(team_id,user_id,role) VALUES('team-a',?,'owner')", (self.actor["id"],))
+            db.execute("UPDATE workers SET owner_id=NULL, team_id='team-a'")
+        rid = self.start(admission="confirm", team_id="team-a")
+        self.tick(rid)
+        with self.db.transaction() as db:
+            db.execute("UPDATE teams SET archived=1 WHERE id='team-a'")
+        with self.assertRaises(Error) as caught:
+            self.confirm(rid)
+        self.assertEqual(caught.exception.code, "team_archived")
+
+    def test_waiting_for_confirmation_does_not_use_up_the_time_budget(self):
+        rid = self.start(admission="confirm")
+        self.tick(rid)
+        with self.db.transaction() as db:   # it has waited thirteen hours for the user
+            db.execute("UPDATE runs SET created=created-?, updated=updated-? WHERE id=?", (13 * 3600, 13 * 3600, rid))
+        self.assertLess(self.service.run(self.actor, rid)["recovery"]["budget"]["minutes"]["used"], 5)   # not counting while it waits
+        self.confirm(rid)
+        self.assertEqual(self.service.run(self.actor, rid)["recovery"]["budget"]["minutes"]["used"], 0)
+
+    def test_the_view_and_the_report_say_who_confirmed(self):
+        from octopus import report
+        rid = self.start(admission="confirm")
+        self.assertEqual(self.tick(rid)["admission"], "confirm")
+        self.confirm(rid)
+        run = self.tick(rid)
+        self.assertEqual(run["confirmed"]["by"], "owner")
+        self.assertIn("计划确认：owner", report.markdown(run))
+
+    def test_a_given_plan_is_not_said_to_be_planned(self):
+        rid = self.start(admission="confirm")
+        attention = self.tick(rid)["attention"]
+        self.assertNotIn("规划已完成", attention["detail"])
+        self.assertEqual(attention["task_id"], "code")
 
     def test_confirm_outside_the_wait_is_refused(self):
         rid = self.start(admission="confirm")

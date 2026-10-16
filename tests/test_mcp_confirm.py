@@ -27,6 +27,17 @@ class McpConfirmTests(unittest.TestCase):
         self.assertIn("得到用户明确同意", tool["description"])
         self.assertEqual(tool["inputSchema"]["required"], ["run_id", "request_id", "expected_version"])
 
+    def test_confirming_is_marked_like_answering_an_approval(self):
+        self.assertEqual(self.tool("octopus_confirm").get("annotations"), self.tool("octopus_approve")["annotations"])
+
+    def test_the_compact_status_shows_what_is_to_be_confirmed(self):
+        spec = {"name": "实现", "tool": "claude", "model": "auto", "acceptance": ["可运行"], "verify": ["npm test"]}
+        session = {"id": "run-1", "status": "awaiting_confirmation", "tasks": [{"id": "code", "status": "pending", "spec": spec, "attempts": []}]}
+        task = mcp.compact_status(session, [])["session"]["tasks"][0]
+        self.assertEqual((task["acceptance"], task["verify"]), (["可运行"], ["npm test"]))
+        session["status"] = "running"
+        self.assertNotIn("verify", mcp.compact_status(session, [])["session"]["tasks"][0])   # otherwise as small as before
+
     def test_a_session_can_be_started_to_wait_for_confirmation(self):
         schema = self.tool("octopus_start")["inputSchema"]["properties"]
         self.assertEqual(schema["admission"]["enum"], ["confirm", "auto"])

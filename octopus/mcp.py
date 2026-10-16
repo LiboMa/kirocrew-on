@@ -101,7 +101,8 @@ TOOLS = [
      "description": "确认一个「计划待确认」（awaiting_confirmation）的 Session 的计划并开始执行。调用前必须把任务、各自的工具与模型（及来源）、"
                     "验收项与检查命令展示给用户，并得到用户明确同意；要修改时改用 octopus_continue（修改后续作即视为确认）。",
      "inputSchema": object_schema({"run_id": STRING, "request_id": STRING, "expected_version": {"type": "integer"}},
-                                 ["run_id", "request_id", "expected_version"])},
+                                 ["run_id", "request_id", "expected_version"]),
+     "annotations": {"destructiveHint": True}},
     {"name": "octopus_continue", "description": "原 Session 修订并重跑 Task；保留 Workspace；可覆盖模型/Effort/工具与任务契约。"
                                                 "rerun 只列出受本次修改影响的后续任务（省略则重跑所选任务之后的全部任务）；"
                                                 "依赖重跑任务的任务与其后的审查 / 测试任务会自动一并重跑，其余沿用上一版结果。",
@@ -400,7 +401,10 @@ def compact_status(session, events):
     view["tasks"] = [{"id": task["id"], "name": task["spec"].get("name"), "status": task["status"],
                       "tool": task["spec"].get("tool"), "model": task["spec"].get("model"),
                       **({"mapping": task["mapping"]["label"]} if (task.get("mapping") or {}).get("label") else {}),
-                      "attempts": len(task.get("attempts") or []), "latest": latest(task.get("attempts"))}
+                      "attempts": len(task.get("attempts") or []), "latest": latest(task.get("attempts")),
+                      # what the user is to confirm (D44): each task's acceptance and checks, only while the plan waits
+                      **({key: task["spec"].get(key) or [] for key in ("acceptance", "verify")}
+                         if session.get("status") == "awaiting_confirmation" else {})}
                      for task in session.get("tasks", [])]
     recent = [{**event, "payload": {k: v for k, v in event["payload"].items() if k not in ("evidence", "context")}}
               for event in events[-10:]]

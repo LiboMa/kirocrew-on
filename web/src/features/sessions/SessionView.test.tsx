@@ -216,6 +216,12 @@ describe("session detail", () => {
     await waitFor(() => expect(calls.find((c) => c.path === "/v1/runs/run-a/confirm")?.body).toMatchObject({ expected_version: 4 }));
   });
 
+  test("an archived Team's waiting plan cannot be confirmed (D44)", async () => {
+    open({ ...blocked, status: "awaiting_confirmation", error: null, permissions: { operate: true, delete: true, resume: false },
+      attention: { title: "计划待确认", detail: "任务尚未开始。", action: "核对后确认开始" } } as Run);
+    expect(await screen.findByRole("button", { name: /确认并开始/ })).toBeDisabled();
+  });
+
   test("a Session that may not switch tools says so", async () => {
     open({ ...blocked, recovery: { ...blocked.recovery!, policy: { enabled: true, max_cycles: 2, switch_tools: false } } } as Run);
     expect(await screen.findByText("自动纠错已开启 · 最多 2 轮 · 不换工具")).toBeInTheDocument();

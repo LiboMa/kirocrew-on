@@ -146,12 +146,16 @@ def confirm_plan(db, rid, who, actor, via):
     snapshot = json.loads(db.execute("SELECT snapshot FROM runs WHERE id=?", (rid,)).fetchone()["snapshot"])
     snapshot["confirmed"] = {"by": actor["username"], "at": time.time(), "via": via}
     journal.change(db, "runs", rid, who, "run.confirmed", "已确认计划", quiet=("snapshot",), snapshot=dumps(snapshot))
+    journal.record(db, rid, "run.confirmed", who, "已确认计划", via=via, by=actor["username"])
 
 
 def awaits_confirmation(snapshot, task_id):
-    """Whether the Session must wait for its plan to be confirmed before this task (D44): planning tasks run before."""
-    from .planning import planning_task
-    return snapshot.get("admission") == "confirm" and not snapshot.get("confirmed") and not planning_task(task_id, snapshot)
+    """Whether the Session must wait for its plan to be confirmed before this task (D44). Only KiroCrew's own planning runs
+    first — its plan task and a replan task; a given plan's task that happens to be named ``plan`` waits like any other."""
+    if snapshot.get("admission") != "confirm" or snapshot.get("confirmed"):
+        return False
+    planning = task_id == "plan" and (snapshot.get("planning") or {}).get("mode") == "agent"
+    return not planning and task_id != (snapshot.get("replan") or {}).get("task")
 
 
 def restart_budget(db, rid, who):
@@ -1365,7 +1369,8 @@ class Service:
         value["permissions"] = run_permissions(db, actor, run)
         snapshot = json.loads(run["snapshot"])
         value.update({key: snapshot.get(key) for key in ("name", "workflow_name", "workflow_version",
-                                                       "selection", "match_mode", "match_reason", "purpose", "planning", "replan")})
+                                                       "selection", "match_mode", "match_reason", "purpose", "planning", "replan",
+                                                       "admission", "confirmed")})
         value["source"] = json.loads(value["source"])
         value["session_id"] = run["id"]
         creator = db.execute("SELECT username FROM users WHERE id=?", (run["owner_id"],)).fetchone()
@@ -1459,8 +1464,10 @@ class Service:
                     "action": "在会话页「待批准」中查看工具与命令后批准或拒绝；Coding Agent 可用 octopus_approvals 查看、"
                               "经用户同意后用 octopus_approve 答复。", "task_id": task["id"] if task else None}
         if run["status"] == "awaiting_confirmation":
-            return {"title": "计划待确认", "detail": run.get("error") or "规划已完成，任务尚未开始。",
-                    "action": "核对任务、工具与检查命令后确认开始；也可修改后续作或关闭。", "task_id": task["id"] if task else None}
+            planned = (run.get("planning") or {}).get("applied")
+            first = next((t for t in run["tasks"] if t["status"] == "pending"), None)
+            return {"title": "计划待确认", "detail": "规划已完成，任务尚未开始。" if planned else "任务尚未开始。",
+                    "action": "核对任务、工具与检查命令后确认开始；也可修改后续作或关闭。", "task_id": first["id"] if first else None}
         if run["status"] == "diagnosing":
             return {"title": "协调者正在诊断与安排修复", "detail": run["error"] or "正在读取失败证据，等待原生诊断结果。",
                     "action": "等待诊断结果；也可停止本 Session", "task_id": task["id"] if task else None}
@@ -1521,7 +1528,7 @@ class Service:
                 oversight = False
             except Error:
                 oversight = True   # allowed only as an elevated admin (A2): audited
-            if run["team_id"] and action in {"continue", "recover", "reopen", "assign-worker"}:
+            if run["team_id"] and action in {"continue", "recover", "reopen", "assign-worker", "confirm"}:
                 active_team(db, run["team_id"])   # an archived Team's Sessions stay readable and stoppable (P3)
             require(action not in {"continue", "recover"} or json.loads(run["snapshot"]).get("purpose") != "workflow_design",
                     "工作流建议请按新需求重新生成；原建议保留作为证据", 409, "invalid_state")
@@ -1623,6 +1630,7 @@ class Service:
                     require(run["status"] == "awaiting_confirmation" and run["lifecycle"] == "open",
                             "此 Session 不在等待确认", 409, "invalid_state")
                     confirm_plan(db, rid, who, actor, "confirm")
+                    restart_budget(db, rid, who)   # the user's word allows the automatic work from here (D42)
                     fields.update(desired="active", status="ready", error=None)
                 elif action == "reopen":
                     require(run["lifecycle"] == "closed", "只有已关闭的 Session 可重新打开", 409, "invalid_state")
@@ -1638,7 +1646,7 @@ class Service:
                     audit(db, actor, "run." + action, "run", rid, {"version": version})
                 return {"id": rid, "session_id": rid, "version": version, "command": action, "status": "accepted"}
             result = self._command(db, actor, action, rid, body, execute)
-        if action in {"continue", "recover", "close", "delete"}:
+        if action in {"continue", "recover", "close", "delete", "confirm"}:
             # The agents work in the same project again, or the Session ends: its remote preview stops (D36 §5.1).
             self._stop_app(rid, "session")
         return result
