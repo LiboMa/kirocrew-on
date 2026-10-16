@@ -161,7 +161,7 @@ M4（共享与组织）、M5（仓库闭环）在 MVP 之后分别立项，各�
 
 - [ ] 在 Claude Code 中用自然语言提交需求，后端登记 Request 并返回自动生成的 Pipeline、映射与门禁。
 - [x] Prompt 中指定的映射被采用并标注来源；不可用的指定给出原因，不静默替换。（D45，§14.23）
-- [ ] 确认后在 EC2 上对一个获授权的已有小型仓库完成：clone → Feature 分支 → 编码 → 候选 commit → 门禁 → 独立审查 → 返工 → 复审。
+- [x] 确认后在 EC2 上对一个获授权的已有小型仓库完成：clone → Feature 分支 → 编码 → 候选 commit → 门禁 → 独立审查 → 返工 → 复审。（§14.24）
 - [ ] 故障注入（测试失败、工具空结果、Gateway 重启、派发回执丢失、Attempt 卡住）在预算内自动恢复并完成；预算耗尽时给出原因与操作。
 - [x] 换工具与重规划在记录和报告中可见。（D38 §14.14、D41 §14.18；映射来源 §14.17）
 - [ ] 审查通过后远端出现对应 Feature 分支，commit 与已验证候选一致；回执丢失与远端变化不产生重复或覆盖。
@@ -280,7 +280,7 @@ M4（共享与组织）、M5（仓库闭环）在 MVP 之后分别立项，各�
 |---|---|---|---|
 | 1 | Request | ○ | Session 的 `request_id` 提供幂等登记；Request 表、来源客户端与仓库字段、与 Session 的关联未建 |
 | 2 | Pipeline 生成 | ◐ EC2 | 已有：Kiro Agent 规划（D26：意图、补全、1–7 个任务与 Agent 映射，追加到同一 Session）、`plan=match` 规则匹配、工作流文档（JSON / YAML / Markdown）解析与规范化。剩余：schema 2、规划阶段的只读源码检查 |
-| 3 | 门禁目录 | ◐ EC2 | D37 第 1 期（分支 `feat/m11-gates`，✅ EC2 2026-10-14，见 §14.13）：命名门禁 `native_completed`、`identity_match`、`handoff_present`、`outcome_valid`、`outcome_pass`、`diff_present`、`no_secrets`、`checks_pass`（平台运行 `verify`）、`review_bound`，逐条入库并在控制台与 MCP 展示；发布只推送已验证候选（`candidate_unchanged`）。第 3 期（本机完成，见 §14.13）：`artifacts_locked`、`tests_fail_on_baseline`。剩余：EC2 验收第 3 期 |
+| 3 | 门禁目录 | ◐ EC2 | D37 第 1 期（分支 `feat/m11-gates`，✅ EC2 2026-10-14，见 §14.13）：命名门禁 `native_completed`、`identity_match`、`handoff_present`、`outcome_valid`、`outcome_pass`、`diff_present`、`no_secrets`、`checks_pass`（平台运行 `verify`）、`review_bound`，逐条入库并在控制台与 MCP 展示；发布只推送已验证候选（`candidate_unchanged`）。第 3 期（✅ EC2 2026-10-15，见 §14.13）：`artifacts_locked`、`tests_fail_on_baseline` |
 | 4 | 映射策略 | ◐ | 已有：Prompt / 工作流显式指定；D38 第 1 期（分支 `feat/m11-gates`，见 §14.14）：工具层失败由 KiroCrew 协调者推荐换用的工具与模型（`switch_tool`），平台按执行环境核对并记录，规划时 Kiro 看到各工具是否可用；不内置回退链（原 OpenCode→Claude 的代码改派已去掉）。映射来源（本机完成）：每个任务写明工具与模型来自提交的 steps、工作流（名称与版本）、模板 / 规则匹配的模板、导入的文档、KiroCrew 规划、续作时的用户修改或协调者换用，控制台、MCP 与报告可见。需求中指定（D45，✅ EC2 2026-10-16，见 §14.23）：规划者标注、平台照用、不可用时如实拒绝不替换。剩余：个人 / Team 偏好 |
 | 5 | 准入 | ◐ | 计划确认：D44（✅ EC2 2026-10-16，见 §14.22：`admission: confirm` 停在「计划待确认」，确认或续作后执行）。剩余：按仓库范围的自动准入与策略快照 |
 | 6 | 恢复阶梯 | ◐ EC2 | 已有：Worker / Gateway 不可用退避（M1）、协调者诊断（重试、退回上游返工、复审、换工具（D38））与轮数上限。D39（本机完成，见 §14.15）：看门狗停止没有进展或运行超时的原生任务、自动重试一次、再交给诊断。重规划：D41（✅ EC2 2026-10-16，见 §14.18）。预算：D42（✅ EC2 2026-10-16，见 §14.19：轮数、自动重试次数与时长，从续作起重新计算）。等待与自动恢复：D43（✅ EC2 2026-10-16，见 §14.20）。剩余：预算按个人 / Team 配置（设计 §8.1，随 `policies` 表） |
@@ -493,6 +493,12 @@ Vite 客户端模块可用；打开链接第二次使用被拒、无 Cookie 时�
 管理员工具得结构化 403；以 admin Token 列出三个管理员工具，用户与执行环境（personal、w1）可列出，变更记录按人筛选，
 不存在的用户名得结构化 404。验收后两枚 Token 已吊销、`e2e-member` 停用。独立审查 3 个 Important 与 4 个上调项修复后重跑 15/15；
 离线 Python 443、控制台 108、旧版回归 92。
+
+### 14.24 M2 验收 3：已有仓库的完整闭环
+
+✅ EC2（2026-10-16，0668bc8，`run-b35a39c4…`，公开测试仓库 `LiboMa/bedrock-claude-call`，只读、未推送）：`admission: "confirm"` →
+克隆后停在「计划待确认」→ API 确认 → 实现任务在会话分支留下候选 `1d465ca` → 独立审查（kiro）以缺少日期为由 `changes_requested`
+（`outcome_pass` 门禁失败）→ 协调者安排返工 → 新候选 `56512a6` → 复审通过且绑定 `56512a6`（`review_bound`）→ 会话的已验证候选为 `56512a6`，完成。
 
 ### 14.23 映射策略：需求中指定的工具与模型（D45，M2 验收 2）
 
