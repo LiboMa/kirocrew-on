@@ -5,6 +5,27 @@
 >
 > 本文盘点现状、列出问题、提出角色模型与分期；第 6 节为负责人的决定。
 
+## 0．以 KiroCrew 为基准（负责人 2026-10-16）
+
+> 「设计时一定要考虑到后方是 KiroCrew，它本身就有很强的 Knowledge 功能；以 KiroCrew 为基准设计，能以接口复用的方式整合；GitHub、GitLab 同样如此。」
+>
+> 依据：KiroCrew 0.10.0（`57df464`，EC2 部署版本）源码调研（路由 1099 条、`kirocrew-core` MCP 工具 86 个）。只在 KiroCrew 没有的地方由平台补齐。
+
+| 领域 | KiroCrew 已有 | 平台复用方式 | 平台仍需补的 |
+|---|---|---|---|
+| 记忆 / 经验 | 成员（Crew Member）各自的记忆库（`POST /api/agents` 新建成员即得独立空库）；lessons（`rule`、`repo_scope` 按仓库路径机械过滤、`applies`）；spawn 的 `include_memory / lessons / project` 与 `crew=<member>`（以某成员的记忆运行模板）；`memory_mode` persistent / incognito / temporary | **每个空间一个成员**：父会话以该成员创建，任务 spawn 带 `crew=`，`include_lessons / project` 开启，`include_memory` 按角色（审查、Challenge、Evaluator 关闭） | 空间 ↔ 成员的对应与生命周期；共享环境上「路由而非保密」的提示 |
+| Knowledge Agent | `POST /api/lessons`（经筛查、去重、矛盾清理后在之后的 spawn 中按 `repo_scope` 自动注入）；`learn_*`、`memory_recall` MCP；Knowledge Library（`knowledge.db`，按需检索，无空间隔离、每块一次 LLM 抽取） | 会话结束时由 Knowledge 角色把决策、约定、坑写成 lessons（`repo_scope` = 仓库），**存于 KiroCrew**；Knowledge Library 只在专属环境用于运行报告与决策 | 写入哪些、何时写、谁审核（平台记录写入了什么） |
+| 角色卡片 | skills（`skill://` 挂到 Agent 模板）；`select_crew` / `route_crew`；`llm-council`（多厂商对抗、`include_memory=false`）、`security-conductor`（审计 → 独立验证 → 人同意后修复）等内置模式 | 每个角色一份 SKILL.md，挂到 `poc-*` 模板；规划者从 skill 目录与可用工具推荐，不内置对照表 | 角色 → `kind` / 门禁 / 输出契约的映射 |
+| Evaluator | 工作账本（work ledger：执行者报告、指挥者写判定，执行者不能写判定）；`accept_eval`（pass / fail / pending / refused / error，不运行模型写的命令）；`eval/`、`decisions/` 是 KiroCrew 自身的基准与小判定，不适合 | 平台 `evaluated` 门禁借用这些设计：判定与执行分离、判定集合、不运行模型写的命令、换用不同工具且关闭记忆 | 门禁本身（平台的 Attempt / 证据 / 门禁记录） |
+| 恢复 | 基础设施级重试梯（工具 → 后端 → ACP → gatewayd）；重启后孤儿任务分类；spawn 的 `continue` / `steer` / `retry` / `resume` | 返工与纠错用 `POST /api/spawn/{id}/continue`（保留上下文），中途纠正用 `steer`；`dispatch_unknown` 用孤儿分类判定 | 任务级诊断与决定（已有，D38–D43） |
+| 用量与时间线 | `/api/usage/turns?slot=subagent:<id>`（模型、token、费用、上下文）；crew-log 投影（工具、批准、子任务时间线） | 每个 Attempt 的费用与工具时间线进报告与预算 | 汇总与展示 |
+| GitHub / GitLab | Connections 是各厂商的远程 MCP（Agent 工具），授权存在每台机器的 kiro-cli 缓存、单一所有者；`gh` / `glab` 用边界 HOME 的登录；PR 侧栏只读与评论、**不能建 PR**；webhook 不兼容 GitHub / GitLab | **凭证与发布留在平台**（按用户 / Team 授权、审计、只推已验证候选，Connector 设计 C7 结论不变）；专属环境上复用 PR / CI 状态读取（`/api/source/pull-request/checks`、`monitor_watch`）给观察员与 Evaluator | — |
+
+**调研中发现的现有问题（安全底线，先修，见 P0）**：
+- 平台写入的 `"memory": {"enabled": false}` 在 0.10.0 中**不存在、不起作用**，全局记忆实际开启；父会话以模板身份、持久模式在**全局记忆库**上运行——共享环境上各空间的协调者会话互相写入、读取记忆。
+- 协调者模板的 `availableAgents` 写在顶层，KiroCrew 只读 `toolsSettings.subagent.availableAgents`（顶层视为全部允许）；移动时须包含 `poc-diagnose`。
+- 协调者挂载了完整的 `@kirocrew-core`（含 `monitor_*` / `autonudge_*`，可能自行追加回合）；`adaptive_concurrency` 可能在主机压力下把并发降到 1；`solo_*` 参数已被忽略。
+
 ## 1．现状：一个 Attempt 收到什么
 
 | 层 | 位置 | 内容 | 说明 |
@@ -89,16 +110,19 @@
 | 期 | 内容 | 主要改动 | 验收 |
 |---|---|---|---|
 | **P1 一致性与正确性**（不改行为模型） | 第 2 节 A 全部、B 9–11 与 14–15、C 16–19、D 20–22 | `prompts.py`、`planning.py`、`worker.py` 外壳与固定结尾、`recovery.feedback`（只给目标任务、摘要化）、模板补 `kind` / 验收 / 检查命令并统一 BLOCKED 用法 | 本机：每类任务的 `instructions.md` 快照测试（长度上限、无矛盾词）；EC2：规划 + 实现 + 审查 + 返工各一次 |
-| **P2 角色卡片** | `role` 字段与 8 张角色卡片；规划提示介绍角色与审查独立性；控制台 / MCP 显示角色 | `domain.steps`、`planning`、`worker`、控制台任务行 | 规划会话中出现安全测试或集成测试角色并按卡片交付 |
-| **P3 Challenge / Evaluator 闭环** | Challenge 的挑战清单交给 Evaluator；Evaluator 的逐项判定取代实现者自报，作为会话通过的依据 | 新门禁 `evaluated`、结果契约、报告的验收表 | 一个实现有隐患的会话：Challenge 找到问题 → Evaluator 判 fail → 返工 → 通过 |
-| **P4 Knowledge** | 会话结束时更新项目知识；规划者读取 | `.octopus/knowledge.md` 约定或 KiroCrew 记忆（待成员记忆分隔） | 第二个会话的规划引用第一个会话沉淀的约定 |
+| **P0 KiroCrew 配置与隔离**（安全底线） | 记忆默认值改为 0.10.0 实际的键（或父会话 `memory_mode: incognito`，直到每空间成员就绪）；`availableAgents` 移到 `toolsSettings.subagent`（含 `poc-diagnose`）；协调者不挂 `monitor_*` / `autonudge_*`；并发模式固定；去掉 `solo_*` | `composition/templates.py`、`worker.py` 父会话创建 | EC2：先核实父会话是否写入全局记忆；修后各空间协调者不再读写全局记忆 |
+| **P2 角色卡片（KiroCrew skills）** | `role` 字段；8 个角色各一份 SKILL.md，以 `skill://` 挂到 `poc-*` 模板；规划提示介绍角色与审查独立性；控制台 / MCP 显示角色 | `composition/`（skills 种入）、`domain.steps`、`planning`、`worker` | 规划会话中出现安全测试或集成测试角色并按其 skill 交付 |
+| **P3 Challenge / Evaluator 闭环** | Challenge 的挑战清单交给 Evaluator；Evaluator（不同工具、`include_memory` 关闭）的逐项判定取代实现者自报；借用 KiroCrew 工作账本 / `accept_eval` 的判定集合与「不运行模型写的命令」 | 新门禁 `evaluated`、结果契约、报告的验收表 | 一个实现有隐患的会话：Challenge 找到问题 → Evaluator 判 fail → 返工 → 通过 |
+| **P4 Knowledge（KiroCrew 成员记忆与 lessons）** | 每个空间一个 Crew Member；父会话与任务 spawn 用该成员（`crew=`）；`include_lessons / project` 开启、`include_memory` 按角色；会话结束时 Knowledge 角色把决策与约定写成 lessons（`POST /api/lessons`，`repo_scope` = 仓库） | `worker.py`（成员创建、spawn 参数）、新的 Knowledge 角色 skill；`tests/native` 合约测试 | 第二个会话的任务自动带上第一个会话沉淀的 lessons；另一空间看不到 |
+| **P5 保留上下文的返工** | 返工 / 纠错的 Attempt 用 `POST /api/spawn/{id}/continue`，中途纠正用 `steer` | `worker.py` 派发、Attempt 与原生 ID 的对应 | 返工的 Agent 能引用上一轮自己的工作 |
+| **P6 用量与时间线** | 每个 Attempt 的费用、token 与工具时间线进入报告与预算 | `worker.py` `/inspect`、`report.py` | 报告显示每个任务的费用与工具时间线 |
 
 ## 6．负责人决定（2026-10-16）
 
 1. **新增 `role` 字段**：`role` 决定角色卡片与输出契约，`kind` 继续决定门禁；角色由 KiroCrew 规划者按事实推荐工具，平台不内置对照表。
 2. **以 Evaluator 为准**：Evaluator（作者以外的工具）的逐项判定取代实现者自报的 pass，作为会话通过的依据；不通过即进入返工（P3）。
-3. **Knowledge 存放在项目内 `.octopus/knowledge.md`**（随仓库、可审查）。
-4. **先做 P1**（只修矛盾与缺陷、不改角色模型），再做 P2–P4。
+3. ~~Knowledge 存放在项目内 `.octopus/knowledge.md`~~ → **改为以 KiroCrew 为基准**（负责人 2026-10-16 修正）：知识存于 KiroCrew 的成员记忆与 lessons，平台只负责空间 ↔ 成员的对应、写入时机与记录（P4）。
+4. **先做 P1**（只修矛盾与缺陷、不改角色模型）——已完成；接着 P0（安全底线），再 P2–P6。
 
 ## 附录 A：今天已有的「角色」痕迹
 
