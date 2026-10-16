@@ -9,6 +9,10 @@ LEGACY_COMMON = ("这是用户授权的本地多 ACP PoC。只操作明确指定
                  "不读取凭据，不联网安装依赖，不发布、不提交。报告实际执行结果，不编造。")
 
 
+MONITORS = ("@kirocrew-core/monitor_watch", "@kirocrew-core/monitor_start", "@kirocrew-core/monitor_update",
+            "@kirocrew-core/monitor_inspect", "@kirocrew-core/monitor_stop")
+
+
 def agent_prompt(name):
     """A template's system prompt (D46): the parent Session's Owner observer, the platform Coordinator's diagnosis agent,
     or the executor every Coding tool runs a task as."""
@@ -32,9 +36,10 @@ def seed(*, crew_home, kiro_home, allowed_roots, port, legacy_pipeline, yolo=Tru
             "session_sharing": False, "max_subagents": 3, "log_level": "INFO",
             "subagent_cwd_allowed_roots": [str(root) for root in allowed_roots],
             "subagent_result_ttl_secs": 86400,
+            # D46 P0: max_subagents is the cap — the adaptive controller would otherwise lower it under host pressure
+            "adaptive_concurrency_mode": "fixed",
         },
         "session": {"pool_size": 0},
-        "memory": {"enabled": False},
         "dashboard": {"host": "127.0.0.1", "port": port, "onboarded": True},
         "workspaces": {"default": {"path": str(allowed_roots[0])}},
         "default_workspace": "default",
@@ -69,9 +74,12 @@ def seed(*, crew_home, kiro_home, allowed_roots, port, legacy_pipeline, yolo=Tru
         if name == "poc-diagnose":
             spec["description"] = "Octopus diagnosis / Kiro CLI worker (no delegation)"
         if coordinator:
-            spec["availableAgents"] = (
+            # Where KiroCrew 0.10.0 reads the spawn allowlist (a top-level key is "allow all"); the platform dispatches
+            # every task and the diagnosis under this parent, so they are all listed (D46 P0).
+            spec["toolsSettings"] = {"subagent": {"availableAgents": (
                 [n for n in LEGACY_BACKENDS if n != name] if name == "poc-pipeline-coordinator"
-                else ["poc-kiro", "poc-claude", "poc-codex", "poc-opencode"])
+                else ["poc-kiro", "poc-claude", "poc-codex", "poc-opencode", "poc-diagnose"])}}
+            spec["excludedTools"] = sorted(MONITORS)   # the observer does not arm loops that add turns of their own
         if name.startswith("poc-pipeline-"):
             from pipeline_spec import COORDINATOR_PROMPT, WORKER_PROMPTS
             spec["description"] = f"App PoC / {backend or 'Kiro CLI'}" + (" coordinator" if coordinator else " worker")
@@ -80,7 +88,14 @@ def seed(*, crew_home, kiro_home, allowed_roots, port, legacy_pipeline, yolo=Tru
         if agent_path.exists() and not name.startswith("poc-pipeline-"):
             # Refresh the development contract without resetting user skills, MCP, models or permissions.
             previous = json.loads(agent_path.read_text())
-            spec = {**spec, **previous, "prompt": spec["prompt"], "description": spec["description"]}
+            previous.pop("availableAgents", None)   # the platform's own earlier key, which KiroCrew never read (D46 P0)
+            merged = {**spec, **previous, "prompt": spec["prompt"], "description": spec["description"]}
+            if coordinator:   # the platform's allowlist and exclusions hold; the user's other tool settings stay
+                settings = dict(previous.get("toolsSettings") or {})
+                settings["subagent"] = {**(settings.get("subagent") or {}), **spec["toolsSettings"]["subagent"]}
+                merged["toolsSettings"] = settings
+                merged["excludedTools"] = sorted(set(previous.get("excludedTools") or []) | set(spec["excludedTools"]))
+            spec = merged
         agent_path.write_text(json.dumps(spec, ensure_ascii=False, indent=2) + "\n")
         written.append(agent_path)
     return written

@@ -371,6 +371,16 @@ CloudFront 只使用 us-east-1 的证书）：分发加上别名与证书（SNI�
 - **旧 Worker**（不支持停止单个任务）：不行动，任务继续，避免两个 Agent 同时修改同一工作区。停止失败时一分钟后再试，同样不重试。
 - 重试在被停止任务留下的工作区上开始（未提交的部分改动仍在）：与 D34 的自动重试相同；D37 的候选按任务起点计算改动。
 
+### KiroCrew 配置与隔离（D46 P0，以 KiroCrew 0.10.0 为准）
+
+- **记忆**：0.10.0 没有 `memory.enabled`（此前写入的该键不起作用，边界的全局记忆一直开着）。平台新建的父会话以 `memory_mode: "incognito"` 运行，
+  不读不写边界的全局记忆——共享环境上各空间的协调者会话不再经全局记忆互通；之前的会话保持原样，全局记忆中已有的历史不自动清除（需要时由管理员处理）。
+  每个空间使用自己的 KiroCrew 成员记忆与 lessons 在 P4 进行。不要改 `memory.persistence_enabled`：它会同时关掉 lessons。
+- **派发白名单**：协调者模板的 `toolsSettings.subagent.availableAgents`（KiroCrew 读的位置；此前写在顶层，等于全部允许）列出平台派发的
+  `poc-kiro`、`poc-claude`、`poc-codex`、`poc-opencode`、`poc-diagnose`；种入时迁移旧位置，用户的其他工具设置保留。
+- **协调者**排除 `@kirocrew-core/monitor_*`（不自行布置监视循环、追加回合）。新边界的 `agent.adaptive_concurrency_mode` 为 `fixed`（并发上限即 `max_subagents`）。
+- 不再发送 KiroCrew 已忽略的 `solo_reason` / `solo_details`。
+
 ### Agent 提示（D46 P1）
 
 - 系统提示：所有 Coding 工具执行任务时为「研发执行者」；父会话的 Agent 为「Owner 观察员」（解释进展，不派发、不改源码）；

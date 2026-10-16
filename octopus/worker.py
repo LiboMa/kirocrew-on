@@ -723,7 +723,10 @@ class Worker:
                     if exc.status != 404:
                         raise
                     present = self.native("/api/chat/slots", {
-                        "name": slot, "agent": "poc-coordinator", "agent_kind": "template", "model": "auto"})
+                        "name": slot, "agent": "poc-coordinator", "agent_kind": "template", "model": "auto",
+                        # D46 P0: neither reads nor writes the boundary's global memory, which a shared environment's
+                        # spaces would otherwise share (until each space has its own KiroCrew member, P4)
+                        "memory_mode": "incognito"})
                     require(present.get("key", present.get("slot")) == slot, "原生父 Session 身份不一致")
                 self.native("/api/chat/slots/" + slot + "/context", {
                     "content": OBSERVER_CONTEXT,
@@ -859,8 +862,6 @@ class Worker:
                     "model": spec["model"], "reasoning_effort": spec["effort"],
                     "cwd": str(workspace.project_dir(run)), "keep": True, "include_memory": False,
                     "include_lessons": False, "include_project": False,
-                    "solo_reason": "user_requested",
-                    "solo_details": "用户通过 Octopus API 选择此任务、工具与执行配置。",
                     "silent": True}
                 if self.approval_mode == "auto":
                     # Owner-authenticated request for native per-spawn auto approval (D14, K19).
