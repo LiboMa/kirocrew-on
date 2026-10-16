@@ -52,17 +52,20 @@ def strings(value, field, items, chars):
     return result
 
 
-def requested(value):
-    """A task's tool / model as the requirement names it (D45): the planner marks it, the platform runs it as asked."""
+def requested(value, tool):
+    """A task's tool / model as the requirement names it (D45): the planner marks it, the platform runs it as asked — so it
+    names the task's own tool."""
     ok = isinstance(value, dict) and value and set(value) <= {"tool", "model", "quote"} and ("tool" in value or "model" in value) \
-        and value.get("tool", "claude") in TOOLS and all(isinstance(value.get(k, "x"), str) and value.get(k, "x").strip()
-                                                         and len(value.get(k, "x")) <= 200 for k in ("model", "quote"))
-    require(ok, "requested 须为 {tool, model, quote}，至少指定 tool 或 model")
+        and value.get("tool", tool) == tool and all(isinstance(value.get(k, "x"), str) and value.get(k, "x").strip()
+                                                    and len(value.get(k, "x")) <= 200 for k in ("model", "quote"))
+    require(ok, "requested 须为 {tool, model, quote}，至少指定 tool 或 model，且 tool 与任务的工具相同")
     return {k: value[k].strip() for k in ("tool", "model", "quote") if k in value}
 
 
-def steps(value, known=()):
-    """Validated tasks; ``known`` are the ids of tasks before ``value`` (a continued task depends on them)."""
+def steps(value, known=(), planned=False):
+    """Validated tasks; ``known`` are the ids of tasks before ``value`` (a continued task depends on them). ``planned``: the
+    KiroCrew planner's tasks (or a continue of one), the only ones that may carry ``requested`` (D45) — anywhere else it is
+    dropped, so a saved workflow or a given plan never claims an old requirement's choice."""
     require(isinstance(value, list) and 1 <= len(value) <= 8, "流程须包含 1–8 个顺序任务")
     seen, earlier, result = set(), set(known), []
     for step in value:
@@ -85,8 +88,8 @@ def steps(value, known=()):
         for field, (items, chars) in LIMITS.items():
             if field in step:
                 item[field] = strings(step[field], field, items, chars)
-        if "requested" in step:   # the tool / model the requirement names for this task (D45)
-            item["requested"] = requested(step["requested"])
+        if "requested" in step and planned:   # the tool / model the requirement names for this task (D45)
+            item["requested"] = requested(step["requested"], tool)
         # Only earlier tasks: dependencies follow the order the Engine runs them in.
         require(all(dep in (seen | earlier) - {sid} for dep in item.get("depends_on", [])),
                 f"任务「{item['name']}」的 depends_on 只能指向前序任务")
@@ -277,7 +280,8 @@ def mapping(snapshot, task, evidence=None):
         return {"source": "continue", "label": "续作时由用户修改"}
     if spec.get("requested"):   # D45: what the requirement named, as the planner marked it
         quote = spec["requested"].get("quote") or ""
-        return {"source": "requested", "label": f"需求中指定：「{quote if len(quote) <= 30 else quote[:30] + '…'}」"}
+        return {"source": "requested", "label": f"需求中指定：「{quote if len(quote) <= 30 else quote[:30] + '…'}」" if quote
+                else "需求中指定"}
     planned, replan = snapshot.get("planning") or {}, snapshot.get("replan") or {}
     if task["id"] == replan.get("task"):
         return {"source": "platform", "label": "平台：重新规划（Kiro）"}
@@ -1582,7 +1586,7 @@ class Service:
                     # D45: the user's own new tool or model for the task takes the place of what the requirement named
                     changed = any(key in override and override[key] != before.get(key) for key in ("tool", "model"))
                     current = steps([{**{k: v for k, v in before.items() if not (changed and k == "requested")}, **override}],
-                                    known=[t["id"] for t in ordered[:index]])[0]
+                                    known=[t["id"] for t in ordered[:index]], planned=True)[0]
                     goal = text(body.get("input", run["input"]), "开发需求", minimum=3)
                     if "recovery" in body:
                         from .recovery import policy

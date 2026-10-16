@@ -257,6 +257,13 @@ class Engine:
                                    status="dispatch_unknown", updated=time.time())
                 return self.update(run["id"], "dispatch_unknown", message, actor=journal.WORKER)
             if code in {"model_unavailable", "model_transport_unsupported"}:
+                wanted = (json.loads(current["spec"] or "{}").get("requested") or {}).get("model")
+                with self.db.read() as db:
+                    row = db.execute("SELECT spec FROM tasks WHERE run_id=? AND current_attempt=?", (run["id"], current["id"])).fetchone()
+                wanted = wanted or ((json.loads(row["spec"]).get("requested") or {}).get("model") if row else None)
+                if wanted:   # D45: the Worker refused the model the requirement named — said, not replaced or diagnosed
+                    return self._refused(run, current["id"], {**json.loads(current["evidence"] or "{}"), "requested": True},
+                                         f"需求指定的模型 {wanted} 未由执行环境公布（Worker：{message}）", code)
                 return self._refused(run, current["id"], json.loads(current["evidence"] or "{}"), message, code)
             if code in {"invalid_request", "not_prepared"}:
                 with self.db.transaction() as db:
@@ -741,7 +748,9 @@ class Engine:
             wanted = json.loads(task["spec"]).get("requested") or {}
             if wanted:   # D45: the requirement named it; not available here → said and stopped, never replaced
                 published = ((config.get("capabilities") or {}).get("models") or {}).get(spec["tool"])
-                why = (f"需求指定的 {spec['tool']} 在此执行环境不可用：{state.get('reason') or '原因未报告'}"
+                who = f"需求指定的 {spec['tool']}" if wanted.get("tool") else f"此任务的 {spec['tool']}"
+                why = (f"{who} 在此执行环境不可用：{state.get('reason') or '原因未报告'}"
+                       + ("" if wanted.get("tool") else f"（需求指定了模型 {wanted.get('model')}）")
                        if isinstance(state, dict) and state.get("available") is False else
                        f"需求指定的模型 {spec['model']} 未由执行环境公布"
                        if wanted.get("model") and spec["model"] not in {"auto", "default"} and published is not None
@@ -861,6 +870,7 @@ class Engine:
                 if planning.pending(fresh, task["id"]):
                     try:   # the KiroCrew plan is applied (or refused) before the planning Attempt's outcome is written
                         planning.expand(db, rid, native.get("result") or "", config.get("capabilities", {}).get("models"),
+                                        tools=config.get("capabilities", {}).get("tools"),
                                         replan=replanning)
                     except (Error, ValueError, TypeError) as exc:
                         state, error = "blocked", "KiroCrew 规划结果未通过校验：" + str(exc)

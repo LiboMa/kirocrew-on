@@ -59,7 +59,7 @@ def plan_step(models=None, tools=None, limitations=None, commands=None):
 
 ## 此执行环境的 Coding 工具
 {dumps(tools or {})}
-available 为 false 的工具不要选择（reason 为原因）；没有列出时表示执行环境未报告。
+available 为 false 的工具不要选择（需求明确指定的除外，见下；reason 为原因）；没有列出时表示执行环境未报告。
 {REQUESTED}
 执行环境的已知限制：{dumps(limitations or [])}
 {commands_line(commands)}按任务性质与这些事实选择工具，并在交接文件中说明选择依据。
@@ -75,7 +75,7 @@ available 为 false 的工具不要选择（reason 为原因）；没有列出�
             "prompt": prompt}
 
 
-def expand(db, rid, text, models=None, replan=False):
+def expand(db, rid, text, models=None, replan=False, tools=None):
     """Validate the plan in ``text`` and append its tasks after the planning task; raises ``Error`` with the reason.
     ``replan``: the Coordinator's replan (D41): at most 6 tasks, recorded under the snapshot's ``replan``."""
     require(isinstance(text, str) and text.strip(), "规划任务没有返回内容")
@@ -83,7 +83,7 @@ def expand(db, rid, text, models=None, replan=False):
     # a replan's tasks may depend on the accepted tasks it keeps (D41)
     kept = [row["id"] for row in db.execute("SELECT id FROM tasks WHERE run_id=? AND status='accepted' ORDER BY ordinal", (rid,))] \
         if replan else []
-    plan = import_workflow(text.strip(), known=kept)
+    plan = import_workflow(text.strip(), known=kept, planned=True)
     notes = list(plan["notes"])
     # ids of tasks that are, or were (replaced by a replan — run or not — their Attempts kept as history), in this Session
     taken = {row["id"] for row in db.execute("SELECT id FROM tasks WHERE run_id=?", (rid,))} | \
@@ -102,14 +102,15 @@ def expand(db, rid, text, models=None, replan=False):
             notes.append(f"任务 ID {base} 与已有任务重复，改为 {step['id']}")
         taken.add(step["id"])
         wanted = step.get("requested") or {}   # D45: the requirement's own choice is kept, never quietly replaced
-        if wanted.get("tool") and step["tool"] != wanted["tool"]:
-            notes.append(f"任务「{step['name']}」改回需求指定的工具 {wanted['tool']}")
-            step["tool"] = wanted["tool"]
-        if wanted.get("model") and step["model"] != wanted["model"]:
-            step["model"] = wanted["model"]
-        if wanted.get("model") and wanted["model"] not in {"auto", "default"} and wanted["model"] not in (published.get(step["tool"]) or []):
-            notes.append(f"任务「{step['name']}」：需求指定的模型 {wanted['model']} 未由执行环境公布")
-        elif step["model"] not in {"auto", "default"} and step["model"] not in (published.get(step["tool"]) or []):
+        listed = published.get(step["tool"])
+        state = (tools or {}).get(step["tool"])
+        if wanted and isinstance(state, dict) and state.get("available") is False:   # said before a confirmation (D44)
+            notes.append(f"任务「{step['name']}」：需求指定的 {step['tool']} 在此执行环境不可用（{state.get('reason') or '原因未报告'}），"
+                         "确认后会停下等待处理")
+        if wanted.get("model"):
+            if wanted["model"] not in {"auto", "default"} and listed is not None and wanted["model"] not in listed:
+                notes.append(f"任务「{step['name']}」：需求指定的模型 {wanted['model']} 未由执行环境公布")
+        elif step["model"] not in {"auto", "default"} and step["model"] not in (listed or []):
             notes.append(f"{step['name']}：模型 {step['model']} 不在执行环境公布的列表中，改为 auto")
             step["model"] = "auto"
         steps.append(step)
@@ -202,13 +203,13 @@ paths 写本任务可改动的路径。平台的门禁：test 任务新增的测
 
 ## 此执行环境的 Coding 工具与已知限制
 {_clip(dumps(tools or {}), 500)}
-available 为 false 的工具不要选择。已知限制：{_clip(dumps(limitations or []), 500)}
+available 为 false 的工具不要选择（需求明确指定的除外，见下）。已知限制：{_clip(dumps(limitations or []), 500)}
 {REQUESTED}
 {_clip(commands_line(commands), 400)}
 
 ## 此执行环境公布的模型
 {_clip(dumps(models or {}), 800)}
-不在上面列表中的具体模型一律写 model=auto。
+不在上面列表中的具体模型一律写 model=auto（需求明确指定的除外，见上）。
 
 最终回复必须包含且仅包含一个 JSON 代码块（字段：intent、summary、name、steps），每个任务的字段与写法如下例，prompt 必须写出：
 {dumps(EXAMPLE["steps"])}

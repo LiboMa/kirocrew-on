@@ -37,7 +37,7 @@ class RequestedCase(unittest.TestCase):
             db.execute("INSERT INTO workers(id,name,owner_id,config) VALUES('worker','W',?,?)",
                        (user["id"], dumps({"url": "fixture", "token": "fixture",
                                             "capabilities": {"tools": TOOLS, "models": MODELS}})))
-        self.bodies, self.plan = {}, plan(task("code", "claude"))
+        self.bodies, self.plan, self.refuse = {}, plan(task("code", "claude")), set()
         self.engine = Engine(self.db, self.request)
 
     def start(self):
@@ -48,6 +48,8 @@ class RequestedCase(unittest.TestCase):
         if path == "/prepare":
             return {"native_parent": "parent", "workspace": "/w"}
         if path == "/dispatch":
+            if not body.get("coordination") and body["spec"]["model"] in self.refuse:
+                raise Error(409, "model_unavailable", "所选模型未由此 Worker 后端公布")
             self.bodies.setdefault(body["attempt_id"], copy.deepcopy(body))
             return {"status": "running", "native_id": body["attempt_id"][-8:], "context_hash": "h"}
         as_old_worker(path)
@@ -122,13 +124,88 @@ class RequestedTests(RequestedCase):
         self.assertNotIn("requested", self.tasks(run)["code"]["spec"])
         self.assertEqual(self.tasks(run)["code"]["mapping"]["label"], "续作时由用户修改")
 
+    def test_a_loosely_written_request_does_not_sink_the_plan(self):
+        self.plan = plan(task("code", "claude"),
+                         task("review", "codex", requested={"tool": "codex", "model": None, "quote": "审查用 codex" * 40, "why": "x"}),
+                         task("deliver", "claude", requested=None), task("docs", "claude", requested={}))
+        rid = self.start()
+        run = self.tick(rid)
+        self.assertEqual(run["status"], "completed")
+        review = self.tasks(run)["review"]["spec"]["requested"]
+        self.assertEqual((review["tool"], len(review["quote"]), "model" in review), ("codex", 200, False))
+        self.assertNotIn("requested", self.tasks(run)["deliver"]["spec"])
+        self.assertTrue(any("requested" in note for note in run["planning"]["notes"]))
+
+    def test_a_worker_refusing_a_requested_model_is_not_handed_to_the_coordinator(self):
+        # the platform's model list was stale: the Worker refuses the model the requirement named
+        self.plan = plan(task("code", "claude", model="sonnet", requested={"model": "sonnet", "quote": "用 sonnet"}))
+        self.refuse = {"sonnet"}
+        rid = self.start()
+        run = self.tick(rid)
+        code = self.tasks(run)["code"]
+        self.assertEqual(run["status"], "blocked")
+        self.assertEqual(run["recovery"]["history"], [])
+        self.assertIn("需求指定的模型 sonnet", code["attempts"][-1]["error"])
+        self.assertEqual(code["spec"]["model"], "sonnet")
+        self.assertEqual(run["attention"]["title"], "需求指定的工具或模型不可用")
+
+    def test_the_coordinator_may_not_change_a_requested_model(self):
+        from octopus import recovery
+        failed = {"id": "code", "current_attempt": None, "ordinal": 0,
+                  "spec": json.dumps(task("code", "claude", model="sonnet", requested={"model": "sonnet", "quote": "用 sonnet"}))}
+        context = {"environment": {"tools": TOOLS, "models": MODELS}}
+        with self.db.read() as db, self.assertRaises(Error) as caught:
+            recovery.switch(db, {"id": "run-x"}, failed, {"action": "switch_tool", "target_task_id": "code", "tool": "claude",
+                                                          "model": "auto"}, context)
+        self.assertIn("需求指定", str(caught.exception))
+
+    def test_requested_comes_only_from_the_planner(self):
+        given = [task("code", "claude", requested={"tool": "claude", "quote": "旧需求：用 claude"})]
+        rid = self.service.start(self.actor, {"request_id": "requested-given-1", "input": "实现功能", "source": {"type": "new"},
+                                              "worker_id": "worker", "steps": given})["id"]
+        run = self.service.run(self.actor, rid)
+        self.assertNotIn("requested", self.tasks(run)["code"]["spec"])
+        self.assertNotEqual(self.tasks(run)["code"]["mapping"]["source"], "requested")
+
+    def test_a_corrected_tool_keeps_a_valid_task(self):
+        self.plan = plan(task("code", "claude", effort="high", requested={"tool": "opencode", "quote": "用 opencode"}))
+        rid = self.start()
+        run = self.tick(rid)
+        self.assertEqual(self.tasks(run)["code"]["spec"]["effort"], "")   # OpenCode takes no Effort
+        steps([self.tasks(run)["code"]["spec"]])                          # a plain continue would accept it
+
+    def test_a_plan_to_be_confirmed_says_a_requested_tool_is_unavailable(self):
+        self.plan = plan(task("code", "opencode", requested={"tool": "opencode", "quote": "用 opencode 实现"}))
+        rid = self.service.start(self.actor, {"request_id": "requested-confirm-1", "input": "用 opencode 实现", "source": {"type": "new"},
+                                              "worker_id": "worker", "admission": "confirm"})["id"]
+        run = self.tick(rid)
+        self.assertEqual(run["status"], "awaiting_confirmation")
+        self.assertIn("任务「code」：需求指定的 opencode 在此执行环境不可用（opencode 命令不存在），确认后会停下等待处理", run["planning"]["notes"])
+
+    def test_a_model_only_request_on_an_unavailable_tool_names_what_was_asked(self):
+        self.plan = plan(task("code", "opencode", model="auto", requested={"model": "auto", "quote": "用 auto 模型"}))
+        run = self.tick(self.start())
+        self.assertIn("此任务的 opencode 在此执行环境不可用", self.tasks(run)["code"]["attempts"][-1]["error"])
+
+    def test_without_a_quote_the_source_still_reads_well(self):
+        self.plan = plan(task("review", "codex", requested={"tool": "codex"}))
+        run = self.tick(self.start())
+        self.assertEqual(self.tasks(run)["review"]["mapping"]["label"], "需求中指定")
+
+    def test_both_prompts_make_the_exception_for_a_request(self):
+        for spec in (planning.plan_step(), planning.replan_step("replan-1", [], "失败", {"reason": "r", "instructions": "i"})):
+            self.assertIn("不要选择（需求明确指定的除外", spec["prompt"])
+            self.assertIn("model=auto（需求明确指定的除外", spec["prompt"])
+
     def test_requested_is_checked(self):
         base = task("code", "claude")
-        self.assertEqual(steps([{**base, "requested": {"tool": "claude", "quote": "用 claude"}}])[0]["requested"],
+        self.assertEqual(steps([{**base, "requested": {"tool": "claude", "quote": "用 claude"}}], planned=True)[0]["requested"],
                          {"tool": "claude", "quote": "用 claude"})
-        for bad in ({"quote": "只有原文"}, {"tool": "gemini"}, {"tool": "claude", "extra": 1}, "claude", {"model": "", "quote": "x"}):
+        self.assertNotIn("requested", steps([{**base, "requested": {"tool": "claude", "quote": "用 claude"}}])[0])   # not a plan
+        for bad in ({"quote": "只有原文"}, {"tool": "gemini"}, {"tool": "claude", "extra": 1}, "claude", {"model": "", "quote": "x"},
+                    {"tool": "codex", "quote": "审查用 codex"}):   # the last names another tool than the task's
             with self.subTest(bad), self.assertRaises(Error) as caught:
-                steps([{**base, "requested": bad}])
+                steps([{**base, "requested": bad}], planned=True)
             self.assertIn("requested 须为", str(caught.exception))
 
     def test_the_planner_is_told_how_to_mark_a_request(self):

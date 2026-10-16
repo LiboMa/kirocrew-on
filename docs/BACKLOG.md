@@ -131,6 +131,7 @@
 - 计划确认（D44 审查延后项）：旧版控制台 `/classic/` 显示原始状态 `awaiting_confirmation` 且无确认操作；控制台 `AppPreviewPanel` / `PublishControl`
   的已停下状态集合未含该状态；看门狗停止失败后 KiroCrew 杀掉进程（`ACP process exited`）时按 `runtime_exited` 重试，看门狗原因丢失；
   模板中名为 `plan` 的 Kiro 步骤仍被当作规划任务跳过 D37 门禁（与 D44 修复前同源）。
+- 需求中指定（D45 审查延后项）：修订快照与差异不显示 `requested` 的变化（续作改工具后去掉指定只能从「工具 A → B」间接看出）。
 - 源码准备失败时控制台只显示 `Worker 操作未完成 (ValueError)`：`octopus/worker.py:488` 只透传 `security.Error`，`octopus/sources.py` 的提示均为 `ValueError`（Connector 设计 §7 P1）。
 - 向导：导入 / 推荐后切换到模板时来源提示未更新；切换空间未重置推荐 Worker；推荐轮询遇 403 / 404 不停止；提交瞬间在途轮询可能回写草稿。
 - 原生入口弹窗缺少账户切换保护；`crew_url` 公网来源未规范化 `:443` 写法。

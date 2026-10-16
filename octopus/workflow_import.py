@@ -41,6 +41,32 @@ def step_id(value, index, seen):
     return candidate
 
 
+def requested_of(value, index, notes):
+    """The planner's ``requested`` as far as it says something (D45): empty or null keys dropped, the quote cut to 200
+    characters, other keys ignored; nothing usable — no tool or model — is dropped with a note rather than sinking the plan."""
+    if value is None:
+        return {}
+    if not isinstance(value, dict):
+        notes.append(f"任务 {index}：requested 不是对象，已忽略")
+        return {}
+    extra = sorted(set(value) - {"tool", "model", "quote"})
+    if extra:
+        notes.append(f"任务 {index}：requested 忽略不支持的字段 {', '.join(map(str, extra))}")
+    clean = {key: value[key].strip() for key in ("tool", "model", "quote") if isinstance(value.get(key), str) and value[key].strip()}
+    if "tool" in clean:
+        clean["tool"] = tool_of(clean["tool"])
+    if len(clean.get("model", "")) > 200:
+        notes.append(f"任务 {index}：requested 的模型名过长，已忽略")
+        clean.pop("model")
+    if "quote" in clean:
+        clean["quote"] = clean["quote"][:200]
+    if not ({"tool", "model"} & set(clean)):
+        if value:
+            notes.append(f"任务 {index}：requested 未指定工具或模型，已忽略")
+        return {}
+    return clean
+
+
 def normalize(raw, notes, known=()):
     require(isinstance(raw, list), "工作流需要 steps 任务列表")
     require(1 <= len(raw) <= 8, "流程须包含 1–8 个顺序任务")
@@ -54,6 +80,10 @@ def normalize(raw, notes, known=()):
         if ignored:
             notes.append(f"任务 {index}：忽略不支持的字段 {', '.join(ignored)}")
         tool = tool_of(picked["tool"])
+        wanted = requested_of(item.get("requested"), index, notes)
+        if wanted.get("tool") and wanted["tool"] != tool:   # D45: the requirement's own tool, not the planner's substitute
+            notes.append(f"任务「{picked['name'] or index}」改回需求指定的工具 {wanted['tool']}")
+            tool = wanted["tool"]
         require(tool in TOOLS, f"任务 {index}：不支持的 Coding 工具 {picked['tool']!r}（可用 kiro / claude / codex / opencode）")
         require(isinstance(picked["prompt"], str) and picked["prompt"].strip(), f"任务 {index}：缺少任务说明（prompt）")
         effort = item.get("effort") or ""
@@ -64,12 +94,9 @@ def normalize(raw, notes, known=()):
         if isinstance(item.get("id"), str):
             renamed[item["id"]] = sid
         result.append({"id": sid, "name": picked["name"] or f"任务 {index}",
-                       "tool": tool, "model": item.get("model") or "auto", "effort": effort,
+                       "tool": tool, "model": wanted.get("model") or item.get("model") or "auto", "effort": effort,
                        "prompt": picked["prompt"], **{k: item[k] for k in CONTRACT if k in item},
-                       **({"requested": {**item["requested"], **({"tool": tool_of(item["requested"]["tool"])}
-                                                                 if isinstance(item["requested"].get("tool"), str) else {})}}
-                          if isinstance(item.get("requested"), dict) else
-                          {"requested": item["requested"]} if "requested" in item else {})})
+                       **({"requested": wanted} if wanted else {})})
     for index, step in enumerate(result, 1):
         # Dependencies by original id or by task name, on earlier tasks only; anything else is dropped with a note.
         if not isinstance(step.get("depends_on"), list):
@@ -90,7 +117,7 @@ def normalize(raw, notes, known=()):
     return result
 
 
-def import_workflow(content, format=None, known=()):
+def import_workflow(content, format=None, known=(), planned=False):
     """Parse a workflow document into ``{"name", "steps", "notes"}``; raises ``Error`` (400) with the reason. ``known``:
     ids of tasks already in the Session that its steps may depend on (a replan keeps the accepted ones, D41)."""
     require(isinstance(content, str) and content.strip(), "工作流内容应为非空文本")
@@ -108,7 +135,7 @@ def import_workflow(content, format=None, known=()):
         title, raw = document.get("name"), document["steps"]
     else:
         title, raw = None, document
-    normalized = steps(normalize(raw, notes, known), known=known)
+    normalized = steps(normalize(raw, notes, known), known=known, planned=planned)   # D45: only a plan keeps requested
     name = title if isinstance(title, str) and title.strip() else "导入的工作流"
     result = {"name": " ".join(name.split())[:80], "steps": normalized, "notes": notes}
     if isinstance(document, dict):

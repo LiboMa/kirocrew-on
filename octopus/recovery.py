@@ -142,6 +142,7 @@ evidence.watchdog 存在时是看门狗停止了没有进展的任务：先判�
 计划本身有问题时（任务拆分不当、缺少必要的步骤、顺序错误、任务目标与需求不符，在原任务上重试或返工无法完成需求）用 replan：
 平台保留已验收的任务，请 KiroCrew 重新规划失败的任务及其后的工作；写明原计划的问题与重新规划的要求。
 每个会话只能重新规划一次：environment.replanned 为 true 时不能再用 replan。
+任务的 spec 带 requested（需求中指定的工具或模型）时，不能换用其他工具或模型：用 wait_for_user 说明原因。
 检查命令以退出码 127 失败表示命令在执行环境中不存在（environment.commands 列出常见命令中可用与没有的）：这是任务契约中 verify 的问题，
 重试或返工无法修改它——未重新规划过时用 replan 并写明改用的命令，否则用 wait_for_user，请用户续作时修改该任务的 verify。
 判断是否已有足够源码、依赖与输入；缺少仓库、需要用户授权或认证时 wait_for_user，不猜测项目地址。
@@ -211,6 +212,8 @@ def switch(db, run, failed, decision, context):
     wanted = spec.get("requested") or {}
     require(not wanted.get("tool") or wanted["tool"] != spec["tool"],
             f"需求指定了此任务使用 {spec['tool']}：不换用其他工具，请用 wait_for_user 说明")   # D45: the user's own choice
+    require(not wanted.get("model") or model == wanted["model"],
+            f"需求指定了此任务使用模型 {wanted.get('model')}：不换用其他模型，请用 wait_for_user 说明")
     if is_review(spec):
         reviewed = reviewed_backend(db, run["id"], failed["ordinal"])
         require(tool != reviewed, f"审查须使用与被审查代码（{reviewed}）不同的工具")
