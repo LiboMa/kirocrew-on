@@ -126,7 +126,7 @@
   部署时已有会话按创建时间起算（可退而取最近一次续作的修订时间或手动诊断）；控制台续作对话框不能调整 `max_retries` / `budget_minutes`，
   且续作带 `recovery` 时整体替换原设置。
 - 等待与自动恢复（D43 审查延后项）：健康检查改写 `workers.config`（`checked_at`）时恰好打开原生入口会得 409「请重试」（入口比对整个 config）；
-  手动「刷新模型」不写 `checked_at`；停用 Worker 上 `waiting_worker` 的会话提示未写「重新启用后自动继续」；`resume` 每个周期逐条解析证据 JSON
+  手动「刷新模型」与重新登记（含部署后 API 启动时的登记）不写 `checked_at`，「最近检查」最多消失 10 分钟；停用 Worker 上 `waiting_worker` 的会话提示未写「重新启用后自动继续」；`resume` 每个周期逐条解析证据 JSON
   （可改 SQL `json_extract` 过滤）；检查间隔用墙钟、`/health` 非对象时中止本轮、边界不同的警告每 10 分钟重复。
 - 源码准备失败时控制台只显示 `Worker 操作未完成 (ValueError)`：`octopus/worker.py:488` 只透传 `security.Error`，`octopus/sources.py` 的提示均为 `ValueError`（Connector 设计 §7 P1）。
 - 向导：导入 / 推荐后切换到模板时来源提示未更新；切换空间未重置推荐 Worker；推荐轮询遇 403 / 404 不停止；提交瞬间在途轮询可能回写草稿。
