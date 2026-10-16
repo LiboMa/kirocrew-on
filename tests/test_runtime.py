@@ -18,6 +18,9 @@ CANCELLED = {"done": True, "result": "", "error": "cancelled (stop_reason=cancel
 # EC2, a Gateway restart while a task ran (M2 fault injection): the Agent's ACP process was ended under it
 EXITED = {"done": True, "result": "", "error": "kiro_crew.acp.client.AcpError: ACP process exited (code=-15, SIGTERM, external) — "
                                                 "[session/create] sessionId=3cb392c9 phase=validate-cwd durationMs=0"}
+# EC2 run-6d7c132b…: the Agent replied, then KiroCrew could not clean up a process its tree left behind (process_identity.py)
+CLEANUP = {"done": True, "result": "已完成：README.md 增加一节。", "error": "kill failed: pid 762595 exited and its process group "
+           "762595 still has members, but none could be verified as this run's; not signalled"}
 
 
 class RuntimeCase(TeamsWorkersCase):
@@ -80,6 +83,15 @@ class TransientTests(RuntimeCase):
         run, attempts = self.detail(rid)
         self.assertEqual([a["status"] for a in attempts], ["blocked", "accepted"])
         self.assertEqual(attempts[0]["evidence"]["transient"], "runtime_exited")   # design §8.1 L0: ACP 进程退出
+        self.assertEqual((run["status"], run["recovery"]["used"]), ("completed", 0))
+
+    def test_a_process_group_the_runtime_could_not_clean_up_is_retried_once_without_a_recovery_cycle(self):
+        rid = self.session()
+        self.natives = [CLEANUP]
+        self.tick(6)
+        run, attempts = self.detail(rid)
+        self.assertEqual([a["status"] for a in attempts], ["blocked", "accepted"])
+        self.assertEqual(attempts[0]["evidence"]["transient"], "runtime_cleanup")
         self.assertEqual((run["status"], run["recovery"]["used"]), ("completed", 0))
 
     def test_a_second_transient_failure_goes_to_recovery(self):
