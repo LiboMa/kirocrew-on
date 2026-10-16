@@ -15,6 +15,9 @@ from tests.test_teams_workers import TeamsWorkersCase
 from tests.old_worker import as_old_worker
 
 CANCELLED = {"done": True, "result": "", "error": "cancelled (stop_reason=cancelled): turn cancelled by the runtime — partial result preserved"}
+# EC2, a Gateway restart while a task ran (M2 fault injection): the Agent's ACP process was ended under it
+EXITED = {"done": True, "result": "", "error": "kiro_crew.acp.client.AcpError: ACP process exited (code=-15, SIGTERM, external) — "
+                                                "[session/create] sessionId=3cb392c9 phase=validate-cwd durationMs=0"}
 
 
 class RuntimeCase(TeamsWorkersCase):
@@ -69,6 +72,15 @@ class TransientTests(RuntimeCase):
         self.assertEqual(attempts[0]["evidence"]["transient"], "runtime_cancelled")
         self.assertEqual((run["status"], run["recovery"]["used"]), ("completed", 0))
         self.assertIn("attempt.retry", self.kinds(rid))
+
+    def test_an_acp_process_that_exited_is_retried_once_without_a_recovery_cycle(self):
+        rid = self.session()
+        self.natives = [EXITED]
+        self.tick(6)
+        run, attempts = self.detail(rid)
+        self.assertEqual([a["status"] for a in attempts], ["blocked", "accepted"])
+        self.assertEqual(attempts[0]["evidence"]["transient"], "runtime_exited")   # design §8.1 L0: ACP 进程退出
+        self.assertEqual((run["status"], run["recovery"]["used"]), ("completed", 0))
 
     def test_a_second_transient_failure_goes_to_recovery(self):
         rid = self.session()

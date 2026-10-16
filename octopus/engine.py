@@ -18,6 +18,8 @@ LEGACY = ("id", "name", "tool", "model", "effort", "prompt")
 
 
 CANCELLED = re.compile(r"stop_reason=cancelled|turn cancelled by the runtime", re.I)
+# The Agent's ACP process ended under the task (a Gateway restart, a killed process): design §8.1 L0, not the task's fault.
+EXITED = re.compile(r"ACP process exited", re.I)
 
 
 def transient(native, error, missing, blocked_line):
@@ -27,6 +29,8 @@ def transient(native, error, missing, blocked_line):
         return None
     if CANCELLED.search(native.get("error") or ""):
         return "runtime_cancelled"
+    if EXITED.search(native.get("error") or ""):
+        return "runtime_exited"
     if error == BLOCKED and missing and not blocked_line:
         return "result_missing"
     return None
@@ -858,7 +862,8 @@ class Engine:
                            quiet=() if native.get("done") else ("result",),
                            status=state, evidence=dumps(evidence), result=native.get("result"), error=error, updated=time.time())
             if retry:
-                why = {"runtime_cancelled": "运行时取消了原生任务", "result_missing": "原生任务没有返回结果"}[retry]
+                why = {"runtime_cancelled": "运行时取消了原生任务", "runtime_exited": "原生运行时进程退出",
+                       "result_missing": "原生任务没有返回结果"}[retry]
                 # The retry is created here and marked, so it is never retried again; a stop or continue before it is
                 # dispatched cancels or replaces it like any other Attempt.
                 aid, now = uid("attempt"), time.time()

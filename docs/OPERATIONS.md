@@ -480,7 +480,7 @@ Draft PR（GitHub）/ Draft MR（GitLab）。
 处理：`sudo -iu crew-personal` 重新登录对应工具；不需要重启平台，Session 在条件满足后继续（M2 起自动恢复）。
 kiro-cli（D34）：Worker 每分钟以 `kiro-cli whoami` 检查登录，「执行环境 · Worker」显示「kiro-cli 登录已过期」；过期时使用 Kiro 的
 任务（规划、kiro 任务、协调者诊断）不派发，会话保持原状态并显示「Worker 上 kiro-cli 登录已过期：请管理员执行 deploy.sh kiro-login」，
-登录恢复后自动继续，不计为失败。运行时取消原生任务、或原生任务没有返回结果时，同一任务自动重试一次，不占纠错轮次。
+登录恢复后自动继续，不计为失败。运行时取消原生任务、Agent 的 ACP 进程退出（如 Gateway 重启，M2 故障注入）、或原生任务没有返回结果时，同一任务自动重试一次，不占纠错轮次。
 不要把个人机器上的 HOME 或凭据目录复制到实例。
 
 ## 9．停止失败
