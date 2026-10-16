@@ -11,6 +11,10 @@ from .prompts import intent_prompt
 from .security import Error, require
 from .workflow_import import import_workflow
 
+# D45: the user's own choice of tool or model for a task, which the platform keeps and never replaces.
+REQUESTED = ("需求明确指定某任务的工具或模型时（如「审查用 codex」「用 sonnet 实现」），照指定写 tool / model，并写 "
+             "requested: {\"tool\": …, \"model\": …, \"quote\": \"需求原文片段\"}——即使该工具 available 为 false、该模型未公布，"
+             "也不要换成别的，平台会如实告知用户；没有指定时省略 requested。")
 PLAN_ID = "plan"
 REPLAN_PREFIX = "replan-"
 EXAMPLE = {"intent": "一句话：用户真正要完成什么、属于哪类工作（新功能 / 缺陷修复 / 审查 / 原型 / 其他）",
@@ -56,12 +60,13 @@ def plan_step(models=None, tools=None, limitations=None, commands=None):
 ## 此执行环境的 Coding 工具
 {dumps(tools or {})}
 available 为 false 的工具不要选择（reason 为原因）；没有列出时表示执行环境未报告。
+{REQUESTED}
 执行环境的已知限制：{dumps(limitations or [])}
 {commands_line(commands)}按任务性质与这些事实选择工具，并在交接文件中说明选择依据。
 
 ## 此执行环境公布的模型
 {dumps(models or {})}
-不在上面列表中的具体模型一律写 model=auto。
+不在上面列表中的具体模型一律写 model=auto（需求明确指定的除外，见上）。
 
 最终回复必须包含且仅包含一个 JSON 代码块（字段：intent、summary、name、steps）；不要加入第二个 JSON/YAML 代码块。
 同时按本任务要求写交接文件，说明规划依据与待用户核实的条件。
@@ -96,7 +101,15 @@ def expand(db, rid, text, models=None, replan=False):
             renames[base] = step["id"]
             notes.append(f"任务 ID {base} 与已有任务重复，改为 {step['id']}")
         taken.add(step["id"])
-        if step["model"] not in {"auto", "default"} and step["model"] not in (published.get(step["tool"]) or []):
+        wanted = step.get("requested") or {}   # D45: the requirement's own choice is kept, never quietly replaced
+        if wanted.get("tool") and step["tool"] != wanted["tool"]:
+            notes.append(f"任务「{step['name']}」改回需求指定的工具 {wanted['tool']}")
+            step["tool"] = wanted["tool"]
+        if wanted.get("model") and step["model"] != wanted["model"]:
+            step["model"] = wanted["model"]
+        if wanted.get("model") and wanted["model"] not in {"auto", "default"} and wanted["model"] not in (published.get(step["tool"]) or []):
+            notes.append(f"任务「{step['name']}」：需求指定的模型 {wanted['model']} 未由执行环境公布")
+        elif step["model"] not in {"auto", "default"} and step["model"] not in (published.get(step["tool"]) or []):
             notes.append(f"{step['name']}：模型 {step['model']} 不在执行环境公布的列表中，改为 auto")
             step["model"] = "auto"
         steps.append(step)
@@ -190,6 +203,7 @@ paths 写本任务可改动的路径。平台的门禁：test 任务新增的测
 ## 此执行环境的 Coding 工具与已知限制
 {_clip(dumps(tools or {}), 500)}
 available 为 false 的工具不要选择。已知限制：{_clip(dumps(limitations or []), 500)}
+{REQUESTED}
 {_clip(commands_line(commands), 400)}
 
 ## 此执行环境公布的模型

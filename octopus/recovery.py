@@ -208,6 +208,9 @@ def switch(db, run, failed, decision, context):
     require((tool, model, effort) != (before["tool"], before["model"], before["effort"]),
             "推荐的工具、模型与 Effort 与失败的那次相同")
     spec = json.loads(failed["spec"])
+    wanted = spec.get("requested") or {}
+    require(not wanted.get("tool") or wanted["tool"] != spec["tool"],
+            f"需求指定了此任务使用 {spec['tool']}：不换用其他工具，请用 wait_for_user 说明")   # D45: the user's own choice
     if is_review(spec):
         reviewed = reviewed_backend(db, run["id"], failed["ordinal"])
         require(tool != reviewed, f"审查须使用与被审查代码（{reviewed}）不同的工具")
@@ -333,7 +336,8 @@ def schedule(db, database, run, task, attempt, *, manual=False, actor=None):
     failure = json.loads(attempt["evidence"]).get("failure_type", "native_error")
     if not manual:
         # An environment that no longer serves the run gets no new diagnosis (§6.2): continuing moves it to waiting.
-        if (not settings["enabled"] or failure in NEEDS_INPUT or
+        # D45: the requirement's own tool or model is not available — the user decides, a diagnosis cannot.
+        if (not settings["enabled"] or failure in NEEDS_INPUT or json.loads(attempt["evidence"]).get("requested") or
                 any(r["failed_attempt_id"] == attempt["id"] for r in rows) or (run["worker_id"] and unserved(db, run))):
             return None
         key = refused(db, run, "cycle")   # last: the cheap checks above end most ticks of a blocked Session

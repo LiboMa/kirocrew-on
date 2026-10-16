@@ -47,7 +47,7 @@ def normalize(raw, notes, known=()):
     seen, result, renamed = set(), [], {}
     for index, item in enumerate(raw, 1):
         require(isinstance(item, dict), f"第 {index} 个任务不是对象")
-        used = {"id", "model", "effort", *CONTRACT} | {key for keys in FIELD_ALIASES.values() for key in keys}
+        used = {"id", "model", "effort", "requested", *CONTRACT} | {key for keys in FIELD_ALIASES.values() for key in keys}
         picked = {field: next((item[key] for key in keys if item.get(key) not in (None, "")), None)
                   for field, keys in FIELD_ALIASES.items()}
         ignored = sorted(set(item) - used)
@@ -65,7 +65,11 @@ def normalize(raw, notes, known=()):
             renamed[item["id"]] = sid
         result.append({"id": sid, "name": picked["name"] or f"任务 {index}",
                        "tool": tool, "model": item.get("model") or "auto", "effort": effort,
-                       "prompt": picked["prompt"], **{k: item[k] for k in CONTRACT if k in item}})
+                       "prompt": picked["prompt"], **{k: item[k] for k in CONTRACT if k in item},
+                       **({"requested": {**item["requested"], **({"tool": tool_of(item["requested"]["tool"])}
+                                                                 if isinstance(item["requested"].get("tool"), str) else {})}}
+                          if isinstance(item.get("requested"), dict) else
+                          {"requested": item["requested"]} if "requested" in item else {})})
     for index, step in enumerate(result, 1):
         # Dependencies by original id or by task name, on earlier tasks only; anything else is dropped with a note.
         if not isinstance(step.get("depends_on"), list):

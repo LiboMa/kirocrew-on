@@ -738,6 +738,17 @@ class Engine:
         if attempt["status"] == "dispatching":
             # The platform's record of this Worker's tools (D38 §3.1): a tool it cannot start is not dispatched.
             state = ((config.get("capabilities") or {}).get("tools") or {}).get(spec["tool"])
+            wanted = json.loads(task["spec"]).get("requested") or {}
+            if wanted:   # D45: the requirement named it; not available here → said and stopped, never replaced
+                published = ((config.get("capabilities") or {}).get("models") or {}).get(spec["tool"])
+                why = (f"需求指定的 {spec['tool']} 在此执行环境不可用：{state.get('reason') or '原因未报告'}"
+                       if isinstance(state, dict) and state.get("available") is False else
+                       f"需求指定的模型 {spec['model']} 未由执行环境公布"
+                       if wanted.get("model") and spec["model"] not in {"auto", "default"} and published is not None
+                       and spec["model"] not in published else None)
+                if why:
+                    return self._refused(run, attempt["id"], {**json.loads(attempt["evidence"] or "{}"), "requested": True},
+                                         why, "requested_unavailable", actor=journal.ENGINE)
             if task["id"] != planning.PLAN_ID and isinstance(state, dict) and state.get("available") is False:
                 return self._refused(run, attempt["id"], json.loads(attempt["evidence"] or "{}"),
                                      f"{spec['tool']} 在此执行环境不可用：{state.get('reason') or '原因未报告'}"

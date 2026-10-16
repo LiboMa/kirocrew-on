@@ -52,12 +52,21 @@ def strings(value, field, items, chars):
     return result
 
 
+def requested(value):
+    """A task's tool / model as the requirement names it (D45): the planner marks it, the platform runs it as asked."""
+    ok = isinstance(value, dict) and value and set(value) <= {"tool", "model", "quote"} and ("tool" in value or "model" in value) \
+        and value.get("tool", "claude") in TOOLS and all(isinstance(value.get(k, "x"), str) and value.get(k, "x").strip()
+                                                         and len(value.get(k, "x")) <= 200 for k in ("model", "quote"))
+    require(ok, "requested 须为 {tool, model, quote}，至少指定 tool 或 model")
+    return {k: value[k].strip() for k in ("tool", "model", "quote") if k in value}
+
+
 def steps(value, known=()):
     """Validated tasks; ``known`` are the ids of tasks before ``value`` (a continued task depends on them)."""
     require(isinstance(value, list) and 1 <= len(value) <= 8, "流程须包含 1–8 个顺序任务")
     seen, earlier, result = set(), set(known), []
     for step in value:
-        require(isinstance(step, dict) and set(step) <= {"id", "name", "prompt", "tool", "model", "effort", *CONTRACT},
+        require(isinstance(step, dict) and set(step) <= {"id", "name", "prompt", "tool", "model", "effort", "requested", *CONTRACT},
                 "不支持的 Task 字段")
         sid = step.get("id")
         require(isinstance(sid, str) and re.fullmatch(r"[a-z][a-z0-9-]{0,47}", sid)
@@ -76,6 +85,8 @@ def steps(value, known=()):
         for field, (items, chars) in LIMITS.items():
             if field in step:
                 item[field] = strings(step[field], field, items, chars)
+        if "requested" in step:   # the tool / model the requirement names for this task (D45)
+            item["requested"] = requested(step["requested"])
         # Only earlier tasks: dependencies follow the order the Engine runs them in.
         require(all(dep in (seen | earlier) - {sid} for dep in item.get("depends_on", [])),
                 f"任务「{item['name']}」的 depends_on 只能指向前序任务")
@@ -264,6 +275,9 @@ def mapping(snapshot, task, evidence=None):
     original = next((s for s in snapshot.get("steps") or [] if s.get("id") == task["id"]), None)
     if original and key(original) != key(spec):
         return {"source": "continue", "label": "续作时由用户修改"}
+    if spec.get("requested"):   # D45: what the requirement named, as the planner marked it
+        quote = spec["requested"].get("quote") or ""
+        return {"source": "requested", "label": f"需求中指定：「{quote if len(quote) <= 30 else quote[:30] + '…'}」"}
     planned, replan = snapshot.get("planning") or {}, snapshot.get("replan") or {}
     if task["id"] == replan.get("task"):
         return {"source": "platform", "label": "平台：重新规划（Kiro）"}
@@ -1491,6 +1505,8 @@ class Service:
             title = "原生任务卡住，看门狗已停止"
             action = ("检查任务是否在运行不会结束的命令（如开发服务器）或等待输入；可在续作时调整提示，"
                       "或为较慢的构建与测试调大 recovery.idle_minutes 后重跑。")
+        elif failure == "tool" and (attempt.get("evidence") or {}).get("requested"):
+            title, action = "需求指定的工具或模型不可用", "修复执行环境后续作，或在「配置并续作」中改用可用的工具或模型。"
         elif failure == "tool":
             title = "需要换用工具或模型"
             action = ("协调者可推荐换用可用的工具（自动纠错开启且允许换工具时）；也可在「配置并续作」中换用可用的工具或模型后重跑，"
@@ -1563,7 +1579,10 @@ class Service:
                     require(isinstance(override, dict) and set(override) <= {"name", "tool", "model", "effort", "prompt", *CONTRACT},
                             "任务覆盖字段无效")
                     before = json.loads(ordered[index]["spec"])
-                    current = steps([{**before, **override}], known=[t["id"] for t in ordered[:index]])[0]
+                    # D45: the user's own new tool or model for the task takes the place of what the requirement named
+                    changed = any(key in override and override[key] != before.get(key) for key in ("tool", "model"))
+                    current = steps([{**{k: v for k, v in before.items() if not (changed and k == "requested")}, **override}],
+                                    known=[t["id"] for t in ordered[:index]])[0]
                     goal = text(body.get("input", run["input"]), "开发需求", minimum=3)
                     if "recovery" in body:
                         from .recovery import policy
