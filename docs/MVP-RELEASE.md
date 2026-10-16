@@ -282,7 +282,7 @@ M4（共享与组织）、M5（仓库闭环）在 MVP 之后分别立项，各�
 | 2 | Pipeline 生成 | ◐ EC2 | 已有：Kiro Agent 规划（D26：意图、补全、1–7 个任务与 Agent 映射，追加到同一 Session）、`plan=match` 规则匹配、工作流文档（JSON / YAML / Markdown）解析与规范化。剩余：schema 2、规划阶段的只读源码检查 |
 | 3 | 门禁目录 | ◐ EC2 | D37 第 1 期（分支 `feat/m11-gates`，✅ EC2 2026-10-14，见 §14.13）：命名门禁 `native_completed`、`identity_match`、`handoff_present`、`outcome_valid`、`outcome_pass`、`diff_present`、`no_secrets`、`checks_pass`（平台运行 `verify`）、`review_bound`，逐条入库并在控制台与 MCP 展示；发布只推送已验证候选（`candidate_unchanged`）。第 3 期（本机完成，见 §14.13）：`artifacts_locked`、`tests_fail_on_baseline`。剩余：EC2 验收第 3 期 |
 | 4 | 映射策略 | ◐ | 已有：Prompt / 工作流显式指定；D38 第 1 期（分支 `feat/m11-gates`，见 §14.14）：工具层失败由 KiroCrew 协调者推荐换用的工具与模型（`switch_tool`），平台按执行环境核对并记录，规划时 Kiro 看到各工具是否可用；不内置回退链（原 OpenCode→Claude 的代码改派已去掉）。映射来源（本机完成）：每个任务写明工具与模型来自提交的 steps、工作流（名称与版本）、模板 / 规则匹配的模板、导入的文档、KiroCrew 规划、续作时的用户修改或协调者换用，控制台、MCP 与报告可见。剩余：个人 / Team 偏好 |
-| 5 | 准入 | ◐ | 计划确认：D44（本机完成，见 §14.22：`admission: confirm` 停在「计划待确认」，确认或续作后执行）。剩余：按仓库范围的自动准入与策略快照 |
+| 5 | 准入 | ◐ | 计划确认：D44（✅ EC2 2026-10-16，见 §14.22：`admission: confirm` 停在「计划待确认」，确认或续作后执行）。剩余：按仓库范围的自动准入与策略快照 |
 | 6 | 恢复阶梯 | ◐ EC2 | 已有：Worker / Gateway 不可用退避（M1）、协调者诊断（重试、退回上游返工、复审、换工具（D38））与轮数上限。D39（本机完成，见 §14.15）：看门狗停止没有进展或运行超时的原生任务、自动重试一次、再交给诊断。重规划：D41（✅ EC2 2026-10-16，见 §14.18）。预算：D42（✅ EC2 2026-10-16，见 §14.19：轮数、自动重试次数与时长，从续作起重新计算）。等待与自动恢复：D43（✅ EC2 2026-10-16，见 §14.20）。剩余：预算按个人 / Team 配置（设计 §8.1，随 `policies` 表） |
 | 7 | 批准代理 | ◐ | D38 第 2 期（本机完成，见 §14.14）：会话父 slot 的原生工具请求与状态级批准在控制台「待批准」卡片与 MCP（`octopus_approvals`、`octopus_approve`，答复前须用户同意）中可见并可答复；创建者、Team owner、管理员可答复，写审计。剩余：EC2 验收、CLI |
 | 8 | 候选与分支 | ◐ | D37 第 1 期：每个改代码的任务在 `octopus/<run>` 上留下候选提交（检出秘密时分支不动），审查绑定候选；D35 的发布推送已验证候选并创建 Draft PR / MR |
@@ -498,7 +498,10 @@ Vite 客户端模块可用；打开链接第二次使用被拒、无 Cookie 时�
 
 本机完成：会话可设 `admission: "confirm"`——规划照常完成，第一个执行任务派发前停在「计划待确认」，经控制台「确认并开始」、API 或 MCP
 `octopus_confirm`（客户端须先向用户展示计划并得到同意）确认，或修改后续作；只确认一次；平台默认 `default_admission = auto`，不改变现有行为。
-待做：EC2 验收。第 2 期：按仓库范围的自动准入与策略快照。
+只有 KiroCrew 规划会话的规划任务在确认前运行；等待不计入预算；已归档 Team 的会话不能确认；视图、报告与时间线写明确认者。
+✅ EC2（2026-10-16，68ad2f3，`run-e758afac…`）：`admission: "confirm"` 的 KiroCrew 规划会话——`plan` 完成后停在「计划待确认」，
+列出规划的 `task-1`（claude，来源「KiroCrew 规划」），未派发；经 API 确认后执行完成，时间线有「计划待确认」与确认记录。
+离线：Python 905、控制台 151；独立审查 4 个 Important 与 3 个上调项已修复，其余记入 BACKLOG。第 2 期：按仓库范围的自动准入与策略快照。
 
 ### 14.21 M2 故障注入（验收 4）
 
