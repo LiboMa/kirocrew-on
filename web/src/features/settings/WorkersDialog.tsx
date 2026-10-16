@@ -11,6 +11,7 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { useConsole } from "@/features/console/context";
+import { formatTime } from "@/lib/labels";
 
 /** What a shared execution environment means (D28); shown before an administrator confirms sharing. */
 export const SHARED_NOTICE = "环境内所有会话的 Agent 以同一系统账号运行，能互相读取源码、工具登录与记忆；记忆未分隔；只用于同一信任范围。";
@@ -72,6 +73,7 @@ export function WorkersDialog() {
             <span className="min-w-0 flex-1">{w.name}
               <small className="ml-2 text-xs text-muted-foreground">
                 {w.capabilities.isolation === "dedicated" ? "专属环境" : "个人本机"} · {w.enabled ? "可用" : "已停用"} · {owner(w)}
+                {typeof w.capabilities.checked_at === "number" && ` · 最近检查 ${formatTime(w.capabilities.checked_at, true)}`}
               </small>
             </span>
             <Button type="button" size="sm" variant="outline" data-refresh-worker={w.id}

@@ -4,6 +4,7 @@ import userEvent from "@testing-library/user-event";
 import { App } from "@/App";
 import { setToken } from "@/api/client";
 import { mockApi, workspaceRoutes } from "@/test/api";
+import { formatTime } from "@/lib/labels";
 
 function start(extra: Record<string, unknown> = {}) {
   setToken("oct_fixture");
@@ -461,6 +462,13 @@ describe("settings", () => {
     await userEvent.click(within(row).getByRole("button", { name: "确认退役" }));
     await waitFor(() => expect(calls.find((c) => c.path === "/v1/workers/w1/retire")?.body).toEqual({}));
     expect(await screen.findByText(/仍是 Team「平台组」的执行环境/)).toBeInTheDocument();
+  });
+
+  test("a Worker shows when the platform last read its health (D43)", async () => {
+    start({ "GET /workers": [{ ...oneWorker["GET /workers"][0], capabilities: { isolation: "trusted-local", checked_at: 1_792_100_000 } }] });
+    const dialog = await openSetting(/执行环境/);
+    const row = within(dialog).getByRole("group", { name: "personal" });
+    expect(within(row).getByText(new RegExp("最近检查 " + formatTime(1_792_100_000, true)))).toBeInTheDocument();
   });
 
   test("a member refreshes models but cannot rename, reconnect or retire a Worker", async () => {
