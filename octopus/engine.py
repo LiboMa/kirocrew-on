@@ -11,7 +11,7 @@ from .db import dumps, uid
 from .transport import worker_request
 from . import gates, journal, planning, recovery, waiting
 from .security import Error
-from .domain import CONTRACT, unserved
+from .domain import CONTRACT, awaits_confirmation, unserved
 from .gates import BLOCKED
 
 LEGACY = ("id", "name", "tool", "model", "effort", "prompt")
@@ -710,6 +710,10 @@ class Engine:
                     journal.change(db, "tasks", (rid, task["id"]), journal.ENGINE, "task.state", "重新规划已应用，不再运行",
                                    status="accepted", current_attempt=done["id"])
                     return
+            if attempt is None and awaits_confirmation(json.loads(fresh["snapshot"]), task["id"]):
+                journal.change(db, "runs", rid, journal.ENGINE, "run.awaiting_confirmation", "计划待确认",
+                               event={"status": "awaiting_confirmation"}, status="awaiting_confirmation", updated=time.time())
+                return
             if attempt is None:
                 aid, now = uid("attempt"), time.time()
                 number = db.execute("SELECT count(*) FROM attempts WHERE run_id=? AND task_id=?", (rid, task["id"])).fetchone()[0] + 1

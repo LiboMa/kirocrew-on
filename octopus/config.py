@@ -24,7 +24,7 @@ INTS = {"api_port": (1, 65535), "worker_port": (1, 65535), "gateway_port": (1, 6
         "preview_tls_port": (1, 65535)}
 FLOATS = {"retry_unavailable": (0.0, 600.0), "shutdown_grace": (0.0, 300.0)}
 STRINGS = {"api_host", "worker_host", "public_url", "crew_url", "worker_isolation", "approval_mode", "crew_entry_ttl",
-           "preview_tls_name", "preview_url", "preview_domain"}
+           "preview_tls_name", "preview_url", "preview_domain", "default_admission"}
 APPROVAL = ("", "auto", "interactive")
 BOOLS = {"crew_yolo"}
 # Lifetime of the native browser login minted for "open in KiroCrew": 1–480 minutes or 1–8 hours (K03).
@@ -65,6 +65,7 @@ class Settings:
     crew_url: str = ""
     # KiroCrew native tool/spawn approval for this boundary; "" keeps the legacy seed default.
     approval_mode: str = ""
+    default_admission: str = "auto"   # D44: a Session without `admission` runs at once; "confirm" waits for its plan's confirmation
     # KiroCrew's standing YOLO on this boundary (agent.dangerously_skip_permissions, re-applied at every Gateway start):
     # on by the owner's direction (2026-10-15); false returns to approving each tool request (D38 phase 2 then has work).
     crew_yolo: bool = True
@@ -154,6 +155,8 @@ def _layer(values, base):
                 raise ConfigError("worker_isolation 只能是 trusted-local 或 dedicated")
             if key == "approval_mode" and value not in APPROVAL:
                 raise ConfigError("approval_mode 只能是 auto 或 interactive（留空表示不指定）")
+            if key == "default_admission" and value not in ("auto", "confirm"):
+                raise ConfigError("default_admission 只能是 auto 或 confirm")
             if key == "crew_entry_ttl" and not ENTRY_TTL.fullmatch(value):
                 raise ConfigError("crew_entry_ttl 只能是 1–480m 或 1–8h")
             if key == "preview_url" and value and not re.fullmatch(r"https?://[A-Za-z0-9.\-]+(:\d{1,5})?/?", value):

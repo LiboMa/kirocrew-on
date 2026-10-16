@@ -85,6 +85,13 @@ class ConfigTests(unittest.TestCase):
         self.assertEqual(s.api_port, 9300)
         self.assertNotIn("secret-value-123", repr(s))
 
+    def test_default_admission_is_auto_and_validated(self):
+        self.assertEqual(load(environ=self.env, cwd=self.cwd).default_admission, "auto")   # D44: running at once, as before
+        self.assertEqual(load(self.write('default_admission = "confirm"\n'), environ=self.env, cwd=self.cwd).default_admission,
+                         "confirm")
+        with self.assertRaises(ConfigError):
+            load(self.write('default_admission = "later"\n'), environ=self.env, cwd=self.cwd)
+
     def test_approval_mode_is_optional_and_validated(self):
         self.assertEqual(load(environ=self.env, cwd=self.cwd).approval_mode, "")
         self.assertEqual(load(self.write('approval_mode = "auto"\n'), environ=self.env, cwd=self.cwd).approval_mode, "auto")

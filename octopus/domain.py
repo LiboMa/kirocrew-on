@@ -20,7 +20,7 @@ TOOLS = ("kiro", "claude", "codex", "opencode")
 ROLES = {"viewer": 1, "runner": 2, "editor": 3, "owner": 4}
 ROLE_LABELS = {"viewer": "查看", "runner": "运行", "editor": "编辑", "owner": "所有者"}
 # Statuses in which an open Session is not running on its Worker (it can be continued).
-SETTLED = ("failed", "blocked", "completed", "stopped", "waiting_worker")
+SETTLED = ("failed", "blocked", "completed", "stopped", "waiting_worker", "awaiting_confirmation")
 # What the admin environment listing shows of a live /health (no boundary or principal hashes).
 HEALTH_FIELDS = ("isolation", "crew_entry", "crew_origin", "version", "tool_auth")
 
@@ -139,6 +139,19 @@ def space_workers(db, user, team):
         query = ("SELECT w.* FROM workers w WHERE w.enabled=1 AND ((w.scope='dedicated' AND w.owner_id=?) OR "
                  "(w.scope='shared' AND EXISTS(SELECT 1 FROM worker_spaces s WHERE s.worker_id=w.id AND s.user_id=?)))")
     return db.execute(query + " ORDER BY w.name", (team or user, team or user)).fetchall()
+
+
+def confirm_plan(db, rid, who, actor, via):
+    """The user confirmed the Session's plan (D44): it runs from here, and does not wait again."""
+    snapshot = json.loads(db.execute("SELECT snapshot FROM runs WHERE id=?", (rid,)).fetchone()["snapshot"])
+    snapshot["confirmed"] = {"by": actor["username"], "at": time.time(), "via": via}
+    journal.change(db, "runs", rid, who, "run.confirmed", "已确认计划", quiet=("snapshot",), snapshot=dumps(snapshot))
+
+
+def awaits_confirmation(snapshot, task_id):
+    """Whether the Session must wait for its plan to be confirmed before this task (D44): planning tasks run before."""
+    from .planning import planning_task
+    return snapshot.get("admission") == "confirm" and not snapshot.get("confirmed") and not planning_task(task_id, snapshot)
 
 
 def restart_budget(db, rid, who):
@@ -309,8 +322,9 @@ def _probe(config):
 
 
 class Service:
-    def __init__(self, database):
+    def __init__(self, database, default_admission="auto"):
         self.db = database
+        self.default_admission = default_admission   # D44: a Session without `admission` runs at once unless set to confirm
         self._opened, self._opened_lock = {}, threading.Lock()   # remote preview opening links already followed
         from .credentials import CredentialStore
         self.credentials = CredentialStore(database)   # D35; the server sets its key file
@@ -733,6 +747,7 @@ class Service:
         selected = any(body.get(key) is not None for key in ("workflow_id", "template_id", "steps", "document"))
         require(body.get("plan") in (None, "agent", "match"), "plan 只能是 agent 或 match")
         require(not (selected and body.get("plan") == "agent"), "plan=agent 时不要同时指定工作流、模板、steps 或 document")
+        require(body.get("admission") in (None, "confirm", "auto"), "admission 须为 confirm 或 auto")
         if not body.get("worker_id"):
             # The space's only usable Worker runs it; a Team without an execution environment takes no new Sessions (D28).
             team = body.get("team_id") or None
@@ -814,6 +829,8 @@ class Service:
                             "match_mode": resolved["mode"], "match_reason": resolved["reason"]}
                 snapshot.update(recovery=policy(body.get("recovery")) if design is None else policy({"enabled": False}),
                                 execution_contract=3 if design is None else 1)
+                if design is None:   # D44: confirm = wait before the first working task
+                    snapshot["admission"] = body.get("admission") or self.default_admission
                 if bound:
                     snapshot["credentials"] = {"source": bound}
                 if design is not None:
@@ -1441,6 +1458,9 @@ class Service:
             return {"title": "等待批准", "detail": run["error"] or "原生任务正在等待批准一次工具调用。",
                     "action": "在会话页「待批准」中查看工具与命令后批准或拒绝；Coding Agent 可用 octopus_approvals 查看、"
                               "经用户同意后用 octopus_approve 答复。", "task_id": task["id"] if task else None}
+        if run["status"] == "awaiting_confirmation":
+            return {"title": "计划待确认", "detail": run.get("error") or "规划已完成，任务尚未开始。",
+                    "action": "核对任务、工具与检查命令后确认开始；也可修改后续作或关闭。", "task_id": task["id"] if task else None}
         if run["status"] == "diagnosing":
             return {"title": "协调者正在诊断与安排修复", "detail": run["error"] or "正在读取失败证据，等待原生诊断结果。",
                     "action": "等待诊断结果；也可停止本 Session", "task_id": task["id"] if task else None}
@@ -1493,7 +1513,7 @@ class Service:
                 "task_name": task["spec"]["name"] if task else None}
 
     def operate(self, actor, rid, action, body):
-        require(action in {"continue", "recover", "stop", "close", "reopen", "delete", "assign-worker"}, "不支持的操作")
+        require(action in {"continue", "recover", "stop", "close", "reopen", "delete", "assign-worker", "confirm"}, "不支持的操作")
         with self.db.transaction() as db:
             run = run_access(db, actor, rid, owner=action == "delete")
             try:
@@ -1558,6 +1578,8 @@ class Service:
                     journal.change(db, "tasks", (rid, current["id"]), who, "task.spec", spec=dumps(current))
                     reason = unserved(db, run) if run["worker_id"] else None
                     restart_budget(db, rid, who)
+                    if run["status"] == "awaiting_confirmation":   # changing the plan and continuing confirms it (D44)
+                        confirm_plan(db, rid, who, actor, "continue")
                     fields.update(input=goal, desired="active", status="ready" if run["worker_id"] and not reason else "waiting_worker",
                                   error=reason)
                     commit()   # before the revision: its snapshot reads the new requirement
@@ -1597,6 +1619,11 @@ class Service:
                         fields.update(worker_id=body["worker_id"], native_parent=None, workspace=None, status="preparing", error=None)
                     else:
                         fields.update(worker_id=body["worker_id"], status="ready" if run["native_parent"] else "preparing", error=None)
+                elif action == "confirm":
+                    require(run["status"] == "awaiting_confirmation" and run["lifecycle"] == "open",
+                            "此 Session 不在等待确认", 409, "invalid_state")
+                    confirm_plan(db, rid, who, actor, "confirm")
+                    fields.update(desired="active", status="ready", error=None)
                 elif action == "reopen":
                     require(run["lifecycle"] == "closed", "只有已关闭的 Session 可重新打开", 409, "invalid_state")
                     fields.update(desired="reopen", status="reopening")

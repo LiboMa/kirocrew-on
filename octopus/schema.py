@@ -77,6 +77,7 @@ def openapi():
                       "template_id": text, "document": ref("WorkflowDocument"), "plan": {"enum": ["agent", "match"]},
                       "workflow_version": integer, "steps": step_list, "team_id": text, "worker_id": text,
                        "source": ref("Source"), "recovery": ref("RecoveryPolicy"),
+                       "admission": {"enum": ["confirm", "auto"]},
                        "credentials": obj({"source": text})}, ["request_id", "input", "source"]),
         "Rebind": obj({"source": {"type": ["string", "null"]}}, ["source"]),
         "Continue": obj({**command, "task_id": text, "input": text, "execution": ref("Execution"),
@@ -143,6 +144,7 @@ def openapi():
         "/v1/runs/{id}/credentials": {"post": "Rebind"},
         "/v1/runs/{id}/app": {"get": None, "post": "AppAction"}, "/v1/runs/{id}/app/open": {"post": "Empty"},
         "/v1/runs/{id}/recover": {"post": "Control"},
+        "/v1/runs/{id}/confirm": {"post": "Control"},
         "/v1/runs/{id}/continue": {"post": "Continue"}, "/v1/runs/{id}/assign-worker": {"post": "AssignWorker"},
         **{"/v1/runs/{id}/" + action: {"post": "Control"} for action in ["stop", "close", "reopen", "delete"]},
     }
