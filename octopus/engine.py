@@ -290,7 +290,8 @@ class Engine:
         """The Attempt the watchdog stopped: blocked as a native error, retried once, then diagnosed (D39 §3.2)."""
         rid, reason = run["id"], info["reason"]
         prior = json.loads(attempt["evidence"] or "{}")
-        retry = settings["enabled"] and not prior.get("transient_retry_of")
+        with self.db.read() as db:   # D42: within the Session's automatic retries and time
+            retry = settings["enabled"] and not prior.get("transient_retry_of") and recovery.allows(db, run, "retry")
         info = {key: item for key, item in info.items() if key not in {"stopping", "stop_failed_at", "stop_error"}}
         evidence = {**evidence, "failure_type": "native_error", "watchdog": {**info, "stopped_at": self.wall()},
                     **({"transient": "stalled"} if retry else {})}
@@ -795,8 +796,9 @@ class Engine:
                     except (Error, ValueError, TypeError) as exc:
                         state, error = "blocked", "KiroCrew 规划结果未通过校验：" + str(exc)
                         evidence["failure_type"] = "contract"
-            if not (retry and current["current_attempt"] == attempt["id"] and active) or retry_of:
-                retry = None   # not ours to retry, or this Attempt already was the automatic retry: recovery decides
+            if not (retry and current["current_attempt"] == attempt["id"] and active) or retry_of or \
+                    not recovery.allows(db, run, "retry"):
+                retry = None   # not ours to retry, already the automatic retry, or past the budget (D42): recovery decides
             if retry:
                 evidence["transient"] = retry
             journal.change(db, "attempts", attempt["id"], journal.WORKER, "attempt.state",

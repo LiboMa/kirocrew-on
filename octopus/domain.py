@@ -1536,8 +1536,10 @@ class Service:
                                         who, "task.reset", status="pending", current_attempt=None)
                     journal.change(db, "tasks", (rid, current["id"]), who, "task.spec", spec=dumps(current))
                     reason = unserved(db, run) if run["worker_id"] else None
+                    # The user's continue authorises more automatic work: the recovery budget counts from here (D42).
+                    fresh = json.loads(db.execute("SELECT snapshot FROM runs WHERE id=?", (rid,)).fetchone()["snapshot"])
                     fields.update(input=goal, desired="active", status="ready" if run["worker_id"] and not reason else "waiting_worker",
-                                  error=reason)
+                                  error=reason, snapshot=dumps({**fresh, "budget_since": time.time()}))
                     commit()   # before the revision: its snapshot reads the new requirement
                     from .revisions import changes, record
                     detail = "、".join(filter(None, ["需求" if goal != run["input"] else "", changes(before, current)]))
@@ -1560,6 +1562,7 @@ class Service:
                     snapshot = json.loads(run["snapshot"])
                     old = snapshot.get("execution_contract", 1)
                     snapshot["execution_contract"] = max(old, 2)
+                    snapshot["budget_since"] = time.time()   # as a continue: the budget counts from the user's request (D42)
                     journal.change(db, "runs", rid, who, "run.settings", event={"execution_contract": [old, snapshot["execution_contract"]]},
                                    snapshot=dumps(snapshot))
                     schedule(db, self.db, run, task, attempt, manual=True, actor=who)

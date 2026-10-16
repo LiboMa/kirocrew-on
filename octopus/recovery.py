@@ -14,12 +14,15 @@ NEEDS_INPUT = {"input", "auth", "model", "native_stopped"}
 # The watchdog's limits (D39 §3.2): minutes without native progress, and of one Attempt in all; a session may change them.
 IDLE_MINUTES, ATTEMPT_MINUTES = 30, 170   # below KiroCrew's own subagent deadline (180 min), which reaps without a retry
 LIMITS = {"idle_minutes": (IDLE_MINUTES, 5, 240), "attempt_minutes": (ATTEMPT_MINUTES, 30, 720)}
+# The automatic recovery budget beside max_cycles (D42): retries without a diagnosis and the time since the user's last word.
+BUDGET = {"max_retries": (4, 0, 20, "的整数"), "budget_minutes": (720, 30, 4320, "的整数（分钟）")}
 
 
 def policy(value=None, *, legacy=False):
     if value is None:
         return {"enabled": not legacy, "max_cycles": 2}
-    require(isinstance(value, dict) and set(value) <= {"enabled", "max_cycles", "switch_tools", *LIMITS}, "自动纠错配置无效")
+    require(isinstance(value, dict) and set(value) <= {"enabled", "max_cycles", "switch_tools", *LIMITS, *BUDGET},
+            "自动纠错配置无效")
     enabled, limit, switch = value.get("enabled", True), value.get("max_cycles", 2), value.get("switch_tools", True)
     require(isinstance(enabled, bool) and type(limit) is int and 1 <= limit <= 5 and isinstance(switch, bool),
             "自动纠错次数须为 1–5，enabled 与 switch_tools 须为布尔值")
@@ -27,6 +30,11 @@ def policy(value=None, *, legacy=False):
     for key, (default, low, high) in LIMITS.items():
         number = value.get(key, default)
         require(type(number) is int and low <= number <= high, f"{key} 须为 {low}–{high} 的整数（分钟）")
+        if number != default:
+            minutes[key] = number
+    for key, (default, low, high, unit) in BUDGET.items():
+        number = value.get(key, default)
+        require(type(number) is int and low <= number <= high, f"{key} 须为 {low}–{high} {unit}")
         if number != default:
             minutes[key] = number
     # Defaults (switching tools on, the watchdog's limits) are not stored, so existing settings keep their shape.
@@ -241,6 +249,31 @@ def _still_switched(db, run_id, task_id, spec):
     return mark if mark and same else None
 
 
+def budget(db, run, now=None):
+    """What the automatic recovery has used since the Session began or the user's latest continue / requested diagnosis
+    (D42 §3.1), and the first part that ran out."""
+    snapshot = json.loads(run["snapshot"])
+    settings = policy(snapshot.get("recovery"), legacy=True)
+    since = snapshot.get("budget_since") or run["created"]
+    cycles = sum(1 for row in db.execute("SELECT context FROM recoveries WHERE run_id=? AND created>=?", (run["id"], since))
+                 if not json.loads(row["context"]).get("manual"))
+    retries = sum(1 for row in db.execute("SELECT evidence FROM attempts WHERE run_id=? AND created>=?", (run["id"], since))
+                  if json.loads(row["evidence"] or "{}").get("transient_retry_of"))
+    value = {"since": since,
+             "cycles": {"used": cycles, "limit": settings["max_cycles"]},
+             "retries": {"used": retries, "limit": settings.get("max_retries", BUDGET["max_retries"][0])},
+             "minutes": {"used": int(((now or time.time()) - since) // 60),
+                         "limit": settings.get("budget_minutes", BUDGET["budget_minutes"][0])}}
+    value["exhausted"] = next((key for key in ("cycles", "retries", "minutes") if value[key]["used"] >= value[key]["limit"]), None)
+    return value
+
+
+def allows(db, run, kind):
+    """Whether the budget leaves room for an automatic ``retry`` or a diagnosis (``cycle``); the time limits both."""
+    left = budget(db, run)
+    return all(left[key]["used"] < left[key]["limit"] for key in ("minutes", {"retry": "retries", "cycle": "cycles"}[kind]))
+
+
 def summary(db, run):
     snapshot = json.loads(run["snapshot"])
     rows = [dict(row) for row in db.execute("SELECT * FROM recoveries WHERE run_id=? ORDER BY number", (run["id"],))]
@@ -260,7 +293,7 @@ def schedule(db, database, run, task, attempt, *, manual=False, actor=None):
     failure = json.loads(attempt["evidence"]).get("failure_type", "native_error")
     if not manual:
         # An environment that no longer serves the run gets no new diagnosis (§6.2): continuing moves it to waiting.
-        if (not settings["enabled"] or len(rows) >= settings["max_cycles"] or failure in NEEDS_INPUT or
+        if (not settings["enabled"] or not allows(db, run, "cycle") or failure in NEEDS_INPUT or
                 any(r["failed_attempt_id"] == attempt["id"] for r in rows) or (run["worker_id"] and unserved(db, run))):
             return None
     ordered = [dict(t) for t in db.execute("SELECT id,ordinal,spec FROM tasks WHERE run_id=? ORDER BY ordinal",

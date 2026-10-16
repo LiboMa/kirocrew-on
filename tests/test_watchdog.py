@@ -112,6 +112,14 @@ class WatchdogTests(WatchdogCase):
         self.assertEqual(attempts[1]["evidence"].get("transient_retry_of"), first["id"])
         self.assertEqual(run["recovery"]["used"], 0)
 
+    def test_the_watchdog_retry_is_within_the_budget(self):
+        rid = self.start({"enabled": True, "max_cycles": 2, "max_retries": 0})   # D42: no automatic retries left
+        run = self.later(rid, 4)
+        attempts = sorted(run["tasks"][0]["attempts"], key=lambda a: a["number"])
+        self.assertEqual(len(attempts), 1)
+        self.assertNotIn("transient", attempts[0]["evidence"])
+        self.assertEqual(run["recovery"]["used"], 1)   # the Coordinator decides instead
+
     def test_a_retry_that_stalls_again_goes_to_diagnosis(self):
         rid = self.start()
         self.later(rid, 3)                # stopped, the retry dispatched and seen running
