@@ -153,7 +153,7 @@ evidence.watchdog 存在时是看门狗停止了没有进展的任务：先判�
 不能从 findings 非空推断 JSON 格式错误。区分已核实原因和推测，不发明引擎的额外规则。
 这是诊断任务；失败业务任务的输入在 coordination 中。下一次重试一定携带新的 repair 字段，
 其中包含本决定和失败证据，不能因为本诊断文件没有 repair 就称下一次业务执行为首次执行。
-当前原始失败及工作流：{dumps(context)}
+失败、证据、各任务的配置与执行环境在 {folder / 'context.json'} 的 coordination 中，完整读取后再判断（不在此重复）。
 
 把唯一有效的处置写到 {folder / 'decision.json'}，严格 JSON：
 {{"action":"retry","target_task_id":"当前或上游 Task ID",
@@ -417,13 +417,29 @@ def reconcile(database, skip=frozenset()):
 
 
 def feedback(db, run, attempt):
+    """What a task run after a recovery round is told (D46): the task the Coordinator sent back gets its decision and a
+    summary of the failure to repair; a later review or test re-checks those findings; any other task gets nothing."""
     row = db.execute("SELECT * FROM recoveries WHERE run_id=? AND status='applied' AND updated<=? "
                      "ORDER BY number DESC LIMIT 1", (run["id"], attempt["created"])).fetchone()
-    if not row or json.loads(row["decision"] or "{}").get("action") == "replan":
+    decision = json.loads(row["decision"] or "{}") if row else {}
+    if not row or decision.get("action") == "replan":
         return None   # a replan's instructions were for the planner; the new tasks are first runs (D41)
-    return {"recovery_id": row["id"], "cycle": row["number"],
-            "decision": json.loads(row["decision"]), "failure": json.loads(row["context"]),
-            "instruction": "本轮为纠错后的重新执行；实施修复并重新验证，后续审查必须针对本轮源码。"}
+    context = json.loads(row["context"])
+    outcome = (context.get("evidence") or {}).get("outcome") or {}
+    findings = [f if isinstance(f, str) else json.dumps(f, ensure_ascii=False) for f in outcome.get("findings") or []]
+    failure = {"task": context.get("failed_task_id"), "error": str(context.get("error") or "")[:1500],
+               "failure_type": context.get("failure_type"), "findings": [f[:300] for f in findings[:10]],
+               "summary": str(outcome.get("summary") or "")[:800]}
+    target = decision.get("target_task_id") or context.get("failed_task_id")
+    if attempt["task_id"] == target:
+        return {"recovery_id": row["id"], "cycle": row["number"],
+                "decision": {k: decision.get(k) for k in ("action", "target_task_id", "reason", "instructions") if decision.get(k)},
+                "failure": failure, "instruction": "本轮为纠错后的重新执行；实施修复并重新验证，后续审查必须针对本轮源码。"}
+    spec = json.loads(attempt["spec"])
+    if is_review(spec) or spec.get("kind") == "test":
+        return {"recovery_id": row["id"], "cycle": row["number"], "recheck": True, "failure": failure,
+                "instruction": "本轮为返工后的复验：逐条核对上一轮的失败与发现是否已解决，结论只针对本轮源码。"}
+    return None
 
 
 class Coordinator:

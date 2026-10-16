@@ -105,8 +105,10 @@ class RecoveryTests(unittest.TestCase):
         self.assertEqual(result["tasks"][1]["attempts"][0]["status"], "blocked")
         corrected = [b for b in self.bodies.values() if b.get("repair")]
         self.assertEqual(len(corrected), 2)
-        self.assertIn("空输入", corrected[0]["repair"]["failure"]["evidence"]["outcome"]["summary"])
-        self.assertEqual(corrected[1]["repair"]["decision"]["target_task_id"], "code")
+        # D46: the reworked task gets the decision and a summary of the failure; the re-review re-checks it
+        self.assertIn("空输入", corrected[0]["repair"]["failure"]["summary"])
+        self.assertEqual(corrected[0]["repair"]["decision"]["target_task_id"], "code")
+        self.assertTrue(corrected[1]["repair"]["recheck"])
         self.assertEqual(corrected[0]["spec"], result["tasks"][0]["attempts"][0]["spec"])
         self.assertNotIn("coordination", corrected[0])
         self.assertEqual(result["version"], 2)

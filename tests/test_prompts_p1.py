@@ -158,5 +158,43 @@ class DispatchTests(unittest.TestCase):
         self.assertTrue(self.bodies("code")[-1]["requirement"].get("outdated"))
 
 
+class RepairTests(unittest.TestCase):
+    def setUp(self):
+        from tests.test_replan import ReplanCase
+        class Case(ReplanCase):
+            def runTest(self):
+                pass
+        self.case = Case()
+        self.case.setUp()
+        self.addCleanup(self.case.tmp.cleanup)
+        self.case.failing = {("review", 1)}
+        self.case.decisions = [{"action": "rework", "target_task_id": "code", "reason": "空输入未处理", "instructions": "补上空输入校验"}]
+
+    def test_only_the_reworked_task_is_told_to_repair(self):
+        rid = self.case.start(recovery={"enabled": True, "max_cycles": 2})
+        run = self.case.tick(rid, 60)
+        self.assertEqual(run["status"], "completed")
+        code, review, deliver = (self.case.dispatched(t) for t in ("code", "review", "deliver"))
+        self.assertIn("实施修复", code[1]["repair"]["instruction"])
+        self.assertTrue(review[1]["repair"]["recheck"])                     # the re-review checks the findings were fixed
+        self.assertNotIn("实施修复", review[1]["repair"]["instruction"])
+        self.assertNotIn("repair", deliver[0])                              # nothing to repair there
+
+    def test_the_repair_carries_a_summary_not_the_whole_context(self):
+        rid = self.case.start(recovery={"enabled": True, "max_cycles": 2})
+        self.case.tick(rid, 60)
+        failure = self.case.dispatched("code")[1]["repair"]["failure"]
+        self.assertEqual(set(failure) - {"task", "error", "failure_type", "findings", "summary"}, set())
+        self.assertEqual(failure["task"], "review")
+        self.assertIn("缺少测试", failure["findings"])
+
+    def test_the_coordinator_reads_its_context_from_the_file(self):
+        from pathlib import Path
+        from octopus.recovery import coordinator_instructions
+        text = coordinator_instructions({"input": "UNIQUE-REQUIREMENT-TEXT", "environment": {}}, Path("/w/attempt"))
+        self.assertNotIn("UNIQUE-REQUIREMENT-TEXT", text)
+        self.assertIn("/w/attempt/context.json", text)
+
+
 if __name__ == "__main__":
     unittest.main()

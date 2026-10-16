@@ -813,8 +813,11 @@ class Worker:
                                  f"\"reviewed_commit\": \"{target['sha']}\"。")
             if body.get("repair"):
                 context["repair"] = body["repair"]
-                extra_prompt += ("\n\n## 本轮协调者纠错与复审要求\n" + dumps(body["repair"]) +
-                                 "\n完整阅读失败证据，优先执行本轮具体修复要求；再次运行相关验证，不能沿用旧通过结论。")
+                extra_prompt += (("\n\n## 本轮返工后的复验要求\n" + dumps(body["repair"]) +
+                                  "\n逐条核对上一轮的失败与发现是否已解决；不能沿用旧结论。")
+                                 if body["repair"].get("recheck") else
+                                 ("\n\n## 本轮协调者纠错与复审要求\n" + dumps(body["repair"]) +
+                                  "\n完整阅读失败证据，优先执行本轮具体修复要求；再次运行相关验证，不能沿用旧通过结论。"))
             if body.get("design"):
                 from .designs import instructions
                 require(spec["tool"] == "kiro", "工作流设计须使用 Kiro 后端")
