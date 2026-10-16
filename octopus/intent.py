@@ -9,18 +9,29 @@ import unicodedata
 CORE = [
     {"id": "chain", "name": "完整研发链", "description": "分析需求、实现、独立审查与交付。",
      "steps": [
-         {"id": "plan", "name": "分析需求与验收", "tool": "kiro", "prompt": "阅读源码与用户需求，形成实现计划、接口约定与可验证的验收条件。此步先完成分析与交接。"},
-         {"id": "code", "name": "实现与基础测试", "tool": "claude", "prompt": "按前序计划实现功能，运行项目相关测试。交接具体修改、真实 diff、命令和测试结果。"},
-         {"id": "review", "name": "Security / Testing Review", "tool": "codex", "prompt": "独立阅读实际源码与 diff，审查安全、边界条件与测试覆盖。运行必要验证，记录问题；存在阻断问题时报告 BLOCKED。"},
-         {"id": "delivery", "name": "交付与开发状态页", "tool": "opencode", "prompt": "核对前序交接与审查，整理开发说明、Release 文档和本地 HTML 状态页面；明确通过项及限制，运行最终验证。"}]},
+         {"id": "plan", "name": "分析需求与验收", "tool": "kiro", "kind": "design", "acceptance": ["交接中给出实现计划、接口约定与可验证的验收条件"],
+          "prompt": "阅读源码与用户需求，形成实现计划、接口约定与可验证的验收条件。此步只做分析与交接，不修改业务代码。"},
+         {"id": "code", "name": "实现与基础测试", "tool": "claude", "kind": "implement", "acceptance": ["改动满足本次目标，并在交接中给出实际执行的验证命令与结果"],
+          "prompt": "按前序计划实现功能，运行项目相关测试。交接具体修改、命令和测试结果。"},
+         {"id": "review", "name": "Security / Testing Review", "tool": "codex", "kind": "review",
+          "acceptance": ["逐条核对本次目标与实际改动；需修复的问题以 changes_requested 列出（文件与行）"],
+          "prompt": "独立阅读实际源码与 diff，审查安全、边界条件与测试覆盖。运行必要验证，记录问题；需修复的问题给出 changes_requested 并列出，"
+                    "缺少输入、认证或权限时才用 BLOCKED。"},
+         {"id": "delivery", "name": "交付与开发状态页", "tool": "claude", "kind": "deliver", "acceptance": ["交付物可按交接中的说明运行或查看，并列出通过项与限制"],
+          "prompt": "核对前序交接与审查，整理开发说明、Release 文档和本地 HTML 状态页面；明确通过项及限制，运行最终验证。"}]},
     {"id": "proof", "name": "最小实现与审查", "description": "先实现最小功能，再独立验证。",
      "steps": [
-         {"id": "code", "name": "最小可用实现", "tool": "claude", "prompt": "以最少依赖实现用户需求。编写并运行真实测试，说明启动方法与交付文件。"},
-         {"id": "review", "name": "独立验证", "tool": "codex", "prompt": "读取前序交接和真实代码，独立运行测试并检查异常输入。明确报告通过、问题及恢复条件。"}]},
+         {"id": "code", "name": "最小可用实现", "tool": "claude", "kind": "implement", "acceptance": ["改动满足本次目标，并在交接中给出实际执行的验证命令与结果"],
+          "prompt": "以最少依赖实现用户需求。编写并运行真实测试，说明启动方法与交付文件。"},
+         {"id": "review", "name": "独立验证", "tool": "codex", "kind": "review",
+          "acceptance": ["逐条核对本次目标与实际改动；需修复的问题以 changes_requested 列出（文件与行）"],
+          "prompt": "读取前序交接和真实代码，独立运行测试并检查异常输入。明确报告通过项；需修复的问题给出 changes_requested 并列出。"}]},
     {"id": "fix", "name": "缺陷定位与修复", "description": "定位缺陷，完成修复与回归。",
      "steps": [
-         {"id": "diagnose", "name": "定位和复现问题", "tool": "kiro", "prompt": "依据需求与源码复现缺陷，提供实际证据、根因分析和最小修复方案。"},
-         {"id": "fix", "name": "修复与回归", "tool": "codex", "prompt": "依据前序交接修复缺陷，加入针对性回归验证，记录实际命令及结果。"}]},
+         {"id": "diagnose", "name": "定位和复现问题", "tool": "kiro", "kind": "design", "acceptance": ["交接中给出复现步骤、实际证据、根因与最小修复方案"],
+          "prompt": "依据需求与源码复现缺陷，提供实际证据、根因分析和最小修复方案。"},
+         {"id": "fix", "name": "修复与回归", "tool": "codex", "kind": "implement", "acceptance": ["缺陷已修复，并在交接中给出针对性回归验证的命令与结果"],
+          "prompt": "依据前序交接修复缺陷，加入针对性回归验证，记录实际命令及结果。"}]},
 ]
 
 # Reuse the existing template library, including examples and task contracts.
@@ -98,8 +109,8 @@ def preset_steps(row, goal):
     """Template-specific prompts include the current goal; manual steps are untouched."""
     result = copy.deepcopy(row["steps"])
     for index, step in enumerate(result):
-        step["prompt"] += ("\n\n本次目标：" + goal[:1200] + ("…（完整需求由平台另行提供）" if len(goal) > 1200 else "") +
-                           f"\n当前步骤：{index + 1}/{len(result)} · {step['name']}。"
+        # the goal is the instructions' own heading (本次研发任务): not repeated in each step (D46)
+        step["prompt"] += (f"\n\n当前步骤：{index + 1}/{len(result)} · {step['name']}。"
                            "\n结合本项目的实际源码和前序交接执行，交付可核查的结果与验证记录。")
     return result
 

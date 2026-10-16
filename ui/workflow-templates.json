@@ -14,7 +14,11 @@
         "tool": "kiro",
         "model": "auto",
         "effort": "",
-        "prompt": "根据目标实现最小可交互原型，保存为 web/index.html。验证输入与输出；浏览器工具不可用时明确记录哪些操作尚未验证，并给出手动验证步骤。"
+        "prompt": "根据目标实现最小可交互原型，保存为 web/index.html。验证输入与输出；浏览器工具不可用时明确记录哪些操作尚未验证，并给出手动验证步骤。",
+        "kind": "implement",
+        "acceptance": [
+          "改动满足本次目标，并在交接中给出实际执行的验证命令与结果"
+        ]
       }
     ]
   },
@@ -33,7 +37,11 @@
         "tool": "claude",
         "model": "auto",
         "effort": "",
-        "prompt": "按目标创建 proof.mjs 和 tests/proof.test.mjs，运行 node --test，保存真实输出与 candidate.diff；没有 Git 基线时使用文件差异工具，不编造结果。"
+        "prompt": "按目标创建 proof.mjs 和 tests/proof.test.mjs，运行 node --test，保存真实输出（候选提交由平台生成），不编造结果。",
+        "kind": "implement",
+        "acceptance": [
+          "改动满足本次目标，并在交接中给出实际执行的验证命令与结果"
+        ]
       },
       {
         "id": "review",
@@ -41,7 +49,11 @@
         "tool": "codex",
         "model": "auto",
         "effort": "",
-        "prompt": "读取实际实现、真实 diff 和前序交接，独立运行可用测试，核对验收目标、输入边界及回归。只记录已执行的结果；未解决的阻塞问题明确报告 BLOCKED，不擅自修改被审查实现。"
+        "prompt": "读取实际实现、真实 diff 和前序交接，独立运行可用测试，核对验收目标、输入边界及回归。只记录已执行的结果；需修复的问题给出 changes_requested 并列出；缺少输入、认证或权限时才用 BLOCKED，不擅自修改被审查实现。",
+        "kind": "review",
+        "acceptance": [
+          "逐条核对本次目标与实际改动；需修复的问题以 changes_requested 列出（文件与行）"
+        ]
       }
     ]
   },
@@ -60,7 +72,11 @@
         "tool": "kiro",
         "model": "auto",
         "effort": "",
-        "prompt": "产出 idea.md 与 acceptance.md。将未知信息标为假设，为下一轮 Coding 给出简洁且可操作的任务建议。"
+        "prompt": "产出 idea.md 与 acceptance.md。将未知信息标为假设，为下一轮 Coding 给出简洁且可操作的任务建议。",
+        "kind": "design",
+        "acceptance": [
+          "交接中给出可核实的结论、依据与后续任务所需的输入"
+        ]
       }
     ]
   },
@@ -79,15 +95,23 @@
         "tool": "claude",
         "model": "auto",
         "effort": "",
-        "prompt": "实现 web/index.html 和必要本地资源，验证导航、输入提示与演示表单，记录真实验证方法及限制，保存代码 diff。"
+        "prompt": "实现 web/index.html 和必要本地资源，验证导航、输入提示与演示表单，记录真实验证方法及限制，保存代码 diff。",
+        "kind": "implement",
+        "acceptance": [
+          "改动满足本次目标，并在交接中给出实际执行的验证命令与结果"
+        ]
       },
       {
         "id": "deliver",
         "name": "预览与交付说明",
-        "tool": "opencode",
+        "tool": "claude",
         "model": "auto",
         "effort": "",
-        "prompt": "核对前序实现和审查结果，确认网页位于 web/index.html，整理启动方式、已验证结果和限制。交付阶段不修改已审查业务代码；需要修改或仍有阻塞时报告 BLOCKED，由用户安排修复和重新审查。"
+        "prompt": "核对前序实现和审查结果，确认网页位于 web/index.html，整理启动方式、已验证结果和限制。交付阶段不修改已审查业务代码；需要修改时给出 changes_requested；缺少输入、认证或权限时才用 BLOCKED。",
+        "kind": "deliver",
+        "acceptance": [
+          "交付物可按交接中的说明运行或查看，并列出通过项与限制"
+        ]
       }
     ]
   },
@@ -106,7 +130,11 @@
         "tool": "kiro",
         "model": "auto",
         "effort": "",
-        "prompt": "阅读本次开发目标，拆分最小范围和可验证的验收标准，写入 plan.md。不要扩大功能或引入未要求的外部服务。"
+        "prompt": "阅读本次开发目标，拆分最小范围和可验证的验收标准，写入 plan.md。不要扩大功能或引入未要求的外部服务。",
+        "kind": "design",
+        "acceptance": [
+          "交接中给出可核实的结论、依据与后续任务所需的输入"
+        ]
       },
       {
         "id": "code",
@@ -114,7 +142,11 @@
         "tool": "claude",
         "model": "auto",
         "effort": "",
-        "prompt": "根据计划实现本地任务看板，将可测试的状态和筛选逻辑单独组织，测试重复操作、空输入及坏数据恢复。保存真实测试输出与 diff。"
+        "prompt": "根据计划实现本地任务看板，将可测试的状态和筛选逻辑单独组织，测试重复操作、空输入及坏数据恢复。保存真实测试输出与 diff。",
+        "kind": "implement",
+        "acceptance": [
+          "改动满足本次目标，并在交接中给出实际执行的验证命令与结果"
+        ]
       },
       {
         "id": "review",
@@ -122,15 +154,23 @@
         "tool": "codex",
         "model": "auto",
         "effort": "",
-        "prompt": "读取实际实现、真实 diff 和前序交接，独立运行可用测试，核对验收目标、输入边界及回归。只记录已执行的结果；未解决的阻塞问题明确报告 BLOCKED，不擅自修改被审查实现。"
+        "prompt": "读取实际实现、真实 diff 和前序交接，独立运行可用测试，核对验收目标、输入边界及回归。只记录已执行的结果；需修复的问题给出 changes_requested 并列出；缺少输入、认证或权限时才用 BLOCKED，不擅自修改被审查实现。",
+        "kind": "review",
+        "acceptance": [
+          "逐条核对本次目标与实际改动；需修复的问题以 changes_requested 列出（文件与行）"
+        ]
       },
       {
         "id": "deliver",
         "name": "预览与交付说明",
-        "tool": "opencode",
+        "tool": "claude",
         "model": "auto",
         "effort": "",
-        "prompt": "核对前序实现和审查结果，确认网页位于 web/index.html，整理启动方式、已验证结果和限制。交付阶段不修改已审查业务代码；需要修改或仍有阻塞时报告 BLOCKED，由用户安排修复和重新审查。"
+        "prompt": "核对前序实现和审查结果，确认网页位于 web/index.html，整理启动方式、已验证结果和限制。交付阶段不修改已审查业务代码；需要修改时给出 changes_requested；缺少输入、认证或权限时才用 BLOCKED。",
+        "kind": "deliver",
+        "acceptance": [
+          "交付物可按交接中的说明运行或查看，并列出通过项与限制"
+        ]
       }
     ]
   },
@@ -149,7 +189,11 @@
         "tool": "claude",
         "model": "auto",
         "effort": "",
-        "prompt": "创建合成样例和本地 CSV 概览页，显式校验约定格式。测试空数据、坏表头、非法数值及不支持的引号格式，保留真实 diff 和输出。"
+        "prompt": "创建合成样例和本地 CSV 概览页，显式校验约定格式。测试空数据、坏表头、非法数值及不支持的引号格式，保留真实 diff 和输出。",
+        "kind": "implement",
+        "acceptance": [
+          "改动满足本次目标，并在交接中给出实际执行的验证命令与结果"
+        ]
       },
       {
         "id": "review",
@@ -157,15 +201,23 @@
         "tool": "codex",
         "model": "auto",
         "effort": "",
-        "prompt": "读取实际实现、真实 diff 和前序交接，独立运行可用测试，核对验收目标、输入边界及回归。只记录已执行的结果；未解决的阻塞问题明确报告 BLOCKED，不擅自修改被审查实现。"
+        "prompt": "读取实际实现、真实 diff 和前序交接，独立运行可用测试，核对验收目标、输入边界及回归。只记录已执行的结果；需修复的问题给出 changes_requested 并列出；缺少输入、认证或权限时才用 BLOCKED，不擅自修改被审查实现。",
+        "kind": "review",
+        "acceptance": [
+          "逐条核对本次目标与实际改动；需修复的问题以 changes_requested 列出（文件与行）"
+        ]
       },
       {
         "id": "deliver",
         "name": "预览与交付说明",
-        "tool": "opencode",
+        "tool": "claude",
         "model": "auto",
         "effort": "",
-        "prompt": "核对前序实现和审查结果，确认网页位于 web/index.html，整理启动方式、已验证结果和限制。交付阶段不修改已审查业务代码；需要修改或仍有阻塞时报告 BLOCKED，由用户安排修复和重新审查。"
+        "prompt": "核对前序实现和审查结果，确认网页位于 web/index.html，整理启动方式、已验证结果和限制。交付阶段不修改已审查业务代码；需要修改时给出 changes_requested；缺少输入、认证或权限时才用 BLOCKED。",
+        "kind": "deliver",
+        "acceptance": [
+          "交付物可按交接中的说明运行或查看，并列出通过项与限制"
+        ]
       }
     ]
   },
@@ -184,7 +236,11 @@
         "tool": "claude",
         "model": "auto",
         "effort": "",
-        "prompt": "实现命令行工具、README 和 unittest；覆盖空文件、中文、末尾换行与异常路径。实际运行测试，记录输出和真实 diff。"
+        "prompt": "实现命令行工具、README 和 unittest；覆盖空文件、中文、末尾换行与异常路径。实际运行测试，记录输出和真实 diff。",
+        "kind": "implement",
+        "acceptance": [
+          "改动满足本次目标，并在交接中给出实际执行的验证命令与结果"
+        ]
       },
       {
         "id": "review",
@@ -192,7 +248,11 @@
         "tool": "codex",
         "model": "auto",
         "effort": "",
-        "prompt": "读取实际实现、真实 diff 和前序交接，独立运行可用测试，核对验收目标、输入边界及回归。只记录已执行的结果；未解决的阻塞问题明确报告 BLOCKED，不擅自修改被审查实现。"
+        "prompt": "读取实际实现、真实 diff 和前序交接，独立运行可用测试，核对验收目标、输入边界及回归。只记录已执行的结果；需修复的问题给出 changes_requested 并列出；缺少输入、认证或权限时才用 BLOCKED，不擅自修改被审查实现。",
+        "kind": "review",
+        "acceptance": [
+          "逐条核对本次目标与实际改动；需修复的问题以 changes_requested 列出（文件与行）"
+        ]
       }
     ]
   },
@@ -211,7 +271,11 @@
         "tool": "kiro",
         "model": "auto",
         "effort": "",
-        "prompt": "阅读本次开发目标，拆分最小范围和可验证的验收标准，写入 plan.md。不要扩大功能或引入未要求的外部服务。"
+        "prompt": "阅读本次开发目标，拆分最小范围和可验证的验收标准，写入 plan.md。不要扩大功能或引入未要求的外部服务。",
+        "kind": "design",
+        "acceptance": [
+          "交接中给出可核实的结论、依据与后续任务所需的输入"
+        ]
       },
       {
         "id": "code",
@@ -219,7 +283,11 @@
         "tool": "claude",
         "model": "auto",
         "effort": "",
-        "prompt": "根据计划用标准库实现 API，提供可启动与关闭的服务接口。使用 node:test 实际验证正常请求、错误响应和请求大小限制，保存真实 diff 与运行输出。"
+        "prompt": "根据计划用标准库实现 API，提供可启动与关闭的服务接口。使用 node:test 实际验证正常请求、错误响应和请求大小限制，保存真实 diff 与运行输出。",
+        "kind": "implement",
+        "acceptance": [
+          "改动满足本次目标，并在交接中给出实际执行的验证命令与结果"
+        ]
       },
       {
         "id": "review",
@@ -227,7 +295,11 @@
         "tool": "codex",
         "model": "auto",
         "effort": "",
-        "prompt": "读取实际实现、真实 diff 和前序交接，独立运行可用测试，核对验收目标、输入边界及回归。只记录已执行的结果；未解决的阻塞问题明确报告 BLOCKED，不擅自修改被审查实现。"
+        "prompt": "读取实际实现、真实 diff 和前序交接，独立运行可用测试，核对验收目标、输入边界及回归。只记录已执行的结果；需修复的问题给出 changes_requested 并列出；缺少输入、认证或权限时才用 BLOCKED，不擅自修改被审查实现。",
+        "kind": "review",
+        "acceptance": [
+          "逐条核对本次目标与实际改动；需修复的问题以 changes_requested 列出（文件与行）"
+        ]
       }
     ]
   },
@@ -243,7 +315,11 @@
         "tool": "kiro",
         "model": "auto",
         "effort": "",
-        "prompt": "先核实本次项目目录、源码基线、技术栈、依赖和接口，再根据目标定义验收标准与实现计划；已有工程不能用空目录或静态假数据替代。"
+        "prompt": "先核实本次项目目录、源码基线、技术栈、依赖和接口，再根据目标定义验收标准与实现计划；已有工程不能用空目录或静态假数据替代。",
+        "kind": "design",
+        "acceptance": [
+          "交接中给出可核实的结论、依据与后续任务所需的输入"
+        ]
       },
       {
         "id": "code",
@@ -251,7 +327,11 @@
         "tool": "claude",
         "model": "auto",
         "effort": "",
-        "prompt": "按项目计划与接口契约实现功能，按锁文件准备依赖，执行已有构建、检查和测试脚本，保存真实 diff 与验证结果。"
+        "prompt": "按项目计划与接口契约实现功能，按锁文件准备依赖，执行已有构建、检查和测试脚本，保存真实 diff 与验证结果。",
+        "kind": "implement",
+        "acceptance": [
+          "改动满足本次目标，并在交接中给出实际执行的验证命令与结果"
+        ]
       },
       {
         "id": "review",
@@ -259,15 +339,23 @@
         "tool": "codex",
         "model": "auto",
         "effort": "",
-        "prompt": "读取实际文件和 diff，检查安全、边界条件及回归，实际运行测试。发现阻塞问题时明确报告 BLOCKED，不把未运行的测试说成通过。"
+        "prompt": "读取实际文件和 diff，检查安全、边界条件及回归，实际运行测试。需修复的问题给出 changes_requested 并列出；缺少输入、认证或权限时才用 BLOCKED。不把未运行的测试说成通过。",
+        "kind": "review",
+        "acceptance": [
+          "逐条核对本次目标与实际改动；需修复的问题以 changes_requested 列出（文件与行）"
+        ]
       },
       {
         "id": "deliver",
         "name": "前端交付",
-        "tool": "opencode",
+        "tool": "claude",
         "model": "auto",
         "effort": "",
-        "prompt": "核对实现与审查，整理可运行前端、接口联通结果、启动方式和 Release 说明。按用户已有授权完成交付动作；更改已审查实现时要求重新验证。"
+        "prompt": "核对实现与审查，整理可运行前端、接口联通结果、启动方式和 Release 说明。按用户已有授权完成交付动作；更改已审查实现时要求重新验证。",
+        "kind": "deliver",
+        "acceptance": [
+          "交付物可按交接中的说明运行或查看，并列出通过项与限制"
+        ]
       }
     ],
     "category": "web",
@@ -286,7 +374,11 @@
         "tool": "kiro",
         "model": "auto",
         "effort": "",
-        "prompt": "读取需求和现有代码，复现问题，记录最小复现步骤及预期行为。没有真实复现证据时说明限制。"
+        "prompt": "读取需求和现有代码，复现问题，记录最小复现步骤及预期行为。没有真实复现证据时说明限制。",
+        "kind": "design",
+        "acceptance": [
+          "交接中给出可核实的结论、依据与后续任务所需的输入"
+        ]
       },
       {
         "id": "fix",
@@ -294,7 +386,11 @@
         "tool": "claude",
         "model": "auto",
         "effort": "",
-        "prompt": "依据复现证据实现最小修复，添加必要回归测试，运行并保存结果与真实 diff。"
+        "prompt": "依据复现证据实现最小修复，添加必要回归测试，运行并保存结果与真实 diff。",
+        "kind": "implement",
+        "acceptance": [
+          "改动满足本次目标，并在交接中给出实际执行的验证命令与结果"
+        ]
       },
       {
         "id": "review",
@@ -302,15 +398,23 @@
         "tool": "codex",
         "model": "auto",
         "effort": "",
-        "prompt": "独立检查修复 diff 和回归结果，实际验证边界条件；报告剩余问题。"
+        "prompt": "独立检查修复 diff 和回归结果，实际验证边界条件；报告剩余问题。需修复的问题给出 changes_requested 并列出；缺少输入、认证或权限时才用 BLOCKED。",
+        "kind": "review",
+        "acceptance": [
+          "逐条核对本次目标与实际改动；需修复的问题以 changes_requested 列出（文件与行）"
+        ]
       },
       {
         "id": "report",
         "name": "修复报告",
-        "tool": "opencode",
+        "tool": "claude",
         "model": "auto",
         "effort": "",
-        "prompt": "将问题、修复、验证和限制整理为本地 HTML 报告，链接真实产物。 将 HTML 报告保存到 web/index.html。"
+        "prompt": "将问题、修复、验证和限制整理为本地 HTML 报告，链接真实产物。 将 HTML 报告保存到 web/index.html。",
+        "kind": "deliver",
+        "acceptance": [
+          "交付物可按交接中的说明运行或查看，并列出通过项与限制"
+        ]
       }
     ],
     "category": "existing",
@@ -329,7 +433,11 @@
         "tool": "codex",
         "model": "auto",
         "effort": "",
-        "prompt": "读取实际代码和 diff，运行适用测试，报告真实问题、文件位置和验证依据。没有代码时明确 BLOCKED。"
+        "prompt": "读取实际代码和 diff，运行适用测试，报告真实问题、文件位置和验证依据。没有代码时明确 BLOCKED。需修复的问题给出 changes_requested 并列出；缺少输入、认证或权限时才用 BLOCKED。",
+        "kind": "review",
+        "acceptance": [
+          "逐条核对本次目标与实际改动；需修复的问题以 changes_requested 列出（文件与行）"
+        ]
       },
       {
         "id": "verify",
@@ -337,7 +445,11 @@
         "tool": "claude",
         "model": "auto",
         "effort": "",
-        "prompt": "逐条复核前序问题，区分已验证问题与推测，生成本地 HTML 审查报告；未经用户要求不修改被审查代码。 将 HTML 报告保存到 web/index.html。"
+        "prompt": "逐条复核前序问题，区分已验证问题与推测，生成本地 HTML 审查报告；未经用户要求不修改被审查代码。 将 HTML 报告保存到 web/index.html。",
+        "kind": "deliver",
+        "acceptance": [
+          "交付物可按交接中的说明运行或查看，并列出通过项与限制"
+        ]
       }
     ],
     "category": "existing",
@@ -356,7 +468,11 @@
         "tool": "kiro",
         "model": "auto",
         "effort": "",
-        "prompt": "定义 Go API 的请求响应、数据模型、验收标准及测试清单，说明前后端交接约定。"
+        "prompt": "定义 Go API 的请求响应、数据模型、验收标准及测试清单，说明前后端交接约定。",
+        "kind": "design",
+        "acceptance": [
+          "交接中给出可核实的结论、依据与后续任务所需的输入"
+        ]
       },
       {
         "id": "code",
@@ -364,7 +480,11 @@
         "tool": "claude",
         "model": "auto",
         "effort": "",
-        "prompt": "使用 Go 标准库实现 API 和必要测试，验证输入与错误处理；缺少项目运行环境时按授权准备或报告准确的缺失条件。"
+        "prompt": "使用 Go 标准库实现 API 和必要测试，验证输入与错误处理；缺少项目运行环境时按授权准备或报告准确的缺失条件。",
+        "kind": "implement",
+        "acceptance": [
+          "改动满足本次目标，并在交接中给出实际执行的验证命令与结果"
+        ]
       },
       {
         "id": "review",
@@ -372,15 +492,23 @@
         "tool": "codex",
         "model": "auto",
         "effort": "",
-        "prompt": "读取真实实现与 diff，实际运行可用测试，检查输入校验、状态变更和并发风险。"
+        "prompt": "读取真实实现与 diff，实际运行可用测试，检查输入校验、状态变更和并发风险。需修复的问题给出 changes_requested 并列出；缺少输入、认证或权限时才用 BLOCKED。",
+        "kind": "review",
+        "acceptance": [
+          "逐条核对本次目标与实际改动；需修复的问题以 changes_requested 列出（文件与行）"
+        ]
       },
       {
         "id": "deliver",
         "name": "Web 前端与交付",
-        "tool": "opencode",
+        "tool": "claude",
         "model": "auto",
         "effort": "",
-        "prompt": "基于已实现 API 制作蓝白色 Web 页面及启动说明，保存到 web/index.html。明确区分静态预览和实际 API 联通结果。"
+        "prompt": "基于已实现 API 制作蓝白色 Web 页面及启动说明，保存到 web/index.html。明确区分静态预览和实际 API 联通结果。",
+        "kind": "deliver",
+        "acceptance": [
+          "交付物可按交接中的说明运行或查看，并列出通过项与限制"
+        ]
       }
     ],
     "category": "engineering",

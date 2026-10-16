@@ -118,7 +118,9 @@ class MVPTests(unittest.TestCase):
         self.assertEqual(result["status"],"ready")
         self.assertEqual(result["config"]["name"],"退款接口工作流")
         self.assertEqual(result["evidence"]["actual_backend"],"kiro")
-        self.assertIn("订单退款",self.dispatched[0]["design"]["basis"][0]["prompt"])
+        # D46: the goal reaches the designer as the requirement, not copied into each basis step's prompt
+        self.assertIn("订单退款",self.dispatched[0]["input"])
+        self.assertNotIn("订单退款",self.dispatched[0]["design"]["basis"][0]["prompt"])
         self.assertEqual(len(self.service.workflows(self.a)),1)
         self.assertEqual(len(self.service.run(self.a,created["id"])["tasks"]),1)
 
@@ -159,8 +161,10 @@ class MVPTests(unittest.TestCase):
         first=self.service.resolve_workflow(self.a,{"input":"实现订单退款","template_id":"proof"})
         second=self.service.resolve_workflow(self.a,{"input":"实现会议议程","template_id":"proof"})
         repair=self.service.resolve_workflow(self.a,{"input":"修复退款异常","template_id":"bugfix"})
-        self.assertIn("实现订单退款",first["steps"][0]["prompt"])
-        self.assertIn("实现会议议程",second["steps"][0]["prompt"])
+        # D46: a step's prompt says where it stands; the goal is the instructions' heading, not repeated per step
+        self.assertNotIn("实现订单退款",first["steps"][0]["prompt"])
+        self.assertIn("当前步骤：1/2",first["steps"][0]["prompt"])
+        self.assertEqual(first["steps"][0]["prompt"],second["steps"][0]["prompt"])
         self.assertNotEqual(first["steps"][0]["prompt"],repair["steps"][0]["prompt"])
         manual=self.service.resolve_workflow(self.a,{"input":"实现会议议程","steps":SPEC})
         self.assertEqual(manual["steps"],SPEC)

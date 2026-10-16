@@ -196,5 +196,32 @@ class RepairTests(unittest.TestCase):
         self.assertIn("/w/attempt/context.json", text)
 
 
+class TemplateTests(unittest.TestCase):
+    def templates(self):
+        import json
+        from octopus import intent
+        return [*intent.CORE, *json.loads(intent.LEGACY.read_text())]
+
+    def test_built_in_templates_carry_a_contract(self):
+        from octopus.domain import KINDS
+        for template in self.templates():
+            for step in template["steps"]:
+                where = f"{template['id']}/{step['id']}"
+                self.assertIn(step.get("kind"), KINDS, where)
+                self.assertTrue(step.get("acceptance"), where)
+                self.assertNotEqual(step["tool"], "opencode", where)   # disabled (K01)
+                self.assertNotIn("candidate.diff", step["prompt"], where)   # the platform commits the candidate
+                if step["kind"] == "review":
+                    self.assertNotIn("报告 BLOCKED", step["prompt"], where)
+                    self.assertIn("changes_requested", step["prompt"], where)
+            steps(template["steps"])   # what a Session accepts
+
+    def test_template_steps_do_not_repeat_the_goal(self):
+        from octopus import intent
+        prompt = intent.preset_steps(intent.CORE[0], "很长的目标" * 100)[0]["prompt"]
+        self.assertNotIn("本次目标：", prompt)
+        self.assertIn("当前步骤：1/", prompt)
+
+
 if __name__ == "__main__":
     unittest.main()
