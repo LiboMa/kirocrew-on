@@ -790,6 +790,26 @@ class MVPTests(unittest.TestCase):
         observation=json.loads((root/"restricted-session-observation.json").read_text())
         self.assertEqual((observation["native_export_code"],observation["memory_mode"]),("export_slot_not_persistent","incognito"))
 
+    def test_a_parent_slot_kirocrew_no_longer_has_closes_and_deletes_with_a_labelled_observation(self):
+        # EC2 run-6d7c132b…: an incognito slot is not restored after a Gateway restart, so its close / delete retried a 404
+        node,body=self.native_worker()
+        calls=[]
+        def native(path,payload=None,method=None):
+            calls.append((path,method))
+            if path.startswith("/api/chat/slots/") or path.startswith("/api/sessions/"):
+                raise crew_api.GatewayError(404,'{"error":"not found","code":"slot_not_found"}')
+            return {"agents":[]} if path=="/api/spawn" else {"ok":True}
+        node.native=native
+        stopped=node.control({"run_id":body["run_id"],"action":"stop"})
+        closed=node.control({"run_id":body["run_id"],"action":"close"})
+        deleted=node.control({"run_id":body["run_id"],"action":"delete"})
+        self.assertEqual(stopped["lifecycle"],"open")
+        self.assertEqual((closed["lifecycle"],closed["backup_kind"]),("closed","native_missing_observation"))
+        self.assertEqual(deleted["lifecycle"],"deleted")
+        root=node.path(body["run_id"])
+        self.assertFalse((root/"native-session-backup.gz").exists())
+        self.assertEqual(json.loads((root/"missing-session-observation.json").read_text())["native_code"],"slot_not_found")
+
     def test_any_other_export_refusal_never_closes(self):
         node,body=self.native_worker()
         calls=[]

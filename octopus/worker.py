@@ -173,10 +173,12 @@ TOOL_COMMANDS = {"kiro": ("kiro_cli", "kiro-cli"), "claude": ("claude", "claude"
                  "opencode": ("opencode", "opencode")}
 
 
-# The export refusals a close / delete records as a labelled observation instead of a backup: KiroCrew's export code
-# -> (backup kind, observation file). Any other refusal keeps the Session open.
-REFUSED_EXPORTS = {"export_bundle_empty": ("native_empty_observation", "empty-session-observation.json"),
-                   "export_slot_not_persistent": ("native_restricted_observation", "restricted-session-observation.json")}
+# What a close / delete records instead of a backup when KiroCrew has nothing to export (backup kind -> observation file),
+# and the export refusals that mean so (KiroCrew's export code -> backup kind). Any other refusal keeps the Session open.
+OBSERVATIONS = {"native_empty_observation": "empty-session-observation.json",
+                "native_restricted_observation": "restricted-session-observation.json",
+                "native_missing_observation": "missing-session-observation.json"}
+REFUSED_EXPORTS = {"export_bundle_empty": "native_empty_observation", "export_slot_not_persistent": "native_restricted_observation"}
 
 
 class Worker:
@@ -1048,22 +1050,44 @@ class Worker:
                 if exc.status != 404:
                     raise
         if current["status"] != "closed":
-            self.native("/api/chat/slots/" + parent["slot"] + "/stop?force=true", {})
-            self.native("/api/spawn/stop-all", {"slot": parent["slot"]})
-            own = [t for t in self.native("/api/spawn").get("agents", []) if t.get("parent") == parent["parent"]]
-            slot = self.native("/api/chat/slots/" + parent["slot"])
-            if slot.get("running") or slot.get("queue") or slot.get("queue_depth") or any(not t.get("done") for t in own):
-                return {"status": "stopping", "lifecycle": "open"}
-            if action in {"close", "delete"}:
-                current["backup_kind"] = self.backup(run, parent, slot)
-                receipt = self.native("/api/chat/slots/" + parent["slot"], method="DELETE")
-                require(receipt.get("ok"), "原生关闭未确认", 409, "native_unavailable")
-                current["status"] = "closed"
-                write(lifecycle, current)
+            try:
+                self.native("/api/chat/slots/" + parent["slot"])
+                gone = False
+            except crew_api.GatewayError as exc:
+                if exc.status != 404:
+                    raise
+                # KiroCrew no longer has the live slot (an incognito one is not restored after a Gateway restart, EC2
+                # run-6d7c132b…): nothing runs under it and nothing can be exported; recorded as such, never forged.
+                gone = True
+            if gone:
+                if action in {"close", "delete"}:
+                    write(run / OBSERVATIONS["native_missing_observation"],
+                          {"kind": "native_missing_observation", "native_code": "slot_not_found", "slot": parent["slot"],
+                           "at": time.time()})
+                    current.update(backup_kind="native_missing_observation", status="closed")
+                    write(lifecycle, current)
+            else:
+                self.native("/api/chat/slots/" + parent["slot"] + "/stop?force=true", {})
+                self.native("/api/spawn/stop-all", {"slot": parent["slot"]})
+                own = [t for t in self.native("/api/spawn").get("agents", []) if t.get("parent") == parent["parent"]]
+                slot = self.native("/api/chat/slots/" + parent["slot"])
+                if slot.get("running") or slot.get("queue") or slot.get("queue_depth") or any(not t.get("done") for t in own):
+                    return {"status": "stopping", "lifecycle": "open"}
+                if action in {"close", "delete"}:
+                    current["backup_kind"] = self.backup(run, parent, slot)
+                    receipt = self.native("/api/chat/slots/" + parent["slot"], method="DELETE")
+                    require(receipt.get("ok"), "原生关闭未确认", 409, "native_unavailable")
+                    current["status"] = "closed"
+                    write(lifecycle, current)
         if action == "delete":
-            observed = next((name for kind, name in REFUSED_EXPORTS.values() if kind == current.get("backup_kind")), None)
+            observed = OBSERVATIONS.get(current.get("backup_kind"))
             require((run / "native-session-backup.gz").is_file() or observed and (run / observed).is_file(), "缺少原生备份")
-            receipt = self.native("/api/sessions/" + quote(parent["parent"], safe=""), method="DELETE")
+            try:
+                receipt = self.native("/api/sessions/" + quote(parent["parent"], safe=""), method="DELETE")
+            except crew_api.GatewayError as exc:
+                if exc.status != 404:
+                    raise
+                receipt = {"ok": True}   # KiroCrew holds no history for it: already gone
             require(receipt.get("ok"), "原生删除未确认", 409, "native_unavailable")
             current["status"] = "deleted"
             write(lifecycle, current)
@@ -1087,8 +1111,8 @@ class Worker:
             # Native notes alone are excluded from its export bundle, and an incognito / temporary Session is never
             # exported (KiroCrew produces nothing from it; owner 2026-10-17). Preserve an explicitly labelled observation;
             # never forge a kcsession bundle.
-            kind, name = REFUSED_EXPORTS[code]
-            write(run / name, {"kind": kind, "native_export_code": code, "slot": parent["slot"],
+            kind = REFUSED_EXPORTS[code]
+            write(run / OBSERVATIONS[kind], {"kind": kind, "native_export_code": code, "slot": parent["slot"],
                                **({"memory_mode": slot["memory_mode"]} if isinstance(slot, dict) and slot.get("memory_mode") else {}),
                                "observation": slot, "at": time.time()})
             return kind

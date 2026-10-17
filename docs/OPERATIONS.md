@@ -397,7 +397,8 @@ CloudFront 只使用 us-east-1 的证书）：分发加上别名与证书（SNI�
   一个 Worker 服务多个空间时记忆不分隔，控制台已标明「记忆未分隔」。不要改 `memory.persistence_enabled`：它会同时关掉 lessons。
   KiroCrew 不导出 incognito / temporary 的会话（`export_slot_not_persistent`）：关闭与删除时记一份标明的观察记录
   `restricted-session-observation.json`（`backup_kind: native_restricted_observation`，与只有说明性 note 的 `empty-session-observation.json` 同理），
-  不伪造备份，然后照常关闭、删除（负责人 2026-10-17）；其他导出错误仍阻止关闭与删除。2026-10-17 部署的 3ec713b 曾以 incognito 建立父会话
+  不伪造备份，然后照常关闭、删除（负责人 2026-10-17）；KiroCrew 已没有这个父会话的活动 slot 时（incognito 的 slot 在 Gateway 重启后不恢复，
+  或在原生页面删掉了）同样处理，记 `missing-session-observation.json`；其他导出错误仍阻止关闭与删除。2026-10-17 部署的 3ec713b 曾以 incognito 建立父会话
   （`run-d098…`、`run-6d7c…`、`run-f7670bfb…`），按此处理。
 - **派发白名单**：协调者模板的 `toolsSettings.subagent.availableAgents`（KiroCrew 读的位置；此前写在顶层，等于全部允许）列出平台派发的
   `poc-kiro`、`poc-claude`、`poc-codex`、`poc-opencode`、`poc-diagnose`；种入时迁移旧位置，用户的其他工具设置保留。
