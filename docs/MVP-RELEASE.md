@@ -513,15 +513,23 @@ still has members`），被当成原生错误交给协调者，用掉一轮纠�
 ✅ EC2（2026-10-17，ed78aa6，`run-d098543e…`，公开测试仓库 `LiboMa/bedrock-claude-call`，负责人同意建 Draft PR）：`publish: {auto: true}`
 的会话（实现 + 独立审查）完成后，平台推送 `octopus/run-d098543e…` 并自动建出 Draft PR #5（只改 README.md，指向 main）；会话页显示
 「已发布 · PR #5」与已勾选的「完成后自动发布 Draft PR」，时间线有「自动发布」。时间线中 `run.published` 等 15 种事件没有标题，已补齐，
-并加契约测试：后端写入的每种事件在控制台都有标题。
+并加契约测试：后端写入的每种事件在控制台都有标题（d417ee2 部署后时间线显示「已发布到仓库」）。
+`run-f7670bfb…`（负责人：在 LiboMa 下新建 Repo 并推 README，新建源码）：发布只能到会话启动时的仓库，此前的提示仍指向「发布到仓库」——
+已改为说明没有远端仓库、可「下载源码」或以已有仓库新建会话，规划者标注的「要求提交 PR」也只对来自仓库的会话开启自动发布。平台尚不能新建仓库。
+同一会话首次执行时部署重启了运行时（`AcpProcessDied: Runtime process died during prompt`），此前未按 L0 重试，已与「ACP process exited」同样处理。
 
 ### 14.26 KiroCrew 配置与隔离（D46 P0）
 
-本机完成：按 KiroCrew 0.10.0 的真实配置项修正——父会话以 `memory_mode: incognito` 建立，不再写 KiroCrew 不认识的 `memory.enabled`；
+本机完成：按 KiroCrew 0.10.0 的真实配置项修正——不再写 KiroCrew 不认识的 `memory.enabled`；
 协调者只能派生平台的工具 Agent（`toolsSettings.subagent.availableAgents`），并排除 monitor 工具；工具 Agent 用固定并发；不再传 KiroCrew 忽略的
 `solo_*` 字段；已有配置迁移时移除旧的允许列表。
-✅ EC2（2026-10-17，ed78aa6，`run-d098543e…`）：新的允许列表下实现与审查任务均正常派发并完成；新父会话没有在边界的全局记忆历史中留下记录。
-后续（负责人 2026-10-17）：每人独立 Worker 与记忆，只有 Team 共用 Worker 空间——`incognito` 只在一个 Worker 服务多个空间时需要，见 P4。
+✅ EC2（2026-10-17，ed78aa6，`run-d098543e…`）：新的允许列表下实现与审查任务均正常派发并完成。
+❌→✅ 回归（3ec713b 引入，6077f92 修复）：P0 曾以 `memory_mode: incognito` 建立父会话，而 KiroCrew 只导出 persistent 的会话（`session_export.py:380`），
+07:00 部署后新建的会话无法备份、不能关闭或删除（`run-6d7c132b…` 复现「原生备份未成功」）；incognito 也仍读记忆。父会话改回 persistent，
+记忆按执行环境分隔（负责人 2026-10-17：每人独立 Worker，只有 Team 共用）；测试改用按记忆模式拒绝导出的严格假 KiroCrew。
+✅ EC2（2026-10-17，d417ee2，`run-30eb53ef…`）：新会话（`admission: confirm`，未派发任务）关闭时导出通过记忆模式检查（只有说明性 note，
+记为 `empty-session-observation`）并关闭；卡在关闭中的 `run-6d7c…` 已停止。期间以 incognito 建立的 `run-d098…`、`run-6d7c…`、`run-f7670bfb…`
+可停止、续作，不能关闭或删除（继承规则：隐私拒绝不伪造备份）。
 
 ### 14.25 Agent 提示 P1：一致性与正确性（D46）
 
