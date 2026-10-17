@@ -179,6 +179,37 @@ class McpTests(unittest.TestCase):
         start = next(t for t in mcp.TOOLS if t["name"] == "octopus_start")["inputSchema"]["properties"]
         self.assertIn("auto", start["publish"]["properties"])
 
+    def test_a_new_repository_can_be_named_through_the_tools(self):
+        from octopus import mcp, schema
+        tools = {t["name"]: t["inputSchema"]["properties"] for t in mcp.TOOLS}
+        self.assertTrue({"repository", "credential"} <= set(tools["octopus_publish"]))
+        self.assertTrue({"repository", "credential"} <= set(tools["octopus_start"]["publish"]["properties"]))
+        self.assertTrue({"repository", "credential"} <= set(tools["octopus_publish_policy"]))
+        components = schema.openapi()["components"]["schemas"]
+        self.assertIn("repository", components["PublishPolicy"]["properties"])
+        self.assertIn("repository", components["Start"]["properties"]["publish"]["properties"])
+        self.assertIn("repository", components["Publish"]["properties"])
+        self.assertIn("/v1/runs/{id}/publish", schema.openapi()["paths"])
+
+    def test_the_policy_command_carries_a_new_repository(self):
+        from octopus import mcp
+        seen = []
+        class Client:
+            def request(self, method, path, body):
+                seen.append(body)
+                return {}
+        mcp.call(Client(), "octopus_publish_policy", {"run_id": "run-1", "auto": True,
+                                                      "repository": {"owner": "o", "name": "r"}, "credential": "cred-1"})
+        self.assertEqual(seen, [{"auto": True, "repository": {"owner": "o", "name": "r"}, "credential": "cred-1"}])
+
+    def test_the_compact_status_shows_where_it_was_published(self):
+        from octopus import mcp
+        view = mcp.compact_status({"id": "run-1", "status": "completed", "tasks": [],
+                                   "publish_target": {"path": "o/r", "web": "https://x/o/r"},
+                                   "publish_suggestion": {"repository": {"owner": "o", "name": "r", "private": True}}}, [])["session"]
+        self.assertEqual(view["publish_target"]["path"], "o/r")
+        self.assertIn("publish_suggestion", view)
+
 
 if __name__ == "__main__":
     unittest.main()

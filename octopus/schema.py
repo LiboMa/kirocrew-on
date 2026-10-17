@@ -8,6 +8,8 @@ def openapi():
     def ref(name):
         return {"$ref": "#/components/schemas/" + name}
     text, integer = {"type": "string"}, {"type": "integer", "minimum": 1}
+    # D48: a new repository a new-source Session is published to
+    repository = obj({"owner": text, "name": text, "private": {"type": "boolean", "default": True}}, ["owner", "name"])
     execution = {"tool": {"enum": ["kiro", "claude", "codex", "opencode"]},
                  "model": {"type": "string", "default": "auto"},
                  "effort": {"enum": ["", "low", "medium", "high", "xhigh", "max"]}, "prompt": text}
@@ -70,7 +72,9 @@ def openapi():
                                "attempt_minutes": {"type": "integer", "minimum": 30, "maximum": 720, "default": 170},
                                "max_retries": {"type": "integer", "minimum": 0, "maximum": 20, "default": 4},
                                "budget_minutes": {"type": "integer", "minimum": 30, "maximum": 4320, "default": 720}}),
-        "PublishPolicy": obj({"auto": {"type": "boolean"}, "branch": text, "title": text}, ["auto"]),
+        "PublishPolicy": obj({"auto": {"type": "boolean"}, "branch": text, "title": text, "repository": repository,
+                              "credential": text}, ["auto"]),
+        "Publish": obj({"branch": text, "title": text, "repository": repository, "credential": text}),
         "ApprovalAnswer": obj({"origin": {"enum": ["native", "coordinator"]}, "request_id": text, "request_mid": text,
                                "instance": text, "decision": {"enum": ["approve", "reject"]}}, ["origin", "request_id", "decision"]),
         "WorkflowDocument": obj({"content": text, "format": {"enum": ["json", "yaml", "markdown"]}}, ["content"]),
@@ -79,7 +83,8 @@ def openapi():
                       "workflow_version": integer, "steps": step_list, "team_id": text, "worker_id": text,
                        "source": ref("Source"), "recovery": ref("RecoveryPolicy"),
                        "admission": {"enum": ["confirm", "auto"]},
-                       "publish": obj({"auto": {"type": "boolean", "default": False}, "branch": text, "title": text}),
+                       "publish": obj({"auto": {"type": "boolean", "default": False}, "branch": text, "title": text,
+                                       "repository": repository, "credential": text}),
                        "credentials": obj({"source": text})}, ["request_id", "input", "source"]),
         "Rebind": obj({"source": {"type": ["string", "null"]}}, ["source"]),
         "Continue": obj({**command, "task_id": text, "input": text, "execution": ref("Execution"),
@@ -147,6 +152,7 @@ def openapi():
         "/v1/runs/{id}/app": {"get": None, "post": "AppAction"}, "/v1/runs/{id}/app/open": {"post": "Empty"},
         "/v1/runs/{id}/recover": {"post": "Control"},
         "/v1/runs/{id}/confirm": {"post": "Control"},
+        "/v1/runs/{id}/publish": {"post": "Publish"},
         "/v1/runs/{id}/publish-policy": {"post": "PublishPolicy"},
         "/v1/runs/{id}/continue": {"post": "Continue"}, "/v1/runs/{id}/assign-worker": {"post": "AssignWorker"},
         **{"/v1/runs/{id}/" + action: {"post": "Control"} for action in ["stop", "close", "reopen", "delete"]},

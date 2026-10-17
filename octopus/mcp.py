@@ -18,6 +18,7 @@ def object_schema(properties=None, required=()):
 
 STRING = {"type": "string"}
 OBSERVE_TEXT = 4000  # per message in octopus_observe: keeps a page well inside an agent's tool output limit
+REPOSITORY = object_schema({"owner": STRING, "name": STRING, "private": {"type": "boolean"}}, ["owner", "name"])   # D48
 RECOVERY = object_schema({"enabled": {"type": "boolean"},
                           "max_cycles": {"type": "integer", "minimum": 1, "maximum": 5},
                           "switch_tools": {"type": "boolean"},
@@ -97,12 +98,14 @@ TOOLS = [
          "credentials": object_schema({"source": STRING}),
          "team_id": STRING, "worker_id": STRING, "recovery": RECOVERY,
          "admission": {"type": "string", "enum": ["confirm", "auto"]},
-         "publish": object_schema({"auto": {"type": "boolean"}, "branch": STRING, "title": STRING})},
+         "publish": object_schema({"auto": {"type": "boolean"}, "branch": STRING, "title": STRING, "repository": REPOSITORY,
+                                   "credential": STRING})},
                                  ["request_id", "input", "source"])},
     {"name": "octopus_publish_policy",
      "description": "设置会话完成后是否自动发布 Draft PR / MR（auto=true 自动发布；false 由人确认后用 octopus_publish 发布）。"
-                    "只在用户明确要求时开启。",
-     "inputSchema": object_schema({"run_id": STRING, "auto": {"type": "boolean"}}, ["run_id", "auto"])},
+                    "只在用户明确要求时开启。新建源码的会话开启时需给出 repository 与 credential（见 octopus_publish）。",
+     "inputSchema": object_schema({"run_id": STRING, "auto": {"type": "boolean"}, "repository": REPOSITORY, "credential": STRING},
+                                  ["run_id", "auto"])},
     {"name": "octopus_confirm",
      "description": "确认一个「计划待确认」（awaiting_confirmation）的 Session 的计划并开始执行。调用前必须把任务、各自的工具与模型（及来源）、"
                     "验收项与检查命令展示给用户，并得到用户明确同意；要修改时改用 octopus_continue（修改后续作即视为确认）。",
@@ -167,8 +170,12 @@ TOOLS += [
      "description": "把会话成果发布到它的源仓库：推送分支（默认 octopus/<run-id>）并创建或沿用 Draft PR（GitHub）/ Draft MR（GitLab）。"
                     "需要会话绑定一枚有写权限的凭证，且会话已结束执行；工作区未提交的改动会先提交（不含 .env 与依赖目录），"
                     "改动或克隆以来的提交历史中含疑似凭证、或提交了 .env 时拒绝（409 publish_secret_found，列出文件）。远端分支被他人改动时 "
-                    "409 publish_conflict，不会覆盖。分支已推送但 PR / MR 未创建时，错误会说明，再次发布沿用该分支。",
-     "inputSchema": object_schema({"run_id": STRING, "branch": STRING, "title": STRING}, ["run_id"])},
+                    "409 publish_conflict，不会覆盖。分支已推送但 PR / MR 未创建时，错误会说明，再次发布沿用该分支。"
+                    "新建源码的会话首次发布需给出 repository（{owner, name, private?}，默认私有）与 credential（有写权限、仓库范围覆盖"
+                    "该仓库、能建仓库的凭证 ID）：平台新建仓库（或用已有的空仓库），基线推到 main，工作走 Draft PR；之后再次发布沿用该仓库。"
+                    "只在用户明确给出仓库名并同意时传。",
+     "inputSchema": object_schema({"run_id": STRING, "branch": STRING, "title": STRING, "repository": REPOSITORY,
+                                   "credential": STRING}, ["run_id"])},
     {"name": "octopus_app",
      "description": "Session 的远程预览（在执行环境中运行应用，经独立的预览域名在浏览器中打开）：start 启动（按 .octopus/preview.json "
                     "或自动识别；会话执行中不能启动；每个执行环境最多 3 个）；status 查看状态与最近日志（installing / starting / "
@@ -396,7 +403,7 @@ def compact_status(session, events):
         return value
 
     view = {key: session[key] for key in SESSION_FIELDS if key in session}
-    for key in ("publish_policy", "publish_auto"):   # D47
+    for key in ("publish_policy", "publish_auto", "publish_target", "publish_suggestion"):   # D47, D48
         if session.get(key):
             view[key] = session[key]
     if session.get("recovery"):
@@ -496,7 +503,8 @@ def call(client, name, args):
         query.append(("limit", int(args.get("limit", 50))))
         return {"changes": client.request("GET", "/v1/runs/" + args["run_id"] + "/changes?" + urlencode(query))}
     if name == "octopus_publish_policy":   # D47
-        return client.request("POST", "/v1/runs/" + quote(args["run_id"], safe="") + "/publish-policy", {"auto": args["auto"]})
+        return client.request("POST", "/v1/runs/" + quote(args["run_id"], safe="") + "/publish-policy",
+                              {k: args[k] for k in ("auto", "repository", "credential") if k in args})
     if name in {"octopus_continue", "octopus_recover", "octopus_control", "octopus_confirm"}:
         rid = args.pop("run_id")
         if name == "octopus_continue" and "credentials" in args:

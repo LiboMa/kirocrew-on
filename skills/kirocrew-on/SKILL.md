@@ -56,6 +56,10 @@ KiroCrew ON 在远端执行开发任务：KiroCrew 的 Kiro Agent 先识别意�
 - 用户明确要求完成后提交 PR / MR 时传 `publish: {"auto": true}`：会话完成并通过审查后平台自动推送 `octopus/<run>` 分支并创建 Draft PR / MR
   （需要绑定有写权限的凭证）。没有要求时不传，完成后先问用户，同意后再用 `octopus_publish`。不要安排 Agent 自己推送或建 PR 的任务——Agent 没有仓库写凭证。
   会话中途可用 `octopus_publish_policy {run_id, auto}` 开关（用户同意后）。
+- 需求要求**新建仓库**（会话的源码是新建的）时：用户明确给出 owner 与仓库名时，`octopus_start` 传
+  `publish: {"auto": true, "repository": {"owner": …, "name": …}, "credential": "<凭证 ID>"}`（凭证须有写权限、范围覆盖该仓库、能建仓库；
+  默认建私有仓库），完成后平台建仓库、基线进 main、工作走 Draft PR；用户没给出时不传，完成后先问用户仓库名与凭证，同意后
+  `octopus_publish {run_id, repository, credential}`。不要安排 Agent 自己建仓库或推送。
 - 回执只代表登记成功。把 `run_id` 和会话链接告诉用户。
 
 ## 3．查看进度：`octopus_status`
