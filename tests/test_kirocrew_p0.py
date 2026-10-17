@@ -1,11 +1,14 @@
 """D46 P0: the KiroCrew boundary as KiroCrew 0.10.0 reads it — the platform's parent Sessions keep out of the boundary's
 global memory (a shared environment serves several spaces), the coordinator's spawn allowlist sits where KiroCrew reads it,
 it cannot arm its own monitor loops, and no ignored fields are sent."""
+import gzip
+import io
 import json
 from pathlib import Path
 import tempfile
 from types import SimpleNamespace
 import unittest
+import urllib.error
 from unittest.mock import patch
 
 from composition import templates
@@ -71,19 +74,35 @@ class ParentSessionTests(unittest.TestCase):
         self.node = Worker(Path(self.tmp.name) / "worker", "x" * 40, crew_home=Path(self.tmp.name) / "crew")
         self.rid, self.calls = "run-" + "1" * 32, []
 
+        self.modes = {}   # what KiroCrew keeps of each slot: its memory mode (chat_handlers.py:1997, default persistent)
+
         def native(path, body=None, method=None):
             self.calls.append((path, body))
-            if path == "/api/chat/slots/octopus-" + self.rid and body is None:
+            if path == "/api/chat/slots/octopus-" + self.rid and body is None and method is None and not self.modes:
                 raise crew_api.GatewayError(404, '{"error":"not found"}')
             if path == "/api/chat/slots":
+                self.modes["octopus-" + self.rid] = body.get("memory_mode", "persistent")
                 return {"key": "octopus-" + self.rid}
-            return {"ok": True}
+            if path == "/api/spawn":
+                return {"agents": []}
+            return {"ok": True, "running": False, "queue_depth": 0}
         self.node.native = native
 
-    def test_a_new_parent_session_keeps_out_of_the_global_memory(self):
+    def export(self, request, timeout=None):
+        """KiroCrew 0.10.0's export (session_export.py:380): an incognito or temporary slot is refused, never exported."""
+        slot = request.full_url.split("/api/chat/slots/")[1].split("/")[0]
+        if self.modes.get(slot) != "persistent":
+            raise urllib.error.HTTPError(request.full_url, 400, "restricted", {},
+                                         io.BytesIO(b'{"code":"export_slot_not_persistent"}'))
+        return io.BytesIO(gzip.compress(json.dumps({"kind": "kcsession", "slot": slot}).encode()))
+
+    def test_a_parent_session_the_platform_creates_can_be_backed_up_and_closed(self):
+        # EC2 2026-10-17 (3ec713b): parents made incognito could not be exported, so no new Session could be closed or deleted
         self.node.prepare({"run_id": self.rid, "source": {"type": "new"}})
-        created = [body for path, body in self.calls if path == "/api/chat/slots"]
-        self.assertEqual(created[0]["memory_mode"], "incognito")
+        with patch("octopus.gateway_client.token", return_value="test-only"), patch("urllib.request.urlopen", side_effect=self.export):
+            result = self.node.control({"run_id": self.rid, "action": "close"})
+        self.assertEqual(result["lifecycle"], "closed")
+        self.assertTrue((self.node.path(self.rid) / "native-session-backup.gz").is_file())
 
 
 class SpawnTests(unittest.TestCase):

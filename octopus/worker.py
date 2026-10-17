@@ -724,9 +724,10 @@ class Worker:
                         raise
                     present = self.native("/api/chat/slots", {
                         "name": slot, "agent": "poc-coordinator", "agent_kind": "template", "model": "auto",
-                        # D46 P0: neither reads nor writes the boundary's global memory, which a shared environment's
-                        # spaces would otherwise share (until each space has its own KiroCrew member, P4)
-                        "memory_mode": "incognito"})
+                        # KiroCrew exports only a persistent slot (session_export.py:380), and close / delete need that
+                        # backup; incognito still reads memory, and a mode is only ever tightened. Memory is kept apart
+                        # by giving each person or Team its own Worker (owner, 2026-10-17), not per Session.
+                        "memory_mode": "persistent"})
                     require(present.get("key", present.get("slot")) == slot, "原生父 Session 身份不一致")
                 self.native("/api/chat/slots/" + slot + "/context", {
                     "content": OBSERVER_CONTEXT,
