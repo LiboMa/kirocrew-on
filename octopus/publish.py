@@ -186,9 +186,12 @@ def create_repository(kind, host, repository, secret):
 
 
 def push_baseline(workdir, url, base, auth):
-    """Start an empty repository's ``main`` at the Session's baseline (D48 R4); one with any branch is never written."""
+    """Start an empty repository's ``main`` at the Session's baseline (D48 R4); one with any branch is never written. A
+    repository whose only branch is ``main`` at this baseline already has it (a push whose answer or record was lost)."""
     with sources.askpass(Path(workdir), auth) as env:
         listed = _git(workdir, *sources.SAFE_GIT_ARGS, "ls-remote", "--heads", url, env=env, secret=auth["secret"])
+        if listed.split() == [base, "refs/heads/main"]:
+            return
         require(not listed.strip(), "仓库已存在且不为空，未发布：改用新的仓库名，或以该仓库为源码新建会话", 409,
                 "repository_not_empty")
         try:

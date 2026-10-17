@@ -74,7 +74,8 @@ function NewRepositoryPublish({ run }: { run: Run }) {
   const suggested = run.publish_suggestion?.repository;
   const [owner, setOwner] = useState(suggested?.owner ?? "");
   const [name, setName] = useState(suggested?.name ?? "");
-  const [isPrivate, setPrivate] = useState(suggested?.private ?? true);
+  // Always private to begin with: making a repository public is the person's own choice, never a suggestion's (final review)
+  const [isPrivate, setPrivate] = useState(true);
   const [credential, setCredential] = useState("");
   const [busy, setBusy] = useState(false);
   const { data = [] } = useCredentials(!target);
@@ -130,6 +131,7 @@ function NewRepositoryPublish({ run }: { run: Run }) {
         {busy ? "正在发布…" : "新建仓库并发布"}
       </Button>
       {run.publish_suggestion?.quote && <span>（需求中要求：{run.publish_suggestion.quote}）</span>}
+      {suggested?.private === false && <span>需求建议公开仓库：确需公开时取消「私有」。</span>}
     </div>
   );
 }

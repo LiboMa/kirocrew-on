@@ -68,8 +68,12 @@ class RepositoryApiTests(PublishCase):
         main = subprocess.run(["git", "-C", str(GitHost.root / "owner/fresh.git"), "rev-parse", "refs/heads/main"],
                               capture_output=True, text=True).stdout.strip()
         self.assertEqual(main, base)
+        publish.push_baseline(work, url, base, auth)   # final review: this Session's own baseline already there is done
+        subprocess.run(["git", "-C", str(work), "-c", "user.email=t@t", "-c", "user.name=t", "commit", "-q", "--allow-empty",
+                        "-m", "other"], check=True)
+        other = subprocess.run(["git", "-C", str(work), "rev-parse", "HEAD"], capture_output=True, text=True).stdout.strip()
         with self.assertRaises(Error) as caught:
-            publish.push_baseline(work, url, base, auth)
+            publish.push_baseline(work, url, other, auth)
         self.assertEqual(caught.exception.code, "repository_not_empty")
 
 
@@ -230,6 +234,44 @@ class SuggestionAttentionTests(NewRepositoryCase):
         self.assertIn("owner/fresh", attention["detail"])
         self.service.publish(self.b, rid, self.target())
         self.assertIsNone(self.service.run(self.b, rid)["attention"])
+
+
+class FinalReviewTests(NewRepositoryCase):
+    def test_a_publish_the_worker_refuses_makes_no_repository(self):
+        rid = self.new_session()
+        (Path(self.service.run(self.b, rid)["workspace"]) / "config.js").write_text("const t = '" + "ghp_" + "A1b2C3d4" * 5 + "';")
+        with self.assertRaises(Error) as caught:
+            self.service.publish(self.b, rid, self.target())
+        self.assertEqual(caught.exception.code, "publish_secret_found")
+        self.assertEqual(FakeApi.made, [])
+        self.assertIsNone(self.service.run(self.b, rid).get("publish_target"))
+
+    def test_a_baseline_pushed_but_not_recorded_does_not_block_the_next_publish(self):
+        from octopus.domain import Service
+        rid, original, failed = self.new_session(), Service._record_target, []
+        def flaky(service, actor, run_id, target, row, **fields):
+            if "baseline" in fields and not failed:
+                failed.append(True)
+                raise OSError("断电")
+            return original(service, actor, run_id, target, row, **fields)
+        with unittest.mock.patch.object(Service, "_record_target", flaky):
+            with self.assertRaises(OSError):
+                self.service.publish(self.b, rid, self.target())
+        record = self.service.publish(self.b, rid, {})
+        self.assertEqual(self.head("owner/fresh", "octopus/" + rid), record["commit"])
+        self.assertEqual(len(FakeApi.made), 1)
+
+    def test_a_failed_automatic_publish_of_a_new_project_points_to_its_own_page(self):
+        rid = self.new_session()
+        with self.db.transaction() as db:
+            snapshot = json.loads(db.execute("SELECT snapshot FROM runs WHERE id=?", (rid,)).fetchone()["snapshot"])
+            snapshot["publish_suggestion"] = {"repository": {"owner": "owner", "name": "fresh", "private": True}, "quote": "建仓库"}
+            snapshot["publish_auto"] = {"ok": False, "code": "credential_permission", "error": "凭证没有此操作的权限", "version": 1}
+            db.execute("UPDATE runs SET snapshot=? WHERE id=?", (json.dumps(snapshot), rid))
+        attention = self.service.run(self.b, rid)["attention"]
+        self.assertEqual(attention["title"], "自动发布未完成")
+        self.assertIn("发布到新仓库", attention["action"])
+        self.assertNotIn("绑定", attention["action"])
 
 
 if __name__ == "__main__":

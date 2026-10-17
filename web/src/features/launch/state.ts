@@ -107,6 +107,14 @@ export function nameFrom(input: string): string {
 }
 
 /** The first problem that keeps the user on this step, or "" when the step is complete. */
+/** A repository owner or name the platform accepts (octopus/publish.py check_repository). */
+const REPOSITORY_PART = /^[A-Za-z0-9_][A-Za-z0-9_.-]{0,99}$/;
+
+/** A source change starts its publish choice afresh: the git and new-project options share the flag (final review). */
+export function withSource(draft: Draft, source: Draft["source"]): Draft {
+  return { ...draft, source, autoPublish: draft.source === source ? draft.autoPublish : false };
+}
+
 export function validateStep(step: number, draft: Draft,
   { workflowMode, teamWithoutEnvironment, archivedTeam }: { workflowMode: boolean; teamWithoutEnvironment?: string; archivedTeam?: string }): string {
   const input = draft.input.trim();
@@ -118,6 +126,12 @@ export function validateStep(step: number, draft: Draft,
     if (!draft.name.trim()) return "请填写名称。";
     if (!workflowMode && !draft.source) return "请明确选择新建项目或目标 Git 仓库，避免把空工作区当作已有项目。";
     if (!workflowMode && draft.source === "git" && !draft.url.trim()) return "请填写 Git URL。";
+    if (!workflowMode && draft.source === "new" && draft.autoPublish) {   // D48: never dropped without a word
+      if (!draft.newRepoOwner.trim() || !draft.newRepoName.trim() || !draft.newRepoCredential)
+        return "完成后发布到新仓库：请填写新仓库的 owner、仓库名并选择凭证，或取消勾选。";
+      if (![draft.newRepoOwner.trim(), draft.newRepoName.trim()].every((part) => REPOSITORY_PART.test(part) && !part.includes("..")))
+        return "新仓库的 owner 与仓库名只能含字母、数字、. _ -（以字母、数字或 _ 开头）。";
+    }
     return "";
   }
   if (draft.method === "agent" && (step === 1 || step === 2)) return workflowMode ? "保存工作流需要任务列表，请选择其他编排方式。" : "";

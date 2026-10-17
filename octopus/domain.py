@@ -1210,21 +1210,6 @@ class Service:
         title = text(body.get("title") or snapshot.get("name") or run["input"][:60], "标题", 200)
         secret = self.credentials.secret(row["id"])
         auth = {"kind": row["kind"], "host": row["host"], "username": repo_credentials.username(row["kind"]), "secret": secret}
-        new = target["new"]
-        if new and "repository" in new:   # D48: the first publish of a new-source Session
-            if publishing.find_repository(row["kind"], host, path, secret) is None:
-                try:
-                    web = publishing.create_repository(row["kind"], host, new["repository"], secret)
-                except Error as exc:
-                    with self.db.transaction() as db:
-                        self._used(db, actor, row["id"], rid, path, None, exc.code, action="repo.create")
-                    raise
-                recorded = self._record_target(actor, rid, target, row, web=web, created=True)
-                with self.db.transaction() as db:
-                    self._used(db, actor, row["id"], rid, path, None, "created", action="repo.create")
-                    journal.record(db, rid, "run.repository", journal.person(actor), "已新建仓库 " + path, url=web, path=path,
-                                   private=new["repository"]["private"], created=True)
-                new = {"recorded": recorded}
         response = worker_stream(config, "/publish/bundle", {"run_id": rid, "message": f"KiroCrew ON：{title}（{rid}）",
                                                              **({"commit": verified["sha"]} if verified else {})}, timeout=120)
         with response, tempfile.TemporaryDirectory(dir=self.db.root, prefix=".publish-") as work:
@@ -1232,6 +1217,23 @@ class Service:
             commit = publishing.receive(response, int(headers.get("Content-Length") or 0), Path(work) / "repo",
                                         headers.get("X-Publish-Branch") or "", headers.get("X-Publish-Base") or "",
                                         headers.get("X-Publish-Commit") or "")
+            new = target["new"]
+            # D48: the first publish of a new-source Session makes its repository only once the Worker's bundle passed every
+            # check — a refusal there leaves no empty repository behind (final review)
+            if new and "repository" in new:
+                if publishing.find_repository(row["kind"], host, path, secret) is None:
+                    try:
+                        web = publishing.create_repository(row["kind"], host, new["repository"], secret)
+                    except Error as exc:
+                        with self.db.transaction() as db:
+                            self._used(db, actor, row["id"], rid, path, None, exc.code, action="repo.create")
+                        raise
+                    recorded = self._record_target(actor, rid, target, row, web=web, created=True)
+                    with self.db.transaction() as db:
+                        self._used(db, actor, row["id"], rid, path, None, "created", action="repo.create")
+                        journal.record(db, rid, "run.repository", journal.person(actor), "已新建仓库 " + path, url=web, path=path,
+                                       private=new["repository"]["private"], created=True)
+                    new = {"recorded": recorded}
             try:
                 if new:   # main starts at the baseline, in a repository that is empty (made now, or found empty)
                     publishing.push_baseline(Path(work) / "repo", target["url"], headers.get("X-Publish-Base") or "", auth)
@@ -1640,15 +1642,18 @@ class Service:
             return {"title": "等待批准", "detail": run["error"] or "原生任务正在等待批准一次工具调用。",
                     "action": "在会话页「待批准」中查看工具与命令后批准或拒绝；Coding Agent 可用 octopus_approvals 查看、"
                               "经用户同意后用 octopus_approve 答复。", "task_id": task["id"] if task else None}
+        if run["status"] == "completed" and (run.get("publish_auto") or {}).get("ok") is False:
+            return {"title": "自动发布未完成", "detail": run["publish_auto"].get("error"),
+                    "action": "处理后在会话页点「发布到仓库」（例如绑定一枚有写权限的凭证）；会话的工作已完成。"
+                    if (run.get("source") or {}).get("type") == "git" else
+                    "处理后在会话页「发布到新仓库」重新发布（例如换一枚能建仓库的写凭证，或改用新的仓库名）；会话的工作已完成。",
+                    "task_id": None}
         suggested = (run.get("publish_suggestion") or {}).get("repository")
         if run["status"] == "completed" and suggested and not run.get("publish_target"):
             name = f"{suggested['owner']}/{suggested['name']}"   # D48 R7: never created on its own
             return {"title": "发布到新仓库待确认", "detail": f"需求要求新建仓库 {name}，平台不会自动创建。",
                     "action": "在会话页核对 owner、仓库名与凭证后点「新建仓库并发布」；Coding Agent 经用户同意后用 octopus_publish "
                               "（repository、credential）。", "task_id": None}
-        if run["status"] == "completed" and (run.get("publish_auto") or {}).get("ok") is False:
-            return {"title": "自动发布未完成", "detail": run["publish_auto"].get("error"),
-                    "action": "处理后在会话页点「发布到仓库」（例如绑定一枚有写权限的凭证）；会话的工作已完成。", "task_id": None}
         if run["status"] == "awaiting_confirmation":
             planned = (run.get("planning") or {}).get("applied")
             first = next((t for t in run["tasks"] if t["status"] == "pending"), None)

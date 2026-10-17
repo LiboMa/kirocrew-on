@@ -38,6 +38,14 @@ describe("publishing a new project to a new repository (D48)", () => {
     expect(sent).toEqual({ repository: { owner: "LiboMa", name: "demo", private: true }, credential: "cred-w" });
   });
 
+  test("a suggestion cannot untick 「私有」: the person makes a repository public", async () => {
+    const run = makeRun({ status: "completed", source: { type: "new" },
+      publish_suggestion: { repository: { owner: "LiboMa", name: "demo", private: false }, quote: "新建公开仓库" } });
+    show(run);
+    expect(await screen.findByRole("checkbox", { name: "私有" })).toBeChecked();
+    expect(screen.getByText(/建议公开/)).toBeInTheDocument();
+  });
+
   test("once published, the repository is shown and publishing again sends no target", async () => {
     const run = makeRun({ status: "completed", source: { type: "new" },
       publish_target: { host: "github.com", path: "LiboMa/demo", url: "https://github.com/LiboMa/demo.git",

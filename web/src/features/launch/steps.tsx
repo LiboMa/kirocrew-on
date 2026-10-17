@@ -14,7 +14,7 @@ import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
 import { spaceWorkers, useConsole } from "@/features/console/context";
 import { generationActive, type MatchStatus } from "@/features/launch/hooks";
-import { PLAN_METHODS, editTasks, fingerprint, nameFrom, type Draft } from "@/features/launch/state";
+import { PLAN_METHODS, editTasks, fingerprint, nameFrom, withSource, type Draft } from "@/features/launch/state";
 import { SCOPE_LABELS, httpsHost } from "@/lib/credentials";
 import { STATES, TOOLS } from "@/lib/labels";
 import { cn } from "@/lib/utils";
@@ -77,7 +77,7 @@ export function NeedStep({ draft, update, workflowMode }: { draft: Draft; update
         {!workflowMode && (
           <div className="space-y-1.5">
             <Label htmlFor="new-source">代码来源</Label>
-            <NativeSelect id="new-source" value={draft.source} onChange={(e) => update((d) => ({ ...d, source: e.target.value as Draft["source"] }))}>
+            <NativeSelect id="new-source" value={draft.source} onChange={(e) => update((d) => withSource(d, e.target.value as Draft["source"]))}>
               <option value="">请选择目标源码，不能默认使用空项目</option>
               <option value="new">明确创建一个全新项目</option>
               <option value="git">开发已有 Git 仓库</option>

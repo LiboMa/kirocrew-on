@@ -1,6 +1,6 @@
 import { describe, expect, test } from "vitest";
 import type { Resolution, Step } from "@/api/types";
-import { draftKey, initialDraft, nameFrom, restoreDraft, selectionOf, submitBody, validateStep, type Draft } from "@/features/launch/state";
+import { draftKey, initialDraft, nameFrom, restoreDraft, selectionOf, submitBody, validateStep, withSource, type Draft } from "@/features/launch/state";
 
 const steps: Step[] = [{ id: "code", name: "实现", tool: "claude", model: "auto", effort: "", prompt: "实现" }];
 const resolved = (input: string): Resolution => ({ input, name: "修复登录", workflow_name: "Bug 修复", reason: "匹配", steps,
@@ -110,6 +110,22 @@ describe("reopening the wizard", () => {
     expect(submitBody(draft({ method: "agent", tasks: [], source: "git", url: "https://x/y.git" })).publish).toBeUndefined();
     expect(submitBody(draft({ method: "agent", tasks: [], autoPublish: true })).publish).toBeUndefined();   // a new project has no repository
   });
+  test("publishing a new project to a new repository needs its owner, name and credential (D48)", () => {
+    const base = { method: "agent" as const, tasks: [], source: "new" as const, autoPublish: true };
+    expect(validateStep(0, draft(base), { workflowMode: false })).toContain("新仓库");
+    expect(validateStep(0, draft({ ...base, newRepoOwner: "LiboMa", newRepoName: "../x", newRepoCredential: "c" }),
+      { workflowMode: false })).toContain("仓库名");
+    expect(validateStep(0, draft({ ...base, newRepoOwner: "LiboMa", newRepoName: "demo", newRepoCredential: "c" }),
+      { workflowMode: false })).toBe("");
+    expect(validateStep(0, draft({ ...base, autoPublish: false }), { workflowMode: false })).toBe("");
+  });
+
+  test("switching the source does not carry 「完成后自动发布」 over (D48)", () => {
+    const git = draft({ source: "git", url: "https://x/y.git", autoPublish: true });
+    expect(withSource(git, "new").autoPublish).toBe(false);
+    expect(withSource(git, "git").autoPublish).toBe(true);
+  });
+
   test("a new project can be published to a new repository on completion (D48)", () => {
     const body = submitBody(draft({ method: "agent", tasks: [], source: "new", autoPublish: true,
       newRepoOwner: "LiboMa", newRepoName: "demo", newRepoCredential: "cred-w" }));
