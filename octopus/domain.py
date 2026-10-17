@@ -157,15 +157,22 @@ def space_workers(db, user, team):
 
 def publish_policy(value):
     """A Session's publish policy (D47): ``auto`` publishes a Draft PR / MR on its own once the Session completes and passes
-    the same checks as the 「发布到仓库」 button; off, a person approves the publish."""
-    require(isinstance(value, dict) and set(value) <= {"auto", "branch", "title"} and isinstance(value.get("auto", False), bool),
-            "publish 须为 {auto: true|false, branch?, title?}")
+    the same checks as the 「发布到仓库」 button; off, a person approves the publish. A new-source Session names the new
+    repository and the write credential to publish with (D48)."""
+    require(isinstance(value, dict) and set(value) <= {"auto", "branch", "title", "repository", "credential"}
+            and isinstance(value.get("auto", False), bool), "publish 须为 {auto: true|false, branch?, title?, repository?, credential?}")
     if value.get("branch") is not None:
         from .publish import check_branch
         check_branch(value["branch"])
     if value.get("title") is not None:
         require(isinstance(value["title"], str) and 0 < len(value["title"].strip()) <= 200, "publish.title 须为 1–200 个字符")
-    return {"auto": bool(value.get("auto", False)), **{k: value[k] for k in ("branch", "title") if value.get(k)}}
+    extra = {}
+    if value.get("repository") is not None or value.get("credential") is not None:
+        from .publish import check_repository
+        require(value.get("repository") is not None and isinstance(value.get("credential"), str) and value["credential"],
+                "publish.repository 与 publish.credential 须一起给出", 400)
+        extra = {"repository": check_repository(value["repository"]), "credential": value["credential"]}
+    return {"auto": bool(value.get("auto", False)), **{k: value[k] for k in ("branch", "title") if value.get(k)}, **extra}
 
 
 PUSHING = re.compile(r"git push|push(ed)? (failed|rejected)|推送|pull request|merge request|创建 PR|提交 PR|Authentication failed for",
@@ -860,6 +867,8 @@ class Service:
                     "credentials 只能是 {\"source\": \"<凭证 ID>\"}")
             from . import credentials as repo_credentials
             bound = repo_credentials.resolve(db, actor, source, team, named.get("source"), default)
+            if "publish" in body:   # D48: a new repository is checked with the credential named for it
+                self._new_repository_policy(db, actor, team, source, publish_policy(body["publish"]))
 
             def execute():
                 rid, now = uid("run"), time.time()
@@ -1062,13 +1071,29 @@ class Service:
             journal.record(db, rid, "approval.answered", journal.person(actor), **detail)   # an event, not a row change
         return {**result, "ok": True}
 
+    @staticmethod
+    def _new_repository_policy(db, actor, team_id, source, policy):
+        """A policy naming a new repository (D48): only for a new-source Session, with a write credential the actor may
+        use for that repository."""
+        from . import credentials as repo_credentials
+        if policy.get("repository"):
+            require(source.get("type") != "git", "会话来自仓库，发布到该仓库：不接受 publish.repository", 400)
+            row = db.execute("SELECT * FROM credentials WHERE id=?", (policy["credential"],)).fetchone()
+            path = f"{policy['repository']['owner']}/{policy['repository']['name']}"
+            repo_credentials.check(db, actor, row, team_id, row["host"] if row else "", path)
+            require(row["access"] == "write", f"凭证「{row['name']}」为只读，无法发布", 409, "credential_read_only")
+
     def set_publish_policy(self, actor, rid, body):
-        """Switch a Session's automatic publish on or off (D47): those who may publish it."""
+        """Switch a Session's automatic publish on or off (D47): those who may publish it. A new-source Session publishes
+        automatically only to a repository it names or was already published to (D48)."""
         policy = publish_policy(body)
         with self.db.transaction() as db:
             run = run_access(db, actor, rid)
             require(may_publish(db, actor, run), "只有会话创建者、Team owner 或管理员可以设置发布", 403, "forbidden")
-            snapshot = json.loads(run["snapshot"])
+            snapshot, source = json.loads(run["snapshot"]), json.loads(run["source"])
+            self._new_repository_policy(db, actor, run["team_id"], source, policy)
+            require(not policy["auto"] or source.get("type") == "git" or policy.get("repository") or snapshot.get("publish_target"),
+                    "新建源码的会话自动发布需要新仓库（repository）与有写权限的凭证（credential）", 409, "publish_target_missing")
             snapshot["publish_policy"] = {**policy, "source": "user"}
             journal.change(db, "runs", rid, journal.person(actor), "run.publish_policy", quiet=("snapshot",), snapshot=dumps(snapshot))
             journal.record(db, rid, "run.publish_policy", journal.person(actor), "完成后自动发布：" + ("开" if policy["auto"] else "关"),
@@ -1092,7 +1117,8 @@ class Service:
                 continue
             actor = {**dict(user), "scopes": ["read", "execute", "manage"], "token_id": None, "client": "auto-publish"}
             try:
-                record = self.publish(actor, row["id"], {k: policy[k] for k in ("branch", "title") if policy.get(k)})
+                record = self.publish(actor, row["id"], {k: policy[k] for k in ("branch", "title", "repository", "credential")
+                                                         if policy.get(k)})
                 result = {"ok": True, "url": record.get("url")}
             except Error as exc:
                 result = {"ok": False, "code": exc.code, "error": str(exc)}
@@ -1104,33 +1130,77 @@ class Service:
                 journal.record(db, row["id"], "run.publish_auto", journal.ENGINE,
                                "自动发布 Draft PR" if result["ok"] else "自动发布未完成：" + result["error"], **result)
 
-    def publish(self, actor, rid, body):
-        """Push the Session's work as one branch and open (or reuse) a draft pull / merge request with the bound write
-        credential (D35 §5.2): its creator, a Team owner or an admin, once its tasks have ended."""
-        import tempfile
+    def _publish_target(self, db, actor, run, snapshot, source, body):
+        """Where a publish goes (D48): a git Session's own repository with its bound credential; a new-source Session's
+        repository it was first published to, or the new one ``body`` names with the credential named for it."""
         from . import credentials as repo_credentials, publish as publishing
-        from .transport import worker_stream
-        require(isinstance(body, dict) and set(body) <= {"branch", "title"}, "只接受 branch 与 title")
-        with self.db.read() as db:
-            run = run_access(db, actor, rid)
-            require(may_publish(db, actor, run), "只有会话创建者、Team owner 或管理员可以发布", 403, "forbidden")
-            require(run["lifecycle"] == "open" and run["status"] in SETTLED and run["workspace"],
-                    "会话执行结束后才能发布", 409, "publish_busy")
-            snapshot, source = json.loads(run["snapshot"]), json.loads(run["source"])
+        if source.get("type") == "git":
+            require(not {"repository", "credential"} & set(body), "会话来自仓库，发布到该仓库：不接受 repository 与 credential", 400)
             bound = (snapshot.get("credentials") or {}).get("source")
             require(bound, "会话没有绑定凭证：先在会话页绑定一枚有写权限的凭证", 409, "credential_unavailable")
             row = db.execute("SELECT * FROM credentials WHERE id=?", (bound["id"],)).fetchone()
             require(repo_credentials.bound_usable(db, row, run),
                     f"凭证「{bound['name']}」已不能用于此会话（已停用、删除、授权撤销或所有者已离开）", 409, "credential_unavailable")
-            require(row["access"] == "write", f"凭证「{row['name']}」为只读，无法发布", 409, "credential_read_only")
-            refused = repo_credentials.refused_address(row["host"], self.credentials.private_hosts)
-            require(not refused, refused, 409, "credential_host_refused")
             try:
                 host, path = repo_credentials.repo_path(source.get("url", ""))
             except ValueError as exc:
                 raise Error(409, "credential_https_only", str(exc)) from None
             require(row["host"] == host and repo_credentials.covers(json.loads(row["repos"]), path) is not None,
                     f"凭证「{row['name']}」不覆盖仓库 {path}", 409, "credential_unavailable")
+            return {"row": row, "host": host, "path": path, "url": source["url"], "target": source.get("ref"), "new": None}
+        recorded = snapshot.get("publish_target")
+        if recorded:
+            if body.get("repository"):
+                wanted = publishing.check_repository(body["repository"])
+                require(f"{wanted['owner']}/{wanted['name']}" == recorded["path"],
+                        f"此会话已发布到 {recorded['path']}，不能改到另一个仓库", 409, "publish_target_fixed")
+            row = db.execute("SELECT * FROM credentials WHERE id=?",
+                             (body.get("credential") or recorded["credential"]["id"],)).fetchone()
+            repo_credentials.check(db, actor, row, run["team_id"], recorded["host"], recorded["path"])
+            return {"row": row, "host": recorded["host"], "path": recorded["path"], "url": recorded["url"], "target": "main",
+                    "new": None if recorded.get("baseline") else {"recorded": recorded}}
+        require(body.get("repository") and body.get("credential"),
+                "新建源码的会话发布时需要新仓库（repository: {owner, name}）与一枚有写权限的凭证（credential）", 409,
+                "publish_target_missing")
+        wanted = publishing.check_repository(body["repository"])
+        row = db.execute("SELECT * FROM credentials WHERE id=?", (body["credential"],)).fetchone()
+        path = f"{wanted['owner']}/{wanted['name']}"
+        repo_credentials.check(db, actor, row, run["team_id"], row["host"] if row else "", path)
+        return {"row": row, "host": row["host"], "path": path, "url": f"https://{row['host']}/{path}.git", "target": "main",
+                "new": {"repository": wanted}}
+
+    def _record_target(self, actor, rid, target, row, **fields):
+        """Note the new-source Session's repository (D48 R6) so a retry or the next publish goes there again."""
+        with self.db.transaction() as db:
+            snapshot = json.loads(db.execute("SELECT snapshot FROM runs WHERE id=?", (rid,)).fetchone()["snapshot"])
+            current = snapshot.get("publish_target") or {
+                "host": target["host"], "path": target["path"], "url": target["url"], "web": None, "created": False,
+                "baseline": None, "credential": {"id": row["id"], "name": row["name"]}, "at": time.time(),
+                "by": {"id": actor["id"], "username": actor.get("username")}}
+            snapshot["publish_target"] = {**current, **fields}
+            journal.change(db, "runs", rid, journal.person(actor), "run.repository", quiet=("snapshot",), snapshot=dumps(snapshot))
+            return snapshot["publish_target"]
+
+    def publish(self, actor, rid, body):
+        """Push the Session's work as one branch and open (or reuse) a draft pull / merge request with the bound write
+        credential (D35 §5.2): its creator, a Team owner or an admin, once its tasks have ended. A new-source Session goes
+        to a repository the platform creates, or one that is empty, with the credential named for it (D48)."""
+        import tempfile
+        from . import credentials as repo_credentials, publish as publishing
+        from .transport import worker_stream
+        require(isinstance(body, dict) and set(body) <= {"branch", "title", "repository", "credential"},
+                "只接受 branch、title、repository 与 credential")
+        with self.db.read() as db:
+            run = run_access(db, actor, rid)
+            require(may_publish(db, actor, run), "只有会话创建者、Team owner 或管理员可以发布", 403, "forbidden")
+            require(run["lifecycle"] == "open" and run["status"] in SETTLED and run["workspace"],
+                    "会话执行结束后才能发布", 409, "publish_busy")
+            snapshot, source = json.loads(run["snapshot"]), json.loads(run["source"])
+            target = self._publish_target(db, actor, run, snapshot, source, body)
+            row, host, path = target["row"], target["host"], target["path"]
+            require(row["access"] == "write", f"凭证「{row['name']}」为只读，无法发布", 409, "credential_read_only")
+            refused = repo_credentials.refused_address(row["host"], self.credentials.private_hosts)
+            require(not refused, refused, 409, "credential_host_refused")
             verified = self._verified(db, rid)   # D37 §7: only what passed the gates and the review is pushed
             require(verified or snapshot.get("execution_contract", 1) < 3 or not db.execute(
                 "SELECT 1 FROM attempts WHERE run_id=? AND evidence LIKE '%\"candidate\"%' LIMIT 1", (rid,)).fetchone(),
@@ -1140,6 +1210,21 @@ class Service:
         title = text(body.get("title") or snapshot.get("name") or run["input"][:60], "标题", 200)
         secret = self.credentials.secret(row["id"])
         auth = {"kind": row["kind"], "host": row["host"], "username": repo_credentials.username(row["kind"]), "secret": secret}
+        new = target["new"]
+        if new and "repository" in new:   # D48: the first publish of a new-source Session
+            if publishing.find_repository(row["kind"], host, path, secret) is None:
+                try:
+                    web = publishing.create_repository(row["kind"], host, new["repository"], secret)
+                except Error as exc:
+                    with self.db.transaction() as db:
+                        self._used(db, actor, row["id"], rid, path, None, exc.code, action="repo.create")
+                    raise
+                recorded = self._record_target(actor, rid, target, row, web=web, created=True)
+                with self.db.transaction() as db:
+                    self._used(db, actor, row["id"], rid, path, None, "created", action="repo.create")
+                    journal.record(db, rid, "run.repository", journal.person(actor), "已新建仓库 " + path, url=web, path=path,
+                                   private=new["repository"]["private"], created=True)
+                new = {"recorded": recorded}
         response = worker_stream(config, "/publish/bundle", {"run_id": rid, "message": f"KiroCrew ON：{title}（{rid}）",
                                                              **({"commit": verified["sha"]} if verified else {})}, timeout=120)
         with response, tempfile.TemporaryDirectory(dir=self.db.root, prefix=".publish-") as work:
@@ -1148,7 +1233,14 @@ class Service:
                                         headers.get("X-Publish-Branch") or "", headers.get("X-Publish-Base") or "",
                                         headers.get("X-Publish-Commit") or "")
             try:
-                pushed = publishing.push(Path(work) / "repo", source["url"], branch, commit, auth)
+                if new:   # main starts at the baseline, in a repository that is empty (made now, or found empty)
+                    publishing.push_baseline(Path(work) / "repo", target["url"], headers.get("X-Publish-Base") or "", auth)
+                    if "recorded" not in new:
+                        with self.db.transaction() as db:
+                            journal.record(db, rid, "run.repository", journal.person(actor), "发布到已有的空仓库 " + path,
+                                           path=path, created=False)
+                    self._record_target(actor, rid, target, row, baseline=headers.get("X-Publish-Base"))
+                pushed = publishing.push(Path(work) / "repo", target["url"], branch, commit, auth)
             except Error as exc:   # the credential was used all the same
                 with self.db.transaction() as db:
                     self._used(db, actor, row["id"], rid, path, branch, exc.code)
@@ -1156,7 +1248,7 @@ class Service:
         # From here the branch is on the remote: what follows is recorded whatever the pull / merge request does.
         failure, request = None, {"url": None, "number": None, "kind": None, "reused": False}
         try:
-            request = publishing.pull_request(row["kind"], host, path, branch, source.get("ref"), title,
+            request = publishing.pull_request(row["kind"], host, path, branch, target["target"], title,
                                               f"由 KiroCrew ON 会话 {rid} 发布。", secret)
         except Error as exc:
             failure = exc
@@ -1165,6 +1257,8 @@ class Service:
                   "by": {"id": actor["id"], "username": actor.get("username")}, **({"request_error": str(failure)} if failure else {})}
         with self.db.transaction() as db:
             snapshot = json.loads(db.execute("SELECT snapshot FROM runs WHERE id=?", (rid,)).fetchone()["snapshot"])
+            if source.get("type") != "git":   # D48: where the new project went
+                record["repository"] = (snapshot.get("publish_target") or {}).get("web") or f"https://{host}/{path}"
             snapshot["publish"] = record
             journal.change(db, "runs", rid, journal.person(actor), "run.published",
                            event={**{k: record[k] for k in ("branch", "commit", "url", "number", "reused")},
@@ -1177,11 +1271,12 @@ class Service:
         return record
 
     @staticmethod
-    def _used(db, actor, credential, rid, repo, branch, result):
-        """Every use of a write credential is audited, whatever came of it (D35 §6)."""
+    def _used(db, actor, credential, rid, repo, branch, result, action=None):
+        """Every use of a write credential is audited, whatever came of it (D35 §6); creating a repository too (D48)."""
         db.execute("UPDATE credentials SET last_used=? WHERE id=?", (time.time(), credential))
         audit(db, actor, "credential.use", "credential", credential,
-              {"run_id": rid, "repo": repo, "access": "write", "branch": branch, "result": result})
+              {"run_id": rid, "repo": repo, "access": "write", "branch": branch, "result": result,
+               **({"action": action} if action else {})})
 
     def rebind(self, actor, rid, body):
         """Change or remove a Session's source credential (spec §4): its creator, a Team owner or an admin, with a
@@ -1451,7 +1546,8 @@ class Service:
         snapshot = json.loads(run["snapshot"])
         value.update({key: snapshot.get(key) for key in ("name", "workflow_name", "workflow_version",
                                                        "selection", "match_mode", "match_reason", "purpose", "planning", "replan",
-                                                       "admission", "confirmed", "publish_policy", "publish_auto")})
+                                                       "admission", "confirmed", "publish_policy", "publish_auto",
+                                                       "publish_target", "publish_suggestion")})
         value["source"] = json.loads(value["source"])
         value["session_id"] = run["id"]
         creator = db.execute("SELECT username FROM users WHERE id=?", (run["owner_id"],)).fetchone()
