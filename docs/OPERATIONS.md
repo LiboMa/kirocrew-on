@@ -395,8 +395,10 @@ CloudFront 只使用 us-east-1 的证书）：分发加上别名与证书（SNI�
   KiroCrew 只导出 persistent 的会话（`session_export.py:380`），关闭与删除需要这份备份；`incognito` 仍读记忆（只是不写），`temporary` 不读不写，
   且已建会话的模式只能收紧、不能放宽。记忆按执行环境分隔：每人独立 Worker，只有 Team 共用一个 Worker 空间（负责人 2026-10-17）；
   一个 Worker 服务多个空间时记忆不分隔，控制台已标明「记忆未分隔」。不要改 `memory.persistence_enabled`：它会同时关掉 lessons。
-  2026-10-17 07:00 前后部署的 3ec713b 曾以 `incognito` 建立父会话，这期间新建的会话无法备份，因而不能关闭或删除（按继承规则，
-  隐私拒绝不伪造备份）；可停止、续作，需要关闭时由管理员处理。
+  KiroCrew 不导出 incognito / temporary 的会话（`export_slot_not_persistent`）：关闭与删除时记一份标明的观察记录
+  `restricted-session-observation.json`（`backup_kind: native_restricted_observation`，与只有说明性 note 的 `empty-session-observation.json` 同理），
+  不伪造备份，然后照常关闭、删除（负责人 2026-10-17）；其他导出错误仍阻止关闭与删除。2026-10-17 部署的 3ec713b 曾以 incognito 建立父会话
+  （`run-d098…`、`run-6d7c…`、`run-f7670bfb…`），按此处理。
 - **派发白名单**：协调者模板的 `toolsSettings.subagent.availableAgents`（KiroCrew 读的位置；此前写在顶层，等于全部允许）列出平台派发的
   `poc-kiro`、`poc-claude`、`poc-codex`、`poc-opencode`、`poc-diagnose`；种入时迁移旧位置，用户的其他工具设置保留。
 - **协调者**排除 `@kirocrew-core/monitor_*`（不自行布置监视循环、追加回合）。新边界的 `agent.adaptive_concurrency_mode` 为 `fixed`（并发上限即 `max_subagents`）。

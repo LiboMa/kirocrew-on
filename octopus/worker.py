@@ -173,6 +173,12 @@ TOOL_COMMANDS = {"kiro": ("kiro_cli", "kiro-cli"), "claude": ("claude", "claude"
                  "opencode": ("opencode", "opencode")}
 
 
+# The export refusals a close / delete records as a labelled observation instead of a backup: KiroCrew's export code
+# -> (backup kind, observation file). Any other refusal keeps the Session open.
+REFUSED_EXPORTS = {"export_bundle_empty": ("native_empty_observation", "empty-session-observation.json"),
+                   "export_slot_not_persistent": ("native_restricted_observation", "restricted-session-observation.json")}
+
+
 class Worker:
     def __init__(self, root, token, gateway_port=5476, crew_home=None, isolation="trusted-local", routing_log=None,
                  crew_url=None, approval_mode="", crew_entry_ttl="8h", kiro_cli=None, path_prepend=(),
@@ -1055,9 +1061,8 @@ class Worker:
                 current["status"] = "closed"
                 write(lifecycle, current)
         if action == "delete":
-            require((run / "native-session-backup.gz").is_file() or
-                    current.get("backup_kind") == "native_empty_observation" and
-                    (run / "empty-session-observation.json").is_file(), "缺少原生备份")
+            observed = next((name for kind, name in REFUSED_EXPORTS.values() if kind == current.get("backup_kind")), None)
+            require((run / "native-session-backup.gz").is_file() or observed and (run / observed).is_file(), "缺少原生备份")
             receipt = self.native("/api/sessions/" + quote(parent["parent"], safe=""), method="DELETE")
             require(receipt.get("ok"), "原生删除未确认", 409, "native_unavailable")
             current["status"] = "deleted"
@@ -1076,14 +1081,17 @@ class Worker:
         except urllib.error.HTTPError as exc:
             with exc:
                 failure = json.loads(exc.read(4096))
-            if exc.code != 400 or failure.get("code") != "export_bundle_empty":
+            code = failure.get("code")
+            if exc.code != 400 or code not in REFUSED_EXPORTS:
                 raise Error(409, "backup_unavailable", "原生备份未成功；会话尚未关闭") from None
-            # Native notes alone are deliberately excluded from its export bundle.
-            # Preserve an explicitly labelled observation; never forge a kcsession bundle.
-            write(run / "empty-session-observation.json",
-                  {"kind": "native_empty_observation", "native_export_code": "export_bundle_empty",
-                   "slot": parent["slot"], "observation": slot, "at": time.time()})
-            return "native_empty_observation"
+            # Native notes alone are excluded from its export bundle, and an incognito / temporary Session is never
+            # exported (KiroCrew produces nothing from it; owner 2026-10-17). Preserve an explicitly labelled observation;
+            # never forge a kcsession bundle.
+            kind, name = REFUSED_EXPORTS[code]
+            write(run / name, {"kind": kind, "native_export_code": code, "slot": parent["slot"],
+                               **({"memory_mode": slot["memory_mode"]} if isinstance(slot, dict) and slot.get("memory_mode") else {}),
+                               "observation": slot, "at": time.time()})
+            return kind
         require(len(content) <= 32 * 1024 * 1024, "原生备份过大")
         with gzip.GzipFile(fileobj=io.BytesIO(content)) as bundle:
             decoded = bundle.read(64 * 1024 * 1024 + 1)

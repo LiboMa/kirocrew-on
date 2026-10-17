@@ -769,18 +769,38 @@ class MVPTests(unittest.TestCase):
         self.assertFalse((root/"native-session-backup.gz").exists())
         self.assertEqual(json.loads((root/"empty-session-observation.json").read_text())["slot"],"octopus-"+body["run_id"])
 
-    def test_incognito_export_refusal_never_closes_or_makes_fake_backup(self):
+    def test_incognito_export_refusal_closes_and_deletes_with_a_labelled_observation_not_a_fake_backup(self):
+        # Owner 2026-10-17: KiroCrew produces nothing from an incognito / temporary Session (session_export.py:366), so the
+        # privacy refusal is recorded as what it is and the Session closes and deletes; no bundle is forged.
+        node,body=self.native_worker()
+        calls=[]
+        def native(path,payload=None,method=None):
+            calls.append((path,method))
+            return {"agents":[]} if path=="/api/spawn" else {"ok":True,"running":False,"memory_mode":"incognito"}
+        node.native=native
+        def refusal(*args,**kwargs):
+            raise urllib.error.HTTPError("fixture",400,"private",{},io.BytesIO(b'{"code":"export_slot_not_persistent"}'))
+        with patch("api.token",return_value="fixture"),patch("urllib.request.urlopen",side_effect=refusal):
+            closed=node.control({"run_id":body["run_id"],"action":"close"})
+            deleted=node.control({"run_id":body["run_id"],"action":"delete"})
+        self.assertEqual((closed["lifecycle"],closed["backup_kind"]),("closed","native_restricted_observation"))
+        self.assertEqual(deleted["lifecycle"],"deleted")
+        root=node.path(body["run_id"])
+        self.assertFalse((root/"native-session-backup.gz").exists())
+        observation=json.loads((root/"restricted-session-observation.json").read_text())
+        self.assertEqual((observation["native_export_code"],observation["memory_mode"]),("export_slot_not_persistent","incognito"))
+
+    def test_any_other_export_refusal_never_closes(self):
         node,body=self.native_worker()
         calls=[]
         def native(path,payload=None,method=None):
             calls.append((path,method))
             return {"agents":[]} if path=="/api/spawn" else {"ok":True,"running":False}
         node.native=native
-        refusal=urllib.error.HTTPError("fixture",400,"private",{},io.BytesIO(b'{"code":"export_slot_not_persistent"}'))
+        refusal=urllib.error.HTTPError("fixture",400,"other",{},io.BytesIO(b'{"code":"export_failed"}'))
         with patch("api.token",return_value="fixture"),patch("urllib.request.urlopen",side_effect=refusal):
             with self.assertRaises(Error):node.control({"run_id":body["run_id"],"action":"close"})
         self.assertFalse(any(method=="DELETE" for _,method in calls))
-        self.assertFalse((node.path(body["run_id"])/"empty-session-observation.json").exists())
 
     def test_openapi_inputs_cover_direct_custom_tasks(self):
         spec=openapi()
