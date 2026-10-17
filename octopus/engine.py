@@ -19,7 +19,9 @@ LEGACY = ("id", "name", "tool", "model", "effort", "prompt")
 
 CANCELLED = re.compile(r"stop_reason=cancelled|turn cancelled by the runtime", re.I)
 # The Agent's ACP process ended under the task (a Gateway restart, a killed process): design §8.1 L0, not the task's fault.
-EXITED = re.compile(r"ACP process exited", re.I)
+# KiroCrew words it two ways: AcpError "ACP process exited" (acp/client.py) and AcpProcessDied "Runtime process died …"
+# (acp/session_handle.py, EC2 run-f7670bfb…).
+EXITED = re.compile(r"ACP process exited|AcpProcessDied|Runtime process died", re.I)
 # The Agent ended, then KiroCrew could not clean up a process its tree left behind (process_identity.py, EC2 run-6d7c132b…).
 CLEANUP = re.compile(r"process group \d+ still has members", re.I)
 
