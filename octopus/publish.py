@@ -3,6 +3,9 @@ Session's repository with the bound write credential and opens a draft pull requ
 
 The Worker exports the branch as a bundle; the platform checks it in a temporary bare repository of its own, pushes only
 that branch and only as a fast-forward (no force, never the default branch), and reuses an open request for the branch.
+
+D48: a Session started from a new project publishes to a repository the platform creates (or one that is empty): its
+baseline becomes `main`, and the work arrives on its octopus/… branch as a draft request like any other publish.
 """
 import http.client
 import json
@@ -19,6 +22,22 @@ from .security import Error, require
 
 BRANCH = re.compile(r"octopus/[A-Za-z0-9._-]+(/[A-Za-z0-9._-]+)*")
 LIMIT = 100 * 1024 * 1024   # D35 §5.2: one bundle (as the Worker's PUBLISH_LIMIT)
+SEGMENT = re.compile(r"[A-Za-z0-9_][A-Za-z0-9_.-]*")
+PULL_NEED = "GitHub 细粒度令牌需对该仓库有 Pull requests 读写权限，GitLab 令牌需 api 范围"
+CREATE_NEED = ("GitHub classic PAT 需 repo 范围，或细粒度令牌对该账户 / 组织有 Administration 读写权限；"
+               "GitLab 令牌需 api 范围")
+
+
+def check_repository(value):
+    """A new repository to publish a Session to (D48 R1): {owner, name, private?} — private unless said otherwise."""
+    require(isinstance(value, dict) and set(value) <= {"owner", "name", "private"}, "repository 须为 {owner, name, private?}")
+    owner, name, private = value.get("owner"), value.get("name"), value.get("private", True)
+    require(isinstance(owner, str) and len(owner) <= 100 and SEGMENT.fullmatch(owner) and ".." not in owner,
+            "repository.owner 只能含字母、数字、. _ -（以字母、数字或 _ 开头）")
+    require(isinstance(name, str) and len(name) <= 100 and SEGMENT.fullmatch(name) and ".." not in name
+            and not name.lower().endswith(".git"), "repository.name 只能含字母、数字、. _ -（1–100 个字符，不以 .git 结尾）")
+    require(isinstance(private, bool), "repository.private 须为 true 或 false")
+    return {"owner": owner, "name": name, "private": private}
 
 
 def check_branch(branch, ref=None):
@@ -91,7 +110,7 @@ def push(workdir, url, branch, commit, auth):
     return {"created": theirs is None}
 
 
-def _api(method, url, secret, kind, body=None):
+def _api(method, url, secret, kind, body=None, *, missing=False, need=PULL_NEED):
     headers = ({"Authorization": "Bearer " + secret, "Accept": "application/vnd.github+json"} if kind == "github_pat"
                else {"PRIVATE-TOKEN": secret})
     headers.update({"User-Agent": "kirocrew-on", **({"Content-Type": "application/json"} if body is not None else {})})
@@ -106,12 +125,13 @@ def _api(method, url, secret, kind, body=None):
     except urllib.error.HTTPError as exc:
         with exc:
             detail = exc.read()[:500].decode(errors="replace")
+        if exc.code == 404 and missing:
+            return None
         if exc.code == 401:
             raise Error(409, "credential_rejected", "托管方拒绝了凭证（HTTP 401）") from None
         if exc.code == 403:   # a valid token without this permission (or the host's rate limit)
             raise Error(409, "credential_permission", sources.scrub(
-                f"凭证没有此操作的权限（HTTP 403：{detail[:200]}）：GitHub 细粒度令牌需对该仓库有 Pull requests 读写权限，"
-                "GitLab 令牌需 api 范围", secret)) from None
+                f"凭证没有此操作的权限（HTTP 403：{detail[:200]}）：{need}", secret)) from None
         raise Error(409, "publish_failed", sources.scrub(f"托管方返回 HTTP {exc.code}：{detail}", secret)) from None
     except (urllib.error.URLError, OSError, ValueError):
         raise Error(502, "publish_failed", "无法连接托管方的 API") from None
@@ -139,3 +159,42 @@ def pull_request(kind, host, path, branch, target, title, body, secret):
     made = _api("POST", f"{base}/projects/{project}/merge_requests", secret, kind,
                 {"source_branch": branch, "target_branch": target, "title": "Draft: " + title, "description": body})
     return {"url": made["web_url"], "number": made["iid"], "kind": "merge_request", "reused": False}
+
+
+def find_repository(kind, host, path, secret):
+    """The repository at ``path``, or None when it does not exist (or the credential cannot see it)."""
+    base = repo_credentials.api_base(kind, host)
+    if kind == "github_pat":
+        return _api("GET", f"{base}/repos/{path}", secret, kind, missing=True)
+    return _api("GET", f"{base}/projects/{urllib.parse.quote(path, safe='')}", secret, kind, missing=True)
+
+
+def create_repository(kind, host, repository, secret):
+    """Create an empty repository (D48 R3) — no README or licence — and return its web address."""
+    base, owner, name = repo_credentials.api_base(kind, host), repository["owner"], repository["name"]
+    if kind == "github_pat":
+        login = str(_api("GET", f"{base}/user", secret, kind).get("login") or "")
+        where = f"{base}/user/repos" if login.lower() == owner.lower() else f"{base}/orgs/{owner}/repos"
+        made = _api("POST", where, secret, kind, {"name": name, "private": repository["private"], "auto_init": False,
+                                                  "description": "由 KiroCrew ON 创建"}, need=CREATE_NEED)
+        return made["html_url"]
+    namespace = _api("GET", f"{base}/namespaces/{urllib.parse.quote(owner, safe='')}", secret, kind)["id"]
+    made = _api("POST", f"{base}/projects", secret, kind,
+                {"name": name, "path": name, "namespace_id": namespace, "initialize_with_readme": False,
+                 "visibility": "private" if repository["private"] else "public"}, need=CREATE_NEED)
+    return made["web_url"]
+
+
+def push_baseline(workdir, url, base, auth):
+    """Start an empty repository's ``main`` at the Session's baseline (D48 R4); one with any branch is never written."""
+    with sources.askpass(Path(workdir), auth) as env:
+        listed = _git(workdir, *sources.SAFE_GIT_ARGS, "ls-remote", "--heads", url, env=env, secret=auth["secret"])
+        require(not listed.strip(), "仓库已存在且不为空，未发布：改用新的仓库名，或以该仓库为源码新建会话", 409,
+                "repository_not_empty")
+        try:
+            _git(workdir, *sources.SAFE_GIT_ARGS, "push", "-q", url, f"{base}:refs/heads/main", env=env, secret=auth["secret"])
+        except Error as exc:
+            if "error: 403" not in str(exc):
+                raise
+            raise Error(409, "credential_permission", "凭证可以读取但不能推送（HTTP 403）：GitHub 细粒度令牌需对该仓库有 "
+                        "Contents 读写权限，GitLab 令牌需 write_repository 范围") from None

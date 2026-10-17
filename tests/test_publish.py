@@ -241,8 +241,9 @@ from tests.test_private_clone import BACKEND, GitHost, TOKEN as SECRET   # the t
 
 
 class FakeApi(BaseHTTPRequestHandler):
-    """GitHub's repository and pulls endpoints, and GitLab's project and merge requests, kept in memory."""
-    pulls, created, seen, refuse = [], [], [], None
+    """GitHub's repository and pulls endpoints, and GitLab's project and merge requests, kept in memory. ``repos`` None:
+    every repository exists (as before D48); a set: only those, and creating one makes a bare repository on GitHost."""
+    pulls, created, seen, refuse, repos, made, login, namespace = [], [], [], None, None, [], "owner", None
 
     def answer(self, status, body):
         data = json.dumps(body).encode()
@@ -260,6 +261,16 @@ class FakeApi(BaseHTTPRequestHandler):
         if not self.authorized():
             return self.answer(401, {"message": "Bad credentials"})
         path, _, query = self.path.partition("?")
+        if path in ("/user", "/api/v4/user"):
+            return self.answer(200, {"login": FakeApi.login, "username": FakeApi.login})
+        if path.startswith("/api/v4/namespaces/"):
+            FakeApi.namespace = urllib.parse.unquote(path.rsplit("/", 1)[1])
+            return self.answer(200, {"id": 7, "full_path": FakeApi.namespace})
+        if FakeApi.repos is not None and (path.startswith("/repos/") or path.startswith("/api/v4/projects/")) \
+                and not path.endswith(("/pulls", "/merge_requests")):
+            name = path[len("/repos/"):] if path.startswith("/repos/") else urllib.parse.unquote(path[len("/api/v4/projects/"):])
+            if name not in FakeApi.repos:
+                return self.answer(404, {"message": "Not Found"})
         if path.endswith("/pulls") or path.endswith("/merge_requests"):
             branch = query.split("head=owner%3A")[-1].split("&")[0] if "head=" in query else query.split("source_branch=")[-1].split("&")[0]
             return self.answer(200, [p for p in FakeApi.pulls if p["branch"] == urllib.parse.unquote(branch)])
@@ -272,6 +283,18 @@ class FakeApi(BaseHTTPRequestHandler):
             return self.answer(401, {"message": "Bad credentials"})
         if FakeApi.refuse:
             return self.answer(FakeApi.refuse, {"message": "Resource not accessible by personal access token"})
+        if self.path in ("/user/repos", "/api/v4/projects") or (self.path.startswith("/orgs/") and self.path.endswith("/repos")):
+            owner = (FakeApi.login if self.path == "/user/repos" else self.path.split("/")[2] if self.path.startswith("/orgs/")
+                     else FakeApi.namespace)
+            name = f"{owner}/{body.get('name') or body.get('path')}"
+            bare = GitHost.root / (name + ".git")
+            bare.parent.mkdir(parents=True, exist_ok=True)
+            subprocess.run(["git", "init", "-q", "--bare", "-b", "main", str(bare)], check=True)
+            subprocess.run(["git", "-C", str(bare), "config", "http.receivepack", "true"], check=True)
+            FakeApi.repos = (FakeApi.repos or set()) | {name}
+            FakeApi.made.append((self.path, body))
+            return self.answer(201, {"html_url": f"https://forge.example/{name}", "web_url": f"https://forge.example/{name}",
+                                     "full_name": name, "path_with_namespace": name})
         FakeApi.created.append(body)
         number = len(FakeApi.pulls) + 1
         branch = body.get("head") or body.get("source_branch")
@@ -292,6 +315,7 @@ class PublishCase(AccessCase):
     def setUp(self):
         super().setUp()
         FakeApi.pulls, FakeApi.created, FakeApi.seen, FakeApi.refuse = [], [], [], None
+        FakeApi.repos, FakeApi.made, FakeApi.login, FakeApi.namespace = None, [], "owner", None
         root = Path(self.tmp.name)
         GitHost.root = root / "repos"
         self.remote = GitHost.root / "owner/app.git"
