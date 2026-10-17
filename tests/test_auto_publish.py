@@ -85,10 +85,28 @@ class PlannedTests(ConfirmationCase):
         import tests.test_confirmation as confirmation
         original, confirmation.PLAN = confirmation.PLAN, PLAN
         self.addCleanup(setattr, confirmation, "PLAN", original)
-        rid = self.start(steps=None, plan="agent")
+        rid = self.start(steps=None, plan="agent", source={"type": "git", "url": "https://github.com/o/r.git"})
         run = self.tick(rid)
         self.assertEqual(run["publish_policy"], {"auto": True, "source": "requested", "quote": "完成后提交 PR"})
-        self.assertTrue(any("要求推送或创建 PR" in note for note in run["planning"]["notes"]))
+
+    def test_a_session_without_a_repository_says_so_instead_of_publishing(self):
+        # EC2 run-f7670bfb…: 「新建一个 Repo 并推 README」 started from a new source
+        import tests.test_confirmation as confirmation
+        original, confirmation.PLAN = confirmation.PLAN, PLAN
+        self.addCleanup(setattr, confirmation, "PLAN", original)
+        run = self.tick(self.start(steps=None, plan="agent"))
+        self.assertFalse((run.get("publish_policy") or {}).get("auto"))
+        notes = run["planning"]["notes"]
+        self.assertTrue(any("要求推送或创建 PR" in note and "没有远端仓库" in note for note in notes))
+        self.assertTrue(any("未开启自动发布" in note for note in notes))
+
+    def test_a_push_task_planned_for_a_repository_says_the_platform_publishes(self):
+        import tests.test_confirmation as confirmation
+        original, confirmation.PLAN = confirmation.PLAN, PLAN
+        self.addCleanup(setattr, confirmation, "PLAN", original)
+        rid = self.start(steps=None, plan="agent", source={"type": "git", "url": "https://github.com/o/r.git"})
+        notes = self.tick(rid)["planning"]["notes"]
+        self.assertTrue(any("发布由平台在会话完成后进行" in note for note in notes))
 
     def test_a_policy_set_at_the_start_is_kept(self):
         import tests.test_confirmation as confirmation
@@ -112,11 +130,20 @@ class PushFailureTests(ConfirmationCase):
         return result
 
     def test_a_task_that_failed_trying_to_push_is_explained_not_blamed_on_permissions(self):
-        rid = self.start(recovery={"enabled": False, "max_cycles": 2})
+        rid = self.start(recovery={"enabled": False, "max_cycles": 2}, source={"type": "git", "url": "https://github.com/o/r.git"})
         run = self.tick(rid)
         self.assertEqual(run["status"], "blocked")
         self.assertEqual(run["attention"]["title"], "Agent 不能推送或创建 PR")
         self.assertIn("发布到仓库", run["attention"]["action"])
+
+    def test_a_session_without_a_repository_is_not_sent_to_publish(self):
+        # EC2 run-f7670bfb…: 「新建一个 Repo 并推 README」 on a new source; publishing needs the repository the Session came from
+        rid = self.start(recovery={"enabled": False, "max_cycles": 2})
+        run = self.tick(rid)
+        self.assertEqual(run["attention"]["title"], "Agent 不能推送或创建 PR")
+        self.assertNotIn("发布到仓库", run["attention"]["action"])
+        self.assertIn("没有远端仓库", run["attention"]["action"])
+        self.assertIn("下载源码", run["attention"]["action"])
 
 
 class McpTests(unittest.TestCase):

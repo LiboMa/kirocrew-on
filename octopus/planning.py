@@ -141,9 +141,12 @@ def expand(db, rid, text, models=None, replan=False, tools=None):
     if len(plan["steps"]) > limit:
         notes.append(f"规划给出 {len(plan['steps'])} 个任务，只保留前 {limit} 个")
     from .domain import PUSHING
+    # publishing goes to the repository the Session was started from; a new or uploaded source has none (EC2 run-f7670bfb…)
+    repository = json.loads(db.execute("SELECT source FROM runs WHERE id=?", (rid,)).fetchone()["source"] or "{}").get("type") == "git"
     for step in steps:   # D47: publishing is the platform's; an Agent has no repository write credential
         if PUSHING.search(step.get("prompt") or ""):
-            notes.append(f"任务「{step['name']}」要求推送或创建 PR：Agent 没有仓库写凭证，发布由平台在会话完成后进行")
+            notes.append(f"任务「{step['name']}」要求推送或创建 PR：Agent 没有仓库写凭证，" + (
+                "发布由平台在会话完成后进行" if repository else "此会话的源码不来自远端仓库，没有远端仓库可发布，平台也不能新建仓库"))
     start = db.execute("SELECT COALESCE(MAX(ordinal), 0) FROM tasks WHERE run_id=?", (rid,)).fetchone()[0] + 1
     for offset, step in enumerate(steps):
         db.execute("INSERT INTO tasks(run_id,id,ordinal,spec) VALUES(?,?,?,?)", (rid, step["id"], start + offset, dumps(step)))
@@ -151,7 +154,10 @@ def expand(db, rid, text, models=None, replan=False, tools=None):
     snapshot = json.loads(row["snapshot"])
     if plan.get("publish") and (snapshot.get("publish_policy") or {}).get("source") != "user":
         # D47: the requirement asked for a pull / merge request — published on completion; the user's own setting wins
-        snapshot["publish_policy"] = {"auto": True, "source": "requested", "quote": plan["publish"].get("quote", "")}
+        if repository:
+            snapshot["publish_policy"] = {"auto": True, "source": "requested", "quote": plan["publish"].get("quote", "")}
+        else:
+            notes.append("需求要求提交 PR，但此会话的源码不来自远端仓库，没有可发布的仓库，未开启自动发布")
     if replan:
         snapshot["replan"] = {**(snapshot.get("replan") or {}), "applied": True, "tasks": [s["id"] for s in steps], "notes": notes,
                               "intent": str(plan.get("intent") or "")[:500]}

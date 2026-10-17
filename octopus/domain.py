@@ -1566,8 +1566,12 @@ class Service:
                 error, outcome.get("summary"), " ".join(map(str, outcome.get("findings") or []))]))):
             # D47: an Agent has no repository write credential by design; publishing is the platform's
             title = "Agent 不能推送或创建 PR"
-            action = ("推送与 Draft PR 由平台完成：会话完成后在会话页点「发布到仓库」，或开启「完成后自动发布」；"
-                      "可续作去掉要求推送的任务。")
+            if (run.get("source") or {}).get("type") == "git":
+                action = ("推送与 Draft PR 由平台完成：会话完成后在会话页点「发布到仓库」，或开启「完成后自动发布」；"
+                          "可续作去掉要求推送的任务。")
+            else:   # publishing goes to the repository the Session was started from (EC2 run-f7670bfb…)
+                action = ("此会话的源码不来自远端仓库，没有远端仓库可发布，平台目前也不能新建仓库：可续作去掉要求建仓库或推送的任务，"
+                          "完成后用「下载源码」取回改动；需要发布时以已有仓库为源码新建会话。")
         elif run.get("error") == "Worker 已停用":   # D43: continues on its own once the Worker is enabled again
             title, action = "执行环境已停用", "管理员重新启用后自动继续。"
         elif "原生任务已停止" in error:

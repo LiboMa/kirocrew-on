@@ -380,6 +380,8 @@ CloudFront 只使用 us-east-1 的证书）：分发加上别名与证书（SNI�
   （来源显示「需求中要求提交 PR」），用户自己的设置优先。
 - 自动发布做不到时（没有写凭证、改动未通过审查、发现秘密、远端冲突）会话仍为「已完成」，「需要处理」为「自动发布未完成」并写明原因；同一版本只自动尝试一次，处理后手动发布。
 - Agent 没有仓库写凭证（设计如此），规划不安排推送 / 建 PR 的任务；任务因尝试推送失败时，「需要处理」为「Agent 不能推送或创建 PR」并指向发布按钮（EC2 `run-361cd491…`）。
+- 发布到会话启动时的仓库（`source.type = git`）。新建或上传源码的会话没有远端仓库：规划者标注的「要求提交 PR」不开启自动发布（记说明），推送失败的提示改为
+  「下载源码」或以已有仓库为源码新建会话；平台目前不能新建仓库（EC2 `run-f7670bfb…`）。
 
 ### 协调者的可选目标（EC2 `run-40a1f6d1…` 修复）
 
@@ -389,9 +391,12 @@ CloudFront 只使用 us-east-1 的证书）：分发加上别名与证书（SNI�
 
 ### KiroCrew 配置与隔离（D46 P0，以 KiroCrew 0.10.0 为准）
 
-- **记忆**：0.10.0 没有 `memory.enabled`（此前写入的该键不起作用，边界的全局记忆一直开着）。平台新建的父会话以 `memory_mode: "incognito"` 运行，
-  不读不写边界的全局记忆——共享环境上各空间的协调者会话不再经全局记忆互通；之前的会话保持原样，全局记忆中已有的历史不自动清除（需要时由管理员处理）。
-  每个空间使用自己的 KiroCrew 成员记忆与 lessons 在 P4 进行。不要改 `memory.persistence_enabled`：它会同时关掉 lessons。
+- **记忆**：0.10.0 没有 `memory.enabled`（此前写入的该键不起作用，边界的全局记忆一直开着）。平台新建的父会话以 `memory_mode: "persistent"` 运行：
+  KiroCrew 只导出 persistent 的会话（`session_export.py:380`），关闭与删除需要这份备份；`incognito` 仍读记忆（只是不写），`temporary` 不读不写，
+  且已建会话的模式只能收紧、不能放宽。记忆按执行环境分隔：每人独立 Worker，只有 Team 共用一个 Worker 空间（负责人 2026-10-17）；
+  一个 Worker 服务多个空间时记忆不分隔，控制台已标明「记忆未分隔」。不要改 `memory.persistence_enabled`：它会同时关掉 lessons。
+  2026-10-17 07:00 前后部署的 3ec713b 曾以 `incognito` 建立父会话，这期间新建的会话无法备份，因而不能关闭或删除（按继承规则，
+  隐私拒绝不伪造备份）；可停止、续作，需要关闭时由管理员处理。
 - **派发白名单**：协调者模板的 `toolsSettings.subagent.availableAgents`（KiroCrew 读的位置；此前写在顶层，等于全部允许）列出平台派发的
   `poc-kiro`、`poc-claude`、`poc-codex`、`poc-opencode`、`poc-diagnose`；种入时迁移旧位置，用户的其他工具设置保留。
 - **协调者**排除 `@kirocrew-core/monitor_*`（不自行布置监视循环、追加回合）。新边界的 `agent.adaptive_concurrency_mode` 为 `fixed`（并发上限即 `max_subagents`）。
