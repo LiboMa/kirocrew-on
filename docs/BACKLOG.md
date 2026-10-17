@@ -69,6 +69,12 @@
 - `publish_target_fixed` 区分 owner / 仓库名的大小写（GitHub、GitLab 不区分）。
 - git 源码发布在多项核对同时失败时先报出的错误代码与此前不同（只有顺序）。
 
+## 运维与 Harness 防线（复盘 2026-10-17 的后续）
+- 部署维护期：`deploy.sh push` 先让平台进入维护（新会话照常登记但暂不派发，运行中的任务等待完成或在重启后由 L0 重试），部署完成后恢复；
+  空闲检查只是时间点（`run-f7670…` 在部署中创建）。
+- KiroCrew 报错词表的契约：L0 依赖的报错文字（`ACP process exited`、`AcpProcessDied`、`process group … still has members`、取消）在部署时的原生测试中
+  核对已安装 KiroCrew 源码仍含这些文字，升级后措辞变化即提示。
+
 ## 已知的次要问题（审查延后项）
 - 访问管理第 1 期（审查延后项）：预览复核按账号的管理员身份而非签发 Token 的 scope
   （≤ 10 分钟）；被降级的管理员仍能签发含 admin 的 Token（降级期间无效）；「全部会话」中已停用所有者显示原始 id、选中自己不在的 Team
