@@ -117,7 +117,7 @@ def assert_unique_name(name, workflow_id):
                 "请换一个名称，或编辑已有工作流。")
 
 
-CONTRACT_FIELDS = {"kind", "deliverables", "acceptance", "verify", "depends_on", "paths", "requested"}
+CONTRACT_FIELDS = {"kind", "role", "deliverables", "acceptance", "verify", "depends_on", "paths", "requested"}
 
 
 def validate(value):

@@ -85,10 +85,13 @@ PREVIEW = ("\n\n## 可运行产出的声明\n交付物是可以运行的应用�
 def envelope(task_input, requirement, contract, prompt, upstream, project, handoff, stage=None, extra=""):
     """The instructions an Attempt reads (D46): the requirement, the contract and the task, the upstream handoffs, then
     what this kind of work does — planning, design and diagnosis are not told to develop — and the handoff it writes."""
+    from . import roles
     from .prompts import HANDOFF
     tail = TAILS.get(stage or (contract or {}).get("kind"), DEFAULT_TAIL)
     common = STAGE_TAILS.get(stage, COMMON_TAIL)
-    return ("# 本次研发任务\n\n" + task_input + briefing(requirement, contract) + "\n\n## 任务\n" + prompt +
+    role = (contract or {}).get("role")   # D46 P2: the role card comes first
+    card = f"# 你的角色：{roles.LABELS[role]}\n{roles.card(role)}\n\n" if role in roles.KINDS else ""
+    return (card + "# 本次研发任务\n\n" + task_input + briefing(requirement, contract) + "\n\n## 任务\n" + prompt +
             "\n\n## 前序交接\n前序任务的结论、发现、候选与检查；handoff 是其完整交接文件的路径，需要细节时读取。\n" +
             dumps(upstream) + f"\n\n源码目录：{project}\n交接文件：{handoff}\n" + tail + common + HANDOFF + extra)
 
@@ -107,7 +110,9 @@ def briefing(requirement, contract):
         checks = ("建议的检查命令（平台不运行）" if contract.get("kind") in {"review", "design"}
                   else "检查命令（任务结束后平台运行，须通过）")   # D46: say whether the platform runs them
         labels = (("deliverables", "交付物"), ("acceptance", "验收项"), ("verify", checks), ("paths", "可改动路径"))
-        text += "\n\n## 本任务契约\n" + (f"类别：{contract['kind']}\n" if contract.get("kind") else "")
+        from . import roles
+        text += "\n\n## 本任务契约\n" + (f"类别：{contract['kind']}\n" if contract.get("kind") else "") + (
+            f"角色：{roles.LABELS[contract['role']]}\n" if contract.get("role") in roles.KINDS else "")
         for key, label in labels:
             if contract.get(key):
                 text += label + "：\n" + "".join(f"- {item}\n" for item in contract[key])

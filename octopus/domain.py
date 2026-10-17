@@ -39,7 +39,7 @@ def name(value):
 
 
 # Optional task structure (D34 §6.1): what a task delivers and how it is checked, kept in its spec only when given.
-CONTRACT = ("kind", "deliverables", "acceptance", "verify", "depends_on", "paths")
+CONTRACT = ("kind", "role", "deliverables", "acceptance", "verify", "depends_on", "paths")
 KINDS = ("implement", "review", "test", "deliver", "design")
 LIMITS = {"deliverables": (20, 500), "acceptance": (20, 500), "verify": (10, 500), "paths": (20, 500), "depends_on": (8, 48)}
 
@@ -85,6 +85,15 @@ def steps(value, known=(), planned=False):
         if "kind" in step:
             require(step["kind"] in KINDS, "任务类别只能是 implement、review、test、deliver 或 design")
             item["kind"] = step["kind"]
+        if "role" in step:   # D46 P2: how the Agent works; kind keeps deciding the gates
+            from . import roles
+            require(step["role"] in roles.KINDS, "角色只能是 " + "、".join(roles.KINDS))
+            allowed = roles.KINDS[step["role"]]
+            if "kind" in item:
+                require(item["kind"] in allowed, f"角色 {step['role']} 的任务类别须为 {' 或 '.join(allowed)}")
+            else:
+                item["kind"] = allowed[0]
+            item["role"] = step["role"]
         for field, (items, chars) in LIMITS.items():
             if field in step:
                 item[field] = strings(step[field], field, items, chars)
@@ -94,6 +103,11 @@ def steps(value, known=(), planned=False):
         require(all(dep in (seen | earlier) - {sid} for dep in item.get("depends_on", [])),
                 f"任务「{item['name']}」的 depends_on 只能指向前序任务")
         result.append(item)
+    if not planned:   # D46 P2: a submitted reviewer never uses the author's tool; a planned one is noted (planning.expand)
+        from . import roles
+        bad = roles.unindependent(result)
+        require(not bad, "审查不独立：" + "；".join(f"任务「{task['name']}」（{roles.LABELS[task['role']]}）与被审查改动的作者使用同一工具 {tool}"
+                                               for task, tool in bad))
     return result
 
 

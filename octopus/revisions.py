@@ -6,8 +6,8 @@ import json
 from .db import dumps
 
 FIELDS = ("name", "tool", "model", "effort")
-CONTRACT = ("kind", "deliverables", "acceptance", "verify", "depends_on", "paths")
-LABELS = {"name": "名称", "tool": "工具", "model": "模型", "effort": "Effort", "kind": "类别", "deliverables": "交付物",
+CONTRACT = ("kind", "role", "deliverables", "acceptance", "verify", "depends_on", "paths")
+LABELS = {"name": "名称", "tool": "工具", "model": "模型", "effort": "Effort", "kind": "类别", "role": "角色", "deliverables": "交付物",
           "acceptance": "验收项", "verify": "验证命令", "depends_on": "依赖", "paths": "可改动路径"}
 
 
