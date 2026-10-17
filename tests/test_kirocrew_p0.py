@@ -26,7 +26,7 @@ class SeedTests(unittest.TestCase):
         root = Path(self.temporary.name)
         self.crew, self.kiro, self.runs = root / "crew", root / "kiro", root / "worker"
         with patch.dict("sys.modules", {"kiro_crew.agent": SimpleNamespace(managed_mcp_spec_entry=lambda name: {"command": "x"})}):
-            templates.seed(crew_home=self.crew, kiro_home=self.kiro, allowed_roots=[self.runs], port=6000, legacy_pipeline=False)
+            templates.seed(crew_home=self.crew, kiro_home=self.kiro, allowed_roots=[self.runs], legacy_pipeline=False)
 
     def spec(self, name):
         return json.loads((self.kiro / "agents" / f"{name}.json").read_text())
@@ -58,7 +58,7 @@ class MigrationTests(unittest.TestCase):
                 "name": "poc-coordinator", "availableAgents": ["poc-kiro"], "excludedTools": ["@user/tool"],
                 "toolsSettings": {"shell": {"user": "keep"}}}))
             with patch.dict("sys.modules", {"kiro_crew.agent": SimpleNamespace(managed_mcp_spec_entry=lambda name: {"command": "x"})}):
-                templates.seed(crew_home=root / "crew", kiro_home=root / "kiro", allowed_roots=[root / "w"], port=6000,
+                templates.seed(crew_home=root / "crew", kiro_home=root / "kiro", allowed_roots=[root / "w"],
                                legacy_pipeline=False)
             spec = json.loads((root / "kiro/agents/poc-coordinator.json").read_text())
         self.assertNotIn("availableAgents", spec)

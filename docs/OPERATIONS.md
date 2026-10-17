@@ -401,6 +401,9 @@ CloudFront 只使用 us-east-1 的证书）：分发加上别名与证书（SNI�
   `poc-kiro`、`poc-claude`、`poc-codex`、`poc-opencode`、`poc-diagnose`；种入时迁移旧位置，用户的其他工具设置保留。
 - **协调者**排除 `@kirocrew-core/monitor_*`（不自行布置监视循环、追加回合）。新边界的 `agent.adaptive_concurrency_mode` 为 `fixed`（并发上限即 `max_subagents`）。
 - 不再发送 KiroCrew 已忽略的 `solo_reason` / `solo_details`。
+- **配置契约**：平台写入 `config.json` 的键列在 `tests/kirocrew_contract.json`（版本须等于 `deploy/versions.env` 的 `KIROCREW_ACCEPTED_VERSION`）。
+  本机回归核对 `seed()` 只写清单内的键；部署时的原生测试在主机上核对清单中每个键都是已安装 KiroCrew 的配置字段，并用 KiroCrew 自己的加载器读回
+  新生成的配置，不得有被忽略的键（`_extra_keys` / `_extra_sections`）。升级 KiroCrew 时先在新版本上核实清单并改版本号，原生测试不过则部署中止。
 
 ### Agent 提示（D46 P1）
 

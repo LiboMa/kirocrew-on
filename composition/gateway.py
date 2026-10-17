@@ -49,7 +49,7 @@ def main(argv=None):
                              f"通过后在边界配置 kirocrew_versions 中显式接受")
         print(f"注意：KiroCrew {__version__} 尚未验证，本次仅做契约检查", file=sys.stderr)
     templates.seed(crew_home=settings.crew_home, kiro_home=settings.kiro_home,
-                   allowed_roots=[settings.worker_data_dir], port=settings.gateway_port,
+                   allowed_roots=[settings.worker_data_dir],
                    legacy_pipeline=args.legacy_pipeline, yolo=settings.crew_yolo)
     cfg = KiroCrewConfig.load()
     if cfg.agent.session_sharing or cfg.session.pool_size:

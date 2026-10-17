@@ -23,7 +23,7 @@ def agent_prompt(name):
     return development.COMMON + development.WORKER
 
 
-def seed(*, crew_home, kiro_home, allowed_roots, port, legacy_pipeline, yolo=True):
+def seed(*, crew_home, kiro_home, allowed_roots, legacy_pipeline, yolo=True):
     from kiro_crew.agent import managed_mcp_spec_entry
     crew_home.mkdir(parents=True, exist_ok=True)
     (kiro_home / "agents").mkdir(parents=True, exist_ok=True)
@@ -39,9 +39,10 @@ def seed(*, crew_home, kiro_home, allowed_roots, port, legacy_pipeline, yolo=Tru
             # D46 P0: max_subagents is the cap — the adaptive controller would otherwise lower it under host pressure
             "adaptive_concurrency_mode": "fixed",
         },
+        # Only keys KiroCrew reads (tests/kirocrew_contract.json): its port comes from --port / KIROCREW_PORT, and the
+        # default workspace stays its own base directory (a workspace entry names it with `dir`, not `path`).
         "session": {"pool_size": 0},
-        "dashboard": {"host": "127.0.0.1", "port": port, "onboarded": True},
-        "workspaces": {"default": {"path": str(allowed_roots[0])}},
+        "dashboard": {"onboarded": True},
         "default_workspace": "default",
     }
     path = crew_home / "config.json"

@@ -50,6 +50,14 @@
 - 共享环境的记忆分隔（T7）：等待 KiroCrew 提供成员创建与子任务继承成员记忆的接口。
 - `deploy.sh space` 定位 Worker 主机上的会话（目前只能到平台主机的边界）。
 
+## KiroCrew 契约后续（2026-10-17 盘点）
+- HTTP 请求字段的契约：平台发出的 `/api/spawn`、`/api/chat/slots`（含 context / note / resume / approve）等请求体与查询参数，
+  对照 0.10.0 处理函数实际读取的键做快照（目前全部被读取；KiroCrew 静默忽略未知键，不会报错），原生测试在部署时以 AST 扫描已安装的处理函数核对快照。
+- 已有边界的 config.json 仍带旧的无效键（`memory.enabled`、`dashboard.host` / `port`、`workspaces.default.path`；KiroCrew 加载器在 EC2 上如实报出），
+  无害；需要时在 `seed()` 中迁移移除，原生测试即可同时核对现有边界的配置。
+- 协调者屏蔽 monitor 工具目前只靠 kiro-cli 执行 `excludedTools`；KiroCrew 自己的 kirocrew-core 按 `managedToolPolicy.exclude` 过滤，可再加一层。
+- `includeCrewContext` 不在 kiro-cli 文档字段内但被 KiroCrew 读取（默认即 true）；kiro-cli 2.29.1 接受未知键（EC2 以 `agent validate` 对照核实），无须改动。
+
 ## 已知的次要问题（审查延后项）
 - 访问管理第 1 期（审查延后项）：预览复核按账号的管理员身份而非签发 Token 的 scope
   （≤ 10 分钟）；被降级的管理员仍能签发含 admin 的 Token（降级期间无效）；「全部会话」中已停用所有者显示原始 id、选中自己不在的 Team

@@ -5,11 +5,15 @@ Run under the KiroCrew interpreter, from the repo root:
 Not part of tools/regress.sh: it needs a real KiroCrew install and ACP adapters, but starts no models.
 """
 import copy
+import dataclasses
+import json
 import os
+from pathlib import Path
 import tempfile
 import unittest
+from unittest.mock import patch
 
-from composition import environment
+from composition import environment, templates
 from composition.registry import BACKENDS, PocProviderRegistry
 from octopus.config import load
 
@@ -92,6 +96,33 @@ class NativeContractTests(unittest.TestCase):
             print(f"\nKiroCrew {__version__}: bracket qualifier accepted by spawn_run")
         except ValidationError:
             print(f"\nKiroCrew {__version__}: bracket qualifier rejected by spawn_run")
+
+
+CONTRACT = json.loads((Path(__file__).resolve().parents[1] / "kirocrew_contract.json").read_text())
+
+
+class ConfigContractTests(unittest.TestCase):
+    """The keys the platform writes into config.json, against the KiroCrew being installed (tests/kirocrew_contract.json)."""
+
+    def test_the_contract_is_for_this_kirocrew(self):
+        self.assertEqual(CONTRACT["kirocrew_version"], __version__)
+
+    def test_every_listed_key_is_a_field_kirocrew_reads(self):
+        cfg = KiroCrewConfig()
+        names = lambda value: {f.name for f in dataclasses.fields(value)}
+        self.assertEqual(sorted(set(CONTRACT["config"][""]) - names(KiroCrewConfig)), [])
+        for section, keys in CONTRACT["config"].items():
+            if section:
+                self.assertEqual(sorted(set(keys) - names(getattr(cfg, section))), [], section)
+
+    def test_the_seeded_config_reads_back_with_no_key_left_over(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            templates.seed(crew_home=root / "crew", kiro_home=root / "kiro", allowed_roots=[root / "w"], legacy_pipeline=False)
+            with patch.dict(os.environ, {"KIROCREW_HOME": str(root / "crew")}):
+                cfg = KiroCrewConfig.load()
+            self.assertEqual((cfg._extra_keys, cfg._extra_sections), ({}, {}))
+            self.assertEqual(cfg.agent.adaptive_concurrency_mode, "fixed")   # and what was written is what it reads
 
 
 if __name__ == "__main__":

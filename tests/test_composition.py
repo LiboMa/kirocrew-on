@@ -148,7 +148,7 @@ class TemplateTests(unittest.TestCase):
 
     def seed(self, legacy=False, **kwargs):
         with patch.dict("sys.modules", {"kiro_crew.agent": self.stub}):
-            return templates.seed(crew_home=self.crew, kiro_home=self.kiro, allowed_roots=[self.runs], port=6000,
+            return templates.seed(crew_home=self.crew, kiro_home=self.kiro, allowed_roots=[self.runs],
                                   legacy_pipeline=legacy, **kwargs)
 
     def test_fresh_config_allows_only_worker_roots(self):
@@ -157,7 +157,7 @@ class TemplateTests(unittest.TestCase):
         self.assertEqual(config["agent"]["subagent_cwd_allowed_roots"], [str(self.runs)])
         self.assertFalse(config["agent"]["session_sharing"])
         self.assertEqual(config["session"]["pool_size"], 0)
-        self.assertEqual(config["dashboard"]["port"], 6000)
+        self.assertNotIn("port", config["dashboard"])   # KiroCrew takes it from --port / KIROCREW_PORT only
         names = sorted(p.stem for p in (self.kiro / "agents").glob("*.json"))
         self.assertEqual(names, sorted(registry.BACKENDS))
         coordinator = json.loads((self.kiro / "agents/poc-coordinator.json").read_text())
@@ -205,7 +205,7 @@ class ApprovalModeTests(unittest.TestCase):
             root = Path(temporary)
             with patch.dict("sys.modules", {"kiro_crew.agent": stub}):
                 templates.seed(crew_home=root / "crew", kiro_home=root / "kiro", allowed_roots=[root / "w"],
-                               port=6000, legacy_pipeline=False)
+                               legacy_pipeline=False)
             config = json.loads((root / "crew/config.json").read_text())
             self.assertEqual(config["agent"]["approval_mode"], "interactive")
 
@@ -248,7 +248,7 @@ class DiagnosisTemplateTests(unittest.TestCase):
             root = Path(temporary)
             with patch.dict("sys.modules", {"kiro_crew.agent": stub}):
                 templates.seed(crew_home=root / "crew", kiro_home=root / "kiro", allowed_roots=[root / "w"],
-                               port=6000, legacy_pipeline=False)
+                               legacy_pipeline=False)
             spec = json.loads((root / "kiro/agents/poc-diagnose.json").read_text())
         self.assertEqual(spec["tools"], ["read", "write", "shell"])
         self.assertEqual(spec["mcpServers"], {})
