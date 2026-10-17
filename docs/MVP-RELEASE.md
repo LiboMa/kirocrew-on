@@ -528,8 +528,11 @@ still has members`），被当成原生错误交给协调者，用掉一轮纠�
 07:00 部署后新建的会话无法备份、不能关闭或删除（`run-6d7c132b…` 复现「原生备份未成功」）；incognito 也仍读记忆。父会话改回 persistent，
 记忆按执行环境分隔（负责人 2026-10-17：每人独立 Worker，只有 Team 共用）；测试改用按记忆模式拒绝导出的严格假 KiroCrew。
 ✅ EC2（2026-10-17，d417ee2，`run-30eb53ef…`）：新会话（`admission: confirm`，未派发任务）关闭时导出通过记忆模式检查（只有说明性 note，
-记为 `empty-session-observation`）并关闭；卡在关闭中的 `run-6d7c…` 已停止。期间以 incognito 建立的 `run-d098…`、`run-6d7c…`、`run-f7670bfb…`
-可停止、续作，不能关闭或删除（继承规则：隐私拒绝不伪造备份）。
+记为 `empty-session-observation`）并关闭；卡在关闭中的 `run-6d7c…` 已停止。
+期间以 incognito 建立的会话：负责人决定（2026-10-17）KiroCrew 不导出 incognito / temporary 会话时记标明的观察记录、照常关闭与删除（7d0d733）；
+incognito 的 slot 在 Gateway 重启后不恢复，关闭 / 删除反复 404，KiroCrew 已没有该 slot 时同样处理（ed5b0a6）。
+✅ EC2（2026-10-17，2bde009）：负责人删除的 `run-6d7c…` 完成删除（`missing-session-observation.json`，`slot_not_found`，无伪造备份）；
+部署时原生测试 9/9（含配置契约）在平台主机与 w1 通过。
 
 ### 14.25 Agent 提示 P1：一致性与正确性（D46）
 
