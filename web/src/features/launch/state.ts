@@ -31,8 +31,12 @@ export interface Draft {
   ref: string;
   /** A source credential named by the user (D35); "" leaves it to matching by repository. */
   credential: string;
-  /** D47: publish a Draft PR / MR on its own once the Session completes (a git source only). */
+  /** D47: publish a Draft PR / MR on its own once the Session completes (a git source; a new project with newRepo*). */
   autoPublish: boolean;
+  /** D48: a new project's new repository to publish to on completion (with autoPublish). */
+  newRepoOwner: string;
+  newRepoName: string;
+  newRepoCredential: string;
   method: PlanMethod;
   choice: string; // "auto" | "custom" | "workflow:<id>" | "template:<id>"
   tasks: Step[];
@@ -56,7 +60,7 @@ export function initialDraft(seed: LaunchSeed, { worker, space = "" }: { worker:
   const workflowMode = seed.mode === "workflow";
   return {
     input: seed.input ?? "", name: seed.name ?? "", nameTouched: !!seed.workflow?.id, space, worker,
-    source: workflowMode ? "new" : "", url: "", ref: "", credential: "", autoPublish: false,
+    source: workflowMode ? "new" : "", url: "", ref: "", credential: "", autoPublish: false, newRepoOwner: "", newRepoName: "", newRepoCredential: "",
     method: explicit && !workflowMode ? "template" : workflowMode ? "recommend" : "agent",
     choice: seed.workflow_id ? "workflow:" + seed.workflow_id : seed.template_id ? "template:" + seed.template_id : seed.steps ? "custom" : "auto",
     tasks: structuredClone(seed.steps ?? []), resolution: null, imported: null, importContent: "", generation: null,
@@ -148,6 +152,9 @@ export function submitBody(draft: Draft) {
     ...plan, input: draft.input.trim(), name: draft.name, source, recovery: draft.recovery,
     ...(draft.source === "git" && draft.credential ? { credentials: { source: draft.credential } } : {}),
     ...(draft.source === "git" && draft.autoPublish ? { publish: { auto: true } } : {}),
+    ...(draft.source === "new" && draft.autoPublish && draft.newRepoOwner.trim() && draft.newRepoName.trim() && draft.newRepoCredential
+      ? { publish: { auto: true, repository: { owner: draft.newRepoOwner.trim(), name: draft.newRepoName.trim(), private: true },
+                     credential: draft.newRepoCredential } } : {}),
     ...(draft.space ? { team_id: draft.space } : {}), ...(draft.worker ? { worker_id: draft.worker } : {}),
   };
 }

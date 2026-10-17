@@ -243,7 +243,13 @@ export interface Run {
   /** The source credential pinned at submission (D35 §4); never the secret. */
   publish?: PublishRecord | null;
   /** D47: publish a Draft PR / MR on completion (the user's setting, or the requirement asked for it); off: a person approves. */
-  publish_policy?: { auto: boolean; source?: "user" | "requested"; quote?: string; branch?: string; title?: string } | null;
+  publish_policy?: { auto: boolean; source?: "user" | "requested"; quote?: string; branch?: string; title?: string;
+    repository?: { owner: string; name: string; private: boolean }; credential?: string } | null;
+  /** D48: the repository a new-source Session was first published to; later publishes go there. */
+  publish_target?: { host: string; path: string; url: string; web?: string | null; created: boolean; baseline?: string | null;
+    credential: { id: string; name: string }; at: number; by: { id: string; username?: string | null } } | null;
+  /** D48 R7: a new repository the requirement named, for the person to confirm (never created on its own). */
+  publish_suggestion?: { repository: { owner: string; name: string; private: boolean }; quote?: string } | null;
   /** The automatic publish's outcome for the version it was tried at. */
   publish_auto?: { ok: boolean; url?: string | null; code?: string; error?: string; version: number } | null;
   /** What a publish pushes: the candidate that passed the gates and the review (D37 §7). */
@@ -491,6 +497,8 @@ export interface PublishRecord {
   number: number | null;
   kind: "pull_request" | "merge_request" | null;
   request_error?: string;
+  /** D48: the new repository a new-source Session was published to. */
+  repository?: string | null;
   reused: boolean;
   at: number;
   by: { id: string; username?: string | null };

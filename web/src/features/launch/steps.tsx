@@ -106,6 +106,35 @@ export function NeedStep({ draft, update, workflowMode }: { draft: Draft; update
           <CredentialChoice draft={draft} update={update} />
         </div>
       )}
+      {!workflowMode && draft.source === "new" && <NewRepositoryChoice draft={draft} update={update} />}
+    </div>
+  );
+}
+
+/** D48: publish a new project to a new repository once it completes (private; the credential must be able to create it). */
+function NewRepositoryChoice({ draft, update }: { draft: Draft; update: Update }) {
+  const { data = [] } = useCredentials(draft.autoPublish);
+  const writers = data.filter((c) => c.access === "write" && !c.disabled);
+  return (
+    <div className="space-y-1.5 text-xs">
+      <label className="flex items-center gap-2">
+        <input type="checkbox" id="new-repo-publish" checked={draft.autoPublish}
+          onChange={(e) => update((d) => ({ ...d, autoPublish: e.target.checked }))} />
+        完成后发布到新仓库（平台新建私有仓库，基线进 main，工作走 Draft PR；凭证须能建仓库）
+      </label>
+      {draft.autoPublish && (
+        <div className="grid gap-2 sm:grid-cols-3">
+          <Input aria-label="新仓库 owner" placeholder="owner（账户或组织）" value={draft.newRepoOwner}
+            onChange={(e) => update((d) => ({ ...d, newRepoOwner: e.target.value }))} />
+          <Input aria-label="新仓库名" placeholder="仓库名" value={draft.newRepoName}
+            onChange={(e) => update((d) => ({ ...d, newRepoName: e.target.value }))} />
+          <NativeSelect aria-label="新仓库凭证" value={draft.newRepoCredential}
+            onChange={(e) => update((d) => ({ ...d, newRepoCredential: e.target.value }))}>
+            <option value="">选择有写权限的凭证</option>
+            {writers.map((c) => <option key={c.id} value={c.id}>{c.name} · {c.host} · {c.hint}</option>)}
+          </NativeSelect>
+        </div>
+      )}
     </div>
   );
 }

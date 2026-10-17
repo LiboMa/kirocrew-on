@@ -110,4 +110,10 @@ describe("reopening the wizard", () => {
     expect(submitBody(draft({ method: "agent", tasks: [], source: "git", url: "https://x/y.git" })).publish).toBeUndefined();
     expect(submitBody(draft({ method: "agent", tasks: [], autoPublish: true })).publish).toBeUndefined();   // a new project has no repository
   });
+  test("a new project can be published to a new repository on completion (D48)", () => {
+    const body = submitBody(draft({ method: "agent", tasks: [], source: "new", autoPublish: true,
+      newRepoOwner: "LiboMa", newRepoName: "demo", newRepoCredential: "cred-w" }));
+    expect(body.publish).toEqual({ auto: true, repository: { owner: "LiboMa", name: "demo", private: true }, credential: "cred-w" });
+    expect(submitBody(draft({ method: "agent", tasks: [], source: "new", autoPublish: true })).publish).toBeUndefined();
+  });
 });
