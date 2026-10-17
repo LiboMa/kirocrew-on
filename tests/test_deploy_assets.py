@@ -65,7 +65,7 @@ class TemplateTests(unittest.TestCase):
 
     def test_native_chat_has_its_own_distribution_behind_the_origin_secret(self):
         # The native KiroCrew dashboard owns /, /api and /api/ws, so it cannot share the console's domain.
-        self.assertEqual(len(of_type(self.r, "AWS::CloudFront::Distribution")), 2)
+        self.assertEqual(len(of_type(self.r, "AWS::CloudFront::Distribution")), 3)   # console, native chat, preview
         native, api = self.distribution("NativePort"), self.distribution("ApiPort")
         self.assertEqual(native["Origins"][0]["DomainName"], api["Origins"][0]["DomainName"])
         self.assertEqual(native["Origins"][0]["OriginCustomHeaders"],
@@ -89,7 +89,81 @@ class TemplateTests(unittest.TestCase):
         self.assertEqual(behavior["OriginRequestPolicyId"], ALL_VIEWER_AND_CLOUDFRONT_HEADERS)
         self.assertEqual(set(behavior["AllowedMethods"]), {"GET", "HEAD", "OPTIONS", "PUT", "PATCH", "POST", "DELETE"})
         self.assertFalse(behavior["Compress"], "SSE must not be buffered for compression")
-        self.assertTrue(config["ViewerCertificate"]["CloudFrontDefaultCertificate"])
+
+    def test_the_console_can_have_its_own_domain(self):
+        # Optional: with ConsoleDomain the console distribution answers on it too (its cloudfront.net name stays), with
+        # an issued us-east-1 certificate and alias records in the zone deploy.sh found (stack.env CONSOLE_DOMAIN).
+        p = self.t["Parameters"]
+        for name in ("ConsoleDomain", "ConsoleCertificateArn", "ConsoleHostedZoneId"):
+            self.assertEqual(p[name]["Default"], "", name)
+        config = self.distribution("ApiPort")
+        self.assertEqual(config["Aliases"], {"If": ["HasConsoleDomain", [{"Ref": "ConsoleDomain"}], {"Ref": "AWS::NoValue"}]})
+        condition, custom, default = config["ViewerCertificate"]["If"]
+        self.assertEqual(condition, "HasConsoleDomain")
+        self.assertEqual(custom, {"AcmCertificateArn": {"Ref": "ConsoleCertificateArn"}, "SslSupportMethod": "sni-only",
+                                  "MinimumProtocolVersion": "TLSv1.2_2021"})
+        self.assertEqual(default, {"CloudFrontDefaultCertificate": True})
+        records = [r for r in of_type(self.r, "AWS::Route53::RecordSet") if r["Condition"] == "HasConsoleRecord"]
+        self.assertEqual(sorted(r["Properties"]["Type"] for r in records), ["A", "AAAA"])
+        for record in records:
+            self.assertEqual(record["Condition"], "HasConsoleRecord")
+            self.assertEqual(record["Properties"]["HostedZoneId"], {"Ref": "ConsoleHostedZoneId"})
+            self.assertEqual(record["Properties"]["Name"], {"Ref": "ConsoleDomain"})
+            self.assertEqual(record["Properties"]["AliasTarget"], {"HostedZoneId": "Z2FDTNDATAQYW2",   # CloudFront's zone
+                                                                    "DNSName": {"GetAtt": "Distribution.DomainName"}})
+        native = self.distribution("NativePort")
+        self.assertNotIn("Aliases", native)
+        self.assertTrue(native["ViewerCertificate"]["CloudFrontDefaultCertificate"])
+        self.assertIn("ConsoleDomain", self.t["Outputs"])
+        self.assertEqual(self.t["Outputs"]["ConsoleUrl"]["Value"]["If"][0], "HasConsoleDomain")
+
+    def test_each_session_can_have_its_own_preview_origin(self):
+        # D36 phase 3: *.<PreviewSessionDomain> on the preview distribution (its cloudfront.net name stays), one wildcard
+        # certificate, wildcard alias records; deploy.sh finds the zone and finds or requests the certificate.
+        p = self.t["Parameters"]
+        for name in ("PreviewSessionDomain", "PreviewCertificateArn", "PreviewHostedZoneId"):
+            self.assertEqual(p[name]["Default"], "", name)
+        wildcard = {"Sub": "*.${PreviewSessionDomain}"}
+        preview = self.distribution("PreviewPort")
+        self.assertEqual(preview["Aliases"], {"If": ["HasPreviewSessionDomain", [wildcard], {"Ref": "AWS::NoValue"}]})
+        condition, custom, default = preview["ViewerCertificate"]["If"]
+        self.assertEqual((condition, default), ("HasPreviewSessionDomain", {"CloudFrontDefaultCertificate": True}))
+        self.assertEqual(custom, {"AcmCertificateArn": {"Ref": "PreviewCertificateArn"}, "SslSupportMethod": "sni-only",
+                                  "MinimumProtocolVersion": "TLSv1.2_2021"})
+        records = [r for r in of_type(self.r, "AWS::Route53::RecordSet") if r["Condition"] == "HasPreviewSessionRecord"]
+        self.assertEqual(sorted(r["Properties"]["Type"] for r in records), ["A", "AAAA"])
+        for record in records:
+            self.assertEqual(record["Properties"]["HostedZoneId"], {"Ref": "PreviewHostedZoneId"})
+            self.assertEqual(record["Properties"]["Name"], wildcard)
+            self.assertEqual(record["Properties"]["AliasTarget"], {"HostedZoneId": "Z2FDTNDATAQYW2",
+                                                                    "DNSName": {"GetAtt": "PreviewDistribution.DomainName"}})
+        output = self.t["Outputs"]["PreviewSessionDomain"]
+        self.assertEqual((output["Condition"], output["Value"]), ("HasPreviewSessionDomain", {"Ref": "PreviewSessionDomain"}))
+
+    def test_the_remote_preview_has_its_own_distribution_inside_the_existing_rule(self):
+        # D36 §5.2. Its port is the last of the one prefix-list rule, so the rule (quota-weighted) is not touched.
+        p = self.t["Parameters"]
+        self.assertEqual(p["PreviewPort"]["Default"], p["NativeRelayEnd"]["Default"])
+        preview, native = self.distribution("PreviewPort"), self.distribution("NativePort")
+        self.assertEqual(preview["Origins"][0]["DomainName"], native["Origins"][0]["DomainName"])
+        self.assertEqual(preview["Origins"][0]["OriginCustomHeaders"],
+                         [{"HeaderName": "X-Origin-Verify", "HeaderValue": {"Ref": "OriginSecret"}}])
+        behavior = preview["DefaultCacheBehavior"]
+        self.assertEqual((behavior["CachePolicyId"], behavior["OriginRequestPolicyId"], behavior["ViewerProtocolPolicy"]),
+                         (CACHING_DISABLED, ALL_VIEWER_AND_CLOUDFRONT_HEADERS, "redirect-to-https"))
+        self.assertFalse(behavior["Compress"])
+        self.assertEqual(preview["ViewerCertificate"]["If"][2], {"CloudFrontDefaultCertificate": True})
+        ingress = of_type(self.r, "AWS::EC2::SecurityGroup")[0]["Properties"]["SecurityGroupIngress"]
+        self.assertEqual((len(ingress), ingress[0]["ToPort"]), (1, {"Ref": "NativeRelayEnd"}))
+        self.assertTrue({"PreviewDomain", "PreviewUrl"} <= set(self.t["Outputs"]))
+
+    def test_push_and_the_installer_admit_the_console_domain(self):
+        deploy = (ROOT / "deploy/aws/deploy.sh").read_text()
+        installer = (ROOT / "deploy/install/al2023.sh").read_text()
+        self.assertIn('console="$(output ConsoleDomain)"', deploy)
+        self.assertIn("CONSOLE_DOMAIN={console}", deploy)
+        self.assertIn('merge_hosts /etc/kirocrew-on/platform.toml "$CF_DOMAIN" ${CONSOLE_DOMAIN:+"$CONSOLE_DOMAIN"} localhost:18918',
+                      installer)
 
     def test_role_grants_ssm_bedrock_and_scoped_storage(self):
         role = of_type(self.r, "AWS::IAM::Role")
@@ -122,6 +196,43 @@ class TemplateTests(unittest.TestCase):
 
 
 class ScriptTests(unittest.TestCase):
+    def test_gateway_restarts_only_when_what_it_loads_changed(self):
+        text = (ROOT / "deploy/install/al2023.sh").read_text()
+        snippet = text[text.index("# gateway:begin"):text.index("# gateway:end")]
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            for name in ("on/composition/gateway.py", "on/octopus/config.py", "on/octopus/prompts.py", "on/octopus/__init__.py",
+                         "on/pipeline_spec.py", "etc/boundary-b1.toml", "systemd/octopus-gateway@.service"):
+                (root / name).parent.mkdir(parents=True, exist_ok=True)
+                (root / name).write_text(name)
+            (root / "kc/releases/1").mkdir(parents=True)
+            (root / "kc/current").symlink_to(root / "kc/releases/1")
+            (root / "base").mkdir()
+            body = (snippet.replace("/opt/kirocrew-on/current", str(root / "on")).replace("/opt/kirocrew/current", str(root / "kc/current"))
+                    .replace("/etc/systemd/system", str(root / "systemd")).replace("/etc/kirocrew-on", str(root / "etc")))
+            script = (f"set -euo pipefail\nBOUNDARY=b1\nBASE={root}/base\nBOUNDARY_TOML={root}/etc/boundary-b1.toml\n"
+                      "log() { echo \"LOG $*\"; }\n"
+                      f"systemctl() {{ echo \"$*\" >> {root}/calls; if [ \"$1\" = is-active ]; then [ -f {root}/active ]; fi; }}\n" + body)
+            def run():
+                (root / "calls").write_text("")
+                out = subprocess.run(["bash", "-c", script], capture_output=True, text=True, check=True).stdout
+                return "restart octopus-gateway@b1" in (root / "calls").read_text(), out
+            self.assertTrue(run()[0])                        # first install: no fingerprint yet
+            (root / "active").write_text("")
+            restarted, out = run()
+            self.assertFalse(restarted)                      # nothing changed and it is running
+            self.assertIn("Gateway 未变化", out)
+            (root / "etc/boundary-b1.toml").write_text("changed")
+            self.assertTrue(run()[0])                        # the boundary config changed
+            self.assertFalse(run()[0])
+            (root / "on/pipeline_spec.py").write_text("changed")
+            self.assertTrue(run()[0])                        # templates import it lazily
+            (root / "systemd/octopus-gateway@b1.service.d").mkdir()
+            (root / "systemd/octopus-gateway@b1.service.d/limits.conf").write_text("[Service]")
+            self.assertTrue(run()[0])                        # a drop-in for this boundary
+            (root / "active").unlink()
+            self.assertTrue(run()[0])                        # unchanged, but not running
+
     def test_scripts_are_valid_bash_without_mac_assumptions(self):
         for name in ("deploy/install/al2023.sh", "deploy/aws/deploy.sh"):
             script = ROOT / name
@@ -220,12 +331,134 @@ class ScriptTests(unittest.TestCase):
                      "ssl_certificate_key /etc/kirocrew-on/worker-tls.key;", "proxy_pass http://127.0.0.1:__WORKER_PORT__;"):
             self.assertIn(part, nginx)
 
+    def test_the_preview_proxy_asks_the_api_before_every_request(self):
+        conf = (ROOT / "deploy/nginx/kirocrew-preview.conf").read_text()
+        for part in ("listen __PREVIEW_PORT__;", 'if ($http_x_origin_verify != "__ORIGIN_SECRET__")', "location ^~ /_kirocrew/",
+                     "auth_request /_kirocrew_auth;", "internal;", "proxy_pass http://127.0.0.1:__API_PORT__/v1/preview-auth;",
+                     "proxy_method GET;", "proxy_pass_request_body off;",
+                     "auth_request_set $kc_upstream $upstream_http_x_preview_upstream;", "proxy_pass $kc_upstream;",
+                     "error_page 401 403 = @kirocrew_denied;", "proxy_ssl_verify on;",
+                     "proxy_ssl_trusted_certificate /etc/kirocrew-on/worker-ca.pem;", "proxy_ssl_name $kc_name;",
+                     "proxy_set_header Host localhost:$kc_port;", "proxy_set_header X-Preview-Verify $kc_verify;",
+                     "proxy_set_header Upgrade $http_upgrade;", 'proxy_set_header X-Origin-Verify "";'):
+            self.assertIn(part, conf)
+        log_format = conf[conf.index("log_format"):conf.index(";", conf.index("log_format"))]
+        self.assertIn("$uri", log_format)
+        self.assertNotIn("$request_uri", log_format)   # opening links carry a ticket: the path only
+        self.assertEqual(set(re.findall(r"__[A-Z_]+__", conf)),
+                         {"__PREVIEW_PORT__", "__API_PORT__", "__ORIGIN_SECRET__", "__PREVIEW_GATE__"})
+        # Every request to the API proves it comes through this nginx (other processes on the host cannot).
+        self.assertEqual(conf.count('proxy_set_header X-Preview-Gate "__PREVIEW_GATE__";'), 3)
+        app = conf[conf.index("    location / {"):]
+        for part in ("if ($http_service_worker) {", "proxy_hide_header Cache-Control;", 'add_header Cache-Control "no-cache" always;',
+                     "proxy_ignore_headers X-Accel-Redirect X-Accel-Expires X-Accel-Limit-Rate X-Accel-Buffering X-Accel-Charset;",
+                     'proxy_set_header X-Preview-Gate "";'):
+            self.assertIn(part, app)
+        # The service-worker check comes before auth_request, so no script is ever fetched for a registration.
+        self.assertLess(app.index("$http_service_worker"), app.index("auth_request /_kirocrew_auth;"))
+
+    def test_a_sessions_own_preview_host_reaches_the_api_and_keeps_cookies_to_itself(self):
+        # D36 phase 3: the API learns which host was asked (the host names the Session), and an app's cookies stay on
+        # its own host even when it names a parent domain (shared with other Sessions or other sites).
+        conf = (ROOT / "deploy/nginx/kirocrew-preview.conf").read_text()
+        self.assertEqual(conf.count("proxy_set_header X-Preview-Host $host;"), 3)
+        app = conf[conf.index("    location / {"):]
+        self.assertIn("proxy_cookie_domain ~.+ $host;", app)
+        self.assertIn('proxy_set_header X-Preview-Host "";', app)
+
+    def test_a_worker_host_preview_port_reaches_only_preview_ports_with_the_check_header(self):
+        conf = (ROOT / "deploy/nginx/kirocrew-worker-preview.conf").read_text()
+        for part in ("listen __PREVIEW_TLS_PORT__ ssl;", "ssl_certificate /etc/kirocrew-on/worker-tls.crt;",
+                     'if ($http_x_preview_verify != "__PREVIEW_VERIFY__")', '"~^47[0-9]{3}$"',
+                     "proxy_pass http://127.0.0.1:$kirocrew_app_port;", "proxy_set_header Host localhost:$kirocrew_app_port;",
+                     'proxy_set_header X-Preview-Verify "";', "proxy_set_header Upgrade $http_upgrade;"):
+            self.assertIn(part, conf)
+        self.assertEqual(set(re.findall(r"__[A-Z_]+__", conf)), {"__PREVIEW_TLS_PORT__", "__PREVIEW_VERIFY__"})
+        self.assertIn("proxy_ignore_headers X-Accel-Redirect X-Accel-Expires X-Accel-Limit-Rate X-Accel-Buffering X-Accel-Charset;",
+                      conf)
+
+    def installer_function(self, name):
+        text = (ROOT / "deploy/install/al2023.sh").read_text()
+        start = text.index(name + "() {")
+        return text[start:text.index("\n}\n", start) + 3]
+
+    def test_the_preview_configs_are_rendered_from_files_with_the_values_the_api_uses(self):
+        from octopus.remote_preview import verify_value
+        with tempfile.TemporaryDirectory() as directory:
+            token, secret = Path(directory, "worker.token"), Path(directory, "origin-secret")
+            token.write_text("t" * 40 + "\n")
+            secret.write_text("s" * 40 + "\n")
+            run = lambda function, *args: subprocess.run(
+                ["bash", "-c", self.installer_function(function) + f'\nPYTHON={sys.executable} TARGET={ROOT} {function} "$@"',
+                 function, *args], capture_output=True, text=True)
+            worker = run("render_worker_preview", str(ROOT / "deploy/nginx/kirocrew-worker-preview.conf"), str(token), "8945")
+            self.assertEqual(worker.returncode, 0, worker.stderr)
+            self.assertIn(f'if ($http_x_preview_verify != "{verify_value("t" * 40)}")', worker.stdout)
+            self.assertIn("listen 8945 ssl;", worker.stdout)
+            platform = run("render_preview", str(ROOT / "deploy/nginx/kirocrew-preview.conf"), str(secret), "8929", "8918")
+            self.assertEqual(platform.returncode, 0, platform.stderr)
+            self.assertIn("listen 8929;", platform.stdout)
+            self.assertIn("proxy_pass http://127.0.0.1:8918/v1/preview-auth;", platform.stdout)
+            from octopus.remote_preview import gate_value
+            self.assertIn(f'proxy_set_header X-Preview-Gate "{gate_value("s" * 40)}";', platform.stdout)
+            self.assertNotRegex(worker.stdout + platform.stdout, r"__[A-Z_]+__")
+            secret.write_text("short")
+            self.assertNotEqual(run("render_preview", str(ROOT / "deploy/nginx/kirocrew-preview.conf"), str(secret), "8929",
+                                    "8918").returncode, 0)
+
+    def test_the_installer_turns_on_per_session_preview_origins(self):
+        text = (ROOT / "deploy/install/al2023.sh").read_text()
+        self.assertGreater(text.index('toml_set /etc/kirocrew-on/platform.toml preview_domain "\\"$PREVIEW_SESSION_DOMAIN\\""'),
+                           text.index('ln -sfn "$TARGET" /opt/kirocrew-on/current'))
+        self.assertIn("toml_unset /etc/kirocrew-on/platform.toml preview_domain", text)   # unset: no key an older release rejects
+        deploy = (ROOT / "deploy/aws/deploy.sh").read_text()
+        self.assertIn('session="$(output PreviewSessionDomain)"', deploy)
+        self.assertIn("PREVIEW_SESSION_DOMAIN={session}", deploy)
+
+    def test_the_installer_publishes_the_remote_preview(self):
+        text = (ROOT / "deploy/install/al2023.sh").read_text()
+        switch = text.index('ln -sfn "$TARGET" /opt/kirocrew-on/current')
+        # Platform host: the preview server, and preview_url once the new release (which knows the key) is current.
+        self.assertIn('render_preview "$TARGET/deploy/nginx/kirocrew-preview.conf" /etc/kirocrew-on/origin-secret', text)
+        self.assertGreater(text.index('toml_set /etc/kirocrew-on/platform.toml preview_url "\\"https://$PREVIEW_DOMAIN\\""'),
+                           switch)
+        self.assertIn("rm -f /etc/nginx/conf.d/kirocrew-preview.conf", text)   # a config nginx rejects never stays
+        # Worker host: its preview port and certificate name after the switch; the check header once its token exists.
+        self.assertGreater(text.index('toml_set "$BOUNDARY_TOML" preview_tls_port "$WORKER_PREVIEW_TLS_PORT"'), switch)
+        self.assertIn('toml_set "$BOUNDARY_TOML" preview_tls_name "\\"$BOUNDARY.worker.kirocrew-on\\""', text)
+        self.assertGreater(text.index('render_worker_preview "$TARGET/deploy/nginx/kirocrew-worker-preview.conf"'),
+                           text.index('systemctl restart "octopus-worker@$BOUNDARY"'))
+        deploy = (ROOT / "deploy/aws/deploy.sh").read_text()
+        self.assertIn('preview="$(output PreviewDomain)"', deploy)
+        self.assertIn("PREVIEW_DOMAIN={preview} PREVIEW_PORT={preview_port}", deploy)
+        self.assertIn("WORKER_PREVIEW_TLS_PORT={preview_port}", deploy)
+        self.assertIn("/etc/kirocrew-on/nginx-worker-preview.conf /etc/nginx/conf.d/kirocrew-worker-preview.conf", deploy)
+
+    def test_the_platform_keeps_a_credentials_master_key_of_its_own(self):
+        # D35 §3.3: generated once on the platform host, readable by the API only, written into platform.toml after the
+        # switch (an older release rejects the key), never fetched from or stored in SSM.
+        text = (ROOT / "deploy/install/al2023.sh").read_text()
+        start = text.index('if [ ! -s /etc/kirocrew-on/credentials.key ]; then')
+        block = text[start:text.index("\nfi\n", start)]
+        self.assertIn("openssl rand -base64 32 > /etc/kirocrew-on/credentials.key.new", block)
+        self.assertIn("umask 077", block)
+        self.assertIn("chown root:octopus /etc/kirocrew-on/credentials.key", text)
+        self.assertIn("chmod 0640 /etc/kirocrew-on/credentials.key", text)
+        region = text.rfind("# platform:begin", 0, start)
+        self.assertGreater(region, text.rfind("# platform:end", 0, start))   # inside a platform-only region
+        written = text.index('toml_set /etc/kirocrew-on/platform.toml credentials_key_file \'"/etc/kirocrew-on/credentials.key"\'')
+        self.assertGreater(written, text.index('ln -sfn "$TARGET" /opt/kirocrew-on/current'))
+        self.assertNotIn("credentials.key", (ROOT / "deploy/aws/deploy.sh").read_text())
+
     def test_worker_host_template_admits_only_the_platform(self):
         worker = yaml.load((ROOT / "deploy/aws/kirocrew-on-worker.yaml").read_text(), Loader=CfnLoader)
         resources = worker["Resources"]
         ingress = resources["WorkerSecurityGroup"]["Properties"]["SecurityGroupIngress"]
-        # The Worker port and the Gateway TLS port (native entry relay), each a single port, both only from the platform.
-        self.assertEqual([rule["FromPort"] for rule in ingress], [{"Ref": "WorkerPort"}, {"Ref": "GatewayTlsPort"}])
+        # The Worker port, the Gateway TLS port (native entry relay) and the preview port (D36), each a single port, all only
+        # from the platform.
+        self.assertEqual([rule["FromPort"] for rule in ingress],
+                         [{"Ref": "WorkerPort"}, {"Ref": "GatewayTlsPort"}, {"Ref": "PreviewTlsPort"}])
+        self.assertEqual(worker["Parameters"]["PreviewTlsPort"]["Default"], 8945)
         for rule in ingress:
             self.assertEqual(rule["SourceSecurityGroupId"], {"Ref": "PlatformSecurityGroupId"})
             self.assertEqual(rule["FromPort"], rule["ToPort"])
@@ -313,7 +546,7 @@ class ScriptTests(unittest.TestCase):
         worker = yaml.load((ROOT / "deploy/aws/kirocrew-on-worker.yaml").read_text(), Loader=CfnLoader)
         resources, parameters = worker["Resources"], worker["Parameters"]
         ingress = resources["WorkerSecurityGroup"]["Properties"]["SecurityGroupIngress"]
-        self.assertEqual({rule["FromPort"]["Ref"] for rule in ingress}, {"WorkerPort", "GatewayTlsPort"})
+        self.assertEqual({rule["FromPort"]["Ref"] for rule in ingress}, {"WorkerPort", "GatewayTlsPort", "PreviewTlsPort"})
         self.assertTrue(all(rule["SourceSecurityGroupId"] == {"Ref": "PlatformSecurityGroupId"} for rule in ingress))
         origin = resources["NativeDistribution"]["Properties"]["DistributionConfig"]["Origins"][0]
         self.assertEqual(origin["DomainName"], {"Ref": "PlatformOriginDomain"})
@@ -475,6 +708,20 @@ class ScriptTests(unittest.TestCase):
         self.assertNotEqual(result.returncode, 0)
         self.assertIn("中转端口", result.stderr)
         self.assertEqual(self.relay(log), [])
+
+    def test_the_preview_port_is_never_a_relay_port(self):
+        worker = lambda port: {"params": {"RelayPort": str(port)}, "outputs": {"InstanceId": "i-w", "PrivateIp": "10.42.1.9"}}
+        stacks = {"kirocrew-on-m1": self.platform(PreviewPort="8929"),
+                  **{f"kirocrew-on-m1-worker-w{port - 8919}": worker(port) for port in range(8920, 8929)}}
+        result, log = self.fake_aws({"stacks": stacks}, "worker-host", "up", "w10")
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("中转端口", result.stderr)
+        self.assertEqual(self.relay(log), [])
+        result, log = self.fake_aws({"stacks": {"kirocrew-on-m1": self.platform(PreviewPort="8929"),
+                                                "kirocrew-on-m1-worker-w1": worker(8920)}}, "worker-host", "up", "w1")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        change = [json.loads(line[len("PARAMS "):]) for line in log if line.startswith("PARAMS ")][0]
+        self.assertEqual(next(p["ParameterValue"] for p in change if p["ParameterKey"] == "PreviewTlsPort"), "8945")
 
     def test_relay_port_lookups_fail_closed(self):
         worker = {"params": {"RelayPort": "8920"}, "outputs": {"InstanceId": "i-w", "PrivateIp": "10.42.1.9"}}

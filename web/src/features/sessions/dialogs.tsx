@@ -11,6 +11,7 @@ import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
 import { spaceWorkers, useConsole } from "@/features/console/context";
 import { useRefreshRun } from "@/features/sessions/useSessionActions";
+import { rerunPlan } from "@/lib/session";
 
 export function ContinueDialog({ run, taskId }: { run: Run; taskId?: string }) {
   const { close, workers } = useConsole();
@@ -22,14 +23,23 @@ export function ContinueDialog({ run, taskId }: { run: Run; taskId?: string }) {
   const [agent, setAgent] = useState({ tool: task.spec.tool, model: task.spec.model, effort: task.spec.effort });
   const [recovery, setRecovery] = useState(run.recovery?.policy ?? DEFAULT_RECOVERY);
   const models = workers.find((w) => w.id === run.worker_id)?.capabilities.models;
+  const later = run.tasks.slice(run.tasks.findIndex((t) => t.id === task.id) + 1);
+  const [chosen, setChosen] = useState(() => new Set(later.map((t) => t.id)));
+  const plan = rerunPlan(run, task.id, chosen);
+  const toggle = (id: string) => setChosen((current) => {
+    const next = new Set(current);
+    if (!next.delete(id)) next.add(id);
+    return next;
+  });
 
   return (
     <FormDialog title={"继续此 Session · " + task.spec.name} kicker="CONTINUE IN PLACE" onClose={close} submitLabel="保存并续作"
-      description="保留当前 Session ID、Workspace 与上游交接。此 Task 和后续 Task 将重新执行；旧 Attempt 保留为历史证据。"
+      description="保留当前 Session ID、Workspace 与上游交接。此 Task 与勾选的后续 Task 将重新执行，其余沿用上一版结果；旧 Attempt 保留为历史证据。"
       note="工具 / 模型改变会创建新的原生执行 Attempt。"
       onSubmit={async () => {
         await command("/runs/" + run.id + "/continue", {
           expected_version: run.version, task_id: task.id, input, recovery,
+          rerun: later.filter((t) => plan.rerun.has(t.id)).map((t) => t.id),
           execution: { name, prompt, ...agent, effort: agent.tool === "opencode" ? "" : agent.effort },
         });
         close();
@@ -50,6 +60,22 @@ export function ContinueDialog({ run, taskId }: { run: Run; taskId?: string }) {
       </div>
       <AgentFields value={agent} onChange={setAgent} models={models} idPrefix="continue" />
       <RecoveryFields value={recovery} onChange={setRecovery} idPrefix="continue-recovery" />
+      {!!later.length && (
+        <fieldset className="space-y-1.5">
+          <legend className="text-sm font-medium">同时重跑的后续任务</legend>
+          {later.map((t) => {
+            const reason = plan.forced.get(t.id);
+            return (
+              <label key={t.id} data-rerun={t.id} className="flex items-center gap-2 text-sm">
+                <input type="checkbox" checked={plan.rerun.has(t.id)} disabled={!!reason} onChange={() => toggle(t.id)} />
+                <span>{t.spec.name}</span>
+                {reason && <small className="text-xs text-muted-foreground">（{reason}）</small>}
+              </label>
+            );
+          })}
+          <p className="text-xs text-muted-foreground">未勾选的任务沿用上一版结果；依赖关系与审查 / 测试规则要求重跑的任务不能取消。</p>
+        </fieldset>
+      )}
       <p className="font-mono text-[11px] text-muted-foreground">{run.id} / {task.id}</p>
     </FormDialog>
   );

@@ -2,7 +2,9 @@
 from concurrent.futures import ThreadPoolExecutor
 import hashlib
 import json
+import logging
 import os
+from pathlib import Path
 import re
 import socket
 import sqlite3
@@ -10,6 +12,7 @@ import threading
 import time
 import unicodedata
 
+from . import journal, remote_preview
 from .db import dumps, uid
 from .security import Error, check_password, elevated, password_hash, require
 
@@ -17,9 +20,9 @@ TOOLS = ("kiro", "claude", "codex", "opencode")
 ROLES = {"viewer": 1, "runner": 2, "editor": 3, "owner": 4}
 ROLE_LABELS = {"viewer": "查看", "runner": "运行", "editor": "编辑", "owner": "所有者"}
 # Statuses in which an open Session is not running on its Worker (it can be continued).
-SETTLED = ("failed", "blocked", "completed", "stopped", "waiting_worker")
+SETTLED = ("failed", "blocked", "completed", "stopped", "waiting_worker", "awaiting_confirmation")
 # What the admin environment listing shows of a live /health (no boundary or principal hashes).
-HEALTH_FIELDS = ("isolation", "crew_entry", "crew_origin", "version")
+HEALTH_FIELDS = ("isolation", "crew_entry", "crew_origin", "version", "tool_auth")
 
 
 def text(value, field, maximum=12000, minimum=1):
@@ -35,11 +38,38 @@ def name(value):
     return value
 
 
-def steps(value):
+# Optional task structure (D34 §6.1): what a task delivers and how it is checked, kept in its spec only when given.
+CONTRACT = ("kind", "deliverables", "acceptance", "verify", "depends_on", "paths")
+KINDS = ("implement", "review", "test", "deliver", "design")
+LIMITS = {"deliverables": (20, 500), "acceptance": (20, 500), "verify": (10, 500), "paths": (20, 500), "depends_on": (8, 48)}
+
+
+def strings(value, field, items, chars):
+    require(isinstance(value, list) and len(value) <= items and all(isinstance(x, str) for x in value),
+            f"{field} 须为不超过 {items} 项的字符串列表")
+    result = list(dict.fromkeys(x.strip() for x in value if x.strip()))
+    require(all(len(x) <= chars for x in result), f"{field} 每项不超过 {chars} 个字符")
+    return result
+
+
+def requested(value, tool):
+    """A task's tool / model as the requirement names it (D45): the planner marks it, the platform runs it as asked — so it
+    names the task's own tool."""
+    ok = isinstance(value, dict) and value and set(value) <= {"tool", "model", "quote"} and ("tool" in value or "model" in value) \
+        and value.get("tool", tool) == tool and all(isinstance(value.get(k, "x"), str) and value.get(k, "x").strip()
+                                                    and len(value.get(k, "x")) <= 200 for k in ("model", "quote"))
+    require(ok, "requested 须为 {tool, model, quote}，至少指定 tool 或 model，且 tool 与任务的工具相同")
+    return {k: value[k].strip() for k in ("tool", "model", "quote") if k in value}
+
+
+def steps(value, known=(), planned=False):
+    """Validated tasks; ``known`` are the ids of tasks before ``value`` (a continued task depends on them). ``planned``: the
+    KiroCrew planner's tasks (or a continue of one), the only ones that may carry ``requested`` (D45) — anywhere else it is
+    dropped, so a saved workflow or a given plan never claims an old requirement's choice."""
     require(isinstance(value, list) and 1 <= len(value) <= 8, "流程须包含 1–8 个顺序任务")
-    seen, result = set(), []
+    seen, earlier, result = set(), set(known), []
     for step in value:
-        require(isinstance(step, dict) and set(step) <= {"id", "name", "prompt", "tool", "model", "effort"},
+        require(isinstance(step, dict) and set(step) <= {"id", "name", "prompt", "tool", "model", "effort", "requested", *CONTRACT},
                 "不支持的 Task 字段")
         sid = step.get("id")
         require(isinstance(sid, str) and re.fullmatch(r"[a-z][a-z0-9-]{0,47}", sid)
@@ -50,10 +80,43 @@ def steps(value):
         effort = step.get("effort", "")
         require(effort in ("", "low", "medium", "high", "xhigh", "max"), "Effort 无效")
         require(tool != "opencode" or not effort, "当前 OpenCode 接入未验证 Effort 覆盖")
-        result.append({"id": sid, "name": name(step.get("name")), "tool": tool,
-                       "model": text(step.get("model", "auto"), "Model", 200),
-                       "effort": effort, "prompt": text(step.get("prompt"), "任务说明", 8000)})
+        item = {"id": sid, "name": name(step.get("name")), "tool": tool, "model": text(step.get("model", "auto"), "Model", 200),
+                "effort": effort, "prompt": text(step.get("prompt"), "任务说明", 8000)}
+        if "kind" in step:
+            require(step["kind"] in KINDS, "任务类别只能是 implement、review、test、deliver 或 design")
+            item["kind"] = step["kind"]
+        for field, (items, chars) in LIMITS.items():
+            if field in step:
+                item[field] = strings(step[field], field, items, chars)
+        if "requested" in step and planned:   # the tool / model the requirement names for this task (D45)
+            item["requested"] = requested(step["requested"], tool)
+        # Only earlier tasks: dependencies follow the order the Engine runs them in.
+        require(all(dep in (seen | earlier) - {sid} for dep in item.get("depends_on", [])),
+                f"任务「{item['name']}」的 depends_on 只能指向前序任务")
+        result.append(item)
     return result
+
+
+def rerun_plan(ordered, index, rerun=None):
+    """Which tasks a continue from ``ordered[index]`` reruns (D34 §7): all later ones when ``rerun`` is None; otherwise
+    the chosen task, those listed, and those the rules require — not yet accepted, depending on a task that reruns, or a
+    review / test after one. Returns (rerunning, kept, reasons) with the reason for each task the rules added."""
+    chosen = None if rerun is None else set(rerun)
+    rerunning, kept, reasons = [ordered[index]["id"]], [], {}
+    for row in ordered[index + 1:]:
+        spec = json.loads(row["spec"])
+        why = None
+        if chosen is not None and row["id"] not in chosen:
+            why = ("pending" if row["status"] != "accepted" else
+                   "depends" if any(dep in rerunning for dep in spec.get("depends_on", [])) else
+                   "review" if spec.get("kind") in {"review", "test"} else None)
+        if chosen is None or row["id"] in chosen or why:
+            rerunning.append(row["id"])
+            if why:
+                reasons[row["id"]] = why
+        else:
+            kept.append(row["id"])
+    return rerunning, kept, reasons
 
 
 def member(db, user, team, owner=False):
@@ -92,10 +155,64 @@ def space_workers(db, user, team):
     return db.execute(query + " ORDER BY w.name", (team or user, team or user)).fetchall()
 
 
+def publish_policy(value):
+    """A Session's publish policy (D47): ``auto`` publishes a Draft PR / MR on its own once the Session completes and passes
+    the same checks as the 「发布到仓库」 button; off, a person approves the publish."""
+    require(isinstance(value, dict) and set(value) <= {"auto", "branch", "title"} and isinstance(value.get("auto", False), bool),
+            "publish 须为 {auto: true|false, branch?, title?}")
+    if value.get("branch") is not None:
+        from .publish import check_branch
+        check_branch(value["branch"])
+    if value.get("title") is not None:
+        require(isinstance(value["title"], str) and 0 < len(value["title"].strip()) <= 200, "publish.title 须为 1–200 个字符")
+    return {"auto": bool(value.get("auto", False)), **{k: value[k] for k in ("branch", "title") if value.get(k)}}
+
+
+PUSHING = re.compile(r"git push|push(ed)? (failed|rejected)|推送|pull request|merge request|创建 PR|提交 PR|Authentication failed for",
+                     re.I)
+
+
+def confirm_plan(db, rid, who, actor, via):
+    """The user confirmed the Session's plan (D44): it runs from here, and does not wait again."""
+    snapshot = json.loads(db.execute("SELECT snapshot FROM runs WHERE id=?", (rid,)).fetchone()["snapshot"])
+    snapshot["confirmed"] = {"by": actor["username"], "at": time.time(), "via": via}
+    journal.change(db, "runs", rid, who, "run.confirmed", "已确认计划", quiet=("snapshot",), snapshot=dumps(snapshot))
+    journal.record(db, rid, "run.confirmed", who, "已确认计划", via=via, by=actor["username"])
+
+
+def awaits_confirmation(snapshot, task_id):
+    """Whether the Session must wait for its plan to be confirmed before this task (D44). Only KiroCrew's own planning runs
+    first — its plan task and a replan task; a given plan's task that happens to be named ``plan`` waits like any other."""
+    if snapshot.get("admission") != "confirm" or snapshot.get("confirmed"):
+        return False
+    from .planning import planner_task
+    return not planner_task(task_id, snapshot)
+
+
+def restart_budget(db, rid, who):
+    """The user's continue, requested diagnosis or Worker assignment authorises more automatic work: the recovery budget
+    counts from now (D42 B2). Written quietly — it is not a change of the Session's settings."""
+    snapshot = json.loads(db.execute("SELECT snapshot FROM runs WHERE id=?", (rid,)).fetchone()["snapshot"])
+    snapshot = {key: value for key, value in snapshot.items() if key != "budget_waited"}   # a new window has waited for nothing
+    journal.change(db, "runs", rid, who, "run.budget", quiet=("snapshot",), snapshot=dumps({**snapshot, "budget_since": time.time()}))
+
+
+def unserved(db, run):
+    """Why the run's Worker no longer runs it (spec §6.2): None while it is enabled and still serves the run's space."""
+    row = db.execute("SELECT enabled,retired FROM workers WHERE id=?", (run["worker_id"],)).fetchone()
+    if row is None or row["retired"]:
+        return "执行环境已退役"
+    if not row["enabled"]:
+        return "执行环境已停用"
+    if all(w["id"] != run["worker_id"] for w in space_workers(db, run["owner_id"], run["team_id"])):
+        return "执行环境已更换或已移出该空间"
+    return None
+
+
 def assign_spare(db, worker, team):
-    """A spare execution environment becomes the Team's dedicated one; only once (D28, T4)."""
-    changed = db.execute("UPDATE workers SET scope='dedicated', team_id=?, owner_id=NULL "
-                         "WHERE id=? AND scope='spare' AND enabled=1", (team, worker)).rowcount
+    """A spare execution environment becomes the Team's dedicated one (D28, T4; P2 for a host that served a Team)."""
+    changed = db.execute("UPDATE workers SET scope='dedicated', team_id=?, owner_id=NULL, last_team=NULL "
+                         "WHERE id=? AND scope='spare' AND enabled=1 AND retired=0", (team, worker)).rowcount
     require(changed == 1, "该执行环境不可用或已分配", 409, "worker_unavailable")
 
 
@@ -106,15 +223,28 @@ def team_environment(db, team):
                       (team, team)).fetchone()
 
 
+def active_team(db, team):
+    """A Team that takes new Sessions and members: 409 once archived (spec §5)."""
+    row = db.execute("SELECT * FROM teams WHERE id=?", (team,)).fetchone()
+    require(row is not None, "Team 不存在或无权限", 404, "not_found")
+    require(not row["archived"], f"Team「{row['name']}」已归档：会话可查看与停止，不能提交新会话或添加成员",
+            409, "team_archived")
+    return row
+
+
 def give_environment(db, worker, team):
     """Give a Team an execution environment: a shared Worker serves it, a spare one becomes its own."""
-    row = db.execute("SELECT scope FROM workers WHERE id=? AND enabled=1", (worker,)).fetchone()
+    row = db.execute("SELECT scope,last_team FROM workers WHERE id=? AND enabled=1 AND retired=0", (worker,)).fetchone()
     require(row is not None and row["scope"] in {"shared", "spare"}, "该执行环境不可用或已分配", 409, "worker_unavailable")
     require(team_environment(db, team) is None, "该 Team 已有执行环境（含已停用的）", 409, "team_has_environment")
     if row["scope"] == "shared":
         db.execute("INSERT INTO worker_spaces(worker_id,team_id) VALUES(?,?)", (worker, team))
-    else:
-        assign_spare(db, worker, team)
+        return
+    if row["last_team"] not in (None, team):
+        served = db.execute("SELECT name FROM teams WHERE id=?", (row["last_team"],)).fetchone()
+        raise Error(409, "environment_reuse", f"该空闲环境曾服务 Team「{served['name'] if served else row['last_team']}」，"
+                    "主机上留有其源码、工作区与记忆；请重新部署该主机（新的执行边界）后再分配给其他 Team")
+    assign_spare(db, worker, team)
 
 
 def run_access(db, actor, rid, owner=False, admin=True):
@@ -151,6 +281,51 @@ def _active_admins(db):
     return db.execute("SELECT count(*) FROM users WHERE admin=1 AND active=1").fetchone()[0]
 
 
+def mapping(snapshot, task, evidence=None):
+    """Where a task's tool and model came from (M2 §6 acceptance 2): the Coordinator's switch, the user's continue (the
+    configuration differs from the one it was created or planned with), the KiroCrew planner, a saved workflow, a template,
+    an imported document, or the steps submitted with the request."""
+    switched = (evidence or {}).get("switched_from")
+    if switched:
+        reason = str(switched.get("reason") or "")
+        reason = reason if len(reason) <= 40 else reason[:40] + "…"   # the full reason is on the Attempt (switched_from)
+        return {"source": "coordinator", "label": f"协调者从 {switched.get('tool')} / {switched.get('model') or 'auto'} 换来"
+                                                  + (f"：{reason}" if reason else "")}
+    spec, key = task["spec"], lambda s: (s.get("tool"), s.get("model") or "auto", s.get("effort") or "")
+    original = next((s for s in snapshot.get("steps") or [] if s.get("id") == task["id"]), None)
+    if original and key(original) != key(spec):
+        return {"source": "continue", "label": "续作时由用户修改"}
+    if spec.get("requested"):   # D45: what the requirement named, as the planner marked it
+        quote = spec["requested"].get("quote") or ""
+        return {"source": "requested", "label": f"需求中指定：「{quote if len(quote) <= 30 else quote[:30] + '…'}」" if quote
+                else "需求中指定"}
+    planned, replan = snapshot.get("planning") or {}, snapshot.get("replan") or {}
+    if task["id"] == replan.get("task"):
+        return {"source": "platform", "label": "平台：重新规划（Kiro）"}
+    if task["id"] in (replan.get("tasks") or []):
+        return {"source": "planner", "label": "KiroCrew 重新规划"}
+    if task["id"] == "plan" and planned.get("mode") == "agent":
+        return {"source": "platform", "label": "平台：需求分析与规划（Kiro）"}
+    if task["id"] in (planned.get("tasks") or []):
+        return {"source": "planner", "label": "KiroCrew 规划"}
+    if snapshot.get("origin") == "document":
+        return {"source": "document", "label": "导入的工作流文档"}
+    selection = snapshot.get("selection") or {}
+    if selection.get("workflow_id"):
+        return {"source": "workflow", "label": f"工作流「{snapshot.get('workflow_name')}」v{snapshot.get('workflow_version')}"}
+    if selection.get("template_id"):
+        kind = "规则匹配的模板" if snapshot.get("match_mode") == "rules" else "模板"
+        return {"source": "template", "label": f"{kind}「{snapshot.get('workflow_name')}」"}
+    return {"source": "steps", "label": "提交时指定"}
+
+
+def may_publish(db, actor, run):
+    """The creator, a Team owner or an admin (D35 §5.2): who may publish a Session and answer its approvals (D38 A3)."""
+    team_owner = bool(run["team_id"]) and db.execute(
+        "SELECT 1 FROM members WHERE team_id=? AND user_id=? AND role='owner'", (run["team_id"], actor["id"])).fetchone()
+    return run["owner_id"] == actor["id"] or bool(team_owner) or elevated(actor)
+
+
 def run_permissions(db, actor, run):
     """What the console may offer on a run it shows (the server enforces the same rules). native: whether the
     actor's own access (never admin oversight, K03) lets them open its native KiroCrew entry."""
@@ -164,7 +339,11 @@ def run_permissions(db, actor, run):
     if native and run["worker_id"]:
         worker = db.execute("SELECT scope,owner_id FROM workers WHERE id=?", (run["worker_id"],)).fetchone()
         native = worker is None or worker["scope"] != "shared" or worker["owner_id"] == actor["id"]
-    return {"operate": True, "delete": allowed(owner=True), "native": native}
+    # An archived Team's Sessions can be read and stopped, not continued, diagnosed, reopened or reassigned (P3).
+    archived = bool(run["team_id"]) and bool(
+        (db.execute("SELECT archived FROM teams WHERE id=?", (run["team_id"],)).fetchone() or {"archived": 0})["archived"])
+    return {"operate": True, "delete": allowed(owner=True), "native": native, "resume": not archived,
+            "publish": may_publish(db, actor, run)}
 
 
 def _probe(config):
@@ -182,8 +361,12 @@ def _probe(config):
 
 
 class Service:
-    def __init__(self, database):
+    def __init__(self, database, default_admission="auto"):
         self.db = database
+        self.default_admission = default_admission   # D44: a Session without `admission` runs at once unless set to confirm
+        self._opened, self._opened_lock = {}, threading.Lock()   # remote preview opening links already followed
+        from .credentials import CredentialStore
+        self.credentials = CredentialStore(database)   # D35; the server sets its key file
 
     def teams(self, actor):
         """The actor's Teams; an admin sees every Team (role None where not a member). Each carries its environment."""
@@ -215,7 +398,7 @@ class Service:
         with self.db.read() as db:
             teams = {r["team_id"] for r in db.execute("SELECT team_id FROM members WHERE user_id=?", (actor["id"],))}
             result = []
-            for row in db.execute("SELECT * FROM workers").fetchall():
+            for row in db.execute("SELECT * FROM workers WHERE retired=0").fetchall():
                 spaces = [{"team_id": s["team_id"]} if s["team_id"] else {"user_id": s["user_id"]} for s in db.execute(
                     "SELECT team_id,user_id FROM worker_spaces WHERE worker_id=? ORDER BY rowid", (row["id"],))]
                 if not elevated(actor):
@@ -244,7 +427,7 @@ class Service:
                 spaces.setdefault(row["worker_id"], []).append(
                     {"team_id": row["team_id"], "name": teams.get(row["team_id"])} if row["team_id"]
                     else {"user_id": row["user_id"], "username": users.get(row["user_id"])})
-            rows = db.execute("SELECT * FROM workers ORDER BY rowid").fetchall()
+            rows = db.execute("SELECT * FROM workers WHERE retired=0 ORDER BY rowid").fetchall()
         configs = [json.loads(row["config"]) for row in rows]
         with ThreadPoolExecutor(max_workers=max(1, min(8, len(rows)))) as pool:
             health = list(pool.map(_probe, configs))
@@ -255,13 +438,48 @@ class Service:
                  "active_runs": active.get(row["id"], 0), "health": probe}
                 for row, config, probe in zip(rows, configs, health)]
 
+    @staticmethod
+    def _live_worker(db, wid):
+        row = db.execute("SELECT * FROM workers WHERE id=?", (wid,)).fetchone()
+        require(row is not None, "Worker 不存在", 404, "not_found")
+        require(not row["retired"], "执行环境已退役", 409, "retired")
+        return row
+
+    def rename_worker(self, actor, wid, body):
+        require(elevated(actor), "需要平台管理员", 403, "forbidden")
+        with self.db.transaction() as db:
+            row = self._live_worker(db, wid)
+            title = name(body.get("name"))
+            db.execute("UPDATE workers SET name=? WHERE id=?", (title, wid))
+            audit(db, actor, "worker.rename", "worker", wid, {"from": row["name"], "to": title})
+        return {"id": wid, "name": title}
+
+    def retire_worker(self, actor, wid):
+        """Retire an execution environment (spec §6.1, P6): no Team may still use it and nothing may be in progress on
+        it; the personal spaces it served lose it; historical Sessions keep their reference."""
+        require(elevated(actor), "需要平台管理员", 403, "forbidden")
+        with self.db.transaction() as db:
+            row = self._live_worker(db, wid)
+            team = row["team_id"] or (db.execute("SELECT team_id FROM worker_spaces WHERE worker_id=? AND team_id IS NOT NULL",
+                                                 (wid,)).fetchone() or [None])[0]
+            if team:
+                title = db.execute("SELECT name FROM teams WHERE id=?", (team,)).fetchone()
+                raise Error(409, "in_use", f"仍是 Team「{title['name'] if title else team}」的执行环境：先为该 Team 更换执行环境")
+            # Whatever the Engine still drives on it, a closed Session being reopened included.
+            busy = db.execute("SELECT count(*) FROM runs WHERE worker_id=? AND lifecycle!='deleted' AND status NOT IN "
+                              f"({','.join('?' * len(SETTLED))})", (wid, *SETTLED)).fetchone()[0]
+            require(busy == 0, f"还有 {busy} 个进行中的会话：先等待结束或停止", 409, "busy")
+            db.execute("DELETE FROM worker_spaces WHERE worker_id=?", (wid,))
+            db.execute("UPDATE workers SET retired=1, enabled=0 WHERE id=?", (wid,))
+            audit(db, actor, "worker.retire", "worker", wid)
+        return {"id": wid, "retired": True}
+
     def dedicate_worker(self, actor, wid):
         """A shared Worker host serving exactly one Team becomes that Team's dedicated environment again (D30): every
         member then opens its native KiroCrew entry, as in a personal space."""
         require(elevated(actor), "需要平台管理员", 403, "forbidden")
         with self.db.transaction() as db:
-            row = db.execute("SELECT * FROM workers WHERE id=?", (wid,)).fetchone()
-            require(row is not None, "Worker 不存在", 404, "not_found")
+            row = self._live_worker(db, wid)
             spaces = db.execute("SELECT team_id,user_id FROM worker_spaces WHERE worker_id=?", (wid,)).fetchall()
             require(row["scope"] == "shared" and len(spaces) == 1 and spaces[0]["team_id"],
                     "只有只服务一个 Team 的共享环境可以改回专属环境", 409, "invalid_state")
@@ -272,6 +490,7 @@ class Service:
             team = spaces[0]["team_id"]
             db.execute("DELETE FROM worker_spaces WHERE worker_id=?", (wid,))
             db.execute("UPDATE workers SET scope='dedicated', team_id=?, owner_id=NULL WHERE id=?", (team, wid))
+            audit(db, actor, "worker.dedicate", "worker", wid, {"team_id": team})
         return {"id": wid, "scope": "dedicated", "team_id": team}
 
     def share_worker(self, actor, wid, body):
@@ -280,8 +499,7 @@ class Service:
         require(body.get("confirm") is True, "设为共享环境需要确认：环境内所有会话的 Agent 以同一系统账号运行，"
                 "能互相读取源码、工具登录与记忆", 400, "confirmation_required")
         with self.db.transaction() as db:
-            row = db.execute("SELECT * FROM workers WHERE id=?", (wid,)).fetchone()
-            require(row is not None, "Worker 不存在", 404, "not_found")
+            row = self._live_worker(db, wid)
             require(row["scope"] == "dedicated", "只有专属 Worker 可以设为共享环境", 409, "invalid_state")
             # Teams and other users would run as the platform's own account, which reads the database and Worker tokens.
             local = hashlib.sha256(f"{socket.gethostname()}:{os.getuid()}".encode()).hexdigest()
@@ -294,6 +512,7 @@ class Service:
             # The boundary owner is kept: it opens the native entry and re-registers the Worker on reinstall.
             db.execute("UPDATE workers SET scope='shared', team_id=NULL, owner_id=? WHERE id=?",
                        (row["owner_id"] or actor["id"], wid))
+            audit(db, actor, "worker.share", "worker", wid)
         return {"id": wid, "scope": "shared"}
 
     def worker_space(self, actor, wid, body, remove=False):
@@ -302,8 +521,7 @@ class Service:
         team, user = body.get("team_id"), body.get("user_id")
         require(isinstance(team or user, str) and bool(team) != bool(user), "需要且只能指定 team_id 或 user_id")
         with self.db.transaction() as db:
-            row = db.execute("SELECT scope FROM workers WHERE id=?", (wid,)).fetchone()
-            require(row is not None, "Worker 不存在", 404, "not_found")
+            row = self._live_worker(db, wid)
             # A spare environment can only be given to a Team, where it becomes that Team's own (T4).
             require(row["scope"] == "shared" or (row["scope"] == "spare" and team and not remove),
                     "只有共享环境可以调整服务空间；空闲环境只能分配给 Team", 409, "invalid_state")
@@ -320,6 +538,7 @@ class Service:
                 require(not db.execute("SELECT 1 FROM worker_spaces WHERE worker_id=? AND user_id=?", (wid, user)).fetchone(),
                         "该用户已在此共享环境中", 409, "conflict")
                 db.execute("INSERT INTO worker_spaces(worker_id,user_id) VALUES(?,?)", (wid, user))
+            audit(db, actor, "worker.space.remove" if remove else "worker.space.add", "worker", wid, {column: value})
         return {"ok": True}
 
     def create_team(self, actor, body):
@@ -335,32 +554,95 @@ class Service:
                                (text(body.get("owner"), "Team owner", 64).lower(),)).fetchone()
             require(owner is not None, "Team owner 不存在", 404, "not_found")
             tid = uid("team")
-            db.execute("INSERT INTO teams VALUES(?,?,?)", (tid, title, time.time()))
+            db.execute("INSERT INTO teams(id,name,created) VALUES(?,?,?)", (tid, title, time.time()))
             db.execute("INSERT INTO members VALUES(?,?,?)", (tid, owner["id"], "owner"))
             give_environment(db, body["worker_id"], tid)
+            audit(db, actor, "team.create", "team", tid, {"owner": owner["id"], "worker_id": body["worker_id"]})
             role = "owner" if owner["id"] == actor["id"] else None
             return {"id": tid, "name": title, "role": role, "environment": self._environment(db, tid)}
 
-    def membership(self, actor, tid, body, remove=False):
+    @staticmethod
+    def _team(db, actor, tid, owner=False):
+        """The Team an admin (any Team) or its members (owner=True: its owners) may manage; 404 / 403 as member()."""
+        row = db.execute("SELECT * FROM teams WHERE id=?", (tid,)).fetchone()
+        if elevated(actor):
+            require(row is not None, "Team 不存在", 404, "not_found")
+        else:
+            member(db, actor["id"], tid, owner=owner)
+        return dict(row)
+
+    def rename_team(self, actor, tid, body):
         with self.db.transaction() as db:
-            member(db, actor["id"], tid, owner=True)
-            target = db.execute("SELECT id FROM users WHERE username=? AND active=1",
-                                (text(body.get("username"), "用户名", 64).lower(),)).fetchone()
+            team = self._team(db, actor, tid, owner=True)
+            title = name(body.get("name"))
+            require(not db.execute("SELECT 1 FROM teams WHERE name=? AND id!=?", (title, tid)).fetchone(),
+                    "Team 名称已存在", 409, "conflict")
+            db.execute("UPDATE teams SET name=? WHERE id=?", (title, tid))
+            audit(db, actor, "team.rename", "team", tid, {"from": team["name"], "to": title})
+        return {"id": tid, "name": title}
+
+    def archive_team(self, actor, tid, body):
+        require(elevated(actor), "需要平台管理员", 403, "forbidden")
+        require(isinstance(body.get("archived"), bool), "archived 必须为布尔值")
+        with self.db.transaction() as db:
+            self._team(db, actor, tid)
+            db.execute("UPDATE teams SET archived=? WHERE id=?", (int(body["archived"]), tid))
+            audit(db, actor, "team.archive" if body["archived"] else "team.restore", "team", tid)
+        return {"id": tid, "archived": body["archived"]}
+
+    def change_environment(self, actor, tid, body):
+        """Move a Team to another execution environment (spec §5). Old Sessions are not moved (T6): their next dispatch
+        finds the Worker no longer serves the Team and waits to be reassigned (§6.2)."""
+        require(elevated(actor), "需要平台管理员", 403, "forbidden")
+        wid = body.get("worker_id")
+        require(isinstance(wid, str) and wid, "需要 worker_id")
+        with self.db.transaction() as db:
+            self._team(db, actor, tid)
+            require(db.execute("SELECT 1 FROM workers WHERE id=? AND retired=0", (wid,)).fetchone(),
+                    "Worker 不存在", 404, "not_found")
+            old = team_environment(db, tid)
+            require(old is None or old["id"] != wid, "该 Team 已在使用这个执行环境", 409, "conflict")
+            if old is not None and old["scope"] == "shared":
+                db.execute("DELETE FROM worker_spaces WHERE worker_id=? AND team_id=?", (old["id"], tid))
+            elif old is not None:
+                # The Team's own host waits as a spare that remembers it: its code and memories are still there (P2).
+                db.execute("UPDATE workers SET scope='spare', team_id=NULL, owner_id=?, last_team=? WHERE id=?",
+                           (actor["id"], tid, old["id"]))
+            give_environment(db, wid, tid)
+            audit(db, actor, "team.environment", "team", tid, {"from": old["id"] if old else None, "to": wid})
+            return {"id": tid, "environment": self._environment(db, tid)}
+
+    def membership(self, actor, tid, body, remove=False):
+        """Owners and admins (elevated, members or not) add, remove and re-role members; a member may remove only
+        themselves (leave). The last active owner stays (B4)."""
+        with self.db.transaction() as db:
+            username = text(body.get("username"), "用户名", 64).lower()
+            leaving = remove and username == actor["username"]
+            self._team(db, actor, tid, owner=not leaving)
+            # A deactivated member can still be removed; only active users join or change role.
+            target = db.execute("SELECT id FROM users WHERE username=?" + ("" if remove else " AND active=1"),
+                                (username,)).fetchone()
             require(target is not None, "用户不存在", 404, "not_found")
             role = body.get("role", "member")
             require(role in {"owner", "member"}, "角色无效")
             current = db.execute("SELECT role FROM members WHERE team_id=? AND user_id=?",
                                  (tid, target["id"])).fetchone()
+            if not remove and current is None:
+                active_team(db, tid)   # an archived Team takes no new members; roles may still change
             if current and current["role"] == "owner" and (remove or role != "owner"):
                 # Another *active* owner must remain: a deactivated owner cannot manage the Team (B4).
                 require(db.execute("SELECT count(*) FROM members m JOIN users u ON u.id=m.user_id WHERE m.team_id=? "
                                    "AND m.role='owner' AND u.active=1 AND m.user_id!=?", (tid, target["id"])).fetchone()[0] > 0,
                         "不能移除最后一位有效的 Team Owner", 409, "conflict")
             if remove:
+                require(current is not None, "该用户不是 Team 成员", 404, "not_found")
                 db.execute("DELETE FROM members WHERE team_id=? AND user_id=?", (tid, target["id"]))
+                audit(db, actor, "team.member.leave" if leaving else "team.member.remove", "team", tid,
+                      None if leaving else {"user": target["id"]})
             else:
                 db.execute("INSERT INTO members VALUES(?,?,?) ON CONFLICT(team_id,user_id) DO UPDATE SET role=excluded.role",
                            (tid, target["id"], role))
+                audit(db, actor, "team.member.set", "team", tid, {"user": target["id"], "role": role})
         return {"ok": True}
 
     def workflows(self, actor):
@@ -381,7 +663,16 @@ class Service:
 
     def save_workflow(self, actor, body, wid=None):
         title, spec = name(body.get("name")), steps(body.get("steps"))
+        named = body.get("credentials") or {}
+        require(isinstance(named, dict) and set(named) <= {"source"} and isinstance(named.get("source", ""), str),
+                "credentials 只能是 {\"source\": \"<凭证 ID>\"}")
         with self.db.transaction() as db:
+            if named.get("source"):
+                # Only a reference: whoever runs the workflow later uses it only if they may (spec §4).
+                from . import credentials as repo_credentials
+                row = db.execute("SELECT * FROM credentials WHERE id=?", (named["source"],)).fetchone()
+                require(row is not None and repo_credentials.usable(db, actor["id"], row, "*"),
+                        "无权使用此凭证作为工作流默认值", 403, "credential_forbidden")
             if wid:
                 flow, _ = workflow_access(db, actor["id"], wid, "editor")
                 require(body.get("expected_version") == flow["version"], "Workflow 版本已更新", 409, "version_conflict")
@@ -397,9 +688,9 @@ class Service:
             else:
                 db.execute("UPDATE workflows SET name=?,name_key=?,version=? WHERE id=?",
                            (title, title.casefold(), version, wid))
-            db.execute("INSERT INTO workflow_versions VALUES(?,?,?,?,?)",
-                       (wid, version, dumps(spec), actor["id"], time.time()))
-        return {"id": wid, "name": title, "version": version, "steps": spec}
+            db.execute("INSERT INTO workflow_versions(workflow_id,version,spec,author,created,credentials) VALUES(?,?,?,?,?,?)",
+                       (wid, version, dumps(spec), actor["id"], time.time(), dumps(named)))
+        return {"id": wid, "name": title, "version": version, "steps": spec, "credentials": named}
 
     def resolve_workflow(self, actor, body):
         """Preview only: no Session, source checkout or Coding task is created."""
@@ -495,12 +786,16 @@ class Service:
         selected = any(body.get(key) is not None for key in ("workflow_id", "template_id", "steps", "document"))
         require(body.get("plan") in (None, "agent", "match"), "plan 只能是 agent 或 match")
         require(not (selected and body.get("plan") == "agent"), "plan=agent 时不要同时指定工作流、模板、steps 或 document")
+        require(body.get("admission") in (None, "confirm", "auto"), "admission 须为 confirm 或 auto")
+        if "publish" in body:
+            publish_policy(body["publish"])
         if not body.get("worker_id"):
             # The space's only usable Worker runs it; a Team without an execution environment takes no new Sessions (D28).
             team = body.get("team_id") or None
             with self.db.read() as db:
                 if team:
                     member(db, actor["id"], team)   # a non-member learns nothing about the Team
+                    active_team(db, team)
                 usable = space_workers(db, actor["id"], team)
                 if team and not usable:
                     row = db.execute("SELECT name FROM teams WHERE id=?", (team,)).fetchone()
@@ -514,28 +809,32 @@ class Service:
         if planning:
             # A real KiroCrew Agent recognises the intent, enriches the requirement and plans the tasks (planning.py).
             from .planning import plan_step
-            models = {}
+            capabilities = {}
             if body.get("worker_id"):
                 with self.db.read() as db:
                     row = db.execute("SELECT config FROM workers WHERE id=?", (body["worker_id"],)).fetchone()
-                models = json.loads(row["config"]).get("capabilities", {}).get("models", {}) if row else {}
-            body = {**{k: v for k, v in body.items() if k != "plan"}, "steps": [plan_step(models)]}
+                capabilities = json.loads(row["config"]).get("capabilities", {}) if row else {}
+            # The planner sees which tools this environment can start and its known limits, and chooses (D38 A5).
+            body = {**{k: v for k, v in body.items() if k != "plan"},
+                    "steps": [plan_step(capabilities.get("models", {}), capabilities.get("tools"), capabilities.get("limitations"),
+                                       capabilities.get("commands"))]}
         resolved = self.resolve_workflow(actor, {k: v for k, v in body.items() if k != "plan"})
         with self.db.transaction() as db:
             wid = resolved["selection"].get("workflow_id")
             team = body.get("team_id") or None
             if team:
                 member(db, actor["id"], team)
+                active_team(db, team)
             if wid:
                 flow, _ = workflow_access(db, actor["id"], wid, "runner")
                 require(not flow["archived"], "工作流已归档，历史 Session 可继续", 409, "archived")
                 version = resolved["selection"]["workflow_version"]
-                saved = db.execute("SELECT spec FROM workflow_versions WHERE workflow_id=? AND version=?",
+                saved = db.execute("SELECT spec,credentials FROM workflow_versions WHERE workflow_id=? AND version=?",
                                    (wid, version)).fetchone()
                 require(saved is not None, "工作流版本不存在", 404, "not_found")
-                spec = json.loads(saved["spec"])
+                spec, default = json.loads(saved["spec"]), json.loads(saved["credentials"]).get("source")
             else:
-                spec, version = resolved["steps"], None
+                spec, version, default = resolved["steps"], None, None
             goal = text(body.get("input"), "开发需求", minimum=3)
             source = body.get("source")
             require(isinstance(source, dict) and set(source) <= {"type", "url", "ref"}
@@ -556,15 +855,27 @@ class Service:
             worker = body.get("worker_id")
             if worker:
                 self._worker(db, actor["id"], worker, team)
+            named = body.get("credentials") or {}
+            require(isinstance(named, dict) and set(named) <= {"source"} and isinstance(named.get("source", ""), str),
+                    "credentials 只能是 {\"source\": \"<凭证 ID>\"}")
+            from . import credentials as repo_credentials
+            bound = repo_credentials.resolve(db, actor, source, team, named.get("source"), default)
 
             def execute():
                 rid, now = uid("run"), time.time()
                 snapshot = {"workflow_id": wid, "workflow_version": version, "steps": spec,
+                            **({"origin": "document"} if body.get("document") is not None else {}),
                             "name": resolved["name"], "workflow_name": resolved["workflow_name"],
                             "selection": {k: v for k, v in resolved["selection"].items() if k != "steps"},
                             "match_mode": resolved["mode"], "match_reason": resolved["reason"]}
                 snapshot.update(recovery=policy(body.get("recovery")) if design is None else policy({"enabled": False}),
-                                execution_contract=2 if design is None else 1)
+                                execution_contract=3 if design is None else 1)
+                if design is None:   # D44: confirm = wait before the first working task
+                    snapshot["admission"] = body.get("admission") or self.default_admission
+                if "publish" in body:   # D47: the user's own word on publishing comes first
+                    snapshot["publish_policy"] = {**publish_policy(body["publish"]), "source": "user"}
+                if bound:
+                    snapshot["credentials"] = {"source": bound}
                 if design is not None:
                     snapshot.update(purpose="workflow_design", design=design)
                 if planning:
@@ -577,9 +888,12 @@ class Service:
                 for i, step in enumerate(spec):
                     db.execute("INSERT INTO tasks(run_id,id,ordinal,spec) VALUES(?,?,?,?)",
                                (rid, step["id"], i, dumps(step)))
-                db.execute("INSERT INTO revisions VALUES(?,?,?,?,?)",
-                           (rid, 1, dumps({"input": goal, "steps": spec}), actor["id"], now))
-                self.db.event(db, rid, "run.created", {"actor": actor["id"], "worker_assigned": bool(worker)})
+                from .revisions import record
+                record(db, rid, 1, "created", f"创建：{len(spec)} 个任务", actor["id"], now, input=goal, steps=spec)
+                journal.record(db, rid, "run.created", journal.person(actor), worker_assigned=bool(worker))
+                if bound:
+                    journal.record(db, rid, "run.credentials", journal.person(actor),
+                                   source={k: bound[k] for k in ("id", "name", "scope", "hint")})
                 return {"id": rid, "session_id": rid, "version": 1,
                         "status": "preparing" if worker else "waiting_worker"}
             return self._command(db, actor, "design" if design is not None else "start", None,
@@ -601,6 +915,468 @@ class Service:
         entry = worker_request(json.loads(worker["config"]), "/files", {"run_id": rid, "path": ""})["entry"]
         self.audit_read(actor, rid, "preview")
         return entry
+
+    def archive_entry(self, actor, rid):
+        """Whether the actor may download the run's source and how large it is: a dry run on the Worker, so a
+        refusal (too large, Worker offline) is an answer here rather than a page the browser opens (D36 §4.1)."""
+        with self.db.read() as db:
+            run = run_access(db, actor, rid)
+            require(run["worker_id"] and run["workspace"], "此会话尚未准备源码，没有可下载的内容", 409, "no_archive")
+            config = json.loads(db.execute("SELECT config FROM workers WHERE id=?", (run["worker_id"],)).fetchone()["config"])
+        from .transport import worker_request
+        try:
+            return worker_request(config, "/archive/plan", {"run_id": rid})
+        except Error as exc:
+            if exc.status == 404 and exc.code == "not_found":
+                raise Error(409, "archive_unsupported", "执行环境的 Worker 尚未升级，暂不支持下载源码") from None
+            raise
+
+    def archive_source(self, rid, holder):
+        """The Worker serving a download, for the link's holder who must still be allowed to read the run (B6)."""
+        with self.db.read() as db:
+            run = db.execute("SELECT * FROM runs WHERE id=?", (rid,)).fetchone()
+            require(run is not None and run["worker_id"], "下载不可用", 404, "not_found")
+            user = db.execute("SELECT id,username,admin FROM users WHERE id=? AND active=1", (holder,)).fetchone()
+            reader = {"id": holder, "username": user["username"] if user else None, "admin": user["admin"] if user else 0,
+                      "scopes": ["read"] + (["admin"] if user and user["admin"] else [])}
+            try:
+                require(user is not None, "下载不可用", 404, "not_found")
+                run_access(db, reader, rid)
+            except Error:
+                raise Error(403, "archive_forbidden", "下载权限已撤销，请在控制台重新下载") from None
+            config = json.loads(db.execute("SELECT config FROM workers WHERE id=?", (run["worker_id"],)).fetchone()["config"])
+            owner = db.execute("SELECT username FROM users WHERE id=?", (run["owner_id"],)).fetchone()
+            name = json.loads(run["snapshot"]).get("name") or run["input"][:40]
+        return config, {"name": name, "creator": owner["username"] if owner else ""}, reader
+
+    def record_download(self, rid, reader, client, size):
+        with self.db.transaction() as db:
+            journal.record(db, rid, "run.downloaded", journal.person({**reader, "client": client}), bytes=size)
+        self.audit_read(reader, rid, "download")
+
+    # --- remote preview (D36 §5): the platform's record of each Session's app; the Worker runs it (octopus/apps.py) ---
+
+    APP_TIMEOUTS = {"status": 5, "stop": 10, "start": 35}   # the console and session commands must not hang on a Worker
+
+    @classmethod
+    def _app_call(cls, config, rid, action):
+        from . import transport
+        try:
+            return transport.worker_request(config, "/app", {"run_id": rid, "action": action}, timeout=cls.APP_TIMEOUTS[action])
+        except Error as exc:
+            if exc.status == 404 and exc.code == "not_found":
+                raise Error(409, "app_unsupported", "执行环境的 Worker 尚未升级，暂不支持远程预览") from None
+            raise
+
+    def _app_sync(self, rid, row, answer):
+        """Bring the record in line with what the Worker reports (ready, failed, or gone after a restart)."""
+        status = answer.get("status")
+        if not row or row["status"] not in remote_preview.LIVE or status == row["status"] or status not in {
+                "running", "failed", "stopped", "starting"}:
+            return row
+        with self.db.transaction() as db:
+            db.execute("UPDATE apps SET status=?,error=?,stopped=? WHERE run_id=?",
+                       (status, answer.get("error"), time.time() if status in {"failed", "stopped"} else None, rid))
+            if status in {"failed", "stopped"}:
+                journal.record(db, rid, "app.stopped", journal.WORKER, reason="worker", status=status,
+                               error=answer.get("error"))
+            return db.execute("SELECT * FROM apps WHERE run_id=?", (rid,)).fetchone()
+
+    def _stale(self, wid, instance, keep):
+        """A Worker that restarted (another instance) has none of its earlier previews: their records stop before any
+        new app can take one of their ports, so no old cookie reaches another Session's app."""
+        if not instance:
+            return
+        with self.db.transaction() as db:
+            rows = db.execute(f"SELECT run_id,upstream FROM apps WHERE worker_id=? AND run_id!=? AND status IN "
+                              f"({','.join('?' * len(remote_preview.LIVE))})", (wid, keep, *remote_preview.LIVE)).fetchall()
+            for row in rows:
+                if json.loads(row["upstream"]).get("instance") != instance:
+                    db.execute("UPDATE apps SET status='stopped',stopped=? WHERE run_id=?", (time.time(), row["run_id"]))
+                    journal.record(db, row["run_id"], "app.stopped", journal.WORKER, reason="worker", status="stopped",
+                                   error="执行环境的 Worker 已重启")
+
+    @staticmethod
+    def _app_worker(db, wid):
+        """(config, retired) of a Worker; a retired one is never called again (P6)."""
+        row = db.execute("SELECT config,retired FROM workers WHERE id=?", (wid,)).fetchone() if wid else None
+        return (json.loads(row["config"]), bool(row["retired"])) if row else (None, False)
+
+    def approvals(self, actor, rid):
+        """The Session's pending native approvals as its Worker reports them (D38 §4.2)."""
+        with self.db.read() as db:
+            run = run_access(db, actor, rid)
+            config, retired = self._app_worker(db, run["worker_id"])
+        if not config or retired or not run["native_parent"]:
+            return {"approvals": [], "supported": bool(config) and not retired}
+        from . import transport
+        try:
+            return {"approvals": transport.worker_request(config, "/approvals", {"run_id": rid}, timeout=10)["approvals"],
+                    "supported": True}
+        except Error as exc:
+            if exc.status == 404 and exc.code == "not_found":
+                return {"approvals": [], "supported": False}
+            raise self._worker_refusal(exc) from None
+
+    @staticmethod
+    def _worker_refusal(exc):
+        """A Worker's 401 / 403 is about the platform's own credentials, not the user's: passed on as such, the console
+        would sign the user out on its next poll."""
+        if exc.status in {401, 403}:
+            return Error(502, "worker_error", "执行环境拒绝了平台的请求（Worker Token 或 Gateway 登录需要更新）")
+        return exc
+
+    def answer_approval(self, actor, rid, body):
+        """Answer one pending approval (D38 §4.2): the people who may publish the Session, audited."""
+        require(isinstance(body, dict) and set(body) <= {"origin", "request_id", "request_mid", "instance", "decision"},
+                "只接受 origin、request_id、request_mid、instance 与 decision")
+        require(body.get("decision") in {"approve", "reject"}, "decision 只能是 approve 或 reject")
+        require(body.get("origin") in {"native", "coordinator"}, "origin 只能是 native 或 coordinator")
+        key = "request_mid" if body["origin"] == "native" else "instance"
+        require(isinstance(body.get("request_id"), str) and body["request_id"] and isinstance(body.get(key), str) and body[key],
+                f"{body['origin']} 的批准须带 request_id 与 {key}（取自 octopus_approvals 的列表）")
+        with self.db.read() as db:
+            run = run_access(db, actor, rid)
+            require(may_publish(db, actor, run), "只有会话创建者、Team owner 或管理员可以答复批准请求", 403, "forbidden")
+            config, retired = self._app_worker(db, run["worker_id"])
+        require(config and not retired and run["native_parent"], "会话没有可用的执行环境", 409, "approvals_unsupported")
+        from . import transport
+        listed = self.approvals(actor, rid)
+        require(listed["supported"], "执行环境的 Worker 尚未升级，暂不支持答复批准请求", 409, "approvals_unsupported")
+        pending = listed["approvals"]
+        item = next((i for i in pending if (i["origin"], i["request_id"], i.get(key)) ==
+                     (body.get("origin"), body.get("request_id"), body.get(key))), None)
+        require(item is not None, "该批准请求已不在等待中（已被答复、过期或不属于此会话）", 409, "approval_not_pending")
+        try:
+            result = transport.worker_request(config, "/approvals/answer", {"run_id": rid, **body}, timeout=15)
+        except Error as exc:
+            if exc.status == 404 and exc.code == "not_found":
+                raise Error(409, "approvals_unsupported", "执行环境的 Worker 尚未升级，暂不支持答复批准请求") from None
+            if exc.code in {"native_unavailable", "worker_unavailable"}:   # nothing retries an answer: say so
+                raise Error(503, exc.code, "未答复：KiroCrew Gateway 或执行环境暂不可用，请稍后重新答复") from None
+            raise self._worker_refusal(exc) from None
+        detail = {"origin": item["origin"], "request_id": item["request_id"], "tool": item.get("tool"),
+                  "input": str(item.get("tool_input") or "")[:200], "decision": body["decision"]}
+        with self.db.transaction() as db:
+            audit(db, actor, "approval.answer", "run", rid, detail)
+            journal.record(db, rid, "approval.answered", journal.person(actor), **detail)   # an event, not a row change
+        return {**result, "ok": True}
+
+    def set_publish_policy(self, actor, rid, body):
+        """Switch a Session's automatic publish on or off (D47): those who may publish it."""
+        policy = publish_policy(body)
+        with self.db.transaction() as db:
+            run = run_access(db, actor, rid)
+            require(may_publish(db, actor, run), "只有会话创建者、Team owner 或管理员可以设置发布", 403, "forbidden")
+            snapshot = json.loads(run["snapshot"])
+            snapshot["publish_policy"] = {**policy, "source": "user"}
+            journal.change(db, "runs", rid, journal.person(actor), "run.publish_policy", quiet=("snapshot",), snapshot=dumps(snapshot))
+            journal.record(db, rid, "run.publish_policy", journal.person(actor), "完成后自动发布：" + ("开" if policy["auto"] else "关"),
+                           auto=policy["auto"])
+        return {"id": rid, "publish_policy": snapshot["publish_policy"]}
+
+    def auto_publish_pending(self):
+        """Publish, as their creator, the completed Sessions whose policy asks for it (D47) — once per version: a publish
+        that cannot happen is recorded with its reason and waits for a person, the Session stays completed."""
+        with self.db.read() as db:
+            rows = [dict(r) for r in db.execute("SELECT id, version, snapshot, owner_id FROM runs "
+                                                "WHERE status='completed' AND lifecycle='open'")]
+        for row in rows:
+            snapshot = json.loads(row["snapshot"])
+            policy, done = snapshot.get("publish_policy") or {}, snapshot.get("publish_auto") or {}
+            if not policy.get("auto") or done.get("version") == row["version"]:
+                continue
+            with self.db.read() as db:
+                user = db.execute("SELECT id, username, admin FROM users WHERE id=? AND active=1", (row["owner_id"],)).fetchone()
+            if user is None:
+                continue
+            actor = {**dict(user), "scopes": ["read", "execute", "manage"], "token_id": None, "client": "auto-publish"}
+            try:
+                record = self.publish(actor, row["id"], {k: policy[k] for k in ("branch", "title") if policy.get(k)})
+                result = {"ok": True, "url": record.get("url")}
+            except Error as exc:
+                result = {"ok": False, "code": exc.code, "error": str(exc)}
+            with self.db.transaction() as db:
+                current = db.execute("SELECT version, snapshot FROM runs WHERE id=?", (row["id"],)).fetchone()
+                fresh = json.loads(current["snapshot"])
+                fresh["publish_auto"] = {**result, "version": current["version"], "at": time.time()}
+                journal.change(db, "runs", row["id"], journal.ENGINE, "run.publish_auto", quiet=("snapshot",), snapshot=dumps(fresh))
+                journal.record(db, row["id"], "run.publish_auto", journal.ENGINE,
+                               "自动发布 Draft PR" if result["ok"] else "自动发布未完成：" + result["error"], **result)
+
+    def publish(self, actor, rid, body):
+        """Push the Session's work as one branch and open (or reuse) a draft pull / merge request with the bound write
+        credential (D35 §5.2): its creator, a Team owner or an admin, once its tasks have ended."""
+        import tempfile
+        from . import credentials as repo_credentials, publish as publishing
+        from .transport import worker_stream
+        require(isinstance(body, dict) and set(body) <= {"branch", "title"}, "只接受 branch 与 title")
+        with self.db.read() as db:
+            run = run_access(db, actor, rid)
+            require(may_publish(db, actor, run), "只有会话创建者、Team owner 或管理员可以发布", 403, "forbidden")
+            require(run["lifecycle"] == "open" and run["status"] in SETTLED and run["workspace"],
+                    "会话执行结束后才能发布", 409, "publish_busy")
+            snapshot, source = json.loads(run["snapshot"]), json.loads(run["source"])
+            bound = (snapshot.get("credentials") or {}).get("source")
+            require(bound, "会话没有绑定凭证：先在会话页绑定一枚有写权限的凭证", 409, "credential_unavailable")
+            row = db.execute("SELECT * FROM credentials WHERE id=?", (bound["id"],)).fetchone()
+            require(repo_credentials.bound_usable(db, row, run),
+                    f"凭证「{bound['name']}」已不能用于此会话（已停用、删除、授权撤销或所有者已离开）", 409, "credential_unavailable")
+            require(row["access"] == "write", f"凭证「{row['name']}」为只读，无法发布", 409, "credential_read_only")
+            refused = repo_credentials.refused_address(row["host"], self.credentials.private_hosts)
+            require(not refused, refused, 409, "credential_host_refused")
+            try:
+                host, path = repo_credentials.repo_path(source.get("url", ""))
+            except ValueError as exc:
+                raise Error(409, "credential_https_only", str(exc)) from None
+            require(row["host"] == host and repo_credentials.covers(json.loads(row["repos"]), path) is not None,
+                    f"凭证「{row['name']}」不覆盖仓库 {path}", 409, "credential_unavailable")
+            verified = self._verified(db, rid)   # D37 §7: only what passed the gates and the review is pushed
+            require(verified or snapshot.get("execution_contract", 1) < 3 or not db.execute(
+                "SELECT 1 FROM attempts WHERE run_id=? AND evidence LIKE '%\"candidate\"%' LIMIT 1", (rid,)).fetchone(),
+                "会话分支上最近的改动尚未通过门禁与审查，未发布：请续作会话，让改动通过后再发布", 409, "publish_unverified")
+            config = json.loads(db.execute("SELECT config FROM workers WHERE id=?", (run["worker_id"],)).fetchone()["config"])
+        branch = publishing.check_branch(body.get("branch") or "octopus/" + rid, source.get("ref"))
+        title = text(body.get("title") or snapshot.get("name") or run["input"][:60], "标题", 200)
+        secret = self.credentials.secret(row["id"])
+        auth = {"kind": row["kind"], "host": row["host"], "username": repo_credentials.username(row["kind"]), "secret": secret}
+        response = worker_stream(config, "/publish/bundle", {"run_id": rid, "message": f"KiroCrew ON：{title}（{rid}）",
+                                                             **({"commit": verified["sha"]} if verified else {})}, timeout=120)
+        with response, tempfile.TemporaryDirectory(dir=self.db.root, prefix=".publish-") as work:
+            headers = response.headers
+            commit = publishing.receive(response, int(headers.get("Content-Length") or 0), Path(work) / "repo",
+                                        headers.get("X-Publish-Branch") or "", headers.get("X-Publish-Base") or "",
+                                        headers.get("X-Publish-Commit") or "")
+            try:
+                pushed = publishing.push(Path(work) / "repo", source["url"], branch, commit, auth)
+            except Error as exc:   # the credential was used all the same
+                with self.db.transaction() as db:
+                    self._used(db, actor, row["id"], rid, path, branch, exc.code)
+                raise
+        # From here the branch is on the remote: what follows is recorded whatever the pull / merge request does.
+        failure, request = None, {"url": None, "number": None, "kind": None, "reused": False}
+        try:
+            request = publishing.pull_request(row["kind"], host, path, branch, source.get("ref"), title,
+                                              f"由 KiroCrew ON 会话 {rid} 发布。", secret)
+        except Error as exc:
+            failure = exc
+        record = {"branch": branch, "commit": commit, "url": request["url"], "number": request["number"],
+                  "kind": request["kind"], "reused": request["reused"], "created_branch": pushed["created"], "at": time.time(),
+                  "by": {"id": actor["id"], "username": actor.get("username")}, **({"request_error": str(failure)} if failure else {})}
+        with self.db.transaction() as db:
+            snapshot = json.loads(db.execute("SELECT snapshot FROM runs WHERE id=?", (rid,)).fetchone()["snapshot"])
+            snapshot["publish"] = record
+            journal.change(db, "runs", rid, journal.person(actor), "run.published",
+                           event={**{k: record[k] for k in ("branch", "commit", "url", "number", "reused")},
+                                  "request": record["kind"], **({"error": record["request_error"]} if failure else {})},
+                           snapshot=dumps(snapshot))
+            self._used(db, actor, row["id"], rid, path, branch, "pushed" if failure else "published")
+        if failure:
+            what = "Draft PR" if row["kind"] == "github_pat" else "Draft MR"
+            raise Error(failure.status, failure.code, f"分支 {branch} 已推送，但 {what} 未创建：{failure}。处理后再次发布即可（沿用该分支）")
+        return record
+
+    @staticmethod
+    def _used(db, actor, credential, rid, repo, branch, result):
+        """Every use of a write credential is audited, whatever came of it (D35 §6)."""
+        db.execute("UPDATE credentials SET last_used=? WHERE id=?", (time.time(), credential))
+        audit(db, actor, "credential.use", "credential", credential,
+              {"run_id": rid, "repo": repo, "access": "write", "branch": branch, "result": result})
+
+    def rebind(self, actor, rid, body):
+        """Change or remove a Session's source credential (spec §4): its creator, a Team owner or an admin, with a
+        credential they may use for this repository; removal also by the owner of the personal credential bound."""
+        from . import credentials as repo_credentials
+        require(isinstance(body, dict) and "source" in body and (body["source"] is None or isinstance(body["source"], str)),
+                "需要 source（凭证 ID，或 null 表示撤下）")
+        with self.db.transaction() as db:
+            run = run_access(db, actor, rid)
+            snapshot = json.loads(run["snapshot"])
+            current = (snapshot.get("credentials") or {}).get("source")
+            team_owner = bool(run["team_id"]) and db.execute(
+                "SELECT 1 FROM members WHERE team_id=? AND user_id=? AND role='owner'", (run["team_id"], actor["id"])).fetchone()
+            own_removal = body["source"] is None and current and current["scope"] == "user" and \
+                (current.get("owner") or {}).get("id") == actor["id"]
+            require(run["owner_id"] == actor["id"] or team_owner or elevated(actor) or own_removal,
+                    "只有会话创建者、Team owner 或管理员可以更换凭证", 403, "forbidden")
+            summary = lambda value: {k: value[k] for k in ("id", "name", "scope", "hint")} if value else None
+            bound = None
+            if body["source"]:
+                source = json.loads(run["source"])
+                try:
+                    host, path = repo_credentials.repo_path(source.get("url", ""))
+                except ValueError as exc:
+                    raise Error(409, "credential_https_only", str(exc)) from None
+                row = db.execute("SELECT * FROM credentials WHERE id=?", (body["source"],)).fetchone()
+                repo_credentials.check(db, actor, row, run["team_id"], host, path)
+                bound = repo_credentials.binding(db, row, actor)
+            # A removal is remembered: the next preparation stops instead of cloning without the credential.
+            snapshot["credentials"] = {"source": bound} if bound else (
+                {"source": None, "removed": {**summary(current), "by": {"id": actor["id"], "username": actor.get("username")},
+                                            "at": time.time()}} if current else {})
+            journal.change(db, "runs", rid, journal.person(actor), "run.credentials",
+                           event={"source": [summary(current), summary(bound)]}, snapshot=dumps(snapshot))
+        return {"source": bound}
+
+    def app(self, actor, rid):
+        """The Session's remote preview as the Worker reports it, with the last lines of its log."""
+        with self.db.read() as db:
+            run = run_access(db, actor, rid)
+            row = db.execute("SELECT * FROM apps WHERE run_id=?", (rid,)).fetchone()
+            config, retired = self._app_worker(db, run["worker_id"])
+            users = dict(db.execute("SELECT id,username FROM users").fetchall())
+        view = {"status": "stopped", "port": None, "error": None, "log": [], "started": None, "started_by": None,
+                "last_access": None, "idle_stop_at": None, "openable": False}
+        if retired and row and row["status"] in remote_preview.LIVE:
+            self._app_stopped(rid, journal.ENGINE, "worker_retired")
+            with self.db.read() as db:
+                row = db.execute("SELECT * FROM apps WHERE run_id=?", (rid,)).fetchone()
+        elif config and not retired:
+            try:
+                answer = self._app_call(config, rid, "status")
+                row = self._app_sync(rid, row, answer)
+                view["log"] = answer.get("log") or []
+            except Error as exc:
+                if exc.code == "app_unsupported":
+                    return {**view, "status": "unsupported", "error": str(exc)}
+                view["worker_error"] = str(exc)
+        if row:
+            view.update(status=row["status"], port=row["port"], error=row["error"], started=row["started"],
+                        last_access=row["last_access"], openable=row["status"] == "running",
+                        started_by={"id": row["started_by"], "username": users.get(row["started_by"])})
+            if row["status"] in remote_preview.LIVE:
+                view["idle_stop_at"] = (row["last_access"] or row["started"]) + remote_preview.IDLE
+        return view
+
+    def app_start(self, actor, rid):
+        with self.db.read() as db:
+            run = run_access(db, actor, rid)
+            require(run_permissions(db, actor, run)["resume"], "Team 已归档，不能启动预览", 409, "team_archived")
+            require(run["lifecycle"] == "open", "会话已关闭，请先重新打开", 409, "invalid_state")
+            require(run["status"] in SETTLED, "会话正在执行任务，完成后再启动预览", 409, "app_busy")
+            require(run["worker_id"] and run["workspace"], "此会话尚未准备源码，无法启动预览", 409, "app_unavailable")
+            row = db.execute("SELECT * FROM apps WHERE run_id=?", (rid,)).fetchone()
+            config, retired = self._app_worker(db, run["worker_id"])
+        require(not retired, "执行环境已退役，不能启动预览", 409, "retired")
+        probe = self._app_call(config, rid, "status")
+        self._stale(run["worker_id"], probe.get("instance"), rid)
+        row = self._app_sync(rid, row, probe)
+        if row and row["status"] in remote_preview.LIVE:
+            return self.app(actor, rid)
+        remote_preview.upstream(config, 0, probe.get("via"))   # a Worker host without a preview port: refuse first
+        with self.db.read() as db:
+            live = db.execute(f"SELECT COUNT(*) FROM apps WHERE worker_id=? AND run_id!=? AND status IN "
+                              f"({','.join('?' * len(remote_preview.LIVE))})",
+                              (run["worker_id"], rid, *remote_preview.LIVE)).fetchone()[0]
+        require(live < remote_preview.LIMIT, f"此执行环境已有 {remote_preview.LIMIT} 个远程预览在运行，请先停止其中一个",
+                409, "app_limit")
+        answer = self._app_call(config, rid, "start")
+        target = {**remote_preview.upstream(config, answer["port"], answer.get("via")), "instance": answer.get("instance")}
+        now = time.time()
+        with self.db.transaction() as db:
+            db.execute("INSERT INTO apps(run_id,worker_id,status,port,path,upstream,error,started_by,started,last_access,stopped)"
+                       " VALUES(?,?,?,?,?,?,NULL,?,?,?,NULL) ON CONFLICT(run_id) DO UPDATE SET worker_id=excluded.worker_id,"
+                       " status=excluded.status,port=excluded.port,path=excluded.path,upstream=excluded.upstream,error=NULL,"
+                       " started_by=excluded.started_by,started=excluded.started,last_access=excluded.last_access,stopped=NULL",
+                       (rid, run["worker_id"], answer["status"], answer["port"], remote_preview.entry_path(answer.get("path")),
+                        dumps(target), actor["id"], now, now))
+            journal.record(db, rid, "app.started", journal.person(actor), port=answer["port"], source=answer.get("source"))
+        return self.app(actor, rid)
+
+    def app_stop(self, actor, rid):
+        with self.db.read() as db:
+            run = run_access(db, actor, rid)
+            config, retired = self._app_worker(db, run["worker_id"])
+        if config and not retired:
+            self._app_call(config, rid, "stop")
+        self._app_stopped(rid, journal.person(actor), "user")
+        return {"status": "stopped"}
+
+    def _app_stopped(self, rid, who, reason):
+        with self.db.transaction() as db:
+            row = db.execute("SELECT status FROM apps WHERE run_id=?", (rid,)).fetchone()
+            if row and row["status"] in remote_preview.LIVE:
+                db.execute("UPDATE apps SET status='stopped',stopped=? WHERE run_id=?", (time.time(), rid))
+                journal.record(db, rid, "app.stopped", who, reason=reason)
+
+    def _stop_app(self, rid, reason):
+        """Best effort, for the platform's own reasons (the Session closed or continues, nobody used it): a Worker that
+        cannot be reached keeps the record live, and the next sweep tries again."""
+        with self.db.read() as db:
+            row = db.execute("SELECT a.status,w.config,w.retired FROM apps a JOIN workers w ON w.id=a.worker_id "
+                             "WHERE a.run_id=?", (rid,)).fetchone()
+        if not row or row["status"] not in remote_preview.LIVE:
+            return
+        if not row["retired"]:
+            try:
+                self._app_call(json.loads(row["config"]), rid, "stop")
+            except Error as exc:
+                logging.warning("Remote preview of %s not stopped (%s)", rid, exc.code)
+                return
+        self._app_stopped(rid, journal.ENGINE, reason if not row["retired"] else "worker_retired")
+
+    def app_ready(self, actor, rid):
+        """Before an opening link is issued: the preview must run (refreshed from the Worker)."""
+        status = self.app(actor, rid)["status"]
+        require(status == "running", "预览尚未就绪，请稍后再打开" if status in {"installing", "starting"}
+                else "远程预览未运行，请先启动", 409, "app_not_ready")
+
+    def app_auth(self, rid, holder, now=None):
+        """For auth_request on every preview request: the holder may still read the Session, the Session is open and
+        not closing, and its app runs."""
+        now = now or time.time()
+        with self.db.read() as db:
+            user = db.execute("SELECT id,admin FROM users WHERE id=? AND active=1", (holder,)).fetchone()
+            try:
+                require(user is not None, "预览不可用", 404, "not_found")
+                run = run_access(db, {"id": user["id"], "admin": user["admin"],
+                                      "scopes": ["read"] + (["admin"] if user["admin"] else [])}, rid)
+            except Error:
+                raise Error(403, "app_forbidden", "无权查看此会话的远程预览") from None
+            row = db.execute("SELECT * FROM apps WHERE run_id=?", (rid,)).fetchone()
+        require(row is not None and row["status"] == "running" and run["lifecycle"] == "open"
+                and run["desired"] not in {"close", "delete"}, "远程预览已停止", 403, "app_stopped")
+        if now - (row["last_access"] or 0) >= remote_preview.TOUCH:
+            try:   # best effort: a busy database must not fail the request it rides on
+                with self.db.transaction() as db:
+                    db.execute("UPDATE apps SET last_access=? WHERE run_id=?", (now, rid))
+            except sqlite3.OperationalError:
+                pass
+        return json.loads(row["upstream"])
+
+    def app_enter(self, rid, holder, nonce, now=None):
+        """Follow an opening link once: checked like every request, then its nonce is spent until it expires."""
+        now = now or time.time()
+        self.app_auth(rid, holder, now)
+        with self._opened_lock:
+            for used, expires in list(self._opened.items()):
+                if expires < now:
+                    del self._opened[used]
+            require(nonce not in self._opened, "此预览链接已使用过，请在控制台重新打开远程预览", 403, "app_link_used")
+            self._opened[nonce] = now + remote_preview.TICKET_TTL
+        with self.db.read() as db:
+            return remote_preview.entry_path(db.execute("SELECT path FROM apps WHERE run_id=?", (rid,)).fetchone()["path"])
+
+    def sweep_apps(self, now=None):
+        """Every minute, from serve: stop previews nobody used for 30 minutes, those of Sessions no longer open and of
+        retired Workers, and follow what the Workers report (a Worker that restarted has none of them any more)."""
+        now = now or time.time()
+        with self.db.read() as db:
+            rows = db.execute(f"SELECT a.*,r.lifecycle,r.desired,w.config,w.retired FROM apps a JOIN runs r ON r.id=a.run_id "
+                              f"JOIN workers w ON w.id=a.worker_id WHERE a.status IN ({','.join('?' * len(remote_preview.LIVE))})",
+                              remote_preview.LIVE).fetchall()
+        for row in rows:
+            if row["retired"]:
+                self._app_stopped(row["run_id"], journal.ENGINE, "worker_retired")
+            elif (row["last_access"] or row["started"] or 0) < now - remote_preview.IDLE:
+                self._stop_app(row["run_id"], "idle")
+            elif row["lifecycle"] != "open" or row["desired"] in {"close", "delete"}:
+                self._stop_app(row["run_id"], "session")
+            else:
+                try:
+                    self._app_sync(row["run_id"], row, self._app_call(json.loads(row["config"]), row["run_id"], "status"))
+                except Error:
+                    pass   # unreachable now: asked again next minute
 
     def preview_file(self, rid, relative, holder):
         """One project file of a run for the holder of a valid preview ticket (checked by the server), who must still
@@ -634,25 +1410,66 @@ class Service:
                     pass
             return result
 
+    def report(self, actor, rid, fmt):
+        """The Session's Feature report (D37 phase 2), as it can be seen: the same access and read audit as its detail."""
+        from . import report
+        view = self.run(actor, rid)
+        return report.html(view) if fmt == "html" else report.markdown(view)
+
     def run(self, actor, rid):
         with self.db.read() as db:
             value = self._view(db, run_access(db, actor, rid), actor)
         self.audit_read(actor, rid, "view")
         return value
 
+    @staticmethod
+    def _verified(db, rid):
+        """What a publish pushes (D37 §7): the candidate the Session's branch holds, when its own gates all passed and —
+        with review tasks — a passing review came after every code change except delivery. None otherwise, and for
+        Sessions from before D37 (no candidates)."""
+        kinds = {r["id"]: json.loads(r["spec"]).get("kind") for r in db.execute("SELECT id,spec FROM tasks WHERE run_id=?", (rid,))}
+        current = {r[0] for r in db.execute("SELECT current_attempt FROM tasks WHERE run_id=? AND status='accepted'", (rid,))}
+        head, sound, unreviewed, reviewed = None, False, False, False
+        for row in db.execute("SELECT id,task_id,evidence FROM attempts WHERE run_id=? ORDER BY updated, created", (rid,)):
+            evidence = json.loads(row["evidence"] or "{}")
+            passed = row["id"] in current and not any(g.get("status") == "fail" for g in evidence.get("gates", []))
+            candidate = evidence.get("candidate") or {}
+            if candidate.get("sha") and candidate.get("moved", True):
+                head, sound = {"sha": candidate["sha"], "task_id": row["task_id"]}, passed
+                unreviewed = unreviewed or kinds.get(row["task_id"]) != "deliver"
+            if kinds.get(row["task_id"]) == "review" and evidence.get("reviewed") and passed:
+                reviewed, unreviewed = True, False   # the review covers what the branch held before it
+        if head is None or not sound:
+            return None
+        if "review" in kinds.values() and (not reviewed or unreviewed):
+            return None
+        return head
+
     def _view(self, db, run, actor, detail=True):
         value = {k: v for k, v in run.items() if k != "snapshot"}
         value["permissions"] = run_permissions(db, actor, run)
         snapshot = json.loads(run["snapshot"])
         value.update({key: snapshot.get(key) for key in ("name", "workflow_name", "workflow_version",
-                                                       "selection", "match_mode", "match_reason", "purpose", "planning")})
+                                                       "selection", "match_mode", "match_reason", "purpose", "planning", "replan",
+                                                       "admission", "confirmed", "publish_policy", "publish_auto")})
         value["source"] = json.loads(value["source"])
         value["session_id"] = run["id"]
+        creator = db.execute("SELECT username FROM users WHERE id=?", (run["owner_id"],)).fetchone()
+        value["created_by"] = {"id": run["owner_id"], "username": creator["username"] if creator else None}
+        from . import credentials as repo_credentials
+        pinned = snapshot.get("credentials") or {}
+        value["credentials"] = ({"source": repo_credentials.availability(db, pinned["source"], run)} if pinned.get("source")
+                                else {"source": None, "removed": pinned["removed"]} if pinned.get("removed") else None)
+        value["publish"] = snapshot.get("publish")
+        value["verified"] = self._verified(db, run["id"])
         value["tasks"] = []
         for row in db.execute("SELECT * FROM tasks WHERE run_id=? ORDER BY ordinal", (run["id"],)):
             task = dict(row)
             task["spec"] = json.loads(task["spec"])
             task["task_id"] = run["id"] + "/" + task["id"]
+            current = db.execute("SELECT evidence FROM attempts WHERE id=?", (task["current_attempt"],)).fetchone() \
+                if task["current_attempt"] else None
+            task["mapping"] = mapping(snapshot, task, json.loads(current["evidence"] or "{}") if current else None)
             if detail:
                 task["attempts"] = []
                 for attempt in db.execute("SELECT * FROM attempts WHERE run_id=? AND task_id=? ORDER BY number",
@@ -666,8 +1483,24 @@ class Service:
         if detail:
             from .recovery import summary
             value["recovery"] = summary(db, run)
+            kept = self._kept(db, run["id"])
+            if kept:
+                value["kept"] = kept
             value["attention"] = self._attention(value, self._space(db, run) if run["status"] == "waiting_worker" else None)
         return value
+
+    @staticmethod
+    def _kept(db, rid):
+        """Tasks the latest continue left as they were (D34 §7), while they still carry that version's result."""
+        for row in db.execute("SELECT version,created,content FROM revisions WHERE run_id=? ORDER BY version DESC", (rid,)):
+            content = json.loads(row["content"])
+            if content.get("kind") != "continued":
+                continue
+            tasks = [t for t in content.get("kept", []) if db.execute(
+                "SELECT 1 FROM tasks t JOIN attempts a ON a.id=t.current_attempt WHERE t.run_id=? AND t.id=? "
+                "AND t.status='accepted' AND a.created<=?", (rid, t, row["created"])).fetchone()]
+            return {"version": row["version"], "tasks": tasks} if tasks else None
+        return None
 
     @staticmethod
     def _space(db, run):
@@ -686,6 +1519,13 @@ class Service:
         if run["status"] == "waiting_worker":
             space = space or {"team": None, "workers": 0}
             where = f"Team「{space['team']}」" if space["team"] else "个人空间"
+            if run.get("worker_id"):
+                # It ran on an environment that no longer runs it (§6.2).
+                title = f"{where}的{run.get('error') or '执行环境不可用'}"
+                detail = "已完成的任务保留；换到另一个执行环境时，工作区在新环境中重新准备，原环境中的产出不会迁移。"
+                action = ("选择 Worker 后继续执行。" if space["workers"]
+                          else "请平台管理员为该空间分配执行环境后重新分配 Worker。")
+                return {"title": title, "detail": detail, "action": action, "workers": space["workers"], "task_id": None}
             if space["workers"]:
                 title, detail = "需求已保存，等待选择 Worker", f"{where}有 {space['workers']} 个可用 Worker，提交时未指定。"
                 action = "选择 Worker 后开始执行。"
@@ -700,6 +1540,18 @@ class Service:
                 title, detail = f"{where}没有可用 Worker", "尚未为你登记执行环境。"
                 action = "请平台管理员为你登记执行环境后分配 Worker。"
             return {"title": title, "detail": detail, "action": action, "workers": space["workers"], "task_id": None}
+        if run["status"] == "waiting_approval":
+            return {"title": "等待批准", "detail": run["error"] or "原生任务正在等待批准一次工具调用。",
+                    "action": "在会话页「待批准」中查看工具与命令后批准或拒绝；Coding Agent 可用 octopus_approvals 查看、"
+                              "经用户同意后用 octopus_approve 答复。", "task_id": task["id"] if task else None}
+        if run["status"] == "completed" and (run.get("publish_auto") or {}).get("ok") is False:
+            return {"title": "自动发布未完成", "detail": run["publish_auto"].get("error"),
+                    "action": "处理后在会话页点「发布到仓库」（例如绑定一枚有写权限的凭证）；会话的工作已完成。", "task_id": None}
+        if run["status"] == "awaiting_confirmation":
+            planned = (run.get("planning") or {}).get("applied")
+            first = next((t for t in run["tasks"] if t["status"] == "pending"), None)
+            return {"title": "计划待确认", "detail": "规划已完成，任务尚未开始。" if planned else "任务尚未开始。",
+                    "action": "核对任务、工具与检查命令后确认开始；也可修改后续作或关闭。", "task_id": first["id"] if first else None}
         if run["status"] == "diagnosing":
             return {"title": "协调者正在诊断与安排修复", "detail": run["error"] or "正在读取失败证据，等待原生诊断结果。",
                     "action": "等待诊断结果；也可停止本 Session", "task_id": task["id"] if task else None}
@@ -707,28 +1559,65 @@ class Service:
             return None
         attempt = (task.get("attempts") or [{}])[-1] if task else {}
         failure = attempt.get("evidence", {}).get("failure_type")
+        from .waiting import handed_over, kiro_login_failure
         error = run.get("error") or attempt.get("error") or "尚无可核实的错误原因"
-        if "原生任务已停止" in error:
+        outcome = ((attempt.get("evidence") or {}).get("outcome") or {})
+        if failure in {"auth", "input", None, "native_error"} and PUSHING.search(" ".join(filter(None, [
+                error, outcome.get("summary"), " ".join(map(str, outcome.get("findings") or []))]))):
+            # D47: an Agent has no repository write credential by design; publishing is the platform's
+            title = "Agent 不能推送或创建 PR"
+            if (run.get("source") or {}).get("type") == "git":
+                action = ("推送与 Draft PR 由平台完成：会话完成后在会话页点「发布到仓库」，或开启「完成后自动发布」；"
+                          "可续作去掉要求推送的任务。")
+            else:   # publishing goes to the repository the Session was started from (EC2 run-f7670bfb…)
+                action = ("此会话的源码不来自远端仓库，没有远端仓库可发布，平台目前也不能新建仓库：可续作去掉要求建仓库或推送的任务，"
+                          "完成后用「下载源码」取回改动；需要发布时以已有仓库为源码新建会话。")
+        elif run.get("error") == "Worker 已停用":   # D43: continues on its own once the Worker is enabled again
+            title, action = "执行环境已停用", "管理员重新启用后自动继续。"
+        elif "原生任务已停止" in error:
             title = (task["spec"]["name"] + "：已停止") if task else "原生任务已停止，尚未完成"
             action = "可请求协调者诊断，或配置后原地重跑；停止原因未报告时不能推断。"
+        elif not task and not run.get("native_parent") and (
+                ((run.get("credentials") or {}).get("source") or {}).get("unavailable") or (run.get("credentials") or {}).get("removed")):
+            title, action = "仓库凭证不可用", "在会话页更换凭证，或请凭证管理者重新启用；凭证可用后自动继续。"
         elif not task and not run.get("native_parent"):
             title, action = "项目准备未完成", "检查仓库来源、访问权限和 Worker，处理具体错误后重跑。"
+        elif ((attempt.get("evidence") or {}).get("watchdog") or {}).get("reason"):
+            title = "原生任务卡住，看门狗已停止"
+            action = ("检查任务是否在运行不会结束的命令（如开发服务器）或等待输入；可在续作时调整提示，"
+                      "或为较慢的构建与测试调大 recovery.idle_minutes 后重跑。")
+        elif failure == "tool" and (attempt.get("evidence") or {}).get("requested"):
+            title, action = "需求指定的工具或模型不可用", "修复执行环境后续作，或在「配置并续作」中改用可用的工具或模型。"
+        elif failure == "tool":
+            title = "需要换用工具或模型"
+            action = ("协调者可推荐换用可用的工具（自动纠错开启且允许换工具时）；也可在「配置并续作」中换用可用的工具或模型后重跑，"
+                      "详情中是失败原因或协调者的建议。")
         elif failure == "input":
             title, action = "等待补充项目或任务信息", "补充缺少的源码来源或需求，再继续同一 Session。"
+        elif task and kiro_login_failure(attempt.get("evidence") or {}, attempt.get("error"),
+                                         (attempt.get("spec") or task["spec"]).get("tool")):
+            if handed_over((attempt.get("evidence") or {}).get("waiting") or {}):
+                title = "Kiro 登录正常，需要处理"
+                action = "失败后检查到 Kiro 登录正常（未见过期，或检查前已恢复），平台不会自动重跑：确认后续作。"
+            else:   # the platform reads Kiro's login and continues on its own (D43)
+                title = "等待 Kiro 登录恢复"
+                action = "请管理员执行 deploy.sh kiro-login；登录恢复后自动继续（平台每分钟检查一次）。"
         elif failure in {"auth", "model"}:
             title, action = "等待处理认证、权限或模型配置", "在原生 KiroCrew 处理权限，或修改本任务配置后重跑。"
         elif latest and latest["status"] == "blocked":
             title, action = "协调者需要你处理具体阻塞", "按诊断说明补充条件，再请求诊断或原地重跑。"
         else:
             title, action = "任务未通过交接或质量检查", "查看失败证据，可请求协调者诊断并修复，或配置后原地重跑。"
-        settings = run["recovery"]["policy"]
-        if settings["enabled"] and run["recovery"]["used"] >= settings["max_cycles"]:
-            action += f" 自动纠错已达到 {settings['max_cycles']} 轮上限。"
+        # What refused automatic recovery of this failure (D42), unless a diagnosis ran for it after all.
+        refusal = (attempt.get("evidence") or {}).get("budget_refused")
+        if refusal and run["recovery"].get("budget") and not (latest and latest.get("failed_attempt_id") == attempt.get("id")):
+            from .recovery import budget_note
+            action += " " + budget_note(run["recovery"]["budget"], refusal)
         return {"title": title, "detail": error, "action": action, "task_id": task["id"] if task else None,
                 "task_name": task["spec"]["name"] if task else None}
 
     def operate(self, actor, rid, action, body):
-        require(action in {"continue", "recover", "stop", "close", "reopen", "delete", "assign-worker"}, "不支持的操作")
+        require(action in {"continue", "recover", "stop", "close", "reopen", "delete", "assign-worker", "confirm"}, "不支持的操作")
         with self.db.transaction() as db:
             run = run_access(db, actor, rid, owner=action == "delete")
             try:
@@ -736,12 +1625,31 @@ class Service:
                 oversight = False
             except Error:
                 oversight = True   # allowed only as an elevated admin (A2): audited
+            if run["team_id"] and action in {"continue", "recover", "reopen", "assign-worker", "confirm"}:
+                active_team(db, run["team_id"])   # an archived Team's Sessions stay readable and stoppable (P3)
             require(action not in {"continue", "recover"} or json.loads(run["snapshot"]).get("purpose") != "workflow_design",
                     "工作流建议请按新需求重新生成；原建议保留作为证据", 409, "invalid_state")
+            # A retired Worker is never called again (P6): its Sessions settle here, and cannot be reopened on it.
+            retired = bool(run["worker_id"]) and bool(
+                db.execute("SELECT retired FROM workers WHERE id=?", (run["worker_id"],)).fetchone()["retired"])
+            require(not (retired and action == "reopen"), "执行环境已退役，会话不能重新打开；可以按此任务列表在其他空间发起新开发",
+                    409, "retired")
             def execute():
                 require(body.get("expected_version") == run["version"], "Session 版本已更新", 409, "version_conflict")
                 require(run["lifecycle"] != "deleted", "Session 已删除", 409, "invalid_state")
                 version = run["version"] + 1
+                who = journal.person(actor)
+                # This command's writes to the Session row, recorded as one command event with its parameters (D34).
+                fields, done, extra = {}, [], {}
+                def commit():
+                    if done:
+                        return
+                    done.append(True)
+                    fields.update(version=version, updated=time.time())
+                    journal.change(db, "runs", rid, who, "command." + action, event={
+                        "version": version, **{k: body[k] for k in ("task_id", "worker_id", "rerun") if k in body}, **extra,
+                        **({"oversight": True, "by": {"id": actor["id"], "username": actor["username"]}} if oversight else {})},
+                        **fields)
                 if action == "continue":
                     require(run["lifecycle"] == "open" and run["status"] in SETTLED, "请先等待结束或停止", 409, "busy")
                     ordered = [dict(t) for t in db.execute("SELECT * FROM tasks WHERE run_id=? ORDER BY ordinal", (rid,))]
@@ -749,61 +1657,104 @@ class Service:
                     require(index is not None, "Task 不存在", 404, "not_found")
                     require(all(t["status"] == "accepted" for t in ordered[:index]), "先完成上游 Task", 409, "dependency")
                     override = body.get("execution", {})
-                    require(isinstance(override, dict) and set(override) <= {"name", "tool", "model", "effort", "prompt"}, "任务覆盖字段无效")
-                    current = steps([{**json.loads(ordered[index]["spec"]), **override}])[0]
+                    require(isinstance(override, dict) and set(override) <= {"name", "tool", "model", "effort", "prompt", *CONTRACT},
+                            "任务覆盖字段无效")
+                    before = json.loads(ordered[index]["spec"])
+                    # D45: the user's own new tool or model for the task takes the place of what the requirement named
+                    changed = any(key in override and override[key] != before.get(key) for key in ("tool", "model"))
+                    current = steps([{**{k: v for k, v in before.items() if not (changed and k == "requested")}, **override}],
+                                    known=[t["id"] for t in ordered[:index]], planned=True)[0]
                     goal = text(body.get("input", run["input"]), "开发需求", minimum=3)
                     if "recovery" in body:
                         from .recovery import policy
                         snapshot = json.loads(run["snapshot"])
+                        old = snapshot.get("recovery")
                         snapshot["recovery"] = policy(body["recovery"])
                         if snapshot["recovery"]["enabled"]:
-                            snapshot["execution_contract"] = 2
-                        db.execute("UPDATE runs SET snapshot=? WHERE id=?", (dumps(snapshot), rid))
-                    for row in ordered[index:]:
-                        spec = current if row["id"] == current["id"] else json.loads(row["spec"])
-                        db.execute("UPDATE tasks SET spec=?,status='pending',current_attempt=NULL WHERE run_id=? AND id=?",
-                                   (dumps(spec), rid, row["id"]))
-                    db.execute("UPDATE runs SET input=?,desired='active',status=?,error=NULL WHERE id=?",
-                               (goal, "ready" if run["worker_id"] else "waiting_worker", rid))
-                    db.execute("INSERT INTO revisions VALUES(?,?,?,?,?)",
-                               (rid, version, dumps({"input": goal, "task": current, "invalidated": [t["id"] for t in ordered[index:]],
-                                                     **({"recovery": snapshot["recovery"]} if "recovery" in body else {})}),
-                                 actor["id"], time.time()))
+                            snapshot["execution_contract"] = max(snapshot.get("execution_contract", 1), 2)
+                        journal.change(db, "runs", rid, who, "run.settings", event={"recovery": [old, snapshot["recovery"]]},
+                                       snapshot=dumps(snapshot))
+                    later = {row["id"] for row in ordered[index + 1:]}
+                    rerun = body.get("rerun")
+                    require(rerun is None or (isinstance(rerun, list) and all(isinstance(x, str) for x in rerun)
+                                              and set(rerun) <= later), "rerun 只能列出所选任务之后的任务")
+                    reset, kept, reasons = rerun_plan(ordered, index, rerun)
+                    extra.update(kept=kept)
+                    journal.change_rows(db, "tasks", f"run_id=? AND id IN ({','.join('?' * len(reset))})", (rid, *reset),
+                                        who, "task.reset", status="pending", current_attempt=None)
+                    journal.change(db, "tasks", (rid, current["id"]), who, "task.spec", spec=dumps(current))
+                    reason = unserved(db, run) if run["worker_id"] else None
+                    restart_budget(db, rid, who)
+                    if goal != run["input"]:   # D46: the plan's completion of the requirement no longer matches it
+                        fresh = json.loads(db.execute("SELECT snapshot FROM runs WHERE id=?", (rid,)).fetchone()["snapshot"])
+                        if (fresh.get("planning") or {}).get("applied"):
+                            fresh["planning"]["outdated"] = True
+                            journal.change(db, "runs", rid, who, "run.planning", quiet=("snapshot",), snapshot=dumps(fresh))
+                    if run["status"] == "awaiting_confirmation":   # changing the plan and continuing confirms it (D44)
+                        confirm_plan(db, rid, who, actor, "continue")
+                    fields.update(input=goal, desired="active", status="ready" if run["worker_id"] and not reason else "waiting_worker",
+                                  error=reason)
+                    commit()   # before the revision: its snapshot reads the new requirement
+                    from .revisions import changes, record
+                    detail = "、".join(filter(None, ["需求" if goal != run["input"] else "", changes(before, current)]))
+                    names = {row["id"]: json.loads(row["spec"])["name"] for row in ordered}
+                    scope = f"重跑 {'、'.join(names[t] for t in reset)}，沿用 {'、'.join(names[t] for t in kept)}" if kept else ""
+                    summary = "；".join(filter(None, [detail, scope]))
+                    record(db, rid, version, "continued", f"续作「{current['name']}」" + (f"：{summary}" if summary else ""),
+                           actor["id"], time.time(), input=goal, task=current, invalidated=reset, rerun=reset, kept=kept,
+                           reasons=reasons, **({"recovery": snapshot["recovery"]} if "recovery" in body else {}))
                 elif action == "recover":
                     from .recovery import schedule
                     require(run["lifecycle"] == "open" and run["worker_id"] and run["native_parent"] and
                             run["status"] in {"blocked", "failed", "stopped"}, "此 Session 当前不能启动诊断", 409, "busy")
+                    reason = unserved(db, run)
+                    require(not reason, f"{reason}：请续作后重新分配 Worker", 409, "environment_changed")
                     task = db.execute("SELECT * FROM tasks WHERE run_id=? AND status!='accepted' ORDER BY ordinal LIMIT 1",
                                       (rid,)).fetchone()
                     attempt = db.execute("SELECT * FROM attempts WHERE id=?", (task["current_attempt"],)).fetchone() if task else None
                     require(attempt is not None, "尚无可诊断的失败执行；请补充输入并重跑", 409, "not_attempted")
                     snapshot = json.loads(run["snapshot"])
-                    snapshot["execution_contract"] = 2
-                    db.execute("UPDATE runs SET snapshot=? WHERE id=?", (dumps(snapshot), rid))
-                    schedule(db, self.db, run, task, attempt, manual=True)
+                    old = snapshot.get("execution_contract", 1)
+                    snapshot["execution_contract"] = max(old, 2)
+                    journal.change(db, "runs", rid, who, "run.settings", event={"execution_contract": [old, snapshot["execution_contract"]]},
+                                   snapshot=dumps(snapshot))
+                    restart_budget(db, rid, who)   # as a continue: the budget counts from the user's request
+                    schedule(db, self.db, run, task, attempt, manual=True, actor=who)
                 elif action == "assign-worker":
                     require(run["status"] == "waiting_worker" and run["lifecycle"] == "open",
                             "运行已分配 Worker 或已关闭", 409, "invalid_state")
                     # The Session's own space, not the operator's (an admin may assign for someone else).
                     self._worker(db, run["owner_id"], body.get("worker_id"), run["team_id"])
-                    db.execute("UPDATE runs SET worker_id=?,status='preparing' WHERE id=?", (body["worker_id"], rid))
+                    restart_budget(db, rid, who)   # waiting for an environment is not automatic work
+                    if run["worker_id"] not in (None, body["worker_id"]):
+                        # Another environment has no native parent of this Session: prepare there afresh (P5).
+                        fields.update(worker_id=body["worker_id"], native_parent=None, workspace=None, status="preparing", error=None)
+                    else:
+                        fields.update(worker_id=body["worker_id"], status="ready" if run["native_parent"] else "preparing", error=None)
+                elif action == "confirm":
+                    require(run["status"] == "awaiting_confirmation" and run["lifecycle"] == "open",
+                            "此 Session 不在等待确认", 409, "invalid_state")
+                    confirm_plan(db, rid, who, actor, "confirm")
+                    restart_budget(db, rid, who)   # the user's word allows the automatic work from here (D42)
+                    fields.update(desired="active", status="ready", error=None)
                 elif action == "reopen":
                     require(run["lifecycle"] == "closed", "只有已关闭的 Session 可重新打开", 409, "invalid_state")
-                    db.execute("UPDATE runs SET desired='reopen',status='reopening' WHERE id=?", (rid,))
+                    fields.update(desired="reopen", status="reopening")
                 else:
                     require(action != "delete" or body.get("confirmation") == rid, "删除需完整 Session ID 确认")
-                    db.execute("UPDATE runs SET desired=?,status='stopping' WHERE id=?", (action, rid))
-                if not run["worker_id"] and action in {"stop", "close", "delete", "reopen"}:
+                    fields.update(desired=action, status="stopping")
+                if (not run["worker_id"] or retired) and action in {"stop", "close", "delete", "reopen"}:
                     lifecycle = {"close": "closed", "delete": "deleted", "reopen": "open"}.get(action, run["lifecycle"])
-                    db.execute("UPDATE runs SET desired='stopped',status='stopped',lifecycle=? WHERE id=?",
-                               (lifecycle, rid))
-                db.execute("UPDATE runs SET version=?,updated=? WHERE id=?", (version, time.time(), rid))
-                self.db.event(db, rid, "command." + action, {"actor": actor["id"], "version": version, **(
-                    {"oversight": True, "by": {"id": actor["id"], "username": actor["username"]}} if oversight else {})})
+                    fields.update(desired="stopped", status="stopped", lifecycle=lifecycle)
+                commit()
                 if oversight:
                     audit(db, actor, "run." + action, "run", rid, {"version": version})
                 return {"id": rid, "session_id": rid, "version": version, "command": action, "status": "accepted"}
-            return self._command(db, actor, action, rid, body, execute)
+            result = self._command(db, actor, action, rid, body, execute)
+        if action in {"continue", "recover", "close", "delete", "confirm"}:
+            # The agents work in the same project again, or the Session ends: its remote preview stops (D36 §5.1).
+            self._stop_app(rid, "session")
+        return result
 
     # --- users (spec §4): only an elevated admin manages others; everyone changes their own password ---
 
@@ -917,6 +1868,75 @@ class Service:
             require(changed == 1, "Token 不存在", 404, "not_found")
             audit(db, actor, "user.revoke_token", "user", uid, {"token_id": tid})
         return {"ok": True}
+
+    # --- revisions (D32) ---
+
+    def revisions(self, actor, rid):
+        """Every revision of a run, oldest first, without snapshots (see revision())."""
+        from .revisions import history
+        with self.db.read() as db:
+            run_access(db, actor, rid)
+            entries = history(db, rid)
+        self.audit_read(actor, rid, "view")
+        return [{k: v for k, v in entry.items() if k not in {"snapshot", "content"}} for entry in entries]
+
+    def changes(self, actor, rid, who=None, kind=None, before=None, limit=50, audited=True):
+        """The Session's change journal, newest first (D34 §4.3): who changed what, from what, to what and why. Events
+        written before the journal carry a user id string (commands) or no actor (system, listed as legacy)."""
+        require(who in (None, "user", "system"), "who 只能是 user 或 system")
+        require(kind is None or (isinstance(kind, str) and len(kind) <= 40), "kind 不超过 40 个字符")
+        require(type(limit) is int and 1 <= limit <= 200, "limit 须为 1–200 的整数")
+        person = "coalesce(json_type(payload,'$.actor')='text' OR json_extract(payload,'$.actor.kind')='user', 0)"
+        sql, params = "SELECT * FROM events WHERE run_id=? AND id<?", [rid, before or 2 ** 62]
+        if who:
+            sql += f" AND {'' if who == 'user' else 'NOT '}{person}"
+        if kind:
+            sql += " AND kind LIKE ? ESCAPE '\\'"
+            params.append(kind.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_") + "%")
+        with self.db.read() as db:
+            run_access(db, actor, rid)
+            users = dict(db.execute("SELECT id,username FROM users").fetchall())
+            rows = db.execute(sql + " ORDER BY id DESC LIMIT ?", (*params, limit)).fetchall()
+        if audited:   # the export audits itself once
+            self.audit_read(actor, rid, "changes")
+        result = []
+        for row in rows:
+            payload = json.loads(row["payload"])
+            by = payload.pop("actor", None)
+            if isinstance(by, str):
+                by = {"kind": "user", "id": by, "username": users.get(by)}
+            result.append({"id": row["id"], "at": row["created"], "kind": row["kind"], "actor": by or {"kind": "legacy"},
+                           "changes": payload.pop("changes", None), "reason": payload.pop("reason", None), "detail": payload})
+        return result
+
+    def revision(self, actor, rid, version):
+        from .revisions import history
+        with self.db.read() as db:
+            run_access(db, actor, rid)
+            entry = next((e for e in history(db, rid) if e["version"] == version), None)
+        require(entry is not None, "修订不存在", 404, "not_found")
+        self.audit_read(actor, rid, "view")
+        return entry
+
+    def revision_diff(self, actor, rid, before=None, after=None):
+        """Differences between two revisions; by default the latest and the one before it."""
+        from .revisions import diff, history
+        with self.db.read() as db:
+            run_access(db, actor, rid)
+            entries = {e["version"]: e for e in history(db, rid)}
+        versions = sorted(entries)
+        after = versions[-1] if after is None else after
+        require(after in entries, "修订不存在", 404, "not_found")
+        if before is None:
+            earlier = [v for v in versions if v < after]
+            before = earlier[-1] if earlier else after
+        require(before in entries, "修订不存在", 404, "not_found")
+        old, new = entries[before]["snapshot"], entries[after]["snapshot"]
+        require(old is not None and new is not None, "该修订没有可比较的内容", 409, "no_snapshot")
+        self.audit_read(actor, rid, "view")
+        return {"from": before, "to": after, "from_summary": entries[before]["summary"],
+                "to_summary": entries[after]["summary"],
+                "reconstructed": entries[before]["reconstructed"] or entries[after]["reconstructed"], **diff(old, new)}
 
     def audit_log(self, actor, before=None, limit=50):
         require(elevated(actor), "需要平台管理员", 403, "forbidden")

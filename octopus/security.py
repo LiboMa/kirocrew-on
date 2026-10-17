@@ -73,12 +73,14 @@ def issue_token(db, user, scopes=None, label="API", ttl=86400):
 def authenticate(db, raw):
     require(isinstance(raw, str) and raw.startswith("oct_"), "需要 API Token", 401, "unauthorized")
     row = db.execute(
-        "SELECT u.id,u.username,u.admin,t.id token_id,t.scopes,t.last_used FROM tokens t JOIN users u ON u.id=t.user_id "
+        "SELECT u.id,u.username,u.admin,t.id token_id,t.scopes,t.last_used,t.label FROM tokens t JOIN users u ON u.id=t.user_id "
         "WHERE t.hash=? AND t.expires>? AND u.active=1",
         (hashlib.sha256(raw.encode()).hexdigest(), time.time())).fetchone()
     require(row is not None, "Token 已失效或撤销", 401, "unauthorized")
+    from .journal import client
     value = dict(row)
     value["scopes"] = json.loads(value["scopes"])
+    value["client"] = client(value.pop("label"))   # console / Coding Agent (MCP) / API, for the change journal (D34)
     return value
 
 

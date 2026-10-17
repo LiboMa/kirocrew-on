@@ -80,7 +80,7 @@ class MigrationTests(unittest.TestCase):
         self.assertIsNotNone(result["backup"])
         with sqlite3.connect(self.path) as db:
             self.assertEqual(db.execute("SELECT scope FROM workers WHERE id='w1'").fetchone()[0], "dedicated")
-            db.execute("INSERT INTO teams VALUES('t1','A',0)")
+            db.execute("INSERT INTO teams(id,name,created) VALUES('t1','A',0)")
             db.execute("INSERT INTO worker_spaces(worker_id,team_id) VALUES('w1','t1')")
             with self.assertRaises(sqlite3.IntegrityError):
                 db.execute("INSERT INTO worker_spaces(worker_id,team_id,user_id) VALUES('w1','t1','u1')")
@@ -93,12 +93,32 @@ class MigrationTests(unittest.TestCase):
     def test_access_migration_adds_audit_and_activity_columns(self):
         self.legacy_database()
         result = migrations.apply(self.path, backup_dir=self.backups)
-        self.assertEqual(result["to"], 3)
+        self.assertEqual(result["to"], LATEST)
         with sqlite3.connect(self.path) as db:
             self.assertIn("last_login", [c[1] for c in db.execute("PRAGMA table_info(users)")])
             self.assertIn("last_used", [c[1] for c in db.execute("PRAGMA table_info(tokens)")])
             db.execute("INSERT INTO audit(at,actor_id,action,kind,target) VALUES(1,'u1','user.deactivate','user','u2')")
             self.assertEqual(db.execute("SELECT detail FROM audit").fetchone()[0], "{}")
+
+    def test_apps_migration_records_remote_previews(self):
+        self.legacy_database()
+        self.assertEqual(migrations.apply(self.path, backup_dir=self.backups)["to"], LATEST)
+        with sqlite3.connect(self.path) as db:
+            columns = [c[1] for c in db.execute("PRAGMA table_info(apps)")]
+        self.assertEqual(columns, ["run_id", "worker_id", "status", "port", "path", "upstream", "error", "started_by",
+                                   "started", "last_access", "stopped"])
+
+    def test_teams_workers_migration_adds_archive_and_retire_columns(self):
+        self.legacy_database()
+        result = migrations.apply(self.path, backup_dir=self.backups)
+        self.assertEqual(result["to"], LATEST)
+        with sqlite3.connect(self.path) as db:
+            self.assertIn("archived", [c[1] for c in db.execute("PRAGMA table_info(teams)")])
+            columns = [c[1] for c in db.execute("PRAGMA table_info(workers)")]
+            self.assertIn("retired", columns)
+            self.assertIn("last_team", columns)
+            db.execute("INSERT INTO teams(id,name,created) VALUES('t9','新 Team',0)")
+            self.assertEqual(db.execute("SELECT archived FROM teams WHERE id='t9'").fetchone()[0], 0)
 
     def test_newer_database_is_refused(self):
         self.legacy_database()

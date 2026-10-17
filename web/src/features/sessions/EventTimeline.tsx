@@ -2,7 +2,7 @@ import { useMemo, useState } from "react";
 import type { StreamState } from "@/api/events";
 import type { RunEvent } from "@/api/types";
 import { Input } from "@/components/ui/input";
-import { STATES, eventLabel, formatTime } from "@/lib/labels";
+import { STATES, TIMELINE_HIDDEN, eventLabel, formatTime } from "@/lib/labels";
 import { cn } from "@/lib/utils";
 
 const STREAM: Record<StreamState, [string, string]> = {
@@ -21,7 +21,7 @@ export function EventTimeline({ events, stream }: { events: RunEvent[]; stream: 
   const [query, setQuery] = useState("");
   const shown = useMemo(() => {
     const term = query.trim().toLowerCase();
-    return [...events].reverse().filter((event) => !term ||
+    return [...events].reverse().filter((event) => !TIMELINE_HIDDEN.has(event.kind)).filter((event) => !term ||
       [event.kind, eventLabel(event), detail(event)].some((text) => text?.toLowerCase().includes(term))).slice(0, 200);
   }, [events, query]);
   const [label, dot] = STREAM[stream];

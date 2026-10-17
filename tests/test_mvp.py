@@ -24,6 +24,7 @@ from octopus import designs
 from octopus.worker import write
 from octopus.schema import openapi
 import api as crew_api
+from tests.old_worker import as_old_worker
 
 
 SPEC = [{"id": "code", "name": "编码", "tool": "claude", "model": "auto", "effort": "", "prompt": "实现加法并运行真实测试"},
@@ -59,7 +60,7 @@ class MVPTests(unittest.TestCase):
         """A Team created before execution environments (D28): no Worker; alice is its owner."""
         tid = "team-" + name.encode().hex()[:12]
         with self.db.transaction() as db:
-            db.execute("INSERT INTO teams VALUES(?,?,0)", (tid, name))
+            db.execute("INSERT INTO teams(id,name,created) VALUES(?,?,0)", (tid, name))
             db.execute("INSERT INTO members VALUES(?,?,'owner')", (tid, self.a["id"]))
             for username in members:
                 user = db.execute("SELECT id FROM users WHERE username=?", (username,)).fetchone()
@@ -117,7 +118,9 @@ class MVPTests(unittest.TestCase):
         self.assertEqual(result["status"],"ready")
         self.assertEqual(result["config"]["name"],"退款接口工作流")
         self.assertEqual(result["evidence"]["actual_backend"],"kiro")
-        self.assertIn("订单退款",self.dispatched[0]["design"]["basis"][0]["prompt"])
+        # D46: the goal reaches the designer as the requirement, not copied into each basis step's prompt
+        self.assertIn("订单退款",self.dispatched[0]["input"])
+        self.assertNotIn("订单退款",self.dispatched[0]["design"]["basis"][0]["prompt"])
         self.assertEqual(len(self.service.workflows(self.a)),1)
         self.assertEqual(len(self.service.run(self.a,created["id"])["tasks"]),1)
 
@@ -158,8 +161,10 @@ class MVPTests(unittest.TestCase):
         first=self.service.resolve_workflow(self.a,{"input":"实现订单退款","template_id":"proof"})
         second=self.service.resolve_workflow(self.a,{"input":"实现会议议程","template_id":"proof"})
         repair=self.service.resolve_workflow(self.a,{"input":"修复退款异常","template_id":"bugfix"})
-        self.assertIn("实现订单退款",first["steps"][0]["prompt"])
-        self.assertIn("实现会议议程",second["steps"][0]["prompt"])
+        # D46: a step's prompt says where it stands; the goal is the instructions' heading, not repeated per step
+        self.assertNotIn("实现订单退款",first["steps"][0]["prompt"])
+        self.assertIn("当前步骤：1/2",first["steps"][0]["prompt"])
+        self.assertEqual(first["steps"][0]["prompt"],second["steps"][0]["prompt"])
         self.assertNotEqual(first["steps"][0]["prompt"],repair["steps"][0]["prompt"])
         manual=self.service.resolve_workflow(self.a,{"input":"实现会议议程","steps":SPEC})
         self.assertEqual(manual["steps"],SPEC)
@@ -175,7 +180,7 @@ class MVPTests(unittest.TestCase):
         self.assertEqual(calls[0][1]["agent"],"poc-kiro")
         folder=node.path(body["run_id"])/"attempts"/body["attempt_id"]
         prompt=(folder/"instructions.md").read_text()
-        self.assertIn("你是 KiroCrew Octopus 研发平台的工作流设计者",prompt)
+        self.assertIn("你是此 Session 的 KiroCrew 规划者（工作流设计）",prompt)
         self.assertIn("当前模板 / 用户草稿基线",prompt)
         self.assertIn("不要只返回",prompt)
         self.assertEqual(json.loads((folder/"context.json").read_text())["design"],body["design"])
@@ -471,6 +476,7 @@ class MVPTests(unittest.TestCase):
             self.service.operate(self.a, run["id"], "continue", {**payload, "task_id": "code"})
 
     def fake_worker(self, path, body):
+        as_old_worker(path)
         if path == "/prepare":
             return {"native_parent": "native-" + body["run_id"], "workspace": "/same/workspace"}
         if path == "/dispatch":
@@ -763,18 +769,58 @@ class MVPTests(unittest.TestCase):
         self.assertFalse((root/"native-session-backup.gz").exists())
         self.assertEqual(json.loads((root/"empty-session-observation.json").read_text())["slot"],"octopus-"+body["run_id"])
 
-    def test_incognito_export_refusal_never_closes_or_makes_fake_backup(self):
+    def test_incognito_export_refusal_closes_and_deletes_with_a_labelled_observation_not_a_fake_backup(self):
+        # Owner 2026-10-17: KiroCrew produces nothing from an incognito / temporary Session (session_export.py:366), so the
+        # privacy refusal is recorded as what it is and the Session closes and deletes; no bundle is forged.
+        node,body=self.native_worker()
+        calls=[]
+        def native(path,payload=None,method=None):
+            calls.append((path,method))
+            return {"agents":[]} if path=="/api/spawn" else {"ok":True,"running":False,"memory_mode":"incognito"}
+        node.native=native
+        def refusal(*args,**kwargs):
+            raise urllib.error.HTTPError("fixture",400,"private",{},io.BytesIO(b'{"code":"export_slot_not_persistent"}'))
+        with patch("api.token",return_value="fixture"),patch("urllib.request.urlopen",side_effect=refusal):
+            closed=node.control({"run_id":body["run_id"],"action":"close"})
+            deleted=node.control({"run_id":body["run_id"],"action":"delete"})
+        self.assertEqual((closed["lifecycle"],closed["backup_kind"]),("closed","native_restricted_observation"))
+        self.assertEqual(deleted["lifecycle"],"deleted")
+        root=node.path(body["run_id"])
+        self.assertFalse((root/"native-session-backup.gz").exists())
+        observation=json.loads((root/"restricted-session-observation.json").read_text())
+        self.assertEqual((observation["native_export_code"],observation["memory_mode"]),("export_slot_not_persistent","incognito"))
+
+    def test_a_parent_slot_kirocrew_no_longer_has_closes_and_deletes_with_a_labelled_observation(self):
+        # EC2 run-6d7c132b…: an incognito slot is not restored after a Gateway restart, so its close / delete retried a 404
+        node,body=self.native_worker()
+        calls=[]
+        def native(path,payload=None,method=None):
+            calls.append((path,method))
+            if path.startswith("/api/chat/slots/") or path.startswith("/api/sessions/"):
+                raise crew_api.GatewayError(404,'{"error":"not found","code":"slot_not_found"}')
+            return {"agents":[]} if path=="/api/spawn" else {"ok":True}
+        node.native=native
+        stopped=node.control({"run_id":body["run_id"],"action":"stop"})
+        closed=node.control({"run_id":body["run_id"],"action":"close"})
+        deleted=node.control({"run_id":body["run_id"],"action":"delete"})
+        self.assertEqual(stopped["lifecycle"],"open")
+        self.assertEqual((closed["lifecycle"],closed["backup_kind"]),("closed","native_missing_observation"))
+        self.assertEqual(deleted["lifecycle"],"deleted")
+        root=node.path(body["run_id"])
+        self.assertFalse((root/"native-session-backup.gz").exists())
+        self.assertEqual(json.loads((root/"missing-session-observation.json").read_text())["native_code"],"slot_not_found")
+
+    def test_any_other_export_refusal_never_closes(self):
         node,body=self.native_worker()
         calls=[]
         def native(path,payload=None,method=None):
             calls.append((path,method))
             return {"agents":[]} if path=="/api/spawn" else {"ok":True,"running":False}
         node.native=native
-        refusal=urllib.error.HTTPError("fixture",400,"private",{},io.BytesIO(b'{"code":"export_slot_not_persistent"}'))
+        refusal=urllib.error.HTTPError("fixture",400,"other",{},io.BytesIO(b'{"code":"export_failed"}'))
         with patch("api.token",return_value="fixture"),patch("urllib.request.urlopen",side_effect=refusal):
             with self.assertRaises(Error):node.control({"run_id":body["run_id"],"action":"close"})
         self.assertFalse(any(method=="DELETE" for _,method in calls))
-        self.assertFalse((node.path(body["run_id"])/"empty-session-observation.json").exists())
 
     def test_openapi_inputs_cover_direct_custom_tasks(self):
         spec=openapi()
@@ -801,7 +847,7 @@ class EnvironmentTests(unittest.TestCase):
     def shared_team(self, wid, name="共享 Team"):
         tid = "team-" + name.encode().hex()[:12]
         with self.db.transaction() as db:
-            db.execute("INSERT INTO teams VALUES(?,?,0)", (tid, name))
+            db.execute("INSERT INTO teams(id,name,created) VALUES(?,?,0)", (tid, name))
             db.execute("INSERT INTO members VALUES(?,?,'owner')", (tid, self.a["id"]))
             db.execute("INSERT INTO members VALUES(?,?,'member')", (tid, self.b["id"]))
             db.execute("INSERT INTO worker_spaces(worker_id,team_id) VALUES(?,?)", (wid, tid))
@@ -918,7 +964,7 @@ class EnvironmentTests(unittest.TestCase):
 
     def test_team_without_environment_is_refused(self):
         with self.db.transaction() as db:
-            db.execute("INSERT INTO teams VALUES('t-legacy','旧 Team',0)")
+            db.execute("INSERT INTO teams(id,name,created) VALUES('t-legacy','旧 Team',0)")
             db.execute("INSERT INTO members VALUES('t-legacy',?,'owner')", (self.a["id"],))
         with self.assertRaises(Error) as caught:
             self.start(team_id="t-legacy")
@@ -956,7 +1002,7 @@ class EnvironmentTests(unittest.TestCase):
 
     def test_a_spare_can_be_assigned_to_an_existing_team(self):
         with self.db.transaction() as db:
-            db.execute("INSERT INTO teams VALUES('t-legacy','旧 Team',0)")
+            db.execute("INSERT INTO teams(id,name,created) VALUES('t-legacy','旧 Team',0)")
             db.execute("INSERT INTO members VALUES('t-legacy',?,'owner')", (self.a["id"],))
             db.execute("INSERT INTO workers(id,name,owner_id,config,scope) VALUES('sp','team-host-1',?,'{}','spare')",
                        (self.a["id"],))

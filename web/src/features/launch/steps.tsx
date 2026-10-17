@@ -1,6 +1,7 @@
-import { useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { ChevronDown, FileUp } from "lucide-react";
 import { api } from "@/api/client";
+import { useCredentials } from "@/api/hooks";
 import type { ParsedWorkflow, Step, Template, Workflow } from "@/api/types";
 import { AgentFields } from "@/components/AgentFields";
 import { TaskEditor } from "@/components/TaskEditor";
@@ -14,6 +15,7 @@ import { Textarea } from "@/components/ui/textarea";
 import { spaceWorkers, useConsole } from "@/features/console/context";
 import { generationActive, type MatchStatus } from "@/features/launch/hooks";
 import { PLAN_METHODS, editTasks, fingerprint, nameFrom, type Draft } from "@/features/launch/state";
+import { SCOPE_LABELS, httpsHost } from "@/lib/credentials";
 import { STATES, TOOLS } from "@/lib/labels";
 import { cn } from "@/lib/utils";
 
@@ -61,7 +63,7 @@ export function NeedStep({ draft, update, workflowMode }: { draft: Draft; update
             update((d) => ({ ...d, space, worker: spaceWorkers(workers, space, me).some((w) => w.id === d.worker) ? d.worker : "" }));
           }}>
             <option value="">我的私有空间</option>
-            {teams.map((team) => <option key={team.id} value={team.id}>{team.name} · Team 共同可见</option>)}
+            {teams.filter((team) => !team.archived).map((team) => <option key={team.id} value={team.id}>{team.name} · Team 共同可见</option>)}
           </NativeSelect>
           {(() => {
             const environment = teams.find((t) => t.id === draft.space)?.environment;
@@ -101,6 +103,7 @@ export function NeedStep({ draft, update, workflowMode }: { draft: Draft; update
             <Label htmlFor="new-ref">分支 / Tag / Commit（可选）</Label>
             <Input id="new-ref" value={draft.ref} placeholder="默认分支" onChange={(e) => update((d) => ({ ...d, ref: e.target.value }))} />
           </div>
+          <CredentialChoice draft={draft} update={update} />
         </div>
       )}
     </div>
@@ -404,6 +407,35 @@ export function ConfirmStep({ draft, update, workflowMode }: { draft: Draft; upd
         {workflowMode ? "保存为可重复使用的工作流；已有工作流保存新版本，不影响正在运行的 Session。"
           : "提交时保存本次需求和任务快照，不修改工作流库或已有 Session。未选择 Worker 时先登记需求，稍后分配。"}
       </p>
+    </div>
+  );
+}
+
+/** The source credential for an HTTPS repository (D35 §4): matched by the platform unless the user names one. */
+function CredentialChoice({ draft, update }: { draft: Draft; update: Update }) {
+  const host = httpsHost(draft.url);
+  const { data = [] } = useCredentials(!!host);
+  const options = data.filter((c) => c.host === host && !c.disabled
+    && (c.scope === "user" || c.scope === "platform" || (c.scope === "team" && c.owner?.id === draft.space)));
+  const known = options.some((c) => c.id === draft.credential);
+  useEffect(() => {
+    if (draft.credential && !known) update((d) => ({ ...d, credential: "" }));
+  }, [draft.credential, known, update]);
+  if (!host) return null;
+  return (
+    <div className="space-y-1.5 sm:col-span-2">
+      <Label htmlFor="new-credential">仓库凭证</Label>
+      <NativeSelect id="new-credential" value={known ? draft.credential : ""}
+        onChange={(e) => update((d) => ({ ...d, credential: e.target.value }))}>
+        <option value="">自动匹配（按仓库选择可用凭证）</option>
+        {options.map((c) => <option key={c.id} value={c.id}>{c.name} · {SCOPE_LABELS[c.scope]} · {c.hint}</option>)}
+      </NativeSelect>
+      <p className="text-xs text-muted-foreground">私有仓库需要凭证：在「设置 → 代码仓库凭证」中添加；公开仓库可以不选。</p>
+      <label className="flex items-center gap-2 text-xs">
+        <input type="checkbox" id="new-auto-publish" checked={draft.autoPublish}
+          onChange={(e) => update((d) => ({ ...d, autoPublish: e.target.checked }))} />
+        完成后自动发布 Draft PR（需要有写权限的凭证；不勾选时完成后由你确认发布）
+      </label>
     </div>
   );
 }

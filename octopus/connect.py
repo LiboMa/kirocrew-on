@@ -25,6 +25,35 @@ def skill(url, repo=ROOT):
     return SKILL.read_text().replace("{{OCTOPUS_URL}}", url.rstrip("/")).replace("{{KIROCREW_ON_REPO}}", str(repo))
 
 
+def issue_token(client_factory, url, client, username, password, admin=False):
+    """Sign in as ``username`` and issue the Coding Agent's own token (spec §7.1): read, execute and manage for 30 days;
+    with ``admin`` (an administrator only) also admin, for 7 days. Returns {"token", "id"} and, when signing out failed,
+    a "warning"; the sign-in token is logged out in every case it can be."""
+    login = client_factory(url, "").request("POST", "/v1/login", {"username": username, "password": password})
+    session = client_factory(url, login["token"])
+    issued = None
+    try:
+        if admin and not session.request("GET", "/v1/me").get("admin"):
+            raise ValueError("--admin 需要管理员账号")
+        issued = session.request("POST", "/v1/tokens", {
+            "label": f"{client} MCP" + (" admin" if admin else ""),
+            "scopes": ["read", "execute", "manage"] + (["admin"] if admin else []),
+            "ttl": (7 if admin else 30) * 86400})
+        return {"token": issued["token"], "id": issued.get("id")}
+    finally:
+        try:
+            session.request("POST", "/v1/logout", {})
+        except (RuntimeError, OSError) as exc:   # best effort: the issued token (or the real error) must still reach the user
+            if issued is not None:
+                return {"token": issued["token"], "id": issued.get("id"),
+                        "warning": f"临时登录未能登出（{exc}），可在控制台撤销名为 Web login 的 Token"}
+
+
+def revoke(client_factory, url, issued):
+    """Revoke a token this command issued (the client configuration could not be written)."""
+    client_factory(url, issued["token"]).request("DELETE", "/v1/tokens/" + issued["id"])
+
+
 def server(url, token):
     return {"command": sys.executable, "args": ["-m", "octopus", "mcp", "--url", url],
             "env": {"OCTOPUS_API_TOKEN": token, "PYTHONPATH": str(ROOT)}}

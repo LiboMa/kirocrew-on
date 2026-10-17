@@ -57,7 +57,9 @@ def build_parser(settings, environ=None):
     link.add_argument("client", choices=["claude", "kiro"])
     link.add_argument("--url", required=True, help="平台地址，如 https://<分发>.cloudfront.net 或 http://127.0.0.1:8918")
     link.add_argument("--token", help="已有 API Token（也可用环境变量 OCTOPUS_API_TOKEN）；都没有时用 --username 登录并创建一枚 30 天 Token")
-    link.add_argument("--username", default="admin")
+    link.add_argument("--username", help="你的平台用户名（未指定时交互询问）")
+    link.add_argument("--admin", action="store_true",
+                      help="管理员：Token 额外含 admin scope（可调用管理员工具），7 天有效；只在本人设备上使用")
     link.add_argument("--password-env", default="OCTOPUS_PASSWORD", help="读取密码的环境变量；未设置时交互输入")
     link.add_argument("--scope", help="claude: user/project/local（默认 user）；kiro: workspace/global（默认 workspace）")
     link.add_argument("--project", help="kiro workspace 范围的项目目录（默认当前目录）")
@@ -119,7 +121,9 @@ def main(argv=None):
         from .engine import Engine
         from .server import server
         db = Database(args.data)
-        engine = Engine(db, workers=settings.engine_workers, retry_unavailable=settings.retry_unavailable)
+        engine = Engine(db, workers=settings.engine_workers, retry_unavailable=settings.retry_unavailable,
+                        credentials_key_file=settings.credentials_key_file,
+                        credentials_private_hosts=settings.credentials_private_hosts, poll_backoff=True)
         secret = settings.origin_secret_file.read_text().strip() if settings.origin_secret_file else None
         from . import transport
         ca = settings.worker_ca_file
@@ -128,9 +132,23 @@ def main(argv=None):
             print(f"警告：worker_ca_file {ca} 不存在；HTTPS Worker 只按系统证书库校验", file=sys.stderr)
             ca = None
         transport.configure(ca)
-        httpd = server(db, args.port, args.host, allowed_hosts=settings.allowed_hosts, origin_secret=secret)
+        httpd = server(db, args.port, args.host, allowed_hosts=settings.allowed_hosts, origin_secret=secret,
+                       preview_url=settings.preview_url, preview_domain=settings.preview_domain, credentials_key_file=settings.credentials_key_file,
+                       credentials_private_hosts=settings.credentials_private_hosts, default_admission=settings.default_admission)
         signal.signal(signal.SIGTERM, lambda *_: threading.Thread(target=httpd.shutdown, daemon=True).start())
         engine.start()
+
+        def sweep():   # remote previews nobody used for 30 minutes, or whose Session closed (D36 §5.1)
+            while not engine.stopping.wait(60):
+                try:
+                    httpd.service.auto_publish_pending()   # D47: Sessions that asked to be published on completion
+                except Exception as exc:
+                    logging.error("Octopus auto publish failed (%s)", type(exc).__name__)
+                try:
+                    httpd.service.sweep_apps()
+                except Exception as exc:
+                    print(f"KiroCrew ON API: 远程预览回收失败（{type(exc).__name__}）", file=sys.stderr, flush=True)
+        threading.Thread(target=sweep, daemon=True, name="octopus-app-sweep").start()
         print(f"KiroCrew ON API: http://{args.host}:{httpd.server_address[1]}", flush=True)
         try:
             httpd.serve_forever()
@@ -149,13 +167,18 @@ def main(argv=None):
             token_path.write_text(secrets.token_urlsafe(40))
             os.chmod(token_path, 0o600)
         node = Worker(args.data, token_path.read_text().strip(), args.gateway_port, args.crew_home,
-                      args.isolation, args.routing_log, args.crew_url, args.approval_mode, settings.crew_entry_ttl)
+                      args.isolation, args.routing_log, args.crew_url, args.approval_mode, settings.crew_entry_ttl,
+                      kiro_cli=settings.tools.get("kiro_cli"), path_prepend=settings.path_prepend,
+                      tool_paths=settings.tools, adapters_dir=settings.adapters_dir,
+                      preview_tls_port=settings.preview_tls_port, preview_tls_name=settings.preview_tls_name,
+                      disabled_tools=settings.disabled_tools)
         httpd = serve(node, args.port, args.host)
         signal.signal(signal.SIGTERM, lambda *_: threading.Thread(target=httpd.shutdown, daemon=True).start())
         print(f"KiroCrew ON Worker: http://{args.host}:{httpd.server_address[1]} ({args.isolation})", flush=True)
         try:
             httpd.serve_forever()
         finally:
+            node.apps.stop_all()   # under systemd the unit's cgroup ends them anyway; elsewhere they would linger
             httpd.server_close()
     elif args.command == "wait-ready":
         from .ops import runtime_marker_ok, wait_for_file, wait_ready
@@ -189,21 +212,49 @@ def main(argv=None):
         from .backup import archive_directory
         print(dumps(archive_directory(Path(args.source), Path(args.dest), args.name, tuple(args.exclude))))
     elif args.command == "connect":
-        from .connect import connect
+        import subprocess
+        from .connect import connect, revoke
         token = args.token or os.environ.get("OCTOPUS_API_TOKEN")
+        if token and args.admin:
+            raise SystemExit("--admin 只用于以账号登录签发新 Token：不能与 --token 或环境变量 OCTOPUS_API_TOKEN 同时使用")
         if token and not args.token:
             print("使用环境变量 OCTOPUS_API_TOKEN 中的 Token")
+        issued = None
         if not token and not args.dry_run:
-            password = os.environ.get(args.password_env) or getpass.getpass(f"{args.username} 的密码：")
-            session = Client(args.url, "")
-            login = session.request("POST", "/v1/login", {"username": args.username, "password": password})
-            issued = Client(args.url, login["token"]).request("POST", "/v1/tokens", {
-                "label": f"{args.client} MCP", "scopes": ["read", "execute"], "ttl": 30 * 86400})
+            from .connect import issue_token
+            username = args.username
+            if not username:
+                if not sys.stdin.isatty():
+                    raise SystemExit("未指定 --username，且没有可交互的终端：请用 --username <你的平台用户名>")
+                username = input("平台用户名：").strip()
+            password = os.environ.get(args.password_env) or getpass.getpass(f"{username} 的密码：")
+            try:
+                issued = issue_token(Client, args.url, args.client, username, password, admin=args.admin)
+            except (RuntimeError, ValueError, OSError) as exc:
+                raise SystemExit(f"错误：{exc}") from None
             token = issued["token"]
-        for action in connect(args.client, args.url, token or "dry-run-token", scope=args.scope, project=args.project,
-                              dry_run=args.dry_run):
+            if issued.get("warning"):
+                print("提示：" + issued["warning"], file=sys.stderr)
+        try:
+            actions = connect(args.client, args.url, token or "dry-run-token", scope=args.scope, project=args.project,
+                              dry_run=args.dry_run)
+        except (subprocess.CalledProcessError, OSError) as exc:
+            # Never echo the command: its arguments carry the token.
+            code = getattr(exc, "returncode", None)
+            note = ""
+            if issued:
+                try:
+                    revoke(Client, args.url, issued)
+                    note = "；刚签发的 Token 已吊销"
+                except (RuntimeError, OSError):
+                    note = "；刚签发的 Token 未能吊销，请在控制台撤销"
+            raise SystemExit(f"错误：写入 {args.client} 配置失败（{'退出码 ' + str(code) if code is not None else type(exc).__name__}）{note}") from None
+        for action in actions:
             print(action)
-        print("完成：重新打开客户端后可用 kirocrew-on 的 MCP 工具；Token 30 天有效，可在控制台撤销。" if not args.dry_run else "（dry-run，未写入）")
+        issued = not (args.token or os.environ.get("OCTOPUS_API_TOKEN"))
+        lifetime = f"Token {7 if args.admin else 30} 天有效" if issued else "使用你提供的 Token"
+        print(f"完成：重新打开客户端后可用 kirocrew-on 的 MCP 工具；{lifetime}，可在控制台撤销。" if not args.dry_run
+              else "（dry-run，未写入）")
     elif args.command == "skill":
         from .connect import install_skill, skill
         if not args.dest:

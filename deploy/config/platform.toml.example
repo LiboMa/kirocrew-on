@@ -12,3 +12,7 @@ worker_ca_file = "/etc/kirocrew-on/worker-ca.pem"
 engine_workers = 4
 retry_unavailable = 2.0
 shutdown_grace = 30.0
+# 远程预览（D36）的预览分发地址；deploy.sh push 写入（https://<PreviewDomain>），留空时不提供远程预览
+# preview_url = "https://dxxxxxxxxxxxxx.cloudfront.net"
+# 会话独立预览域名（D36 第 3 期）：每个会话的预览在 https://<run-id>.<preview_domain>/（需要 *.<preview_domain> 证书）
+# preview_domain = "preview.example.com"

@@ -29,6 +29,10 @@ export interface Draft {
   source: "" | "new" | "git";
   url: string;
   ref: string;
+  /** A source credential named by the user (D35); "" leaves it to matching by repository. */
+  credential: string;
+  /** D47: publish a Draft PR / MR on its own once the Session completes (a git source only). */
+  autoPublish: boolean;
   method: PlanMethod;
   choice: string; // "auto" | "custom" | "workflow:<id>" | "template:<id>"
   tasks: Step[];
@@ -52,7 +56,7 @@ export function initialDraft(seed: LaunchSeed, { worker, space = "" }: { worker:
   const workflowMode = seed.mode === "workflow";
   return {
     input: seed.input ?? "", name: seed.name ?? "", nameTouched: !!seed.workflow?.id, space, worker,
-    source: workflowMode ? "new" : "", url: "", ref: "",
+    source: workflowMode ? "new" : "", url: "", ref: "", credential: "", autoPublish: false,
     method: explicit && !workflowMode ? "template" : workflowMode ? "recommend" : "agent",
     choice: seed.workflow_id ? "workflow:" + seed.workflow_id : seed.template_id ? "template:" + seed.template_id : seed.steps ? "custom" : "auto",
     tasks: structuredClone(seed.steps ?? []), resolution: null, imported: null, importContent: "", generation: null,
@@ -100,10 +104,11 @@ export function nameFrom(input: string): string {
 
 /** The first problem that keeps the user on this step, or "" when the step is complete. */
 export function validateStep(step: number, draft: Draft,
-  { workflowMode, teamWithoutEnvironment }: { workflowMode: boolean; teamWithoutEnvironment?: string }): string {
+  { workflowMode, teamWithoutEnvironment, archivedTeam }: { workflowMode: boolean; teamWithoutEnvironment?: string; archivedTeam?: string }): string {
   const input = draft.input.trim();
   if (step === 0) {
     if (input.length < 3) return "请填写这次要完成什么（至少 3 个字符）。";
+    if (archivedTeam) return `Team「${archivedTeam}」已归档，不能提交新会话；请选择其他执行空间。`;
     if (!workflowMode && teamWithoutEnvironment)
       return `Team「${teamWithoutEnvironment}」当前没有可用的执行环境（未分配或已停用），请联系平台管理员。`;
     if (!draft.name.trim()) return "请填写名称。";
@@ -141,6 +146,8 @@ export function submitBody(draft: Draft) {
     : { type: "new" as const };
   return {
     ...plan, input: draft.input.trim(), name: draft.name, source, recovery: draft.recovery,
+    ...(draft.source === "git" && draft.credential ? { credentials: { source: draft.credential } } : {}),
+    ...(draft.source === "git" && draft.autoPublish ? { publish: { auto: true } } : {}),
     ...(draft.space ? { team_id: draft.space } : {}), ...(draft.worker ? { worker_id: draft.worker } : {}),
   };
 }

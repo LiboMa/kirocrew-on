@@ -54,6 +54,379 @@ describe("session detail", () => {
     expect(screen.getByText("缺少测试命令")).toBeInTheDocument();
   });
 
+  test("an attempt's conclusion lists each acceptance item and the suggestions", async () => {
+    const outcome = { decision: "pass", summary: "完成", acceptance: [
+      { item: "登录成功", result: "pass", evidence: "npm test 0" }, { item: "错误提示清晰", result: "fail" },
+      { item: "移动端", result: "n/a" }], suggestions: ["补 CHANGELOG"] };
+    const task = blocked.tasks[0];
+    open({ ...blocked, tasks: [{ ...task, attempts: [{ ...task.attempts![0], evidence: { ...task.attempts![0].evidence, outcome } }] },
+      blocked.tasks[1]] } as Run);
+    await userEvent.click(await screen.findByText("执行证据与历史 Attempt"));
+    const checks = screen.getByRole("list", { name: "验收项" });
+    expect(within(checks).getAllByRole("listitem").map((item) => item.textContent)).toEqual(
+      ["✓ 登录成功 · npm test 0", "✗ 错误提示清晰", "— 移动端"]);
+    expect(screen.getByRole("list", { name: "建议" })).toHaveTextContent("补 CHANGELOG");
+  });
+
+  test("the report opens in a sandbox without scripts and downloads as Markdown", async () => {
+    const formats: string[] = [];
+    const create = vi.fn(() => "blob:report");
+    Object.defineProperty(URL, "createObjectURL", { value: create, configurable: true });
+    const revoke = vi.fn();
+    Object.defineProperty(URL, "revokeObjectURL", { value: revoke, configurable: true });
+    open(blocked, { "GET /runs/run-a/report": (_body: unknown, url: URL) => {
+      const format = url.searchParams.get("format") ?? "";
+      formats.push(format);
+      return new Response(format === "html" ? "<h1>修复登录失败</h1>" : "# 修复登录失败\n", { status: 200 });
+    } });
+    await userEvent.click(await screen.findByRole("button", { name: /报告/ }));
+    const frame = await screen.findByTitle("会话报告");
+    expect(frame).toHaveAttribute("sandbox", "allow-popups allow-popups-to-escape-sandbox");
+    await waitFor(() => expect(frame.getAttribute("srcdoc")).toContain("<h1>修复登录失败</h1>"));
+    await userEvent.click(screen.getByRole("button", { name: "下载 Markdown" }));
+    await waitFor(() => expect(create).toHaveBeenCalledTimes(1));
+    expect(revoke).not.toHaveBeenCalled();   // Safari starts the download after click(): the URL must outlive it
+    expect(formats).toEqual(["html", "md"]);
+  });
+
+  test("an attempt lists its gates and the candidate it left (D37)", async () => {
+    const evidence = { ...blocked.tasks[0].attempts![0].evidence,
+      candidate: { sha: "abc1234def5678abc1234def5678abc1234def56", parent: "b".repeat(40), changed: true, files: 2, insertions: 12, deletions: 3 },
+      gates: [{ name: "native_completed", status: "pass" }, { name: "diff_present", status: "pass", detail: "2 个文件" },
+        { name: "checks_pass", status: "fail", detail: "检查命令失败：npm test（退出码 1）" }, { name: "review_bound", status: "skip", detail: "此前没有候选" }] };
+    const task = blocked.tasks[0];
+    open({ ...blocked, tasks: [{ ...task, attempts: [{ ...task.attempts![0], evidence }] }, blocked.tasks[1]] } as Run);
+    await userEvent.click(await screen.findByText("执行证据与历史 Attempt"));
+    const gates = screen.getByRole("list", { name: "门禁" });
+    expect(within(gates).getAllByRole("listitem").map((item) => item.textContent)).toEqual(
+      ["✓ native_completed", "✓ diff_present · 2 个文件", "✗ checks_pass · 检查命令失败：npm test（退出码 1）", "– review_bound · 此前没有候选"]);
+    expect(screen.getByText("abc1234 · 2 个文件 +12 −3")).toBeInTheDocument();
+  });
+
+  test("an attempt the Coordinator switched says from which tool and why (D38)", async () => {
+    const task = blocked.tasks[0];
+    const evidence = { ...task.attempts![0].evidence,
+      switched_from: { tool: "opencode", model: "auto", effort: "", reason: "opencode 不可用", by: "coordinator", recovery: 1 } };
+    open({ ...blocked, tasks: [{ ...task, attempts: [{ ...task.attempts![0], evidence }] }, blocked.tasks[1]] } as Run);
+    await userEvent.click(await screen.findByText("执行证据与历史 Attempt"));
+    expect(screen.getByText("由协调者从 opencode / auto 换为 claude / auto：opencode 不可用")).toBeInTheDocument();
+  });
+
+  test("a recovery round that switched tools says so, and a refused switch shows why (D38)", async () => {
+    const switched = { action: "switch_tool", target_task_id: "code", tool: "codex", model: "auto", reason: "claude 不可用",
+      instructions: "以 codex 重新执行", switched_from: { tool: "claude", model: "auto", effort: "" } };
+    open({ ...blocked, status: "running", recovery: { ...blocked.recovery!, used: 2,
+      latest: { number: 2, status: "applied", failed_task_id: "code", decision: switched },
+      history: [{ number: 1, status: "blocked", failed_task_id: "code", decision: { ...switched, tool: "opencode" },
+                  error: "协调者换工具的推荐未通过核对：opencode 在此执行环境不可用" },
+                { number: 2, status: "applied", failed_task_id: "code", decision: switched }] } } as Run);
+    expect(await screen.findByText("第 2 轮 · 已换用 codex / auto 重跑")).toBeInTheDocument();
+    await userEvent.click(screen.getByText("第 2 轮 · 已换用 codex / auto 重跑"));
+    expect(screen.getByText("协调者换工具的推荐未通过核对：opencode 在此执行环境不可用")).toBeInTheDocument();
+    expect(screen.getAllByText(/换工具 Task：code（claude \/ auto → codex \/ auto）/)).toHaveLength(1);
+  });
+
+  describe("pending approvals (D38)", () => {
+    const item = { origin: "native", request_id: "7", request_mid: "mid-7", tool: "shell",
+      tool_input: "npm test -- --watch=false " + "x".repeat(300), tool_purpose: "运行测试" };
+
+    test("a pending approval shows what it would run and is approved after confirming", async () => {
+      const run = { ...blocked, status: "waiting_approval" } as Run;
+      const calls = open(run, { [`GET /runs/${run.id}/approvals`]: { approvals: [item], supported: true },
+        [`POST /runs/${run.id}/approvals/answer`]: { ok: true } });
+      const card = await screen.findByRole("region", { name: "待批准" });
+      expect(within(card).getByText("shell")).toBeInTheDocument();
+      expect(within(card).getByText("运行测试")).toBeInTheDocument();
+      await userEvent.click(within(card).getByRole("button", { name: "批准" }));
+      expect(within(card).getByText(item.tool_input)).toBeInTheDocument();   // the full input before confirming
+      await userEvent.click(within(card).getByRole("button", { name: "确认批准" }));
+      await waitFor(() => expect(calls.find((c) => c.path.endsWith("/approvals/answer"))?.body).toEqual(
+        { origin: "native", request_id: "7", request_mid: "mid-7", decision: "approve" }));
+    });
+
+    test("nothing pending shows no card, and an old Worker says it cannot list them", async () => {
+      open({ ...blocked, status: "running" } as Run);
+      await screen.findByText("实现与测试");
+      expect(screen.queryByRole("region", { name: "待批准" })).not.toBeInTheDocument();
+    });
+
+    test("an old Worker waiting for approval says where to answer it", async () => {
+      const run = { ...blocked, status: "waiting_approval" } as Run;
+      open(run, { [`GET /runs/${run.id}/approvals`]: { approvals: [], supported: false } });
+      expect(await screen.findByText("此执行环境的 Worker 尚未升级，请在原生 KiroCrew 中处理批准。")).toBeInTheDocument();
+    });
+
+    test("someone who may not answer sees the request without the buttons", async () => {
+      const run = { ...blocked, status: "waiting_approval", permissions: { operate: true, delete: false, publish: false } } as Run;
+      open(run, { [`GET /runs/${run.id}/approvals`]: { approvals: [item], supported: true } });
+      const card = await screen.findByRole("region", { name: "待批准" });
+      expect(within(card).getByText("只有会话创建者、Team owner 或管理员可以答复。")).toBeInTheDocument();
+      expect(within(card).queryByRole("button", { name: "批准" })).not.toBeInTheDocument();
+    });
+  });
+
+  test("an attempt the watchdog stopped says why (D39)", async () => {
+    const task = blocked.tasks[0];
+    const evidence = { ...task.attempts![0].evidence, watchdog: { reason: "原生任务 31 分钟没有进展，看门狗已停止" } };
+    open({ ...blocked, tasks: [{ ...task, attempts: [{ ...task.attempts![0], evidence }] }, blocked.tasks[1]] } as Run);
+    await userEvent.click(await screen.findByText("执行证据与历史 Attempt"));
+    expect(screen.getByText("原生任务 31 分钟没有进展，看门狗已停止")).toBeInTheDocument();
+  });
+
+  test("each task says where its tool came from", async () => {
+    const task = blocked.tasks[0];
+    open({ ...blocked, tasks: [{ ...task, mapping: { source: "planner", label: "KiroCrew 规划" } }, blocked.tasks[1]] } as Run);
+    expect(await screen.findByText("来源：KiroCrew 规划")).toBeInTheDocument();
+  });
+
+  test("a recovery round that replanned says so (D41)", async () => {
+    const replan = { action: "replan", reason: "计划缺少测试步骤", instructions: "加入测试任务" };
+    open({ ...blocked, status: "running", recovery: { ...blocked.recovery!, used: 1,
+      latest: { number: 1, status: "applied", failed_task_id: "review", decision: replan },
+      history: [{ number: 1, status: "applied", failed_task_id: "review", decision: replan }] } } as Run);
+    expect(await screen.findByText("第 1 轮 · 已安排重新规划")).toBeInTheDocument();
+    await userEvent.click(screen.getByText("第 1 轮 · 已安排重新规划"));
+    expect(screen.getByText(/失败 Task：review → 重新规划其后的工作/)).toBeInTheDocument();
+  });
+
+  test("the recovery record shows the budget and what ran out (D42)", async () => {
+    const budget = { since: 1, reset: true, cycles: { used: 2, limit: 2 }, retries: { used: 0, limit: 4 },
+      minutes: { used: 35, limit: 720 }, exhausted: "cycles" as const };
+    open({ ...blocked, recovery: { ...blocked.recovery!, budget } } as Run);
+    expect(await screen.findByText("预算（自上次续作 / 请求诊断起）：纠错 2/2 轮（已用完） · 自动重试 0/4 次 · 35/720 分钟"))
+      .toBeInTheDocument();
+  });
+
+  test("a Session that recovered nothing and is not held by the budget shows no budget (D42)", async () => {
+    const budget = { since: 1, reset: false, cycles: { used: 0, limit: 2 }, retries: { used: 0, limit: 4 },
+      minutes: { used: 780, limit: 720 }, exhausted: "minutes" as const };
+    open({ ...blocked, status: "completed", attention: null,
+      recovery: { ...blocked.recovery!, used: 0, latest: null, history: [], budget } } as Run);
+    expect(await screen.findByText(/自动纠错已开启/)).toBeInTheDocument();   // the detail has rendered
+    expect(screen.queryByText(/预算（/)).not.toBeInTheDocument();
+  });
+
+  test("a plan waiting for confirmation is confirmed from the session page (D44)", async () => {
+    const waiting = { ...blocked, status: "awaiting_confirmation", error: null,
+      attention: { title: "计划待确认", detail: "规划已完成，任务尚未开始。", action: "核对任务、工具与检查命令后确认开始；也可修改后续作或关闭。" } } as Run;
+    const calls = open(waiting, { "POST /runs/run-a/confirm": { id: "run-a", status: "accepted" } });
+    expect(await screen.findByText("计划待确认", { selector: "#confirm-notice-title" })).toBeInTheDocument();
+    expect(screen.getAllByText("计划待确认").length).toBeGreaterThan(0);   // the status label too
+    await userEvent.click(screen.getByRole("button", { name: /确认并开始/ }));
+    await waitFor(() => expect(calls.find((c) => c.path === "/v1/runs/run-a/confirm")?.body).toMatchObject({ expected_version: 4 }));
+  });
+
+  test("an archived Team's waiting plan cannot be confirmed (D44)", async () => {
+    open({ ...blocked, status: "awaiting_confirmation", error: null, permissions: { operate: true, delete: true, resume: false },
+      attention: { title: "计划待确认", detail: "任务尚未开始。", action: "核对后确认开始" } } as Run);
+    expect(await screen.findByRole("button", { name: /确认并开始/ })).toBeDisabled();
+  });
+
+  test("a Session that may not switch tools says so", async () => {
+    open({ ...blocked, recovery: { ...blocked.recovery!, policy: { enabled: true, max_cycles: 2, switch_tools: false } } } as Run);
+    expect(await screen.findByText("自动纠错已开启 · 最多 2 轮 · 不换工具")).toBeInTheDocument();
+  });
+
+  test("an attempt whose checks are running says so", async () => {
+    const task = blocked.tasks[0];
+    const evidence = { ...task.attempts![0].evidence, checks: { job: "j", started: 1, commands: 3 } };
+    open({ ...blocked, tasks: [{ ...task, attempts: [{ ...task.attempts![0], status: "running", evidence }] }, blocked.tasks[1]] } as Run);
+    await userEvent.click(await screen.findByText("执行证据与历史 Attempt"));
+    expect(screen.getByText("正在运行检查命令（3 条）")).toBeInTheDocument();
+  });
+
+  test("continue lets the user choose which later tasks rerun, the rules adding those that must", async () => {
+    const step = (id: string, name: string, extra: Record<string, unknown>) => ({ ...spec(id, name, "claude"), ...extra });
+    const run = makeRun({ id: "run-k", status: "completed", worker_id: "w1", version: 3, tasks: [
+      { id: "code", run_id: "run-k", ordinal: 0, status: "accepted", current_attempt: null, spec: step("code", "实现", { kind: "implement" }), attempts: [] },
+      { id: "docs", run_id: "run-k", ordinal: 1, status: "accepted", current_attempt: null, spec: step("docs", "文档", { kind: "deliver" }), attempts: [] },
+      { id: "check", run_id: "run-k", ordinal: 2, status: "accepted", current_attempt: null, spec: step("check", "核对", { kind: "test" }), attempts: [] },
+    ] });
+    const calls = open(run, { "POST /runs/run-k/continue": { id: "run-k", version: 4 } });
+    await userEvent.click((await screen.findAllByRole("button", { name: "配置并续作" }))[0]);
+    const dialog = await screen.findByRole("dialog");
+    const docs = within(dialog).getByRole("checkbox", { name: /文档/ });
+    const check = within(dialog).getByRole("checkbox", { name: /核对/ });
+    expect(check).toBeChecked();
+    expect(check).toBeDisabled();
+    expect(within(dialog).getByText(/审查 \/ 测试在改动后必须复验/)).toBeInTheDocument();
+    await userEvent.click(docs);
+    expect(docs).not.toBeChecked();
+    await userEvent.click(within(dialog).getByRole("button", { name: "保存并续作" }));
+    await waitFor(() => expect(calls.find((c) => c.path === "/v1/runs/run-k/continue")?.body).toMatchObject({ task_id: "code", rerun: ["check"] }));
+  });
+
+  test("tasks the latest continue left as they were say so", async () => {
+    const run = makeRun({ id: "run-kept", status: "completed", kept: { version: 3, tasks: ["review"] }, tasks: blocked.tasks.map((t) => ({ ...t, status: "accepted" })) });
+    open(run);
+    const review = await waitFor(() => {
+      const card = document.querySelector('[data-task="review"]');
+      expect(card).not.toBeNull();
+      return card as HTMLElement;
+    });
+    expect(review).toHaveTextContent("沿用 v3 结果");
+    expect(document.querySelector('[data-task="code"]')).not.toHaveTextContent("沿用");
+  });
+
+  test("downloading the source asks for a link and follows it", async () => {
+    const click = vi.spyOn(HTMLAnchorElement.prototype, "click").mockImplementation(() => {});
+    const calls = open(blocked, { "POST /runs/run-a/archive": { url: "/archive/t/run-a.zip", expires_in: 600 } });
+    await userEvent.click(await screen.findByRole("button", { name: /下载源码/ }));
+    await waitFor(() => expect(click).toHaveBeenCalled());
+    expect((click.mock.contexts[0] as HTMLAnchorElement).getAttribute("href")).toBe("/archive/t/run-a.zip");
+    expect(calls.some((c) => c.method === "POST" && c.path === "/v1/runs/run-a/archive")).toBe(true);
+    click.mockRestore();
+  });
+
+  describe("remote preview", () => {
+    const done = makeRun({ id: "run-p", status: "completed", worker_id: "w1", native_parent: "octopus-run-p", version: 3 });
+    const view = (extra: Record<string, unknown>) => ({ status: "stopped", port: null, error: null, log: [], started: null,
+      started_by: null, last_access: null, idle_stop_at: null, openable: false, ...extra });
+
+    test("starts the Session's app", async () => {
+      const calls = open(done, { "GET /runs/run-p/app": view({}), "POST /runs/run-p/app": view({ status: "starting" }) });
+      const panel = await screen.findByRole("region", { name: "远程预览" });
+      await userEvent.click(within(panel).getByRole("button", { name: "启动" }));
+      await waitFor(() => expect(calls.find((c) => c.method === "POST" && c.path === "/v1/runs/run-p/app")?.body)
+        .toEqual({ action: "start" }));
+    });
+
+    test("a running preview opens in a new tab through a single-use link", async () => {
+      const replace = vi.fn();
+      vi.stubGlobal("open", vi.fn(() => ({ closed: false, opener: {}, location: { replace }, close: vi.fn() })));
+      const calls = open(done, {
+        "GET /runs/run-p/app": view({ status: "running", port: 47001, openable: true, started: 1_790_000_000,
+          started_by: { id: "u1", username: "fixture-owner" }, idle_stop_at: 1_790_001_800 }),
+        "POST /runs/run-p/app/open": { url: "https://preview.example/_kirocrew/open/t", expires_in: 600 },
+      });
+      await userEvent.click(await screen.findByRole("button", { name: /打开远程预览/ }));
+      await waitFor(() => expect(replace).toHaveBeenCalledWith("https://preview.example/_kirocrew/open/t"));
+      expect(calls.some((c) => c.method === "POST" && c.path === "/v1/runs/run-p/app/open")).toBe(true);
+      const panel = screen.getByRole("region", { name: "远程预览" });
+      expect(panel).toHaveTextContent("运行中");
+      expect(panel).toHaveTextContent("fixture-owner");
+      expect(panel).toHaveTextContent("空闲 30 分钟后自动停止");
+    });
+
+    test("a failed preview shows why, with its log", async () => {
+      open(done, { "GET /runs/run-p/app": view({ status: "failed", error: "进程 web 已退出（代码 1）", log: ["npm ERR! boom"] }) });
+      const panel = await screen.findByRole("region", { name: "远程预览" });
+      expect(await within(panel).findByText("进程 web 已退出（代码 1）")).toBeInTheDocument();
+      await userEvent.click(within(panel).getByText("最近日志"));
+      expect(within(panel).getByText(/npm ERR! boom/)).toBeInTheDocument();
+    });
+
+    test("a Session running tasks cannot start one, and says why", async () => {
+      open(makeRun({ id: "run-r", status: "running", worker_id: "w1" }), { "GET /runs/run-r/app": view({}) });
+      const panel = await screen.findByRole("region", { name: "远程预览" });
+      expect(within(panel).getByRole("button", { name: "启动" })).toBeDisabled();
+      expect(panel).toHaveTextContent("会话正在执行任务");
+    });
+
+    test("an environment without remote preview says it needs an upgrade", async () => {
+      open(done, { "GET /runs/run-p/app": view({ status: "unsupported" }) });
+      const panel = await screen.findByRole("region", { name: "远程预览" });
+      expect(await within(panel).findByText(/执行环境需要升级/)).toBeInTheDocument();
+      expect(within(panel).queryByRole("button", { name: "启动" })).not.toBeInTheDocument();
+    });
+  });
+
+  test("shows who created the Session and the credential it clones with", async () => {
+    const source = { id: "cred-1", name: "bob 的 GitHub", kind: "github_pat", scope: "user", owner: { id: "u2", username: "bob" },
+      hint: "…1a2b", bound_by: { id: "u2", username: "bob" }, at: 1 };
+    open(makeRun({ id: "run-c", status: "completed", worker_id: "w1", created_by: { id: "u2", username: "bob" },
+      credentials: { source } } as Partial<Run>));
+    const line = await screen.findByText(/创建者 bob/);
+    expect(line).toHaveTextContent("创建者 bob · 凭证：bob 的个人 GitHub Token（…1a2b）");
+    expect(line).not.toHaveTextContent("不可用");
+  });
+
+  test("the creator can change or remove the Session's credential", async () => {
+    const source = { id: "cred-1", name: "旧的", kind: "github_pat", scope: "user", owner: { id: "u1", username: "fixture-owner" },
+      hint: "…1a2b", bound_by: { id: "u1", username: "fixture-owner" }, at: 1, unavailable: true };
+    const calls = open(makeRun({ id: "run-e", status: "blocked", worker_id: "w1", owner_id: "u1",
+      source: { type: "git", url: "https://github.com/kirocrew/app.git" }, created_by: { id: "u1", username: "fixture-owner" },
+      credentials: { source } } as Partial<Run>), {
+      "GET /credentials": [{ id: "cred-2", name: "新的", kind: "github_pat", host: "github.com", scope: "user", access: "read",
+        hint: "…9z9z", owner: { id: "u1", username: "fixture-owner" }, repos: [], disabled: false, can_manage: true }],
+      "POST /runs/run-e/credentials": { source: { ...source, id: "cred-2", name: "新的", hint: "…9z9z", unavailable: undefined } },
+    });
+    await userEvent.click(await screen.findByRole("button", { name: "更换凭证" }));
+    await userEvent.selectOptions(screen.getByLabelText("会话凭证"), "cred-2");
+    await userEvent.click(screen.getByRole("button", { name: "保存凭证" }));
+    await waitFor(() => expect(calls.find((c) => c.method === "POST" && c.path === "/v1/runs/run-e/credentials")?.body)
+      .toEqual({ source: "cred-2" }));
+  });
+
+  describe("publishing", () => {
+    const writable = { id: "cred-1", name: "bob 写", kind: "github_pat", scope: "user", owner: { id: "u1", username: "fixture-owner" },
+      hint: "…1a2b", bound_by: { id: "u1", username: "fixture-owner" }, at: 1, access: "write" };
+    const done = (extra: Partial<Run> = {}) => makeRun({ id: "run-pub", status: "completed", worker_id: "w1", owner_id: "u1",
+      source: { type: "git", url: "https://github.com/kirocrew/app.git" }, created_by: { id: "u1", username: "fixture-owner" },
+      credentials: { source: writable }, ...extra } as Partial<Run>);
+
+    test("a finished Session with a write credential is published as a draft pull request", async () => {
+      const calls = open(done(), { "POST /runs/run-pub/publish": { branch: "octopus/run-pub", url: "https://github.com/kirocrew/app/pull/7",
+        number: 7, kind: "pull_request", reused: false } });
+      await userEvent.click(await screen.findByRole("button", { name: /发布到仓库/ }));
+      await waitFor(() => expect(calls.some((c) => c.method === "POST" && c.path === "/v1/runs/run-pub/publish")).toBe(true));
+    });
+
+    test("a published Session links its pull request", async () => {
+      open(done({ publish: { branch: "octopus/run-pub", url: "https://github.com/kirocrew/app/pull/7", number: 7,
+        kind: "pull_request", reused: false, commit: "abc", at: 1, by: { id: "u1", username: "fixture-owner" } } } as Partial<Run>));
+      const link = await screen.findByRole("link", { name: /PR #7/ });
+      expect(link).toHaveAttribute("href", "https://github.com/kirocrew/app/pull/7");
+      expect(document.querySelector("#run-publish")).toHaveTextContent("已发布：octopus/run-pub · PR #7");
+    });
+
+    test("a branch pushed without its pull request says so instead of linking nothing", async () => {
+      open(done({ publish: { branch: "octopus/run-pub", url: null, number: null, kind: null, reused: false, commit: "abc", at: 1,
+        by: { id: "u1", username: "fixture-owner" }, request_error: "凭证没有此操作的权限（HTTP 403）" } } as Partial<Run>));
+      await screen.findByRole("button", { name: /再次发布到仓库/ });
+      expect(document.querySelector("#run-publish")).toHaveTextContent("已推送：octopus/run-pub（拉取请求未创建：凭证没有此操作的权限（HTTP 403））");
+      expect(screen.queryByRole("link", { name: /#/ })).not.toBeInTheDocument();
+    });
+
+    test("the automatic publish is switched on from the session page (D47)", async () => {
+      const calls = open(done(), { "POST /runs/run-pub/publish-policy": { id: "run-pub", publish_policy: { auto: true, source: "user" } } });
+      await userEvent.click(await screen.findByRole("checkbox", { name: /完成后自动发布 Draft PR/ }));
+      await waitFor(() => expect(calls.find((c) => c.path === "/v1/runs/run-pub/publish-policy")?.body).toEqual({ auto: true }));
+    });
+
+    test("an automatic publish that did not happen says why (D47)", async () => {
+      open(done({ publish_policy: { auto: true, source: "requested", quote: "完成后提交 PR" },
+        publish_auto: { ok: false, code: "credential_read_only", error: "凭证「bob 写」为只读，无法发布", version: 3 } } as Partial<Run>));
+      expect(await screen.findByText(/自动发布未完成：凭证「bob 写」为只读，无法发布/)).toBeInTheDocument();
+      expect(screen.getByText(/需求中要求提交 PR/)).toBeInTheDocument();
+    });
+
+    test("the verified candidate is what will be pushed", async () => {
+      open(done({ verified: { sha: "abc1234def5678abc1234def5678abc1234def56", task_id: "review" } } as Partial<Run>));
+      await screen.findByRole("button", { name: /发布到仓库/ });
+      expect(document.querySelector("#run-publish")).toHaveTextContent("将推送已验证的候选 abc1234");
+    });
+
+    test("a read-only credential cannot publish, and says so", async () => {
+      open(done({ credentials: { source: { ...writable, access: "read" } } } as Partial<Run>));
+      expect(await screen.findByText(/凭证为只读，无法发布/)).toBeInTheDocument();
+      expect(screen.queryByRole("button", { name: /发布到仓库/ })).not.toBeInTheDocument();
+    });
+  });
+
+  test("a credential that was disabled or deleted is shown as unavailable", async () => {
+    const source = { id: "cred-2", name: "Team GitLab", kind: "gitlab_token", scope: "team", owner: { id: "t1", name: "平台组" },
+      hint: "…0000", bound_by: { id: "u1", username: "fixture-owner" }, at: 1, unavailable: true };
+    open(makeRun({ id: "run-d", status: "blocked", worker_id: "w1", created_by: { id: "u1", username: "fixture-owner" },
+      credentials: { source } } as Partial<Run>));
+    expect(await screen.findByText(/凭证：Team「平台组」的 GitLab Token（…0000）/)).toHaveTextContent("已停用或删除");
+  });
+
+  test("a Session without a Worker has no source to download yet", async () => {
+    open(makeRun({ id: "run-n", status: "waiting_worker", worker_id: null, workspace: null }));
+    expect(await screen.findByRole("button", { name: /下载源码/ })).toBeDisabled();
+  });
+
   test("continue keeps the Session and submits the edited execution with the expected version", async () => {
     const calls = open(blocked, { "POST /runs/run-a/continue": { id: "run-a", version: 5 } });
     await userEvent.click(await screen.findByRole("button", { name: "续作" }));
@@ -82,6 +455,14 @@ describe("session detail", () => {
     await userEvent.type(within(dialog).getByLabelText("输入完整 Session ID 确认"), "run-a");
     await userEvent.click(within(dialog).getByRole("button", { name: "确认删除会话" }));
     await waitFor(() => expect(calls.find((c) => c.path === "/v1/runs/run-a/delete")?.body).toMatchObject({ confirmation: "run-a", expected_version: 4 }));
+  });
+
+  test("a Session of an archived Team cannot be continued, diagnosed or reopened, and says why", async () => {
+    open({ ...blocked, team_id: "team-1", permissions: { operate: true, delete: true, native: true, resume: false } } as Run);
+    expect(await screen.findByRole("button", { name: "续作" })).toBeDisabled();
+    expect(screen.getByRole("button", { name: /请求协调者诊断/ })).toBeDisabled();
+    expect(screen.getByRole("button", { name: /停止/ })).toBeEnabled();
+    expect(screen.getByText(/Team 已归档：会话可查看与停止/)).toBeInTheDocument();
   });
 
   test("deleting is offered only when the server allows it, with the reason otherwise", async () => {
@@ -131,6 +512,92 @@ describe("session detail", () => {
       "GET /teams": [{ id: "team-1", name: "平台组", role: "owner", created: 1, members: [] },
         { id: "team-x", name: "Hardware-Dev", role: null, created: 2, members: [] }] });
     expect(await screen.findByText(/Hardware-Dev \/ /)).toBeInTheDocument();
+  });
+
+  const revisions = [
+    { version: 1, kind: "created", summary: "创建：2 个任务", created: 1_790_000_000, actor: { id: "u1", username: "fixture-owner" }, reconstructed: false },
+    { version: 2, kind: "planned", summary: "规划：追加 1 个任务", created: 1_790_000_100, actor: { id: "u1", username: "fixture-owner" }, reconstructed: false },
+    { version: 3, kind: "continued", summary: "续作「实现」：工具 claude → codex、提示词", created: 1_790_000_200,
+      actor: { id: "u1", username: "fixture-owner" }, reconstructed: false },
+  ];
+  const same = (text: string) => ({ op: " ", text });
+  const diffs: Record<string, unknown> = {
+    "?from=2&to=3": { from: 2, to: 3, from_summary: "", to_summary: "", reconstructed: false, input: [same("做一个数字时钟")],
+      tasks: [{ id: "plan", name: "规划", status: "same", fields: {}, prompt: [same("规划")] },
+        { id: "code", name: "实现", status: "changed", fields: { tool: ["claude", "codex"] },
+          prompt: [same("实现数字时钟"), { op: "+", text: "12 小时制补零" }, same("不引入外部资源")] },
+        { id: "review", name: "审查", status: "same", fields: {}, prompt: [same("审查")] }] },
+    "?from=1&to=3": { from: 1, to: 3, from_summary: "", to_summary: "", reconstructed: false, input: [same("做一个数字时钟")],
+      tasks: [{ id: "review", name: "审查", status: "added", fields: {}, prompt: [{ op: "+", text: "审查" }] }] },
+  };
+
+  test("revision history lists every change and shows what changed between any two revisions", async () => {
+    const searches: string[] = [];
+    open(makeRun({ id: "run-r", version: 3 }), { "GET /runs/run-r/revisions": revisions,
+      "GET /runs/run-r/revisions/diff": (_b: unknown, url: URL) => { searches.push(url.search); return diffs[url.search]; } });
+    const panel = await screen.findByRole("region", { name: "修订历史" });
+    expect(await within(panel).findByText("续作「实现」：工具 claude → codex、提示词")).toBeInTheDocument();
+    expect(await within(panel).findByText("工具 claude → codex")).toBeInTheDocument();
+    const added = within(panel).getByText("12 小时制补零").closest("[data-op]");
+    expect(added).toHaveAttribute("data-op", "+");
+    expect(panel).toHaveTextContent("另有 2 个任务未变化");
+    await userEvent.selectOptions(within(panel).getByLabelText("对比起点"), "1");
+    expect(await within(panel).findByText("新增")).toBeInTheDocument();
+    expect(searches).toEqual(["?from=2&to=3", "?from=1&to=3"]);
+    await userEvent.click(within(panel).getByRole("button", { name: /v2 · 规划/ }));
+    await waitFor(() => expect(searches.at(-1)).toBe("?from=1&to=2"));
+  });
+
+  test("long prompts fold unchanged lines around each change, and the kind is not repeated", async () => {
+    const body = Array.from({ length: 20 }, (_, i) => same(`第 ${i + 1} 行`));
+    body.splice(10, 0, { op: "+", text: "新增的要求" });
+    open(makeRun({ id: "run-l", version: 2 }), {
+      "GET /runs/run-l/revisions": [revisions[0], { ...revisions[2], version: 2, summary: "续作「实现」：提示词" }],
+      "GET /runs/run-l/revisions/diff": { from: 1, to: 2, from_summary: "", to_summary: "", reconstructed: false,
+        input: [same("需求")], tasks: [{ id: "code", name: "实现", status: "changed", fields: {}, prompt: body }] } });
+    const panel = await screen.findByRole("region", { name: "修订历史" });
+    expect(await within(panel).findByText("新增的要求")).toBeInTheDocument();
+    expect(within(panel).getByText("第 9 行")).toBeInTheDocument();          // two lines of context
+    expect(within(panel).queryByText("第 3 行")).toBeNull();
+    expect(panel).toHaveTextContent("… 8 行未变化 …");
+    expect(within(panel).getByRole("button", { name: /v2 · 续作「实现」/ })).not.toHaveTextContent("续作 · 续作");
+  });
+
+  test("the change log lists who changed what, filtered by people or the system", async () => {
+    const entries = [
+      { id: 9, at: 1_790_000_200, kind: "command.continue", actor: { kind: "user", id: "u1", username: "alice", client: "mcp" },
+        changes: { status: ["stopped", "ready"], input: [{ chars: 25, sha256: "a" }, { chars: 31, sha256: "b" }] },
+        reason: null, detail: { version: 3, task_id: "code" } },
+      { id: 8, at: 1_790_000_100, kind: "run.state", actor: { kind: "engine" }, changes: { status: ["ready", "waiting_worker"] },
+        reason: "派发前核对：执行环境已更换", detail: { status: "waiting_worker" } },
+      { id: 7, at: 1_790_000_050, kind: "task.reset", actor: { kind: "recovery" },
+        changes: [{ id: "code", changes: { status: ["blocked", "pending"] } }], reason: null, detail: {} },
+    ];
+    const searches: string[] = [];
+    open(makeRun({ id: "run-c" }), { "GET /runs/run-c/changes": (_b: unknown, url: URL) => {
+      searches.push(url.search);
+      return url.searchParams.get("who") === "user" ? [entries[0]] : entries;
+    } });
+    const panel = await screen.findByRole("region", { name: "变更记录" });
+    expect(searches).toEqual([]);   // loaded only when opened
+    await userEvent.click(within(panel).getByRole("button", { name: "显示变更记录" }));
+    const user = (await within(panel).findByText("已提交原地续作")).closest("[data-change]") as HTMLElement;
+    expect(user).toHaveTextContent("alice · Coding Agent");
+    expect(user).toHaveTextContent("状态：stopped → ready");
+    expect(user).toHaveTextContent("需求：25 字符 → 31 字符");
+    const engine = within(panel).getByText("派发前核对：执行环境已更换").closest("[data-change]") as HTMLElement;
+    expect(engine).toHaveTextContent("Engine");
+    expect(within(panel).getByText(/code：状态 blocked → pending/)).toBeInTheDocument();
+    expect(within(panel).getByText("协调者")).toBeInTheDocument();
+    await userEvent.selectOptions(within(panel).getByLabelText("变更来源"), "user");
+    await waitFor(() => expect(searches.at(-1)).toBe("?who=user&limit=200"));
+    expect(searches[0]).toBe("?limit=200");
+  });
+
+  test("a Session with only its first revision says nothing has changed yet", async () => {
+    open(makeRun({ id: "run-r1", version: 1 }), { "GET /runs/run-r1/revisions": [revisions[0]] });
+    const panel = await screen.findByRole("region", { name: "修订历史" });
+    expect(await within(panel).findByText("尚无后续修订：续作、KiroCrew 规划与自动纠错都会在这里留下可对比的版本。")).toBeInTheDocument();
   });
 
   test("a Session waiting for a Worker can be assigned one from its space", async () => {

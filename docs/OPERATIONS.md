@@ -23,9 +23,11 @@
 | 8918 | `octopus-api`（Web 控制台 + `/v1` API + Engine） | 127.0.0.1 |
 | 8928 | `octopus-worker@personal` | 127.0.0.1 |
 | 5476 | `octopus-gateway@personal`（KiroCrew Gateway + composition） | 127.0.0.1 |
-| 8919 / 8920–8929 | 主机 nginx：平台原生入口 / 各 Worker 主机原生入口的中转（只接受 CloudFront 且校验源站密钥） | 0.0.0.0 |
+| 8919 / 8920–8928 / 8929 | 主机 nginx：平台原生入口 / 各 Worker 主机原生入口的中转 / 远程预览（D36；只接受 CloudFront 且校验源站密钥） | 0.0.0.0 |
+| 47000–47999 | 远程预览的会话应用（执行环境内的进程） | 127.0.0.1 |
 
-控制台与 API 经 CloudFront 访问：`https://<分发域名>/`（`deploy/aws/deploy.sh status` 显示）。API 监听 `0.0.0.0:8918`，
+控制台与 API 经 CloudFront 访问：`https://<分发域名>/`（`deploy/aws/deploy.sh status` 显示），配置了自定义域名时也可经
+`https://<CONSOLE_DOMAIN>/` 访问（见下）。API 监听 `0.0.0.0:8918`，
 安全组只允许 CloudFront 源站地址访问，平台另外校验 `X-Origin-Verify`；Worker（8928）与 Gateway（5476）只监听回环，
 原生入口经 SSM 端口转发：`deploy/aws/deploy.sh tunnel`（`localhost:15476 → 5476`）。
 
@@ -84,12 +86,30 @@ dev server 只在工作区写 `node_modules/.vite`；不需要把工作区拉回
 
 1. **设为共享环境**：控制台「执行环境 · Worker」，对专属 Worker 点「设为共享环境」并确认（环境内所有会话的 Agent 以同一系统账号运行，能互相读取源码、工具登录与记忆；记忆未分隔；只用于同一信任范围）。原所属的个人空间继续由它服务。
 2. **创建 Team**（仅管理员）：「团队与成员」，填写名称、Team owner，选择执行环境（共享环境，或已登记的空闲专属环境）。没有可选环境时无法创建。
-3. **为已有 Team 分配**：同一对话框中，未分配执行环境的 Team 显示「分配执行环境」。未分配前，向该 Team 提交会被拒绝（`team_without_worker`）；此前已在等待的会话分配后在会话页「分配 Worker」继续。
-4. **为用户分配**：创建用户时选择「个人空间的执行环境」，或在用户列表中「分配共享环境」。
+3. **为已有 Team 分配或更换**：「团队与成员」中每个 Team 一页，管理员在「执行环境」一行选择共享或空闲环境后「分配执行环境」/「更换执行环境」（`POST /v1/teams/<id>/environment {"worker_id"}`）。未分配前，向该 Team 提交会被拒绝（`team_without_worker`）。
+   更换时旧会话不迁移：原环境为共享时不再服务该 Team；原环境为该 Team 的专属 Worker 主机时改为空闲，**只能再分配回这个 Team**（主机上留有其源码、工作区与记忆），要给其他 Team 须先重新部署主机，执行边界变化后（`deploy.sh worker-host add`，或「更新连接」）才可分配。
+4. **为用户分配**：「设置 → 用户管理」创建用户时选择「个人空间的执行环境」，或在用户行中「分配共享环境」。
+
+**派发前核对**（访问管理第 2 期）：Engine 每次准备工作区或派发新任务前核对会话的 Worker 仍启用、未退役且仍服务该会话的空间；
+否则会话进入「等待 Worker」，说明「执行环境已更换或已移出该空间 / 已停用 / 已退役」，已在执行的任务不中断。成员或管理员在会话页「分配 Worker」：
+分配回原环境时直接继续；换到另一个环境时在新环境重新准备工作区，已完成的任务保留，原环境中的产出不迁移。续作同样核对；诊断在环境不服务时返回 409。
+
+**Team 管理**：Team owner 或管理员可改名、管理成员与角色（管理员不必是成员）；成员可「退出 Team」（唯一的有效 owner 不能退出）；
+管理员可归档 / 恢复：归档后不能提交新会话或添加成员，已有会话可查看与停止，执行环境保留；归档的 Team 在顶栏标「已归档」，
+不出现在提交、共享与分配的选择器中。不提供删除 Team。
+
+**Worker 管理**（管理员，「执行环境 · Worker」）：改名、「更新连接」（主机替换或 Token 轮换，新地址按登记规则重新核验）、
+「退役」（仍是某 Team 的执行环境或有进行中的会话时拒绝；退役后不再出现在列表与选择器中，它服务的个人空间失去该环境，历史会话保留引用）。
+该环境服务的全部用户（含共享环境上的个人与 Team 成员）都可以「刷新模型」。
+
+Team 与执行环境的管理操作都写入审计（`GET /v1/admin/audit`）：`team.create|rename|archive|restore|environment|member.set|member.remove|member.leave`、
+`worker.register|rename|retire|enabled|share|dedicate|space.add|space.remove|connection`（不记录 Worker URL 与 Token）。
 
 API 对应（OpenAPI 分组「执行环境（管理员）」）：`GET /v1/admin/environments`（全部环境的绑定、进行中会话与实时健康，
 单个 Worker 不可达不影响列表）、`POST /v1/workers/<id>/share {"confirm": true}`、`POST|DELETE /v1/workers/<id>/spaces {"team_id"}|{"user_id"}`、`POST /v1/teams {"name", "owner", "worker_id"}`、`POST /v1/users {..., "worker_id"}`、
-`POST /v1/workers/<id>/enabled {"enabled"}`、`POST /v1/workers/<id>/connection {"connection"}`。
+`POST /v1/workers/<id>/enabled {"enabled"}`、`POST /v1/workers/<id>/connection {"connection"}`、
+`PATCH /v1/workers/<id> {"name"}`、`POST /v1/workers/<id>/retire`、`POST /v1/teams/<id>/archive {"archived"}`、`POST /v1/teams/<id>/environment {"worker_id"}`；
+Team owner 也可调用 `PATCH /v1/teams/<id> {"name"}` 与 `POST|DELETE /v1/teams/<id>/members`。
 
 ### Worker 主机：独立的执行环境（D28）
 
@@ -137,6 +157,8 @@ SSM 隧道（`localhost:15476`）方式仍可用：`crew_url` 指向本地端口
   （`IMAGE_ID`、`AVAILABILITY_ZONE`），已有栈留空时沿用运行中的值。确需替换时以 `ALLOW_REPLACEMENT=1` 执行并先规划数据迁移。
 - 管理员密码在主机首次安装时生成，只存于 `/etc/kirocrew-on/admin-password`（root 0600）；实例角色只能读取源站密钥。
   读取：`deploy/aws/deploy.sh admin-password`（经 SSM Run Command，输出保留在 SSM 命令历史中，仅账户运维人员可见）。
+  **在控制台「修改密码」改了管理员密码后，须以 root 把新密码写入该文件**（0600），否则下一次 `push` 在「注册执行边界 Worker」一步以 401 失败
+  （此前各步已完成、服务已重启）；写入后重新 `push` 即可。
   从旧版本迁移：在实例角色收窄之前，以 root 把现有密码写入该文件后再执行 `up` 与 `push`。
 
 ## 4．升级
@@ -144,6 +166,9 @@ SSM 隧道（`localhost:15476`）方式仍可用：`crew_url` 指向本地端口
 1. 一致性备份：`sudo -u octopus /opt/kirocrew-on/venv/bin/python -m octopus --config /etc/kirocrew-on/platform.toml backup --dest /var/lib/octopus/platform/backups`
 2. 取得新版本代码后重新运行 `sudo deploy/install/al2023.sh personal`（新 release 目录与旧目录并存，`current` 指向新版本）。
 3. 依次重启：`octopus-api` → `octopus-worker@personal` → `octopus-gateway@personal`；每个服务的 `ExecStartPost` 执行 `wait-ready`。
+   Gateway 只在它加载的内容变化时重启（D34）：KiroCrew 版本目录、本发布的 `composition/`、`octopus/{config,prompts,__init__}.py`、
+   边界配置与环境文件、unit 文件的指纹保存在 `/var/lib/octopus/boundaries/<边界>/gateway.fingerprint`；未变化时安装日志显示
+   「Gateway 未变化，保持运行」，进行中的原生任务不中断。需要强制重启时删除该文件后重新部署，或直接 `systemctl restart`。
 4. schema 迁移在 API 启动时执行，迁移前自动备份到 `/var/lib/octopus/platform/backups/octopus-v<旧版本>-<时间>.sqlite3`；结果见 `journalctl -u octopus-api`。
 
 ## 5．回滚
@@ -152,6 +177,9 @@ SSM 隧道（`localhost:15476`）方式仍可用：`crew_url` 指向本地端口
 sudo ln -sfn /opt/kirocrew-on/releases/<旧版本> /opt/kirocrew-on/current
 sudo systemctl restart octopus-api octopus-worker@personal octopus-gateway@personal
 ```
+
+旧版本不认识新版本写入 `platform.toml` 的配置项时拒绝启动（“未知配置项”）：回滚到会话独立预览域名（D36 第 3 期）之前的版本，
+先删除 `platform.toml` 中的 `preview_domain` 一行。
 
 若新版本已执行 schema 迁移，旧版本会拒绝打开更高版本的数据库（“数据库 schema 版本 N 高于程序支持的 M”）。
 此时先用升级前备份在独立目录执行 `restore-verify`，确认后停服替换数据库文件。
@@ -181,13 +209,340 @@ API 访问日志不记录 token、请求体或查询串；Engine 只记录异常
 - Claude Code 与 Codex 经实例角色使用 Bedrock：实例角色需要 `bedrock:InvokeModel*`（Claude）与 `bedrock-mantle:CreateInference`（Codex 的 amazon-bedrock 提供方）。
 - Kiro CLI：`deploy/aws/deploy.sh kiro-login` 经 SSM Run Command 在主机上以 crew-personal 运行 `kiro-cli login --use-device-flow`（带 `stack.env` 中的 `KIRO_LICENSE`、`KIRO_IDC_START_URL`、`KIRO_IDC_REGION`）。kiro-cli 即使给齐参数仍有交互提示、无终端时失败，因此在 `script(1)` 伪终端中运行并自动回车；脚本打印验证地址与设备码，在浏览器完成授权后自动确认（设备码 15 分钟内有效，过期重新执行）。日志：`/var/lib/octopus/boundaries/personal/logs/kiro-login.log`。不需要本机安装 session-manager-plugin。
 
+### 控制台自定义域名
+
+`deploy/aws/stack.env` 的 `CONSOLE_DOMAIN`（如 `kirocrew-on.tinyboat.blog`）为控制台分发加上自定义域名；cloudfront.net 域名继续可用。
+`deploy.sh up` 在 Route 53 中找到包含该名称的公有托管区，并在 us-east-1 找到覆盖它的已签发 ACM 证书（同名或 `*.上级域名`；
+CloudFront 只使用 us-east-1 的证书）：分发加上别名与证书（SNI、TLS 1.2 以上），托管区写入 A / AAAA 别名记录。找不到托管区或
+证书时 `up` 在任何变更前停止。之后执行 `deploy.sh push`，把该域名加入 `platform.toml` 的 `allowed_hosts`（Host 校验）。
+托管区与证书 ID 不写入仓库，每次 `up` 时查询。浏览器中的登录按域名分开保存：改用新域名后需要重新登录；MCP 的 `--url`
+可以继续使用 cloudfront.net 地址，也可以换成新域名。清空 `CONSOLE_DOMAIN` 后再执行 `up` 会移除别名与 DNS 记录。
+
+### 代码仓库凭证（D35）
+
+控制台「设置 → 代码仓库凭证」或 API `/v1/credentials`：GitHub fine-grained Token 与 GitLab Token（含自建实例），用于克隆私有仓库。
+
+- **作用域**：
+  - 个人：本人管理与使用，可用于本人提交的 Team 会话。
+  - Team：Team owner 与管理员管理，该 Team 的会话使用。
+  - 平台：管理员管理，并授权给 Team 或用户（`POST|DELETE /v1/credentials/<id>/grants`）。
+  - 看不到为 404，不能管理为 403。
+- **秘密只写**：创建或轮换时提交，之后只返回元数据与末 4 位，审计 `credential.*` 不含秘密。MCP 不创建凭证。
+- **主密钥**：`/etc/kirocrew-on/credentials.key`（root:octopus 0640，安装脚本首次生成，不在 SSM、不进备份）。数据库备份只含密文：
+  恢复到另一台主机时，须把同一个主密钥文件放到同一路径（`platform.toml` 的 `credentials_key_file`），否则现有凭证无法解密，
+  需要逐个轮换。主密钥丢失后，现有凭证无法恢复，只能逐个轮换（重新录入 Token）。
+- **会话绑定**：提交时依次按明确指定、工作流默认值、按仓库自动匹配（Team → 授权给 Team 的平台 → 提交者个人；同层取仓库范围
+  更具体者，并列时 409 `credential_ambiguous`）解析，并固定在会话中；会话页显示创建者与凭证。改绑：`POST /v1/runs/<id>/credentials`。
+- **使用**：只在准备工作区（首次与改派到其他 Worker）时由 Engine 解密，交给 Worker 的 `/prepare`。Worker 以 `GIT_ASKPASS` 读取
+  运行目录内 0600 的临时文件，克隆完立即删除；remote 不含凭证，push 地址为 `DISABLED_NO_PUSH`；git 报错去除凭证后显示。
+  每次使用审计 `credential.use`。停用、删除或范围不再覆盖时会话停在「仓库凭证不可用」，改绑后续作。
+
+### 候选提交与命名门禁（D37 第 1 期）
+
+新会话（`execution_contract` 3）中，每个 Attempt 由命名门禁判定，结果逐条写入 Attempt 证据 `gates`，控制台任务列表与 MCP 状态展示它们。
+- **前五个门禁**：`native_completed`、`identity_match`、`handoff_present`、`outcome_valid`、`outcome_pass`，即原有的五项检查。
+- **候选**（`implement` / `test` / `deliver` 与未标类别的任务）：
+  - Worker 以发布同样的方式（临时索引、排除 `.env` 与依赖目录）在 `octopus/<run>` 上提交 `KiroCrew ON：<任务>（<run>/<task> 第 n 次）`。
+  - 检查自上一个候选以来新增的内容：有疑似凭证或 `.env` 时分支不动，`no_secrets` 失败。
+  - `implement` / `deliver` 没有改动时 `diff_present` 失败；`test` 与未标类别的任务没有改动时记为跳过。
+- **检查命令**（`checks_pass`）：
+  - Worker 在会话的项目目录中以执行用户运行任务的 `verify`：`bash -lc`，`PATH` 同远程预览，不带 Worker 自己的 `PYTHONPATH`。
+  - 顺序执行，第一条失败即停；每条 10 分钟、合计 20 分钟，超时结束整个进程组。命令留在后台的进程（如为检查而启动的服务）
+    在命令结束时一并结束。
+  - 每条记录退出码、耗时与输出末尾 4 KB（隐去凭证）。
+  - 运行期间 Attempt 仍为 `running`，控制台显示「正在运行检查命令」。停止、关闭或删除会话时结束；Worker 重启后重新运行一次。
+- **审查**（`review_bound`）：审查任务派发时带上会话分支当前所在的候选（按时间，而非任务顺序）；`outcome.json` 须写
+  `reviewed_commit`，审查结束时 HEAD 不变、已跟踪的文件（排除的除外）没有改动。检查与测试留下的未跟踪文件（`.coverage`、
+  `reports/`、`dist/`）不算改动。
+- **失败与恢复**：任何门禁失败即 Attempt `blocked`（`failure_type: gate`），照常进入自动纠错，协调者看到门禁详情与命令输出。
+  Worker 拒绝生成候选或运行检查（如 Agent 切换了分支）也按门禁失败处理。
+- **发布**：只推送已验证的候选，即会话分支当前所在、自身门禁全部通过的候选；会话有审查任务时，还须在最近一次代码改动之后
+  有一次通过的审查（审查之后只有交付类任务的改动时仍可发布）。否则，或之后已跟踪的文件有改动时，409 `publish_unverified`，
+  请续作会话。
+- **兼容**：已有会话与旧 Worker（对新接口回答 404）行为不变：新门禁记为跳过。
+- **第 3 期**：
+  - `artifacts_locked`（声明了 `paths` 的任务）：候选记录从任务起点以来改动的文件名（重试中撤回的改动不算）；此前已验收任务交付的文件，
+    只能由 `paths` 覆盖它们的任务修改；平台检查命令留下的文件（`.coverage`、报告）不算交付物。
+    `paths` 支持目录（`src/`、`src/**`）、glob（`src/**/*.ts`、`**/*.py`）与整个项目（`.`）。未声明 `paths` 的任务（模板）跳过。
+  - `tests_fail_on_baseline`（`test` 任务，`checks_pass` 通过之后）：Worker 把本任务从起点（另一个任务最近的候选）到候选的改动
+    三方合并到会话基线（`git merge-tree`），在项目目录中原地切过去（`git read-tree -u --reset`，未跟踪的依赖不动），再运行一次 `verify`；
+    全部通过即失败（测试在改动之前也通过），有命令失败即通过。运行结束后必定恢复到候选。
+    - 跳过而不判定：会话此前没有源码改动（为已有代码补测试）、测试任务没有改动、检查命令会安装依赖、合并冲突、
+      工作区有未进入候选的已跟踪改动或与基线同名的本地文件、运行中断 / 停止 / 超时。
+    - 运行期间（最长与检查命令相同）该会话的预览启动、下载与发布返回 409「正在会话基线上运行测试，稍后再试」。
+    - Worker 中途重启时留下 `<run>/baseline.json`；该会话的下一次派发、候选、检查、发布、下载或预览之前先恢复到候选。
+  - Agent 的任务说明与规划提示写明这两条门禁，避免先失败再纠错。
+
+### Feature 报告（D37 第 2 期）
+
+会话页「报告」、`GET /v1/runs/<id>/report?format=md|html` 或 MCP `octopus_report`：
+- **内容**：需求与计划（任务表）、每个任务最终一次 Attempt（请求与实际的工具 / 模型、结论、门禁表、候选、检查命令的退出码与耗时、
+  验收项与建议、审查绑定）、纠错记录、已验证候选与发布的分支 / PR / MR。
+- **大小**：其余 Attempt 只计次数；结论最多 2000 字符，门禁详情与命令只取首行；检查命令的输出不进入报告。
+- **安全**：
+  - 会话中的所有文字都转义（Markdown 中多行文字放在代码块里、单行文字转义标点，不会变成标题、链接或图片）。HTML 不含脚本与外部资源（`Content-Security-Policy: default-src 'none'; style-src 'unsafe-inline'; img-src data:`），
+    只有 https 的 PR 链接是链接。
+  - 控制台在不允许脚本的 iframe 中显示，可下载 Markdown / HTML。
+- **权限**：与查看会话相同（`read`），看不到会话时 404。
+
+### 任务的映射来源
+
+会话视图中每个任务带 `mapping: {source, label}`：`steps`（提交时指定）、`workflow`（工作流名称与版本）、`template`（模板，
+规则匹配时注明）、`document`（导入的工作流文档）、`platform`（规划任务本身）、`planner`（KiroCrew 规划）、`continue`
+（续作时由用户修改了工具 / 模型 / Effort）、`coordinator`（协调者换用，写明从哪个工具换来与原因）。控制台任务行、MCP 状态与报告的计划表显示它。
+
+### 交接与轮询（D40）
+
+- **前序交接**：派发时每个已验收的前序任务（按 `depends_on`）只带名称、类别、实际后端、结论、摘要（≤ 1500 字符）、
+  发现（≤ 10 条）、建议（≤ 5 条）、候选（短 sha 与改动的文件）、检查命令及退出码，以及完整交接文件的路径 `handoff`；
+  不再附原始结果与证据。Agent 需要细节时读取交接文件（同一执行环境）。
+- **轮询**：运行中的 Attempt 越久越少查看：2 分钟内每 2 秒，10 分钟内每 5 秒，30 分钟内每 10 秒，之后每 20 秒；
+  停止、关闭等命令不受影响（立即生效）。
+
+### 重新规划（D41）
+
+- 协调者判断计划本身有问题（任务拆分不当、缺少步骤、顺序错误、任务目标与需求不符）时决定 `replan`：平台保留已验收的任务，
+  删除失败的任务及其后的任务（其 Attempt 留作历史，修订历史保存原计划），插入 KiroCrew 重新规划任务 `replan-1`。
+- `replan-1` 的提示列出被替换的任务、失败原因与协调者的要求（各节限长），用户需求、规划补全的需求与已验收任务的交接引用派发时已带的上下文，
+  不重复抄写（Worker 的任务说明上限 8000 字符）；失败任务的改动仍在会话分支上。
+- 其结果与首次规划相同地校验后追加（1–6 个任务）：新任务 ID 不与历史上任何任务相同，改名后 `depends_on` 随之改写，可以依赖已保留的已验收任务。
+  之后的任务不再带「纠错后的重新执行」要求；返工更早的任务时 `replan-1` 不再重新运行。
+- **检查命令可用的命令**：Worker `/health` 的 `commands`（常见命令中 `available` / `missing`，按检查命令的搜索路径），
+  写入首次规划、重新规划与协调者的上下文，`verify` 只用可用的命令（EC2 两台主机只有 `python3`，没有 `python`、`node`、`npm`、`pip`）。
+  与 `tools` 相同，由平台的健康检查保存（D43，最多 10 分钟）。检查命令以退出码 127 失败时，协调者按「verify 写错」处理：
+  未重新规划过用 `replan`，否则 `wait_for_user`，由用户续作时修改该任务的 `verify`。
+- 每个会话至多一次，消耗一轮纠错；工作流设计会话与规划任务本身不重新规划。
+- 可见：修订「自动纠错：重新规划，替换「…」」与「重新规划：追加 N 个任务」；任务来源「KiroCrew 重新规划」；控制台纠错记录「已安排重新规划」。
+
+### 需求中指定的工具与模型（D45）
+
+- KiroCrew 规划时识别需求中点名的工具或模型（如「审查用 codex」），任务带 `requested`（工具、模型与需求原文片段）；映射来源显示「需求中指定：「…」」。
+- 平台照指定执行：规划者改了工具会被改回，指定的模型未公布时不改为 `auto`（规划说明中写明）。
+- 指定的工具不可用或模型未公布：派发前拒绝，会话停下并写明「需求指定的 …」，不交给协调者、也不换用其他工具。
+  修复执行环境（安装、登录该工具或公布该模型）后续作，或在「配置并续作」中改用可用的工具或模型——用户的新选择取代需求中的指定。
+- Worker 因平台记录过期而拒绝指定的模型时同样如实停下；协调者不能换用指定的工具或模型。确认模式下，指定的工具不可用会在规划说明中预先写明。
+- 只有 KiroCrew 规划的任务带 `requested`：显式提交的 steps、模板、导入的文档与保存的工作流中的 `requested` 一律去掉，
+  其工具不可用时仍按 D38 由协调者推荐换用。规划者写法不完整的 `requested`（空值、缺工具与模型）被忽略并记说明，不使计划失败。
+
+### 计划确认（D44，准入第 1 期）
+
+- 会话的 `admission`：`confirm`（确认后执行）或 `auto`（立即执行）；未写时取平台配置 `default_admission`（`platform.toml`，默认 `auto`，
+  可改为 `confirm` 让所有新会话先确认）。
+- `confirm` 的会话：规划（`plan`、`replan-*`）照常完成，第一个执行任务派发前停在「计划待确认」（`awaiting_confirmation`）；
+  控制台会话页「确认并开始」、API `POST /v1/runs/<id>/confirm` 或 MCP `octopus_confirm` 确认后执行；修改任务后续作也视为确认；也可停止或关闭。
+- 只确认一次：之后的返工、重试、换工具与重新规划不再停下。确认者与时间记在会话的 `confirmed`、时间线「已确认计划」与报告抬头。
+- 只有 KiroCrew 规划会话的规划任务（`plan`）与重新规划任务在确认前运行；提交或模板中名为 `plan` 的任务同样等待确认。
+- 等待确认的时间不计入会话预算；确认与续作一样重新计算预算，并停止正在运行的远程预览。已归档 Team 的会话不能确认。
+- MCP 精简状态在等待确认时带出各任务的 `acceptance` 与 `verify`，供客户端展示给用户。
+
+### 等待与自动恢复（D43）
+
+- **健康检查**：平台每 10 分钟读取一次各已启用 Worker 的 `/health`（有会话在等 Kiro 登录的 Worker 每分钟一次），执行边界未变时保存为执行环境能力
+  （工具、检查命令、Kiro 登录、模型；「执行环境」中显示「最近检查」）。升级 Worker 后不必再手动「刷新模型」，最多 10 分钟内生效；急用时仍可手动刷新。
+  边界、宿主账号或隔离方式变了不保存（日志「another execution boundary」），由管理员核查。
+- **条件满足后自动继续**（不计入、也不重置会话预算；时间线「条件满足，自动继续」）：
+  - Kiro 任务因登录过期失败：「等待 Kiro 登录恢复」——管理员执行 `deploy.sh kiro-login`；平台在失败后先看到登录过期、再看到恢复时重跑该任务。
+    只认原生错误中的登录过期（Agent 自己报告的权限、额度问题不算）；失败后检查到登录正常（未见过期，或检查前已恢复）时提示改为
+    「Kiro 登录正常，需要处理」，不自动重跑；其他工具的登录平台读不到，也等人处理。等待的时间不计入会话预算的时长。
+  - Worker 被停用：运行中的会话「执行环境已停用」，重新启用后回到停用前的状态继续查看（原生任务可能已在此期间完成）；
+    准备中的会话 `waiting_worker`，重新启用或执行环境重新给到该空间后继续准备。
+  - 仓库凭证不可用：凭证重新启用、授权恢复或在会话页更换后（且仍覆盖该仓库）自动重新准备。
+- 派发时的 Kiro 登录过期与 Worker / Gateway 暂不可用仍由退避自动重试（M1，不变）。
+
+### 会话预算（D42）
+
+- 自动纠错的预算有三项：协调者轮数 `max_cycles`（默认 2，1–5）、自动重试次数 `max_retries`（D34 瞬时重试与看门狗重试合计，默认 4，0–20）、
+  时长 `budget_minutes`（默认 720，30–4320）。从会话开始或用户最近一次「续作」/「请求诊断」/「分配 Worker」起计算；手动请求的那一轮诊断不计入；
+  会话停下后时长不再累计。
+- 只限制**自动**的工作：自动重试的次数或时长用完时不再重试、交给协调者诊断；轮数或时长用完时不再诊断，会话 `blocked`，
+  「需要处理」写明是哪一项拒绝了这次自动纠错（记在失败 Attempt 的 `budget_refused`）。计划内的任务照常执行，正在运行的任务不因预算停止。重新规划仍是每个会话一次，不随续作重置。
+- 可见：控制台纠错记录下的「预算（…）：纠错 a/b 轮 · 自动重试 c/d 次 · e/f 分钟」，MCP 精简状态的 `recovery.budget`，报告的纠错一节。
+- 调整：启动或续作时的 `recovery` 设置（API / MCP）；续作本身就重新开始计算。
+
+### 看门狗（D39）
+
+- **判定**：运行中的 Attempt，安静时长（KiroCrew 子任务 `state.json` 最后写入至今，Worker 按自己的时钟计算；从派发或最后一次
+  等待批准时起算）超过 `idle_minutes`（默认 30），或总时长超过 `attempt_minutes`（默认 170）时，平台以 `DELETE /api/spawn/{id}`
+  停止该原生任务。等待批准与检查命令运行期间不判定；没有 `state.json` 时只按总时长判定。
+  KiroCrew 自己在 180 分钟收回子任务（不经平台的自动重试），`attempt_minutes` 大于它时不起作用。
+- **之后**：Attempt `blocked`（原因写明分钟数与最后工具），自动重试一次（不消耗纠错轮次）；重试仍卡住时交给协调者诊断（可换工具）。
+  自动纠错关闭的会话只停止、不重试。
+- **长命令**：单个命令运行期间 `updated_at` 不更新；大型构建或完整测试较慢的项目，启动或续作时设 `recovery.idle_minutes`（5–240）。
+- **旧 Worker**（不支持停止单个任务）：不行动，任务继续，避免两个 Agent 同时修改同一工作区。停止失败时一分钟后再试，同样不重试。
+- 重试在被停止任务留下的工作区上开始（未提交的部分改动仍在）：与 D34 的自动重试相同；D37 的候选按任务起点计算改动。
+
+### 发布：自动或人工确认（D47）
+
+- 默认：会话完成后由人确认发布——会话页「发布到仓库」或 MCP `octopus_publish`（创建者、Team owner、管理员）。
+- **自动发布**：会话的 `publish_policy.auto` 为 true 时，会话完成且满足发布条件后，平台以创建者的身份推送 `octopus/<run>` 分支并创建或沿用 Draft PR / MR
+  （与手动发布相同的核对：写权限凭证、只推已验证候选、秘密扫描、不推默认分支）。开启方式：启动时 `publish: {auto: true}`（控制台向导「完成后自动发布 Draft PR」、
+  MCP `octopus_start.publish`）；会话页的同名开关或 `POST /v1/runs/<id>/publish-policy`（MCP `octopus_publish_policy`）；需求中明确要求提交 PR / MR 时由 KiroCrew 规划者标注
+  （来源显示「需求中要求提交 PR」），用户自己的设置优先。
+- 自动发布做不到时（没有写凭证、改动未通过审查、发现秘密、远端冲突）会话仍为「已完成」，「需要处理」为「自动发布未完成」并写明原因；同一版本只自动尝试一次，处理后手动发布。
+- Agent 没有仓库写凭证（设计如此），规划不安排推送 / 建 PR 的任务；任务因尝试推送失败时，「需要处理」为「Agent 不能推送或创建 PR」并指向发布按钮（EC2 `run-361cd491…`）。
+- 发布到会话启动时的仓库（`source.type = git`）。新建或上传源码的会话没有远端仓库：规划者标注的「要求提交 PR」不开启自动发布（记说明），推送失败的提示改为
+  「下载源码」或以已有仓库为源码新建会话；平台目前不能新建仓库（EC2 `run-f7670bfb…`）。
+
+### 协调者的可选目标（EC2 `run-40a1f6d1…` 修复）
+
+- 诊断上下文的 `allowed_targets` 列出失败任务及其上游；`previous_decisions` 带每轮的结果与平台拒绝的原因（`refused`）。
+- 目标排在失败任务之后（例如计划中审查之后的「修复」任务）会被拒绝，原因写明可选的目标与「返工上游，其后的任务自动重跑」；协调者不再重复被拒的决定。
+- 规划者不在审查之后另设「按审查修复」的任务：审查要求修改时平台自动安排上游返工与复审。
+
+### KiroCrew 配置与隔离（D46 P0，以 KiroCrew 0.10.0 为准）
+
+- **记忆**：0.10.0 没有 `memory.enabled`（此前写入的该键不起作用，边界的全局记忆一直开着）。平台新建的父会话以 `memory_mode: "persistent"` 运行：
+  KiroCrew 只导出 persistent 的会话（`session_export.py:380`），关闭与删除需要这份备份；`incognito` 仍读记忆（只是不写），`temporary` 不读不写，
+  且已建会话的模式只能收紧、不能放宽。记忆按执行环境分隔：每人独立 Worker，只有 Team 共用一个 Worker 空间（负责人 2026-10-17）；
+  一个 Worker 服务多个空间时记忆不分隔，控制台已标明「记忆未分隔」。不要改 `memory.persistence_enabled`：它会同时关掉 lessons。
+  KiroCrew 不导出 incognito / temporary 的会话（`export_slot_not_persistent`）：关闭与删除时记一份标明的观察记录
+  `restricted-session-observation.json`（`backup_kind: native_restricted_observation`，与只有说明性 note 的 `empty-session-observation.json` 同理），
+  不伪造备份，然后照常关闭、删除（负责人 2026-10-17）；KiroCrew 已没有这个父会话的活动 slot 时（incognito 的 slot 在 Gateway 重启后不恢复，
+  或在原生页面删掉了）同样处理，记 `missing-session-observation.json`；其他导出错误仍阻止关闭与删除。2026-10-17 部署的 3ec713b 曾以 incognito 建立父会话
+  （`run-d098…`、`run-6d7c…`、`run-f7670bfb…`），按此处理。
+- **派发白名单**：协调者模板的 `toolsSettings.subagent.availableAgents`（KiroCrew 读的位置；此前写在顶层，等于全部允许）列出平台派发的
+  `poc-kiro`、`poc-claude`、`poc-codex`、`poc-opencode`、`poc-diagnose`；种入时迁移旧位置，用户的其他工具设置保留。
+- **协调者**排除 `@kirocrew-core/monitor_*`（不自行布置监视循环、追加回合）。新边界的 `agent.adaptive_concurrency_mode` 为 `fixed`（并发上限即 `max_subagents`）。
+- 不再发送 KiroCrew 已忽略的 `solo_reason` / `solo_details`。
+- **配置契约**：平台写入 `config.json` 的键列在 `tests/kirocrew_contract.json`（版本须等于 `deploy/versions.env` 的 `KIROCREW_ACCEPTED_VERSION`）。
+  本机回归核对 `seed()` 只写清单内的键；部署时的原生测试在主机上核对清单中每个键都是已安装 KiroCrew 的配置字段，并用 KiroCrew 自己的加载器读回
+  新生成的配置，不得有被忽略的键（`_extra_keys` / `_extra_sections`）。升级 KiroCrew 时先在新版本上核实清单并改版本号，原生测试不过则部署中止。
+
+### Agent 提示（D46 P1）
+
+- 系统提示：所有 Coding 工具执行任务时为「研发执行者」；父会话的 Agent 为「Owner 观察员」（解释进展，不派发、不改源码）；
+  诊断 Agent（`poc-diagnose`）只写 `decision.json`，不修改源码。Agent 不自行推送或建 PR / MR：平台提交候选，审查通过后由用户发布。
+- 规划（首次与重新规划）共用同一份规则（契约、门禁、preview.json、.gitignore、结论用法、工具选择依据与审查独立性），环境事实截断，不超过 8000 字符；
+  不再写默认工具组合，按执行环境中可用的工具选择。
+- 任务说明（`instructions.md`）按任务性质结尾：规划、设计与诊断不被要求开发；实现与交付须产生改动；审查只读；测试不改实现；
+  写明交接内容清单、检查命令是否由平台运行；交付任务带 `.octopus/preview.json` 的格式；续作改了需求时标明规划补全已过时。
+- 纠错要求只发给被安排修复的任务（决定与失败摘要）；其后的审查 / 测试只收到「复验」说明；协调者上下文只在 `context.json`。
+- 内置模板的每个步骤带 `kind` 与验收项（审查绑定候选、实现与交付须有改动），审查用 `changes_requested`，不再使用已停用的 OpenCode，步骤提示不再重复目标。
+
+### 停用的 Coding 工具（K01）
+
+- Worker 配置 `disabled_tools`（默认 `["opencode"]`）：所列工具在 `/health` 的 `tools` 中报告为不可用，原因「已停用（K01…）」。
+  规划者不会选用、协调者不会换用；提交的 steps、模板或工作流中用到它的任务在派发前停下并写明原因，按 D38 由协调者推荐换用可用的工具。
+- 恢复：在 Worker 配置中写 `disabled_tools = []`（或去掉 opencode）后重启 Worker，平台 10 分钟内的健康检查即更新（急用时「刷新模型」）。
+- K01 复测（2026-10-16，YOLO 常驻）：OpenCode（`opencode/big-pickle`）两次 Attempt 均只返回 `_No response._`，仍未修复。
+
+### 换工具（D38 第 1 期）
+
+- **工具是否可用**：Worker `/health` 的 `tools`（`available`、`reason`；Kiro 另有 `login`）。平台只在登记 Worker 或「执行环境 · Worker」
+  中「刷新模型」时保存它，此外平台每 10 分钟自动读取一次（D43）。尚未读取到时派发照旧，协调者的换工具推荐因「未报告可用性」被拒。
+- **何时换**：任务因工具本身失败（平台记录中不可用、模型未公布或不受支持、实际后端不符、原生错误在自动重试后再现）时，
+  自动纠错请 KiroCrew 协调者诊断；协调者可推荐 `switch_tool`，平台核对通过后改写该任务的工具 / 模型并重跑。
+  Kiro 登录过期仍等待管理员执行 `deploy.sh kiro-login`，不换工具。
+- **关闭**：启动或续作时 `recovery.switch_tools: false`（控制台自动纠错设置中的对应选项）。
+- **记录**：Attempt 证据的 `switched_from`；变更记录 `task.tool_switched`；修订摘要「自动纠错：「任务」由 X 换为 Y（原因）」。
+
+### 批准代理（D38 第 2 期）
+
+- **来源**：会话原生父 slot 中等待批准的工具请求（`GET /api/chat/slots` 的 `pending_approval_info`），以及 KiroCrew 状态级批准中属于该 slot 的记录
+  （`GET /api/approvals`）。平台派发的 spawn 在 `approval_mode = "auto"` 的边界上自动批准，不出现在这里；全局批准为 interactive 时，
+  原生父会话想运行的工具（K20）与 interactive 边界上的任务会出现。
+- **答复**：会话页「待批准」卡片，或 MCP `octopus_approve`（客户端须先征得用户同意）。只有会话创建者、Team owner、管理员可以答复；
+  答复前 Worker 重新核对该请求仍在等待且属于本会话。
+- **记录**：审计 `approval.answer`（来源、工具、命令前 200 字符、决定、答复人），会话变更记录 `approval.answered`。
+- **旧 Worker**：列表为空并标明不支持（`supported: false`），在原生 KiroCrew 中处理。
+- **YOLO（默认开启）**：执行边界配置 `crew_yolo` 默认为 `true`（负责人 2026-10-15）。每次 Gateway 启动时，平台把
+  `agent.dangerously_skip_permissions` 写入 `crew/config.json`，KiroCrew 据此建立常驻 YOLO，不随重启失效，期间所有工具与派生都直接执行，
+  这里不会出现待批准项。
+  - 关闭：边界配置写 `crew_yolo = false`（或环境变量 `OCTOPUS_CREW_YOLO=false`），重启该边界的 Gateway 后恢复逐项批准。
+  - 在 Dashboard 中切回 Normal 会立即结束 YOLO（对该 Gateway 上的所有会话生效），到下次 Gateway 启动时按 `crew_yolo` 恢复。
+
+### 发布到仓库（D35 第 2 期）
+
+会话页「发布到仓库」或 MCP `octopus_publish`：会话结束后，把成果推送到源仓库的分支（默认 `octopus/<run-id>`），并创建或沿用
+Draft PR（GitHub）/ Draft MR（GitLab）。
+
+- **前提**：会话绑定一枚写权限（`access: write`）、仍可用于该会话的凭证。只有会话创建者、Team owner 或管理员可以发布。
+- **Worker**：在临时索引中把工作区未提交的改动做成一个提交（作者 `KiroCrew ON`；不含 `.env` 文件或目录与依赖、缓存目录，即使未被
+  `.gitignore` 忽略——这些目录也不会被读入 Git）。bundle 带克隆以来的全部提交，所以检查的是克隆以来新增的每个对象的原始内容
+  （任何文件名与文件类型、二进制、提交说明）和新提交引入的每个路径：有疑似凭证（GitHub / GitLab Token、AWS Key、私钥）或提交了
+  `.env` 时拒绝并列出文件（不回显内容），会话分支与工作区索引都不动；在已提交历史中的，需改写这些提交后再发布。检查通过后才把
+  提交放到会话分支上，导出带完整历史的 bundle（≤ 100 MB）。写凭证不交给 Worker。
+- **平台**：先按 Content-Length 拒绝超过 100 MB 的 bundle（413，不写盘）；在数据目录的临时裸仓库中核对 bundle（完整、基于会话
+  克隆时的提交、正是 Worker 检查过的提交），只推送这一个分支：不 force，远端分支被他人改动时拒绝（409 `publish_conflict`）。
+  推送与托管方 API 用同一套加固：不读全局 git 配置、只走 HTTPS、不跟随跳转。
+  结果写入会话（`publish`）与变更记录 `run.published`；每次使用写凭证都审计 `credential.use`（`access: write`，`result`：
+  `published` / `pushed` / 失败的错误码）。令牌能读不能推送时为 409 `credential_permission`（GitHub 细粒度令牌需 Contents 读写，GitLab 需 `write_repository`）。
+  分支已推送而 PR / MR 未创建时（如令牌缺 Pull requests 权限，同为 409 `credential_permission`），
+  会话记下分支与原因（`publish.request_error`），处理后再次发布即沿用该分支。
+
+### 远程预览（D36 第 2 期）
+
+会话页「远程预览」或 MCP `octopus_app`：在执行环境中运行会话的应用，经第三个 CloudFront 分发（`deploy.sh status` 的 `PreviewUrl`）
+在浏览器中打开。
+
+- **运行**：Worker 按 `.octopus/preview.json`（或自动识别 `package.json` / `index.html`）以执行环境的 OS 用户、在项目目录中启动。
+  - 每个进程独立进程组，入口端口取 47000–47999。
+  - 依赖安装只执行一次，日志写入会话目录的 `app.log`。
+  - 每个执行环境最多 3 个；会话执行任务时不能启动。
+  - 空闲 30 分钟、会话关闭 / 删除 / 续作 / 诊断时停止；Worker 重启（含每次部署）后预览随之结束。
+- **访问**：浏览器 → CloudFront（源站密钥）→ 平台主机 nginx `:8929` → `auth_request` 问 API `/v1/preview-auth`（校验预览域
+  Cookie、复核查看权限、记录最近访问）→ 平台主机回环端口，或经私网 TLS 到 Worker 主机 nginx `:8945` → 回环端口。
+  - Worker 主机端口只接受平台安全组，并校验由该边界 Worker Token 派生的请求头（`HMAC-SHA256(token, "kirocrew-preview")`）。
+  - 打开链接 10 分钟内有效、只能用一次，写入 8 小时的 `__Host-kirocrew_preview`。共用的预览域上打开时先清除旧 Cookie 与存储；
+    会话自己的预览域（见下「会话独立预览域名」）不清除，应用保留自己的存储。
+  - `/v1/preview-auth` 与 `/_kirocrew/*` 只接受本机 nginx 的请求。
+- **部署**（一次）：
+  1. `deploy.sh up`：新增预览分发；端口取现有安全组规则的最后一个，规则本身不变。
+  2. `deploy.sh worker-host up <名称>`：Worker 主机加一条只对平台安全组开放的入站规则。
+  3. `deploy.sh push` 与 `deploy.sh worker-host push <名称>`。
+  - 安装脚本渲染 nginx 配置（`nginx -t` 不通过时移除并退出），平台 `platform.toml` 写入 `preview_url`，Worker 主机边界配置写入
+    `preview_tls_port` / `preview_tls_name`。
+  - 首次写入边界配置会让该主机的 Gateway 重启一次（指纹包含边界配置），部署前确认没有进行中的会话。
+- **会话独立预览域名**（D36 第 3 期，`stack.env` 的 `PREVIEW_SESSION_DOMAIN`，现为 `preview.tinyboat.blog`）：
+  - 每个会话的预览在 `https://<run-id>.preview.tinyboat.blog/`：同一浏览器可同时打开多个会话的预览，各应用读不到其他会话的
+    Cookie、存储与缓存（但应用的 JavaScript 可以写 `Domain=preview.tinyboat.blog` 的 Cookie，其他会话的应用会收到；写给
+    `.tinyboat.blog` 的大量 Cookie 也会让控制台的请求头过大而失败）。控制台与 MCP 取得的打开链接直接指向该会话的域名。
+  - `deploy.sh up` 在 Route 53 找到托管区，在 us-east-1 找到 `*.preview.tinyboat.blog` 通配证书；没有时申请，把 DNS 验证记录写入
+    托管区并等待签发（几分钟）。随后为预览分发加通配别名与 A / AAAA 别名记录。`push` 把 `preview_domain` 写入 `platform.toml`。
+  - CloudFront 把访问的主机名交给源站，nginx 以 `X-Preview-Host` 转给 API：主机名指明会话，Cookie 与打开链接必须属于同一会话，
+    其他会话的 Cookie 或链接得 403。预览分发的 cloudfront.net 域名保留为共用预览域。
+  - 应用为上级域设置的 Cookie（`Domain=tinyboat.blog` 等）由 nginx 改回该会话的主机名。**剩余风险**：应用在页面里用 JavaScript
+    设置的上级域 Cookie 不经过 nginx，会被浏览器发给 `tinyboat.blog` 的其他站点（如 `keycloak.tinyboat.blog`）。控制台的 Token
+    存在 `sessionStorage`，不受影响。负责人 2026-10-14 选择沿用 `tinyboat.blog`；改用专用域名只需改 `PREVIEW_SESSION_DOMAIN`
+    并重新 `up`、`push`。
+- **同源防护**（共用的 cloudfront.net 预览域：所有会话的应用同源）：
+  - nginx 拒绝 Service Worker 脚本请求（`Service-Worker` 头），所以应用无法注册 Service Worker。
+  - 代理的响应一律为 `Cache-Control: no-cache`，并忽略应用发出的 `X-Accel-*`。
+  - 打开链接时清除预览域的缓存、Cookie、存储与已打开的页面（`Clear-Site-Data`）。
+  - 本机接口要求 nginx 带上由源站密钥派生的 `X-Preview-Gate`，因此平台主机上的其他进程（如个人空间的 Agent）拿不到上游
+    与 Worker 主机的校验头。
+  - Worker 重启后，旧预览的记录在该执行环境下一次启动预览时，以及每分钟回收时停止（按 Worker 进程实例判断）。
+  - 剩余风险：在共用预览域上，浏览器中仍开着的旧预览页面，在打开另一个会话的预览后仍能以新 Cookie 访问预览域。会话独立预览域名
+    消除了这一点（控制台与 MCP 默认使用它）。
+  - 两种域名都拒绝 Service Worker：它会在预览停止、权限撤销后继续留在浏览器中。
+- **限制**：不限 CPU / 内存；共用预览域上同一浏览器同时只预览一个会话；`/_kirocrew/` 路径保留给平台。
+
+### 下载会话源码（D36）
+
+控制台会话页「下载源码」或 MCP `octopus_download`：源码打包为 zip（含 `.git`，不含 `node_modules`、`.venv`、`target` 等依赖与缓存目录、
+`.env`、符号链接；压缩前 200 MB 上限），经 10 分钟签名链接 `GET /archive/<票据>/<run>.zip` 流式下载，每次下载复核持有人仍能查看
+该会话；包内 `OCTOPUS-ARCHIVE.txt` 写明 HEAD、未打包的内容与本机启动步骤（来自交付任务写的 `.octopus/preview.json`，或按
+`package.json` 自动识别）。下载写入变更记录（`run.downloaded`），管理员下载他人会话写审计（`run.download`）。
+- `.git` 可直接使用（含空目录）；`.git/config` 只保留格式、remote 与 branch 设置，不打包 hooks（`*.sample` 除外），打开下载的仓库
+  不会运行会话中设置的命令（如 `core.fsmonitor`、别名、hooks）。
+- 签发链接前先在 Worker 试算（`POST /archive/plan`）：超限（413 `archive_too_large`）、Worker 不可用（503）、Worker 未升级
+  （409 `archive_unsupported`）直接作为错误返回，响应含 `bytes_estimate`。
+- 读不到的文件（权限、打包中被删除、FIFO 等）跳过并列在说明文件中；其他打包错误使 zip 没有结尾记录，平台不完成下载、不写记录。
+
+### 会话变更记录（D34）
+
+会话的每一次写入都记录操作者（用户名与来源：控制台 / Coding Agent / API，或 Engine / Worker / KiroCrew / 协调者）、
+字段前后值（长文本只记字符数与哈希）与原因。控制台会话页「变更记录」按人 / 系统筛选；API：
+`GET /v1/runs/<id>/changes?who=user|system&kind=<前缀>&before=<id>&limit=<1–200>`；导出（`/export`）含 `changes`。
+此前的事件按记录列出（命令归为人，其余标为「系统（旧记录）」）。
+
 ### 用户、Token 与管理员权限（访问管理第 1 期）
 
 - **scope**：`read`（查看）、`execute`（会话操作）、`manage`（自己的配置：工作流、本人 Token 与密码、作为 Team owner 管理本 Team）、
   `admin`（平台管理：用户、Team 创建、执行环境、`/v1/admin/*`，以及查看与操作他人会话）。管理员网页登录自动带 `admin`；
   **已签发、不含 `admin` 的长期 Token（如 `claude MCP`）调管理接口返回 403**，查看与提交本人会话不受影响，需要时以管理员重新签发。
   **部署后管理员需重新登录一次**：此前的网页登录不含 `admin`，控制台顶部会提示「重新登录后才能使用管理功能」。
-- **用户**：控制台「设置 → 用户管理」停用 / 恢复、设为 / 取消管理员、重置密码、查看与吊销 Token；停用与重置立即吊销该用户全部 Token，
+- **用户**：控制台「设置 → 用户管理」创建账户（可同时为个人空间分配共享环境）、停用 / 恢复、设为 / 取消管理员、重置密码、查看与吊销 Token；停用与重置立即吊销该用户全部 Token，
   会话照常执行；至少保留一位有效管理员，Team 唯一的有效 owner 不能被停用。账户菜单「修改密码」后，本人其他登录与 Token 失效。
   API：`POST /v1/me/password`、`POST /v1/users/<id>/password|active|admin`、`GET /v1/admin/users`、`GET|DELETE /v1/admin/users/<id>/tokens[/<tid>]`。
 - **管理员越权**：可查看并操作全部会话（控制台侧栏「全部会话」，`GET /v1/runs?all=1`），原生 KiroCrew 入口不因管理员身份开放；
@@ -199,6 +554,9 @@ API 访问日志不记录 token、请求体或查询串；Engine 只记录异常
 
 现象：Attempt 失败类型为 `auth`，Session 进入等待并说明具体工具。
 处理：`sudo -iu crew-personal` 重新登录对应工具；不需要重启平台，Session 在条件满足后继续（M2 起自动恢复）。
+kiro-cli（D34）：Worker 每分钟以 `kiro-cli whoami` 检查登录，「执行环境 · Worker」显示「kiro-cli 登录已过期」；过期时使用 Kiro 的
+任务（规划、kiro 任务、协调者诊断）不派发，会话保持原状态并显示「Worker 上 kiro-cli 登录已过期：请管理员执行 deploy.sh kiro-login」，
+登录恢复后自动继续，不计为失败。运行时取消原生任务、Agent 的 ACP 进程退出（如 Gateway 重启，M2 故障注入）、或原生任务没有返回结果时，同一任务自动重试一次，不占纠错轮次。
 不要把个人机器上的 HOME 或凭据目录复制到实例。
 
 ## 9．停止失败

@@ -3,17 +3,22 @@ import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
 import { api } from "@/api/client";
 import { keys } from "@/api/hooks";
-import type { AdminUser, UserToken } from "@/api/types";
+import type { AdminUser, UserToken, Worker } from "@/api/types";
 import { FormDialog } from "@/components/FormDialog";
+import { NativeSelect } from "@/components/NativeSelect";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
-import { useConsole } from "@/features/console/context";
+import { spaceWorkers, useConsole } from "@/features/console/context";
 
 const ADMIN_USERS = ["admin", "users"] as const;
 type Pending = { action: "deactivate" | "activate" | "promote" | "demote"; label: string } | null;
 
-/** Platform administrators manage accounts: deactivate or restore, promote or demote, reset a password, revoke tokens. */
+const environmentLabel = (w: Pick<Worker, "name" | "scope">) =>
+  (w.scope === "shared" ? "共享环境 · " : w.scope === "spare" ? "空闲专属环境 · " : "专属环境 · ") + w.name;
+
+/** Platform administrators manage accounts: create, deactivate or restore, promote or demote, reset a password,
+ * revoke tokens, and give a personal space the shared execution environment. */
 export function UsersDialog() {
   const { close } = useConsole();
   const { data: users = [], error } = useQuery({ queryKey: ADMIN_USERS, queryFn: () => api<AdminUser[]>("/admin/users") });
@@ -21,6 +26,7 @@ export function UsersDialog() {
     <FormDialog title="用户管理" kicker="USERS" onClose={close} wide
       description="停用或重置密码会立即吊销该用户的全部 Token；平台至少保留一位有效的管理员，Team 唯一的 owner 不能被停用。">
       {error && <p className="text-sm text-destructive">{(error as Error).message}</p>}
+      <CreateUser />
       <div className="space-y-2">
         {users.map((user) => <UserRow key={user.id} user={user} />)}
       </div>
@@ -28,8 +34,48 @@ export function UsersDialog() {
   );
 }
 
+function CreateUser() {
+  const { workers } = useConsole();
+  const client = useQueryClient();
+  const shared = workers.filter((w) => w.scope === "shared" && !!w.enabled);
+  const [user, setUser] = useState({ username: "", password: "" });
+  const [environment, setEnvironment] = useState<string | null>(null);
+  const personal = environment ?? shared[0]?.id ?? "";
+  const create = () => api("/users", "POST", personal ? { ...user, worker_id: personal } : user)
+    .then(() => Promise.all([ADMIN_USERS, keys.users, keys.workers].map((queryKey) => client.invalidateQueries({ queryKey }))))
+    .then(() => { setUser({ username: "", password: "" }); toast.success("账户已创建。"); })
+    .catch((e: Error) => toast.error(e.message));
+  return (
+    <section className="space-y-3 rounded-lg border px-3 py-3">
+      <h3 className="text-sm font-semibold">创建平台账户</h3>
+      <div className="grid gap-3 sm:grid-cols-3">
+        <div className="space-y-1.5">
+          <Label htmlFor="user-name">用户名</Label>
+          <Input id="user-name" autoComplete="off" value={user.username} onChange={(e) => setUser({ ...user, username: e.target.value })} />
+        </div>
+        <div className="space-y-1.5">
+          <Label htmlFor="user-password">初始密码（至少 12 位）</Label>
+          <Input id="user-password" type="password" autoComplete="new-password" value={user.password}
+            onChange={(e) => setUser({ ...user, password: e.target.value })} />
+        </div>
+        <div className="space-y-1.5">
+          <Label htmlFor="user-environment">个人空间的执行环境</Label>
+          <NativeSelect id="user-environment" value={personal} onChange={(e) => setEnvironment(e.target.value)}>
+            <option value="">暂不分配</option>
+            {shared.map((w) => <option key={w.id} value={w.id}>{environmentLabel(w)}</option>)}
+          </NativeSelect>
+        </div>
+      </div>
+      <p className="text-xs text-muted-foreground">个人空间可以使用共享环境，不必每人一个 Worker；之后也可以在下方列表中分配。</p>
+      <Button type="button" variant="outline" id="create-user" onClick={() => void create()}>创建用户</Button>
+    </section>
+  );
+}
+
 function UserRow({ user }: { user: AdminUser }) {
-  const { me } = useConsole();
+  const { me, workers } = useConsole();
+  const shared = workers.find((w) => w.scope === "shared" && !!w.enabled);
+  const current = spaceWorkers(workers, "", user)[0];
   const self = user.id === me.id;   // no locking oneself out from one's own row
   const client = useQueryClient();
   const [revoking, setRevoking] = useState<string | null>(null);
@@ -38,7 +84,7 @@ function UserRow({ user }: { user: AdminUser }) {
   const [showTokens, setShowTokens] = useState(false);
   const tokens = useQuery({ queryKey: [...ADMIN_USERS, user.id, "tokens"], enabled: showTokens,
     queryFn: () => api<UserToken[]>(`/admin/users/${encodeURIComponent(user.id)}/tokens`) });
-  const refresh = () => Promise.all([ADMIN_USERS, keys.users].map((queryKey) => client.invalidateQueries({ queryKey })));
+  const refresh = () => Promise.all([ADMIN_USERS, keys.users, keys.workers].map((queryKey) => client.invalidateQueries({ queryKey })));
   const run = (action: () => Promise<unknown>, done: string) =>
     action().then(refresh).then(() => toast.success(done)).catch((e: Error) => toast.error(e.message));
   const base = `/users/${encodeURIComponent(user.id)}`;
@@ -68,6 +114,7 @@ function UserRow({ user }: { user: AdminUser }) {
           {user.last_login ? "最近登录 " + new Date(user.last_login * 1000).toLocaleString() : "从未登录"}
           {" · "}{user.teams.length ? user.teams.map((t) => `${t.name}（${t.role}）`).join("、") : "不在任何 Team"}
           {" · "}{user.tokens} 个有效 Token
+          {" · "}个人空间：{current ? environmentLabel(current) : "未分配"}
         </small>
         <span className="ml-auto flex flex-wrap gap-1.5">
           <Button type="button" size="sm" variant="outline" disabled={self && user.active} title={self ? "不能停用自己" : undefined}
@@ -79,6 +126,12 @@ function UserRow({ user }: { user: AdminUser }) {
             {user.admin ? "取消管理员" : "设为管理员"}
           </Button>
           <Button type="button" size="sm" variant="outline" onClick={() => setReset({ password: "", confirm: "", error: "" })}>重置密码</Button>
+          {!current && !!shared && user.active && (
+            <Button type="button" size="sm" variant="outline" onClick={() => void run(() =>
+              api("/workers/" + encodeURIComponent(shared.id) + "/spaces", "POST", { user_id: user.id }), "已分配共享环境。")}>
+              分配共享环境
+            </Button>
+          )}
           <Button type="button" size="sm" variant="ghost" aria-expanded={showTokens} onClick={() => setShowTokens(!showTokens)}>Token</Button>
         </span>
       </div>

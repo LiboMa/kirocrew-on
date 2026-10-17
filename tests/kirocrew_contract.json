@@ -1,0 +1,12 @@
+{
+  "kirocrew_version": "0.10.0",
+  "about": "Config keys the platform writes into $KIROCREW_HOME/config.json that KiroCrew reads (sections: dataclass fields of KiroCrewConfig and its section configs). tests/test_kirocrew_contract.py keeps seed() inside this list; tests/native checks the list against the installed KiroCrew on every deploy.",
+  "config": {
+    "": ["agent", "session", "dashboard", "default_workspace"],
+    "agent": ["provider", "acp_backend", "default_agent", "model", "sandbox", "approval_mode", "session_sharing", "max_subagents",
+              "log_level", "subagent_cwd_allowed_roots", "subagent_result_ttl_secs", "adaptive_concurrency_mode",
+              "dangerously_skip_permissions"],
+    "session": ["pool_size"],
+    "dashboard": ["onboarded"]
+  }
+}

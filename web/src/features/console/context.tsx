@@ -17,6 +17,7 @@ export type Dialog =
   | { kind: "share"; flowId: string }
   | { kind: "team" }
   | { kind: "tokens" }
+  | { kind: "credentials" }
   | { kind: "workers" }
   | { kind: "users" }
   | { kind: "password" }

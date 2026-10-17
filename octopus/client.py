@@ -7,6 +7,14 @@ from urllib.parse import urlencode, urlsplit
 from .db import dumps
 
 
+class ApiError(RuntimeError):
+    """An API error response: HTTP status, the API's stable code and its message (spec §7.2: Agents act on these)."""
+
+    def __init__(self, status, code, error, text=None):
+        super().__init__(text or f"{status} {code}: {error}")
+        self.status, self.code, self.error = status, code, error
+
+
 def http_error(exc):
     """A readable error for an API error response, including non-JSON pages from a proxy (CloudFront)."""
     with exc:
@@ -14,11 +22,11 @@ def http_error(exc):
     try:
         result = json.loads(raw)
     except ValueError:
-        hint = ": API 暂不可用，稍后重试" if exc.code >= 500 else ""
-        return RuntimeError(f"{exc.code} {exc.reason}{hint}")
+        hint = "：API 暂不可用，稍后重试" if exc.code >= 500 else ""
+        return ApiError(exc.code, "http_error", f"{exc.reason}{hint}", f"{exc.code} {exc.reason}{hint.replace('：', ': ', 1)}")
     if not isinstance(result, dict):
-        return RuntimeError(f"{exc.code} {exc.reason}")
-    return RuntimeError(f"{exc.code} {result.get('code')}: {result.get('error')}")
+        return ApiError(exc.code, "http_error", str(exc.reason), f"{exc.code} {exc.reason}")
+    return ApiError(exc.code, result.get("code"), result.get("error"))
 
 
 class Client:
@@ -28,7 +36,7 @@ class Client:
             raise ValueError("Remote API connections require HTTPS")
         self.url, self.token = url.rstrip("/"), token
 
-    def request(self, method, path, body=None):
+    def request(self, method, path, body=None, timeout=40):
         if not path.startswith("/v1/") or path.startswith("//"):
             raise ValueError("Use a /v1/ API path")
         req = urllib.request.Request(self.url + path, method=method,
@@ -36,8 +44,34 @@ class Client:
                                      headers={"Authorization": "Bearer " + self.token,
                                               "Content-Type": "application/json"})
         try:
-            with urllib.request.urlopen(req, timeout=40) as response:
+            with urllib.request.urlopen(req, timeout=timeout) as response:
                 return json.load(response)
+        except urllib.error.HTTPError as exc:
+            raise http_error(exc) from None
+
+    def text(self, method, path, timeout=40):
+        """A text answer (a Session's Markdown report), read like request: a /v1/ path with the token."""
+        if not path.startswith("/v1/") or path.startswith("//"):
+            raise ValueError("Use a /v1/ API path")
+        req = urllib.request.Request(self.url + path, method=method, headers={"Authorization": "Bearer " + self.token})
+        try:
+            with urllib.request.urlopen(req, timeout=timeout) as response:
+                return response.read().decode("utf-8", errors="replace")
+        except urllib.error.HTTPError as exc:
+            raise http_error(exc) from None
+
+    def download(self, path, file, timeout=300):
+        """Write a signed download (``/archive/<ticket>/…``) to ``file``; returns the bytes written."""
+        if not path.startswith("/archive/"):
+            raise ValueError("只能下载 /archive/ 链接")
+        req = urllib.request.Request(self.url + path)
+        try:
+            with urllib.request.urlopen(req, timeout=timeout) as response:
+                total = 0
+                while chunk := response.read(65536):
+                    file.write(chunk)
+                    total += len(chunk)
+                return total
         except urllib.error.HTTPError as exc:
             raise http_error(exc) from None
 

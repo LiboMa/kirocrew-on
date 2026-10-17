@@ -3,39 +3,23 @@ import { useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
 import { api } from "@/api/client";
 import { keys } from "@/api/hooks";
-import type { Team, Worker } from "@/api/types";
+import type { Member, Team, Worker } from "@/api/types";
 import { FormDialog } from "@/components/FormDialog";
 import { NativeSelect } from "@/components/NativeSelect";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Separator } from "@/components/ui/separator";
-import { spaceWorkers, useConsole } from "@/features/console/context";
+import { useConsole } from "@/features/console/context";
+import { elevated } from "@/lib/access";
 
 const environmentLabel = (w: Pick<Worker, "name" | "scope">) =>
   (w.scope === "shared" ? "共享环境 · " : w.scope === "spare" ? "空闲专属环境 · " : "专属环境 · ") + w.name;
 
-export function TeamDialog() {
-  const { teams, allTeams, users, workers, space, setSpace, me, close } = useConsole();
+/** Run a Team or Worker change, refresh what it touches and report the server's message on failure. */
+function useAct(setError: (message: string) => void) {
   const client = useQueryClient();
-  const team = teams.find((t) => t.id === space);
-  // A Team is created on an execution environment (D28): a shared one, or a spare one that becomes its own.
-  // Shared environments first, so a spare one (which a Team keeps for good) is never the default by accident.
-  const environments = workers.filter((w) => !!w.enabled && (w.scope === "shared" || w.scope === "spare"))
-    .sort((a, b) => Number(a.scope === "spare") - Number(b.scope === "spare"));
-  const shared = environments.filter((w) => w.scope === "shared");
-  const [teamName, setTeamName] = useState("");
-  const [owner, setOwner] = useState(me.username);
-  const [environment, setEnvironment] = useState("");
-  const [member, setMember] = useState(users[0]?.username ?? "");
-  const [role, setRole] = useState("member");
-  const [user, setUser] = useState({ username: "", password: "" });
-  const [userEnvironment, setUserEnvironment] = useState<string | null>(null);
-  const [assignments, setAssignments] = useState<Record<string, string>>({});
-  const [error, setError] = useState("");
-  const chosen = environments.some((w) => w.id === environment) ? environment : environments[0]?.id ?? "";
-  const personal = userEnvironment ?? shared[0]?.id ?? "";
-  const act = (action: () => Promise<unknown>, done?: string) => async () => {
+  return (action: () => Promise<unknown>, done?: string) => async () => {
     setError("");
     try {
       await action();
@@ -45,154 +29,236 @@ export function TeamDialog() {
       setError((reason as Error).message);
     }
   };
+}
+
+/** A confirmation strip for an action that is hard to undo, in the style of the user administration. */
+function Confirm({ text, label, onConfirm, onCancel }: { text: string; label: string; onConfirm: () => void; onCancel: () => void }) {
+  return (
+    <div className="flex w-full flex-wrap items-center gap-2 rounded-md border border-warning/40 bg-warning/5 px-3 py-2 text-xs">
+      <span className="flex-1">{text}</span>
+      <Button type="button" size="sm" variant="destructive" onClick={onConfirm}>{label}</Button>
+      <Button type="button" size="sm" variant="ghost" onClick={onCancel}>取消</Button>
+    </div>
+  );
+}
+
+export function TeamDialog() {
+  const { teams, allTeams, space, me, close } = useConsole();
+  const admin = elevated(me);
+  // An administrator manages every Team (spec §5); everyone else the Teams they belong to.
+  const manageable = admin ? allTeams : teams;
+  const [picked, setPicked] = useState("");
+  const team = manageable.find((t) => t.id === (picked || space)) ?? manageable[0];
+  const [error, setError] = useState("");
 
   return (
     <FormDialog title="团队与成员" kicker="TEAM ACCESS" onClose={close}>
-      {me.admin ? (
-        <section className="space-y-3">
-          <div className="grid items-end gap-3 sm:grid-cols-3">
-            <div className="space-y-1.5">
-              <Label htmlFor="team-name">创建 Team</Label>
-              <Input id="team-name" value={teamName} onChange={(e) => setTeamName(e.target.value)} placeholder="团队名称" maxLength={80} />
-            </div>
-            <div className="space-y-1.5">
-              <Label htmlFor="team-owner">Team owner</Label>
-              <NativeSelect id="team-owner" value={owner} onChange={(e) => setOwner(e.target.value)}>
-                {users.map((u) => <option key={u.id} value={u.username}>{u.username}</option>)}
-              </NativeSelect>
-            </div>
-            <div className="space-y-1.5">
-              <Label htmlFor="team-environment">执行环境</Label>
-              <NativeSelect id="team-environment" value={chosen} disabled={!environments.length}
-                onChange={(e) => setEnvironment(e.target.value)}>
-                {environments.map((w) => <option key={w.id} value={w.id}>{environmentLabel(w)}</option>)}
-              </NativeSelect>
-            </div>
-          </div>
-          <Button type="button" id="create-team" disabled={!chosen} onClick={act(async () => {
-            const created = await api<Team>("/teams", "POST", { name: teamName, owner, worker_id: chosen });
-            setTeamName("");
-            if (created.role) setSpace(created.id);
-          }, "Team 已创建。")}>创建 Team</Button>
-          <p className="text-xs text-muted-foreground">
-            {environments.length
-              ? "共享环境内的会话互相可读；空闲专属环境分配后只属于这个 Team，不能再改绑。"
-              : "先在主机上开通执行环境，或把一个 Worker 设为共享环境（「执行环境 · Worker」），再创建 Team。"}
-          </p>
-          <div className="space-y-2">
-            {allTeams.map((t) => {
-              const pick = environments.some((w) => w.id === assignments[t.id]) ? assignments[t.id] : environments[0]?.id ?? "";
-              return (
-                <div key={t.id} data-team-environment={t.id} className="flex flex-wrap items-center justify-between gap-2 rounded-lg border bg-card px-3 py-2 text-sm">
-                  <span>{t.name} <small className="ml-2 text-xs text-muted-foreground">
-                    {t.environment
-                      ? (t.environment.enabled === false ? "执行环境已停用 · " + t.environment.name : environmentLabel(t.environment))
-                      : t.environment === null ? <span>未分配执行环境</span> : null}
-                  </small></span>
-                  {t.environment === null && !!environments.length && (
-                    <span className="flex items-center gap-2">
-                      <NativeSelect aria-label={`为 ${t.name} 分配的执行环境`} value={pick}
-                        onChange={(e) => setAssignments({ ...assignments, [t.id]: e.target.value })}>
-                        {environments.map((w) => <option key={w.id} value={w.id}>{environmentLabel(w)}</option>)}
-                      </NativeSelect>
-                      <Button type="button" size="sm" variant="outline"
-                        onClick={act(() => api("/workers/" + pick + "/spaces", "POST", { team_id: t.id }), "已分配执行环境。")}>
-                        分配执行环境
-                      </Button>
-                    </span>
-                  )}
-                </div>
-              );
-            })}
-          </div>
-        </section>
-      ) : <p className="text-sm text-muted-foreground">Team 由平台管理员创建，并在创建时分配执行环境。</p>}
+      {admin ? <CreateTeam setError={setError} />
+        : <p className="text-sm text-muted-foreground">Team 由平台管理员创建，并在创建时分配执行环境。</p>}
       <Separator />
       {team ? (
-        <section className="space-y-3">
-          <h3 className="text-sm font-semibold">{team.name}</h3>
-          {team.environment !== undefined && (
-            <p className="text-xs text-muted-foreground">
-              执行环境：{team.environment ? environmentLabel(team.environment) : "未分配，提交会被拒绝，请联系平台管理员"}
-            </p>
-          )}
-          {team.members.map((m) => (
-            <div key={m.id} className="flex items-center justify-between rounded-lg border bg-card px-3 py-2 text-sm">
-              <span>{m.username} <small className="ml-2 text-xs text-muted-foreground">{m.role}</small></span>
-              {team.role === "owner" && (
-                <Button type="button" size="sm" variant="ghost" className="text-destructive" data-remove-member={m.username}
-                  onClick={act(() => api("/teams/" + team.id + "/members", "DELETE", { username: m.username }))}>移除</Button>
-              )}
-            </div>
-          ))}
-          {team.role === "owner" && (
-            <div className="grid items-end gap-3 sm:grid-cols-[1fr_9rem_auto]">
-              <div className="space-y-1.5">
-                <Label htmlFor="member-name">添加现有用户</Label>
-                <NativeSelect id="member-name" value={member} onChange={(e) => setMember(e.target.value)}>
-                  {users.map((u) => <option key={u.id} value={u.username}>{u.username}</option>)}
-                </NativeSelect>
-              </div>
-              <div className="space-y-1.5">
-                <Label htmlFor="member-role">角色</Label>
-                <NativeSelect id="member-role" value={role} onChange={(e) => setRole(e.target.value)}>
-                  <option value="member">Member</option><option value="owner">Owner</option>
-                </NativeSelect>
-              </div>
-              <Button type="button" variant="outline" id="add-member"
-                onClick={act(() => api("/teams/" + team.id + "/members", "POST", { username: member, role }))}>添加 / 更新</Button>
-            </div>
-          )}
-        </section>
-      ) : <p className="text-sm text-muted-foreground">切换至一个 Team 后，可在这里管理它的成员。</p>}
-      {!!me.admin && (
         <>
-          <Separator />
-          <section className="space-y-3">
-            <h3 className="text-sm font-semibold">创建平台账户</h3>
-            <p className="text-xs text-muted-foreground">个人空间可以使用共享环境，不必每人一个 Worker；之后也可以在下方列表中分配。</p>
-            <div className="grid gap-3 sm:grid-cols-3">
-              <div className="space-y-1.5">
-                <Label htmlFor="user-name">用户名</Label>
-                <Input id="user-name" autoComplete="off" value={user.username} onChange={(e) => setUser({ ...user, username: e.target.value })} />
-              </div>
-              <div className="space-y-1.5">
-                <Label htmlFor="user-password">初始密码（至少 12 位）</Label>
-                <Input id="user-password" type="password" autoComplete="new-password" value={user.password}
-                  onChange={(e) => setUser({ ...user, password: e.target.value })} />
-              </div>
-              <div className="space-y-1.5">
-                <Label htmlFor="user-environment">个人空间的执行环境</Label>
-                <NativeSelect id="user-environment" value={personal} onChange={(e) => setUserEnvironment(e.target.value)}>
-                  <option value="">暂不分配</option>
-                  {shared.map((w) => <option key={w.id} value={w.id}>{environmentLabel(w)}</option>)}
-                </NativeSelect>
-              </div>
+          {manageable.length > 1 && (
+            <div className="space-y-1.5">
+              <Label htmlFor="team-pick">Team</Label>
+              <NativeSelect id="team-pick" value={team.id} onChange={(e) => setPicked(e.target.value)}>
+                {manageable.map((t) => <option key={t.id} value={t.id}>{t.name}{t.archived ? " · 已归档" : ""}</option>)}
+              </NativeSelect>
             </div>
-            <Button type="button" variant="outline" id="create-user" onClick={act(async () => {
-              await api("/users", "POST", personal ? { ...user, worker_id: personal } : user);
-              setUser({ username: "", password: "" });
-            }, "账户已创建。")}>创建用户</Button>
-            <div className="space-y-2">
-              {users.map((u) => {
-                const current = spaceWorkers(workers, "", u)[0];
-                return (
-                  <div key={u.id} data-user-environment={u.id} className="flex flex-wrap items-center justify-between gap-2 rounded-lg border bg-card px-3 py-2 text-sm">
-                    <span><span>{u.username}</span> <small className="ml-2 text-xs text-muted-foreground">{current ? environmentLabel(current) : "未分配"}</small></span>
-                    {!current && !!shared.length && (
-                      <Button type="button" size="sm" variant="outline"
-                        onClick={act(() => api("/workers/" + shared[0].id + "/spaces", "POST", { user_id: u.id }), "已分配共享环境。")}>
-                        分配共享环境
-                      </Button>
-                    )}
-                  </div>
-                );
-              })}
-            </div>
-          </section>
+          )}
+          <TeamPage key={team.id} team={team} setError={setError} />
         </>
-      )}
+      ) : <p className="text-sm text-muted-foreground">你还不在任何 Team 中。</p>}
       {error && <p role="alert" className="text-sm text-destructive">{error}</p>}
     </FormDialog>
+  );
+}
+
+function CreateTeam({ setError }: { setError: (message: string) => void }) {
+  const { users, workers, me, setSpace } = useConsole();
+  const act = useAct(setError);
+  // A Team is created on an execution environment (D28): a shared one, or a spare one that becomes its own.
+  // Shared environments first, so a spare one (which a Team keeps for good) is never the default by accident.
+  const environments = workers.filter((w) => !!w.enabled && (w.scope === "shared" || w.scope === "spare"))
+    .sort((a, b) => Number(a.scope === "spare") - Number(b.scope === "spare"));
+  const [teamName, setTeamName] = useState("");
+  const [owner, setOwner] = useState(me.username);
+  const [environment, setEnvironment] = useState("");
+  const chosen = environments.some((w) => w.id === environment) ? environment : environments[0]?.id ?? "";
+  return (
+    <section className="space-y-3">
+      <div className="grid items-end gap-3 sm:grid-cols-3">
+        <div className="space-y-1.5">
+          <Label htmlFor="team-name">创建 Team</Label>
+          <Input id="team-name" value={teamName} onChange={(e) => setTeamName(e.target.value)} placeholder="团队名称" maxLength={80} />
+        </div>
+        <div className="space-y-1.5">
+          <Label htmlFor="team-owner">Team owner</Label>
+          <NativeSelect id="team-owner" value={owner} onChange={(e) => setOwner(e.target.value)}>
+            {users.map((u) => <option key={u.id} value={u.username}>{u.username}</option>)}
+          </NativeSelect>
+        </div>
+        <div className="space-y-1.5">
+          <Label htmlFor="team-environment">执行环境</Label>
+          <NativeSelect id="team-environment" value={chosen} disabled={!environments.length}
+            onChange={(e) => setEnvironment(e.target.value)}>
+            {environments.map((w) => <option key={w.id} value={w.id}>{environmentLabel(w)}</option>)}
+          </NativeSelect>
+        </div>
+      </div>
+      <Button type="button" id="create-team" disabled={!chosen} onClick={act(async () => {
+        const created = await api<Team>("/teams", "POST", { name: teamName, owner, worker_id: chosen });
+        setTeamName("");
+        if (created.role) setSpace(created.id);
+      }, "Team 已创建。")}>创建 Team</Button>
+      <p className="text-xs text-muted-foreground">
+        {environments.length
+          ? "共享环境内的会话互相可读；空闲专属环境分配后属于这个 Team。"
+          : "先在主机上开通执行环境，或把一个 Worker 设为共享环境（「执行环境 · Worker」），再创建 Team。"}
+      </p>
+    </section>
+  );
+}
+
+type Pending = { kind: "environment" | "archive" } | { kind: "remove" | "leave"; member: string } | null;
+
+/** One Team: name, execution environment, members and roles, archiving (spec §5). */
+function TeamPage({ team, setError }: { team: Team; setError: (message: string) => void }) {
+  const { users, workers, me } = useConsole();
+  const act = useAct(setError);
+  const admin = elevated(me);
+  const manage = admin || team.role === "owner";
+  const archived = !!team.archived;
+  const base = "/teams/" + encodeURIComponent(team.id);
+  const [title, setTitle] = useState(team.name);
+  const [pending, setPending] = useState<Pending>(null);
+  // Another enabled shared or spare environment; the Team's current one is not offered again.
+  const candidates = workers.filter((w) => !!w.enabled && (w.scope === "shared" || w.scope === "spare")
+    && w.id !== team.environment?.worker_id);
+  const [pick, setPick] = useState("");
+  const target = candidates.some((w) => w.id === pick) ? pick : candidates[0]?.id ?? "";
+  const outsiders = users.filter((u) => !team.members.some((m) => m.id === u.id));
+  const [member, setMember] = useState("");
+  const [role, setRole] = useState("member");
+  const adding = outsiders.some((u) => u.username === member) ? member : outsiders[0]?.username ?? "";
+  const changeEnvironment = act(() => api(base + "/environment", "POST", { worker_id: target }),
+    team.environment ? "已更换执行环境。" : "已分配执行环境。");
+
+  return (
+    <section className="space-y-4">
+      <div className="flex flex-wrap items-center gap-2">
+        <h3 className="text-sm font-semibold">{team.name}</h3>
+        {team.role && <span className="rounded bg-muted px-1.5 text-[11px] text-muted-foreground">{team.role}</span>}
+        {archived && <span className="rounded bg-destructive/10 px-1.5 text-[11px] text-destructive">已归档</span>}
+      </div>
+
+      {manage && (
+        <div className="flex items-end gap-2">
+          <div className="flex-1 space-y-1.5">
+            <Label htmlFor="team-title">Team 名称</Label>
+            <Input id="team-title" value={title} maxLength={80} onChange={(e) => setTitle(e.target.value)} />
+          </div>
+          <Button type="button" variant="outline" disabled={!title.trim() || title.trim() === team.name}
+            onClick={act(() => api(base, "PATCH", { name: title }), "Team 已改名。")}>改名</Button>
+        </div>
+      )}
+
+      <div data-team-environment={team.id} className="flex flex-wrap items-center justify-between gap-2 rounded-lg border bg-card px-3 py-2 text-sm">
+        <span>执行环境 <small className="ml-2 text-xs text-muted-foreground">
+          {team.environment
+            ? (team.environment.enabled === false ? "执行环境已停用 · " + team.environment.name : environmentLabel(team.environment))
+            : team.environment === null ? <span>未分配执行环境</span> : null}
+        </small></span>
+        {admin && !!candidates.length && (
+          <span className="flex items-center gap-2">
+            <NativeSelect aria-label={`为 ${team.name} 分配的执行环境`} value={target} onChange={(e) => setPick(e.target.value)}>
+              {candidates.map((w) => <option key={w.id} value={w.id}>{environmentLabel(w)}</option>)}
+            </NativeSelect>
+            <Button type="button" size="sm" variant="outline"
+              onClick={team.environment ? () => setPending({ kind: "environment" }) : changeEnvironment}>
+              {team.environment ? "更换执行环境" : "分配执行环境"}
+            </Button>
+          </span>
+        )}
+        {pending?.kind === "environment" && (
+          <Confirm label="确认更换" onCancel={() => setPending(null)}
+            onConfirm={() => { setPending(null); void changeEnvironment(); }}
+            text="旧会话不迁移：下次派发时进入等待，由成员或管理员重新分配；原环境若是该 Team 的专属主机，会改为空闲、只能再分配回这个 Team。确认更换？" />
+        )}
+      </div>
+
+      <div className="space-y-2">
+        {team.members.map((m) => (
+          <MemberRow key={m.id} member={m} self={m.id === me.id} manage={manage} pending={pending} setPending={setPending}
+            onRole={act(() => api(base + "/members", "POST", { username: m.username, role: m.role === "owner" ? "member" : "owner" }),
+              "角色已更新。")}
+            onRemove={act(() => api(base + "/members", "DELETE", { username: m.username }),
+              m.id === me.id ? "已退出 Team。" : "已移除。")} />
+        ))}
+      </div>
+
+      {manage && !archived && (
+        <div className="grid items-end gap-3 sm:grid-cols-[1fr_9rem_auto]">
+          <div className="space-y-1.5">
+            <Label htmlFor="member-name">添加现有用户</Label>
+            <NativeSelect id="member-name" value={adding} onChange={(e) => setMember(e.target.value)}>
+              {outsiders.map((u) => <option key={u.id} value={u.username}>{u.username}</option>)}
+            </NativeSelect>
+          </div>
+          <div className="space-y-1.5">
+            <Label htmlFor="member-role">角色</Label>
+            <NativeSelect id="member-role" value={role} onChange={(e) => setRole(e.target.value)}>
+              <option value="member">Member</option><option value="owner">Owner</option>
+            </NativeSelect>
+          </div>
+          <Button type="button" variant="outline" id="add-member" disabled={!adding}
+            onClick={act(() => api(base + "/members", "POST", { username: adding, role }), "成员已添加。")}>添加 / 更新</Button>
+        </div>
+      )}
+
+      {admin && (
+        <div className="space-y-2">
+          {archived ? (
+            <Button type="button" variant="outline" onClick={act(() => api(base + "/archive", "POST", { archived: false }), "Team 已恢复。")}>
+              恢复 Team
+            </Button>
+          ) : (
+            <Button type="button" variant="outline" onClick={() => setPending({ kind: "archive" })}>归档 Team</Button>
+          )}
+          {pending?.kind === "archive" && (
+            <Confirm label="确认归档" onCancel={() => setPending(null)}
+              onConfirm={() => { setPending(null); void act(() => api(base + "/archive", "POST", { archived: true }), "Team 已归档。")(); }}
+              text="归档后不能提交新会话或添加成员；已有会话可查看与停止，执行环境保留，恢复后可继续使用。" />
+          )}
+        </div>
+      )}
+    </section>
+  );
+}
+
+function MemberRow({ member, self, manage, pending, setPending, onRole, onRemove }: {
+  member: Member; self: boolean; manage: boolean; pending: Pending; setPending: (p: Pending) => void;
+  onRole: () => Promise<void>; onRemove: () => Promise<void>;
+}) {
+  const kind = self ? "leave" : "remove";
+  const asking = pending?.kind === kind && pending.member === member.id;
+  return (
+    <div role="group" aria-label={member.username} className="flex flex-wrap items-center gap-2 rounded-lg border bg-card px-3 py-2 text-sm">
+      <span className="flex-1">{member.username} <small className="ml-2 text-xs text-muted-foreground">{member.role}</small></span>
+      {manage && (
+        <Button type="button" size="sm" variant="ghost" onClick={() => void onRole()}>
+          {member.role === "owner" ? "改为 member" : "设为 owner"}
+        </Button>
+      )}
+      {(self || manage) && (
+        <Button type="button" size="sm" variant="ghost" className="text-destructive"
+          onClick={() => setPending({ kind, member: member.id })}>{self ? "退出 Team" : "移除"}</Button>
+      )}
+      {asking && (
+        <Confirm label={self ? "确认退出" : "确认移除"} onCancel={() => setPending(null)}
+          onConfirm={() => { setPending(null); void onRemove(); }}
+          text={self ? "退出后不能再查看这个 Team 的会话；唯一的 owner 不能退出。" : `移除 ${member.username}？其创建的 Team 会话保留在 Team 中。`} />
+      )}
+    </div>
   );
 }

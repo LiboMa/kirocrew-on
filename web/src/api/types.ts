@@ -10,6 +10,13 @@ export interface Step {
   model: string;
   effort: Effort | string;
   prompt: string;
+  /** Optional task contract (D34): what the task delivers and how it is checked. */
+  kind?: "implement" | "review" | "test" | "deliver" | "design";
+  deliverables?: string[];
+  acceptance?: string[];
+  verify?: string[];
+  depends_on?: string[];
+  paths?: string[];
 }
 
 export interface Me {
@@ -37,6 +44,8 @@ export interface Team {
   role: "owner" | "member" | string | null;
   created: number;
   members: Member[];
+  /** An archived Team takes no new Sessions or members; its Sessions stay readable (spec §5). */
+  archived?: boolean | number;
   /** The Team's execution environment (D28); null when none is assigned. Absent from older platforms. */
   environment?: { worker_id: string; name: string; scope: WorkerScope; enabled?: boolean } | null;
 }
@@ -75,7 +84,9 @@ export interface Environment {
   spaces: ({ team_id: string; name: string | null } | { user_id: string; username: string | null })[];
   url: string | null;
   active_runs: number;
-  health: { reachable: true; version?: string; isolation?: string; crew_entry?: boolean; crew_origin?: string }
+  health: { reachable: true; version?: string; isolation?: string; crew_entry?: boolean; crew_origin?: string;
+    /** kiro-cli's login on the boundary (D34): "expired" holds Kiro dispatches until an administrator logs in again. */
+    tool_auth?: { kiro?: "ok" | "expired" | "unknown" } }
     | { reachable: false; error: string };
 }
 
@@ -109,8 +120,34 @@ export interface AttemptEvidence {
   actual_model?: string | null;
   actual_effort?: string | null;
   native_session_id?: string | null;
-  outcome?: { decision?: string; [key: string]: unknown } | null;
+  outcome?: { decision?: string; acceptance?: AcceptanceCheck[]; suggestions?: string[]; [key: string]: unknown } | null;
+  /** Named gates (D37 §4), in the order they were judged. */
+  gates?: Gate[];
+  /** The task's candidate commit on the Session's branch (D37 §3). */
+  candidate?: Candidate | null;
+  /** The watchdog stopped this Attempt's native task for making no progress or running too long (D39). */
+  watchdog?: { reason?: string; unsupported?: boolean; [key: string]: unknown } | null;
+  /** The Coordinator recommended this Attempt's tool instead of the one that failed (D38 §3.3). */
+  switched_from?: { tool: string; model: string; effort: string; reason?: string | null; by: string; recovery: number } | null;
+  /** Verify commands still running (D37 §5). */
+  checks?: { job: string; started: number; commands: number } | null;
   [key: string]: unknown;
+}
+
+export interface Gate {
+  name: string;
+  status: "pass" | "fail" | "skip";
+  detail?: string;
+}
+
+export interface Candidate {
+  sha: string;
+  parent: string;
+  changed: boolean;
+  files: number;
+  insertions: number;
+  deletions: number;
+  rewritten?: boolean;
 }
 
 export interface Attempt {
@@ -135,6 +172,8 @@ export interface RunTask {
   spec: Step;
   current_attempt: string | null;
   attempts?: Attempt[];
+  /** Where its tool and model came from (M2: steps, workflow, template, document, planner, continue, coordinator). */
+  mapping?: { source: string; label: string };
 }
 
 export interface Attention {
@@ -153,17 +192,41 @@ export interface RecoveryRecord {
   failed_task_id: string;
   native_id?: string | null;
   error?: string | null;
-  decision?: { reason?: string; instructions?: string; target_task_id?: string; [key: string]: unknown } | null;
+  decision?: {
+    reason?: string; instructions?: string; target_task_id?: string; action?: string;
+    /** switch_tool (D38): the recommended tool and model, and what they replaced once applied. */
+    tool?: string; model?: string; switched_from?: { tool: string; model: string; effort: string };
+    [key: string]: unknown;
+  } | null;
 }
 
 export interface RecoveryPolicy {
   enabled: boolean;
   max_cycles: number;
+  /** false: the Coordinator may not recommend another tool (D38 §3.5); absent means allowed. */
+  switch_tools?: boolean;
+  /** The watchdog's limits in minutes (D39); absent means the defaults (30 and 170). */
+  idle_minutes?: number;
+  attempt_minutes?: number;
+  /** The automatic recovery budget (D42); absent means the defaults (4 retries, 720 minutes). */
+  max_retries?: number;
+  budget_minutes?: number;
+}
+
+/** What automatic recovery used since the Session began or the user's latest continue / requested diagnosis (D42). */
+export interface RecoveryBudget {
+  since: number;
+  reset: boolean;
+  cycles: { used: number; limit: number };
+  retries: { used: number; limit: number };
+  minutes: { used: number; limit: number };
+  exhausted: "cycles" | "retries" | "minutes" | null;
 }
 
 export interface Recovery {
   policy: RecoveryPolicy;
   used: number;
+  budget?: RecoveryBudget;
   latest: RecoveryRecord | null;
   history: RecoveryRecord[];
 }
@@ -175,6 +238,19 @@ export interface RunSource {
 }
 
 export interface Run {
+  /** Who submitted the Session (D35 §4). */
+  created_by?: { id: string; username?: string | null };
+  /** The source credential pinned at submission (D35 §4); never the secret. */
+  publish?: PublishRecord | null;
+  /** D47: publish a Draft PR / MR on completion (the user's setting, or the requirement asked for it); off: a person approves. */
+  publish_policy?: { auto: boolean; source?: "user" | "requested"; quote?: string; branch?: string; title?: string } | null;
+  /** The automatic publish's outcome for the version it was tried at. */
+  publish_auto?: { ok: boolean; url?: string | null; code?: string; error?: string; version: number } | null;
+  /** What a publish pushes: the candidate that passed the gates and the review (D37 §7). */
+  verified?: { sha: string; task_id: string } | null;
+  credentials?: { source: CredentialBinding | null; removed?: { id: string; name: string; hint: string; by: { username?: string | null } } } | null;
+  /** Tasks the latest continue left as they were, still carrying that version's result (D34). */
+  kept?: { version: number; tasks: string[] };
   id: string;
   name: string | null;
   input: string;
@@ -200,7 +276,9 @@ export interface Run {
   attention?: Attention | null;
   recovery?: Recovery | null;
   /** What the server allows the current user on this Session; absent from older platforms. */
-  permissions?: { operate: boolean; delete: boolean; native?: boolean };
+  /** resume: false for a Session of an archived Team (readable and stoppable only). */
+  /** publish: may publish the Session and answer its approvals (creator, Team owner, admin; D38 A3). */
+  permissions?: { operate: boolean; delete: boolean; native?: boolean; resume?: boolean; publish?: boolean };
   /** KiroCrew Agent planning: intent recognition, requirement enrichment and the generated tasks. */
   planning?: { mode: "agent"; applied: boolean; intent?: string; summary?: string; name?: string; tasks?: string[]; notes?: string[] } | null;
 }
@@ -223,6 +301,40 @@ export interface Observation {
   next_before: number | null;
   context_pct: number | null;
   messages: ObservedMessage[];
+}
+
+/** Session revisions (D32): GET /v1/runs/<id>/revisions and …/revisions/diff. */
+export interface RevisionEntry {
+  version: number;
+  kind: "created" | "planned" | "continued" | "recovered" | string;
+  summary: string;
+  created: number;
+  actor: { id: string; username: string | null };
+  /** Written before snapshots existed: rebuilt from what it recorded. */
+  reconstructed: boolean;
+}
+
+export interface DiffLine {
+  op: " " | "-" | "+";
+  text: string;
+}
+
+export interface TaskDiff {
+  id: string;
+  name: string;
+  status: "added" | "removed" | "changed" | "same";
+  fields: Record<string, [string | null, string | null]>;
+  prompt: DiffLine[];
+}
+
+export interface RevisionDiff {
+  from: number;
+  to: number;
+  from_summary: string;
+  to_summary: string;
+  reconstructed: boolean;
+  input: DiffLine[];
+  tasks: TaskDiff[];
 }
 
 export interface RunEvent {
@@ -295,3 +407,108 @@ export interface DesignJob {
   config?: { name: string; steps: Step[] } | null;
   error?: string | null;
 }
+
+/** One write to a Session (D34): who made it (a user and their client, or a part of the system) and what changed. */
+export interface ChangeEntry {
+  id: number;
+  at: number;
+  kind: string;
+  actor: { kind: "user"; id: string; username?: string | null; client?: "console" | "mcp" | "api" }
+    | { kind: "engine" | "worker" | "kirocrew" | "recovery" | "legacy" };
+  /** {field: [before, after]}; a write to many rows lists each row's changes. Long text is {chars, sha256}. */
+  changes: Record<string, [unknown, unknown]> | { id: string; changes: Record<string, [unknown, unknown]> }[] | null;
+  reason: string | null;
+  detail: Record<string, unknown>;
+}
+
+/** One acceptance item as an Attempt's outcome reports it (D34 §6.2). */
+export interface AcceptanceCheck {
+  item: string;
+  result: "pass" | "fail" | "n/a";
+  evidence?: string;
+}
+
+/** A Session's remote preview (D36 §5): its app running in the execution environment, reached through the preview domain. */
+export interface AppPreview {
+  status: "stopped" | "installing" | "starting" | "running" | "failed" | "unsupported";
+  port: number | null;
+  error: string | null;
+  /** The last lines of the app's log (install steps and every process). */
+  log: string[];
+  started: number | null;
+  started_by: { id: string; username?: string | null } | null;
+  last_access: number | null;
+  idle_stop_at: number | null;
+  openable: boolean;
+  worker_error?: string;
+}
+
+export type CredentialKind = "github_pat" | "gitlab_token";
+export type CredentialScope = "user" | "team" | "platform";
+export type CredentialOwner = { id: string; username?: string | null; name?: string | null } | null;
+
+/** A repository credential as the API lists it (D35 §3): metadata only — the secret is write-only. */
+export interface Credential {
+  id: string;
+  name: string;
+  kind: CredentialKind;
+  host: string;
+  scope: CredentialScope;
+  owner: CredentialOwner;
+  repos: string[];
+  access: "read" | "write";
+  hint: string;
+  expires: number | null;
+  created: number;
+  updated: number;
+  last_used: number | null;
+  disabled: boolean;
+  can_manage: boolean;
+  grants?: ({ team_id: string } | { user_id: string })[];
+}
+
+/** What a Session pins: the credential's identity and who bound it. */
+export interface CredentialBinding {
+  id: string;
+  name: string;
+  kind: CredentialKind;
+  scope: CredentialScope;
+  owner: CredentialOwner;
+  hint: string;
+  bound_by: { id: string; username?: string | null };
+  at: number;
+  unavailable?: boolean;
+  /** What the credential may do now (publishing needs write). */
+  access?: "read" | "write" | null;
+}
+
+/** Where a Session's work was published (D35 §5.2). */
+export interface PublishRecord {
+  branch: string;
+  commit: string;
+  /** null when the branch was pushed but the pull / merge request was not created (see request_error). */
+  url: string | null;
+  number: number | null;
+  kind: "pull_request" | "merge_request" | null;
+  request_error?: string;
+  reused: boolean;
+  at: number;
+  by: { id: string; username?: string | null };
+}
+
+/** A native approval pending on the Session (D38 §4.2). */
+export interface PendingApproval {
+  origin: "native" | "coordinator";
+  request_id: string;
+  request_mid?: string;
+  instance?: string;
+  source?: string;
+  tool: string;
+  tool_input: string;
+  tool_kind?: string;
+  tool_purpose?: string;
+  ts?: number;
+  /** The content was clipped by the Worker: what is shown is not all of it. */
+  truncated?: boolean;
+}
+export interface ApprovalList { approvals: PendingApproval[]; supported: boolean }

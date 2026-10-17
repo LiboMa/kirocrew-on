@@ -1,6 +1,7 @@
 import type { Dialog } from "@/features/console/context";
 import { LaunchWizard } from "@/features/launch/LaunchWizard";
 import { AssignWorkerDialog, ContinueDialog, ControlDialog } from "@/features/sessions/dialogs";
+import { CredentialsDialog } from "@/features/settings/CredentialsDialog";
 import { TeamDialog } from "@/features/settings/TeamDialog";
 import { PasswordDialog } from "@/features/settings/PasswordDialog";
 import { TokensDialog } from "@/features/settings/TokensDialog";
@@ -23,6 +24,8 @@ export function DialogHost({ dialog }: { dialog: Dialog | null }) {
       return <TeamDialog />;
     case "tokens":
       return <TokensDialog />;
+    case "credentials":
+      return <CredentialsDialog />;
     case "workers":
       return <WorkersDialog />;
     case "users":

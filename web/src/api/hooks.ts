@@ -2,7 +2,7 @@ import { useEffect, useState } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { api } from "@/api/client";
 import { followRunEvents, type StreamState } from "@/api/events";
-import type { Environment, Me, Observation, Run, RunEvent, Team, Template, User, Worker, Workflow } from "@/api/types";
+import type { ApprovalList, AppPreview, ChangeEntry, Credential, Environment, Me, Observation, RevisionDiff, RevisionEntry, Run, RunEvent, Team, Template, User, Worker, Workflow } from "@/api/types";
 
 export const keys = {
   me: ["me"] as const,
@@ -16,6 +16,8 @@ export const keys = {
   environments: ["admin", "environments"] as const,
   run: (id: string) => ["run", id] as const,
   observe: (id: string) => ["observe", id] as const,
+  app: (id: string) => ["app", id] as const,
+  credentials: ["credentials"] as const,
 };
 
 const every = (ms: number) => ({ refetchInterval: ms, refetchIntervalInBackground: false });
@@ -61,6 +63,47 @@ export function useObservation(id: string | null, live: boolean, limit = 50) {
     enabled: !!id, retry: false, placeholderData: (previous) => previous,
     refetchInterval: live ? 5_000 : false, refetchIntervalInBackground: false,
   });
+}
+
+/** The repository credentials the user may use or manage (D35); metadata only. */
+export function useCredentials(enabled = true) {
+  return useQuery({ queryKey: keys.credentials, queryFn: () => api<Credential[]>("/credentials"), enabled, retry: false });
+}
+
+/** The run's remote preview: every 3 s while it installs or starts, every 15 s while it runs. */
+export function useRunApp(id: string, enabled: boolean) {
+  return useQuery({
+    queryKey: keys.app(id), enabled, retry: false, placeholderData: (previous) => previous,
+    queryFn: () => api<AppPreview>(`/runs/${encodeURIComponent(id)}/app`),
+    refetchInterval: (query) => {
+      const status = query.state.data?.status;
+      return status === "installing" || status === "starting" ? 3_000 : status === "running" ? 15_000 : false;
+    },
+    refetchIntervalInBackground: false,
+  });
+}
+
+/** The Session's pending native approvals, every 10 s while it is open and not finished (D38). */
+export function useApprovals(id: string, live: boolean) {
+  return useQuery({ queryKey: ["approvals", id], enabled: live, retry: false, placeholderData: (previous) => previous,
+    queryFn: () => api<ApprovalList>(`/runs/${encodeURIComponent(id)}/approvals`), ...every(10_000) });
+}
+
+/** The run's revisions; refetched when the run's version changes. */
+export function useChanges(id: string, who: "" | "user" | "system", enabled: boolean) {
+  return useQuery({ queryKey: ["changes", id, who], enabled, retry: false, placeholderData: (previous) => previous,
+    queryFn: () => api<ChangeEntry[]>(`/runs/${encodeURIComponent(id)}/changes?${who ? "who=" + who + "&" : ""}limit=200`) });
+}
+
+export function useRevisions(id: string, version: number) {
+  return useQuery({ queryKey: ["revisions", id, version], retry: false,
+    queryFn: () => api<RevisionEntry[]>(`/runs/${encodeURIComponent(id)}/revisions`) });
+}
+
+export function useRevisionDiff(id: string, from: number | null, to: number | null) {
+  return useQuery({ queryKey: ["revisions", id, "diff", from, to], enabled: from !== null && to !== null && from !== to,
+    retry: false, placeholderData: (previous) => previous,
+    queryFn: () => api<RevisionDiff>(`/runs/${encodeURIComponent(id)}/revisions/diff?from=${from}&to=${to}`) });
 }
 
 export function useRun(id: string | null) {

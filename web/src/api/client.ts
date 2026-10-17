@@ -32,7 +32,7 @@ export class ApiError extends Error {
   }
 }
 
-type Method = "GET" | "POST" | "DELETE";
+type Method = "GET" | "POST" | "PATCH" | "DELETE";
 
 export async function api<T>(path: string, method: Method = "GET", body?: unknown): Promise<T> {
   let response: Response;
@@ -63,6 +63,28 @@ export async function api<T>(path: string, method: Method = "GET", body?: unknow
     throw new ApiError(response.status, detail.code ?? "http_" + response.status, message);
   }
   return result as T;
+}
+
+/** A text answer (a Session's report): the same token and errors as api(). */
+export async function apiText(path: string): Promise<string> {
+  let response: Response;
+  try {
+    response = await fetch("/v1" + path, { cache: "no-store", headers: { Authorization: "Bearer " + getToken() } });
+  } catch {
+    throw new ApiError(0, "network", "无法连接平台 API，请检查网络后重试。");
+  }
+  const text = await response.text();
+  if (!response.ok) {
+    if (response.status === 401) setToken("");
+    let detail: { error?: string; code?: string } = {};
+    try {
+      detail = JSON.parse(text);
+    } catch {
+      // not JSON: a proxy's page
+    }
+    throw new ApiError(response.status, detail.code ?? "http_" + response.status, detail.error ?? `请求失败（${response.status}）`);
+  }
+  return text;
 }
 
 // Commands carry a request_id; a retry of the same command (same path and body) reuses it, so the platform executes

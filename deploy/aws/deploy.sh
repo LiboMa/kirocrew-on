@@ -20,6 +20,8 @@ WORKER_TEMPLATE=deploy/aws/kirocrew-on-worker.yaml
 WORKER_TLS_PORT="${WORKER_TLS_PORT:-8943}"
 WORKER_GATEWAY_TLS_PORT="${WORKER_GATEWAY_TLS_PORT:-8944}"
 NATIVE_RELAY_END="${NATIVE_RELAY_END:-$((NATIVE_PORT + 10))}"
+PREVIEW_PORT="${PREVIEW_PORT:-$NATIVE_RELAY_END}"
+WORKER_PREVIEW_TLS_PORT="${WORKER_PREVIEW_TLS_PORT:-8945}"
 PARAMS="/kirocrew-on/$STACK_NAME"
 DRY="${DEPLOY_DRY_RUN:-}"
 WORK="$(mktemp -d)"
@@ -101,6 +103,87 @@ change_stack() {  # change_stack STACK TEMPLATE PARAMETERS_FILE CREATE|UPDATE: a
     --stack-name "$stack"
 }
 
+console_zone() {  # console_zone NAME: the public Route 53 zone holding NAME (the longest matching suffix)
+  local zones zone name best="" id=""
+  zones="$(query "/hostedzone/ZDRYRUN"$'\t'"${1#*.}." route53 list-hosted-zones \
+    --query 'HostedZones[?Config.PrivateZone==`false`].[Id,Name]' --output text)" || return 1
+  while read -r zone name; do
+    name="${name%.}"
+    if [ -n "$name" ] && { [ "$1" = "$name" ] || [[ "$1" == *".$name" ]]; } && [ ${#name} -gt ${#best} ]; then
+      best="$name"; id="${zone##*/}"
+    fi
+  done <<<"$zones"
+  [ -n "$id" ] || { echo "Route 53 中没有包含 $1 的公有托管区：先创建托管区，或清空 stack.env 的 CONSOLE_DOMAIN / PREVIEW_SESSION_DOMAIN" >&2; return 1; }
+  echo "$id"
+}
+
+console_certificate() {  # console_certificate NAME: an issued certificate naming NAME or *.<parent>, in us-east-1 (the
+  # only region CloudFront takes certificates from, whatever REGION is)
+  local wildcard="*.${1#*.}" filter arn
+  filter="CertificateSummaryList[?DomainName=='$1' || DomainName=='$wildcard' || contains(SubjectAlternativeNameSummaries || \`[]\`, '$1') || contains(SubjectAlternativeNameSummaries || \`[]\`, '$wildcard')].CertificateArn | [0]"
+  if [ -n "$DRY" ]; then
+    printf 'aws --region us-east-1 acm list-certificates --certificate-statuses ISSUED --query %s\n' "$filter" >&2
+    echo "arn:aws:acm:us-east-1:000000000000:certificate/dry-run"; return
+  fi
+  arn="$(aws --region us-east-1 acm list-certificates --certificate-statuses ISSUED --query "$filter" --output text)" || return 1
+  [[ "$arn" == arn:aws:acm:us-east-1:* ]] || {
+    echo "us-east-1 没有覆盖 $1 的已签发 ACM 证书（${1} 或 ${wildcard}）：先申请证书并完成 DNS 验证" >&2; return 1; }
+  echo "$arn"
+}
+
+preview_certificate() {  # preview_certificate DOMAIN ZONE_ID: the us-east-1 certificate for *.DOMAIN (each Session's
+  # preview host, D36 phase 3) — an issued one, else a pending or newly requested one validated through a CNAME in ZONE_ID
+  local name="*.$1" found arn state record waited=0 limit="${DEPLOY_CERT_WAIT_SECONDS:-2400}"
+  if [ -n "$DRY" ]; then
+    printf 'aws --region us-east-1 acm list-certificates --certificate-statuses ISSUED PENDING_VALIDATION（%s；没有时 request-certificate 并在 %s 写验证记录）\n' \
+      "$name" "$2" >&2
+    echo "arn:aws:acm:us-east-1:000000000000:certificate/dry-run-preview"; return
+  fi
+  # JSON, not text: the CLI applies --query to each page of text output separately.
+  found="$(aws --region us-east-1 acm list-certificates --certificate-statuses ISSUED PENDING_VALIDATION \
+    --query "CertificateSummaryList[?DomainName=='$name'].[CertificateArn,Status]" --output json)" || return 1
+  read -r arn state <<<"$(python3 -c '
+import json, sys
+rows = [r for r in (json.loads(sys.stdin.read() or "[]") or []) if isinstance(r, list) and len(r) == 2]
+rows.sort(key=lambda r: r[1] != "ISSUED")   # an issued certificate before one an earlier run left pending
+print(*(rows[0] if rows else []))' <<<"$found")"
+  if [[ "$arn" != arn:aws:acm:us-east-1:* ]]; then
+    echo "申请 us-east-1 通配证书 ${name}（DNS 验证，记录写入托管区 ${2}）" >&2
+    # One token per domain: ACM returns the same certificate for the same token within an hour.
+    arn="$(aws --region us-east-1 acm request-certificate --domain-name "$name" --validation-method DNS \
+      --idempotency-token "$(python3 -c 'import hashlib, sys; print(hashlib.sha256(sys.argv[1].encode()).hexdigest()[:32])' "$1")" \
+      --query CertificateArn --output text)" || return 1
+    state=PENDING_VALIDATION
+  fi
+  if [ "$state" != ISSUED ]; then
+    for _ in $(seq 1 30); do   # ACM fills in the validation record a few seconds after the request
+      record="$(aws --region us-east-1 acm describe-certificate --certificate-arn "$arn" \
+        --query 'Certificate.DomainValidationOptions[0].ResourceRecord.[Name,Value]' --output text)" || return 1
+      [[ "$record" == *$'\t'* && "$record" != None* ]] && break
+      sleep 2
+    done
+    [[ "$record" == *$'\t'* && "$record" != None* ]] || { echo "ACM 未给出 ${name} 的验证记录" >&2; return 1; }
+    python3 - "${record%%$'\t'*}" "${record##*$'\t'}" > "$WORK/validation.json" <<'PY'
+import json, sys
+name, value = sys.argv[1:]
+print(json.dumps({"Changes": [{"Action": "UPSERT", "ResourceRecordSet": {"Name": name, "Type": "CNAME", "TTL": 300,
+                                                                          "ResourceRecords": [{"Value": value}]}}]}))
+PY
+    aws route53 change-resource-record-sets --hosted-zone-id "$2" --change-batch "file://$WORK/validation.json" >/dev/null || return 1
+    echo "等待证书 ${name} 完成验证（通常几分钟，最多等 $((limit / 60)) 分钟）" >&2
+    while :; do
+      state="$(aws --region us-east-1 acm describe-certificate --certificate-arn "$arn" --query 'Certificate.Status' \
+        --output text)" || return 1
+      [ "$state" = ISSUED ] && break
+      [ "$state" = PENDING_VALIDATION ] || { echo "证书 ${name} 验证失败（${state}）" >&2; return 1; }
+      [ "$waited" -lt "$limit" ] || {
+        echo "证书 ${name} 尚未验证完成：DNS 验证记录已写入，栈未改动；稍后重新运行 up 即可（沿用这张证书）" >&2; return 1; }
+      sleep 20; waited=$((waited + 20))
+    done
+  fi
+  echo "$arn"
+}
+
 up() {
   run cloudformation validate-template --template-body "file://$TEMPLATE" >/dev/null
   local status prefix_list zone="${AVAILABILITY_ZONE:-}" image="${IMAGE_ID:-}" current origin type
@@ -122,13 +205,27 @@ up() {
   [ -n "$image" ] || image="$(query ami-dryrun ssm get-parameter \
     --name /aws/service/ami-amazon-linux-latest/al2023-ami-kernel-default-x86_64 --query Parameter.Value --output text)"
   [ -n "$status" ] || echo "首次创建：可用区 ${zone}，AMI ${image}；创建后写入 deploy/aws/stack.env 的 AVAILABILITY_ZONE 与 IMAGE_ID" >&2
+  # The console's own domain (optional): its zone and certificate are looked up, never kept in the repository.
+  local console="${CONSOLE_DOMAIN:-}" console_zone_id="" console_certificate_arn=""
+  if [ -n "$console" ]; then
+    console_zone_id="$(console_zone "$console")" || exit 2
+    console_certificate_arn="$(console_certificate "$console")" || exit 2
+  fi
+  # Each Session's preview on its own origin (optional, D36 phase 3): one wildcard certificate, found or requested.
+  local session="${PREVIEW_SESSION_DOMAIN:-}" session_zone_id="" session_certificate_arn=""
+  if [ -n "$session" ]; then
+    session_zone_id="$(console_zone "$session")" || exit 2
+    session_certificate_arn="$(preview_certificate "$session" "$session_zone_id")" || exit 2
+  fi
   origin="$(secret origin-secret)"
   # Parameters go through a 0600 file: the origin secret never appears on a command line.
   (umask 077; ORIGIN_VALUE="$origin" python3 - "$INSTANCE_TYPE" "$VOLUME_SIZE_GIB" "$zone" "$image" "$prefix_list" \
-    "$API_PORT" "$NATIVE_PORT" "$NATIVE_RELAY_END" "$ALARM_EMAIL" > "$WORK/parameters.json" <<'PY'
+    "$API_PORT" "$NATIVE_PORT" "$NATIVE_RELAY_END" "$ALARM_EMAIL" "$console" "$console_certificate_arn" "$console_zone_id" \
+    "$PREVIEW_PORT" "$session" "$session_certificate_arn" "$session_zone_id" > "$WORK/parameters.json" <<'PY'
 import json, os, sys
 keys = ["InstanceType", "VolumeSizeGiB", "AvailabilityZone", "ImageId", "CloudFrontPrefixListId", "ApiPort", "NativePort",
-        "NativeRelayEnd", "AlarmEmail"]
+        "NativeRelayEnd", "AlarmEmail", "ConsoleDomain", "ConsoleCertificateArn", "ConsoleHostedZoneId", "PreviewPort",
+        "PreviewSessionDomain", "PreviewCertificateArn", "PreviewHostedZoneId"]
 values = dict(zip(keys, sys.argv[1:]), OriginSecret=os.environ["ORIGIN_VALUE"])
 print(json.dumps([{"ParameterKey": k, "ParameterValue": v} for k, v in values.items()]))
 PY
@@ -142,20 +239,27 @@ PY
 
 push() {
   [ -z "$(git status --porcelain)" ] || { echo "工作区有未提交改动；push 只发布已提交的 commit" >&2; exit 2; }
-  local sha bucket instance domain native archive command_id
+  local sha bucket instance domain native console preview session archive command_id
   sha="$(git rev-parse HEAD)"
   bucket="$(output ArtifactBucket)"; instance="$(output InstanceId)"; domain="$(output CloudFrontDomain)"
-  native="$(output NativeDomain)"
+  native="$(output NativeDomain)"; console="$(output ConsoleDomain)"; preview="$(output PreviewDomain)"
+  session="$(output PreviewSessionDomain)"
+  [ "$console" != "None" ] || console=""   # a stack from before ConsoleDomain
+  [ "$preview" != "None" ] || preview=""   # a stack from before the remote preview (D36): no preview server
+  [ "$session" != "None" ] || session=""   # no per-session preview origins (D36 phase 3)
   archive="$WORK/kirocrew-on-$sha.tar.gz"
   git archive --format=tar.gz --prefix="kirocrew-on-$sha/" -o "$archive" HEAD
   run s3 cp "$archive" "s3://$bucket/releases/$sha.tar.gz" --only-show-errors
-  python3 - "$sha" "$bucket" "$domain" "$PARAMS" "$REGION" "$BOUNDARY" "$native" "$NATIVE_PORT" > "$WORK/commands.json" <<'PY'
+  python3 - "$sha" "$bucket" "$domain" "$PARAMS" "$REGION" "$BOUNDARY" "$native" "$NATIVE_PORT" "$console" "$preview" \
+    "$PREVIEW_PORT" "$session" > "$WORK/commands.json" <<'PY'
 import json, sys
-sha, bucket, domain, params, region, boundary, native, native_port = sys.argv[1:]
+sha, bucket, domain, params, region, boundary, native, native_port, console, preview, preview_port, session = sys.argv[1:]
 d = "/opt/kirocrew-on/incoming"
 script = (f"set -euo pipefail; mkdir -p {d}; aws s3 cp s3://{bucket}/releases/{sha}.tar.gz {d}/{sha}.tar.gz "
           f"--region {region} --only-show-errors; rm -rf {d}/kirocrew-on-{sha}; tar -xzf {d}/{sha}.tar.gz -C {d}; "
-          f"KIROCREW_ON_RELEASE={sha} CF_DOMAIN={domain} NATIVE_DOMAIN={native} NATIVE_PORT={native_port} "
+          f"KIROCREW_ON_RELEASE={sha} CF_DOMAIN={domain} CONSOLE_DOMAIN={console} NATIVE_DOMAIN={native} "
+          f"NATIVE_PORT={native_port} PREVIEW_DOMAIN={preview} PREVIEW_PORT={preview_port} "
+          f"PREVIEW_SESSION_DOMAIN={session} "
           f"ORIGIN_SECRET_PARAM={params}/origin-secret "
           f"AWS_REGION={region} "
           f"bash {d}/kirocrew-on-{sha}/deploy/install/al2023.sh {boundary}")
@@ -165,7 +269,7 @@ PY
     --comment "kirocrew-on $sha" --parameters "file://$WORK/commands.json" --query Command.CommandId --output text)"
   [ -n "$DRY" ] && return
   wait_command "$instance" "$command_id"
-  echo "控制台：https://$domain/"
+  echo "控制台：https://${console:-$domain}/"
 }
 
 wait_command() {  # wait_command INSTANCE COMMAND_ID: wait for an install command, print its tail, fail unless it succeeded
@@ -280,17 +384,21 @@ worker_host() {  # worker-host <add|up|push|tls|native|register|status> <name>: 
 relay_port() {  # relay_port STACK: the Worker host's relay port on the platform host. A host keeps its port unless another
   # host has it too (both created at once); otherwise it takes the lowest free one in the platform's deployed range.
   # Runs in a command substitution, where set -e does not apply: every lookup failure exits explicitly.
-  local own end used port
+  local own end used port preview
   own="$(stack_parameter "$1" RelayPort)" || exit 2
   end="$(stack_parameter "$STACK_NAME" NativeRelayEnd)" || exit 2
+  preview="$(stack_parameter "$STACK_NAME" PreviewPort)" || exit 2   # the remote preview's port is never a relay (D36)
   if [ -n "$DRY" ]; then end="${end:-$NATIVE_RELAY_END}"; else
     [[ "$end" =~ ^[0-9]+$ ]] || { echo "平台栈还没有中转端口范围（NativeRelayEnd）：先执行 deploy.sh up" >&2; exit 2; }
   fi
   used=" $(query "" cloudformation describe-stacks --output text --query \
     "Stacks[?starts_with(StackName, '$STACK_NAME-worker-') && StackName != '$1'].Parameters[] | [?ParameterKey=='RelayPort'].ParameterValue") " ||
     { echo "无法读取其他 Worker 主机的中转端口，稍后重试" >&2; exit 2; }
-  if [[ "$own" =~ ^[0-9]+$ ]] && [[ "$used" != *[[:space:]]$own[[:space:]]* ]]; then echo "$own"; return; fi
+  if [[ "$own" =~ ^[0-9]+$ ]] && [ "$own" != "$preview" ] && [[ "$used" != *[[:space:]]$own[[:space:]]* ]]; then
+    echo "$own"; return
+  fi
   for ((port = NATIVE_PORT + 1; port <= end; port++)); do
+    [ "$port" != "$preview" ] || continue
     [[ "$used" == *[[:space:]]$port[[:space:]]* ]] || { echo "$port"; return; }
   done
   echo "平台主机的中转端口 $((NATIVE_PORT + 1))–$end 已用完：调大 stack.env 的 NATIVE_RELAY_END 并先执行 deploy.sh up" >&2
@@ -325,10 +433,10 @@ worker_up() {  # the Worker host stack in the platform's VPC and subnet, admitte
   (umask 077; ORIGIN_VALUE="$origin" python3 - "$(output VpcId)" "$(output SubnetId)" "$(output HostSecurityGroupId)" \
     "${IMAGE_ID:-$(output ImageId)}" "${WORKER_INSTANCE_TYPE:-$INSTANCE_TYPE}" "${WORKER_VOLUME_SIZE_GIB:-$VOLUME_SIZE_GIB}" \
     "$(output ArtifactBucket)" "$WORKER_TLS_PORT" "$STACK_NAME" "$WORKER_GATEWAY_TLS_PORT" "$relay" "$domain" \
-    > "$WORK/worker-parameters.json" <<'PY'
+    "$WORKER_PREVIEW_TLS_PORT" > "$WORK/worker-parameters.json" <<'PY'
 import json, os, sys
 keys = ["VpcId", "SubnetId", "PlatformSecurityGroupId", "ImageId", "InstanceType", "VolumeSizeGiB", "ArtifactBucket",
-        "WorkerPort", "BackupTag", "GatewayTlsPort", "RelayPort", "PlatformOriginDomain"]
+        "WorkerPort", "BackupTag", "GatewayTlsPort", "RelayPort", "PlatformOriginDomain", "PreviewTlsPort"]
 values = dict(zip(keys, sys.argv[1:]), OriginSecret=os.environ["ORIGIN_VALUE"])
 print(json.dumps([{"ParameterKey": k, "ParameterValue": v} for k, v in values.items()]))
 PY
@@ -351,13 +459,14 @@ worker_push() {  # the committed HEAD, installed in Worker host mode (WORKER_HOS
   git archive --format=tar.gz --prefix="kirocrew-on-$sha/" -o "$archive" HEAD
   run s3 cp "$archive" "s3://$bucket/releases/$sha.tar.gz" --only-show-errors
   python3 - "$sha" "$bucket" "$REGION" "$name" "$WORKER_TLS_PORT" "$WORKER_GATEWAY_TLS_PORT" "$native" \
-    > "$WORK/commands.json" <<'PY'
+    "$WORKER_PREVIEW_TLS_PORT" > "$WORK/commands.json" <<'PY'
 import json, sys
-sha, bucket, region, name, port, gateway_port, native = sys.argv[1:]
+sha, bucket, region, name, port, gateway_port, native, preview_port = sys.argv[1:]
 d = "/opt/kirocrew-on/incoming"
 script = (f"set -euo pipefail; mkdir -p {d}; aws s3 cp s3://{bucket}/releases/{sha}.tar.gz {d}/{sha}.tar.gz "
           f"--region {region} --only-show-errors; rm -rf {d}/kirocrew-on-{sha}; tar -xzf {d}/{sha}.tar.gz -C {d}; "
           f"WORKER_HOST=1 WORKER_TLS_PORT={port} GATEWAY_TLS_PORT={gateway_port} NATIVE_DOMAIN={native} "
+          f"WORKER_PREVIEW_TLS_PORT={preview_port} "
           f"KIROCREW_ON_RELEASE={sha} AWS_REGION={region} "
           f"bash {d}/kirocrew-on-{sha}/deploy/install/al2023.sh {name}")
 print(json.dumps({"commands": [script], "executionTimeout": ["3600"]}))
@@ -384,7 +493,7 @@ printf 'subjectAltName=IP:%s,DNS:$name.worker.kirocrew-on\nextendedKeyUsage=serv
   install="set -euo pipefail; cat > /etc/kirocrew-on/worker-tls.crt <<'PEM_END'
 $cert
 PEM_END
-chmod 0644 /etc/kirocrew-on/worker-tls.crt; install -m 0644 /etc/kirocrew-on/nginx-worker.conf /etc/nginx/conf.d/kirocrew-worker.conf; nginx -t -q; systemctl enable nginx >/dev/null; systemctl reload-or-restart nginx; echo 已安装证书"
+chmod 0644 /etc/kirocrew-on/worker-tls.crt; install -m 0644 /etc/kirocrew-on/nginx-worker.conf /etc/nginx/conf.d/kirocrew-worker.conf; [ ! -s /etc/kirocrew-on/nginx-worker-preview.conf ] || install -m 0640 -o root -g nginx /etc/kirocrew-on/nginx-worker-preview.conf /etc/nginx/conf.d/kirocrew-worker-preview.conf; nginx -t -q; systemctl enable nginx >/dev/null; systemctl reload-or-restart nginx; echo 已安装证书"
   if [ -n "$DRY" ]; then printf '%s\n\n' "$request" "$sign" "$install"; return; fi
   remote "$worker" "$install"
   echo "平台经 TLS 访问 Worker（不带 Token，期望 401）：$(remote "$platform" "curl -s -o /dev/null -w '%{http_code}' --cacert /etc/kirocrew-on/worker-ca.pem https://$ip:$WORKER_TLS_PORT/health || true")"

@@ -51,7 +51,10 @@ export function workspaceRoutes(runs: Run[], extra: Record<string, unknown> = {}
     "GET /workers": [],
     "GET /users": [{ id: "u1", username: "fixture-owner" }],
     "GET /workflow-templates": [],
+    "GET /credentials": [],
     ...Object.fromEntries(runs.map((run) => [`GET /runs/${run.id}`, run])),
+    ...Object.fromEntries(runs.map((run) => [`GET /runs/${run.id}/app`, { status: "stopped", log: [], openable: false }])),
+    ...Object.fromEntries(runs.map((run) => [`GET /runs/${run.id}/approvals`, { approvals: [], supported: true }])),
     ...extra,
   };
 }

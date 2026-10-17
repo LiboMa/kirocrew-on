@@ -104,4 +104,10 @@ describe("reopening the wizard", () => {
     const saved = draft({ choice: "custom", tasks: steps, method: "import" as const });
     expect(restoreDraft({}, saved, initialDraft({}, { worker: "" }))).toMatchObject({ method: "import", tasks: steps });
   });
+  test("a git Session may ask to be published on completion (D47)", () => {
+    const body = submitBody(draft({ method: "agent", tasks: [], source: "git", url: "https://x/y.git", autoPublish: true }));
+    expect(body.publish).toEqual({ auto: true });
+    expect(submitBody(draft({ method: "agent", tasks: [], source: "git", url: "https://x/y.git" })).publish).toBeUndefined();
+    expect(submitBody(draft({ method: "agent", tasks: [], autoPublish: true })).publish).toBeUndefined();   // a new project has no repository
+  });
 });

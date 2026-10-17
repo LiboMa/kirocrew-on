@@ -11,6 +11,7 @@ from octopus.db import Database, dumps
 from octopus.domain import Service
 from octopus.engine import Engine
 from octopus.security import Error, authenticate, create_user, issue_token
+from tests.old_worker import as_old_worker
 
 
 SPEC = [
@@ -64,6 +65,7 @@ class RecoveryTests(unittest.TestCase):
                 raise Error(503, "worker_unavailable", "回执丢失")
             return {"status": "running", "native_id": hashlib.sha256(aid.encode()).hexdigest()[:8],
                     "context_hash": hashlib.sha256(dumps(body).encode()).hexdigest()}
+        as_old_worker(path)
         self.assertEqual(path, "/inspect")
         record = self.bodies[aid]
         result = {"native": {"done": True, "result": "已检查真实测试与交接"},
@@ -103,11 +105,18 @@ class RecoveryTests(unittest.TestCase):
         self.assertEqual(result["tasks"][1]["attempts"][0]["status"], "blocked")
         corrected = [b for b in self.bodies.values() if b.get("repair")]
         self.assertEqual(len(corrected), 2)
-        self.assertIn("空输入", corrected[0]["repair"]["failure"]["evidence"]["outcome"]["summary"])
-        self.assertEqual(corrected[1]["repair"]["decision"]["target_task_id"], "code")
+        # D46: the reworked task gets the decision and a summary of the failure; the re-review re-checks it
+        self.assertIn("空输入", corrected[0]["repair"]["failure"]["summary"])
+        self.assertEqual(corrected[0]["repair"]["decision"]["target_task_id"], "code")
+        self.assertTrue(corrected[1]["repair"]["recheck"])
         self.assertEqual(corrected[0]["spec"], result["tasks"][0]["attempts"][0]["spec"])
         self.assertNotIn("coordination", corrected[0])
         self.assertEqual(result["version"], 2)
+        # The applied decision is a revision with its snapshot (D32).
+        revisions = self.service.revisions(self.actor, result["id"])
+        self.assertEqual([r["kind"] for r in revisions], ["created", "recovered"])
+        self.assertTrue(revisions[1]["summary"].startswith("自动纠错：退回「"))
+        self.assertFalse(revisions[1]["reconstructed"])
 
     def test_cycle_limit_stops_without_infinite_dispatch(self):
         self.always_fail = True

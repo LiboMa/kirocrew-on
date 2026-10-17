@@ -146,10 +146,10 @@ class TemplateTests(unittest.TestCase):
     def tearDown(self):
         self.temporary.cleanup()
 
-    def seed(self, legacy=False):
+    def seed(self, legacy=False, **kwargs):
         with patch.dict("sys.modules", {"kiro_crew.agent": self.stub}):
-            return templates.seed(crew_home=self.crew, kiro_home=self.kiro, allowed_roots=[self.runs], port=6000,
-                                  legacy_pipeline=legacy)
+            return templates.seed(crew_home=self.crew, kiro_home=self.kiro, allowed_roots=[self.runs],
+                                  legacy_pipeline=legacy, **kwargs)
 
     def test_fresh_config_allows_only_worker_roots(self):
         self.seed()
@@ -157,7 +157,7 @@ class TemplateTests(unittest.TestCase):
         self.assertEqual(config["agent"]["subagent_cwd_allowed_roots"], [str(self.runs)])
         self.assertFalse(config["agent"]["session_sharing"])
         self.assertEqual(config["session"]["pool_size"], 0)
-        self.assertEqual(config["dashboard"]["port"], 6000)
+        self.assertNotIn("port", config["dashboard"])   # KiroCrew takes it from --port / KIROCREW_PORT only
         names = sorted(p.stem for p in (self.kiro / "agents").glob("*.json"))
         self.assertEqual(names, sorted(registry.BACKENDS))
         coordinator = json.loads((self.kiro / "agents/poc-coordinator.json").read_text())
@@ -170,10 +170,24 @@ class TemplateTests(unittest.TestCase):
         (self.kiro / "agents/poc-claude.json").write_text(json.dumps({"name": "poc-claude", "model": "user-model",
                                                                        "prompt": "old", "resources": ["skill://x"]}))
         self.seed()
-        self.assertEqual((self.crew / "config.json").read_text(), '{"user_config":"preserve"}\n')
+        # only the standing approval switch is written (crew_yolo); everything else the user set stays
+        self.assertEqual(json.loads((self.crew / "config.json").read_text()),
+                         {"user_config": "preserve", "agent": {"dangerously_skip_permissions": True}})
         agent = json.loads((self.kiro / "agents/poc-claude.json").read_text())
         self.assertEqual((agent["model"], agent["resources"]), ("user-model", ["skill://x"]))
         self.assertIn("真实研发工作", agent["prompt"])
+
+    def test_yolo_is_kept_on_by_the_boundary_setting_and_can_be_turned_off(self):
+        self.seed()
+        config = json.loads((self.crew / "config.json").read_text())
+        self.assertIs(config["agent"]["dangerously_skip_permissions"], True)   # a real bool: KiroCrew ignores strings
+        self.seed(yolo=False)
+        config = json.loads((self.crew / "config.json").read_text())
+        self.assertIs(config["agent"]["dangerously_skip_permissions"], False)
+        self.assertEqual(config["agent"]["approval_mode"], "interactive")   # the rest of the agent section stays
+        text = (self.crew / "config.json").read_text()
+        self.seed(yolo=False)
+        self.assertEqual((self.crew / "config.json").read_text(), text)   # already as set: not rewritten
 
     def test_legacy_pipeline_templates_only_on_request(self):
         self.seed(legacy=True)
@@ -191,7 +205,7 @@ class ApprovalModeTests(unittest.TestCase):
             root = Path(temporary)
             with patch.dict("sys.modules", {"kiro_crew.agent": stub}):
                 templates.seed(crew_home=root / "crew", kiro_home=root / "kiro", allowed_roots=[root / "w"],
-                               port=6000, legacy_pipeline=False)
+                               legacy_pipeline=False)
             config = json.loads((root / "crew/config.json").read_text())
             self.assertEqual(config["agent"]["approval_mode"], "interactive")
 
@@ -234,7 +248,7 @@ class DiagnosisTemplateTests(unittest.TestCase):
             root = Path(temporary)
             with patch.dict("sys.modules", {"kiro_crew.agent": stub}):
                 templates.seed(crew_home=root / "crew", kiro_home=root / "kiro", allowed_roots=[root / "w"],
-                               port=6000, legacy_pipeline=False)
+                               legacy_pipeline=False)
             spec = json.loads((root / "kiro/agents/poc-diagnose.json").read_text())
         self.assertEqual(spec["tools"], ["read", "write", "shell"])
         self.assertEqual(spec["mcpServers"], {})

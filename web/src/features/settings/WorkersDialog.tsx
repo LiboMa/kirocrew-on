@@ -11,6 +11,7 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { useConsole } from "@/features/console/context";
+import { formatTime } from "@/lib/labels";
 
 /** What a shared execution environment means (D28); shown before an administrator confirms sharing. */
 export const SHARED_NOTICE = "环境内所有会话的 Agent 以同一系统账号运行，能互相读取源码、工具登录与记忆；记忆未分隔；只用于同一信任范围。";
@@ -20,7 +21,8 @@ function health(environment: Environment) {
   if (!h.reachable) return `不可达：${h.error}`;
   let origin = "";
   try { origin = h.crew_origin ? " · 原生入口 " + new URL(h.crew_origin).host : ""; } catch { /* not a URL: omitted */ }
-  return `可达${h.version ? " · v" + h.version : ""}${origin} · 进行中会话 ${active}`;
+  const login = h.tool_auth?.kiro === "expired" ? " · kiro-cli 登录已过期（deploy.sh kiro-login）" : "";
+  return `可达${h.version ? " · v" + h.version : ""}${origin} · 进行中会话 ${active}${login}`;
 }
 
 /** The single management entry for execution environments (D28): bindings, health, sharing, assignment, enabling. */
@@ -38,7 +40,7 @@ export function WorkersDialog() {
     : "个人 · " + (users.find((u) => u.id === space.user_id)?.username ?? space.user_id);
   // Teams take one environment each; a user may join a shared one beside a personal Worker.
   const candidates = (w: Worker) => [
-    ...teams.filter((t) => !t.environment).map((t) => ({ value: "team:" + t.id, text: "Team · " + t.name })),
+    ...teams.filter((t) => !t.environment && !t.archived).map((t) => ({ value: "team:" + t.id, text: "Team · " + t.name })),
     ...(w.scope === "shared" ? users.filter((u) => !w.spaces?.some((s) => s.user_id === u.id))
       .map((u) => ({ value: "user:" + u.id, text: "个人 · " + u.username })) : []),
   ];
@@ -71,6 +73,7 @@ export function WorkersDialog() {
             <span className="min-w-0 flex-1">{w.name}
               <small className="ml-2 text-xs text-muted-foreground">
                 {w.capabilities.isolation === "dedicated" ? "专属环境" : "个人本机"} · {w.enabled ? "可用" : "已停用"} · {owner(w)}
+                {typeof w.capabilities.checked_at === "number" && ` · 最近检查 ${formatTime(w.capabilities.checked_at, true)}`}
               </small>
             </span>
             <Button type="button" size="sm" variant="outline" data-refresh-worker={w.id}
@@ -84,6 +87,7 @@ export function WorkersDialog() {
               <Button type="button" size="sm" variant="outline" data-dedicate-worker={w.id}
                 onClick={act(() => api("/workers/" + w.id + "/dedicate", "POST", {}), "已改回该 Team 的专属环境。")}>改回专属环境</Button>
             )}
+            {!!me.admin && <WorkerTools worker={w} act={act} />}
             {!!me.admin && (
               <Button type="button" size="sm" variant="outline" data-toggle-worker={w.id}
                 onClick={act(() => api("/workers/" + w.id + "/enabled", "POST", { enabled: !w.enabled }), w.enabled ? "已停用。" : "已启用。")}>
@@ -151,7 +155,7 @@ export function WorkersDialog() {
               <NativeSelect id="worker-owner" value={form.owner} onChange={(e) => setForm({ ...form, owner: e.target.value })}>
                 <option value="spare:">空闲专属环境（之后分配给 Team）</option>
                 {users.map((u) => <option key={u.id} value={"user:" + u.id}>个人 · {u.username}</option>)}
-                {teams.map((t) => <option key={t.id} value={"team:" + t.id}>Team · {t.name}</option>)}
+                {teams.filter((t) => !t.archived).map((t) => <option key={t.id} value={"team:" + t.id}>Team · {t.name}</option>)}
               </NativeSelect>
             </div>
             <div className="space-y-1.5">
@@ -167,5 +171,63 @@ export function WorkersDialog() {
         </section>
       ) : <p className="text-sm text-muted-foreground">执行环境由管理员登记和分配。</p>}
     </FormDialog>
+  );
+}
+
+type Tool = "name" | "connection" | "retire" | null;
+
+/** Administrator tools on one Worker (spec §6.1): rename, a new connection after a host is replaced, retirement. */
+function WorkerTools({ worker, act }: { worker: Worker; act: (action: () => Promise<unknown>, done: string) => () => Promise<unknown> }) {
+  const [open, setOpen] = useState<Tool>(null);
+  const [title, setTitle] = useState(worker.name);
+  const [connection, setConnection] = useState({ url: "", token: "" });
+  const base = "/workers/" + encodeURIComponent(worker.id);
+  const toggle = (tool: Tool) => setOpen(open === tool ? null : tool);
+  return (
+    <>
+      <Button type="button" size="sm" variant="outline" onClick={() => toggle("name")}>改名</Button>
+      <Button type="button" size="sm" variant="outline" onClick={() => toggle("connection")}>更新连接</Button>
+      <Button type="button" size="sm" variant="outline" onClick={() => toggle("retire")}>退役</Button>
+      {open === "name" && (
+        <div className="flex w-full items-end gap-2">
+          <div className="flex-1 space-y-1">
+            <Label htmlFor={"worker-title-" + worker.id} className="text-xs">Worker 名称</Label>
+            <Input id={"worker-title-" + worker.id} value={title} maxLength={80} onChange={(e) => setTitle(e.target.value)} />
+          </div>
+          <Button type="button" size="sm" disabled={!title.trim()} onClick={() => void act(async () => {
+            await api(base, "PATCH", { name: title });
+            setOpen(null);
+          }, "Worker 已改名。")()}>保存名称</Button>
+        </div>
+      )}
+      {open === "connection" && (
+        <div className="w-full space-y-2 rounded-md border px-3 py-2">
+          <p className="text-xs text-muted-foreground">用于主机替换或 Token 轮换；新地址按登记时的规则重新核验。执行边界变化（重新部署的主机）后，该环境才可分配给其他 Team。</p>
+          <div className="grid gap-2 sm:grid-cols-2">
+            <div className="space-y-1">
+              <Label htmlFor={"worker-url-" + worker.id} className="text-xs">新的 Worker URL</Label>
+              <Input id={"worker-url-" + worker.id} value={connection.url} onChange={(e) => setConnection({ ...connection, url: e.target.value })} />
+            </div>
+            <div className="space-y-1">
+              <Label htmlFor={"worker-token-" + worker.id} className="text-xs">新的 Worker Token</Label>
+              <Input id={"worker-token-" + worker.id} type="password" autoComplete="off" minLength={32} value={connection.token}
+                onChange={(e) => setConnection({ ...connection, token: e.target.value })} />
+            </div>
+          </div>
+          <Button type="button" size="sm" disabled={!connection.url || !connection.token} onClick={() => void act(async () => {
+            await api(base + "/connection", "POST", { connection });
+            setConnection({ url: "", token: "" });
+            setOpen(null);
+          }, "连接已更新。")()}>保存连接</Button>
+        </div>
+      )}
+      {open === "retire" && (
+        <div role="alert" className="flex w-full flex-wrap items-center gap-2 rounded-md border border-warning/40 bg-warning/5 px-3 py-2 text-xs">
+          <span className="flex-1">退役后不再出现在列表与选择器中，历史会话保留引用；仍是 Team 的执行环境或有进行中的会话时会被拒绝，它服务的个人空间会失去这个环境。</span>
+          <Button type="button" size="sm" variant="destructive" onClick={() => { setOpen(null); void act(() => api(base + "/retire", "POST", {}), "已退役。")(); }}>确认退役</Button>
+          <Button type="button" size="sm" variant="ghost" onClick={() => setOpen(null)}>取消</Button>
+        </div>
+      )}
+    </>
   );
 }

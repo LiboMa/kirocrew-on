@@ -1,8 +1,10 @@
 import {
-  CircleStop, Copy, Download, Eye, ExternalLink, ListRestart, MoreHorizontal, Power, RotateCcw, Stethoscope, Trash2, UserCog,
+  CircleStop, Copy, Download, Eye, ExternalLink, FolderDown, ListRestart, MonitorPlay, MoreHorizontal, Play, Power, RotateCcw, Stethoscope,
+  Trash2,
+  UserCog,
 } from "lucide-react";
 import { toast } from "sonner";
-import { useRun, useRunEvents } from "@/api/hooks";
+import { useRun, useRunApp, useRunEvents } from "@/api/hooks";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
 import {
@@ -15,10 +17,18 @@ import { StatusBadge } from "@/components/StatusBadge";
 import { useConsole } from "@/features/console/context";
 import { EventTimeline } from "@/features/sessions/EventTimeline";
 import { NativeSessionPanel } from "@/features/sessions/NativeSessionPanel";
+import { AppPreviewPanel } from "@/features/sessions/AppPreviewPanel";
+import { ChangesPanel } from "@/features/sessions/ChangesPanel";
+import { CredentialControl } from "@/features/sessions/CredentialControl";
+import { PublishControl } from "@/features/sessions/PublishControl";
+import { RevisionsPanel } from "@/features/sessions/RevisionsPanel";
+import { ApprovalsCard } from "@/features/sessions/ApprovalsCard";
 import { RecoveryPanel } from "@/features/sessions/RecoveryPanel";
+import { ReportButton } from "@/features/sessions/ReportDialog";
 import { TaskList } from "@/features/sessions/TaskList";
 import { useSessionActions } from "@/features/sessions/useSessionActions";
-import { canContinue, canDelete, canRecover, canStop, closeAction, crewEntryReason, deleteReason, statusText } from "@/lib/session";
+import { bindingLabel } from "@/lib/credentials";
+import { canContinue, canDelete, canRecover, canStop, closeAction, crewEntryReason, deleteReason, resumeReason, statusText } from "@/lib/session";
 
 export function SessionView({ id }: { id: string }) {
   const { allTeams, workflows, workers, me, open } = useConsole();
@@ -26,6 +36,7 @@ export function SessionView({ id }: { id: string }) {
   const { events, stream } = useRunEvents(id);
   const run = query.data;
   const actions = useSessionActions(run);
+  const app = useRunApp(id, !!run?.worker_id).data;   // shared with the panel: one request
 
   if (!run) {
     return (
@@ -64,6 +75,18 @@ export function SessionView({ id }: { id: string }) {
               <p id="run-goal" className="line-clamp-3 text-sm leading-6 whitespace-pre-wrap text-muted-foreground">{run.input}</p>
             )}
             <p id="run-id" className="font-mono text-[11px] text-muted-foreground">{run.id} · revision {run.version}</p>
+            {run.created_by && (
+              <p id="run-owner" className="text-xs text-muted-foreground" title={run.credentials?.source?.name}>
+                创建者 {run.created_by.username ?? run.created_by.id}
+                {run.credentials?.source && (
+                  <> · 凭证：{bindingLabel(run.credentials.source)}
+                    {run.credentials.source.unavailable && <span className="text-destructive">（已停用或删除，请更换后续作）</span>}</>
+                )}
+                {run.credentials?.removed && <> · <span className="text-destructive">凭证「{run.credentials.removed.name}」已撤下</span></>}
+                <CredentialControl run={run} />
+              </p>
+            )}
+            <PublishControl run={run} />
           </div>
           <div className="flex flex-col items-end gap-2">
             <StatusBadge status={run.lifecycle === "closed" ? "stopped" : run.status} label={statusText(run)} className="text-xs" />
@@ -92,6 +115,17 @@ export function SessionView({ id }: { id: string }) {
             </TooltipTrigger>
             <TooltipContent>{crewReason || "在新标签页打开此 Session 对应的 KiroCrew 原生父会话"}</TooltipContent>
           </Tooltip>
+          <Button size="sm" variant="outline" onClick={actions.downloadSource} id="run-download"
+            disabled={!run.worker_id || !run.workspace || !!actions.busy}
+            title={!run.worker_id || !run.workspace ? "源码尚未准备，暂无可下载的内容" : "下载源码（含 .git，不含依赖目录与 .env）"}>
+            <FolderDown /> 下载源码
+          </Button>
+          <ReportButton run={run} />
+          {app?.openable && (
+            <Button size="sm" onClick={actions.openApp} id="run-open-app">
+              <MonitorPlay /> 打开远程预览
+            </Button>
+          )}
           <Button size="sm" variant="outline" onClick={actions.preview} disabled={!run.worker_id} id="run-preview">
             <Eye /> 预览产出
           </Button>
@@ -120,13 +154,25 @@ export function SessionView({ id }: { id: string }) {
             </DropdownMenuContent>
           </DropdownMenu>
         </div>
+        {resumeReason(run) && <p id="resume-hint" className="text-xs text-muted-foreground">{resumeReason(run)}</p>}
         {crewReason && <p id="crew-entry-hint" className="text-xs text-muted-foreground">{crewReason}</p>}
         {workers.find((w) => w.id === run.worker_id)?.scope === "shared" && (
           <p id="shared-environment" className="text-xs text-muted-foreground">共享执行环境：环境内会话的 Agent 互相可读，记忆未分隔。</p>
         )}
       </header>
 
-      {run.attention && run.status !== "waiting_worker" && (
+      {run.status === "awaiting_confirmation" && (
+        <Alert id="confirm-notice" className="border-warning/30 bg-warning/5">
+          <AlertTitle id="confirm-notice-title">{run.attention?.title ?? "计划待确认"}</AlertTitle>
+          <AlertDescription className="flex flex-wrap items-center gap-3">
+            <span>{[run.attention?.detail, run.attention?.action].filter(Boolean).join(" ")}</span>
+            <Button size="sm" onClick={actions.confirm} disabled={!!actions.busy || run.permissions?.operate === false || !!resumeReason(run)} id="run-confirm">
+              <Play /> 确认并开始
+            </Button>
+          </AlertDescription>
+        </Alert>
+      )}
+      {run.attention && run.status !== "waiting_worker" && run.status !== "awaiting_confirmation" && (
         <Alert variant="destructive" id="run-attention" className="border-destructive/30 bg-destructive/5">
           <AlertTitle id="attention-title">{run.attention.title}</AlertTitle>
           <AlertDescription className="space-y-1">
@@ -148,7 +194,8 @@ export function SessionView({ id }: { id: string }) {
               ? <span id="worker-notice-detail">{[run.attention.detail, run.attention.action].filter(Boolean).join(" ")}</span>
               : "需求已保存。请选择此开发空间的 Worker 后开始执行。"}
             {run.attention?.workers !== 0 && (
-              <Button size="sm" variant="outline" onClick={() => open({ kind: "assign", run })} id="assign-worker"><UserCog /> 分配 Worker</Button>
+              <Button size="sm" variant="outline" onClick={() => open({ kind: "assign", run })} id="assign-worker"
+                disabled={!!resumeReason(run)}><UserCog /> 分配 Worker</Button>
             )}
           </AlertDescription>
         </Alert>
@@ -175,9 +222,12 @@ export function SessionView({ id }: { id: string }) {
       )}
       {run.recovery && (
         <p id="recovery-policy" className="text-xs text-muted-foreground">
-          {run.recovery.policy.enabled ? `自动纠错已开启 · 最多 ${run.recovery.policy.max_cycles} 轮` : "自动纠错未开启 · 可手动诊断"}
+          {run.recovery.policy.enabled
+            ? `自动纠错已开启 · 最多 ${run.recovery.policy.max_cycles} 轮${run.recovery.policy.switch_tools === false ? " · 不换工具" : ""}`
+            : "自动纠错未开启 · 可手动诊断"}
         </p>
       )}
+      <ApprovalsCard run={run} canAnswer={run.permissions?.publish !== false} />
       <RecoveryPanel run={run} />
 
       <div className="grid gap-5 lg:grid-cols-[minmax(0,1fr)_22rem]">
@@ -185,8 +235,11 @@ export function SessionView({ id }: { id: string }) {
           <h2 className="text-sm font-semibold">开发任务</h2>
           <TaskList run={run} onContinue={(taskId) => open({ kind: "continue", run, taskId })} />
           <NativeSessionPanel run={run} />
+          <RevisionsPanel run={run} />
+          <ChangesPanel run={run} />
         </section>
         <aside className="space-y-4">
+          {!design && <AppPreviewPanel run={run} onOpen={actions.openApp} />}
           <EventTimeline events={events} stream={stream} />
           <section className="space-y-2 rounded-xl border bg-card p-4 text-xs" id="native-details">
             <h2 className="text-sm font-semibold">Workspace 与原生会话</h2>

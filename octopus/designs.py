@@ -59,12 +59,18 @@ def status(service, actor, rid):
     return result
 
 
-def instructions(intent, design, directory, models):
+def clip(text, limit):
+    return text if len(text) <= limit else text[:limit] + "…"
+
+
+def instructions(intent, design, directory, models, tools=None):
+    from .planning import environment
     from .prompts import intent_prompt
     example = {"name": "针对本次需求的工作流", "steps": [
         {"id": "task-1", "name": "任务名称", "tool": "kiro", "model": "auto", "effort": "",
          "prompt": "本任务的具体目标、输入、实施要求、交付物与验证方法"}]}
-    return intent_prompt(dumps(example), intent, directory) + """
+    return intent_prompt(dumps(example), intent, directory, role="KiroCrew 规划者（工作流设计）") + """
+设计 1–8 个顺序任务。
 
 ## 当前模板 / 用户草稿基线
 下面的数据用于设计参考。针对本次业务需求重新编写各 Task 的提示词，
@@ -73,8 +79,7 @@ def instructions(intent, design, directory, models):
 如果需要调整任务顺序或增加任务，在推荐中体现，用户会在采用前审阅。
 """ + dumps(design) + """
 
-## 此执行环境公布的模型
-""" + dumps(models) + """
+""" + environment(models, tools, None, None) + """
 
 这里只交付工作流设计，不运行推荐工作流、不提交或发布业务代码。
 最终回复必须包含且仅包含一个完整的 JSON 工作流代码块；不要加入第二个 JSON/YAML 代码块。

@@ -72,6 +72,48 @@ class CompactStatusTests(unittest.TestCase):
         self.assertNotIn("poc-kiro", text)
         self.assertLess(len(text), 4000)
 
+    def test_gates_candidates_and_the_verified_candidate_are_summarised(self):
+        gated = attempt(5, "blocked", "pass", "实现完成")
+        gated["evidence"].update(candidate={"sha": "abc1234" + "0" * 33, "parent": "b" * 40, "changed": True, "files": 2,
+                                            "insertions": 12, "deletions": 3},
+                                 gates=[{"name": "native_completed", "status": "pass"}, {"name": "diff_present", "status": "pass"},
+                                        {"name": "checks_pass", "status": "fail", "detail": "检查命令失败：npm test（退出码 1）\n" + RAW},
+                                        {"name": "review_bound", "status": "skip", "detail": "此前没有候选"}])
+        session = {**SESSION, "verified": {"sha": "abc1234" + "0" * 33, "task_id": "implement"},
+                   "tasks": [{**SESSION["tasks"][0], "attempts": [gated]}]}
+
+        class One:
+            def request(self, method, path, body=None):
+                return {f"/v1/runs/{RID}": session, f"/v1/runs/{RID}/events": []}[path]
+        view = mcp.call(One(), "octopus_status", {"run_id": RID})
+        latest = view["session"]["tasks"][0]["latest"]
+        self.assertEqual(latest["gates"], {"passed": 2, "failed": [{"name": "checks_pass", "detail": "检查命令失败：npm test（退出码 1）"}],
+                                           "skipped": ["review_bound"]})
+        self.assertEqual(latest["candidate"], {"sha": "abc1234" + "0" * 5, "files": 2, "insertions": 12, "deletions": 3})
+        self.assertEqual(view["session"]["verified"]["task_id"], "implement")
+        self.assertNotIn("原始输出", json.dumps(view, ensure_ascii=False))
+
+    def test_a_switched_attempt_says_what_it_was_switched_from(self):
+        session = json.loads(json.dumps(SESSION))
+        switched = {"tool": "opencode", "model": "auto", "effort": "", "reason": "opencode 不可用", "by": "coordinator", "recovery": 1}
+        session["tasks"][0]["attempts"][-1]["evidence"]["switched_from"] = switched
+        tasks = mcp.compact_status(session, [])["session"]["tasks"]
+        self.assertEqual(tasks[0]["latest"]["switched_from"], switched)
+        self.assertNotIn("switched_from", tasks[1]["latest"])
+
+    def test_a_stopped_stall_says_so(self):
+        session = json.loads(json.dumps(SESSION))
+        watchdog = json.loads('{"reason": "原生任务 31 分钟没有进展（最后工具：npm run build），看门狗已停止", "idle_minutes": 30, "attempt_minutes": 240, "last_progress": 1.0, "turns": 4, "last_tool": "npm run build", "stopped_at": 2.0}')
+        session["tasks"][0]["attempts"][-1]["evidence"]["watchdog"] = watchdog
+        latest = mcp.compact_status(session, [])["session"]["tasks"][0]["latest"]
+        self.assertEqual(latest["watchdog"], watchdog["reason"])
+
+    def test_each_task_says_where_its_tool_came_from(self):
+        session = json.loads(json.dumps(SESSION))
+        session["tasks"][0]["mapping"] = {"source": "planner", "label": "KiroCrew 规划"}
+        tasks = mcp.compact_status(session, [])["session"]["tasks"]
+        self.assertEqual(tasks[0]["mapping"], "KiroCrew 规划")
+
     def test_detail_returns_the_full_record(self):
         view = mcp.call(Client(), "octopus_status", {"run_id": RID, "detail": True})
         self.assertEqual(view, {"session": SESSION, "events": EVENTS})

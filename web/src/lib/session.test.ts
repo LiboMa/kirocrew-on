@@ -9,6 +9,7 @@ import {
   closeAction,
   crewEntryReason,
   filterRuns,
+  rerunPlan,
   statusText,
 } from "@/lib/session";
 
@@ -101,5 +102,24 @@ describe("session list search and filters", () => {
     expect(filterRuns(runs, { space: "", query: "", filter: "active" }).map((r) => r.id)).toEqual(["run-b"]);
     expect(filterRuns(runs, { space: "", query: "", filter: "attention" }).map((r) => r.id)).toEqual(["run-a"]);
     expect(filterRuns(runs, { space: "", query: "", filter: "closed" }).map((r) => r.id)).toEqual(["run-e"]);
+  });
+});
+
+describe("rerunPlan", () => {
+  const spec = (id: string, extra: Record<string, unknown> = {}) => ({ id, name: id, tool: "claude" as const, model: "auto", effort: "", prompt: "p", ...extra });
+  const run = { tasks: [
+    { ...task("design", "accepted"), spec: spec("design", { kind: "design" }) },
+    { ...task("backend", "accepted"), spec: spec("backend", { kind: "implement", depends_on: ["design"] }) },
+    { ...task("frontend", "accepted"), spec: spec("frontend", { kind: "implement", depends_on: ["design"] }) },
+    { ...task("check", "accepted"), spec: spec("check", { kind: "test", depends_on: ["backend"] }) },
+    { ...task("deliver", "pending"), spec: spec("deliver", { kind: "deliver" }) },
+  ] } as unknown as Run;
+
+  test("dependents, later review / test tasks and unaccepted tasks always rerun", () => {
+    const { rerun, forced } = rerunPlan(run, "frontend", new Set());
+    expect([...rerun]).toEqual(["frontend", "check", "deliver"]);
+    expect(Object.fromEntries(forced)).toEqual({ check: "审查 / 测试在改动后必须复验", deliver: "尚未验收" });
+    const fromDesign = rerunPlan(run, "design", new Set());
+    expect(fromDesign.forced.get("backend")).toBe("依赖重跑的任务");
   });
 });

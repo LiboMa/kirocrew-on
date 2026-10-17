@@ -22,6 +22,14 @@ export function RecoveryFields({ value, onChange, idPrefix = "recovery" }: {
           {[1, 2, 3, 4, 5].map((n) => <option key={n} value={n}>{n} 轮</option>)}
         </NativeSelect>
       </div>
+      <div className="flex items-center gap-2.5">
+        <Checkbox id={idPrefix + "-switch"} checked={value.switch_tools !== false}
+          onCheckedChange={(checked) => {
+            const { switch_tools: _ignored, ...rest } = value;
+            onChange(checked === true ? rest : { ...rest, switch_tools: false });
+          }} />
+        <Label htmlFor={idPrefix + "-switch"}>工具本身失败时，允许协调者推荐换用其他可用的工具或模型</Label>
+      </div>
       <p className="text-xs leading-6 text-muted-foreground">同一工作区内返工，保留历史并重新审查。缺少项目输入、认证或权限时说明原因，等待处理。</p>
     </div>
   );
