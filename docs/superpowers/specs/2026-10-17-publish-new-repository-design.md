@@ -8,14 +8,14 @@ EC2 `run-f7670bfb…`（负责人 2026-10-17）：需求是「在 https://github
 
 不变的前提：Agent 依然没有任何凭证；创建仓库与推送都由平台以发布者的凭证完成，并经过与现有发布相同的核对（D35 §5.2、D37 §7、D47）。
 
-## 2．已确定（待负责人审阅）
+## 2．已确定（负责人 2026-10-17 审阅通过）
 
 | 编号 | 决定 |
 |---|---|
 | R1 | 只用于源码不来自远端仓库的会话（`source.type = new`）。发布请求带 `repository: {owner, name, private?}`（`private` 默认 true）；托管方取自所选凭证（github.com、GitHub Enterprise Server、GitLab）。 |
 | R2 | 凭证要求：写权限，`repos` 范围覆盖 `owner/name`（如 `LiboMa/*`），并能创建仓库（GitHub classic PAT 的 `repo`，或细粒度令牌对账户的 Administration 写权限；GitLab 的 `api`）。缺权限时如实说明需要哪一项。 |
 | R3 | 创建：GitHub 在 `owner` 是凭证本人时调 `POST /user/repos`，否则 `POST /orgs/{owner}/repos`；GitLab 在 `owner` 命名空间下 `POST /projects`。不自动初始化（无 README / license）。 |
-| R4 | 推送方式（推荐）：会话的基线提交推到新仓库的默认分支 `main`（新仓库为空，没有可覆盖的内容），会话的工作推到 `octopus/<run>` 并建 Draft PR 指向 `main`——与已有仓库的发布一致，合并仍由人决定。备选：工作直接作为 `main` 的提交（没有 PR）。 |
+| R4 | 推送方式：会话的基线提交推到新仓库的默认分支 `main`（新仓库为空，没有可覆盖的内容），会话的工作推到 `octopus/<run>` 并建 Draft PR 指向 `main`——与已有仓库的发布一致，合并仍由人决定（负责人选定；不采用工作直接进 `main`）。 |
 | R5 | 同名仓库已存在时：若为空仓库（没有任何分支）且凭证可写，按 R4 发布到它（用户可以先自己建好空仓库）；否则拒绝并说明「仓库已存在且不为空」，不推送。 |
 | R6 | 新仓库只建一次：会话记录发布目标 `publish.repository = {host, path, url, created}`；之后再次发布（新的已验证候选）与已有仓库相同——快进推送 `octopus/<run>`，沿用 Draft PR。会话的 `source` 保持原样（记录会话从哪里开始）。 |
 | R7 | 自动发布（D47）：启动时 `publish: {auto: true, repository: {...}}` 由用户明确给出时，完成后自动建仓库并发布。规划者从需求中识别到「新建仓库」时只记说明并在「需要处理」提示用户在会话页确认目标，**不自动创建**——创建仓库是对外的、难撤销的动作，由人给出名称。 |
