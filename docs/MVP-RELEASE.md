@@ -494,6 +494,18 @@ Vite 客户端模块可用；打开链接第二次使用被拒、无 Cookie 时�
 不存在的用户名得结构化 404。验收后两枚 Token 已吊销、`e2e-member` 停用。独立审查 3 个 Important 与 4 个上调项修复后重跑 15/15；
 离线 Python 443、控制台 108、旧版回归 92。
 
+### 14.29 发布到新仓库（D48，EC2 run-f7670bfb… 的需求）
+
+本机完成：新建源码的会话发布时给出 `repository: {owner, name, private?}`（默认私有）与写凭证，平台在 Worker 的发布包通过全部检查后建仓库
+（GitHub 用户 / 组织、GitLab 命名空间；或用已有的空仓库），会话基线推到 `main`、工作推到 `octopus/<run>` 并建 Draft PR；只建一次并记
+`publish_target`，再次发布与自动发布沿用；非空的同名仓库、范围不覆盖的凭证在任何托管方调用前拒绝。规划者识别到建仓库只记建议，完成后
+「需要处理」为「发布到新仓库待确认」；会话页「发布到新仓库」表单、向导「完成后发布到新仓库」；MCP / OpenAPI / Skill 同步。
+离线：Python 1028、控制台 160；独立终审（opus）无严重问题，5 项重要问题已修复（含先建仓库后检查、基线推送不幂等、建议可取消「私有」），
+其余记入 BACKLOG。
+✅ EC2（2026-10-18，a044fb8，`run-4be521cf…`，负责人同意在 LiboMa 下建私有仓库、用凭证 full-access-repo）：`publish: {auto: true, repository,
+credential}` 的新建源码会话（新建 README + 独立审查）完成后，平台自动新建私有仓库 `LiboMa/kirocrew-d48-acceptance`，`main` 为会话基线，
+Draft PR #1 从 `octopus/run-4be521cf…` 指向 `main`、只含 README.md；会话页显示仓库与 PR 链接，时间线「已新建仓库」「已发布到仓库」「自动发布」。
+
 ### 14.28 协调者的可选目标（EC2 run-40a1…）
 
 本机完成：协调者诊断时收到 `allowed_targets`（失败任务及其之前的任务）与此前各轮决定及其被拒原因（`previous_decisions[].refused`）；
