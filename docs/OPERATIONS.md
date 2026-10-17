@@ -411,6 +411,8 @@ CloudFront 只使用 us-east-1 的证书）：分发加上别名与证书（SNI�
 - **配置契约**：平台写入 `config.json` 的键列在 `tests/kirocrew_contract.json`（版本须等于 `deploy/versions.env` 的 `KIROCREW_ACCEPTED_VERSION`）。
   本机回归核对 `seed()` 只写清单内的键；部署时的原生测试在主机上核对清单中每个键都是已安装 KiroCrew 的配置字段，并用 KiroCrew 自己的加载器读回
   新生成的配置，不得有被忽略的键（`_extra_keys` / `_extra_sections`）。升级 KiroCrew 时先在新版本上核实清单并改版本号，原生测试不过则部署中止。
+  同一清单的 `runtime_errors` 列出平台自动重试（L0）所依赖的 KiroCrew 报错文字，各附一条 EC2 原样报错：本机回归核对每条都按其种类重试，
+  部署时的原生测试核对已安装 KiroCrew 的源码仍含这些文字——升级后措辞变了，运行时故障不会悄悄改由协调者处理。
 
 ### Agent 提示（D46 P1）
 

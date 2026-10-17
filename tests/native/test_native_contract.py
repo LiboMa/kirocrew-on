@@ -125,5 +125,17 @@ class ConfigContractTests(unittest.TestCase):
             self.assertEqual(cfg.agent.adaptive_concurrency_mode, "fixed")   # and what was written is what it reads
 
 
+
+class RuntimeErrorContractTests(unittest.TestCase):
+    """The installed KiroCrew still words its runtime failures the way the platform's L0 retry reads them
+    (tests/kirocrew_contract.json runtime_errors)."""
+
+    def test_every_runtime_failure_phrase_is_in_the_installed_kirocrew(self):
+        import kiro_crew
+        sources = "\n".join(path.read_text(errors="replace") for path in Path(kiro_crew.__file__).parent.rglob("*.py"))
+        missing = [item["phrase"] for item in CONTRACT["runtime_errors"] if item["phrase"] not in sources]
+        self.assertEqual(missing, [], "KiroCrew no longer says these: update octopus/engine.py transient and the contract")
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)

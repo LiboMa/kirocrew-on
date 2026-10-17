@@ -1,12 +1,55 @@
 {
   "kirocrew_version": "0.10.0",
-  "about": "Config keys the platform writes into $KIROCREW_HOME/config.json that KiroCrew reads (sections: dataclass fields of KiroCrewConfig and its section configs). tests/test_kirocrew_contract.py keeps seed() inside this list; tests/native checks the list against the installed KiroCrew on every deploy.",
+  "about": "Config keys the platform writes into $KIROCREW_HOME/config.json that KiroCrew reads (sections: dataclass fields of KiroCrewConfig and its section configs). tests/test_kirocrew_contract.py keeps seed() inside this list; tests/native checks the list against the installed KiroCrew on every deploy. runtime_errors: the words of KiroCrew's runtime failures the platform retries on its own (octopus/engine.py transient), each with a failure as EC2 reported it; tests/native checks the installed KiroCrew still contains each phrase.",
   "config": {
-    "": ["agent", "session", "dashboard", "default_workspace"],
-    "agent": ["provider", "acp_backend", "default_agent", "model", "sandbox", "approval_mode", "session_sharing", "max_subagents",
-              "log_level", "subagent_cwd_allowed_roots", "subagent_result_ttl_secs", "adaptive_concurrency_mode",
-              "dangerously_skip_permissions"],
-    "session": ["pool_size"],
-    "dashboard": ["onboarded"]
-  }
+    "": [
+      "agent",
+      "session",
+      "dashboard",
+      "default_workspace"
+    ],
+    "agent": [
+      "provider",
+      "acp_backend",
+      "default_agent",
+      "model",
+      "sandbox",
+      "approval_mode",
+      "session_sharing",
+      "max_subagents",
+      "log_level",
+      "subagent_cwd_allowed_roots",
+      "subagent_result_ttl_secs",
+      "adaptive_concurrency_mode",
+      "dangerously_skip_permissions"
+    ],
+    "session": [
+      "pool_size"
+    ],
+    "dashboard": [
+      "onboarded"
+    ]
+  },
+  "runtime_errors": [
+    {
+      "kind": "runtime_cancelled",
+      "phrase": "turn cancelled by the runtime",
+      "sample": "cancelled (stop_reason=cancelled): turn cancelled by the runtime — partial result preserved"
+    },
+    {
+      "kind": "runtime_exited",
+      "phrase": "ACP process exited",
+      "sample": "kiro_crew.acp.client.AcpError: ACP process exited (code=-15, SIGTERM, external) — [session/create] sessionId=3cb392c9 phase=validate-cwd durationMs=0"
+    },
+    {
+      "kind": "runtime_exited",
+      "phrase": "Runtime process died",
+      "sample": "kiro_crew.acp.client.AcpProcessDied: Runtime process died during prompt — process exited (rc=-15 (signal SIGTERM)) [returncode=-15] stderr_tail: <none>"
+    },
+    {
+      "kind": "runtime_cleanup",
+      "phrase": "still has members",
+      "sample": "kill failed: pid 762595 exited and its process group 762595 still has members, but none could be verified as this run's; not signalled"
+    }
+  ]
 }

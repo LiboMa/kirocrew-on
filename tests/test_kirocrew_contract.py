@@ -37,5 +37,20 @@ class ConfigContractTests(unittest.TestCase):
         self.assertEqual(CONTRACT["kirocrew_version"], pinned["KIROCREW_ACCEPTED_VERSION"])
 
 
+
+class RuntimeErrorContractTests(unittest.TestCase):
+    """The words of KiroCrew's runtime failures the platform retries on its own (design §8.1 L0); tests/native checks the
+    installed KiroCrew still says them, so a reworded release does not silently send runtime faults to the Coordinator."""
+
+    def test_every_listed_runtime_failure_is_retried_as_its_kind(self):
+        from octopus.engine import transient
+        listed = CONTRACT["runtime_errors"]
+        self.assertGreaterEqual(len(listed), 4)
+        for item in listed:
+            with self.subTest(item["kind"], phrase=item["phrase"]):
+                self.assertIn(item["phrase"], item["sample"])
+                self.assertEqual(transient({"done": True, "error": item["sample"]}, None, False, None), item["kind"])
+
+
 if __name__ == "__main__":
     unittest.main()
