@@ -115,6 +115,27 @@ class PlannedTests(ConfirmationCase):
         rid = self.start(steps=None, plan="agent", publish={"auto": False})
         self.assertFalse(self.tick(rid)["publish_policy"]["auto"])
 
+    def test_a_requirement_to_create_a_repository_is_suggested_not_created(self):
+        import tests.test_confirmation as confirmation
+        plan = PLAN.replace('"publish": {"quote": "完成后提交 PR"}',
+                            '"publish": {"quote": "新建 LiboMa/demo 仓库", "repository": {"owner": "LiboMa", "name": "demo"}}')
+        original, confirmation.PLAN = confirmation.PLAN, plan
+        self.addCleanup(setattr, confirmation, "PLAN", original)
+        run = self.tick(self.start(steps=None, plan="agent"))
+        self.assertEqual(run["publish_suggestion"]["repository"], {"owner": "LiboMa", "name": "demo", "private": True})
+        self.assertFalse((run.get("publish_policy") or {}).get("auto"))
+        self.assertTrue(any("LiboMa/demo" in note and "不自动创建" in note for note in run["planning"]["notes"]))
+
+    def test_an_invalid_suggested_repository_is_dropped_with_a_note(self):
+        import tests.test_confirmation as confirmation
+        plan = PLAN.replace('"publish": {"quote": "完成后提交 PR"}',
+                            '"publish": {"quote": "建仓库", "repository": {"owner": "a/b", "name": "../x"}}')
+        original, confirmation.PLAN = confirmation.PLAN, plan
+        self.addCleanup(setattr, confirmation, "PLAN", original)
+        run = self.tick(self.start(steps=None, plan="agent"))
+        self.assertIsNone(run.get("publish_suggestion"))
+        self.assertTrue(any("仓库名不合法" in note for note in run["planning"]["notes"]))
+
     def test_the_planner_is_told_how_to_mark_a_pull_request(self):
         from octopus import planning
         self.assertIn('"publish"', planning.plan_step()["prompt"])
@@ -137,13 +158,12 @@ class PushFailureTests(ConfirmationCase):
         self.assertIn("发布到仓库", run["attention"]["action"])
 
     def test_a_session_without_a_repository_is_not_sent_to_publish(self):
-        # EC2 run-f7670bfb…: 「新建一个 Repo 并推 README」 on a new source; publishing needs the repository the Session came from
+        # EC2 run-f7670bfb…: 「新建一个 Repo 并推 README」 on a new source: the platform publishes it to a new repository (D48)
         rid = self.start(recovery={"enabled": False, "max_cycles": 2})
         run = self.tick(rid)
         self.assertEqual(run["attention"]["title"], "Agent 不能推送或创建 PR")
-        self.assertNotIn("发布到仓库", run["attention"]["action"])
-        self.assertIn("没有远端仓库", run["attention"]["action"])
-        self.assertIn("下载源码", run["attention"]["action"])
+        self.assertNotIn("「发布到仓库」", run["attention"]["action"])
+        self.assertIn("新建仓库并发布", run["attention"]["action"])
 
 
 class McpTests(unittest.TestCase):

@@ -49,6 +49,7 @@ def rules(count, depends):
    blocked 只用于缺输入、认证或权限。推送与 PR / MR 由平台在审查通过后发布，任务中不安排推送。
    不要在审查之后另设「按审查修复」的任务：审查要求修改时，平台会自动安排上游任务返工并复审。
    需求明确要求提交 PR / MR 时，在计划 JSON 顶层写 "publish": {{"quote": "需求原文片段"}}：会话完成并通过审查后平台自动发布 Draft PR。
+   需求要求新建仓库时再写 "repository": {{"owner": "账户或组织", "name": "仓库名"}}：平台只记为建议，由用户确认后发布，不安排建仓库的任务。
 5. 可运行的产出：交付物是可以运行的应用时，最后的交付任务须在项目根目录写 .octopus/preview.json
    （processes：命令、cwd、端口或 "$PORT"、哪个是入口；install：依赖安装；前后端分开时各写一个进程），
    并把「.octopus/preview.json 能按声明启动应用」列为该任务的验收项；用户据此下载到本机或远程预览。
@@ -146,7 +147,8 @@ def expand(db, rid, text, models=None, replan=False, tools=None):
     for step in steps:   # D47: publishing is the platform's; an Agent has no repository write credential
         if PUSHING.search(step.get("prompt") or ""):
             notes.append(f"任务「{step['name']}」要求推送或创建 PR：Agent 没有仓库写凭证，" + (
-                "发布由平台在会话完成后进行" if repository else "此会话的源码不来自远端仓库，没有远端仓库可发布，平台也不能新建仓库"))
+                "发布由平台在会话完成后进行" if repository
+                else "此会话的源码不来自远端仓库：没有远端仓库，会话完成后可在会话页发布到新仓库"))
     start = db.execute("SELECT COALESCE(MAX(ordinal), 0) FROM tasks WHERE run_id=?", (rid,)).fetchone()[0] + 1
     for offset, step in enumerate(steps):
         db.execute("INSERT INTO tasks(run_id,id,ordinal,spec) VALUES(?,?,?,?)", (rid, step["id"], start + offset, dumps(step)))
@@ -157,7 +159,17 @@ def expand(db, rid, text, models=None, replan=False, tools=None):
         if repository:
             snapshot["publish_policy"] = {"auto": True, "source": "requested", "quote": plan["publish"].get("quote", "")}
         else:
-            notes.append("需求要求提交 PR，但此会话的源码不来自远端仓库，没有可发布的仓库，未开启自动发布")
+            suggested = plan["publish"].get("repository")
+            if suggested is not None:
+                from .publish import check_repository
+                try:   # D48 R7: what the requirement named, for the person to confirm; never created on its own
+                    checked = check_repository(suggested)
+                    snapshot["publish_suggestion"] = {"repository": checked, "quote": plan["publish"].get("quote", "")}
+                    notes.append(f"需求要求新建仓库 {checked['owner']}/{checked['name']}：平台不自动创建，"
+                                 "会话完成后在会话页确认仓库名与凭证后发布")
+                except Error:
+                    notes.append("需求要求新建仓库，但规划给出的仓库名不合法，未记为建议：会话完成后在会话页填写")
+            notes.append("需求要求提交 PR，但此会话的源码不来自远端仓库，没有远端仓库，未开启自动发布")
     if replan:
         snapshot["replan"] = {**(snapshot.get("replan") or {}), "applied": True, "tasks": [s["id"] for s in steps], "notes": notes,
                               "intent": str(plan.get("intent") or "")[:500]}

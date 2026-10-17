@@ -1640,6 +1640,12 @@ class Service:
             return {"title": "等待批准", "detail": run["error"] or "原生任务正在等待批准一次工具调用。",
                     "action": "在会话页「待批准」中查看工具与命令后批准或拒绝；Coding Agent 可用 octopus_approvals 查看、"
                               "经用户同意后用 octopus_approve 答复。", "task_id": task["id"] if task else None}
+        suggested = (run.get("publish_suggestion") or {}).get("repository")
+        if run["status"] == "completed" and suggested and not run.get("publish_target"):
+            name = f"{suggested['owner']}/{suggested['name']}"   # D48 R7: never created on its own
+            return {"title": "发布到新仓库待确认", "detail": f"需求要求新建仓库 {name}，平台不会自动创建。",
+                    "action": "在会话页核对 owner、仓库名与凭证后点「新建仓库并发布」；Coding Agent 经用户同意后用 octopus_publish "
+                              "（repository、credential）。", "task_id": None}
         if run["status"] == "completed" and (run.get("publish_auto") or {}).get("ok") is False:
             return {"title": "自动发布未完成", "detail": run["publish_auto"].get("error"),
                     "action": "处理后在会话页点「发布到仓库」（例如绑定一枚有写权限的凭证）；会话的工作已完成。", "task_id": None}
@@ -1665,9 +1671,9 @@ class Service:
             if (run.get("source") or {}).get("type") == "git":
                 action = ("推送与 Draft PR 由平台完成：会话完成后在会话页点「发布到仓库」，或开启「完成后自动发布」；"
                           "可续作去掉要求推送的任务。")
-            else:   # publishing goes to the repository the Session was started from (EC2 run-f7670bfb…)
-                action = ("此会话的源码不来自远端仓库，没有远端仓库可发布，平台目前也不能新建仓库：可续作去掉要求建仓库或推送的任务，"
-                          "完成后用「下载源码」取回改动；需要发布时以已有仓库为源码新建会话。")
+            else:   # a new project goes to a new repository the platform makes (EC2 run-f7670bfb…, D48)
+                action = ("此会话的源码不来自远端仓库：推送与建仓库由平台完成——会话完成后在会话页填写新仓库（owner、仓库名）与有写权限的凭证，"
+                          "点「新建仓库并发布」；可续作去掉要求建仓库或推送的任务。")
         elif run.get("error") == "Worker 已停用":   # D43: continues on its own once the Worker is enabled again
             title, action = "执行环境已停用", "管理员重新启用后自动继续。"
         elif "原生任务已停止" in error:

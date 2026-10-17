@@ -218,5 +218,19 @@ class NewRepositoryPolicyTests(NewRepositoryCase):
         self.assertTrue(self.service.run(self.b, rid)["publish_auto"]["ok"])
 
 
+class SuggestionAttentionTests(NewRepositoryCase):
+    def test_a_completed_session_with_a_suggested_repository_asks_for_confirmation(self):
+        rid = self.new_session()
+        with self.db.transaction() as db:
+            snapshot = json.loads(db.execute("SELECT snapshot FROM runs WHERE id=?", (rid,)).fetchone()["snapshot"])
+            snapshot["publish_suggestion"] = {"repository": {"owner": "owner", "name": "fresh", "private": True}, "quote": "建仓库"}
+            db.execute("UPDATE runs SET snapshot=? WHERE id=?", (json.dumps(snapshot), rid))
+        attention = self.service.run(self.b, rid)["attention"]
+        self.assertEqual(attention["title"], "发布到新仓库待确认")
+        self.assertIn("owner/fresh", attention["detail"])
+        self.service.publish(self.b, rid, self.target())
+        self.assertIsNone(self.service.run(self.b, rid)["attention"])
+
+
 if __name__ == "__main__":
     unittest.main()

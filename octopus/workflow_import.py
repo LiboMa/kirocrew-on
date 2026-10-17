@@ -142,4 +142,6 @@ def import_workflow(content, format=None, known=(), planned=False):
         result.update({key: document[key] for key in ("intent", "summary") if isinstance(document.get(key), str)})
         if isinstance(document.get("publish"), dict):   # D47: the requirement asked for a pull / merge request
             result["publish"] = {"quote": str(document["publish"].get("quote") or "")[:200]}
+            if document["publish"].get("repository") is not None:   # D48: a new repository it named — a suggestion only
+                result["publish"]["repository"] = document["publish"]["repository"]
     return result
