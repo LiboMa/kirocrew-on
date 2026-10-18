@@ -417,14 +417,37 @@ GATEWAY_PRINT="$( { readlink -f /opt/kirocrew/current
       /opt/kirocrew-on/current/pipeline_spec.py "$BOUNDARY_TOML" /etc/systemd/system/octopus-gateway@.service
   cat /etc/systemd/system/octopus-gateway@.service.d/*.conf "/etc/systemd/system/octopus-gateway@$BOUNDARY.service.d/"*.conf \
       "/etc/kirocrew-on/boundary-$BOUNDARY.env" 2>/dev/null || true; } | sha256sum | cut -d' ' -f1)"
+# A restart ends the native tasks in flight (postmortem #8, EC2 run-f7670bfb…): the Worker first stops taking work (its
+# .maintenance mark: the platform waits and retries) and the running tasks get up to DRAIN_MINUTES to end.
+MAINTENANCE="$BASE/worker/.maintenance"
 if [ "$(cat "$GATEWAY_STAMP" 2>/dev/null || true)" = "$GATEWAY_PRINT" ] && systemctl is-active --quiet "octopus-gateway@$BOUNDARY"; then
   log "Gateway 未变化，保持运行（进行中的原生任务不中断）"
 else
+  if systemctl is-active --quiet "octopus-gateway@$BOUNDARY" && [ -d "$BASE/worker" ]; then
+    printf 'deploy %s\n' "$(date -u +%FT%TZ)" > "$MAINTENANCE"   # the Worker only checks that it exists
+    DEADLINE=$(( $(date +%s) + ${DRAIN_MINUTES:-30} * 60 ))
+    while [ "$(date +%s)" -lt "$DEADLINE" ]; do
+      RUNNING="$(runuser -u "$CREW" -- env PYTHONPATH=/opt/kirocrew-on/current "$KC/venv/bin/python" -s -c '
+import sys
+from pathlib import Path
+from octopus import gateway_client as g
+try:
+    agents = g.request("/api/spawn", port=int(sys.argv[1]), home=Path(sys.argv[2])).get("agents", [])
+    print(sum(1 for a in agents if not a.get("done")))
+except Exception:
+    print(0)
+' "$(grep -E '^gateway_port' "$BOUNDARY_TOML" | grep -oE '[0-9]+')" "$BASE/crew" 2>/dev/null || echo 0)"
+      [ "${RUNNING:-0}" = 0 ] && break
+      log "等待 $RUNNING 个原生任务结束后重启 Gateway（最多 ${DRAIN_MINUTES:-30} 分钟）"
+      sleep 20
+    done
+  fi
   systemctl restart "octopus-gateway@$BOUNDARY"
   printf '%s\n' "$GATEWAY_PRINT" > "$GATEWAY_STAMP"
 fi
 # gateway:end
 systemctl restart "octopus-worker@$BOUNDARY"
+rm -f "$MAINTENANCE"   # the restarted Worker takes work again
 if [ -n "$WORKER_HOST" ] && [ -n "${WORKER_PREVIEW_TLS_PORT:-}" ] && [ -s "$BASE/worker.token" ]; then
   log "远程预览端口 $WORKER_PREVIEW_TLS_PORT（TLS；只转发到回环 47000–47999，校验头由 Worker Token 派生）"
   ( umask 077; render_worker_preview "$TARGET/deploy/nginx/kirocrew-worker-preview.conf" "$BASE/worker.token" \

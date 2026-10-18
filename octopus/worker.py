@@ -701,7 +701,13 @@ class Worker:
                                 "已知问题 K01：OpenCode 在 EC2 执行边界上以 shell 写文件被 KiroCrew 工具门禁拒绝、返回空结果"
                                 + ("，已停用。" if "opencode" in self.disabled_tools else "，实现类任务可能失败。")]}
 
+    def taking_work(self):
+        """A deploy that restarts the Gateway marks the Worker while it drains (deploy/install/al2023.sh): no new work until
+        it is done — the platform waits and retries on its own (native_unavailable)."""
+        require(not (self.root / ".maintenance").exists(), "执行环境维护中（部署），稍后自动继续", 503, "native_unavailable")
+
     def prepare(self, body):
+        self.taking_work()
         rid = body["run_id"]
         run = self.path(rid)
         with self.lock:
@@ -783,6 +789,7 @@ class Worker:
                                                ttl=self.crew_entry_ttl)}
 
     def dispatch(self, body):
+        self.taking_work()
         run, parent = self.binding(body["run_id"])
         self._undo_baseline(run)   # the next task's Agent must see the candidate, never a baseline left by a restart
         attempt = body["attempt_id"]
