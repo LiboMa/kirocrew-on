@@ -1,4 +1,4 @@
-import type { CredentialBinding, CredentialKind, CredentialOwner, CredentialScope } from "@/api/types";
+import type { Credential, CredentialBinding, CredentialKind, CredentialOwner, CredentialScope } from "@/api/types";
 
 export const KIND_LABELS: Record<CredentialKind, string> = { github_pat: "GitHub Token", gitlab_token: "GitLab Token" };
 export const SCOPE_LABELS: Record<CredentialScope, string> = { user: "个人", team: "Team", platform: "平台" };
@@ -24,4 +24,14 @@ export function httpsHost(url: string): string {
   } catch {
     return "";
   }
+}
+
+/** A credential a Session in ``space`` ("" for personal) may use, as the server checks it (D35 R1; D48). */
+export function usableIn(c: Credential, space: string): boolean {
+  return !c.disabled && (c.scope === "user" || c.scope === "platform" || (c.scope === "team" && c.owner?.id === space));
+}
+
+/** A credential as a picker shows it: name, scope, host, the repositories it covers and its hint. */
+export function credentialLabel(c: Credential): string {
+  return [c.name, SCOPE_LABELS[c.scope], c.host, c.repos?.length ? c.repos.join("、") : "全部仓库", c.hint].join(" · ");
 }

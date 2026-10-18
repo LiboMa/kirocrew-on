@@ -2,6 +2,7 @@ import { useState } from "react";
 import { toast } from "sonner";
 import { api } from "@/api/client";
 import { useCredentials } from "@/api/hooks";
+import { credentialLabel, usableIn } from "@/lib/credentials";
 import type { PublishRecord, Run } from "@/api/types";
 import { Button } from "@/components/ui/button";
 import { useRefreshRun } from "@/features/sessions/useSessionActions";
@@ -79,7 +80,7 @@ function NewRepositoryPublish({ run }: { run: Run }) {
   const [credential, setCredential] = useState("");
   const [busy, setBusy] = useState(false);
   const { data = [] } = useCredentials(!target);
-  const writers = data.filter((c) => c.access === "write" && !c.disabled);
+  const writers = data.filter((c) => c.access === "write" && usableIn(c, run.team_id ?? ""));
   const published = run.publish;
   const settled = run.lifecycle === "open" && SETTLED.has(run.status) && run.permissions?.publish !== false;
   const send = async (body: Record<string, unknown>) => {
@@ -123,7 +124,7 @@ function NewRepositoryPublish({ run }: { run: Run }) {
       <label className="inline-flex items-center gap-1">凭证
         <select aria-label="凭证" className="h-6 rounded border px-1" value={credential} onChange={(e) => setCredential(e.target.value)}>
           <option value="">选择有写权限的凭证</option>
-          {writers.map((c) => <option key={c.id} value={c.id}>{c.name} · {c.host} · {c.hint}</option>)}
+          {writers.map((c) => <option key={c.id} value={c.id}>{credentialLabel(c)}</option>)}
         </select>
       </label>
       <Button type="button" size="xs" variant="outline" disabled={busy || !owner.trim() || !name.trim() || !credential}

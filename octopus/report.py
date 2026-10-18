@@ -117,8 +117,8 @@ def model(view, now=None):
     judged = next((t for t in reversed(view.get("tasks") or []) if (t.get("spec") or {}).get("role") == "evaluator"
                    and t.get("attempts")), None)   # D46 P3: the Session passes on the Evaluator's verdicts
     evaluation = None
-    if judged:
-        final = sorted(judged["attempts"], key=lambda a: a.get("number") or 0)[-1].get("evidence") or {}
+    final = sorted(judged["attempts"], key=lambda a: a.get("number") or 0)[-1].get("evidence") or {} if judged else {}
+    if judged and any(g.get("name") == "evaluated" for g in final.get("gates") or []):   # only where the gate applied
         by = ((final.get("evaluation") or {}).get("accepted_by") or {}).get("username")
         evaluation = [{"item": _line(a.get("item"), 300), "result": str(a.get("result") or "—"),
                        "by": by if a.get("result") == "pending" else None}

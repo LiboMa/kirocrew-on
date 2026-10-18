@@ -15,7 +15,7 @@ import { Textarea } from "@/components/ui/textarea";
 import { spaceWorkers, useConsole } from "@/features/console/context";
 import { generationActive, type MatchStatus } from "@/features/launch/hooks";
 import { PLAN_METHODS, editTasks, fingerprint, nameFrom, withSource, type Draft } from "@/features/launch/state";
-import { SCOPE_LABELS, httpsHost } from "@/lib/credentials";
+import { SCOPE_LABELS, credentialLabel, httpsHost, usableIn } from "@/lib/credentials";
 import { STATES, TOOLS } from "@/lib/labels";
 import { cn } from "@/lib/utils";
 
@@ -114,7 +114,7 @@ export function NeedStep({ draft, update, workflowMode }: { draft: Draft; update
 /** D48: publish a new project to a new repository once it completes (private; the credential must be able to create it). */
 function NewRepositoryChoice({ draft, update }: { draft: Draft; update: Update }) {
   const { data = [] } = useCredentials(draft.autoPublish);
-  const writers = data.filter((c) => c.access === "write" && !c.disabled);
+  const writers = data.filter((c) => c.access === "write" && usableIn(c, draft.space));
   return (
     <div className="space-y-1.5 text-xs">
       <label className="flex items-center gap-2">
@@ -131,7 +131,7 @@ function NewRepositoryChoice({ draft, update }: { draft: Draft; update: Update }
           <NativeSelect aria-label="新仓库凭证" value={draft.newRepoCredential}
             onChange={(e) => update((d) => ({ ...d, newRepoCredential: e.target.value }))}>
             <option value="">选择有写权限的凭证</option>
-            {writers.map((c) => <option key={c.id} value={c.id}>{c.name} · {c.host} · {c.hint}</option>)}
+            {writers.map((c) => <option key={c.id} value={c.id}>{credentialLabel(c)}</option>)}
           </NativeSelect>
         </div>
       )}
@@ -444,8 +444,7 @@ export function ConfirmStep({ draft, update, workflowMode }: { draft: Draft; upd
 function CredentialChoice({ draft, update }: { draft: Draft; update: Update }) {
   const host = httpsHost(draft.url);
   const { data = [] } = useCredentials(!!host);
-  const options = data.filter((c) => c.host === host && !c.disabled
-    && (c.scope === "user" || c.scope === "platform" || (c.scope === "team" && c.owner?.id === draft.space)));
+  const options = data.filter((c) => c.host === host && usableIn(c, draft.space));
   const known = options.some((c) => c.id === draft.credential);
   useEffect(() => {
     if (draft.credential && !known) update((d) => ({ ...d, credential: "" }));

@@ -46,6 +46,19 @@ describe("publishing a new project to a new repository (D48)", () => {
     expect(screen.getByText(/建议公开/)).toBeInTheDocument();
   });
 
+  test("only credentials the Session's space may use are offered, with their scope", async () => {
+    const others = { ...writer, id: "cred-other", name: "别的 Team", scope: "team", owner: { id: "team-x" } };
+    const ours = { ...writer, id: "cred-team", name: "本 Team", scope: "team", owner: { id: "team-a" }, repos: [] };
+    const run = makeRun({ status: "completed", source: { type: "new" }, team_id: "team-a" });
+    setToken("oct_fixture");
+    mockApi({ "GET /credentials": [writer, others, ours], [`GET /runs/${run.id}`]: run });
+    const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    render(<QueryClientProvider client={client}><PublishControl run={run} /></QueryClientProvider>);
+    expect(await screen.findByRole("option", { name: /本 Team · Team · github.com · 全部仓库/ })).toBeInTheDocument();
+    expect(screen.getByRole("option", { name: /我的 GitHub · 个人 · github.com · LiboMa\/\*/ })).toBeInTheDocument();
+    expect(screen.queryByRole("option", { name: /别的 Team/ })).not.toBeInTheDocument();
+  });
+
   test("once published, the repository is shown and publishing again sends no target", async () => {
     const run = makeRun({ status: "completed", source: { type: "new" },
       publish_target: { host: "github.com", path: "LiboMa/demo", url: "https://github.com/LiboMa/demo.git",

@@ -879,8 +879,9 @@ class Engine:
                 error, pending = evaluation.verdicts(spec, report)
                 evidence["gates"].append(gates.record("evaluated", "fail" if error else "pass",
                                                       error or (f"{len(pending)} 项待人确认" if pending else None)))
-                if error:
-                    failure_type, evidence["gate"] = "gate", "evaluated"
+                if error:   # a failed verdict is reworked; a missing one or one without evidence is the outcome's form (R3)
+                    failure_type = "implementation" if error.startswith(evaluation.FAILED) else "contract"
+                    evidence["gate"] = "evaluated"
                 elif pending:
                     evidence["evaluation"] = {"pending": pending}
             if lost and not error:

@@ -6,6 +6,7 @@ import json
 import time
 
 RESULTS = ("pass", "fail", "pending")
+FAILED = "Evaluator 判定未通过："   # a verdict that failed (rework); every other refusal is the outcome's form (contract)
 
 
 def applies(snapshot, spec, config):
@@ -22,7 +23,7 @@ def verdicts(spec, report):
     result = lambda verdict: str(verdict.get("result") or "").strip().lower()
     failures = [str(a.get("item") or "").strip() for a in given if result(a) == "fail"]
     if failures:
-        return "Evaluator 判定未通过：" + "；".join(failures[:5]), []
+        return FAILED + "；".join(failures[:5]), []
     remaining, matched = list(given), []
     for item in items:
         hit = next((a for a in remaining if str(a.get("item") or "").strip() == item), None)
@@ -102,7 +103,8 @@ def append(db, rid, snapshot, config):
     tasks = [json.loads(r["spec"]) for r in rows]
     if not needed(tasks, snapshot, config):
         return None
-    ids = {r["id"] for r in rows}
+    ids = {r["id"] for r in rows} | {r[0] for r in db.execute("SELECT DISTINCT task_id FROM attempts WHERE run_id=?", (rid,))} \
+        | {t.get("id") for t in (snapshot.get("replan") or {}).get("replaced") or []}   # never an id used before
     tid = next(name for name in ["evaluator", *(f"evaluator-{n}" for n in range(2, 100))] if name not in ids)
     items = _items(tasks)
     tool, independent = _tool(tasks, config)

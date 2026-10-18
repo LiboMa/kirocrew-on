@@ -366,5 +366,33 @@ class StoppedAcceptanceTests(EvaluatorCase):
         self.assertIn("验收", str(caught.exception))
 
 
+class SecondBatchTests(EvaluatorCase):
+    def test_a_missing_verdict_is_a_contract_failure(self):
+        self.verdicts = [[{"item": "登录成功", "result": "pass", "evidence": "curl 200"}]]
+        run = self.run_()[1]
+        check = next(t for t in run["tasks"] if t["id"] == "check")
+        self.assertEqual(check["attempts"][-1]["evidence"]["failure_type"], "contract")
+
+    def test_a_new_evaluator_does_not_take_an_id_used_before(self):
+        from octopus import evaluation
+        rid, run = self.run_([TEAM[0]])
+        with self.db.transaction() as db:   # as a replan replacing the appended Evaluator: its Attempts stay as history
+            db.execute("DELETE FROM tasks WHERE run_id=? AND id='evaluator'", (rid,))
+            snapshot = json.loads(db.execute("SELECT snapshot FROM runs WHERE id=?", (rid,)).fetchone()["snapshot"])
+            config = json.loads(db.execute("SELECT config FROM workers WHERE id='worker'").fetchone()["config"])
+            self.assertEqual(evaluation.append(db, rid, snapshot, config), "evaluator-2")
+
+    def test_the_report_has_the_evaluator_section_only_where_the_gate_applied(self):
+        from octopus import report
+        rid, run = self.run_()
+        self.assertIn("## 验收（以 Evaluator 为准）", report.markdown(run))
+        older = ConfirmationCase.start(self, steps=TEAM, recovery={"enabled": False, "max_cycles": 2})
+        with self.db.transaction() as db:   # a Session from before the gate (contract 3)
+            snapshot = json.loads(db.execute("SELECT snapshot FROM runs WHERE id=?", (older,)).fetchone()["snapshot"])
+            snapshot["execution_contract"] = 3
+            db.execute("UPDATE runs SET snapshot=? WHERE id=?", (dumps(snapshot), older))
+        self.assertNotIn("以 Evaluator 为准", report.markdown(self.tick(older)))
+
+
 if __name__ == "__main__":
     unittest.main()
