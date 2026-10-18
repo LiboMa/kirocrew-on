@@ -25,6 +25,8 @@ class EvaluatorCase(ConfirmationCase):
         self.decision = "pass"
 
     def request(self, config, path, body, **kwargs):
+        if path == "/control":   # a stop: the native parent and its tasks have ended
+            return {"status": "stopped", "lifecycle": "open"}
         result = super().request(config, path, body, **kwargs)
         if path == "/inspect" and (self.bodies[body["attempt_id"]].get("contract") or {}).get("role") == "evaluator":
             outcome = json.loads(result["outcome"])
@@ -349,6 +351,19 @@ class BlockedPendingTests(EvaluatorCase):
         text = quality_instructions(Path("/w"), {"acceptance": ["A"], "role": "evaluator", "kind": "review"})
         self.assertIn("decision 写 pass", text)
         self.assertIn("decision 仍写 pass", roles.card("evaluator"))
+
+
+class StoppedAcceptanceTests(EvaluatorCase):
+    def test_a_session_waiting_for_acceptance_is_not_sent_to_diagnosis(self):
+        self.verdicts = [[{"item": "登录成功", "result": "pass", "evidence": "a"}, {"item": "错误密码提示", "result": "pending", "evidence": "b"}]]
+        rid, run = self.run_()
+        self.assertEqual(run["status"], "awaiting_acceptance")
+        self.service.operate(self.actor, rid, "stop", {"request_id": "stop-accept-1", "expected_version": run["version"]})
+        run = self.tick(rid)
+        self.assertEqual(run["status"], "stopped")
+        with self.assertRaises(Error) as caught:   # stopped, its Evaluator still waits for a person: nothing failed
+            self.service.operate(self.actor, rid, "recover", {"request_id": "recover-accept-1", "expected_version": run["version"]})
+        self.assertIn("验收", str(caught.exception))
 
 
 if __name__ == "__main__":

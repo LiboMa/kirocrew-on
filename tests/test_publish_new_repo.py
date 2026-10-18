@@ -274,5 +274,37 @@ class FinalReviewTests(NewRepositoryCase):
         self.assertNotIn("绑定", attention["action"])
 
 
+class DeferredTests(NewRepositoryCase):
+    def test_the_automatic_publish_needs_a_credential_its_creator_may_use(self):
+        theirs = self.service.credentials.create(self.a, {"name": "alice 的", "kind": "github_pat", "host": self.host,
+                                                          "scope": "user", "access": "write", "repos": ["owner/*"], "secret": SECRET})
+        rid = self.new_session()   # bob's Session; alice is the Team owner
+        with self.assertRaises(Error):
+            self.service.set_publish_policy(self.a, rid, {"auto": True, "repository": {"owner": "owner", "name": "fresh"},
+                                                          "credential": theirs["id"]})
+
+    def test_a_new_source_asking_to_publish_on_its_own_names_its_repository_at_the_start(self):
+        with self.assertRaises(Error) as caught:
+            self.new_session(request="start-0000000890", publish={"auto": True})
+        self.assertEqual(caught.exception.code, "publish_target_missing")
+
+    def test_the_recorded_repository_matches_without_regard_to_case(self):
+        rid = self.new_session()
+        self.service.publish(self.b, rid, self.target())
+        (Path(self.service.run(self.b, rid)["workspace"]) / "more.txt").write_text("2")
+        self.service.publish(self.b, rid, {"repository": {"owner": "Owner", "name": "FRESH"}})
+
+    def test_an_existing_empty_repository_is_not_shown_as_made(self):
+        FakeApi.repos = {"owner/app", "owner/fresh"}
+        bare = GitHost.root / "owner/fresh.git"
+        subprocess.run(["git", "init", "-q", "--bare", "-b", "main", str(bare)], check=True)
+        subprocess.run(["git", "-C", str(bare), "config", "http.receivepack", "true"], check=True)
+        rid = self.new_session()
+        self.service.publish(self.b, rid, self.target())
+        self.assertEqual(self.events(rid, "run.repository"), [])
+        self.assertEqual(len(self.events(rid, "run.repository_used")), 1)
+        self.assertTrue(self.events(rid, "run.published")[0].get("repository"))
+
+
 if __name__ == "__main__":
     unittest.main()

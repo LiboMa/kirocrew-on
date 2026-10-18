@@ -58,14 +58,14 @@
 - `includeCrewContext` 不在 kiro-cli 文档字段内但被 KiroCrew 读取（默认即 true）；kiro-cli 2.29.1 接受未知键（EC2 以 `agent validate` 对照核实），无须改动。
 
 ## D48 发布到新仓库的终审延后项（2026-10-17）
-- 会话页开启自动发布时按设置者核对凭证，自动发布以创建者执行：Team owner 用自己的个人凭证开启时之后每次失败（「需要处理」会说明）；应按创建者核对。
-- 启动时新建源码 `publish: {auto: true}` 未给仓库时被接受、完成后才失败；会话页同样的设置返回 409——启动时也应拒绝。
+- ~~会话页开启自动发布时按设置者核对凭证~~（2026-10-18 修复：同时按创建者核对）。原文：自动发布以创建者执行：Team owner 用自己的个人凭证开启时之后每次失败（「需要处理」会说明）；应按创建者核对。
+- ~~启动时新建源码 `publish: {auto: true}` 未给仓库时被接受~~（2026-10-18 修复：启动时 409）。原文：完成后才失败；会话页同样的设置返回 409——启动时也应拒绝。
 - 凭证下拉只按写权限与停用过滤：会列出服务端会拒绝的凭证（其他 Team 的 Team 凭证、未授权的平台凭证），也不显示 `repos` 范围。
 - 记下发布目标后会话页不能换凭证；建议只在组件挂载时读取（规划完成前打开的页面不会预填）。
-- 「发布到已有的空仓库」在时间线也显示为「已新建仓库」；`run.published` 不含新仓库地址，已有空仓库的事件没有 url（R8）。
+- ~~「发布到已有的空仓库」在时间线也显示为「已新建仓库」~~（2026-10-18 修复：`run.repository_used`，`run.published` 带仓库地址）。原文：`run.published` 不含新仓库地址，已有空仓库的事件没有 url（R8）。
 - 建仓库的审计与 `publish_target` 分两个事务（两者之间退出会丢审计）。
 - 托管方错误：`/orgs/{owner}/repos` 对他人账户返回 404 时只说「HTTP 404」；改名仓库的 301 为笼统的 publish_failed；`find_repository` 的 403 提示 Pull requests 权限。
-- `publish_target_fixed` 区分 owner / 仓库名的大小写（GitHub、GitLab 不区分）。
+- ~~`publish_target_fixed` 区分 owner / 仓库名的大小写~~（2026-10-18 修复）（GitHub、GitLab 不区分）。
 - git 源码发布在多项核对同时失败时先报出的错误代码与此前不同（只有顺序）。
 
 ## 运维与 Harness 防线（复盘 2026-10-17 的后续）
@@ -84,7 +84,7 @@
 ## D46 P3 Evaluator 门禁的终审延后项（2026-10-18）
 - 平台追加的 Evaluator 被重新规划替换后再次追加时可能复用 id `evaluator`（旧任务的 Attempt 显示在新任务下）：应像 `planning.expand` 一样排除历史 id。
 - 追加 Evaluator 不记修订、不升版本，也不进规划说明（时间线有记录）：下一次续作的修订差异会把它算作用户的改动。
-- 停在「验收待确认」时停止、再请求诊断：Evaluator 任务仍为 awaiting_acceptance，被当作 native_error 交给协调者；应要求首个未通过任务为 blocked / failed，或停止时重置。
+- ~~停在「验收待确认」时停止、再请求诊断~~（2026-10-18 修复：诊断入口拒绝并说明）。原文：Evaluator 任务仍为 awaiting_acceptance，被当作 native_error 交给协调者；应要求首个未通过任务为 blocked / failed，或停止时重置。
 - 缺项、缺证据记为 failure_type gate（spec 写 contract）；报告的「验收（以 Evaluator 为准）」在门禁不适用的会话也会出现。
 - 「验收待确认」时控制台的发布区不显示发布按钮（服务端允许手动发布）：保持保守，待负责人决定是否在确认前允许发布。
 

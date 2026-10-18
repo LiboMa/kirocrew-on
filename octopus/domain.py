@@ -893,7 +893,10 @@ class Service:
             from . import credentials as repo_credentials
             bound = repo_credentials.resolve(db, actor, source, team, named.get("source"), default)
             if "publish" in body:   # D48: a new repository is checked with the credential named for it
-                self._new_repository_policy(db, actor, team, source, publish_policy(body["publish"]))
+                wanted = publish_policy(body["publish"])
+                self._new_repository_policy(db, actor, team, source, wanted)
+                require(not wanted["auto"] or source.get("type") == "git" or wanted.get("repository"),
+                        "新建源码的会话自动发布需要新仓库（repository）与有写权限的凭证（credential）", 409, "publish_target_missing")
 
             def execute():
                 rid, now = uid("run"), time.time()
@@ -1117,6 +1120,11 @@ class Service:
             require(may_publish(db, actor, run), "只有会话创建者、Team owner 或管理员可以设置发布", 403, "forbidden")
             snapshot, source = json.loads(run["snapshot"]), json.loads(run["source"])
             self._new_repository_policy(db, actor, run["team_id"], source, policy)
+            if policy.get("repository") and run["owner_id"] != actor["id"]:   # the automatic publish runs as its creator
+                try:
+                    self._new_repository_policy(db, {"id": run["owner_id"]}, run["team_id"], source, policy)
+                except Error:
+                    raise Error(403, "credential_forbidden", "自动发布以会话创建者的身份进行：请选择创建者可以使用的凭证") from None
             require(not policy["auto"] or source.get("type") == "git" or policy.get("repository") or snapshot.get("publish_target"),
                     "新建源码的会话自动发布需要新仓库（repository）与有写权限的凭证（credential）", 409, "publish_target_missing")
             snapshot["publish_policy"] = {**policy, "source": "user"}
@@ -1177,7 +1185,7 @@ class Service:
         if recorded:
             if body.get("repository"):
                 wanted = publishing.check_repository(body["repository"])
-                require(f"{wanted['owner']}/{wanted['name']}" == recorded["path"],
+                require(f"{wanted['owner']}/{wanted['name']}".lower() == recorded["path"].lower(),
                         f"此会话已发布到 {recorded['path']}，不能改到另一个仓库", 409, "publish_target_fixed")
             row = db.execute("SELECT * FROM credentials WHERE id=?",
                              (body.get("credential") or recorded["credential"]["id"],)).fetchone()
@@ -1264,8 +1272,8 @@ class Service:
                     publishing.push_baseline(Path(work) / "repo", target["url"], headers.get("X-Publish-Base") or "", auth)
                     if "recorded" not in new:
                         with self.db.transaction() as db:
-                            journal.record(db, rid, "run.repository", journal.person(actor), "发布到已有的空仓库 " + path,
-                                           path=path, created=False)
+                            journal.record(db, rid, "run.repository_used", journal.person(actor), "发布到已有的空仓库 " + path,
+                                           path=path, url=f"https://{host}/{path}", created=False)
                     self._record_target(actor, rid, target, row, baseline=headers.get("X-Publish-Base"))
                 pushed = publishing.push(Path(work) / "repo", target["url"], branch, commit, auth)
             except Error as exc:   # the credential was used all the same
@@ -1289,7 +1297,8 @@ class Service:
             snapshot["publish"] = record
             journal.change(db, "runs", rid, journal.person(actor), "run.published",
                            event={**{k: record[k] for k in ("branch", "commit", "url", "number", "reused")},
-                                  "request": record["kind"], **({"error": record["request_error"]} if failure else {})},
+                                  "request": record["kind"], **({"error": record["request_error"]} if failure else {}),
+                                  **({"repository": record["repository"]} if record.get("repository") else {})},
                            snapshot=dumps(snapshot))
             self._used(db, actor, row["id"], rid, path, branch, "pushed" if failure else "published")
         if failure:
@@ -1860,6 +1869,8 @@ class Service:
                                       (rid,)).fetchone()
                     attempt = db.execute("SELECT * FROM attempts WHERE id=?", (task["current_attempt"],)).fetchone() if task else None
                     require(attempt is not None, "尚无可诊断的失败执行；请补充输入并重跑", 409, "not_attempted")
+                    require(task["status"] != "awaiting_acceptance",   # D46 P3: nothing failed, a person is to judge
+                            "Evaluator 留下的验收项等待人确认，没有可诊断的失败：请续作返工，或重新运行后确认验收", 409, "awaiting_acceptance")
                     snapshot = json.loads(run["snapshot"])
                     old = snapshot.get("execution_contract", 1)
                     snapshot["execution_contract"] = max(old, 2)
