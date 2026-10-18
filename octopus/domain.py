@@ -321,6 +321,8 @@ def mapping(snapshot, task, evidence=None):
         reason = reason if len(reason) <= 40 else reason[:40] + "…"   # the full reason is on the Attempt (switched_from)
         return {"source": "coordinator", "label": f"协调者从 {switched.get('tool')} / {switched.get('model') or 'auto'} 换来"
                                                   + (f"：{reason}" if reason else "")}
+    if task["id"] == (snapshot.get("evaluator_added") or {}).get("task"):   # D46 P3
+        return {"source": "platform", "label": "平台追加（改代码的会话须经 Evaluator）"}
     spec, key = task["spec"], lambda s: (s.get("tool"), s.get("model") or "auto", s.get("effort") or "")
     original = next((s for s in snapshot.get("steps") or [] if s.get("id") == task["id"]), None)
     if original and key(original) != key(spec):

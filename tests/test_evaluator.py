@@ -135,5 +135,63 @@ class ScopeTests(ConfirmationCase):
         self.assertEqual(snapshot["execution_contract"], 4)
 
 
+CODE_ONLY = [TEAM[0]]
+
+
+class AppendTests(EvaluatorCase):
+    def test_a_session_without_an_evaluator_gets_one_on_another_tool(self):
+        rid, run = self.run_(CODE_ONLY)
+        added = next(t for t in run["tasks"] if t["spec"].get("role") == "evaluator")
+        self.assertNotEqual(added["spec"]["tool"], "claude")
+        self.assertEqual(added["spec"]["acceptance"], ["登录成功", "错误密码提示"])
+        self.assertEqual(added["mapping"]["label"], "平台追加（改代码的会话须经 Evaluator）")
+        self.assertEqual(run["status"], "completed")
+
+    def test_a_planned_reviewer_tool_is_preferred(self):
+        steps = [TEAM[0], {"id": "look", "name": "审查", "tool": "kiro", "prompt": "审查", "kind": "review", "acceptance": ["无阻断"]}]
+        run = self.run_(steps)[1]
+        self.assertEqual(next(t for t in run["tasks"] if t["spec"].get("role") == "evaluator")["spec"]["tool"], "kiro")
+
+    def test_with_an_evaluator_none_is_added(self):
+        run = self.run_()[1]
+        self.assertEqual([t["id"] for t in run["tasks"]], ["code", "check"])
+
+    def test_an_implementation_after_the_evaluator_gets_another(self):
+        steps = [*TEAM, {"id": "more", "name": "再实现", "tool": "claude", "prompt": "再实现", "kind": "implement",
+                         "acceptance": ["导出可用"], "verify": ["true"]}]
+        run = self.run_(steps)[1]
+        self.assertEqual(sum(t["spec"].get("role") == "evaluator" for t in run["tasks"]), 2)
+
+    def test_a_session_without_code_changes_gets_none(self):
+        steps = [{"id": "plan-doc", "name": "设计", "tool": "kiro", "prompt": "设计", "kind": "design", "acceptance": ["有规格"]}]
+        self.assertEqual([t["id"] for t in self.run_(steps)[1]["tasks"]], ["plan-doc"])
+
+    def test_without_another_tool_the_evaluator_is_added_and_noted(self):
+        with self.db.transaction() as db:
+            db.execute("UPDATE workers SET config=? WHERE id='worker'",
+                       (dumps({"url": "fixture", "token": "fixture",
+                               "capabilities": {"role_cards": True, "tools": {"claude": {"available": True}}}}),))
+        rid, run = self.run_(CODE_ONLY)
+        added = next(t for t in run["tasks"] if t["spec"].get("role") == "evaluator")
+        self.assertEqual(added["spec"]["tool"], "claude")
+        with self.db.read() as db:
+            titles = [str(json.loads(r["payload"]).get("changes") or "") for r in db.execute(
+                "SELECT payload FROM events WHERE run_id=? AND kind='run.evaluator'", (rid,))]
+        self.assertTrue(any("审查不独立" in t for t in titles), titles)
+
+
+class PromptTests(unittest.TestCase):
+    def test_the_planner_is_told_to_plan_an_evaluator(self):
+        from octopus import planning
+        self.assertIn("改代码的计划最后安排一个 evaluator 任务", planning.plan_step()["prompt"])
+
+    def test_the_evaluator_card_answers_the_challenges(self):
+        from octopus import roles
+        card = roles.card("evaluator")
+        self.assertIn("pending", card)
+        self.assertIn("Challenge", card)
+        self.assertLessEqual(len(card), 600)
+
+
 if __name__ == "__main__":
     unittest.main()

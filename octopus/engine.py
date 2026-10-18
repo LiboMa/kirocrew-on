@@ -707,6 +707,8 @@ class Engine:
                 return
             task = db.execute("SELECT * FROM tasks WHERE run_id=? AND status!='accepted' ORDER BY ordinal LIMIT 1", (rid,)).fetchone()
             if task is None:
+                if evaluation.append(db, rid, json.loads(fresh["snapshot"]), config):   # D46 P3: a verdict before completion
+                    return
                 journal.change(db, "runs", rid, journal.ENGINE, "run.completed",
                                event={"quality": "原生执行与交接核对完成；不是自动安全认证"}, status="completed", updated=time.time())
                 return

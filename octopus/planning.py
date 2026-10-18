@@ -54,6 +54,7 @@ def rules(count, depends):
    每个任务可给出 role（担任的角色，决定 Agent 拿到的角色卡片；kind 仍决定门禁），可选：
 {roles.catalogue()}
    审查类角色（security_test / challenge / evaluator）不得使用被审查改动的作者工具（此前 implement / deliver 任务的 tool）。
+   改代码的计划最后安排一个 evaluator 任务（与作者不同的工具），其验收项为 summary 的验收标准；没有时平台会追加。
 5. 可运行的产出：交付物是可以运行的应用时，最后的交付任务须在项目根目录写 .octopus/preview.json
    （processes：命令、cwd、端口或 "$PORT"、哪个是入口；install：依赖安装；前后端分开时各写一个进程），
    并把「.octopus/preview.json 能按声明启动应用」列为该任务的验收项；用户据此下载到本机或远程预览。
