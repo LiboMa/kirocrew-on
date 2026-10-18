@@ -143,5 +143,68 @@ class VisibleTests(unittest.TestCase):
         self.assertEqual(report.model({"id": "run-1", "tasks": [task]})["tasks"][0]["kind"], "review（安全测试）")
 
 
+TEAM = [{"id": "code", "name": "实现", "tool": "claude", "prompt": "实现", "kind": "implement", "role": "sde",
+         "acceptance": ["完成"], "verify": ["true"]},
+        {"id": "check", "name": "评估", "tool": "codex", "prompt": "评估", "kind": "review", "role": "evaluator", "acceptance": ["完成"]}]
+
+
+class FinalReviewTests(ConfirmationCase):
+    def contracts(self):
+        return [b.get("contract") or {} for b in self.bodies.values() if not b.get("coordination")]
+
+    def test_a_worker_that_does_not_know_roles_gets_no_role(self):
+        rid = self.start(steps=TEAM, recovery={"enabled": False, "max_cycles": 2})
+        self.tick(rid)
+        self.assertTrue(self.contracts())
+        self.assertTrue(all("role" not in c for c in self.contracts()))   # an older Worker refuses a contract field it lacks
+
+    def test_a_worker_that_knows_roles_gets_them(self):
+        from octopus.db import dumps
+        with self.db.transaction() as db:
+            db.execute("UPDATE workers SET config=? WHERE id='worker'",
+                       (dumps({"url": "fixture", "token": "fixture", "capabilities": {"role_cards": True}}),))
+        rid = self.start(steps=TEAM, recovery={"enabled": False, "max_cycles": 2})
+        self.tick(rid)
+        self.assertIn("sde", [c.get("role") for c in self.contracts()])
+
+    def test_the_worker_says_it_knows_roles(self):
+        import inspect
+        from octopus.worker import Worker
+        self.assertIn('"role_cards": True', inspect.getsource(Worker.health))
+
+    def test_an_invalid_planned_role_is_dropped_with_a_note(self):
+        import tests.test_confirmation as confirmation
+        plan = PLANNED.replace('"role": "sde"', '"role": ""').replace('"role": "evaluator"', '"role": "integration_test"')
+        original, confirmation.PLAN = confirmation.PLAN, plan
+        self.addCleanup(setattr, confirmation, "PLAN", original)
+        run = self.tick(self.start(steps=None, plan="agent"))
+        tasks = [t for t in run["tasks"] if t["id"] != "plan"]
+        self.assertEqual([t["spec"].get("role") for t in tasks], [None, None])
+        self.assertEqual([t["spec"]["kind"] for t in tasks], ["implement", "review"])
+        self.assertEqual(sum("角色" in note and "已忽略" in note for note in run["planning"]["notes"]), 2)
+
+    def test_a_continue_that_puts_the_reviewer_on_the_authors_tool_is_refused(self):
+        rid = self.start(steps=TEAM, recovery={"enabled": False, "max_cycles": 2})
+        run = self.tick(rid)
+        with self.assertRaises(Error) as caught:
+            self.service.operate(self.actor, rid, "continue", {"request_id": "roles-continue-1", "expected_version": run["version"],
+                                                               "task_id": "check", "execution": {"tool": "claude"}})
+        self.assertIn("审查不独立", str(caught.exception))
+        self.service.operate(self.actor, rid, "continue", {"request_id": "roles-continue-2", "expected_version": run["version"],
+                                                           "task_id": "check", "execution": {"prompt": "再评估"}})
+
+
+class SchemaAndConsoleTests(unittest.TestCase):
+    def test_the_openapi_step_accepts_a_role(self):
+        from octopus.schema import openapi
+        step_schema = openapi()["components"]["schemas"]["Step"]["properties"]
+        self.assertEqual(set(step_schema["role"]["enum"]), set(roles.KINDS))
+
+    def test_the_revision_diff_names_the_role(self):
+        text = (ROOT / "web/src/features/sessions/RevisionsPanel.tsx").read_text()
+        block = re.search(r"const FIELD[^=]*=\s*\{(.*?)\};", text, re.S).group(1)
+        self.assertEqual(dict(re.findall(r'(\w+):\s*"([^"]+)"', block)).get("role"), "角色")
+
+
 if __name__ == "__main__":
     unittest.main()

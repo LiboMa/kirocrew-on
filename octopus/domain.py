@@ -1785,6 +1785,13 @@ class Service:
                     changed = any(key in override and override[key] != before.get(key) for key in ("tool", "model"))
                     current = steps([{**{k: v for k, v in before.items() if not (changed and k == "requested")}, **override}],
                                     known=[t["id"] for t in ordered[:index]], planned=True)[0]
+                    # D46 P2: the user's own change never puts a reviewer on the tool that wrote the change (one the plan
+                    # already had was noted when it was planned, and does not stop the continue)
+                    from . import roles
+                    specs = [json.loads(t["spec"]) for t in ordered]
+                    found = lambda tasks: {(t["id"], tool) for t, tool in roles.unindependent(tasks)}
+                    fresh = found([*specs[:index], current, *specs[index + 1:]]) - found(specs)
+                    require(not fresh, "审查不独立：" + "；".join(f"任务 {tid} 与被审查改动的作者使用同一工具 {tool}" for tid, tool in sorted(fresh)))
                     goal = text(body.get("input", run["input"]), "开发需求", minimum=3)
                     if "recovery" in body:
                         from .recovery import policy

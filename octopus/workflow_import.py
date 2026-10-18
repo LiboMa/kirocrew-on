@@ -67,7 +67,7 @@ def requested_of(value, index, notes):
     return clean
 
 
-def normalize(raw, notes, known=()):
+def normalize(raw, notes, known=(), planned=False):
     require(isinstance(raw, list), "工作流需要 steps 任务列表")
     require(1 <= len(raw) <= 8, "流程须包含 1–8 个顺序任务")
     seen, result, renamed = set(), [], {}
@@ -93,10 +93,16 @@ def normalize(raw, notes, known=()):
         sid = step_id(item.get("id"), index, seen)
         if isinstance(item.get("id"), str):
             renamed[item["id"]] = sid
+        contract = {k: item[k] for k in CONTRACT if k in item}
+        if planned and "role" in contract:   # D46 P2: an optional label never sinks a plan (as requested, D45)
+            from . import roles
+            role, kind = contract["role"], contract.get("kind")
+            if role not in roles.KINDS or (kind is not None and kind not in roles.KINDS[role]):
+                notes.append(f"任务「{picked['name'] or index}」的角色 {role!r} 无效或与类别 {kind} 不相容，已忽略")
+                del contract["role"]
         result.append({"id": sid, "name": picked["name"] or f"任务 {index}",
                        "tool": tool, "model": wanted.get("model") or item.get("model") or "auto", "effort": effort,
-                       "prompt": picked["prompt"], **{k: item[k] for k in CONTRACT if k in item},
-                       **({"requested": wanted} if wanted else {})})
+                       "prompt": picked["prompt"], **contract, **({"requested": wanted} if wanted else {})})
     for index, step in enumerate(result, 1):
         # Dependencies by original id or by task name, on earlier tasks only; anything else is dropped with a note.
         if not isinstance(step.get("depends_on"), list):
@@ -135,7 +141,7 @@ def import_workflow(content, format=None, known=(), planned=False):
         title, raw = document.get("name"), document["steps"]
     else:
         title, raw = None, document
-    normalized = steps(normalize(raw, notes, known), known=known, planned=planned)   # D45: only a plan keeps requested
+    normalized = steps(normalize(raw, notes, known, planned), known=known, planned=planned)   # D45: only a plan keeps requested
     name = title if isinstance(title, str) and title.strip() else "导入的工作流"
     result = {"name": " ".join(name.split())[:80], "steps": normalized, "notes": notes}
     if isinstance(document, dict):

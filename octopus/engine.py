@@ -772,6 +772,8 @@ class Engine:
             # The spec a Worker validates keeps its six fields (a Worker not yet upgraded runs it as before); the task
             # contract and the requirement KiroCrew completed travel beside it (D34 §6.2).
             contract = {key: spec[key] for key in CONTRACT if key in spec}
+            if not (config.get("capabilities") or {}).get("role_cards"):   # D46 P2: an older Worker refuses the field
+                contract.pop("role", None)
             plan = snapshot.get("planning") or {}
             if contract.get("depends_on"):
                 upstream = [item for item in upstream if item["id"] in contract["depends_on"]]

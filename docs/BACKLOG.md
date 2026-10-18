@@ -75,6 +75,13 @@
 - KiroCrew 报错词表的契约：L0 依赖的报错文字（`ACP process exited`、`AcpProcessDied`、`process group … still has members`、取消）在部署时的原生测试中
   核对已安装 KiroCrew 源码仍含这些文字，升级后措辞变化即提示。
 
+## D46 P2 角色卡片的终审延后项（2026-10-18）
+- 审查独立性的「作者」口径与恢复换工具的 `reviewed_backend` 不同：没写 kind 的任务不算作者；`reviewed_backend` 取最新已验收的非审查任务的
+  实际后端，并把 test 任务算作作者。P3 的 Evaluator 门禁前统一。
+- 卡片文件格式错时在派发时才报 ValueError / AttributeError，且每次调用重读文件（可加缓存与明确报错；仓库内文件由 CardTests 覆盖）。
+- 续作不能去掉任务的角色（`null` / `""` 被拒）；改类别时须同时换成相容的角色。
+- 控制台修订对比中角色的取值显示为 id（security_test → evaluator），未用中文标题。
+
 ## 已知的次要问题（审查延后项）
 - 访问管理第 1 期（审查延后项）：预览复核按账号的管理员身份而非签发 Token 的 scope
   （≤ 10 分钟）；被降级的管理员仍能签发含 admin 的 Token（降级期间无效）；「全部会话」中已停用所有者显示原始 id、选中自己不在的 Team

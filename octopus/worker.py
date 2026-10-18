@@ -688,6 +688,7 @@ class Worker:
                 "crew_entry": True, "crew_origin": self.crew_origin, "observe": True, "app_preview": True,
                 "tool_auth": {"kiro": self.tool_auth()}, "tools": self.tools(), "commands": self.checks.commands(),
                 "coordinator_recovery": True, "quality_outcome": True, "baseline_checks": True, "attempt_stop": True,
+                "role_cards": True,   # D46 P2: a contract may carry a role
                 "boundary": hashlib.sha256(boundary.encode()).hexdigest(),
                 "host_principal": hashlib.sha256(f"{socket.gethostname()}:{os.getuid()}".encode()).hexdigest(),
                 "routing_evidence": bool(self.routing_log and self.routing_log.is_file()),
