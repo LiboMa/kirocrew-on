@@ -86,5 +86,47 @@ class InstructionsTests(unittest.TestCase):
         self.assertTrue(self.render({"kind": "review"}).startswith("# 本次研发任务"))
 
 
+class PlannerTests(unittest.TestCase):
+    def test_the_planner_is_told_the_roles_and_independence(self):
+        from octopus import planning
+        for prompt in (planning.plan_step()["prompt"],
+                       planning.replan_step("replan-1", [], "失败", {"reason": "r", "instructions": "i"})["prompt"]):
+            self.assertIn("security_test（安全测试，kind review）", prompt)
+            self.assertIn("不得使用被审查改动的作者工具", prompt)
+            self.assertIn('"role"', prompt)
+
+
+PLANNED = """```json
+{"intent": "实现并审查", "summary": "需求", "name": "计划", "steps": [
+ {"id": "code", "name": "实现", "tool": "claude", "prompt": "实现", "kind": "implement", "role": "sde", "acceptance": ["完成"], "verify": ["true"]},
+ {"id": "check", "name": "评估", "tool": "claude", "prompt": "评估", "kind": "review", "role": "evaluator", "acceptance": ["完成"]}]}
+```"""
+
+from tests.test_confirmation import ConfirmationCase   # noqa: E402
+from tests.test_replan import ReplanCase   # noqa: E402
+
+REPLANNED = """```json
+{"intent": "补上评估", "summary": "剩余工作", "name": "剩余工作", "steps": [
+ {"id": "check", "name": "复评", "tool": "claude", "prompt": "复评", "kind": "review", "role": "evaluator", "acceptance": ["无阻断问题"]}]}
+```"""
+
+
+class PlannedRoleTests(ConfirmationCase):
+    def test_a_planned_reviewer_on_the_authors_tool_is_applied_with_a_note(self):
+        import tests.test_confirmation as confirmation
+        original, confirmation.PLAN = confirmation.PLAN, PLANNED
+        self.addCleanup(setattr, confirmation, "PLAN", original)
+        run = self.tick(self.start(steps=None, plan="agent"))
+        self.assertEqual([t["spec"].get("role") for t in run["tasks"] if t["id"] != "plan"], ["sde", "evaluator"])
+        self.assertTrue(any("审查不独立" in note and "评估" in note for note in run["planning"]["notes"]))
+
+
+class ReplannedRoleTests(ReplanCase):
+    def test_a_replan_notes_a_reviewer_on_the_authors_tool(self):
+        self.plan = REPLANNED   # the kept task "code" (claude, implement) wrote the change
+        run = self.tick(self.start(), 40)
+        self.assertTrue(any("审查不独立" in note and "复评" in note for note in run["replan"]["notes"]), run["replan"])
+
+
 if __name__ == "__main__":
     unittest.main()

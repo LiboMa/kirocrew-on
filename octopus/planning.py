@@ -22,7 +22,7 @@ EXAMPLE = {"intent": "一句话：用户真正要完成什么、属于哪类工�
            "name": "针对本次需求的简短名称",
            "steps": [{"id": "task-1", "name": "任务名称", "tool": "claude", "model": "auto", "effort": "",
                       "prompt": "本任务的具体目标、输入、实施步骤、交付物与验证方法",
-                      "kind": "implement", "deliverables": ["本任务交付的文件或产物"],
+                      "kind": "implement", "role": "sde", "deliverables": ["本任务交付的文件或产物"],
                       "acceptance": ["可检查的验收项（来自 summary 的验收标准）"], "verify": ["实际执行的验证命令"],
                       "depends_on": [], "paths": ["本任务可改动的路径或 glob"]}]}
 
@@ -37,6 +37,7 @@ def commands_line(commands):
 
 def rules(count, depends):
     """What every planned task carries and the gates it meets — the same for the first plan and a replan (D46)."""
+    from . import roles
     return f"""3. 任务拆分与 Agent 映射：steps 为 {count} 个顺序任务，每个任务选择最合适的工具并写出具体 prompt；
    后续任务将在同一个 Session、同一份源码检出上依次执行。
 4. 任务契约：每个任务必须给出 kind（implement / review / test / deliver / design）、deliverables、
@@ -50,6 +51,9 @@ def rules(count, depends):
    不要在审查之后另设「按审查修复」的任务：审查要求修改时，平台会自动安排上游任务返工并复审。
    需求明确要求提交 PR / MR 时，在计划 JSON 顶层写 "publish": {{"quote": "需求原文片段"}}：会话完成并通过审查后平台自动发布 Draft PR。
    需求要求新建仓库时再写 "repository": {{"owner": "账户或组织", "name": "仓库名"}}：平台只记为建议，由用户确认后发布，不安排建仓库的任务。
+   每个任务可给出 role（担任的角色，决定 Agent 拿到的角色卡片；kind 仍决定门禁），可选：
+{roles.catalogue()}
+   审查类角色（security_test / challenge / evaluator）不得使用被审查改动的作者工具（此前 implement / deliver 任务的 tool）。
 5. 可运行的产出：交付物是可以运行的应用时，最后的交付任务须在项目根目录写 .octopus/preview.json
    （processes：命令、cwd、端口或 "$PORT"、哪个是入口；install：依赖安装；前后端分开时各写一个进程），
    并把「.octopus/preview.json 能按声明启动应用」列为该任务的验收项；用户据此下载到本机或远程预览。
@@ -144,6 +148,12 @@ def expand(db, rid, text, models=None, replan=False, tools=None):
     from .domain import PUSHING
     # publishing goes to the repository the Session was started from; a new or uploaded source has none (EC2 run-f7670bfb…)
     repository = json.loads(db.execute("SELECT source FROM runs WHERE id=?", (rid,)).fetchone()["source"] or "{}").get("type") == "git"
+    from . import roles
+    earlier = [json.loads(row["spec"]) for row in db.execute(
+        "SELECT spec FROM tasks WHERE run_id=? AND status='accepted' ORDER BY ordinal", (rid,))] if replan else []
+    for task, tool in roles.unindependent(earlier + steps):   # D46 P2: applied as planned; P3's Evaluator gate judges on it
+        if any(task is step for step in steps):
+            notes.append(f"审查不独立：任务「{task['name']}」（{roles.LABELS[task['role']]}）与被审查改动的作者使用同一工具 {tool}")
     for step in steps:   # D47: publishing is the platform's; an Agent has no repository write credential
         if PUSHING.search(step.get("prompt") or ""):
             notes.append(f"任务「{step['name']}」要求推送或创建 PR：Agent 没有仓库写凭证，" + (
