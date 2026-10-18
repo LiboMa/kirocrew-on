@@ -494,6 +494,18 @@ Vite 客户端模块可用；打开链接第二次使用被拒、无 Cookie 时�
 不存在的用户名得结构化 404。验收后两枚 Token 已吊销、`e2e-member` 停用。独立审查 3 个 Important 与 4 个上调项修复后重跑 15/15；
 离线 Python 443、控制台 108、旧版回归 92。
 
+### 14.31 Evaluator 门禁（D46 P3）
+
+本机完成：改代码的新会话（执行契约 4、Worker 支持角色卡片）以 Evaluator 对每条验收项的 pass / fail / pending 与证据为准（负责人：以 Evaluator 为准、
+改代码的会话都要经过）：缺项或缺证据交给协调者，任何 fail 返工，pending 停在「验收待确认」，由创建者、Team owner 或管理员在会话页或
+MCP `octopus_accept` 确认（记确认者，不计预算）；缺少 Evaluator 时平台在完成前追加（工具按环境事实与审查独立性），运行前按当前验收项判定；
+报告「验收（以 Evaluator 为准）」。离线：Python 1088、控制台 163；独立终审（opus）无严重问题，9 项重要问题已修复，其余记入 BACKLOG。
+✅ EC2（2026-10-18，公开测试仓库，只读、未发布）：
+(a) 7540427，`run-8165de8e…`：只有实现任务（claude）的会话，平台追加 Evaluator（codex，与作者不同的工具，来源「平台追加」），`evaluated` 通过，会话完成。
+(b) 649d30a，`run-b819da61…`：验收项含「欢迎语的语气符合品牌风格（需人工判断）」，Evaluator 判 pending 并附核对到的原文与位置，会话停在「验收待确认」，
+API 确认后完成，报告写明「admin 确认通过」。首次运行（`run-346afc30…`，7540427）Evaluator 把只有 pending 的结论写成 blocked、会话按缺输入停下——
+说明与卡片补写「有 pending 而无 fail 时 decision 写 pass」，平台对只有 pending 的 blocked 结论按逐项判定处理（649d30a）。
+
 ### 14.30 角色卡片（D46 P2）
 
 本机完成：任务可带 `role`（Spec 分析、SDE 开发、集成测试、安全测试、Challenge、Evaluator）；角色卡片按 KiroCrew 的 SKILL.md 格式存于
