@@ -312,5 +312,44 @@ class ContractTests(unittest.TestCase):
         self.assertIn("/v1/runs/{id}/accept", openapi()["paths"])
 
 
+class BlockedPendingTests(EvaluatorCase):
+    """EC2 run-346afc30…: the Evaluator gave a pending verdict and called the whole outcome blocked (input)."""
+    def setUp(self):
+        super().setUp()
+        self.verdicts = [[{"item": "登录成功", "result": "pass", "evidence": "curl 200"},
+                          {"item": "错误密码提示", "result": "pending", "evidence": "文案待产品负责人判断"}]]
+        self.decision = "blocked"
+        self.blocked_line = False
+
+    def request(self, config, path, body, **kwargs):
+        result = super().request(config, path, body, **kwargs)
+        if path == "/inspect" and (self.bodies[body["attempt_id"]].get("contract") or {}).get("role") == "evaluator":
+            outcome = json.loads(result["outcome"])
+            outcome["failure_type"] = "input"
+            result["outcome"] = dumps(outcome)
+            if self.blocked_line:
+                result["native"]["result"] = "已核对。\nBLOCKED：第二项需要产品负责人判断"
+        return result
+
+    def test_a_blocked_outcome_with_only_pending_items_waits_for_a_person(self):
+        self.assertEqual(self.run_()[1]["status"], "awaiting_acceptance")
+
+    def test_even_with_a_blocked_line(self):
+        self.blocked_line = True
+        self.assertEqual(self.run_()[1]["status"], "awaiting_acceptance")
+
+    def test_a_blocked_outcome_without_pending_stays_blocked(self):
+        self.verdicts = [[{"item": "登录成功", "result": "pass", "evidence": "a"}, {"item": "错误密码提示", "result": "pass", "evidence": "b"}]]
+        self.assertEqual(self.run_()[1]["status"], "blocked")
+
+    def test_the_evaluator_is_told_what_decision_pending_takes(self):
+        from pathlib import Path
+        from octopus import roles
+        from octopus.recovery import quality_instructions
+        text = quality_instructions(Path("/w"), {"acceptance": ["A"], "role": "evaluator", "kind": "review"})
+        self.assertIn("decision 写 pass", text)
+        self.assertIn("decision 仍写 pass", roles.card("evaluator"))
+
+
 if __name__ == "__main__":
     unittest.main()

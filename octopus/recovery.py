@@ -100,7 +100,7 @@ decision=pass 表示已给出符合要求的计划 JSON；需求缺少必要信�
 本任务有验收项：在 outcome.json 中加入 "acceptance"，逐项对应本任务契约的每条验收项：
   "acceptance":[{"item":"验收项原文","result":"pass","evidence":"实际核对的命令、输出或文件:行"}]
 result 只能是 pass、fail 或 pending（需要人判断时，写明已核对的部分）；每项必须有 evidence。会话以这些判定为准：
-任一项 fail 即 changes_requested；有 pending 时会话停下，等用户确认。
+任一项 fail 即 changes_requested；有 pending 而没有 fail 时 decision 写 pass——平台会停下，等用户确认这些项。
 """
     elif contract and contract.get("acceptance"):
         accept = """

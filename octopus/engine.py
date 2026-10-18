@@ -856,6 +856,13 @@ class Engine:
             # done (D34 §5.1); judge it on the evidence like any other Attempt.
             lost = missing and not blocked_line and report is not None and report["decision"] == "pass" \
                 and bool(result.get("handoff", "").strip())
+            if report is not None and report["decision"] == "blocked" and evaluation.applies(snapshot, spec, config):
+                # D46 P3 (EC2 run-346afc30…): an Evaluator that left items to a person and called the whole outcome blocked
+                # has done its part; its verdicts decide, and the Session waits for the person
+                problem, waiting = evaluation.verdicts(spec, report)
+                if problem is None and waiting:
+                    report = evidence["outcome"] = {**report, "decision": "pass", "failure_type": "none", "stated": "blocked"}
+                    blocked_line = False
             # The five checks every Attempt passes, named and recorded (D37 §4).
             error, failure_type, evidence["gates"] = gates.basic(native, result, spec, evidence, report, invalid, lost,
                                                                  missing, blocked_line)
