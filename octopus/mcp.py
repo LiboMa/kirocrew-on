@@ -106,6 +106,12 @@ TOOLS = [
                     "只在用户明确要求时开启。新建源码的会话开启时需给出 repository 与 credential（见 octopus_publish）。",
      "inputSchema": object_schema({"run_id": STRING, "auto": {"type": "boolean"}, "repository": REPOSITORY, "credential": STRING},
                                   ["run_id", "auto"])},
+    {"name": "octopus_accept",
+     "description": "确认一个「验收待确认」（awaiting_acceptance）的 Session：Evaluator 判为需要人判断的验收项（见精简状态中 Evaluator "
+                    "任务 latest.pending）。调用前必须把这些项与证据展示给用户并得到明确同意；不同意时用 octopus_continue 返工。",
+     "inputSchema": object_schema({"run_id": STRING, "request_id": STRING, "expected_version": {"type": "integer"}},
+                                 ["run_id", "request_id", "expected_version"]),
+     "annotations": {"destructiveHint": True}},
     {"name": "octopus_confirm",
      "description": "确认一个「计划待确认」（awaiting_confirmation）的 Session 的计划并开始执行。调用前必须把任务、各自的工具与模型（及来源）、"
                     "验收项与检查命令展示给用户，并得到用户明确同意；要修改时改用 octopus_continue（修改后续作即视为确认）。",
@@ -385,7 +391,8 @@ def compact_status(session, events):
         value = {"number": attempt.get("number"), "status": attempt.get("status"), "error": attempt.get("error"),
                  "backend": evidence.get("actual_backend"), "model": evidence.get("actual_model"),
                  "decision": outcome.get("decision"), "summary": outcome.get("summary"),
-                 "findings": outcome.get("findings") or [], "handoff": evidence.get("handoff_path")}
+                 "findings": outcome.get("findings") or [], "handoff": evidence.get("handoff_path"),
+                 **({"pending": evidence["evaluation"]["pending"]} if (evidence.get("evaluation") or {}).get("pending") else {})}
         if evidence.get("gates"):   # D37: passed as a count, failures with their first line, skipped by name
             records = evidence["gates"]
             value["gates"] = {"passed": sum(g.get("status") == "pass" for g in records),
@@ -506,13 +513,13 @@ def call(client, name, args):
     if name == "octopus_publish_policy":   # D47
         return client.request("POST", "/v1/runs/" + quote(args["run_id"], safe="") + "/publish-policy",
                               {k: args[k] for k in ("auto", "repository", "credential") if k in args})
-    if name in {"octopus_continue", "octopus_recover", "octopus_control", "octopus_confirm"}:
+    if name in {"octopus_continue", "octopus_recover", "octopus_control", "octopus_confirm", "octopus_accept"}:
         rid = args.pop("run_id")
         if name == "octopus_continue" and "credentials" in args:
             # A Session stopped on its credential: change (or remove) it first, then continue (D35 §4).
             client.request("POST", "/v1/runs/" + quote(rid, safe="") + "/credentials", {"source": args.pop("credentials").get("source")})
         action = args.pop("action") if name == "octopus_control" else name.removeprefix("octopus_")
-        if action not in {"continue", "recover", "stop", "close", "reopen", "delete", "confirm"}:
+        if action not in {"continue", "recover", "stop", "close", "reopen", "delete", "confirm", "accept"}:
             raise ValueError("Invalid action")
         return client.request("POST", "/v1/runs/" + rid + "/" + action, args)
     if name in ADMIN:

@@ -172,7 +172,19 @@ export function SessionView({ id }: { id: string }) {
           </AlertDescription>
         </Alert>
       )}
-      {run.attention && run.status !== "waiting_worker" && run.status !== "awaiting_confirmation" && (
+      {run.status === "awaiting_acceptance" && (
+        <Alert id="accept-notice" className="border-warning/30 bg-warning/5">
+          <AlertTitle id="accept-notice-title">{run.attention?.title ?? "验收待确认"}</AlertTitle>
+          <AlertDescription className="flex flex-wrap items-center gap-3">
+            <span>{[run.attention?.detail, run.attention?.action].filter(Boolean).join(" ")}</span>
+            <Button size="sm" onClick={actions.accept} disabled={!!actions.busy || run.permissions?.operate === false} id="run-accept">
+              <Play /> 确认通过
+            </Button>
+          </AlertDescription>
+        </Alert>
+      )}
+      {run.attention && run.status !== "waiting_worker" && run.status !== "awaiting_confirmation"
+        && run.status !== "awaiting_acceptance" && (
         <Alert variant="destructive" id="run-attention" className="border-destructive/30 bg-destructive/5">
           <AlertTitle id="attention-title">{run.attention.title}</AlertTitle>
           <AlertDescription className="space-y-1">

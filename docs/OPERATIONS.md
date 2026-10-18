@@ -436,6 +436,17 @@ CloudFront 只使用 us-east-1 的证书）：分发加上别名与证书（SNI�
   已验收任务）。用户提交的违反时拒绝；KiroCrew 规划的照常应用并在规划说明中记「审查不独立」。
 - 规划提示列出 6 个角色（取自卡片的 description）与独立性规则；控制台任务卡片「角色：…」、MCP 精简状态的任务 `role`、报告的类别列「review（安全测试）」。
 
+### Evaluator 门禁（D46 P3）
+
+- 适用：执行契约 4 的新会话，且 Worker 支持角色卡片（`role_cards`）；之前的会话与未升级的 Worker 不变。
+- 改代码的会话（有 implement / deliver 任务）须有一个 `role: evaluator` 的任务排在最后一次改动之后（负责人 2026-10-18：都要经过 Evaluator）。
+  规划者被要求安排；缺少时平台在会话即将完成时追加「Evaluator 验收」：验收项取此前 implement / deliver / test 的验收项，工具按环境事实与审查独立性
+  （计划中审查用过且非作者的工具 → 第一个非作者的可用工具 → 没有时用可用工具并记「审查不独立」），映射来源「平台追加（改代码的会话须经 Evaluator）」。
+- Evaluator 对每条验收项给出 pass / fail / pending 与证据（门禁 `evaluated`）：缺项或缺证据 → 交给协调者；fail → 照审查流程返工上游、复审；
+  全部 pass → 通过。实现者自报的 pass 不再是会话通过的依据。
+- pending（需要人判断，如观感、文案）且无 fail → 会话停在「验收待确认」（`awaiting_acceptance`）：会话页「确认通过」或 MCP `octopus_accept`
+  （创建者、Team owner、管理员；已归档 Team 不可），记确认者，不计入预算；也可续作返工。报告「验收（以 Evaluator 为准）」列出判定与确认者。
+
 ### 停用的 Coding 工具（K01）
 
 - Worker 配置 `disabled_tools`（默认 `["opencode"]`）：所列工具在 `/health` 的 `tools` 中报告为不可用，原因「已停用（K01…）」。

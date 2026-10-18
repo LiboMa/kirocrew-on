@@ -216,6 +216,15 @@ describe("session detail", () => {
     await waitFor(() => expect(calls.find((c) => c.path === "/v1/runs/run-a/confirm")?.body).toMatchObject({ expected_version: 4 }));
   });
 
+  test("what the Evaluator left to a person is accepted from the session page (D46 P3)", async () => {
+    const waiting = { ...blocked, status: "awaiting_acceptance", error: null,
+      attention: { title: "验收待确认", detail: "Evaluator 判为需要人判断：错误密码提示（文案需产品确认）", action: "核对后确认通过" } } as Run;
+    const calls = open(waiting, { "POST /runs/run-a/accept": { id: "run-a", status: "accepted" } });
+    expect(await screen.findByText("验收待确认", { selector: "#accept-notice-title" })).toBeInTheDocument();
+    await userEvent.click(screen.getByRole("button", { name: /确认通过/ }));
+    await waitFor(() => expect(calls.find((c) => c.path === "/v1/runs/run-a/accept")?.body).toMatchObject({ expected_version: 4 }));
+  });
+
   test("an archived Team's waiting plan cannot be confirmed (D44)", async () => {
     open({ ...blocked, status: "awaiting_confirmation", error: null, permissions: { operate: true, delete: true, resume: false },
       attention: { title: "计划待确认", detail: "任务尚未开始。", action: "核对后确认开始" } } as Run);

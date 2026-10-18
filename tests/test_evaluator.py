@@ -193,5 +193,36 @@ class PromptTests(unittest.TestCase):
         self.assertLessEqual(len(card), 600)
 
 
+class SurfaceTests(EvaluatorCase):
+    def setUp(self):
+        super().setUp()
+        self.verdicts = [[{"item": "登录成功", "result": "pass", "evidence": "curl 200"},
+                          {"item": "错误密码提示", "result": "pending", "evidence": "文案需产品确认"}]]
+
+    def test_the_tools_accept_and_show_what_waits(self):
+        from octopus import mcp
+        rid, run = self.run_()
+        view = mcp.compact_status(run, [])["session"]
+        check = next(t for t in view["tasks"] if t["id"] == "check")
+        self.assertEqual(check["latest"]["pending"][0]["item"], "错误密码提示")
+        seen = []
+        class Client:
+            def request(self, method, path, body):
+                seen.append((method, path))
+                return {}
+        mcp.call(Client(), "octopus_accept", {"run_id": rid, "request_id": "accept-mcp-1", "expected_version": run["version"]})
+        self.assertEqual(seen, [("POST", f"/v1/runs/{rid}/accept")])
+
+    def test_the_report_judges_by_the_evaluator(self):
+        from octopus import report
+        rid, run = self.run_()
+        self.service.operate(self.actor, rid, "accept", {"request_id": "accept-report-1", "expected_version": run["version"]})
+        view = self.tick(rid)
+        md, page = report.markdown(view), report.html(view)
+        self.assertIn("## 验收（以 Evaluator 为准）", md)
+        self.assertIn("| 错误密码提示 | pending（owner 确认通过） |", md)
+        self.assertIn("<h2>验收（以 Evaluator 为准）</h2>", page)
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -114,7 +114,17 @@ def model(view, now=None):
     else:
         budget = None
     publish = view.get("publish") or None
+    judged = next((t for t in reversed(view.get("tasks") or []) if (t.get("spec") or {}).get("role") == "evaluator"
+                   and t.get("attempts")), None)   # D46 P3: the Session passes on the Evaluator's verdicts
+    evaluation = None
+    if judged:
+        final = sorted(judged["attempts"], key=lambda a: a.get("number") or 0)[-1].get("evidence") or {}
+        by = ((final.get("evaluation") or {}).get("accepted_by") or {}).get("username")
+        evaluation = [{"item": _line(a.get("item"), 300), "result": str(a.get("result") or "—"),
+                       "by": by if a.get("result") == "pending" else None}
+                      for a in (final.get("outcome") or {}).get("acceptance") or []]
     return {"title": _line(view.get("name") or view.get("input") or view.get("id"), 200), "id": view.get("id"),
+            "evaluation": evaluation,
             "status": view.get("status"), "creator": (view.get("created_by") or {}).get("username") or "—",
             "confirmed": _line((view.get("confirmed") or {}).get("by"), 100) or None,
             "generated": time.strftime("%Y-%m-%d %H:%M UTC", time.gmtime(now or time.time())),
@@ -205,6 +215,10 @@ def markdown(view, now=None):
                                        for a in final["acceptance"]]
         if final["suggestions"]:
             out += ["", "建议："] + [f"- {_md(s)}" for s in final["suggestions"]]
+    if m["evaluation"]:
+        out += ["", "## 验收（以 Evaluator 为准）", "", "| 验收项 | 判定 |", "|---|---|"]
+        out += [f"| {_cell(a['item'])} | {a['result']}" + (f"（{_cell(a['by'])} 确认通过）" if a["by"] else "") + " |"
+                for a in m["evaluation"]]
     out += ["", "## 纠错记录", ""]
     out += [_md(m["budget"]), ""] if m["budget"] else []
     out += [f"- {_md(_round(r))}" for r in m["recovery"]] or ["无纠错"]
@@ -282,6 +296,10 @@ def html(view, now=None):
                             ("建议", [e(s) for s in final["suggestions"]])):
             if rows:
                 out.append(f"<p>{title}：</p><ul>" + "".join(f"<li>{row}</li>" for row in rows) + "</ul>")
+    if m["evaluation"]:
+        out += ["<h2>验收（以 Evaluator 为准）</h2>", "<table><tr><th>验收项</th><th>判定</th></tr>" + "".join(
+            f"<tr><td>{e(a['item'])}</td><td>{e(a['result'])}" + (f"（{e(a['by'])} 确认通过）" if a["by"] else "") + "</td></tr>"
+            for a in m["evaluation"]) + "</table>"]
     out.append("<h2>纠错记录</h2>")
     if m["budget"]:
         out.append(f"<p>{e(m['budget'])}</p>")

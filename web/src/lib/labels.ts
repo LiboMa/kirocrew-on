@@ -7,7 +7,7 @@ export const STATES: Record<string, string> = {
   pending: "待执行", preparing: "准备源码", ready: "准备派发", dispatching: "派发中", running: "执行中",
   accepted: "已交接", completed: "已完成", blocked: "流程已暂停", failed: "执行失败", diagnosing: "协调者诊断中",
   waiting_worker: "待分配 Worker", waiting_approval: "等待原生权限", dispatch_unknown: "派发待核实",
-  stopping: "停止中", stopped: "已停止", cancelled: "已取消", reopening: "重新打开中", awaiting_confirmation: "计划待确认",
+  stopping: "停止中", stopped: "已停止", cancelled: "已取消", reopening: "重新打开中", awaiting_confirmation: "计划待确认", awaiting_acceptance: "验收待确认",
 };
 
 export const ACTIVE_STATES = new Set([
@@ -15,7 +15,7 @@ export const ACTIVE_STATES = new Set([
 ]);
 
 export const ATTENTION_STATES = new Set(["blocked", "failed", "waiting_worker", "waiting_approval", "dispatch_unknown",
-  "awaiting_confirmation"]);
+  "awaiting_confirmation", "awaiting_acceptance"]);
 
 export type Tone = "neutral" | "active" | "success" | "warning" | "danger";
 
@@ -23,7 +23,7 @@ export function stateTone(status: string): Tone {
   if (status === "accepted" || status === "completed") return "success";
   if (status === "blocked" || status === "failed") return "danger";
   if (status === "waiting_worker" || status === "waiting_approval" || status === "dispatch_unknown" || status === "stopped" ||
-      status === "awaiting_confirmation") return "warning";
+      status === "awaiting_confirmation" || status === "awaiting_acceptance") return "warning";
   if (ACTIVE_STATES.has(status)) return "active";
   return "neutral";
 }
