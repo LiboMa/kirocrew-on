@@ -51,8 +51,7 @@
 - `deploy.sh space` 定位 Worker 主机上的会话（目前只能到平台主机的边界）。
 
 ## KiroCrew 契约后续（2026-10-17 盘点）
-- HTTP 请求字段的契约：平台发出的 `/api/spawn`、`/api/chat/slots`（含 context / note / resume / approve）等请求体与查询参数，
-  对照 0.10.0 处理函数实际读取的键做快照（目前全部被读取；KiroCrew 静默忽略未知键，不会报错），原生测试在部署时以 AST 扫描已安装的处理函数核对快照。
+- ~~HTTP 请求字段的契约~~（2026-10-18 完成：`tests/kirocrew_contract.json` 的 `http`；查询参数仍未纳入）。
 - 已有边界的 config.json 仍带旧的无效键（`memory.enabled`、`dashboard.host` / `port`、`workspaces.default.path`；KiroCrew 加载器在 EC2 上如实报出），
   无害；需要时在 `seed()` 中迁移移除，原生测试即可同时核对现有边界的配置。
 - 协调者屏蔽 monitor 工具目前只靠 kiro-cli 执行 `excludedTools`；KiroCrew 自己的 kirocrew-core 按 `managedToolPolicy.exclude` 过滤，可再加一层。
@@ -70,7 +69,7 @@
 - git 源码发布在多项核对同时失败时先报出的错误代码与此前不同（只有顺序）。
 
 ## 运维与 Harness 防线（复盘 2026-10-17 的后续）
-- 部署维护期：`deploy.sh push` 先让平台进入维护（新会话照常登记但暂不派发，运行中的任务等待完成或在重启后由 L0 重试），部署完成后恢复；
+- ~~部署维护期~~（2026-10-18 完成：Gateway 需要重启时先排空，见 OPERATIONS）。原文：`deploy.sh push` 先让平台进入维护（新会话照常登记但暂不派发，运行中的任务等待完成或在重启后由 L0 重试），部署完成后恢复；
   空闲检查只是时间点（`run-f7670…` 在部署中创建）。
 - KiroCrew 报错词表的契约：L0 依赖的报错文字（`ACP process exited`、`AcpProcessDied`、`process group … still has members`、取消）在部署时的原生测试中
   核对已安装 KiroCrew 源码仍含这些文字，升级后措辞变化即提示。

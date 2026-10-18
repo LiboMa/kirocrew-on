@@ -1,6 +1,6 @@
 {
   "kirocrew_version": "0.10.0",
-  "about": "Config keys the platform writes into $KIROCREW_HOME/config.json that KiroCrew reads (sections: dataclass fields of KiroCrewConfig and its section configs). tests/test_kirocrew_contract.py keeps seed() inside this list; tests/native checks the list against the installed KiroCrew on every deploy. runtime_errors: the words of KiroCrew's runtime failures the platform retries on its own (octopus/engine.py transient), each with a failure as EC2 reported it; tests/native checks the installed KiroCrew still contains each phrase.",
+  "about": "Config keys the platform writes into $KIROCREW_HOME/config.json that KiroCrew reads (sections: dataclass fields of KiroCrewConfig and its section configs). tests/test_kirocrew_contract.py keeps seed() inside this list; tests/native checks the list against the installed KiroCrew on every deploy. runtime_errors: the words of KiroCrew's runtime failures the platform retries on its own (octopus/engine.py transient), each with a failure as EC2 reported it; tests/native checks the installed KiroCrew still contains each phrase. http: per endpoint the platform sends a body to, the KiroCrew module whose handler reads it and the keys it reads (0.10.0: dashboard handlers take body.get() and ignore any other key without a word).",
   "config": {
     "": [
       "agent",
@@ -51,5 +51,87 @@
       "phrase": "still has members",
       "sample": "kill failed: pid 762595 exited and its process group 762595 still has members, but none could be verified as this run's; not signalled"
     }
-  ]
+  ],
+  "http": {
+    "POST /api/spawn": {
+      "module": "dashboard/messaging_api/spawn.py",
+      "reads": [
+        "task",
+        "agent",
+        "max_turns",
+        "cwd",
+        "model",
+        "reasoning_effort",
+        "include_memory",
+        "include_lessons",
+        "include_project",
+        "crew",
+        "target_member",
+        "parent_session",
+        "approval_mode",
+        "silent",
+        "keep",
+        "batch_id",
+        "batch_total"
+      ]
+    },
+    "POST /api/chat/slots": {
+      "module": "dashboard/chat_handlers.py",
+      "reads": [
+        "instance_id",
+        "adopt_remote_slot",
+        "name",
+        "agent",
+        "agent_kind",
+        "model",
+        "folder_id",
+        "memory_mode",
+        "mode",
+        "ephemeral",
+        "title",
+        "artifact"
+      ]
+    },
+    "POST /api/chat/slots/{}/context": {
+      "module": "dashboard/chat_handlers.py",
+      "reads": [
+        "content",
+        "source",
+        "maxAge",
+        "ephemeral"
+      ]
+    },
+    "POST /api/chat/slots/{}/note": {
+      "module": "dashboard/chat_handlers.py",
+      "reads": [
+        "content",
+        "source",
+        "maxAge",
+        "ephemeral"
+      ]
+    },
+    "POST /api/chat/slots/{}/resume": {
+      "module": "dashboard/chat_api/resume.py",
+      "reads": [
+        "key",
+        "title"
+      ]
+    },
+    "POST /api/chat/slots/{}/approve": {
+      "module": "dashboard/chat_handlers.py",
+      "reads": [
+        "action",
+        "request_id",
+        "origin",
+        "request_mid",
+        "pattern"
+      ]
+    },
+    "POST /api/spawn/stop-all": {
+      "module": "dashboard/messaging_api/run_control.py",
+      "reads": [
+        "slot"
+      ]
+    }
+  }
 }

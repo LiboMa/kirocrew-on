@@ -169,6 +169,9 @@ SSM 隧道（`localhost:15476`）方式仍可用：`crew_url` 指向本地端口
    Gateway 只在它加载的内容变化时重启（D34）：KiroCrew 版本目录、本发布的 `composition/`、`octopus/{config,prompts,__init__}.py`、
    边界配置与环境文件、unit 文件的指纹保存在 `/var/lib/octopus/boundaries/<边界>/gateway.fingerprint`；未变化时安装日志显示
    「Gateway 未变化，保持运行」，进行中的原生任务不中断。需要强制重启时删除该文件后重新部署，或直接 `systemctl restart`。
+   需要重启时先排空（复盘 #8，`run-f7670bfb…` 的首个任务被部署中的重启结束）：安装脚本在 Worker 数据目录写 `.maintenance`，Worker 暂不接受
+   新的准备与派发（503 `native_unavailable`，平台自动退避重试，会话显示「执行环境维护中（部署），稍后自动继续」），并等待 Gateway 中运行的原生任务
+   结束（最多 `DRAIN_MINUTES`，默认 30 分钟）后重启；Worker 重启后移除标记。部署中断导致标记残留时手动删除该文件即可。
 4. schema 迁移在 API 启动时执行，迁移前自动备份到 `/var/lib/octopus/platform/backups/octopus-v<旧版本>-<时间>.sqlite3`；结果见 `journalctl -u octopus-api`。
 
 ## 5．回滚
@@ -413,6 +416,8 @@ CloudFront 只使用 us-east-1 的证书）：分发加上别名与证书（SNI�
   新生成的配置，不得有被忽略的键（`_extra_keys` / `_extra_sections`）。升级 KiroCrew 时先在新版本上核实清单并改版本号，原生测试不过则部署中止。
   同一清单的 `runtime_errors` 列出平台自动重试（L0）所依赖的 KiroCrew 报错文字，各附一条 EC2 原样报错：本机回归核对每条都按其种类重试，
   部署时的原生测试核对已安装 KiroCrew 的源码仍含这些文字——升级后措辞变了，运行时故障不会悄悄改由协调者处理。
+  `http` 列出平台发给 KiroCrew 的每个请求体所到的处理模块与其读取的键：本机回归以 AST 扫描 `octopus/worker.py` 的每个请求体，只许用清单内的键
+  （KiroCrew 静默忽略未知键）；部署时原生测试核对已安装 KiroCrew 的这些模块仍读取这些键。
 
 ### Agent 提示（D46 P1）
 

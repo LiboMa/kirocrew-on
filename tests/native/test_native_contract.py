@@ -137,5 +137,21 @@ class RuntimeErrorContractTests(unittest.TestCase):
         self.assertEqual(missing, [], "KiroCrew no longer says these: update octopus/engine.py transient and the contract")
 
 
+
+class HttpContractTests(unittest.TestCase):
+    """Each handler module the platform's request bodies go to still reads every key the contract lists for it
+    (tests/kirocrew_contract.json http): a renamed or removed field fails the deploy instead of being ignored."""
+
+    def test_every_listed_key_is_read_by_its_handler_module(self):
+        import kiro_crew
+        package = Path(kiro_crew.__file__).parent
+        for endpoint, entry in CONTRACT["http"].items():
+            with self.subTest(endpoint):
+                module = package / entry["module"]
+                self.assertTrue(module.is_file(), f"{entry['module']} is no longer in KiroCrew")
+                text = module.read_text()
+                self.assertEqual([k for k in entry["reads"] if f'"{k}"' not in text and f"'{k}'" not in text], [])
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)
