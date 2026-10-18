@@ -425,6 +425,17 @@ CloudFront 只使用 us-east-1 的证书）：分发加上别名与证书（SNI�
 - 纠错要求只发给被安排修复的任务（决定与失败摘要）；其后的审查 / 测试只收到「复验」说明；协调者上下文只在 `context.json`。
 - 内置模板的每个步骤带 `kind` 与验收项（审查绑定候选、实现与交付须有改动），审查用 `changes_requested`，不再使用已停用的 OpenCode，步骤提示不再重复目标。
 
+### 角色卡片（D46 P2）
+
+- 任务可带 `role`：`spec`（Spec 分析，kind design）、`sde`（SDE 开发，implement / deliver）、`integration_test`（集成测试，test）、
+  `security_test`（安全测试）、`challenge`、`evaluator`（review）。`kind` 仍决定门禁；`role` 决定 Agent 拿到的角色卡片。省略时不发卡片、行为不变；
+  给了 `role` 没给 `kind` 时取该角色的首个类别，两者不相容时拒绝。
+- 卡片按 KiroCrew 的 SKILL.md 格式存于 `octopus/roles/<role>/SKILL.md`（正文 ≤600 字符），平台把它内联到任务说明开头（「你的角色：…」），
+  契约中写明角色——三个后端行为一致（KiroCrew 的 skill 只能按 Agent 配置挂载、不能按任务选，负责人 2026-10-18 选定内联）。
+- 审查独立性：`security_test` / `challenge` / `evaluator` 不得使用被审查改动的作者工具（此前 implement / deliver 任务的 tool；重新规划时含保留的
+  已验收任务）。用户提交的违反时拒绝；KiroCrew 规划的照常应用并在规划说明中记「审查不独立」。
+- 规划提示列出 6 个角色（取自卡片的 description）与独立性规则；控制台任务卡片「角色：…」、MCP 精简状态的任务 `role`、报告的类别列「review（安全测试）」。
+
 ### 停用的 Coding 工具（K01）
 
 - Worker 配置 `disabled_tools`（默认 `["opencode"]`）：所列工具在 `/health` 的 `tools` 中报告为不可用，原因「已停用（K01…）」。

@@ -3,7 +3,7 @@ import type { Run } from "@/api/types";
 import { Button } from "@/components/ui/button";
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible";
 import { StatusBadge } from "@/components/StatusBadge";
-import { TOOLS, formatTime } from "@/lib/labels";
+import { ROLE_LABELS, TOOLS, formatTime } from "@/lib/labels";
 import { canRetryTask } from "@/lib/session";
 
 function Meta({ label, value }: { label: string; value: string | null | undefined }) {
@@ -32,6 +32,7 @@ export function TaskList({ run, onContinue }: { run: Run; onContinue: (taskId: s
                   <h3 className="text-sm font-semibold">{spec.name}</h3>
                   <p className="mt-0.5 text-xs text-muted-foreground">
                     {TOOLS[spec.tool] ?? spec.tool} · {spec.model} · Effort {spec.effort || "继承默认"}
+                    {spec.role && <>{" · "}<span>角色：{ROLE_LABELS[spec.role] ?? spec.role}</span></>}
                     {task.mapping && <>{" · "}<span>来源：{task.mapping.label}</span></>}
                   </p>
                 </div>

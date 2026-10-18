@@ -48,6 +48,11 @@ export const EVENT_LABELS: Record<string, string> = {
   "task.replaced": "重新规划替换了后续任务", "task.tool_switched": "已切换执行工具",
 };
 
+/** D46 P2: the roles a task's Agent works in (octopus/roles.py LABELS; kept equal by tests/test_roles.py). */
+export const ROLE_LABELS: Record<string, string> = {
+  spec: "Spec 分析", sde: "SDE 开发", integration_test: "集成测试", security_test: "安全测试", challenge: "Challenge", evaluator: "Evaluator",
+};
+
 /** Change-log entries that repeat an Attempt or recovery event; shown in 「变更记录」, not in the timeline. */
 export const TIMELINE_HIDDEN = new Set(["task.state", "recovery.state"]);
 

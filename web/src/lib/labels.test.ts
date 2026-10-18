@@ -1,5 +1,5 @@
 import { describe, expect, test } from "vitest";
-import { eventLabel } from "@/lib/labels";
+import { ROLE_LABELS, eventLabel } from "@/lib/labels";
 
 describe("event labels", () => {
   test("a plan waiting for and given confirmation says so (D44)", () => {
@@ -10,5 +10,8 @@ describe("event labels", () => {
 
   test("a Session that continued on its own says so (D43)", () => {
     expect(eventLabel({ kind: "run.resumed", payload: { reason: "Kiro 登录已恢复，自动继续" } })).toBe("条件满足，自动继续");
+  });
+  test("a task's role has a title (D46 P2)", () => {
+    expect(ROLE_LABELS.security_test).toBe("安全测试");
   });
 });

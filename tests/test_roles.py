@@ -128,5 +128,20 @@ class ReplannedRoleTests(ReplanCase):
         self.assertTrue(any("审查不独立" in note and "复评" in note for note in run["replan"]["notes"]), run["replan"])
 
 
+class VisibleTests(unittest.TestCase):
+    def test_the_console_has_a_title_for_every_role(self):
+        text = (ROOT / "web/src/lib/labels.ts").read_text()
+        block = re.search(r"ROLE_LABELS[^=]*=\s*\{(.*?)\}", text, re.S).group(1)
+        self.assertEqual(dict(re.findall(r'(\w+):\s*"([^"]+)"', block)), roles.LABELS)
+
+    def test_the_compact_status_and_the_report_carry_the_role(self):
+        from octopus import mcp, report
+        task = {"id": "check", "status": "accepted", "spec": {"name": "安全审查", "tool": "codex", "kind": "review",
+                                                              "role": "security_test"}, "attempts": []}
+        view = mcp.compact_status({"id": "run-1", "status": "completed", "tasks": [task]}, [])["session"]
+        self.assertEqual(view["tasks"][0]["role"], "security_test")
+        self.assertEqual(report.model({"id": "run-1", "tasks": [task]})["tasks"][0]["kind"], "review（安全测试）")
+
+
 if __name__ == "__main__":
     unittest.main()

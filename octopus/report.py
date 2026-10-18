@@ -6,6 +6,8 @@ import html as markup
 import re
 import time
 
+from . import roles
+
 MARK = {"pass": "✓", "fail": "✗", "skip": "–"}
 SUMMARY, DETAIL, INPUT, PLAN = 2000, 300, 12000, 8000   # the request and the plan keep their own limits (domain, planning)
 SPECIAL = str.maketrans({c: "\\" + c for c in "\\`*_[]<>!#|~"})
@@ -94,7 +96,8 @@ def model(view, now=None):
         spec = task.get("spec") or {}
         attempts = sorted(task.get("attempts") or [], key=lambda a: a.get("number") or 0)
         tasks.append({"ordinal": ordinal, "id": task.get("id"), "name": _line(spec.get("name") or task.get("id"), 200),
-                      "kind": spec.get("kind") or "—", "tool": spec.get("tool") or "—", "status": task.get("status"),
+                      "kind": (spec.get("kind") or "—") + (f"（{roles.LABELS[spec['role']]}）" if spec.get("role") in roles.LABELS else ""),
+                      "tool": spec.get("tool") or "—", "status": task.get("status"),
                       "mapping": _line((task.get("mapping") or {}).get("label"), 120) or "—",
                       "attempts": len(attempts),
                       "final": _attempt(attempts[-1], attempts[-1].get("spec") or spec) if attempts else None})
