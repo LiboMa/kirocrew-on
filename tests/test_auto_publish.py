@@ -136,6 +136,17 @@ class PlannedTests(ConfirmationCase):
         self.assertIsNone(run.get("publish_suggestion"))
         self.assertTrue(any("仓库名不合法" in note for note in run["planning"]["notes"]))
 
+    def test_a_task_told_not_to_push_is_not_noted_as_pushing(self):
+        # EC2 run-f897a462…: 「只改 README.md，不推送、不提交 PR」 was noted as 「要求推送或创建 PR」
+        from octopus.domain import pushing
+        for text in ("只改 README.md，不推送、不提交 PR。", "不要 git push，也不要创建 PR", "无需推送", "Do not push or open a pull request."):
+            with self.subTest(text):
+                self.assertFalse(pushing(text))
+        for text in ("git push 到 main 并创建 PR", "完成后推送并提交 PR", "git push 失败：Authentication failed for 'https://x'",
+                     "不修改测试，完成后 git push", "Piano PR：完成后创建 PR"):
+            with self.subTest(text):
+                self.assertTrue(pushing(text))
+
     def test_the_planner_is_told_how_to_mark_a_pull_request(self):
         from octopus import planning
         self.assertIn('"publish"', planning.plan_step()["prompt"])

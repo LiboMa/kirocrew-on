@@ -191,6 +191,15 @@ def publish_policy(value):
 
 PUSHING = re.compile(r"git push|push(ed)? (failed|rejected)|推送|pull request|merge request|创建 PR|提交 PR|Authentication failed for",
                      re.I)
+# What a task is told not to do is not what it asks for (EC2 run-f897a462…: 「不推送、不提交 PR」 was read as pushing).
+NOT_PUSHING = re.compile(r"(不要|不必|不需要|无需|不得|禁止|切勿|勿|别|不|\b(?:do not|don't|never|no)\b)\s*(也不要|也不)?\s*"
+                         r"(提交|创建|发起|开)?\s*(git push|push|推送|pull request|merge request|PR|MR)"
+                         r"(\s*(or|和|或|、|/)\s*(提交|创建|发起|open|create)?\s*(a )?(pull request|merge request|PR|MR))?", re.I)
+
+
+def pushing(text):
+    """Whether ``text`` asks for, or reports, a push or a pull / merge request (D47) — not one it says not to make."""
+    return bool(PUSHING.search(NOT_PUSHING.sub(" ", text or "")))
 
 
 def confirm_plan(db, rid, who, actor, via):
@@ -1683,7 +1692,7 @@ class Service:
         from .waiting import handed_over, kiro_login_failure
         error = run.get("error") or attempt.get("error") or "尚无可核实的错误原因"
         outcome = ((attempt.get("evidence") or {}).get("outcome") or {})
-        if failure in {"auth", "input", None, "native_error"} and PUSHING.search(" ".join(filter(None, [
+        if failure in {"auth", "input", None, "native_error"} and pushing(" ".join(filter(None, [
                 error, outcome.get("summary"), " ".join(map(str, outcome.get("findings") or []))]))):
             # D47: an Agent has no repository write credential by design; publishing is the platform's
             title = "Agent 不能推送或创建 PR"

@@ -145,7 +145,7 @@ def expand(db, rid, text, models=None, replan=False, tools=None):
         require(not missing, f"任务「{step['name']}」缺少{'、'.join(missing)}", 409, "plan_invalid")
     if len(plan["steps"]) > limit:
         notes.append(f"规划给出 {len(plan['steps'])} 个任务，只保留前 {limit} 个")
-    from .domain import PUSHING
+    from .domain import pushing
     # publishing goes to the repository the Session was started from; a new or uploaded source has none (EC2 run-f7670bfb…)
     repository = json.loads(db.execute("SELECT source FROM runs WHERE id=?", (rid,)).fetchone()["source"] or "{}").get("type") == "git"
     from . import roles
@@ -155,7 +155,7 @@ def expand(db, rid, text, models=None, replan=False, tools=None):
         if any(task is step for step in steps):
             notes.append(f"审查不独立：任务「{task['name']}」（{roles.LABELS[task['role']]}）与被审查改动的作者使用同一工具 {tool}")
     for step in steps:   # D47: publishing is the platform's; an Agent has no repository write credential
-        if PUSHING.search(step.get("prompt") or ""):
+        if pushing(step.get("prompt")):
             notes.append(f"任务「{step['name']}」要求推送或创建 PR：Agent 没有仓库写凭证，" + (
                 "发布由平台在会话完成后进行" if repository
                 else "此会话的源码不来自远端仓库：没有远端仓库，会话完成后可在会话页发布到新仓库"))
