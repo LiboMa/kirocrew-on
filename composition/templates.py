@@ -23,6 +23,33 @@ def agent_prompt(name):
     return development.COMMON + development.WORKER
 
 
+def _forget_ignored(config):
+    """Remove what earlier releases of the platform wrote that KiroCrew 0.10.0 never read — memory.enabled,
+    dashboard.host / port and workspaces.default.path — and keep everything else. Returns whether anything went."""
+    changed = False
+    memory = config.get("memory")
+    if isinstance(memory, dict) and "enabled" in memory:
+        memory.pop("enabled")
+        changed = True
+        if not memory:
+            config.pop("memory")
+    dashboard = config.get("dashboard")
+    if isinstance(dashboard, dict):
+        for key in ("host", "port"):
+            if key in dashboard:
+                dashboard.pop(key)
+                changed = True
+    workspaces = config.get("workspaces")
+    if isinstance(workspaces, dict) and isinstance(workspaces.get("default"), dict) and "path" in workspaces["default"]:
+        workspaces["default"].pop("path")
+        changed = True
+        if not workspaces["default"]:
+            workspaces.pop("default")
+        if not workspaces:
+            config.pop("workspaces")
+    return changed
+
+
 def seed(*, crew_home, kiro_home, allowed_roots, legacy_pipeline, yolo=True):
     from kiro_crew.agent import managed_mcp_spec_entry
     crew_home.mkdir(parents=True, exist_ok=True)
@@ -49,11 +76,15 @@ def seed(*, crew_home, kiro_home, allowed_roots, legacy_pipeline, yolo=True):
     if not path.exists():
         path.write_text(json.dumps(config, ensure_ascii=False, indent=2) + "\n")
     # The boundary's standing YOLO (crew_yolo): the one key written into an existing config, so it holds across
-    # Gateway restarts (a Dashboard grant ends at shutdown) and the setting can turn it off again.
+    # Gateway restarts (a Dashboard grant ends at shutdown) and the setting can turn it off again. The keys the platform
+    # once wrote that KiroCrew never read go at the same time (tests/kirocrew_contract.json).
     current = json.loads(path.read_text())
+    changed = _forget_ignored(current)
     agent = current.setdefault("agent", {})
     if agent.get("dangerously_skip_permissions") is not yolo:
         agent["dangerously_skip_permissions"] = bool(yolo)
+        changed = True
+    if changed:
         staged = path.with_name(path.name + ".tmp")
         staged.write_text(json.dumps(current, ensure_ascii=False, indent=2) + "\n")
         staged.replace(path)
@@ -81,6 +112,8 @@ def seed(*, crew_home, kiro_home, allowed_roots, legacy_pipeline, yolo=True):
                 [n for n in LEGACY_BACKENDS if n != name] if name == "poc-pipeline-coordinator"
                 else ["poc-kiro", "poc-claude", "poc-codex", "poc-opencode", "poc-diagnose"])}}
             spec["excludedTools"] = sorted(MONITORS)   # the observer does not arm loops that add turns of their own
+            # kiro-cli applies excludedTools; KiroCrew's own kirocrew-core filters by managedToolPolicy (both, so neither alone)
+            spec["managedToolPolicy"] = {"exclude": sorted(tool.rsplit("/", 1)[1] for tool in MONITORS)}
         if name.startswith("poc-pipeline-"):
             from pipeline_spec import COORDINATOR_PROMPT, WORKER_PROMPTS
             spec["description"] = f"App PoC / {backend or 'Kiro CLI'}" + (" coordinator" if coordinator else " worker")
@@ -96,6 +129,9 @@ def seed(*, crew_home, kiro_home, allowed_roots, legacy_pipeline, yolo=True):
                 settings["subagent"] = {**(settings.get("subagent") or {}), **spec["toolsSettings"]["subagent"]}
                 merged["toolsSettings"] = settings
                 merged["excludedTools"] = sorted(set(previous.get("excludedTools") or []) | set(spec["excludedTools"]))
+                policy = previous.get("managedToolPolicy") if isinstance(previous.get("managedToolPolicy"), dict) else {}
+                merged["managedToolPolicy"] = {**policy, "exclude": sorted(set(policy.get("exclude") or [])
+                                                                         | set(spec["managedToolPolicy"]["exclude"]))}
             spec = merged
         agent_path.write_text(json.dumps(spec, ensure_ascii=False, indent=2) + "\n")
         written.append(agent_path)

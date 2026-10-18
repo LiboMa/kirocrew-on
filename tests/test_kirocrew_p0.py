@@ -48,6 +48,29 @@ class SeedTests(unittest.TestCase):
     def test_the_coordinator_cannot_arm_its_own_monitor_loops(self):
         self.assertTrue(MONITORS <= set(self.spec("poc-coordinator")["excludedTools"]))
 
+    def test_kirocrews_own_tools_also_exclude_the_monitors(self):
+        # kiro-cli applies excludedTools; KiroCrew's kirocrew-core filters by managedToolPolicy.exclude (sessions.py:4925)
+        names = {tool.rsplit("/", 1)[1] for tool in MONITORS}
+        self.assertTrue(names <= set(self.spec("poc-coordinator")["managedToolPolicy"]["exclude"]))
+
+
+class LegacyConfigTests(unittest.TestCase):
+    def test_an_existing_config_loses_the_keys_kirocrew_never_read(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            (root / "crew").mkdir()
+            (root / "crew/config.json").write_text(json.dumps({
+                "memory": {"enabled": False}, "dashboard": {"host": "127.0.0.1", "port": 5476, "onboarded": True},
+                "workspaces": {"default": {"path": "/w"}}, "default_workspace": "default", "user_config": "keep",
+                "agent": {"model": "user-model"}}))
+            with patch.dict("sys.modules", {"kiro_crew.agent": SimpleNamespace(managed_mcp_spec_entry=lambda name: {"command": "x"})}):
+                templates.seed(crew_home=root / "crew", kiro_home=root / "kiro", allowed_roots=[root / "w"], legacy_pipeline=False)
+            config = json.loads((root / "crew/config.json").read_text())
+        self.assertNotIn("memory", config)
+        self.assertEqual(config["dashboard"], {"onboarded": True})
+        self.assertNotIn("workspaces", config)
+        self.assertEqual((config["user_config"], config["agent"]["model"], config["default_workspace"]), ("keep", "user-model", "default"))
+
 
 class MigrationTests(unittest.TestCase):
     def test_an_existing_coordinator_spec_moves_the_allowlist_and_keeps_user_settings(self):

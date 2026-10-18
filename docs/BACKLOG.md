@@ -52,9 +52,9 @@
 
 ## KiroCrew 契约后续（2026-10-17 盘点）
 - ~~HTTP 请求字段的契约~~（2026-10-18 完成：`tests/kirocrew_contract.json` 的 `http`；查询参数仍未纳入）。
-- 已有边界的 config.json 仍带旧的无效键（`memory.enabled`、`dashboard.host` / `port`、`workspaces.default.path`；KiroCrew 加载器在 EC2 上如实报出），
+- ~~已有边界的 config.json 仍带旧的无效键~~（2026-10-18 修复：`seed()` 迁移移除，原生测试核对现有边界）。原文：已有边界的 config.json 仍带旧的无效键（`memory.enabled`、`dashboard.host` / `port`、`workspaces.default.path`；KiroCrew 加载器在 EC2 上如实报出），
   无害；需要时在 `seed()` 中迁移移除，原生测试即可同时核对现有边界的配置。
-- 协调者屏蔽 monitor 工具目前只靠 kiro-cli 执行 `excludedTools`；KiroCrew 自己的 kirocrew-core 按 `managedToolPolicy.exclude` 过滤，可再加一层。
+- ~~协调者屏蔽 monitor 工具目前只靠 kiro-cli 执行 `excludedTools`~~（2026-10-18 修复：同时写 `managedToolPolicy.exclude`）。原文：KiroCrew 自己的 kirocrew-core 按 `managedToolPolicy.exclude` 过滤，可再加一层。
 - `includeCrewContext` 不在 kiro-cli 文档字段内但被 KiroCrew 读取（默认即 true）；kiro-cli 2.29.1 接受未知键（EC2 以 `agent validate` 对照核实），无须改动。
 
 ## D48 发布到新仓库的终审延后项（2026-10-17）

@@ -124,6 +124,13 @@ class ConfigContractTests(unittest.TestCase):
             self.assertEqual((cfg._extra_keys, cfg._extra_sections), ({}, {}))
             self.assertEqual(cfg.agent.adaptive_concurrency_mode, "fixed")   # and what was written is what it reads
 
+    def test_the_boundarys_own_config_keeps_none_of_the_keys_the_platform_once_wrote(self):
+        # the deploy's --check seeds this boundary first: the keys KiroCrew never read are gone from its config
+        extra = KiroCrewConfig.load()._extra_keys
+        self.assertNotIn("enabled", extra.get("memory") or {})
+        self.assertFalse({"host", "port"} & set(extra.get("dashboard") or {}))
+        self.assertNotIn("path", (extra.get("workspaces") or {}).get("default") or {})
+
 
 
 class RuntimeErrorContractTests(unittest.TestCase):
