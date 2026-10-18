@@ -225,6 +225,12 @@ describe("session detail", () => {
     await waitFor(() => expect(calls.find((c) => c.path === "/v1/runs/run-a/accept")?.body).toMatchObject({ expected_version: 4 }));
   });
 
+  test("an acceptance that may not be given is not offered (D46 P3)", async () => {
+    open({ ...blocked, status: "awaiting_acceptance", error: null, permissions: { operate: true, delete: true, resume: false, publish: false },
+      attention: { title: "验收待确认", detail: "待判定", action: "核对后确认通过" } } as Run);
+    expect(await screen.findByRole("button", { name: /确认通过/ })).toBeDisabled();
+  });
+
   test("an archived Team's waiting plan cannot be confirmed (D44)", async () => {
     open({ ...blocked, status: "awaiting_confirmation", error: null, permissions: { operate: true, delete: true, resume: false },
       attention: { title: "计划待确认", detail: "任务尚未开始。", action: "核对后确认开始" } } as Run);

@@ -224,5 +224,93 @@ class SurfaceTests(EvaluatorCase):
         self.assertIn("<h2>验收（以 Evaluator 为准）</h2>", page)
 
 
+class FinalReviewTests(EvaluatorCase):
+    def pending(self):
+        self.verdicts = [[{"item": "登录成功", "result": "pass", "evidence": "curl 200"},
+                          {"item": "错误密码提示", "result": "pending", "evidence": "文案需产品确认"}]]
+
+    def test_a_team_member_who_is_not_the_creator_cannot_accept(self):
+        from octopus.security import authenticate, create_user, issue_token
+        with self.db.transaction() as db:
+            db.execute("INSERT INTO teams(id,name,created) VALUES('team-a','组',1)")
+            db.execute("INSERT INTO members(team_id,user_id,role) VALUES('team-a',?,'owner')", (self.actor["id"],))
+            db.execute("UPDATE workers SET owner_id=NULL, team_id='team-a'")
+            member = create_user(db, "member", "Fixture-password-123!", False)
+            db.execute("INSERT INTO members(team_id,user_id,role) VALUES('team-a',?,'member')", (member["id"],))
+            other = authenticate(db, issue_token(db, member["id"])["token"])
+        self.pending()
+        rid, run = self.run_(team_id="team-a")
+        with self.assertRaises(Error) as caught:
+            self.service.operate(other, rid, "accept", {"request_id": "accept-member-1", "expected_version": run["version"]})
+        self.assertEqual(caught.exception.code, "forbidden")
+
+    def test_an_evaluator_without_items_judges_the_sessions_items(self):
+        steps = [TEAM[0], {**TEAM[1], "acceptance": []}]
+        run = self.run_(steps)[1]
+        check = next(t for t in run["tasks"] if t["id"] == "check")
+        self.assertEqual(check["spec"]["acceptance"], ["登录成功", "错误密码提示"])
+        self.assertEqual(run["status"], "completed")
+
+    def test_the_appended_evaluator_judges_items_a_continue_added(self):
+        rid, run = self.run_([TEAM[0]])
+        self.assertEqual(run["status"], "completed")
+        self.service.operate(self.actor, rid, "continue", {"request_id": "refresh-1", "expected_version": run["version"],
+                                                           "task_id": "code", "execution": {"acceptance": ["登录成功", "错误密码提示", "导出可用"]}})
+        run = self.tick(rid)
+        added = next(t for t in run["tasks"] if t["spec"].get("role") == "evaluator")
+        self.assertIn("导出可用", added["spec"]["acceptance"])
+        self.assertIn("导出可用", run["error"])   # judged: the fixture's Evaluator did not give a verdict for it
+
+    def test_the_compact_status_drops_pending_once_accepted(self):
+        from octopus import mcp
+        self.pending()
+        rid, run = self.run_()
+        self.service.operate(self.actor, rid, "accept", {"request_id": "accept-mcp-2", "expected_version": run["version"]})
+        view = mcp.compact_status(self.tick(rid), [])["session"]
+        latest = next(t for t in view["tasks"] if t["id"] == "check")["latest"]
+        self.assertNotIn("pending", latest)
+        self.assertEqual(latest["accepted_by"], "owner")
+
+
+class VerdictUnitTests(unittest.TestCase):
+    SPEC = {"acceptance": ["A 可用", "B 可用"]}
+
+    def test_items_matched_by_text_keep_their_own_evidence(self):
+        from octopus.evaluation import verdicts
+        error, pending = verdicts(self.SPEC, {"acceptance": [   # B paraphrased and listed first: A keeps its own evidence
+            {"item": "B 大致可用", "result": "pending", "evidence": "about B"}, {"item": "A 可用", "result": "pending", "evidence": "about A"}]})
+        self.assertIsNone(error)
+        self.assertEqual([(p["item"], p["evidence"]) for p in pending], [("A 可用", "about A"), ("B 可用", "about B")])
+
+    def test_an_extra_or_repeated_failure_fails(self):
+        from octopus.evaluation import verdicts
+        base = [{"item": "A 可用", "result": "pass", "evidence": "a"}, {"item": "B 可用", "result": "pass", "evidence": "b"}]
+        for extra in ({"item": "C 不可用", "result": "fail", "evidence": "c"}, {"item": "A 可用", "result": "fail", "evidence": "a2"}):
+            with self.subTest(extra):
+                self.assertIsNotNone(verdicts(self.SPEC, {"acceptance": [*base, extra]})[0])
+
+    def test_the_evaluator_is_told_its_own_results(self):
+        from pathlib import Path
+        from octopus.recovery import quality_instructions
+        text = quality_instructions(Path("/w"), {"acceptance": ["A"], "role": "evaluator", "kind": "review"})
+        self.assertIn("pass、fail 或 pending", text)
+        self.assertNotIn("n/a", text)
+        self.assertIn("n/a", quality_instructions(Path("/w"), {"acceptance": ["A"], "kind": "implement"}))
+
+
+class ContractTests(unittest.TestCase):
+    def test_the_console_preview_waits_for_the_same_statuses_as_the_server(self):
+        import re
+        from pathlib import Path
+        from octopus.domain import SETTLED
+        text = (Path(__file__).resolve().parents[1] / "web/src/features/sessions/AppPreviewPanel.tsx").read_text()
+        console = set(re.findall(r'"(\w+)"', re.search(r"const SETTLED = new Set\(\[(.*?)\]\)", text, re.S).group(1)))
+        self.assertEqual(console, set(SETTLED))
+
+    def test_the_openapi_lists_accept(self):
+        from octopus.schema import openapi
+        self.assertIn("/v1/runs/{id}/accept", openapi()["paths"])
+
+
 if __name__ == "__main__":
     unittest.main()

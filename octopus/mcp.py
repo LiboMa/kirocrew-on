@@ -392,7 +392,9 @@ def compact_status(session, events):
                  "backend": evidence.get("actual_backend"), "model": evidence.get("actual_model"),
                  "decision": outcome.get("decision"), "summary": outcome.get("summary"),
                  "findings": outcome.get("findings") or [], "handoff": evidence.get("handoff_path"),
-                 **({"pending": evidence["evaluation"]["pending"]} if (evidence.get("evaluation") or {}).get("pending") else {})}
+                 **({"accepted_by": evidence["evaluation"]["accepted_by"].get("username")}
+                    if (evidence.get("evaluation") or {}).get("accepted_by")
+                    else {"pending": evidence["evaluation"]["pending"]} if (evidence.get("evaluation") or {}).get("pending") else {})}
         if evidence.get("gates"):   # D37: passed as a count, failures with their first line, skipped by name
             records = evidence["gates"]
             value["gates"] = {"passed": sum(g.get("status") == "pass" for g in records),

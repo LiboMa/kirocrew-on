@@ -730,6 +730,8 @@ class Engine:
                                event={"status": "awaiting_confirmation"}, status="awaiting_confirmation", updated=time.time())
                 return
             if attempt is None:
+                if evaluation.refresh(db, rid, task, json.loads(fresh["snapshot"]), config):   # D46 P3: today's items
+                    task = db.execute("SELECT * FROM tasks WHERE run_id=? AND id=?", (rid, task["id"])).fetchone()
                 aid, now = uid("attempt"), time.time()
                 number = db.execute("SELECT count(*) FROM attempts WHERE run_id=? AND task_id=?", (rid, task["id"])).fetchone()[0] + 1
                 switched = recovery.switched_from(db, rid, task["id"], json.loads(task["spec"]))

@@ -177,7 +177,8 @@ export function SessionView({ id }: { id: string }) {
           <AlertTitle id="accept-notice-title">{run.attention?.title ?? "验收待确认"}</AlertTitle>
           <AlertDescription className="flex flex-wrap items-center gap-3">
             <span>{[run.attention?.detail, run.attention?.action].filter(Boolean).join(" ")}</span>
-            <Button size="sm" onClick={actions.accept} disabled={!!actions.busy || run.permissions?.operate === false} id="run-accept">
+            <Button size="sm" onClick={actions.accept} id="run-accept"
+              disabled={!!actions.busy || run.permissions?.publish === false || !!resumeReason(run)}>
               <Play /> 确认通过
             </Button>
           </AlertDescription>

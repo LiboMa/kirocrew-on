@@ -12,7 +12,8 @@ const LABELS: Record<AppPreview["status"], string> = {
 };
 const LIVE = new Set(["installing", "starting", "running"]);
 // The platform starts a preview only once the Session's tasks have ended (D36 §5.1).
-const SETTLED = new Set(["failed", "blocked", "completed", "stopped", "waiting_worker"]);
+// Kept equal to octopus/domain.py SETTLED by tests/test_evaluator.py (a person judging appearance needs the preview, D46 P3).
+const SETTLED = new Set(["failed", "blocked", "completed", "stopped", "waiting_worker", "awaiting_confirmation", "awaiting_acceptance"]);
 
 function startReason(run: Run): string {
   if (!run.worker_id || !run.workspace) return "源码尚未准备，暂不能启动预览。";

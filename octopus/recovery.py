@@ -95,7 +95,14 @@ decision=pass 表示已给出符合要求的计划 JSON；需求缺少必要信�
 并在 findings 中写明缺少什么。本文件是本次 Attempt 的真实结论，不能复制旧结论。
 """
     accept = ""
-    if contract and contract.get("acceptance"):
+    if contract and contract.get("acceptance") and contract.get("role") == "evaluator":   # D46 P3: the Evaluator's own set
+        accept = """
+本任务有验收项：在 outcome.json 中加入 "acceptance"，逐项对应本任务契约的每条验收项：
+  "acceptance":[{"item":"验收项原文","result":"pass","evidence":"实际核对的命令、输出或文件:行"}]
+result 只能是 pass、fail 或 pending（需要人判断时，写明已核对的部分）；每项必须有 evidence。会话以这些判定为准：
+任一项 fail 即 changes_requested；有 pending 时会话停下，等用户确认。
+"""
+    elif contract and contract.get("acceptance"):
         accept = """
 本任务有验收项：在 outcome.json 中加入 "acceptance"，逐项对应本任务契约的每条验收项：
   "acceptance":[{"item":"验收项原文","result":"pass","evidence":"实际执行的命令与结果"}]

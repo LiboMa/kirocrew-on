@@ -1885,6 +1885,7 @@ class Service:
                     restart_budget(db, rid, who)   # the user's word allows the automatic work from here (D42)
                     fields.update(desired="active", status="ready", error=None)
                 elif action == "accept":   # D46 P3: the person's word on what the Evaluator left pending
+                    require(may_publish(db, actor, run), "只有会话创建者、Team owner 或管理员可以确认验收", 403, "forbidden")
                     require(run["status"] == "awaiting_acceptance" and run["lifecycle"] == "open",
                             "此 Session 不在等待验收确认", 409, "invalid_state")
                     task = db.execute("SELECT * FROM tasks WHERE run_id=? AND status='awaiting_acceptance' ORDER BY ordinal LIMIT 1",
