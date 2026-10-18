@@ -9,7 +9,7 @@ import time
 
 from .db import dumps, uid
 from .transport import worker_request
-from . import gates, journal, planning, recovery, waiting
+from . import evaluation, gates, journal, planning, recovery, waiting
 from .security import Error
 from .domain import CONTRACT, awaits_confirmation, unserved
 from .gates import BLOCKED
@@ -864,12 +864,22 @@ class Engine:
                                        event={"id": attempt["id"], "task_id": task["id"], "commands": evidence["checks"]["commands"]},
                                        status="running", evidence=dumps(evidence), result=native.get("result"), updated=time.time())
                     return self.update(rid, "running", actor=journal.WORKER)
+            if not error and gated and evaluation.applies(snapshot, spec, config):   # D46 P3: the Evaluator's verdicts
+                error, pending = evaluation.verdicts(spec, report)
+                evidence["gates"].append(gates.record("evaluated", "fail" if error else "pass",
+                                                      error or (f"{len(pending)} 项待人确认" if pending else None)))
+                if error:
+                    failure_type, evidence["gate"] = "gate", "evaluated"
+                elif pending:
+                    evidence["evaluation"] = {"pending": pending}
             if lost and not error:
                 evidence["result_missing"] = True
             if error:
                 evidence["failure_type"] = failure_type
                 retry = transient(native, error, missing, blocked_line)
             state = "blocked" if error else "accepted"
+            if state == "accepted" and (evidence.get("evaluation") or {}).get("pending"):
+                state = "awaiting_acceptance"   # D46 P3: what the Evaluator left to a person
         with self.db.transaction() as db:
             current = db.execute("SELECT * FROM tasks WHERE run_id=? AND id=?", (rid, task["id"])).fetchone()
             # Old observations cannot complete a newly retried task.
@@ -914,6 +924,9 @@ class Engine:
                                status="dispatching", current_attempt=aid)
             elif current["current_attempt"] == attempt["id"] and active:
                 journal.change(db, "tasks", (rid, task["id"]), journal.WORKER, "task.state", status=state)
+                if state == "awaiting_acceptance":
+                    journal.record(db, rid, "run.awaiting_acceptance", journal.ENGINE, "验收待确认",
+                                   pending=len(evidence["evaluation"]["pending"]))
         if retry:
             return self.update(rid, "ready", None, reason="瞬时失败，自动重试一次")
         self.update(rid, "ready" if state == "accepted" else state, error, actor=journal.WORKER)

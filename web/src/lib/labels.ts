@@ -41,6 +41,7 @@ export const EVENT_LABELS: Record<string, string> = {
   "recovery.state": "协调者记录更新", "plan.applied": "KiroCrew 规划已应用", "run.resumed": "条件满足，自动继续",
   "run.awaiting_confirmation": "计划待确认", "command.confirm": "收到确认请求", "run.confirmed": "已确认计划",
   "run.publish_auto": "自动发布", "run.publish_policy": "发布设置已修改", "run.published": "已发布到仓库", "run.repository": "已新建仓库",
+  "run.awaiting_acceptance": "验收待确认", "run.accepted": "已确认验收", "command.accept": "收到验收确认",
   "run.credentials": "凭证已更换", "run.downloaded": "已下载源码", "run.planning": "需求已改，原规划已过期",
   "run.budget": "等待时间不计入预算", "session.reopen": "原生会话已重新打开", "app.started": "远程预览已启动",
   "app.stopped": "远程预览已停止", "approval.answered": "已答复工具审批", "attempt.checking": "正在运行检查命令",
@@ -57,7 +58,7 @@ export const ROLE_LABELS: Record<string, string> = {
 export const TIMELINE_HIDDEN = new Set(["task.state", "recovery.state"]);
 
 const ADMIN_VERBS: Record<string, string> = {
-  confirm: "确认计划", stop: "停止", close: "关闭", delete: "删除", reopen: "重新打开", continue: "续作", recover: "请求诊断", "assign-worker": "分配 Worker",
+  confirm: "确认计划", accept: "确认验收", stop: "停止", close: "关闭", delete: "删除", reopen: "重新打开", continue: "续作", recover: "请求诊断", "assign-worker": "分配 Worker",
 };
 
 /** An event's title; an administrator acting on someone else's Session is named (spec §3.4). */

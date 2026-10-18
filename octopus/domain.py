@@ -20,7 +20,7 @@ TOOLS = ("kiro", "claude", "codex", "opencode")
 ROLES = {"viewer": 1, "runner": 2, "editor": 3, "owner": 4}
 ROLE_LABELS = {"viewer": "查看", "runner": "运行", "editor": "编辑", "owner": "所有者"}
 # Statuses in which an open Session is not running on its Worker (it can be continued).
-SETTLED = ("failed", "blocked", "completed", "stopped", "waiting_worker", "awaiting_confirmation")
+SETTLED = ("failed", "blocked", "completed", "stopped", "waiting_worker", "awaiting_confirmation", "awaiting_acceptance")
 # What the admin environment listing shows of a live /health (no boundary or principal hashes).
 HEALTH_FIELDS = ("isolation", "crew_entry", "crew_origin", "version", "tool_auth")
 
@@ -901,7 +901,7 @@ class Service:
                             "selection": {k: v for k, v in resolved["selection"].items() if k != "steps"},
                             "match_mode": resolved["mode"], "match_reason": resolved["reason"]}
                 snapshot.update(recovery=policy(body.get("recovery")) if design is None else policy({"enabled": False}),
-                                execution_contract=3 if design is None else 1)
+                                execution_contract=4 if design is None else 1)   # D46 P3: the Evaluator gate
                 if design is None:   # D44: confirm = wait before the first working task
                     snapshot["admission"] = body.get("admission") or self.default_admission
                 if "publish" in body:   # D47: the user's own word on publishing comes first
@@ -1677,6 +1677,13 @@ class Service:
             return {"title": "发布到新仓库待确认", "detail": f"需求要求新建仓库 {name}，平台不会自动创建。",
                     "action": "在会话页核对 owner、仓库名与凭证后点「新建仓库并发布」；Coding Agent 经用户同意后用 octopus_publish "
                               "（repository、credential）。", "task_id": None}
+        if run["status"] == "awaiting_acceptance":   # D46 P3
+            task = next((t for t in run["tasks"] if t["status"] == "awaiting_acceptance"), None)
+            pending = ((((task or {}).get("attempts") or [{}])[-1].get("evidence") or {}).get("evaluation") or {}).get("pending") or []
+            return {"title": "验收待确认",
+                    "detail": "Evaluator 判为需要人判断：" + "；".join(f"{p['item']}（{p['evidence']}）" for p in pending[:5]),
+                    "action": "核对后在会话页点「确认通过」，或续作返工；Coding Agent 经用户同意后用 octopus_accept。",
+                    "task_id": task["id"] if task else None}
         if run["status"] == "awaiting_confirmation":
             planned = (run.get("planning") or {}).get("applied")
             first = next((t for t in run["tasks"] if t["status"] == "pending"), None)
@@ -1747,7 +1754,8 @@ class Service:
                 "task_name": task["spec"]["name"] if task else None}
 
     def operate(self, actor, rid, action, body):
-        require(action in {"continue", "recover", "stop", "close", "reopen", "delete", "assign-worker", "confirm"}, "不支持的操作")
+        require(action in {"continue", "recover", "stop", "close", "reopen", "delete", "assign-worker", "confirm", "accept"},
+                "不支持的操作")
         with self.db.transaction() as db:
             run = run_access(db, actor, rid, owner=action == "delete")
             try:
@@ -1755,7 +1763,7 @@ class Service:
                 oversight = False
             except Error:
                 oversight = True   # allowed only as an elevated admin (A2): audited
-            if run["team_id"] and action in {"continue", "recover", "reopen", "assign-worker", "confirm"}:
+            if run["team_id"] and action in {"continue", "recover", "reopen", "assign-worker", "confirm", "accept"}:
                 active_team(db, run["team_id"])   # an archived Team's Sessions stay readable and stoppable (P3)
             require(action not in {"continue", "recover"} or json.loads(run["snapshot"]).get("purpose") != "workflow_design",
                     "工作流建议请按新需求重新生成；原建议保留作为证据", 409, "invalid_state")
@@ -1873,6 +1881,21 @@ class Service:
                             "此 Session 不在等待确认", 409, "invalid_state")
                     confirm_plan(db, rid, who, actor, "confirm")
                     restart_budget(db, rid, who)   # the user's word allows the automatic work from here (D42)
+                    fields.update(desired="active", status="ready", error=None)
+                elif action == "accept":   # D46 P3: the person's word on what the Evaluator left pending
+                    require(run["status"] == "awaiting_acceptance" and run["lifecycle"] == "open",
+                            "此 Session 不在等待验收确认", 409, "invalid_state")
+                    task = db.execute("SELECT * FROM tasks WHERE run_id=? AND status='awaiting_acceptance' ORDER BY ordinal LIMIT 1",
+                                      (rid,)).fetchone()
+                    require(task is not None and task["current_attempt"], "没有待确认的验收", 409, "invalid_state")
+                    attempt = db.execute("SELECT * FROM attempts WHERE id=?", (task["current_attempt"],)).fetchone()
+                    evidence = json.loads(attempt["evidence"] or "{}")
+                    evidence["evaluation"] = {**(evidence.get("evaluation") or {}), "accepted_at": time.time(),
+                                              "accepted_by": {"id": actor["id"], "username": actor.get("username")}}
+                    journal.change(db, "attempts", attempt["id"], who, "run.accepted", status="accepted", evidence=dumps(evidence),
+                                   updated=time.time())
+                    journal.change(db, "tasks", (rid, task["id"]), who, "task.state", status="accepted")
+                    restart_budget(db, rid, who)   # the person's word allows the automatic work from here (as confirm)
                     fields.update(desired="active", status="ready", error=None)
                 elif action == "reopen":
                     require(run["lifecycle"] == "closed", "只有已关闭的 Session 可重新打开", 409, "invalid_state")

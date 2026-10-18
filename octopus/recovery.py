@@ -70,7 +70,8 @@ def outcome(text):
     for item in raw[:30]:
         name = item.get("item") if isinstance(item, dict) else None
         result = str(item.get("result", "")).strip().lower() if isinstance(item, dict) else ""
-        if not (isinstance(name, str) and name.strip()) or result not in {"pass", "fail", "n/a"}:
+        # pending: an item that needs a person's judgement (D46 P3, the Evaluator's 「验收待确认」)
+        if not (isinstance(name, str) and name.strip()) or result not in {"pass", "fail", "n/a", "pending"}:
             notes.append(f"忽略无效的验收结果：{dumps(item)[:80]}")
             continue
         entry = {"item": name.strip()[:500], "result": result}

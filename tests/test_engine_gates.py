@@ -79,7 +79,7 @@ class EngineGateTests(TeamsWorkersCase):
         return {g["name"]: g["status"] for g in evidence.get("gates", [])}
 
     def test_new_sessions_use_the_third_contract(self):
-        self.assertEqual(self.snapshot(self.session([IMPLEMENT]))["execution_contract"], 3)
+        self.assertEqual(self.snapshot(self.session([IMPLEMENT]))["execution_contract"], 4)   # D46 P3
 
     def snapshot(self, rid):
         with self.db.read() as db:
@@ -277,7 +277,7 @@ class EngineGateTests(TeamsWorkersCase):
             db.execute("UPDATE runs SET status='completed' WHERE id=?", (rid,))
         self.service.operate(self.c, rid, "continue", {"request_id": "continue-000001", "expected_version": self.version(rid),
                                                         "task_id": "code", "recovery": {"enabled": True, "max_cycles": 2}})
-        self.assertEqual(self.snapshot(rid)["execution_contract"], 3)
+        self.assertEqual(self.snapshot(rid)["execution_contract"], 4)   # D46 P3
 
     def test_a_later_task_may_not_change_an_accepted_tasks_files_unless_its_paths_say_so(self):
         worker = FakeWorker()
