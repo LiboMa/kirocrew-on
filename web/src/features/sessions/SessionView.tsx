@@ -30,7 +30,7 @@ import { TaskList } from "@/features/sessions/TaskList";
 import { useSessionActions } from "@/features/sessions/useSessionActions";
 import { bindingLabel } from "@/lib/credentials";
 import { usageLine } from "@/lib/usage";
-import { canContinue, canDelete, canMoveToTeam, canRecover, canStop, closeAction, crewEntryReason, deleteReason, directReason, resumeReason, statusText } from "@/lib/session";
+import { canContinue, canDelete, canRecover, canStop, closeAction, crewEntryReason, deleteReason, directReason, resumeReason, statusText } from "@/lib/session";
 
 export function SessionView({ id }: { id: string }) {
   const { allTeams, workflows, workers, me, open } = useConsole();
@@ -160,15 +160,7 @@ export function SessionView({ id }: { id: string }) {
         {resumeReason(run) && <p id="resume-hint" className="text-xs text-muted-foreground">{resumeReason(run)}</p>}
         {crewReason && <p id="crew-entry-hint" className="text-xs text-muted-foreground">{crewReason}</p>}
         {run.placement?.hint && <p id="placement-hint" className="text-xs text-muted-foreground">{run.placement.hint}</p>}
-        {directReason(run) && (
-          <div className="flex flex-wrap items-center gap-2">
-            <p id="direct-hint" className="text-xs text-muted-foreground">{directReason(run)}</p>
-            {canMoveToTeam(run) && (
-              <Button size="sm" variant="outline" onClick={() => open({ kind: "assign", run })} id="move-to-team">
-                <UserCog /> 改派到 Team 的环境</Button>
-            )}
-          </div>
-        )}
+        {directReason(run) && <p id="direct-hint" className="text-xs text-muted-foreground">{directReason(run)}</p>}
         {workers.find((w) => w.id === run.worker_id)?.scope === "shared" && (
           <p id="shared-environment" className="text-xs text-muted-foreground">共享执行环境：环境内会话的 Agent 互相可读，记忆未分隔。</p>
         )}

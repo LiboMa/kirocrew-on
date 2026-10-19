@@ -171,7 +171,7 @@ class TemplateTests(unittest.TestCase):
         installer = (ROOT / "deploy/install/al2023.sh").read_text()
         for package in ("libX11", "libXcomposite", "libXdamage", "libXext", "libXfixes", "libXrandr", "alsa-lib", "atk",
                         "at-spi2-atk", "at-spi2-core", "cairo", "cups-libs", "mesa-libgbm", "pango", "libxcb", "libxkbcommon"):
-            self.assertRegex(installer, r"dnf install -y -q [^\n]*\b" + package + r"\b", package)
+            self.assertRegex(installer, r"dnf install -y -q [^\n]*(?<![\w-])" + re.escape(package) + r"(?![\w-])", package)
 
     def test_role_grants_ssm_bedrock_and_scoped_storage(self):
         role = of_type(self.r, "AWS::IAM::Role")

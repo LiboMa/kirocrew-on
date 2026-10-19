@@ -13,11 +13,6 @@ export function directReason(run: Run): string {
   return directed(run) ? "" : run.permissions?.direct_reason ?? "只有执行边界的主人能在上面下达指令。";
 }
 
-/** A Team owner or an administrator may move a stopped Session off a member's boundary so others can go on (D49 R10). */
-export function canMoveToTeam(run: Run): boolean {
-  return !directed(run) && !!run.team_id && open(run) && resumable(run) && run.permissions?.publish !== false &&
-    ["blocked", "failed", "stopped"].includes(run.status);
-}
 
 export function canContinue(run: Run): boolean {
   return !ACTIVE_STATES.has(run.status) && open(run) && !design(run) && resumable(run) && directed(run);

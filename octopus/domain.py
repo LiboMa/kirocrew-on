@@ -2060,14 +2060,13 @@ class Service:
                     restart_budget(db, rid, who)   # as a continue: the budget counts from the user's request
                     schedule(db, self.db, run, task, attempt, manual=True, actor=who)
                 elif action == "assign-worker":
-                    # D49 R10: a Team owner or an administrator (or its creator) moves a Session that is not running off a
-                    # person's boundary, so that others may go on with it
-                    moving = (run["status"] in {"blocked", "failed", "stopped"} and boundary_owner(db, run) is not None
-                              and body.get("worker_id") != run["worker_id"] and may_publish(db, actor, run))
-                    require(run["lifecycle"] == "open" and (run["status"] == "waiting_worker" or moving),
+                    require(run["status"] == "waiting_worker" and run["lifecycle"] == "open",
                             "运行已分配 Worker 或已关闭", 409, "invalid_state")
                     # The Session's own space, not the operator's (an admin may assign for someone else).
-                    self._worker(db, run["owner_id"], body.get("worker_id"), run["team_id"])
+                    target = self._worker(db, run["owner_id"], body.get("worker_id"), run["team_id"])
+                    # D49 R10: putting the work on a person's own boundary runs it as them: only they may
+                    require(not own(target, target["owner_id"]) or target["owner_id"] == actor["id"],
+                            "只有边界主人能把会话放到自己的执行边界上；其他人可以分配 Team 的环境", 403, "boundary_owner_only")
                     restart_budget(db, rid, who)   # waiting for an environment is not automatic work
                     if run["worker_id"] not in (None, body["worker_id"]):
                         # Another environment has no native parent of this Session: prepare there afresh (P5).

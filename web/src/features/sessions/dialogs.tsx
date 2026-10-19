@@ -83,11 +83,11 @@ export function ContinueDialog({ run, taskId }: { run: Run; taskId?: string }) {
 }
 
 export function AssignWorkerDialog({ run }: { run: Run }) {
-  const { close } = useConsole();
+  const { close, me } = useConsole();
   const refresh = useRefreshRun();
   // Where this Session may move, as the platform answers it for its creator (D49 R4; an administrator may assign, A2).
-  // Moving a stopped Session off a member's boundary (D49 R10) never offers where it already is.
-  const choices = (usePlacement(run.team_id ?? "", run.id).data?.options ?? []).filter((w) => run.status === "waiting_worker" || w.id !== run.worker_id);
+  // The creator's own boundary is theirs to put the work on (D49 R10): others are offered the Team's environment.
+  const choices = (usePlacement(run.team_id ?? "", run.id).data?.options ?? []).filter((w) => !w.own || me.id === run.owner_id);
   const [picked, setWorker] = useState("");
   const worker = picked || choices[0]?.id || "";
   return (

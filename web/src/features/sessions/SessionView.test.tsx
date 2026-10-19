@@ -539,7 +539,9 @@ describe("session detail", () => {
     });
     await userEvent.click(await screen.findByRole("button", { name: "分配 Worker" }));
     const dialog = await screen.findByRole("dialog");
-    expect(dialog).toHaveTextContent("dev-own");
+    // D49 R10: dev-own is the owner's boundary — only they put the work on it; admin-own is not the Session's space
+    await waitFor(() => expect(dialog).toHaveTextContent("此空间尚无可用 Worker"));
+    expect(dialog).not.toHaveTextContent("dev-own");
     expect(dialog).not.toHaveTextContent("admin-own");
   });
 
@@ -676,22 +678,24 @@ describe("session detail", () => {
     expect(asked).toContain("?run_id=run-m2");
   });
 
-  test("on another member's boundary the instructions stay with its owner, and it can be moved to the Team (D49 R10)", async () => {
-    const run = makeRun({ id: "run-r10", status: "blocked", version: 3, worker_id: "alice-b", team_id: "team-1", native_parent: "octopus-x",
+  test("on another member's boundary the instructions stay with its owner (D49 R10)", async () => {
+    open(makeRun({ id: "run-r10", status: "blocked", version: 3, worker_id: "alice-b", team_id: "team-1", native_parent: "octopus-x",
       permissions: { operate: true, delete: false, native: false, publish: true, direct: false,
-        direct_reason: "此会话在 alice 的执行边界上运行：只有边界主人能在上面下达指令" } } as Partial<Run>);
-    const calls = open(run, { "GET /placement": { space: "team-1", hint: null, default: null,
-      options: [{ id: "alice-b", name: "alice", scope: "dedicated", own: true, isolation: "dedicated", models: {} },
-        { id: "teamenv", name: "研发组环境", scope: "dedicated", own: false, isolation: "dedicated", models: {} }] },
-      "POST /runs/run-r10/assign-worker": { id: "run-r10", version: 4 } });
+        direct_reason: "此会话在 alice 的执行边界上运行：只有边界主人能在上面下达指令" } } as Partial<Run>));
     expect(await screen.findByText(/只有边界主人能在上面下达指令/, { selector: "#direct-hint" })).toBeInTheDocument();
     expect(screen.getByRole("button", { name: /续作/ })).toBeDisabled();
-    await userEvent.click(screen.getByRole("button", { name: "改派到 Team 的环境" }));
+    expect(screen.queryByRole("button", { name: /改派/ })).toBeNull();   // a move left the work behind (R10 review)
+  });
+
+  test("only its creator is offered their own boundary for a waiting Session (D49 R10)", async () => {
+    const waiting = makeRun({ id: "run-w2", status: "waiting_worker", version: 1, team_id: "team-1", owner_id: "u2" });
+    open(waiting, { "GET /placement": { space: "team-1", hint: null, default: null,
+      options: [{ id: "alice-b", name: "alice", scope: "dedicated", own: true, isolation: "dedicated", models: {} },
+        { id: "teamenv", name: "研发组环境", scope: "dedicated", own: false, isolation: "dedicated", models: {} }] } });
+    await userEvent.click(await screen.findByRole("button", { name: "分配 Worker" }));
     const dialog = await screen.findByRole("dialog");
     await waitFor(() => expect(dialog).toHaveTextContent("研发组环境"));
-    expect(within(dialog).queryByRole("option", { name: /alice/ })).toBeNull();   // not where it already is
-    await userEvent.click(within(dialog).getByRole("button", { name: "开始执行" }));
-    await waitFor(() => expect(calls.find((c) => c.path === "/v1/runs/run-r10/assign-worker")?.body).toMatchObject({ worker_id: "teamenv" }));
+    expect(within(dialog).queryByRole("option", { name: /alice/ })).toBeNull();
   });
 
   test("a Session waiting for a Worker can be assigned one from its space", async () => {

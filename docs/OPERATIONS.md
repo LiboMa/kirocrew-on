@@ -148,9 +148,9 @@ deploy/aws/deploy.sh tunnel --boundary alice       # 该边界的原生 KiroCrew
     记于视图、精简状态与时间线 `run.created`。
   - Team 成员看得到会话的状态、报告、预览与下载；原生 KiroCrew 入口只开放给边界主人（`permissions.native_reason` 说明原因）。
   - 在某人边界上的会话只有边界主人下达指令（R10）：续作、诊断、确认计划、补充说明与答复批准请求对其他成员与管理员返回 403
-    `boundary_owner_only`（控制台停用并写明原因，`permissions.direct_reason`）；他们可以查看、停止、关闭、发布与确认验收。需要接手时，
-    创建者、Team owner 或管理员在会话页「改派到 Team 的环境」（blocked / failed / stopped 的会话；工作区在新环境重新准备，已完成的任务保留），
-    之后照常续作。
+    `boundary_owner_only`（控制台停用并写明原因，`permissions.direct_reason`）；他们可以查看、停止、关闭、发布与确认验收。把等待执行环境的
+    会话分配到某人的边界也只接受此人（其他人分配 Team 的环境）。停下的会话不改派（新环境会重新克隆，已完成任务的改动留在原边界）：
+    由创建者续作；创建者离开 Team 或边界停用后会话进入等待执行环境，再分配 Team 的环境。
     Team 会话的 lessons 存于提交者的 Gateway、按 Team 空间标识区分；用量计入提交者的 kiro 账号。
 - 以后（第 3 期）：每个边界的公开原生入口、跨主机放置、空闲停 Gateway、退役共享 `personal`、按人的用量视图。
 

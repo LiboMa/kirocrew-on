@@ -53,6 +53,7 @@ KiroCrew ON 在远端执行开发任务：KiroCrew 的 Kiro Agent 先识别意�
   `receiving-code-review`、`frontend-design`）：Agent 开始前读取并按其方法工作，如界面任务带 `frontend-design`、实现任务带
   `test-driven-development`。由 KiroCrew 规划时规划者自己推荐，不必替它写。
 - `worker_id` 通常省略：平台先用你自己的执行边界（Team 会话也一样），没有时用 Team 的环境或空间内唯一的环境；返回的 `placement.hint`（如「你还没有自己的执行边界…」）原样告诉用户。想先知道会在哪执行，用 `octopus_environments`（`default: true` 的那个）。
+- 403 `boundary_owner_only`：会话在他人的执行边界上运行（Agent 以此人的身份执行），只有边界主人能续作、诊断、确认计划、补充说明或批准；原样告诉用户，请会话创建者操作，不要换别的工具或参数重试。
 - 提交到 Team 返回 409 `team_without_worker`（该 Team 尚未分配执行环境）或 `environment_disabled`（执行环境已停用）时，
   原样告诉用户需要平台管理员在控制台分配或启用执行环境；也可以建议改在个人空间提交。不要换一个 Team 重试。
 - 返回 409 `team_archived` 时该 Team 已归档：不能提交新会话或续作，已有会话仍可查看与停止；告诉用户需要平台管理员恢复，或改在其他空间提交。

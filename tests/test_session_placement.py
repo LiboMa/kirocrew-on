@@ -267,22 +267,28 @@ class DirectionTests(PlacementCase):
         self.operate("bob", rid, "stop")
         self.assertEqual(self.row(rid)["desired"], "stop")
 
-    def test_the_team_owner_moves_it_to_the_teams_environment_then_anyone_continues(self):
+    def test_a_stopped_session_stays_where_it_is(self):   # R10 review: a move left it stuck and its work behind
         rid = self.blocked()
-        self.operate("dave", rid, "assign-worker", worker_id="teamenv")
-        row = self.row(rid)
-        self.assertEqual((row["worker_id"], row["native_parent"], row["status"]), ("teamenv", None, "preparing"))
-        with self.db.transaction() as db:
-            db.execute("UPDATE runs SET status='blocked', native_parent='octopus-y' WHERE id=?", (rid,))
-        self.operate("bob", rid, "continue", task_id="code")
-
-    def test_a_running_session_is_not_moved_away(self):
-        rid = self.blocked()
-        with self.db.transaction() as db:
-            db.execute("UPDATE runs SET status='running' WHERE id=?", (rid,))
         with self.assertRaises(Error) as caught:
             self.operate("dave", rid, "assign-worker", worker_id="teamenv")
         self.assertEqual(caught.exception.status, 409)
+        self.assertEqual(self.row(rid)["worker_id"], "alice-b")
+
+    def test_only_the_owner_puts_work_on_their_boundary(self):   # R10 review: waiting, any member could pick alice-b
+        rid = self.blocked()
+        with self.db.transaction() as db:
+            db.execute("UPDATE runs SET status='waiting_worker', worker_id=NULL, native_parent=NULL WHERE id=?", (rid,))
+        for person in ("bob", "dave", "admin"):
+            with self.subTest(person=person), self.assertRaises(Error) as caught:
+                self.operate(person, rid, "assign-worker", worker_id="alice-b")
+            self.assertEqual(caught.exception.code, "boundary_owner_only")
+        self.operate("dave", rid, "assign-worker", worker_id="teamenv")   # the Team's environment: as before
+        self.assertEqual(self.row(rid)["worker_id"], "teamenv")
+        other = self.blocked()
+        with self.db.transaction() as db:
+            db.execute("UPDATE runs SET status='waiting_worker', worker_id=NULL, native_parent=NULL WHERE id=?", (other,))
+        self.operate("alice", other, "assign-worker", worker_id="alice-b")   # she herself may
+        self.assertEqual(self.row(other)["worker_id"], "alice-b")
 
     def test_the_console_is_told(self):
         rid = self.blocked()

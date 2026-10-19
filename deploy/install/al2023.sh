@@ -28,7 +28,7 @@ trap cleanup EXIT
 log "系统依赖"
 dnf install -y -q git tar gzip xz jq unzip make gcc gcc-c++ nginx "$PYTHON_PACKAGE" "$PYTHON_PACKAGE-pip" "$PYTHON_PACKAGE-devel"
 # What the Agents' Playwright Chromium needs to open a page (reviews, frontend checks; EC2 2026-10-19 lacked all 16).
-dnf install -y -q libX11 libXcomposite libXdamage libXext libXfixes libXrandr alsa-lib atk at-spi2-atk at-spi2-core cairo cups-libs mesa-libgbm pango libxcb libxkbcommon
+dnf install -y -q nss nspr libdrm libX11 libXcomposite libXdamage libXext libXfixes libXrandr alsa-lib atk at-spi2-atk at-spi2-core cairo cups-libs mesa-libgbm pango libxcb libxkbcommon
 PYTHON="$(command -v "$PYTHON_PACKAGE")"
 merge_hosts() {  # add hosts to platform.toml allowed_hosts, keeping the entries already there
   "$PYTHON" - "$@" <<'PY'
