@@ -405,6 +405,10 @@ def compact_status(session, events):
             value["watchdog"] = evidence["watchdog"]["reason"]
         if evidence.get("switched_from"):   # D38: the Coordinator recommended this tool instead
             value["switched_from"] = evidence["switched_from"]
+        if evidence.get("continued"):   # D46 P5a: this rework resumed the task's conversation
+            value["continued"] = True
+        elif evidence.get("continue_refused"):
+            value["continue_refused"] = evidence["continue_refused"]
         if evidence.get("candidate"):
             candidate = evidence["candidate"]
             value["candidate"] = {"sha": str(candidate.get("sha", ""))[:12],

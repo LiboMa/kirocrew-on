@@ -69,6 +69,9 @@ def _attempt(attempt, spec):
         "requested": f"{spec.get('tool') or '—'} / {spec.get('model') or 'auto'}",
         "actual": f"{evidence.get('actual_backend') or '—'} / {evidence.get('actual_model') or '—'}",
         "watchdog": _line((evidence.get("watchdog") or {}).get("reason")) or None,
+        "continued": ("续接上一轮（保留上下文）" if evidence.get("continued")
+                      else f"续接被拒，已重新派发：{_line(evidence['continue_refused'], 80)}" if evidence.get("continue_refused")
+                      else None),   # D46 P5a
         "switched": (f"{_line(switched.get('tool'), 40)} / {_line(switched.get('model'), 80)} → "
                      f"{spec.get('tool') or '—'} / {spec.get('model') or 'auto'}（协调者推荐）：{_line(switched.get('reason'))}")
                     if isinstance(switched, dict) else None,
@@ -183,6 +186,8 @@ def markdown(view, now=None):
                 f"- 请求：{_md(final['requested'])}；实际：{_md(final['actual'])}"]
         if final["switched"]:
             out.append(f"- 换工具：{_md(final['switched'])}")
+        if final["continued"]:
+            out.append(f"- 返工：{_md(final['continued'])}")
         if final["watchdog"]:
             out.append(f"- 看门狗：{_md(final['watchdog'])}")
         if contract["deliverables"]:
@@ -266,6 +271,8 @@ def html(view, now=None):
                  f"请求：{e(final['requested'])}；实际：{e(final['actual'])}"]
         if final["switched"]:
             items.append(f"换工具：{e(final['switched'])}")
+        if final["continued"]:
+            items.append(f"返工：{e(final['continued'])}")
         if final["watchdog"]:
             items.append(f"看门狗：{e(final['watchdog'])}")
         contract = final["contract"]

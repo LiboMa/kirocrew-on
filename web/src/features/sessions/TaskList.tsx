@@ -68,6 +68,9 @@ export function TaskList({ run, onContinue }: { run: Run; onContinue: (taskId: s
                               + `换为 ${attempt.spec.tool} / ${attempt.spec.model}：${attempt.evidence.switched_from.reason ?? "未说明原因"}`} />
                           )}
                           {attempt.evidence.watchdog?.reason && <Meta label="看门狗" value={attempt.evidence.watchdog.reason} />}
+                          {attempt.evidence.continued ? <Meta label="返工" value="续接上一轮的对话（保留上下文）" />
+                            : attempt.evidence.continue_refused
+                              ? <Meta label="返工" value={`续接被拒，已重新派发：${attempt.evidence.continue_refused}`} /> : null}
                           <Meta label="实际后端" value={attempt.evidence.actual_backend} />
                           <Meta label="实际模型" value={attempt.evidence.actual_model} />
                           <Meta label="实际 Effort" value={attempt.evidence.actual_effort} />

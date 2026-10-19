@@ -119,6 +119,17 @@ describe("session detail", () => {
     expect(screen.getByText("由协调者从 opencode / auto 换为 claude / auto：opencode 不可用")).toBeInTheDocument();
   });
 
+  test("a rework says whether it continued its conversation (D46 P5a)", async () => {
+    const task = blocked.tasks[0];
+    const attempt = task.attempts![0];
+    const continued = { ...attempt, evidence: { ...attempt.evidence, continued: { conversation: "aaaa1111", from: "att-0" } } };
+    const refused = { ...attempt, id: "att-2", number: 2, evidence: { ...attempt.evidence, continue_refused: "conversation_gone" } };
+    open({ ...blocked, tasks: [{ ...task, attempts: [continued, refused] }, blocked.tasks[1]] } as Run);
+    await userEvent.click(await screen.findByText("执行证据与历史 Attempt"));
+    expect(screen.getByText("续接上一轮的对话（保留上下文）")).toBeInTheDocument();
+    expect(screen.getByText("续接被拒，已重新派发：conversation_gone")).toBeInTheDocument();
+  });
+
   test("a recovery round that switched tools says so, and a refused switch shows why (D38)", async () => {
     const switched = { action: "switch_tool", target_task_id: "code", tool: "codex", model: "auto", reason: "claude 不可用",
       instructions: "以 codex 重新执行", switched_from: { tool: "claude", model: "auto", effort: "" } };

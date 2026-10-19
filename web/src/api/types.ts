@@ -131,6 +131,9 @@ export interface AttemptEvidence {
   watchdog?: { reason?: string; unsupported?: boolean; [key: string]: unknown } | null;
   /** The Coordinator recommended this Attempt's tool instead of the one that failed (D38 §3.3). */
   switched_from?: { tool: string; model: string; effort: string; reason?: string | null; by: string; recovery: number } | null;
+  /** D46 P5a: this rework continued the task's native conversation, or a refused continue was spawned afresh. */
+  continued?: { conversation: string; from: string } | null;
+  continue_refused?: string | null;
   /** Verify commands still running (D37 §5). */
   checks?: { job: string; started: number; commands: number } | null;
   [key: string]: unknown;

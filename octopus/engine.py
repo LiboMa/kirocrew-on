@@ -67,6 +67,22 @@ def handoff(row):
     return item
 
 
+def continuation(previous, attempt, spec, repair, changed):
+    """D46 P5a: a rework the platform arranged (``repair``) resumes the task's previous native conversation when that
+    Attempt ran natively with the same tool, model and effort, this one is neither the Coordinator's switch nor the
+    automatic retry, and the user did not continue the Session since (``changed``). The conversation is the chain's
+    first: the one the first Attempt started."""
+    if not repair or changed or not previous or not previous.get("native_id"):
+        return None
+    evidence = json.loads(attempt.get("evidence") or "{}")
+    if evidence.get("switched_from") or evidence.get("transient_retry_of"):
+        return None
+    before = json.loads(previous.get("spec") or "{}")
+    if any((before.get(k) or "") != (spec.get(k) or "") for k in ("tool", "model", "effort")):
+        return None
+    chain = (json.loads(previous.get("evidence") or "{}").get("continued") or {}).get("conversation")
+    return {"conversation": chain or previous["native_id"], "from": previous["id"]}
+
 class Engine:
     def __init__(self, database, request=worker_request, workers=1, retry_unavailable=0.0, clock=time.monotonic,
                  credentials_key_file=None, credentials_private_hosts=(), wall=time.time, poll_backoff=False):
@@ -237,6 +253,20 @@ class Engine:
                 "r.status IN ('preparing','ready','running','waiting_approval','dispatch_unknown','stopping','reopening','diagnosing')",
                 (rid,)).fetchone()
         return dict(row) if row else None
+    @staticmethod
+    def _continuation(db, run, task, attempt, repair, config):
+        """The conversation a platform rework resumes (D46 P5a), or None for a fresh spawn."""
+        if not repair or json.loads(run["snapshot"]).get("execution_contract", 1) < 4 \
+                or not (config.get("capabilities") or {}).get("continue"):
+            return None
+        previous = db.execute("SELECT * FROM attempts WHERE run_id=? AND task_id=? AND number<? AND native_id IS NOT NULL "
+                              "ORDER BY number DESC LIMIT 1", (run["id"], task["id"], attempt["number"])).fetchone()
+        if previous is None:
+            return None
+        changed = any(json.loads(r["content"]).get("kind") == "continued" for r in db.execute(
+            "SELECT content FROM revisions WHERE run_id=? AND created>?", (run["id"], previous["created"])))
+        return continuation(dict(previous), dict(attempt), json.loads(attempt["spec"]), repair, changed)
+
     def _knowledge_attempt(self, run, attempt_id):
         with self.db.read() as db:
             row = db.execute("SELECT task_id FROM attempts WHERE id=?", (attempt_id,)).fetchone()
@@ -873,6 +903,7 @@ class Engine:
                 "SELECT t.id,t.spec,a.result,a.evidence FROM tasks t JOIN attempts a ON a.id=t.current_attempt "
                 "WHERE t.run_id=? AND t.ordinal<? AND t.status='accepted' ORDER BY t.ordinal", (rid, task["ordinal"]))]
             repair = recovery.feedback(db, run, attempt)
+            resume = self._continuation(db, run, task, attempt, repair, config) if attempt["status"] == "dispatching" else None
             latest = self._head_candidate(db, rid)
             start = self._task_start(db, rid, task["id"])
         spec = json.loads(attempt["spec"])
@@ -918,6 +949,7 @@ class Engine:
                 **({"stage": "planning"} if planning.planner_task(task["id"], snapshot) else {}),
                 **({"quality": True} if snapshot.get("execution_contract", 1) >= 2 else {}),
                 **({"repair": repair} if repair else {}),
+                **({"continue": resume} if resume else {}),   # D46 P5a: the rework resumes its conversation
                 **({"candidate": {"sha": latest["sha"], "parent": latest["parent"]}}
                    if gated and spec.get("kind") == "review" and latest else {}),
                 **({"design": snapshot["design"]} if snapshot.get("purpose") == "workflow_design" else {}),
@@ -925,11 +957,13 @@ class Engine:
                 **({"lessons": True} if knowledge.applies(snapshot, json.loads(run["source"]), run.get("worker_scope"), config)
                    else {})})
             state = result["status"]
+            resumed = {k: result[k] for k in ("continued", "continue_refused") if result.get(k)}
             with self.db.transaction() as db:
                 journal.change(db, "attempts", attempt["id"], journal.WORKER, "attempt.dispatched",
-                               event={"id": attempt["id"], "task_id": task["id"], "status": state},
+                               event={"id": attempt["id"], "task_id": task["id"], "status": state, **resumed},
                                status=state, native_id=result.get("native_id"), context_hash=result.get("context_hash"),
-                               error=result.get("error"), updated=time.time())
+                               error=result.get("error"), updated=time.time(),
+                               **({"evidence": dumps({**json.loads(attempt["evidence"] or "{}"), **resumed})} if resumed else {}))
                 journal.change_rows(db, "tasks", "run_id=? AND id=? AND current_attempt=? "
                                     "AND EXISTS (SELECT 1 FROM runs WHERE id=? AND desired='active')",
                                     (rid, task["id"], attempt["id"], rid), journal.WORKER, "task.state", status=state)
@@ -954,7 +988,8 @@ class Engine:
         evidence = result.get("evidence", {})
         # An automatic retry and a Coordinator's switch keep their marks through every evidence update (D34 §5.1, D38 §3.3).
         retry_of = prior.get("transient_retry_of")
-        for key in ("transient_retry_of", "switched_from", "watchdog", "approval_seen"):   # marks kept across updates
+        for key in ("transient_retry_of", "switched_from", "watchdog", "approval_seen", "continued",
+                    "continue_refused"):   # marks kept across updates
             if prior.get(key):
                 evidence[key] = prior[key]
         if native.get("done") and not native.get("stopped") and (evidence.get("watchdog") or {}).get("stopping"):
