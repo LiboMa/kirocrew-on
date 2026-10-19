@@ -139,6 +139,15 @@
 - 控制台：任务已完成而没有可沉淀的条目时仍写「Knowledge 任务完成后…」；`steps()` 接受用户提交的 `role: knowledge`（不沉淀）；
   KiroCrew 报告替代了旧条目时，旧的台账行仍为 written；会话删除后其写入的 lessons 只能在 KiroCrew 中删除（没有执行环境级的列表）。
 
+## D50 编码技能包的终审延后项（2026-10-19）
+- 报告：Attempt 证据里的 `skills` 不是列表（如被改坏的 dispatch.json）时 `report._attempt` 抛 TypeError：加 `isinstance(..., list)`。
+- 重新规划的提示最长约 7838 / 8000 字符（各输入取上限时）：技能包再加两三个技能就会超出 Worker 的上限，可为重新规划用精简目录。
+- 任务卡片与 MCP 精简状态显示的是计划的 `skills`（旧 Worker 未交付时也显示）；报告取证据，是实际交付的——OPERATIONS 已写明，可在卡片上区分。
+- `systematic-debugging` 的 SKILL.md 仍有一处「Ask for help」：改编说明已覆盖（写 blocked），可直接替换为平台的说法。
+- 丢失回执的重派发跨 Worker 升级时（请求体多了 `skills`）按请求散列判为 409 conflict：与 `role_cards` 同一个已有问题。
+- 以后（规格 §3）：KiroCrew builtin skill 按后端评估后纳入；返工自动附 `systematic-debugging` / `receiving-code-review`（需负责人认可）；
+  要求交接写明读过的技能（使用证据）。
+
 ## 已知的次要问题（审查延后项）
 - 访问管理第 1 期（审查延后项）：预览复核按账号的管理员身份而非签发 Token 的 scope
   （≤ 10 分钟）；被降级的管理员仍能签发含 admin 的 Token（降级期间无效）；「全部会话」中已停用所有者显示原始 id、选中自己不在的 Team
