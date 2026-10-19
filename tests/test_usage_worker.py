@@ -24,7 +24,8 @@ class UsageWorkerTests(unittest.TestCase):
         self.tmp = tempfile.TemporaryDirectory()
         self.addCleanup(self.tmp.cleanup)
         self.node = Worker(Path(self.tmp.name) / "worker", "x" * 40, crew_home=Path(self.tmp.name) / "crew")
-        self.calls, self.runs, self.turns, self.turns_error = [], {}, [], None
+        self.calls, self.runs, self.turns, self.turns_error, self.slots = [], {}, [], None, []
+        self.node.usage_wait = 0
 
         def native(path, body=None, method=None, timeout=None, headers=None):
             self.calls.append(path)
@@ -44,7 +45,11 @@ class UsageWorkerTests(unittest.TestCase):
             if path.startswith("/api/usage/turns"):
                 if self.turns_error:
                     raise self.turns_error
-                return {"slot": "subagent:aaaa1111", "days": 2, "turns": self.turns}
+                from urllib.parse import parse_qs, urlsplit
+                slot = parse_qs(urlsplit(path).query)["slot"][0]
+                self.slots.append(slot)
+                rows = self.turns.pop(0) if self.turns and isinstance(self.turns[0], list) else self.turns
+                return {"slot": slot, "days": 2, "turns": [r for r in rows if r.get("slot", "subagent:aaaa1111") == slot]}
             return {"ok": True}
         self.node.native = native
         self.node.prepare({"run_id": RID, "source": {"type": "new"}})
@@ -72,13 +77,34 @@ class UsageWorkerTests(unittest.TestCase):
         self.assertTrue(any(c.startswith("/api/usage/turns?") and "subagent%3Aaaaa1111" in c for c in self.calls))
 
     def test_continued_runs_take_their_own_row(self):
+        # one slot for the conversation; each run's row is written when it ends (the second ran 5000 s later)
         self.turns = [{"ts": iso(STARTED + 190), "model": "m", "input": 1000, "output": 10, "cost": 0.1},
-                      {"ts": iso(STARTED + 5000 + 90), "model": "m", "input": 3000, "output": 30, "cost": 0.3}]
-        self.run_attempt()
+                      {"ts": iso(STARTED + 5000 + 90), "model": "m", "input": 3000, "output": 30, "cost": 0.3},
+                      {"ts": iso(STARTED + 9000), "model": "m", "input": 9, "output": 9, "cost": 9.0}]   # a later run's
+        first = self.run_attempt()
+        self.assertEqual((first["input_tokens"], first["cost_usd"]), (1000, 0.1))
         self.runs["bbbb2222"] = {"started": STARTED + 5000, "elapsed": 100.0, "credits": 0.0}
         usage = self.run_attempt(SECOND, "bbbb2222", **{"continue": {"conversation": "aaaa1111", "from": FIRST}})
         self.assertEqual((usage["input_tokens"], usage["cost_usd"]), (3000, 0.3))
-        self.assertTrue(any("subagent%3Aaaaa1111" in c for c in self.calls if c.startswith("/api/usage/turns?")))
+        self.assertEqual(self.slots, ["subagent:aaaa1111", "subagent:aaaa1111"])   # the conversation's, not bbbb2222
+
+    def test_a_row_written_just_after_the_run_ends_is_waited_for(self):
+        import time
+        now = time.time()
+        self.runs["aaaa1111"] = {"started": now - 30, "elapsed": 29.0, "credits": 0.0}
+        row = {"ts": iso(now - 1), "model": "m", "input": 500, "output": 5, "cost": 0.05}
+        self.turns = [[], [row]]   # not there yet at the first look
+        usage = self.run_attempt()
+        self.assertEqual(usage["input_tokens"], 500)
+        self.assertEqual(len(self.slots), 2)
+
+    def test_huge_numbers_never_stop_the_attempt_being_judged(self):
+        self.turns = [{"ts": iso(STARTED + 10), "model": "m", "input": 10 ** 400, "output": 3, "cost": 10 ** 400}]
+        self.runs["aaaa1111"] = {"started": STARTED, "elapsed": 10 ** 400, "credits": 10 ** 400}
+        usage = self.run_attempt()
+        self.assertNotIn("cost_usd", usage)
+        self.assertNotIn("input_tokens", usage)
+        self.assertEqual(usage["output_tokens"], 3)
 
     def test_without_a_row_tokens_are_unavailable(self):
         self.turns = [{"ts": iso(STARTED - 3600), "model": "m", "input": 5, "output": 5, "cost": 0.01}]   # another run's

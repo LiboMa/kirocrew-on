@@ -1035,6 +1035,8 @@ class Worker:
     USAGE_ROW = {"input": "input_tokens", "output": "output_tokens", "cache_read": "cache_read_tokens",
                  "cache_create": "cache_write_tokens"}
 
+    usage_wait = 1.5   # seconds between looks for a usage row that KiroCrew writes just after a run ends
+
     def _usage(self, folder, dispatch, native, state):
         """What a finished run used (D46 P6a): Kiro credits, wall time and turns from the run; tokens, cost and the model
         from KiroCrew's usage row for it (one per run, written when it ends, on the conversation's slot). Read once and
@@ -1045,46 +1047,69 @@ class Worker:
                 return json.loads(saved.read_text())
             except ValueError:
                 pass
+        try:
+            usage = self._read_usage(dispatch, native, state)
+        except Exception:   # best effort: never what decides an Attempt
+            usage = {"tokens": "unavailable"}
+        try:
+            write(saved, usage)
+        except OSError:
+            pass
+        return usage
 
-        def number(value):
-            return float(value) if isinstance(value, (int, float)) and not isinstance(value, bool) \
-                and math.isfinite(value) and value >= 0 else None
-        usage = {}
+    @staticmethod
+    def _number(value):
+        if isinstance(value, bool) or not isinstance(value, (int, float)):
+            return None
+        try:
+            value = float(value)
+        except OverflowError:
+            return None
+        return value if math.isfinite(value) and value >= 0 else None
+
+    def _read_usage(self, dispatch, native, state):
+        number, usage = self._number, {}
         for key, name in (("credits", "credits"), ("elapsed", "seconds")):
             if number(native.get(key)) is not None:
                 usage[name] = round(number(native[key]), 4)
         turns = native.get("turns", state.get("turns"))
-        if isinstance(turns, int) and not isinstance(turns, bool) and turns >= 0:
+        if isinstance(turns, int) and not isinstance(turns, bool) and 0 <= turns < 10 ** 9:
             usage["turns"] = turns
         started = number(native.get("started")) or number(state.get("started"))
         conversation = (dispatch.get("continued") or {}).get("conversation") or dispatch["native_id"]
+        end = started + usage.get("seconds", 0) + 300 if started else None
+        # KiroCrew writes the row in the background as the run ends, so it can trail the run's `done` by a moment.
+        recent = started is not None and time.time() - (started + usage.get("seconds", 0)) < 20
         row = None
-        try:
-            rows = self.native("/api/usage/turns?" + urlencode({"slot": "subagent:" + conversation, "days": 2})).get("turns")
-            end = started + usage.get("seconds", 0) + 300 if started else None
+        for look in range(3 if recent else 1):
+            if look:
+                time.sleep(self.usage_wait)
+            try:
+                rows = self.native("/api/usage/turns?" + urlencode({"slot": "subagent:" + conversation, "days": 2})).get("turns")
+            except Exception:   # an older Gateway or a refusal: the run's own numbers still stand
+                break
             mine = []
             for item in rows if isinstance(rows, list) else []:
                 try:
                     at = datetime.fromisoformat(str(item.get("ts"))).timestamp()
-                except (ValueError, AttributeError):
+                except (ValueError, AttributeError, OverflowError):
                     continue
                 if started is None or started - 5 <= at <= end:
                     mine.append((at, item))
-            row = max(mine, key=lambda pair: pair[0])[1] if mine else None
-        except Exception:   # best effort (an older Gateway, a refusal, a broken row): the run's own numbers still stand
-            row = None
+            if mine:
+                row = max(mine, key=lambda pair: pair[0])[1]
+                break
         if row is None:
             usage["tokens"] = "unavailable"
-        else:
-            for key, name in self.USAGE_ROW.items():
-                value = row.get(key)
-                if isinstance(value, int) and not isinstance(value, bool) and value >= 0:
-                    usage[name] = value
-            if number(row.get("cost")) is not None:
-                usage["cost_usd"] = round(number(row["cost"]), 6)
-            if isinstance(row.get("model"), str) and row["model"]:
-                usage["model"] = row["model"][:120]
-        write(saved, usage)
+            return usage
+        for key, name in self.USAGE_ROW.items():
+            value = row.get(key)
+            if isinstance(value, int) and not isinstance(value, bool) and 0 <= value < 10 ** 15:
+                usage[name] = value
+        if number(row.get("cost")) is not None:
+            usage["cost_usd"] = round(number(row["cost"]), 6)
+        if isinstance(row.get("model"), str) and row["model"]:
+            usage["model"] = row["model"][:120]
         return usage
 
     @staticmethod
