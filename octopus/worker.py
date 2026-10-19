@@ -1,10 +1,12 @@
 """A worker colocated with ONE trusted execution boundary and its native Crew Gateway."""
+from datetime import datetime
 import hashlib
 import gzip
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 import hmac
 import io
 import json
+import math
 import os
 from pathlib import Path
 import re
@@ -1030,6 +1032,61 @@ class Worker:
             write(record, value)
             return value
 
+    USAGE_ROW = {"input": "input_tokens", "output": "output_tokens", "cache_read": "cache_read_tokens",
+                 "cache_create": "cache_write_tokens"}
+
+    def _usage(self, folder, dispatch, native, state):
+        """What a finished run used (D46 P6a): Kiro credits, wall time and turns from the run; tokens, cost and the model
+        from KiroCrew's usage row for it (one per run, written when it ends, on the conversation's slot). Read once and
+        kept in the Attempt's folder; anything unreadable is left out and never changes the verdict."""
+        saved = folder / "usage.json"
+        if saved.is_file() and not saved.is_symlink():
+            try:
+                return json.loads(saved.read_text())
+            except ValueError:
+                pass
+
+        def number(value):
+            return float(value) if isinstance(value, (int, float)) and not isinstance(value, bool) \
+                and math.isfinite(value) and value >= 0 else None
+        usage = {}
+        for key, name in (("credits", "credits"), ("elapsed", "seconds")):
+            if number(native.get(key)) is not None:
+                usage[name] = round(number(native[key]), 4)
+        turns = native.get("turns", state.get("turns"))
+        if isinstance(turns, int) and not isinstance(turns, bool) and turns >= 0:
+            usage["turns"] = turns
+        started = number(native.get("started")) or number(state.get("started"))
+        conversation = (dispatch.get("continued") or {}).get("conversation") or dispatch["native_id"]
+        row = None
+        try:
+            rows = self.native("/api/usage/turns?" + urlencode({"slot": "subagent:" + conversation, "days": 2})).get("turns")
+            end = started + usage.get("seconds", 0) + 300 if started else None
+            mine = []
+            for item in rows if isinstance(rows, list) else []:
+                try:
+                    at = datetime.fromisoformat(str(item.get("ts"))).timestamp()
+                except (ValueError, AttributeError):
+                    continue
+                if started is None or started - 5 <= at <= end:
+                    mine.append((at, item))
+            row = max(mine, key=lambda pair: pair[0])[1] if mine else None
+        except (crew_api.GatewayError, OSError, ValueError, AttributeError, TypeError):
+            row = None   # an older Gateway or a refusal: the run's own numbers still stand
+        if row is None:
+            usage["tokens"] = "unavailable"
+        else:
+            for key, name in self.USAGE_ROW.items():
+                value = row.get(key)
+                if isinstance(value, int) and not isinstance(value, bool) and value >= 0:
+                    usage[name] = value
+            if number(row.get("cost")) is not None:
+                usage["cost_usd"] = round(number(row["cost"]), 6)
+            if isinstance(row.get("model"), str) and row["model"]:
+                usage["model"] = row["model"][:120]
+        write(saved, usage)
+        return usage
+
     @staticmethod
     def _conversations(run):
         """The native conversations this Session's Attempts started or continued (D46 P5a)."""
@@ -1133,6 +1190,8 @@ class Worker:
             if isinstance(updated, (int, float)) and not isinstance(updated, bool):
                 signal.update(updated_at=updated, idle_seconds=max(0.0, time.time() - updated))
             progress = {"progress": signal}
+        if native.get("done"):
+            evidence["usage"] = self._usage(folder, dispatch, native, state)   # D46 P6a
         return {**dispatch, "native": native, "evidence": evidence, "handoff": handoff_text, **reports, **progress}
 
     def attempt_stop(self, body):
