@@ -208,6 +208,13 @@ class InterfaceTests(PlacementCase):
         self.assertEqual(view["placement"]["kind"], "team")
         self.assertIn("boundary add", view["placement"]["hint"])
 
+    def test_the_skill_lists_a_waiting_sessions_environments_by_run(self):   # final review: team_id gave 404 / 403
+        from pathlib import Path
+        text = (Path(__file__).resolve().parents[1] / "skills/kirocrew-on/SKILL.md").read_text()
+        row = next(line for line in text.splitlines() if line.startswith("| `waiting_worker` |"))
+        self.assertIn("`octopus_environments`（传 `run_id`）", row)
+        self.assertNotIn("Team 会话传 `team_id`", row)
+
     def test_the_route_and_schema(self):
         from octopus.schema import openapi
         from octopus.server import required_scope, server

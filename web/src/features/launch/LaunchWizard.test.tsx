@@ -147,6 +147,24 @@ describe("launch wizard", () => {
     expect(calls.find((c) => c.method === "POST" && c.path === "/v1/runs")?.body).not.toHaveProperty("worker_id");
   });
 
+  test("a Team without an environment still takes a member who has an own boundary (D49 R2, final review)", async () => {
+    const calls = start({ "GET /teams": [{ id: "team-1", name: "平台组", role: "owner", created: 1, members: [], environment: null }],
+      "GET /placement": (_b: unknown, url: URL) => url.searchParams.get("team_id") === "team-1"
+        ? { space: "team-1", hint: null, default: { id: "b-own", name: "owner", scope: "dedicated", placement: "own" },
+          options: [{ id: "b-own", name: "owner", scope: "dedicated", own: true, isolation: "dedicated", models: {} }] }
+        : { space: "personal", hint: null, default: null, options: [] } });
+    const dialog = await openWizard();
+    await userEvent.selectOptions(within(dialog).getByLabelText("执行空间"), "team-1");
+    await waitFor(() => expect(within(within(dialog).getByLabelText("执行 Worker")).getAllByRole("option")[0])
+      .toHaveTextContent("自动：将在 owner 执行"));
+    expect(dialog.querySelector("#space-environment")).toBeNull();
+    await fillNeed(dialog);
+    await next(dialog);
+    expect(within(dialog).queryByRole("alert")).toBeNull();
+    expect(within(dialog).getByRole("radio", { name: /KiroCrew 自动规划/ })).toBeInTheDocument();
+    expect(calls.some((c) => c.path === "/v1/placement")).toBe(true);
+  });
+
   test("changing the space leaves the choice to the platform again (D49)", async () => {
     start({ "GET /workers": [worker] });
     const dialog = await openWizard();

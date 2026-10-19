@@ -16,9 +16,11 @@ import { cn } from "@/lib/utils";
 
 export function LaunchWizard({ seed }: { seed: LaunchSeed }) {
   const { me, space, selected, workers, teams, templates, workflows, close, select } = useConsole();
-  // A Team without an execution environment takes no new Sessions (D28); null means none, absent means an older platform.
+  // A Team with neither an environment nor the submitter's own boundary takes no new Sessions (D28, D49 R2): the platform's
+  // placement says so; until it has answered, the server's own refusal stands.
   const unassigned = (target: string) =>
-    teams.find((t) => t.id === target && (t.environment === null || t.environment?.enabled === false))?.name;
+    target && target === draft.space && placement && !placement.default && !placement.options.length
+      ? teams.find((t) => t.id === target)?.name : undefined;
   const archived = (target: string) => teams.find((t) => t.id === target && !!t.archived)?.name;
   const client = useQueryClient();
   const workflowMode = seed.mode === "workflow";
