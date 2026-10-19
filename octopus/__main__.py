@@ -80,6 +80,7 @@ def build_parser(settings, environ=None):
     boot.add_argument("--worker-url", required=True)
     boot.add_argument("--token-file", required=True)
     boot.add_argument("--name", required=True)
+    boot.add_argument("--owner", help="其专属执行环境的平台用户名（D49：每人一个边界；默认管理员本人）")
     boot.add_argument("--spare", action="store_true", help="登记为空闲专属执行环境，由管理员在控制台分配给 Team")
     backup_cmd = sub.add_parser("backup", help="平台数据库一致性备份")
     backup_cmd.add_argument("--dest", required=True)
@@ -204,7 +205,8 @@ def main(argv=None):
         from .bootstrap import register_boundary_worker
         url = f"http://{probe_host(settings.api_host)}:{settings.api_port}"
         print(dumps(register_boundary_worker(url, args.username, os.environ[args.password_env], args.worker_url,
-                                             Path(args.token_file).read_text().strip(), args.name, spare=args.spare)))
+                                             Path(args.token_file).read_text().strip(), args.name, spare=args.spare,
+                                             owner=args.owner)))
     elif args.command == "backup":
         from .backup import backup_database
         print(dumps(backup_database(settings.data_dir / "octopus.sqlite3", Path(args.dest))))

@@ -838,8 +838,11 @@ class Service:
                         raise Error(409, "environment_disabled", f"Team「{row['name']}」的执行环境已停用，请联系平台管理员")
                     if row is not None:
                         raise Error(409, "team_without_worker", f"Team「{row['name']}」尚未分配执行环境，请联系平台管理员分配")
+            own = [w for w in usable if w["scope"] == "dedicated"] if not team else []
             if len(usable) == 1:
                 body = {**body, "worker_id": usable[0]["id"]}
+            elif len(own) == 1:   # D49: a person's own boundary before a shared environment that also serves them
+                body = {**body, "worker_id": own[0]["id"]}
         planning = design is None and (body.get("plan") == "agent" or (not selected and body.get("plan") != "match"))
         if planning:
             # A real KiroCrew Agent recognises the intent, enriches the requirement and plans the tasks (planning.py).
