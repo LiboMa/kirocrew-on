@@ -157,13 +157,15 @@ KiroCrew 的相关事实：
 | 层 | 步骤 |
 |---|---|
 | 主机层（共享） | 系统依赖；Node.js（校验 SHASUMS256）；OS 用户 `octopus`；KiroCrew ON 发布与 venv；KiroCrew 按锁定 commit 构建；kiro-cli（sha256 校验）；Claude Code / Codex / OpenCode（固定版本）；平台配置 `platform.toml` 与源站密钥；平台管理员初始化（`/etc/kirocrew-on/admin-password`）；切换 `current` 发布；`octopus-api` |
-| 边界层（一个边界） | OS 用户 `crew-<边界>` 与目录；边界环境（Bedrock 经实例角色、PATH）；边界配置 `boundary-<边界>.toml`；原生对话入口（nginx）；以边界用户执行原生契约检查；`octopus-gateway@<边界>`、`octopus-worker@<边界>`；`bootstrap-worker` 把 Worker 登记到**管理员的个人空间** |
+| 边界层（每个边界，`deploy/install/boundary-lib.sh`） | OS 用户 `crew-<边界>` 与目录；边界环境（Bedrock 经实例角色、PATH）；边界配置 `boundary-<边界>.toml`；以边界用户执行原生契约检查（主机上**全部边界**通过才切换 `current`）；`octopus-gateway@<边界>`、`octopus-worker@<边界>`（逐个排空后重启）。主边界另有原生对话入口（nginx）与 `bootstrap-worker`（登记到**管理员的个人空间**） |
+| 新边界（`deploy/install/boundary.sh`，D49） | 平台主机上专属于一个人的边界：独立端口（Gateway 5481–5580、Worker 9001–9100）、`dedicated`、资源上限 drop-in、登记为该用户的专属 Worker；之后由 `al2023.sh` 随每次 `push` 一起检查与升级 |
 
 ## 7．现状与差距
 
 - EC2（2026-10-12）：平台主机上的 `personal` 边界为**共享环境**，服务管理员与多位用户的个人空间及 Team Hardware-Dev；独立 Worker 主机 `w1`
   为「Web应用软件研发组」的**专属环境**，原生入口经平台主机中转（D29、D30，`docs/OPERATIONS.md`「Worker 主机」）。
-- 新增专属环境的方式是独立 Worker 主机（`deploy.sh worker-host add <名称>`）。**同一主机上**再加一个边界（`al2023.sh <第二个边界>`）尚未实现，会遇到：
+- 新增专属环境：独立 Worker 主机（`deploy.sh worker-host add <名称>`），或**同一平台主机上**每人一个边界（D49，`deploy.sh boundary add <名称> --owner <用户>`，
+  见 `docs/OPERATIONS.md`「每人一个边界」）。下表为 D49 之前（直接再跑 `al2023.sh <第二个边界>`）会遇到的问题，D49 第 1 期已逐项处理（原生入口除外，用 `tunnel --boundary`）：
 
   | 问题 | 后果 |
   |---|---|

@@ -111,6 +111,28 @@ API 对应（OpenAPI 分组「执行环境（管理员）」）：`GET /v1/admin
 `PATCH /v1/workers/<id> {"name"}`、`POST /v1/workers/<id>/retire`、`POST /v1/teams/<id>/archive {"archived"}`、`POST /v1/teams/<id>/environment {"worker_id"}`；
 Team owner 也可调用 `PATCH /v1/teams/<id> {"name"}` 与 `POST|DELETE /v1/teams/<id>/members`。
 
+### 每人一个边界（D49 第 1 期）
+
+KiroCrew 是个人助手：一个 Gateway 对应一个主人、一份记忆、一个 kiro 登录（负责人 2026-10-19）。平台主机上可以为每个人开通自己的边界：
+
+```bash
+deploy/aws/deploy.sh boundary add alice --owner alice [--memory 8] [--cpu 300]   # 经 SSM 以 root 运行 deploy/install/boundary.sh
+deploy/aws/deploy.sh kiro-login --boundary alice   # alice 用自己的 IdC 账号设备码登录（Kiro Credit 按人计）
+deploy/aws/deploy.sh boundaries                    # 各边界的端口与服务状态
+deploy/aws/deploy.sh tunnel --boundary alice       # 该边界的原生 KiroCrew：localhost:<10000+gateway_port>
+```
+
+- `boundary add` 在**当前发布**上开通：OS 用户 `crew-alice`、目录、工具环境、`/etc/kirocrew-on/boundary-alice.toml`（Gateway 5481–5580、
+  Worker 9001–9100 中第一个空闲端口；`worker_isolation = "dedicated"`；`crew_url` 为本机回环，经 `tunnel --boundary` 打开）、资源上限
+  （`octopus-gateway@alice.service.d/limits.conf`：`MemoryHigh` = ¾ × `MemoryMax`、`CPUQuota`、`TasksMax=4096`；Worker `MemoryMax=2G`）、
+  原生契约检查、启动两个服务，最后 `bootstrap-worker --owner alice` 登记为 alice 的专属 Worker（每人至多一个；用户须已存在）。不重启平台 API；
+  重复执行只补缺（端口与配置不变）。主机须已 `push` 过含 `boundary.sh` 的发布。
+- 之后每次 `deploy.sh push`：`al2023.sh` 对主机上**全部** `boundary-*.toml` 做原生契约检查，全部通过才切换 `current`，再逐个排空、重启。
+- 个人会话自动选择：有**恰好一个**启用的专属 Worker 时选它，即使共享的 `personal` 也服务此人；两个以上时等待选择。Team 会话不变。
+- `deploy.sh space <run-id>` 在 `boundaries/*/worker/<run-id>` 中找会话所在的边界。
+- `personal`（共享）本期不加资源上限，避免在用的会话被终止。平台主机 m7i.xlarge（4 vCPU / 16 GiB）上放两三个边界；更多人时换更大的主机或增加 Worker 主机。
+- 第 2 期：Team 会话在提交者自己的边界执行、每个边界的公开原生入口、跨主机放置、空闲停 Gateway、用量按人归属。
+
 ### Worker 主机：独立的执行环境（D28）
 
 一台 Worker 主机 = 一个专属执行边界（`crew-<名称>`、Gateway 与 Worker），与平台同 VPC、同子网，只有平台主机可访问。
