@@ -657,6 +657,25 @@ describe("session detail", () => {
     expect(await within(panel).findByText("尚无后续修订：续作、KiroCrew 规划与自动纠错都会在这里留下可对比的版本。")).toBeInTheDocument();
   });
 
+  test("a Team Session on the Team's environment for want of one's own boundary says so (D49)", async () => {
+    open(makeRun({ id: "run-p", status: "running", worker_id: "w1", team_id: "team-1",
+      placement: { kind: "team", hint: "你还没有自己的执行边界：本次在 Team 的环境执行" } } as Partial<Run>));
+    expect(await screen.findByText(/你还没有自己的执行边界/, { selector: "#placement-hint" })).toBeInTheDocument();
+  });
+
+  test("the environments a waiting Session may move to come from the platform (D49)", async () => {
+    const waiting = makeRun({ id: "run-m2", status: "waiting_worker", version: 1, team_id: "team-1" });
+    const asked: string[] = [];
+    open(waiting, { "GET /placement": (_b: unknown, url: URL) => { asked.push(url.search); return { space: "team-1", hint: null, default: null,
+      options: [{ id: "teamenv", name: "研发组环境", scope: "dedicated", own: false, isolation: "dedicated", models: {} },
+        { id: "alice-b", name: "alice", scope: "dedicated", own: true, isolation: "dedicated", models: {} }] }; } });
+    await userEvent.click(await screen.findByRole("button", { name: "分配 Worker" }));
+    const dialog = await screen.findByRole("dialog");
+    await waitFor(() => expect(dialog).toHaveTextContent("研发组环境"));
+    expect(dialog).toHaveTextContent("alice");
+    expect(asked).toContain("?run_id=run-m2");
+  });
+
   test("a Session waiting for a Worker can be assigned one from its space", async () => {
     const waiting = makeRun({ id: "run-w", status: "waiting_worker", version: 1 });
     const calls = open(waiting, {

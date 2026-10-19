@@ -9,7 +9,8 @@ import { DEFAULT_RECOVERY, RecoveryFields } from "@/components/RecoveryFields";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
-import { spaceWorkers, useConsole } from "@/features/console/context";
+import { usePlacement } from "@/api/hooks";
+import { useConsole } from "@/features/console/context";
 import { useRefreshRun } from "@/features/sessions/useSessionActions";
 import { rerunPlan } from "@/lib/session";
 
@@ -82,11 +83,12 @@ export function ContinueDialog({ run, taskId }: { run: Run; taskId?: string }) {
 }
 
 export function AssignWorkerDialog({ run }: { run: Run }) {
-  const { close, workers } = useConsole();
+  const { close } = useConsole();
   const refresh = useRefreshRun();
-  // The Session's own space: an administrator may assign a Worker to someone else's Session (A2).
-  const choices = spaceWorkers(workers, run.team_id ?? "", { id: run.owner_id });
-  const [worker, setWorker] = useState(choices[0]?.id ?? "");
+  // Where this Session may move, as the platform answers it for its creator (D49 R4; an administrator may assign, A2).
+  const choices = usePlacement(run.team_id ?? "", run.id).data?.options ?? [];
+  const [picked, setWorker] = useState("");
+  const worker = picked || choices[0]?.id || "";
   return (
     <FormDialog title="分配执行 Worker" kicker="ASSIGN WORKER" onClose={close} submitLabel="开始执行"
       onSubmit={async () => {
@@ -100,7 +102,7 @@ export function AssignWorkerDialog({ run }: { run: Run }) {
         <NativeSelect id="assign-choice" value={worker} onChange={(e) => setWorker(e.target.value)} required>
           {!choices.length && <option value="">此空间尚无可用 Worker</option>}
           {choices.map((w) => (
-            <option key={w.id} value={w.id}>{w.name} · {w.capabilities.isolation === "dedicated" ? "专属环境" : "个人本机"}</option>
+            <option key={w.id} value={w.id}>{w.name} · {w.isolation === "dedicated" ? "专属环境" : "个人本机"}</option>
           ))}
         </NativeSelect>
       </div>

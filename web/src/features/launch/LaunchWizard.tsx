@@ -3,11 +3,11 @@ import { Check } from "lucide-react";
 import { useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
 import { api, command } from "@/api/client";
-import { keys } from "@/api/hooks";
+import { keys, usePlacement } from "@/api/hooks";
 import type { Run } from "@/api/types";
 import { Button } from "@/components/ui/button";
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
-import { spaceWorkers, useConsole, type LaunchSeed } from "@/features/console/context";
+import { useConsole, type LaunchSeed } from "@/features/console/context";
 import { useDraft, useMatch, useRecommendation } from "@/features/launch/hooks";
 import { STEPS, draftKey, initialDraft, loadDraft, restoreDraft, submitBody, validateStep } from "@/features/launch/state";
 import { ConfirmStep, NeedStep, PlanStep, TasksStep } from "@/features/launch/steps";
@@ -24,21 +24,22 @@ export function LaunchWizard({ seed }: { seed: LaunchSeed }) {
   const workflowMode = seed.mode === "workflow";
   const key = draftKey(me.id, space, selected, seed);
   const { draft, ref, update, storageError } = useDraft(key, () => {
-    const eligible = spaceWorkers(workers, space, me);
-    return restoreDraft(seed, loadDraft(key), initialDraft(seed, { worker: eligible.length === 1 ? eligible[0].id : "", space }));
+    // D49: where it runs is the platform's choice unless one is picked (no preselection)
+    return restoreDraft(seed, loadDraft(key), initialDraft(seed, { worker: "", space }));
   });
   const { status: matchStatus, schedule, settle, describe } = useMatch(ref, update, { templates, workflows });
   const recommendation = useRecommendation(ref, update);
   const [step, setStep] = useState(0);
   const [error, setError] = useState("");
   const [busy, setBusy] = useState(false);
-  const eligible = spaceWorkers(workers, draft.space, me);
-  const [recommendWorker, setRecommendWorker] = useState(() => draft.generation?.request?.worker_id ?? draft.worker ?? eligible[0]?.id ?? "");
-  const models = workers.find((w) => w.id === (draft.worker || recommendWorker))?.capabilities.models;
+  const placement = usePlacement(draft.space).data;
+  const [recommendWorker, setRecommendWorker] = useState(() => draft.generation?.request?.worker_id ?? draft.worker ?? "");
+  const models = workers.find((w) => w.id === (draft.worker || recommendWorker || placement?.default?.id))?.capabilities.models;
 
-  useEffect(() => {
-    if (!recommendWorker && eligible[0]) setRecommendWorker(eligible[0].id);
-  }, [recommendWorker, eligible]);
+  useEffect(() => {   // the recommendation runs where the Session would (D49)
+    const first = placement?.default?.id ?? placement?.options[0]?.id;
+    if (!recommendWorker && first) setRecommendWorker(first);
+  }, [recommendWorker, placement]);
 
   // Matching follows the requirement, the choice and the space; a custom plan is never re-matched.
   useEffect(() => {

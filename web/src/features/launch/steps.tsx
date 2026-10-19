@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { ChevronDown, FileUp } from "lucide-react";
 import { api } from "@/api/client";
-import { useCredentials } from "@/api/hooks";
+import { useCredentials, usePlacement } from "@/api/hooks";
 import type { ParsedWorkflow, Step, Template, Workflow } from "@/api/types";
 import { AgentFields } from "@/components/AgentFields";
 import { TaskEditor } from "@/components/TaskEditor";
@@ -12,7 +12,7 @@ import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/component
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
-import { spaceWorkers, useConsole } from "@/features/console/context";
+import { useConsole } from "@/features/console/context";
 import { generationActive, type MatchStatus } from "@/features/launch/hooks";
 import { PLAN_METHODS, editTasks, fingerprint, nameFrom, withSource, type Draft } from "@/features/launch/state";
 import { SCOPE_LABELS, credentialLabel, httpsHost, usableIn } from "@/lib/credentials";
@@ -30,8 +30,9 @@ const EXAMPLES = [
 const REPOSITORY = /https:\/\/(?:github\.com|gitlab\.com)\/[\w.-]+\/[\w.-]+(?:\.git)?/;
 
 export function NeedStep({ draft, update, workflowMode }: { draft: Draft; update: Update; workflowMode: boolean }) {
-  const { teams, workers, me } = useConsole();
-  const choices = spaceWorkers(workers, draft.space, me);
+  const { teams } = useConsole();
+  const placement = usePlacement(draft.space).data;   // D49: the platform's choice and the alternatives
+  const choices = placement?.options ?? [];
   const setInput = (input: string) => update((d) => {
     const next = { ...d, input, name: d.nameTouched ? d.name : nameFrom(input) };
     const url = !d.source && input.match(REPOSITORY);
@@ -87,9 +88,10 @@ export function NeedStep({ draft, update, workflowMode }: { draft: Draft; update
         <div className="space-y-1.5">
           <Label htmlFor="new-worker">执行 Worker</Label>
           <NativeSelect id="new-worker" value={draft.worker} onChange={(e) => update((d) => ({ ...d, worker: e.target.value }))}>
-            <option value="">稍后分配 Worker</option>
-            {choices.map((w) => <option key={w.id} value={w.id}>{w.name} · {w.capabilities.isolation === "dedicated" ? "专属环境" : "个人本机"}</option>)}
+            <option value="">{placement?.default ? `自动：将在 ${placement.default.name} 执行` : "稍后分配 Worker"}</option>
+            {choices.map((w) => <option key={w.id} value={w.id}>{w.name} · {w.isolation === "dedicated" ? "专属环境" : "个人本机"}</option>)}
           </NativeSelect>
+          {!draft.worker && placement?.hint && <p id="placement-hint" className="text-xs text-muted-foreground">{placement.hint}</p>}
         </div>
       </div>
       {!workflowMode && draft.source === "git" && (
@@ -259,8 +261,7 @@ const GENERATION_LABELS: Record<string, string> = {
 };
 
 function RecommendPanel({ draft, recommendWorker, setRecommendWorker, recommendation, onOpenGeneration, setError }: PlanProps) {
-  const { workers, me } = useConsole();
-  const choices = spaceWorkers(workers, draft.space, me);
+  const choices = usePlacement(draft.space).data?.options ?? [];
   const job = draft.generation;
   const active = generationActive(job);
   const stale = !!job && job.fingerprint !== fingerprint(draft.input, draft.tasks, draft.space);
@@ -404,12 +405,14 @@ export function TasksStep({ draft, update, origin, models }: { draft: Draft; upd
 
 export function ConfirmStep({ draft, update, workflowMode }: { draft: Draft; update: Update; workflowMode: boolean }) {
   const { teams, workers } = useConsole();
+  const placement = usePlacement(draft.space).data;
   const source = draft.source === "git" ? `已有 Git 仓库 · ${draft.url.trim()}${draft.ref.trim() ? " @ " + draft.ref.trim() : ""}` : "全新项目";
   const rows: [string, string][] = [
     ["需求", draft.input.trim()], [workflowMode ? "工作流名称" : "Session 名称", draft.name],
     ...(workflowMode ? [] : [["代码来源", source] as [string, string]]),
     ["执行空间", teams.find((t) => t.id === draft.space)?.name ?? "我的私有空间"],
-    ["执行 Worker", workers.find((w) => w.id === draft.worker)?.name ?? "稍后分配"],
+    ["执行 Worker", workers.find((w) => w.id === draft.worker)?.name ??
+      (placement?.default ? `自动（${placement.default.name}）` : "稍后分配")],
     ["编排方式", PLAN_METHODS.find(([m]) => m === draft.method)![1]],
   ];
   return (

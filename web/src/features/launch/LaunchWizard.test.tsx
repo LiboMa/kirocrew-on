@@ -125,6 +125,28 @@ describe("launch wizard", () => {
     expect(body.steps).toBeUndefined();
   });
 
+  test("the platform chooses where the Session runs unless one is picked (D49)", async () => {
+    const own = { ...worker, id: "b-own", name: "owner", scope: "dedicated", capabilities: { ...worker.capabilities, isolation: "dedicated" } };
+    const calls = start({ "GET /workers": [own, { ...worker, id: "w-shared", scope: "shared" }], "GET /placement": {
+      space: "personal", hint: "你还没有自己的执行边界：示例提示",
+      default: { id: "b-own", name: "owner", scope: "dedicated", placement: "own" },
+      options: [{ id: "b-own", name: "owner", scope: "dedicated", own: true, isolation: "dedicated", models: {} },
+        { id: "w-shared", name: "personal", scope: "shared", own: false, isolation: "trusted-local", models: {} }] } });
+    const dialog = await openWizard();
+    const select = await within(dialog).findByLabelText("执行 Worker");
+    await waitFor(() => expect(within(select).getAllByRole("option").map((o) => o.textContent))
+      .toEqual(["自动：将在 owner 执行", "owner · 专属环境", "personal · 个人本机"]));
+    expect(select).toHaveValue("");
+    expect(dialog.querySelector("#placement-hint")).toHaveTextContent("示例提示");
+    await fillNeed(dialog);
+    await next(dialog);
+    await next(dialog);
+    await next(dialog);
+    await userEvent.click(within(dialog).getByRole("button", { name: "确认任务并提交" }));
+    await waitFor(() => expect(calls.some((c) => c.method === "POST" && c.path === "/v1/runs")).toBe(true));
+    expect(calls.find((c) => c.method === "POST" && c.path === "/v1/runs")?.body).not.toHaveProperty("worker_id");
+  });
+
   test("reference template: a picked card is submitted as that template", async () => {
     const calls = start();
     const dialog = await openWizard();

@@ -408,15 +408,20 @@ def run_permissions(db, actor, run):
             return True
         except Error:
             return False
-    native = allowed(admin=False)
+    native, reason = allowed(admin=False), None
     if native and run["worker_id"]:
-        worker = db.execute("SELECT scope,owner_id FROM workers WHERE id=?", (run["worker_id"],)).fetchone()
+        worker = db.execute("SELECT scope,owner_id,team_id FROM workers WHERE id=?", (run["worker_id"],)).fetchone()
         native = worker is None or worker["scope"] != "shared" or worker["owner_id"] == actor["id"]
+        if native and worker is not None and own(worker, worker["owner_id"]) and worker["owner_id"] != actor["id"]:
+            # D49 R7: a member's own boundary carries their kiro login and memory; the server refuses the same
+            holder = db.execute("SELECT username FROM users WHERE id=?", (worker["owner_id"],)).fetchone()
+            native, reason = False, (f"此会话在 {holder['username'] if holder else '创建者'} 的执行边界上运行：原生 KiroCrew 入口只开放给"
+                                     "边界主人；可在本页「KiroCrew 会话」查看。")
     # An archived Team's Sessions can be read and stopped, not continued, diagnosed, reopened or reassigned (P3).
     archived = bool(run["team_id"]) and bool(
         (db.execute("SELECT archived FROM teams WHERE id=?", (run["team_id"],)).fetchone() or {"archived": 0})["archived"])
     return {"operate": True, "delete": allowed(owner=True), "native": native, "resume": not archived,
-            "publish": may_publish(db, actor, run)}
+            "publish": may_publish(db, actor, run), **({"native_reason": reason} if reason else {})}
 
 
 def _probe(config):

@@ -57,7 +57,8 @@ export function SessionView({ id }: { id: string }) {
   const crewReason = crewEntryReason(run) ||
     (environment?.scope === "shared" && environment.owner_id !== me.id
       ? "共享执行环境不开放原生 KiroCrew 入口；可在本页「KiroCrew 会话」查看。"
-      : run.permissions?.native === false ? "原生 KiroCrew 入口不因管理员身份开放；可在本页「KiroCrew 会话」查看。" : "");
+      : run.permissions?.native === false
+        ? run.permissions.native_reason ?? "原生 KiroCrew 入口不因管理员身份开放；可在本页「KiroCrew 会话」查看。" : "");
   const close = closeAction(run);
   const design = run.purpose === "workflow_design";
   const percent = run.progress.total ? (100 * run.progress.accepted) / run.progress.total : 0;
@@ -158,6 +159,7 @@ export function SessionView({ id }: { id: string }) {
         </div>
         {resumeReason(run) && <p id="resume-hint" className="text-xs text-muted-foreground">{resumeReason(run)}</p>}
         {crewReason && <p id="crew-entry-hint" className="text-xs text-muted-foreground">{crewReason}</p>}
+        {run.placement?.hint && <p id="placement-hint" className="text-xs text-muted-foreground">{run.placement.hint}</p>}
         {workers.find((w) => w.id === run.worker_id)?.scope === "shared" && (
           <p id="shared-environment" className="text-xs text-muted-foreground">共享执行环境：环境内会话的 Agent 互相可读，记忆未分隔。</p>
         )}

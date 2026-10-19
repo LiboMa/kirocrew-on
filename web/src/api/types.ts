@@ -259,7 +259,26 @@ export interface KnowledgeItem {
   removed_by: string | null;
 }
 
+/** D49: where a new Session would run, or where a Session may move (GET /v1/placement). */
+export type PlacementKind = "own" | "team" | "only" | "requested";
+export interface PlacementOption {
+  id: string;
+  name: string;
+  scope: string;
+  own: boolean;
+  isolation?: string | null;
+  models: Record<string, string[]>;
+}
+export interface Placement {
+  space: string;
+  default: { id: string; name: string; scope: string; placement: PlacementKind | null } | null;
+  hint: string | null;
+  options: PlacementOption[];
+}
+
 export interface Run {
+  /** D49: where it runs and, on a Team's environment for want of one's own boundary, why. */
+  placement?: { kind: PlacementKind; hint?: string } | null;
   /** D46 P6a: what the Session's Attempts used in total. */
   usage?: import("@/lib/usage").Usage | null;
   /** D46 P4: this Session's 「本次沉淀的知识」, and why a shared environment gathers none. */
@@ -310,7 +329,9 @@ export interface Run {
   /** What the server allows the current user on this Session; absent from older platforms. */
   /** resume: false for a Session of an archived Team (readable and stoppable only). */
   /** publish: may publish the Session and answer its approvals (creator, Team owner, admin; D38 A3). */
-  permissions?: { operate: boolean; delete: boolean; native?: boolean; resume?: boolean; publish?: boolean };
+  permissions?: { operate: boolean; delete: boolean; native?: boolean; resume?: boolean; publish?: boolean;
+    /** D49 R7: why the native entry stays closed (e.g. another member's boundary). */
+    native_reason?: string };
   /** KiroCrew Agent planning: intent recognition, requirement enrichment and the generated tasks. */
   planning?: { mode: "agent"; applied: boolean; intent?: string; summary?: string; name?: string; tasks?: string[]; notes?: string[] } | null;
 }

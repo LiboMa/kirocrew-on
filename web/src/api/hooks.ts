@@ -2,7 +2,7 @@ import { useEffect, useState } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { api } from "@/api/client";
 import { followRunEvents, type StreamState } from "@/api/events";
-import type { ApprovalList, AppPreview, ChangeEntry, Credential, Environment, Me, Observation, RevisionDiff, RevisionEntry, Run, RunEvent, Team, Template, User, Worker, Workflow } from "@/api/types";
+import type { ApprovalList, AppPreview, ChangeEntry, Credential, Environment, Me, Observation, Placement, RevisionDiff, RevisionEntry, Run, RunEvent, Team, Template, User, Worker, Workflow } from "@/api/types";
 
 export const keys = {
   me: ["me"] as const,
@@ -18,6 +18,7 @@ export const keys = {
   observe: (id: string) => ["observe", id] as const,
   app: (id: string) => ["app", id] as const,
   credentials: ["credentials"] as const,
+  placement: (space: string, run?: string) => ["placement", space, run ?? ""] as const,
 };
 
 const every = (ms: number) => ({ refetchInterval: ms, refetchIntervalInBackground: false });
@@ -71,6 +72,12 @@ export function useCredentials(enabled = true) {
 }
 
 /** The run's remote preview: every 3 s while it installs or starts, every 15 s while it runs. */
+/** D49: the platform's own answer to where a Session runs: the console keeps no copy of the rule. */
+export function usePlacement(space: string, run?: string) {
+  const query = run ? "?run_id=" + encodeURIComponent(run) : space ? "?team_id=" + encodeURIComponent(space) : "";
+  return useQuery({ queryKey: keys.placement(space, run), queryFn: () => api<Placement>("/placement" + query), ...every(30_000) });
+}
+
 export function useRunApp(id: string, enabled: boolean) {
   return useQuery({
     queryKey: keys.app(id), enabled, retry: false, placeholderData: (previous) => previous,

@@ -172,6 +172,13 @@ class InterfaceTests(PlacementCase):
                 crew_entry.create(self.service, self.people["bob"], created["id"])
         self.assertEqual(caught.exception.status, 403)
 
+    def test_the_console_offers_the_native_entry_only_to_the_boundary_owner(self):   # R7: as the server enforces it
+        created, _ = self.start("alice")
+        self.assertTrue(self.service.run(self.people["alice"], created["id"])["permissions"]["native"])
+        theirs = self.service.run(self.people["bob"], created["id"])["permissions"]
+        self.assertFalse(theirs["native"])
+        self.assertIn("alice 的执行边界", theirs["native_reason"])
+
     def test_other_members_see_the_session_and_its_report(self):
         from octopus import report
         created, _ = self.start("alice")
