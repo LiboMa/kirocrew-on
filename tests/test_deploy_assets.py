@@ -165,6 +165,14 @@ class TemplateTests(unittest.TestCase):
         self.assertIn('merge_hosts /etc/kirocrew-on/platform.toml "$CF_DOMAIN" ${CONSOLE_DOMAIN:+"$CONSOLE_DOMAIN"} localhost:18918',
                       installer)
 
+    def test_the_installer_gives_agents_a_headless_browser(self):
+        # EC2 2026-10-19 (run-48f02d32): Playwright's Chromium lacked 16 system libraries (exit 127), so reviews and the
+        # D50 frontend checks could not open the page; every host (platform and Worker hosts) installs them on each push
+        installer = (ROOT / "deploy/install/al2023.sh").read_text()
+        for package in ("libX11", "libXcomposite", "libXdamage", "libXext", "libXfixes", "libXrandr", "alsa-lib", "atk",
+                        "at-spi2-atk", "at-spi2-core", "cairo", "cups-libs", "mesa-libgbm", "pango", "libxcb", "libxkbcommon"):
+            self.assertRegex(installer, r"dnf install -y -q [^\n]*\b" + package + r"\b", package)
+
     def test_role_grants_ssm_bedrock_and_scoped_storage(self):
         role = of_type(self.r, "AWS::IAM::Role")
         host_role = next(r for r in role if "ec2.amazonaws.com" in json.dumps(r["Properties"]["AssumeRolePolicyDocument"]))
