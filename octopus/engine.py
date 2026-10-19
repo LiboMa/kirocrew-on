@@ -237,6 +237,22 @@ class Engine:
                 "r.status IN ('preparing','ready','running','waiting_approval','dispatch_unknown','stopping','reopening','diagnosing')",
                 (rid,)).fetchone()
         return dict(row) if row else None
+    def _knowledge_attempt(self, run, attempt_id):
+        with self.db.read() as db:
+            row = db.execute("SELECT task_id FROM attempts WHERE id=?", (attempt_id,)).fetchone()
+        return bool(row) and knowledge.platform(json.loads(run["snapshot"]), row["task_id"])
+
+    def _skip_knowledge(self, run, attempt_id, evidence, reason, actor=journal.WORKER):
+        """D46 P4: the platform's Knowledge task that cannot run or finish is passed over with its reason — never blocked,
+        never diagnosed — so a Session the Evaluator passed completes (R5)."""
+        with self.db.transaction() as db:
+            journal.change(db, "attempts", attempt_id, actor, "attempt.state", "Knowledge 沉淀未完成",
+                           event={"id": attempt_id, "status": "accepted", "skipped": reason},
+                           status="accepted", error=None, evidence=dumps({**evidence, "knowledge_skipped": reason}),
+                           updated=time.time())
+            journal.change_rows(db, "tasks", "current_attempt=?", (attempt_id,), actor, "task.state", status="accepted")
+        self.update(run["id"], "ready", None, actor=actor)
+
     def _knowledge(self, run, config):
         """Write what an accepted Knowledge task listed (D46 P4 R5) — once for each of its Attempts, before the Session
         completes. A refusal or an older Worker is recorded and never holds the Session; an unavailable environment is
@@ -254,12 +270,16 @@ class Engine:
                 return False
             source = json.loads(run["source"])
             repo = knowledge.key(source, knowledge.space(run))
-            keep, rest = knowledge.items((json.loads(row["evidence"] or "{}")).get("outcome"),
-                                         knowledge.known(db, run["worker_id"], repo) if repo else ())
+            evidence = json.loads(row["evidence"] or "{}")
+            skipped = str(evidence.get("knowledge_skipped") or "")[:300] or None
+            keep, rest = ((), ()) if skipped else knowledge.items(
+                evidence.get("outcome"), knowledge.known(db, run["worker_id"], repo) if repo else ())
         results = []
         if keep and repo:
             try:
-                answer = self.request(config, "/knowledge/write", {"run_id": rid, "scope": repo, "items": keep}, timeout=60)
+                # the Worker writes the items one by one, up to 30 s each (gateway_client.request)
+                answer = self.request(config, "/knowledge/write", {"run_id": rid, "scope": repo, "items": keep},
+                                      timeout=knowledge.LIMIT * 30 + 30)
                 results = answer.get("results") if isinstance(answer, dict) else None
                 results = results if isinstance(results, list) else []
             except Error as exc:
@@ -287,12 +307,13 @@ class Engine:
             if repo:
                 knowledge.record(db, rid, row["id"], run["worker_id"], repo, rows)
             fresh = json.loads(db.execute("SELECT snapshot FROM runs WHERE id=?", (rid,)).fetchone()["snapshot"])
-            state = {k: v for k, v in (fresh.get("knowledge_added") or {}).items() if k != "waiting"}
-            fresh["knowledge_added"] = {**state, "written": [*(state.get("written") or []), row["attempt"]]}
+            state = {k: v for k, v in (fresh.get("knowledge_added") or {}).items() if k not in {"waiting", "skipped"}}
+            fresh["knowledge_added"] = {**state, "written": [*(state.get("written") or []), row["attempt"]],
+                                        **({"skipped": skipped} if skipped else {})}
             journal.change(db, "runs", rid, journal.ENGINE, "run.knowledge", quiet=("snapshot",), snapshot=dumps(fresh))
             counts = {result: sum(r["result"] == result for r in rows) for result in ("written", "refused", "superseded", "skipped")}
             journal.record(db, rid, "run.knowledge", journal.ENGINE,
-                           reason="沉淀知识：" + ("、".join(f"{label} {counts[k]} 条" for k, label in
+                           reason="Knowledge 沉淀未完成：" + skipped if skipped else "沉淀知识：" + ("、".join(f"{label} {counts[k]} 条" for k, label in
                                                 (("written", "写入"), ("superseded", "替代"), ("refused", "被拒"), ("skipped", "未写入"))
                                                 if counts[k]) or "没有可沉淀的知识"),
                            task=row["id"], **counts)
@@ -312,6 +333,10 @@ class Engine:
                 "WHERE a.run_id=? AND a.status IN ('dispatching','running','dispatch_unknown','waiting_approval') "
                 "ORDER BY t.ordinal LIMIT 1", (run["id"],)).fetchone()
         if current and current["status"] == "dispatching":
+            if code in {"tool_auth_expired", "model_unavailable", "model_transport_unsupported", "invalid_request",
+                        "not_prepared"} and knowledge.platform(json.loads(run["snapshot"]), current["task_id"]):
+                # D46 P4: the platform's Knowledge task does not wait for a login or go to diagnosis
+                return self._skip_knowledge(run, current["id"], json.loads(current["evidence"] or "{}"), message)
             if code == "tool_auth_expired":
                 # Refused before anything was spawned: the same Attempt goes out again once the login is back (D34 §5.2).
                 return self.update(run["id"], run["status"], message)
@@ -423,6 +448,9 @@ class Engine:
         evidence = {**evidence, "failure_type": "native_error", "watchdog": {**info, "stopped_at": self.wall()},
                     **({"transient": "stalled"} if retry else {}),
                     **({"budget_refused": over} if over else {})}
+        if not retry and knowledge.platform(json.loads(run["snapshot"]), task["id"]):   # D46 P4: skipped, not diagnosed
+            self._skip_knowledge(run, attempt["id"], evidence, reason, journal.ENGINE)
+            return True
         with self.db.transaction() as db:
             current = db.execute("SELECT * FROM tasks WHERE run_id=? AND id=?", (rid, task["id"])).fetchone()
             active = db.execute("SELECT desired FROM runs WHERE id=?", (rid,)).fetchone()[0] == "active"
@@ -454,6 +482,8 @@ class Engine:
     def _refused(self, run, attempt_id, evidence, message, code, actor=journal.WORKER):
         """A tool the task cannot run on (D38 §3.2): the Attempt is blocked as the tool's failure and goes to diagnosis,
         where the Coordinator may recommend another tool."""
+        if self._knowledge_attempt(run, attempt_id):
+            return self._skip_knowledge(run, attempt_id, evidence, message, actor)
         with self.db.transaction() as db:
             journal.change(db, "attempts", attempt_id, actor, "attempt.state",
                            event={"id": attempt_id, "status": "blocked", "error": message},
@@ -485,6 +515,32 @@ class Engine:
                 return candidate["sha"]
         return None
 
+    def _read_only(self, run, config, attempt, latest, records, fail):
+        """The platform's Knowledge task runs after the Evaluator and changes nothing (D46 P4): what it changed in tracked
+        files is put back, so what is published is what the gates passed; the task is then skipped."""
+        body = {"run_id": run["id"], "attempt_id": attempt["id"], "expected": latest["sha"]}
+        try:
+            check = self.request(config, "/candidate", {**body, "mode": "check"})
+        except Error as exc:
+            if exc.status == 404:
+                records.append(gates.record("read_only", "skip", gates.OLD_WORKER))
+                return None, None, False
+            if 400 <= exc.status < 500:
+                return fail("read_only", f"无法核对 Knowledge 任务的工作区：{exc}")
+            raise
+        if check["head"] == latest["sha"] and not check["changed_files"]:
+            records.append(gates.record("read_only", "pass"))
+            return None, None, False
+        if check["head"] != latest["sha"]:
+            return fail("read_only", f"Knowledge 任务移动了会话分支（HEAD 不是候选 {latest['sha'][:7]}），未沉淀")
+        files = "、".join(check["changed_files"][:10])
+        try:
+            self.request(config, "/candidate", {**body, "mode": "restore"})
+            done = "已还原"
+        except Error as exc:
+            done = "未能还原：" + str(exc)[:160]
+        return fail("read_only", f"Knowledge 任务修改了 {files}（{done}），未沉淀")
+
     def _more_gates(self, run, config, task, attempt, spec, evidence, report, latest, start=None):
         """diff_present, no_secrets and the start of checks_pass for a code task; review_bound for a review (D37 §4).
         (error, failure_type, checking): ``checking`` when the verify commands were started."""
@@ -495,6 +551,8 @@ class Engine:
             evidence["gate"] = name
             return detail, "gate", False
         if kind == "design":
+            if latest and knowledge.platform(json.loads(run["snapshot"]), task["id"]):   # D46 P4: after the Evaluator
+                return self._read_only(run, config, attempt, latest, records, fail)
             return None, None, False
         if kind == "review":
             if latest is None:
@@ -985,6 +1043,10 @@ class Engine:
                 retry, evidence["budget_refused"] = None, over   # past the budget (D42): recovery decides, and says why
             if retry:
                 evidence["transient"] = retry
+            elif state == "blocked" and current["current_attempt"] == attempt["id"] and active \
+                    and knowledge.platform(snapshot, task["id"]):   # D46 P4: the platform's side task never holds a Session
+                evidence["knowledge_skipped"] = error
+                state, error = "accepted", None
             journal.change(db, "attempts", attempt["id"], journal.WORKER, "attempt.state",
                            event={"id": attempt["id"], "task_id": task["id"], "status": state, "error": error,
                                   "evidence": evidence},

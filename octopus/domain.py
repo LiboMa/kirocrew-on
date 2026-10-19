@@ -123,7 +123,8 @@ def rerun_plan(ordered, index, rerun=None):
         if chosen is not None and row["id"] not in chosen:
             why = ("pending" if row["status"] != "accepted" else
                    "depends" if any(dep in rerunning for dep in spec.get("depends_on", [])) else
-                   "review" if spec.get("kind") in {"review", "test"} else None)
+                   "review" if spec.get("kind") in {"review", "test"} else
+                   "knowledge" if spec.get("role") == "knowledge" else None)   # D46 P4: gathered again after a change
         if chosen is None or row["id"] in chosen or why:
             rerunning.append(row["id"])
             if why:

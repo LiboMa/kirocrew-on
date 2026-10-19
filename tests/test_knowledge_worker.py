@@ -121,6 +121,27 @@ class KnowledgeWorkerTests(unittest.TestCase):
         with self.assertRaises(Exception):
             self.node.knowledge_forget({"run_id": RID, "scope": "h_o_r", "rule": ""})
 
+    def test_a_restore_puts_back_what_a_read_only_task_changed(self):
+        project = self.prepare()
+        (project / "README.md").write_text("初始\n")
+        subprocess.run(["git", "add", "README.md"], cwd=project, check=True)
+        subprocess.run(["git", "-c", "user.name=t", "-c", "user.email=t@example.com", "commit", "-qm", "c"], cwd=project, check=True)
+        head = subprocess.run(["git", "rev-parse", "HEAD"], cwd=project, capture_output=True, text=True).stdout.strip()
+        (project / "README.md").write_text("Knowledge 任务改了它\n")
+        (project / "KNOWLEDGE.md").write_text("新文件\n")
+        subprocess.run(["git", "add", "KNOWLEDGE.md"], cwd=project, check=True)   # staged, not in HEAD
+        result = self.node.candidate({"run_id": RID, "attempt_id": "attempt-" + "3" * 32, "mode": "restore", "expected": head})
+        self.assertEqual((project / "README.md").read_text(), "初始\n")
+        self.assertFalse((project / "KNOWLEDGE.md").exists())
+        self.assertTrue(result["clean"])
+
+    def test_a_restore_never_moves_the_branch(self):
+        project = self.prepare()
+        head = subprocess.run(["git", "rev-parse", "HEAD"], cwd=project, capture_output=True, text=True).stdout.strip()
+        with self.assertRaises(Exception):
+            self.node.candidate({"run_id": RID, "attempt_id": "attempt-" + "3" * 32, "mode": "restore", "expected": "c" * 40})
+        self.assertEqual(subprocess.run(["git", "rev-parse", "HEAD"], cwd=project, capture_output=True, text=True).stdout.strip(), head)
+
     def test_the_worker_says_it_writes_knowledge(self):
         with patch.object(Worker, "tools", lambda self: {}), patch.object(Worker, "tool_auth", lambda self: "ok"):
             self.assertIs(self.node.health()["knowledge"], True)

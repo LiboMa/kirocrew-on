@@ -459,7 +459,11 @@ CloudFront 只使用 us-east-1 的证书）：分发加上别名与证书（SNI�
 - 仓库标记：准备检出时 Worker 在项目根写空文件 `.octopus-kb/<仓库标识>.<空间散列>`（`host_owner_repo` 小写，空间散列为 Team 或个人 ID 的
   sha256 前 12 位：执行环境换到另一个 Team 后，不把前一个空间同一仓库的知识注入新空间），并写入 `.git/info/exclude`（不提交、不发布）。
 - 沉淀：有 implement / deliver 任务的会话即将完成时（Evaluator 之后），平台追加「Knowledge 沉淀」（`role: knowledge`、`kind: design`、只读；
-  工具优先 kiro，否则第一个可用工具）。它在 outcome.json 写 `knowledge: [{rule ≤300, avoid? ≤200}]`，至多 5 条。续作后它会重新运行并再写一次。
+  工具优先 kiro，否则第一个可用工具）。它在 outcome.json 写 `knowledge: [{rule ≤300, avoid? ≤200}]`，至多 5 条。续作有任务重跑时它也重跑
+  （重跑原因「改动后重新整理项目知识」）并再写一次。
+- 它从不阻止会话完成：结论无效或 blocked、派发被拒（工具不可用、kiro-cli 登录过期、模型未公布）、看门狗停止，都记为「Knowledge 沉淀未完成：原因」
+  （会话页与时间线），任务记为通过，不进入自动纠错；瞬时失败仍自动重试一次。它是只读的（门禁 `read_only`）：改了已跟踪文件时 Worker 把这些文件
+  还原到候选（`/candidate {mode: restore}`，不移动分支），本次不沉淀——发布的仍是门禁与 Evaluator 通过的候选。
 - 写入：平台丢弃超长、含疑似秘密（与发布相同的扫描，文本不保存）、超过 5 条、此执行环境同一仓库已记录的条目；其余经 Worker
   `POST /knowledge/write` → KiroCrew `POST /api/lessons`（`category: knowledge`、`applies: always`、`repo_scope` 为标记、`negative` 为 avoid，
   `X-Session-Key: dashboard:ui`，写入该 Gateway 的全局存储）。每条记入台账表 `knowledge`（结果 written / superseded / refused / skipped 与原因）。

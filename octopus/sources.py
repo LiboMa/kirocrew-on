@@ -256,6 +256,11 @@ def clean_against(project, expected):
     return {"head": head, "clean": head == expected and not changed, "changed_files": changed}
 
 
+def restore(project, paths):
+    """Tracked files back to HEAD, in the index and the working tree (D46 P4: what a read-only task changed)."""
+    _git(project, "restore", "--source=HEAD", "--staged", "--worktree", "--", *paths)   # one HEAD lacks is removed
+
+
 def advance(project, branch, commit, old):
     """Put the checked ``commit`` on ``branch`` (still at ``old``) and the workspace's index to match; files untouched."""
     if commit == old:

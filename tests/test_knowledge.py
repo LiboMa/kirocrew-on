@@ -14,6 +14,7 @@ from tests.test_evaluator import CAPABILITIES, TEAM, EvaluatorCase
 
 CAPS = {**CAPABILITIES, "knowledge": True}
 SOURCE = {"type": "git", "url": "https://github.com/O/r.git"}
+SHA = "a" * 40
 READ_ONLY = [{"id": "look", "name": "分析", "tool": "claude", "prompt": "分析", "kind": "design", "acceptance": ["结论"]}]
 
 
@@ -23,6 +24,8 @@ class KnowledgeCase(EvaluatorCase):
         self.configure(CAPS)
         self.prepared, self.writes, self.forgets, self.write_errors = [], [], [], []
         self.knowledge = [{"rule": "依赖用 pnpm 安装", "avoid": "不要用 npm install"}, {"rule": "接口测试在 tests/api/"}]
+        self.knowledge_outcome, self.knowledge_running, self.knowledge_dispatch_error = {}, False, None
+        self.candidates, self.knowledge_check, self.restores = False, None, []
 
     def configure(self, capabilities, scope="dedicated"):
         with self.db.transaction() as db:
@@ -42,10 +45,28 @@ class KnowledgeCase(EvaluatorCase):
         if path == "/knowledge/forget":
             self.forgets.append(copy.deepcopy(body))
             return {"ok": True}
+        role = lambda: (self.bodies[body["attempt_id"]].get("contract") or {}).get("role")
+        if path == "/dispatch" and (body.get("contract") or {}).get("role") == "knowledge" and self.knowledge_dispatch_error:
+            raise self.knowledge_dispatch_error
+        if path == "/candidate" and self.candidates:   # a Worker of D37: candidates and the review's check
+            if body["mode"] == "commit":
+                return {"sha": SHA, "parent": "b" * 40, "changed": True, "files": 1, "insertions": 1, "deletions": 0, "secrets": []}
+            if body["mode"] == "restore":
+                self.restores.append(copy.deepcopy(body))
+                return {"head": SHA, "clean": True, "changed_files": []}
+            if role() == "knowledge" and self.knowledge_check:
+                return self.knowledge_check
+            return {"head": SHA, "clean": True, "changed_files": []}
+        if path == "/inspect" and role() == "knowledge" and self.knowledge_running:
+            return {"native_id": "n1", "native": {}}
         result = super().request(config, path, body, **kwargs)
-        if path == "/inspect" and (self.bodies[body["attempt_id"]].get("contract") or {}).get("role") == "knowledge":
+        if path == "/inspect" and role() == "knowledge":
             outcome = json.loads(result["outcome"])
-            outcome["knowledge"] = self.knowledge
+            outcome.update(knowledge=self.knowledge, **self.knowledge_outcome)
+            result["outcome"] = dumps(outcome)
+        if path == "/inspect" and role() == "evaluator" and self.candidates:
+            outcome = json.loads(result["outcome"])
+            outcome["reviewed_commit"] = SHA
             result["outcome"] = dumps(outcome)
         return result
 
@@ -243,6 +264,130 @@ class WriteTests(KnowledgeCase):
         run = self.tick(rid, 3)
         self.assertEqual(run["status"], "completed")
         self.assertEqual({i["result"] for i in run["knowledge"]["items"]}, {"skipped"})
+
+
+class NeverHoldsTests(KnowledgeCase):
+    """The platform's own side task never holds a Session the Evaluator passed (R5; review 2026-10-19)."""
+
+    def start_(self):
+        return self.start(steps=TEAM, source=SOURCE, recovery={"enabled": True, "max_cycles": 2})
+
+    def assert_completed_without_knowledge(self, run, why):
+        self.assertEqual(run["status"], "completed")
+        self.assertEqual(self.writes, [])
+        self.assertEqual(self.decisions, [])   # no Coordinator was asked
+        with self.db.read() as db:
+            self.assertEqual(db.execute("SELECT count(*) FROM recoveries WHERE run_id=?", (run["id"],)).fetchone()[0], 0)
+        self.assertIn(why, run["knowledge"]["note"])
+        self.assertEqual(next(t for t in run["tasks"] if t["id"] == "knowledge")["status"], "accepted")
+
+    def test_a_blocked_knowledge_outcome_completes_the_session(self):
+        self.knowledge_outcome = {"decision": "blocked", "failure_type": "input", "summary": "没有可读的交接"}
+        run = self.tick(self.start_())
+        self.assert_completed_without_knowledge(run, "未完成")
+
+    def test_a_knowledge_task_without_an_outcome_completes_the_session(self):
+        self.knowledge_outcome = {"decision": "maybe"}
+        run = self.tick(self.start_())
+        self.assert_completed_without_knowledge(run, "未完成")
+
+    def test_an_expired_kiro_login_completes_the_session(self):
+        self.knowledge_dispatch_error = Error(503, "tool_auth_expired", "Worker 上 kiro-cli 登录已过期")
+        run = self.tick(self.start_())
+        self.assert_completed_without_knowledge(run, "kiro-cli 登录已过期")
+
+    def test_a_tool_no_longer_available_completes_the_session(self):
+        rid = self.start_()
+        for _ in range(30):
+            self.engine.tick()
+            if any(t["id"] == "knowledge" for t in self.service.run(self.actor, rid)["tasks"]):
+                break
+        self.configure({**CAPS, "tools": {"kiro": {"available": False, "reason": "未安装"}, "claude": {"available": True},
+                                          "codex": {"available": True}}})
+        run = self.tick(rid)
+        self.assert_completed_without_knowledge(run, "不可用")
+
+    def test_a_stalled_knowledge_task_completes_the_session(self):
+        self.knowledge_running = True
+        rid = self.start_()
+        self.tick(rid)
+        with self.db.read() as db:
+            row = dict(db.execute("SELECT r.*,w.config worker_config,w.enabled worker_enabled,w.scope worker_scope FROM runs r "
+                                  "JOIN workers w ON w.id=r.worker_id WHERE r.id=?", (rid,)).fetchone())
+            task = dict(db.execute("SELECT * FROM tasks WHERE run_id=? AND id='knowledge'", (rid,)).fetchone())
+            attempt = dict(db.execute("SELECT * FROM attempts WHERE id=?", (task["current_attempt"],)).fetchone())
+        self.assertEqual(attempt["status"], "running")
+        self.engine._stalled(row, task, attempt, {}, {"reason": "原生任务 30 分钟没有进展"}, {"enabled": False})
+        self.knowledge_running = False
+        self.assert_completed_without_knowledge(self.tick(rid), "没有进展")
+
+    def test_a_transient_failure_is_still_retried_once(self):
+        answers = iter([{"native": {"done": True, "result": "", "error": "AcpProcessDied: Runtime process died"}}])
+        original = KnowledgeCase.request
+
+        def flaky(config, path, body, **kwargs):
+            if path == "/inspect" and (self.bodies[body["attempt_id"]].get("contract") or {}).get("role") == "knowledge":
+                answer = next(answers, None)
+                if answer:
+                    return {**answer, "evidence": {"actual_backend": "kiro"}}
+            return original(self, config, path, body, **kwargs)
+        self.engine.request = flaky
+        run = self.tick(self.start_())
+        self.assertEqual(run["status"], "completed")
+        self.assertEqual(len(next(t for t in run["tasks"] if t["id"] == "knowledge")["attempts"]), 2)
+        self.assertEqual(len(self.writes), 1)
+
+
+class ReadOnlyTests(KnowledgeCase):
+    def test_what_the_knowledge_task_changed_is_restored_and_nothing_is_written(self):
+        self.candidates = True
+        self.knowledge_check = {"head": SHA, "clean": False, "changed_files": ["README.md"]}
+        run = self.tick(self.start(steps=TEAM, source=SOURCE, recovery={"enabled": True, "max_cycles": 2}))
+        self.assertEqual(run["status"], "completed")
+        self.assertEqual([(r["mode"], r["expected"]) for r in self.restores], [("restore", SHA)])
+        self.assertEqual(self.writes, [])
+        self.assertIn("README.md", run["knowledge"]["note"])
+        self.assertIn("已还原", run["knowledge"]["note"])
+
+    def test_a_read_only_knowledge_task_is_written_as_usual(self):
+        self.candidates = True
+        run = self.tick(self.start(steps=TEAM, source=SOURCE, recovery={"enabled": False, "max_cycles": 2}))
+        self.assertEqual(run["status"], "completed")
+        self.assertEqual(self.restores, [])
+        self.assertEqual(len(self.writes), 1)
+
+
+class TimeoutTests(KnowledgeCase):
+    def test_the_platform_waits_longer_than_the_worker_takes(self):
+        seen = []
+        original = KnowledgeCase.request
+
+        def timed(config, path, body, **kwargs):
+            if path == "/knowledge/write":
+                seen.append(kwargs.get("timeout"))
+            return original(self, config, path, body, **kwargs)
+        self.engine.request = timed
+        self.run_()
+        self.assertGreaterEqual(seen[0], 5 * 30 + 15)   # five KiroCrew writes of up to 30 s each
+
+
+class ContinueTests(KnowledgeCase):
+    def test_a_selective_continue_gathers_again(self):
+        rid, run = self.run_()
+        self.knowledge = [{"rule": "错误密码返回 401"}]
+        self.service.operate(self.actor, rid, "continue", {"request_id": "knowledge-continue-2", "expected_version": run["version"],
+                                                           "task_id": "code", "input": "补充错误密码提示", "rerun": []})
+        run = self.tick(rid)
+        self.assertEqual(run["status"], "completed")
+        self.assertEqual([[i["rule"] for i in w["items"]] for w in self.writes][-1], ["错误密码返回 401"])
+
+    def test_the_rerun_rule_names_the_knowledge_task(self):
+        from octopus.domain import rerun_plan
+        rows = [{"id": "code", "status": "accepted", "spec": dumps({"kind": "implement"})},
+                {"id": "knowledge", "status": "accepted", "spec": dumps({"kind": "design", "role": "knowledge"})},
+                {"id": "look", "status": "accepted", "spec": dumps({"kind": "design"})}]
+        rerunning, kept, reasons = rerun_plan(rows, 0, [])
+        self.assertEqual((rerunning, kept, reasons), (["code", "knowledge"], ["look"], {"knowledge": "knowledge"}))
 
 
 class StatusTests(KnowledgeCase):

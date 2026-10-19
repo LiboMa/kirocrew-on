@@ -15,7 +15,8 @@ export function resumeReason(run: Run): string {
   return resumable(run) ? "" : "Team 已归档：会话可查看与停止，不能续作、诊断、确认计划、重新打开或重新分配 Worker。";
 }
 
-export const RERUN_REASONS = { depends: "依赖重跑的任务", review: "审查 / 测试在改动后必须复验", pending: "尚未验收" } as const;
+export const RERUN_REASONS = { depends: "依赖重跑的任务", review: "审查 / 测试在改动后必须复验", pending: "尚未验收",
+  knowledge: "改动后重新整理项目知识" } as const;
 
 /** The tasks a continue from ``taskId`` reruns when the user chose ``chosen`` among the later ones (D34 §7): the rules
  * the server applies add those not yet accepted, those depending on a rerun task and later review / test tasks. */

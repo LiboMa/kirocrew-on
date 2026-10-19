@@ -24,6 +24,11 @@ def applies(snapshot, source, scope, config):
             and bool(capabilities.get("role_cards")) and bool(capabilities.get("knowledge")))
 
 
+def platform(snapshot, task_id):
+    """A Knowledge task the platform added (not one a person submitted with the role)."""
+    return task_id in ((snapshot.get("knowledge_added") or {}).get("tasks") or [])
+
+
 def space(run):
     return run["team_id"] or run["owner_id"]
 
@@ -139,5 +144,7 @@ def view(db, run, scope):
     rows = [dict(r) for r in db.execute(
         "SELECT k.id,k.task_id,k.rule,k.avoid,k.result,k.reason,k.created,k.removed,u.username removed_by FROM knowledge k "
         "LEFT JOIN users u ON u.id=k.removed_by WHERE k.run_id=? ORDER BY k.created, k.rowid", (run["id"],))]
-    note = SHARED if scope == "shared" and snapshot.get("execution_contract", 1) >= 4 else None
+    skipped = (snapshot.get("knowledge_added") or {}).get("skipped")
+    note = (SHARED if scope == "shared" and snapshot.get("execution_contract", 1) >= 4
+            else "Knowledge 沉淀未完成：" + skipped if skipped else None)
     return {"items": rows, "note": note} if rows or note or snapshot.get("knowledge_added") else None
