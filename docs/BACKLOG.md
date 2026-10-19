@@ -45,8 +45,12 @@
   outcome 为 pass 但有验收项为 fail 时仍按 pass（S4：审查者裁定）。
 
 ## 执行环境后续（D28–D30）
+- **方向（负责人 2026-10-19）：每人一个 KiroCrew 边界，一台主机可放多人的边界；Team 会话在提交者自己的边界执行，Team 只共享平台层**
+  （会话、工作流、凭证、审查与发布）。原因：KiroCrew 是个人助手——共享 Gateway 时所有人共用 `max_subagents: 3`、同一个 kiro 账号的 Credit 与
+  限流（无法按人归属）、只按路由分隔的记忆，一人的长任务、登录过期或部署排空会停住所有人。共享的 `personal` 环境仅作试用、逐步退役。
+  待做：边界放置（按主机容量）、每个边界的端口与资源上限（systemd slice）、空闲停 Gateway、Team 会话的执行边界选择、用量按人归属（D46 P6）。
 - 扩容 `w2`、`w3`（`deploy.sh worker-host add <名称>`，负责人确认后）。
-- 同主机新 OS 用户的专属边界（设计 §4.1–4.3：`boundary add`、`boundaries`、`boundary.sh`），按需实现。
+- 同主机新 OS 用户的专属边界（设计 §4.1–4.3：`boundary add`、`boundaries`、`boundary.sh`）：按上面的方向实现（P4 的 EC2 验收先用一个）。
 - 共享环境的记忆分隔（T7）：等待 KiroCrew 提供成员创建与子任务继承成员记忆的接口。
 - `deploy.sh space` 定位 Worker 主机上的会话（目前只能到平台主机的边界）。
 
@@ -87,6 +91,20 @@
 - ~~停在「验收待确认」时停止、再请求诊断~~（2026-10-18 修复：诊断入口拒绝并说明）。原文：Evaluator 任务仍为 awaiting_acceptance，被当作 native_error 交给协调者；应要求首个未通过任务为 blocked / failed，或停止时重置。
 - ~~缺项、缺证据记为 failure_type gate；报告一节在门禁不适用的会话也出现~~（2026-10-18 修复：contract，fail 为 implementation；报告只在门禁生效时）。原文：报告的「验收（以 Evaluator 为准）」在门禁不适用的会话也会出现。
 - 「验收待确认」时控制台的发布区不显示发布按钮（服务端允许手动发布）：保持保守，待负责人决定是否在确认前允许发布。
+
+## D46 P4 Knowledge 的终审延后项（2026-10-19）
+- 团队层知识（负责人 2026-10-19：P4 验收后排入）：Knowledge 任务的条目以 Draft PR 提到仓库的知识文件（如 `.octopus/knowledge.md`），由人审核合并；
+  跨人、跨执行环境，补上 KiroCrew lessons（个人层）自动写入、无人审核的缺口。
+- 一个会话有两个平台追加的 Knowledge 任务时，只写第一个（`_knowledge` 取首个已通过的）：如把 Knowledge 任务续作改成 implement 后。
+- 删除过的条目以后被列出时会再次写入（`known()` 不算已删除的）。
+- Worker 删除时忽略 KiroCrew 的 `{"ok": false}`，`GatewayError` 未转译；写入时 KiroCrew 5xx / 401 记为最终的 refused，不重试。
+- 等待执行环境恢复期间没有退避（每个 tick 重发，最多 600 秒）。
+- 仓库标识可能碰撞（`github.com/o/r_x` 与 `github.com/o_r/x`）：可对 host/path 一并散列。
+- `_mark` 不拒绝符号链接的标记文件（仓库提交了 `.octopus-kb/<key>` 符号链接时 `touch` 会跟随）。
+- 测试缺口：共享 → 专属（改派后重新准备写标记、`lessons: true`）、第二个 Knowledge 任务的写入。
+- OPERATIONS「专属环境内属于同一空间」没有考虑先共享、后改为专属的 Worker（带着当时的 KiroCrew 自动 lessons）。
+- 控制台：任务已完成而没有可沉淀的条目时仍写「Knowledge 任务完成后…」；`steps()` 接受用户提交的 `role: knowledge`（不沉淀）；
+  KiroCrew 报告替代了旧条目时，旧的台账行仍为 written；会话删除后其写入的 lessons 只能在 KiroCrew 中删除（没有执行环境级的列表）。
 
 ## 已知的次要问题（审查延后项）
 - 访问管理第 1 期（审查延后项）：预览复核按账号的管理员身份而非签发 Token 的 scope
