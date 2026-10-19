@@ -119,6 +119,17 @@ describe("session detail", () => {
     expect(screen.getByText("由协调者从 opencode / auto 换为 claude / auto：opencode 不可用")).toBeInTheDocument();
   });
 
+  test("what the Session and each attempt used (D46 P6a)", async () => {
+    const task = blocked.tasks[0];
+    const attempt = { ...task.attempts![0], evidence: { ...task.attempts![0].evidence,
+      usage: { input_tokens: 120000, output_tokens: 8000, cost_usd: 0.84, seconds: 200 } } };
+    open({ ...blocked, usage: { credits: 12.4, input_tokens: 120000, output_tokens: 8000, cost_usd: 0.84, seconds: 325.5,
+      attempts: 2, tokens_unavailable: 1 }, tasks: [{ ...task, attempts: [attempt] }, blocked.tasks[1]] } as Run);
+    expect(await screen.findByText("本会话用量：12.4 credits · 输入 120k / 输出 8k token · $0.84 · 5 分 26 秒")).toBeInTheDocument();
+    await userEvent.click(screen.getByText("执行证据与历史 Attempt"));
+    expect(screen.getByText("输入 120k / 输出 8k token · $0.84 · 3 分 20 秒")).toBeInTheDocument();
+  });
+
   test("a rework says whether it continued its conversation (D46 P5a)", async () => {
     const task = blocked.tasks[0];
     const attempt = task.attempts![0];

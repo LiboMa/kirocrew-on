@@ -29,6 +29,7 @@ import { ReportButton } from "@/features/sessions/ReportDialog";
 import { TaskList } from "@/features/sessions/TaskList";
 import { useSessionActions } from "@/features/sessions/useSessionActions";
 import { bindingLabel } from "@/lib/credentials";
+import { usageLine } from "@/lib/usage";
 import { canContinue, canDelete, canRecover, canStop, closeAction, crewEntryReason, deleteReason, resumeReason, statusText } from "@/lib/session";
 
 export function SessionView({ id }: { id: string }) {
@@ -233,6 +234,9 @@ export function SessionView({ id }: { id: string }) {
             </>
           ) : <p className="text-sm text-muted-foreground">Kiro Agent 正在识别意图、补全需求并拆分任务；规划完成后任务会自动出现在下方。</p>}
         </section>
+      )}
+      {run.usage && (
+        <p id="run-usage" className="text-xs text-muted-foreground">本会话用量：{usageLine(run.usage)}</p>
       )}
       {run.recovery && (
         <p id="recovery-policy" className="text-xs text-muted-foreground">

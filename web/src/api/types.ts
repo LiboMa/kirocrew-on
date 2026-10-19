@@ -131,6 +131,8 @@ export interface AttemptEvidence {
   watchdog?: { reason?: string; unsupported?: boolean; [key: string]: unknown } | null;
   /** The Coordinator recommended this Attempt's tool instead of the one that failed (D38 §3.3). */
   switched_from?: { tool: string; model: string; effort: string; reason?: string | null; by: string; recovery: number } | null;
+  /** D46 P6a: what this Attempt's native run used. */
+  usage?: import("@/lib/usage").Usage | null;
   /** D46 P5a: this rework continued the task's native conversation, or a refused continue was spawned afresh. */
   continued?: { conversation: string; from: string } | null;
   continue_refused?: string | null;
@@ -256,6 +258,8 @@ export interface KnowledgeItem {
 }
 
 export interface Run {
+  /** D46 P6a: what the Session's Attempts used in total. */
+  usage?: import("@/lib/usage").Usage | null;
   /** D46 P4: this Session's 「本次沉淀的知识」, and why a shared environment gathers none. */
   knowledge?: { items: KnowledgeItem[]; note: string | null } | null;
   /** Who submitted the Session (D35 §4). */

@@ -126,8 +126,16 @@ def model(view, now=None):
         evaluation = [{"item": _line(a.get("item"), 300), "result": str(a.get("result") or "—"),
                        "by": by if a.get("result") == "pending" else None}
                       for a in (final.get("outcome") or {}).get("acceptance") or []]
+    from . import usage as spent   # D46 P6a: per task (all its Attempts) and in total
+    used = None
+    if view.get("usage"):
+        used = {"tasks": [{"name": _line((t.get("spec") or {}).get("name") or t.get("id"), 200),
+                           "line": spent.line(spent.total([a.get("evidence") or {} for a in t.get("attempts") or []]))}
+                          for t in view.get("tasks") or [] if spent.total([a.get("evidence") or {} for a in t.get("attempts") or []])],
+                "total": spent.line(view["usage"]),
+                "unavailable": view["usage"].get("tokens_unavailable") or 0}
     return {"title": _line(view.get("name") or view.get("input") or view.get("id"), 200), "id": view.get("id"),
-            "evaluation": evaluation,
+            "evaluation": evaluation, "usage": used,
             "status": view.get("status"), "creator": (view.get("created_by") or {}).get("username") or "—",
             "confirmed": _line((view.get("confirmed") or {}).get("by"), 100) or None,
             "generated": time.strftime("%Y-%m-%d %H:%M UTC", time.gmtime(now or time.time())),
@@ -224,6 +232,12 @@ def markdown(view, now=None):
         out += ["", "## 验收（以 Evaluator 为准）", "", "| 验收项 | 判定 |", "|---|---|"]
         out += [f"| {_cell(a['item'])} | {a['result']}" + (f"（{_cell(a['by'])} 确认通过）" if a["by"] else "") + " |"
                 for a in m["evaluation"]]
+    if m["usage"]:
+        out += ["", "## 用量", "", "| 任务 | 用量 |", "|---|---|"]
+        out += [f"| {_cell(t['name'])} | {_cell(t['line'])} |" for t in m["usage"]["tasks"]]
+        out += [f"| **合计** | {_cell(m['usage']['total'])} |"]
+        if m["usage"]["unavailable"]:
+            out += ["", f"{m['usage']['unavailable']} 次执行没有 token 记录（KiroCrew 未写用量行）。"]
     out += ["", "## 纠错记录", ""]
     out += [_md(m["budget"]), ""] if m["budget"] else []
     out += [f"- {_md(_round(r))}" for r in m["recovery"]] or ["无纠错"]
@@ -307,6 +321,12 @@ def html(view, now=None):
         out += ["<h2>验收（以 Evaluator 为准）</h2>", "<table><tr><th>验收项</th><th>判定</th></tr>" + "".join(
             f"<tr><td>{e(a['item'])}</td><td>{e(a['result'])}" + (f"（{e(a['by'])} 确认通过）" if a["by"] else "") + "</td></tr>"
             for a in m["evaluation"]) + "</table>"]
+    if m["usage"]:   # D46 P6a
+        out += ["<h2>用量</h2>", "<table><tr><th>任务</th><th>用量</th></tr>" + "".join(
+            f"<tr><td>{e(t['name'])}</td><td>{e(t['line'])}</td></tr>" for t in m["usage"]["tasks"])
+            + f"<tr><th>合计</th><th>{e(m['usage']['total'])}</th></tr></table>"]
+        if m["usage"]["unavailable"]:
+            out.append(f"<p class=\"meta\">{m['usage']['unavailable']} 次执行没有 token 记录（KiroCrew 未写用量行）。</p>")
     out.append("<h2>纠错记录</h2>")
     if m["budget"]:
         out.append(f"<p>{e(m['budget'])}</p>")

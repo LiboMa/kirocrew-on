@@ -405,6 +405,8 @@ def compact_status(session, events):
             value["watchdog"] = evidence["watchdog"]["reason"]
         if evidence.get("switched_from"):   # D38: the Coordinator recommended this tool instead
             value["switched_from"] = evidence["switched_from"]
+        if evidence.get("usage"):   # D46 P6a
+            value["usage"] = {k: v for k, v in evidence["usage"].items() if k != "turns"}
         if evidence.get("continued"):   # D46 P5a: this rework resumed the task's conversation
             value["continued"] = True
         elif evidence.get("continue_refused"):
@@ -419,6 +421,8 @@ def compact_status(session, events):
     for key in ("publish_policy", "publish_auto", "publish_target", "publish_suggestion"):   # D47, D48
         if session.get(key):
             view[key] = session[key]
+    if session.get("usage"):   # D46 P6a: what its Attempts used
+        view["usage"] = session["usage"]
     if session.get("knowledge"):   # D46 P4: what this Session wrote to the environment's lessons
         view["knowledge"] = {"note": session["knowledge"].get("note"), "items": [
             {"id": item["id"], "rule": item["rule"], "result": "removed" if item.get("removed") else item["result"],

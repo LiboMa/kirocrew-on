@@ -1649,6 +1649,9 @@ class Service:
                     item["spec"], item["evidence"] = json.loads(item["spec"]), json.loads(item["evidence"])
                     task["attempts"].append(item)
             value["tasks"].append(task)
+        from . import usage   # D46 P6a: what the Session's Attempts used
+        value["usage"] = usage.total([json.loads(r["evidence"] or "{}") for r in db.execute(
+            "SELECT evidence FROM attempts WHERE run_id=?", (run["id"],))])
         value["progress"] = {"accepted": sum(t["status"] == "accepted" for t in value["tasks"]),
                              "total": len(value["tasks"])}
         if detail:

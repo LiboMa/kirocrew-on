@@ -1,3 +1,4 @@
+import { usageLine } from "@/lib/usage";
 import { ChevronDown } from "lucide-react";
 import type { Run } from "@/api/types";
 import { Button } from "@/components/ui/button";
@@ -68,6 +69,7 @@ export function TaskList({ run, onContinue }: { run: Run; onContinue: (taskId: s
                               + `换为 ${attempt.spec.tool} / ${attempt.spec.model}：${attempt.evidence.switched_from.reason ?? "未说明原因"}`} />
                           )}
                           {attempt.evidence.watchdog?.reason && <Meta label="看门狗" value={attempt.evidence.watchdog.reason} />}
+                          {attempt.evidence.usage && <Meta label="用量" value={usageLine(attempt.evidence.usage)} />}
                           {attempt.evidence.continued ? <Meta label="返工" value="续接上一轮的对话（保留上下文）" />
                             : attempt.evidence.continue_refused
                               ? <Meta label="返工" value={`续接被拒，已重新派发：${attempt.evidence.continue_refused}`} /> : null}
