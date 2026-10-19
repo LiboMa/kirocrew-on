@@ -6,6 +6,7 @@ import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/component
 import { StatusBadge } from "@/components/StatusBadge";
 import { ROLE_LABELS, TOOLS, formatTime } from "@/lib/labels";
 import { canRetryTask } from "@/lib/session";
+import { SteerControl } from "@/features/sessions/SteerControl";
 
 function Meta({ label, value }: { label: string; value: string | null | undefined }) {
   return (
@@ -46,6 +47,7 @@ export function TaskList({ run, onContinue }: { run: Run; onContinue: (taskId: s
               <footer className="mt-3 flex flex-wrap items-center gap-3">
                 <Button type="button" size="sm" variant="outline" disabled={!canRetryTask(run, index)}
                   onClick={() => onContinue(task.id)} data-retry={task.id}>配置并续作</Button>
+                <SteerControl run={run} task={task} />
                 <small className="text-xs text-muted-foreground">Task {task.id} · {attempts.length} 次执行</small>
               </footer>
               {attempts.length > 0 && (

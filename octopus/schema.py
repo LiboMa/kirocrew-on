@@ -90,6 +90,8 @@ def openapi():
                        "credentials": obj({"source": text})}, ["request_id", "input", "source"]),
         "Rebind": obj({"source": {"type": ["string", "null"]}}, ["source"]),
         "KnowledgeForget": obj({"id": text}, ["id"]),   # D46 P4: one item of the Session's knowledge.items
+        "Steer": obj({"task_id": text, "message": text, "mode": {"enum": ["interrupt", "follow_up"]}},
+                     ["task_id", "message"]),   # D46 P5b
         "Continue": obj({**command, "task_id": text, "input": text, "execution": ref("Execution"),
                          "recovery": ref("RecoveryPolicy"), "rerun": {"type": "array", "items": text, "maxItems": 8}},
                         ["request_id", "expected_version", "task_id"]),
@@ -158,6 +160,7 @@ def openapi():
         "/v1/runs/{id}/publish": {"post": "Publish"},
         "/v1/runs/{id}/publish-policy": {"post": "PublishPolicy"},
         "/v1/runs/{id}/knowledge/forget": {"post": "KnowledgeForget"},
+        "/v1/runs/{id}/steer": {"post": "Steer"},
         "/v1/runs/{id}/continue": {"post": "Continue"}, "/v1/runs/{id}/assign-worker": {"post": "AssignWorker"},
         **{"/v1/runs/{id}/" + action: {"post": "Control"} for action in ["stop", "close", "reopen", "delete"]},
     }

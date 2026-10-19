@@ -118,6 +118,12 @@ KiroCrew ON 在远端执行开发任务：KiroCrew 的 Kiro Agent 先识别意�
   `note` 为「共享执行环境不沉淀、不注入知识」时，该会话在共享环境中，什么也不写也不注入。
 - 用户认为某条不对时，请其在控制台会话页「本次沉淀的知识」中删除（创建者、Team owner、管理员）。
 
+## 给运行中的任务补充说明
+
+- 用户要纠正或补充一个**正在运行**的任务时，用 `octopus_steer {run_id, task_id, message, mode?}`：`mode` 为 `interrupt`（默认，插入它正在进行的这一轮）
+  或 `follow_up`（这一轮结束后送达）。把要发送的原文给用户确认后再发；只能由会话创建者、Team owner 或管理员发送，写入审计与时间线。
+- `409 not_running`：任务已结束或尚未开始，改用 `octopus_continue`；`steer_unsupported`：执行环境的 Worker 尚未升级。
+
 ## 批准原生工具请求
 
 - 会话为 `waiting_approval`，或原生父会话想运行工具时，`octopus_approvals {run_id}` 列出待批准项（`origin`、`tool`、`tool_input`、`tool_purpose`）。

@@ -81,6 +81,13 @@ TOOLS = [
                                    "decision": {"type": "string", "enum": ["approve", "reject"]}},
                                   ["run_id", "origin", "request_id", "decision"]),
      "annotations": {"destructiveHint": True}},
+    {"name": "octopus_steer",
+     "description": "给正在运行的任务补充说明（D46 P5b）：mode=interrupt（默认）插入它正在进行的这一轮，follow_up 在这一轮结束后送达。"
+                    "只用于用户要求的纠正或补充（把要发送的原文给用户确认），不要用它替用户决定；任务不在运行时返回 not_running。",
+     "inputSchema": object_schema({"run_id": STRING, "task_id": STRING, "message": STRING,
+                                   "mode": {"type": "string", "enum": ["interrupt", "follow_up"]}},
+                                  ["run_id", "task_id", "message"]),
+     "annotations": {"destructiveHint": True}},
     {"name": "octopus_parse_workflow",
      "description": "校验并规范化一个由 Agent 预先生成的工作流（JSON / YAML / 含一个代码块的 Markdown；新版导出或旧版 schema 1），返回 name、steps 与规范化说明；仅预览，不执行。",
      "inputSchema": object_schema({"content": STRING, "format": {"type": "string", "enum": ["json", "yaml", "markdown"]}},
@@ -465,6 +472,9 @@ def call(client, name, args):
         return {"markdown": client.text("GET", "/v1/runs/" + quote(args["run_id"], safe="") + "/report?format=md")}
     if name == "octopus_approvals":
         return client.request("GET", "/v1/runs/" + quote(args["run_id"], safe="") + "/approvals")
+    if name == "octopus_steer":
+        rid = args.pop("run_id")
+        return client.request("POST", "/v1/runs/" + quote(rid, safe="") + "/steer", args)
     if name == "octopus_approve":
         rid = args.pop("run_id")
         return client.request("POST", "/v1/runs/" + quote(rid, safe="") + "/approvals/answer", args)

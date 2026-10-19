@@ -1099,6 +1099,44 @@ class Service:
             return Error(502, "worker_error", "执行环境拒绝了平台的请求（Worker Token 或 Gateway 登录需要更新）")
         return exc
 
+    def steer(self, actor, rid, body):
+        """A note for a running task (D46 P5b), through the Worker to KiroCrew's steer: those who may publish the Session;
+        audited and on the timeline. ``interrupt`` reaches the running turn, ``follow_up`` the next one."""
+        require(isinstance(body, dict) and set(body) <= {"task_id", "message", "mode"}, "只接受 task_id、message 与 mode")
+        message, mode = body.get("message"), body.get("mode", "interrupt")
+        require(isinstance(message, str) and message.strip() and len(message) <= 4000, "补充说明须为 1–4000 字符")
+        require(mode in {"interrupt", "follow_up"}, "mode 只能是 interrupt 或 follow_up")
+        with self.db.read() as db:
+            run = run_access(db, actor, rid)
+            require(may_publish(db, actor, run), "只有会话创建者、Team owner 或管理员可以补充说明", 403, "forbidden")
+            require(run_permissions(db, actor, run)["resume"], "Team 已归档，不能补充说明", 409, "team_archived")
+            task = db.execute("SELECT * FROM tasks WHERE run_id=? AND id=?", (rid, body.get("task_id"))).fetchone()
+            require(task is not None, "任务不存在", 404, "not_found")
+            attempt = db.execute("SELECT * FROM attempts WHERE id=?", (task["current_attempt"],)).fetchone() \
+                if task["current_attempt"] else None
+            require(attempt is not None and attempt["status"] in {"running", "waiting_approval"} and attempt["native_id"],
+                    "任务不在运行，不能补充说明", 409, "not_running")
+            config, retired = self._app_worker(db, run["worker_id"])
+        require(config and not retired, "会话没有可用的执行环境", 409, "worker_unavailable")
+        require((config.get("capabilities") or {}).get("steer"), "执行环境的 Worker 尚未升级，暂不支持补充说明", 409,
+                "steer_unsupported")
+        from . import transport
+        try:
+            result = transport.worker_request(config, "/steer", {"run_id": rid, "attempt_id": attempt["id"],
+                                                                 "message": message, "mode": mode}, timeout=15)
+        except Error as exc:
+            if exc.code in {"not_running", "native_unavailable"}:
+                raise
+            if exc.code == "worker_unavailable":
+                raise Error(503, exc.code, "未送达：执行环境暂不可用，请稍后重试") from None
+            raise self._worker_refusal(exc) from None
+        with self.db.transaction() as db:
+            audit(db, actor, "task.steer", "run", rid, {"task": task["id"], "mode": mode, "message": message[:200]})
+            journal.record(db, rid, "task.steered", journal.person(actor),
+                           reason=("补充说明：" if mode == "interrupt" else "本轮结束后补充说明：") + message[:500],
+                           task=task["id"], mode=mode)
+        return {"ok": True, "status": result.get("status"), "task_id": task["id"]}
+
     def answer_approval(self, actor, rid, body):
         """Answer one pending approval (D38 §4.2): the people who may publish the Session, audited."""
         require(isinstance(body, dict) and set(body) <= {"origin", "request_id", "request_mid", "instance", "decision"},
