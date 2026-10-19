@@ -103,7 +103,10 @@
   续接的 claude 对话的 cost 是每轮还是累计未确认（EC2 核对，以免合计重复计算）。
 
 ## D46 P5a 保留上下文的返工的终审延后项（2026-10-19）
-- P5b：运行中补充说明（`steer`，控制台与 MCP，写审计；看门狗停止前先 `follow_up` 提醒）；会话关闭 / 删除时 `release` 可续接的对话。
+- ~~P5b：运行中补充说明与释放对话~~（2026-10-19 完成：只支持 Kiro 任务的 `interrupt`；删除会话时 `release`）。后续：
+  `follow_up` 需由平台跟踪 KiroCrew 另起的续接运行（或改为下一次返工时附上）；claude / codex 的补充说明待 KiroCrew 支持；超时时说「送达情况未确认」；
+  `queued_not_started` 单独提示；`task_id` 类型与控制字符校验、schema 的长度约束；控制台在会话刷新后保留错误、归档 Team 不显示；
+  release 用短超时、记录未释放的对话；补测试（续接后的 Attempt、Team 成员 403、waiting_approval、上游 502 经平台）。
 - 时间线不说明续接被拒（只在事件内容中有 `continue_refused`）：给 `attempt.dispatched` 加原因。
 - `health()["continue"]` 恒为 true：前置的 KiroCrew 早于 0.10 时每次返工都记 `continue_refused: HTTP 404`，可与接受的 KiroCrew 版本挂钩。
 - `from` 只校验格式，未核对它的 dispatch.json 确有该对话。
