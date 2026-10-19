@@ -154,6 +154,16 @@
         "scope",
         "workspace"
       ]
+    },
+    "POST /api/spawn/{}/continue": {
+      "module": "dashboard/messaging_api/spawn.py",
+      "reads": [
+        "task",
+        "parent_session",
+        "agent",
+        "model",
+        "max_turns"
+      ]
     }
   }
 }

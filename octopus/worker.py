@@ -186,6 +186,9 @@ OBSERVATIONS = {"native_empty_observation": "empty-session-observation.json",
 REFUSED_EXPORTS = {"export_bundle_empty": "native_empty_observation", "export_slot_not_persistent": "native_restricted_observation"}
 
 
+# The rework's own words when it resumes its conversation (D46 P5a); a fresh spawn never says it.
+REWORK = "\n这是同一任务的返工：你上一轮的工作与对话都在，先核对本轮要求，在已有改动上修复，不要从头重写。"
+
 class Worker:
     def __init__(self, root, token, gateway_port=5476, crew_home=None, isolation="trusted-local", routing_log=None,
                  crew_url=None, approval_mode="", crew_entry_ttl="8h", kiro_cli=None, path_prepend=(),
@@ -748,6 +751,7 @@ class Worker:
                 "coordinator_recovery": True, "quality_outcome": True, "baseline_checks": True, "attempt_stop": True,
                 "role_cards": True,   # D46 P2: a contract may carry a role
                 "knowledge": True,    # D46 P4: repository mark, lessons on request, /knowledge/write and /forget
+                "continue": True,     # D46 P5a: a rework may continue its task's native conversation
                 "boundary": hashlib.sha256(boundary.encode()).hexdigest(),
                 "host_principal": hashlib.sha256(f"{socket.gethostname()}:{os.getuid()}".encode()).hexdigest(),
                 "routing_evidence": bool(self.routing_log and self.routing_log.is_file()),
@@ -875,6 +879,12 @@ class Worker:
                     409, "model_transport_unsupported")
             require(spec["model"] in self.health()["models"][spec["tool"]],
                     "所选模型未由此 Worker 后端公布", 409, "model_unavailable")
+        resume = body.get("continue")
+        if resume is not None:   # D46 P5a: a rework resumes one of this Session's own native conversations, no other
+            require(isinstance(resume, dict) and set(resume) == {"conversation", "from"}
+                    and re.fullmatch(r"[a-f0-9]{8,64}", str(resume.get("conversation", "")))
+                    and re.fullmatch(r"attempt-[a-f0-9]{32}", str(resume.get("from", ""))), "续接对象无效")
+            require(resume["conversation"] in self._conversations(run), "续接的对话不属于此会话", 409, "conflict")
         folder = run / "attempts" / attempt
         # Checked before the lock: a slow kiro-cli must not hold every other request of this Worker.
         login = self.tool_auth() if spec["tool"] == "kiro" or body.get("coordination") or body.get("design") else "ok"
@@ -961,7 +971,25 @@ class Worker:
                 if self.approval_mode == "auto":
                     # Owner-authenticated request for native per-spawn auto approval (D14, K19).
                     spawn["approval_mode"] = "auto"
-                result = self.native("/api/spawn", spawn)
+                result = None
+                if resume is not None:
+                    # The conversation keeps its own model settings, effort and approvals; the rework is a new run in it.
+                    again = {"task": prompt + REWORK, "parent_session": parent["parent"], "agent": spawn["agent"]}
+                    if explicit:
+                        again["model"] = spec["model"]
+                    try:
+                        result = self.native("/api/spawn/" + quote(resume["conversation"], safe="") + "/continue", again)
+                        value["continued"] = {"conversation": resume["conversation"], "from": resume["from"]}
+                    except crew_api.GatewayError as exc:
+                        if exc.status not in {400, 404, 409}:
+                            raise   # capacity or the Gateway itself: as for a spawn, inspected before any retry
+                        try:
+                            code = json.loads(str(exc).partition(": ")[2]).get("code")
+                        except (ValueError, AttributeError):
+                            code = None
+                        value["continue_refused"] = str(code or f"HTTP {exc.status}")[:80]   # gone, busy: a fresh spawn
+                if result is None:
+                    result = self.native("/api/spawn", spawn)
                 require(re.fullmatch(r"[a-f0-9]{8,64}", str(result.get("id", ""))), "原生 Task ID 无效")
                 value.update(status="running", native_id=result["id"], receipt=result)
             except crew_api.GatewayError as exc:
@@ -979,6 +1007,18 @@ class Worker:
                 value.update(status="dispatch_unknown", error="原生派发回执未确认")
             write(record, value)
             return value
+
+    @staticmethod
+    def _conversations(run):
+        """The native conversations this Session's Attempts started or continued (D46 P5a)."""
+        found = set()
+        for record in (run / "attempts").glob("attempt-*/dispatch.json"):
+            try:
+                value = json.loads(record.read_text())
+            except (OSError, ValueError):
+                continue
+            found |= {str(v) for v in (value.get("native_id"), (value.get("continued") or {}).get("conversation")) if v}
+        return found
 
     def reconcile(self, run, parent, attempt, value):
         tasks = self.native("/api/spawn").get("agents", [])
