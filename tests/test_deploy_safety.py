@@ -66,19 +66,21 @@ class InstallerSafetyTests(unittest.TestCase):
         self.text = (ROOT / "deploy/install/al2023.sh").read_text()
 
     def test_current_switches_only_after_the_new_release_passed_its_checks(self):
-        checks = self.text.index("-m unittest discover")
+        # D49: every boundary on the host is checked (boundary_check) before either link moves.
+        checks = self.text.index('boundary_check "$OTHER" "$TARGET" "$KC"')
+        self.assertLess(self.text.index('boundary_check "$BOUNDARY" "$TARGET" "$KC"'), checks)
         for link in ('ln -sfn "$TARGET" /opt/kirocrew-on/current', 'ln -sfn "$KC" /opt/kirocrew/current'):
             self.assertEqual(self.text.count(link), 1, link)
             self.assertGreater(self.text.index(link), checks, link)
+        self.assertNotIn("/opt/kirocrew/current/", self.text[:checks])
+        self.assertNotIn("/opt/kirocrew-on/current/", self.text[:checks])
         # The checks read a copy of the boundary config whose current paths are rewritten to the release being installed.
-        rewrite = 'sed -e "s#/opt/kirocrew-on/current/#$TARGET/#g" -e "s#/opt/kirocrew/current/#$KC/#g" "$BOUNDARY_TOML" > "$CHECK_TOML"'
-        self.assertEqual(self.text.count(rewrite), 1)
-        self.assertIn('-m composition.gateway --config "$CHECK_TOML" --check', self.text)
-        self.assertIn('OCTOPUS_CONFIG="$CHECK_TOML"', self.text)
-        before = self.text[:checks].replace(rewrite, "")
-        self.assertNotIn("/opt/kirocrew/current/", before)
-        self.assertNotIn("/opt/kirocrew-on/current/", before)
-        self.assertIn('"$KC/venv/bin/python" -s -m unittest discover -s "$TARGET/tests/native"', self.text)
+        library = (ROOT / "deploy/install/boundary-lib.sh").read_text()
+        rewrite = 'sed -e "s#/opt/kirocrew-on/current/#$2/#g" -e "s#/opt/kirocrew/current/#$3/#g" "$toml" > "$check"'
+        self.assertEqual(library.count(rewrite), 1)
+        self.assertIn('-m composition.gateway --config "$check" --check', library)
+        self.assertIn('OCTOPUS_CONFIG="$check"', library)
+        self.assertIn('"$3/venv/bin/python" -s -m unittest discover -s "$2/tests/native"', library)
 
     def test_the_admin_password_lives_in_a_root_only_file_on_the_host(self):
         self.assertNotIn("ADMIN_PASSWORD_PARAM", self.text)

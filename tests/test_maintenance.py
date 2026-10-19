@@ -44,13 +44,13 @@ class WorkerTests(unittest.TestCase):
 
 class InstallerTests(unittest.TestCase):
     def test_a_gateway_restart_is_drained_first(self):
-        text = (ROOT / "deploy/install/al2023.sh").read_text()
+        text = (ROOT / "deploy/install/boundary-lib.sh").read_text()   # D49: boundary_restart, for every boundary
         block = re.search(r"# gateway:begin(.*?)# gateway:end", text, re.S).group(1)
-        mark, restart = block.index(".maintenance"), block.index('systemctl restart "octopus-gateway@$BOUNDARY"')
+        mark, restart = block.index(".maintenance"), block.index('systemctl restart "octopus-gateway@$name"')
         self.assertLess(mark, restart)   # marked before the restart
         self.assertIn("DRAIN_MINUTES", block)   # and waits, with a limit, for the running native tasks
         after = text[text.index("# gateway:end"):]
-        self.assertLess(after.index('systemctl restart "octopus-worker@$BOUNDARY"'), after.index('rm -f "$MAINTENANCE"'))
+        self.assertLess(after.index('systemctl restart "octopus-worker@$name"'), after.index('rm -f "$maintenance"'))
 
 
 if __name__ == "__main__":

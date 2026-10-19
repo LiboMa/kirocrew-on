@@ -197,44 +197,18 @@ class TemplateTests(unittest.TestCase):
 
 class ScriptTests(unittest.TestCase):
     def test_gateway_restarts_only_when_what_it_loads_changed(self):
+        # D49: the restart logic is boundary_restart in deploy/install/boundary-lib.sh, run for every boundary on the host;
+        # tests/test_boundaries.py runs it against a fake host (fingerprint, drop-ins, env, not running).
         text = (ROOT / "deploy/install/al2023.sh").read_text()
-        snippet = text[text.index("# gateway:begin"):text.index("# gateway:end")]
-        with tempfile.TemporaryDirectory() as tmp:
-            root = Path(tmp)
-            for name in ("on/composition/gateway.py", "on/octopus/config.py", "on/octopus/prompts.py", "on/octopus/__init__.py",
-                         "on/pipeline_spec.py", "etc/boundary-b1.toml", "systemd/octopus-gateway@.service"):
-                (root / name).parent.mkdir(parents=True, exist_ok=True)
-                (root / name).write_text(name)
-            (root / "kc/releases/1").mkdir(parents=True)
-            (root / "kc/current").symlink_to(root / "kc/releases/1")
-            (root / "base").mkdir()
-            body = (snippet.replace("/opt/kirocrew-on/current", str(root / "on")).replace("/opt/kirocrew/current", str(root / "kc/current"))
-                    .replace("/etc/systemd/system", str(root / "systemd")).replace("/etc/kirocrew-on", str(root / "etc")))
-            script = (f"set -euo pipefail\nBOUNDARY=b1\nBASE={root}/base\nBOUNDARY_TOML={root}/etc/boundary-b1.toml\n"
-                      "log() { echo \"LOG $*\"; }\n"
-                      f"systemctl() {{ echo \"$*\" >> {root}/calls; if [ \"$1\" = is-active ]; then [ -f {root}/active ]; fi; }}\n" + body)
-            def run():
-                (root / "calls").write_text("")
-                out = subprocess.run(["bash", "-c", script], capture_output=True, text=True, check=True).stdout
-                return "restart octopus-gateway@b1" in (root / "calls").read_text(), out
-            self.assertTrue(run()[0])                        # first install: no fingerprint yet
-            (root / "active").write_text("")
-            restarted, out = run()
-            self.assertFalse(restarted)                      # nothing changed and it is running
-            self.assertIn("Gateway 未变化", out)
-            (root / "etc/boundary-b1.toml").write_text("changed")
-            self.assertTrue(run()[0])                        # the boundary config changed
-            self.assertFalse(run()[0])
-            (root / "on/pipeline_spec.py").write_text("changed")
-            self.assertTrue(run()[0])                        # templates import it lazily
-            (root / "systemd/octopus-gateway@b1.service.d").mkdir()
-            (root / "systemd/octopus-gateway@b1.service.d/limits.conf").write_text("[Service]")
-            self.assertTrue(run()[0])                        # a drop-in for this boundary
-            (root / "active").unlink()
-            self.assertTrue(run()[0])                        # unchanged, but not running
+        self.assertIn('boundary_restart "$BOUNDARY" "$KC"', text)
+        library = (ROOT / "deploy/install/boundary-lib.sh").read_text()
+        block = library[library.index("# gateway:begin"):library.index("# gateway:end")]
+        for part in ('readlink -f "$KC_CURRENT"', '"$toml" "$SYSTEMD/octopus-gateway@.service"',
+                     '"$SYSTEMD/octopus-gateway@$name.service.d/"*.conf', '"$ETC/boundary-$name.env"'):
+            self.assertIn(part, block)
 
     def test_scripts_are_valid_bash_without_mac_assumptions(self):
-        for name in ("deploy/install/al2023.sh", "deploy/aws/deploy.sh"):
+        for name in ("deploy/install/al2023.sh", "deploy/install/boundary-lib.sh", "deploy/aws/deploy.sh"):
             script = ROOT / name
             subprocess.run(["bash", "-n", str(script)], check=True)
             text = script.read_text()
@@ -259,7 +233,7 @@ class ScriptTests(unittest.TestCase):
     def test_contract_check_runs_after_templates_are_seeded(self):
         # Observed on EC2: a fresh KIRO_HOME has no poc-* templates until the composition seeds them, so the
         # coordinator control-plane mount was empty. --check seeds and verifies routing before the native tests.
-        text = (ROOT / "deploy/install/al2023.sh").read_text()
+        text = (ROOT / "deploy/install/boundary-lib.sh").read_text()   # D49: boundary_check, for every boundary
         self.assertIn("-m composition.gateway --config", text)
         self.assertLess(text.index("-m composition.gateway --config"), text.index("-m unittest discover"))
 
@@ -427,7 +401,7 @@ class ScriptTests(unittest.TestCase):
         self.assertGreater(text.index('toml_set "$BOUNDARY_TOML" preview_tls_port "$WORKER_PREVIEW_TLS_PORT"'), switch)
         self.assertIn('toml_set "$BOUNDARY_TOML" preview_tls_name "\\"$BOUNDARY.worker.kirocrew-on\\""', text)
         self.assertGreater(text.index('render_worker_preview "$TARGET/deploy/nginx/kirocrew-worker-preview.conf"'),
-                           text.index('systemctl restart "octopus-worker@$BOUNDARY"'))
+                           text.index('boundary_restart "$BOUNDARY" "$KC"'))
         deploy = (ROOT / "deploy/aws/deploy.sh").read_text()
         self.assertIn('preview="$(output PreviewDomain)"', deploy)
         self.assertIn("PREVIEW_DOMAIN={preview} PREVIEW_PORT={preview_port}", deploy)
@@ -520,13 +494,17 @@ class ScriptTests(unittest.TestCase):
         # Found on the first fresh Worker host (D28): before the switch /opt/kirocrew-on/current and /opt/kirocrew/current
         # do not exist yet, and on an upgrade they still point at the old release.
         text = (ROOT / "deploy/install/al2023.sh").read_text()
-        check = text[text.index('log "原生契约检查'):text.index('log "切换到已通过检查的发布')]
-        self.assertIn('-e "s#/opt/kirocrew-on/current/#$TARGET/#g" -e "s#/opt/kirocrew/current/#$KC/#g"', check)
+        calls = text[text.index('log "原生契约检查'):text.index('log "切换到已通过检查的发布')]
+        self.assertIn('boundary_check "$BOUNDARY" "$TARGET" "$KC"', calls)   # the release being installed, not current
+        library = (ROOT / "deploy/install/boundary-lib.sh").read_text()
+        start = library.index("boundary_check() {")
+        check = library[start:library.index("\n}\n", start)]
+        self.assertIn('sed -e "s#/opt/kirocrew-on/current/#$2/#g" -e "s#/opt/kirocrew/current/#$3/#g" "$toml" > "$check"', check)
         for line in (l for l in check.splitlines() if "runuser" in l or "composition.gateway" in l or "OCTOPUS_CONFIG" in l):
-            self.assertNotIn("$BOUNDARY_TOML", line)
-        self.assertIn('--config "$CHECK_TOML" --check', check)
-        self.assertIn('OCTOPUS_CONFIG="$CHECK_TOML"', check)
-        self.assertIn('rm -f "$CHECK_TOML"', check)
+            self.assertNotIn("$toml", line)
+        self.assertIn('--config "$check" --check', check)
+        self.assertIn('OCTOPUS_CONFIG="$check"', check)
+        self.assertIn('rm -f "$check"', check)
 
     def test_security_group_descriptions_use_only_what_ec2_accepts(self):
         # Observed on EC2: an apostrophe in a rule description made the platform update roll back.

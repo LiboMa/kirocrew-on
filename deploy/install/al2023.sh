@@ -18,6 +18,9 @@ REGION="${AWS_REGION:-us-east-1}"
 # shellcheck source=../versions.env
 source "$SOURCE/deploy/versions.env"
 log() { printf '[%s] %s\n' "$(date -u +%H:%M:%S)" "$*"; }
+# The steps of each boundary on this host (D49: one per person; the platform host may carry several).
+# shellcheck source=boundary-lib.sh
+. "$SOURCE/deploy/install/boundary-lib.sh"
 SCRATCH="$(mktemp -d)"
 cleanup() { rm -rf "$SCRATCH"; }
 trap cleanup EXIT
@@ -185,12 +188,7 @@ npm install --global --no-audit --no-fund --prefix /opt/kirocrew-tools \
   "@anthropic-ai/claude-code@$CLAUDE_CODE_VERSION" "@openai/codex@$CODEX_VERSION" "opencode-ai@$OPENCODE_VERSION"
 
 log "执行边界 $BOUNDARY 的环境（Bedrock 经实例角色）"
-cat > "/etc/kirocrew-on/boundary-$BOUNDARY.env" <<EOF
-CLAUDE_CODE_USE_BEDROCK=1
-AWS_REGION=$REGION
-PATH=/opt/kirocrew-tools/bin:$NODE_ROOT/bin:/usr/local/bin:/usr/bin:/bin
-EOF
-chmod 0644 "/etc/kirocrew-on/boundary-$BOUNDARY.env"
+boundary_env "$BOUNDARY"
 if [ ! -f "$BASE/home/.codex/config.toml" ]; then
   install -d -m 0700 -o "$CREW" -g "$CREW" "$BASE/home/.codex"
   printf 'model_provider = "amazon-bedrock"\nmodel = "openai.gpt-6-astra"\n' > "$BASE/home/.codex/config.toml"
@@ -330,23 +328,14 @@ fi
 fi
 
 log "原生契约检查（以 $CREW 身份，隔离边界配置）"
-CREW_ENV=(env HOME="$BASE/home" PATH="/opt/kirocrew-tools/bin:$NODE_ROOT/bin:/usr/local/bin:/usr/bin:/bin"
-          PYTHONPATH="$TARGET")
-# The check runs against the release being installed: before the switch, current points at the previous release, or
-# (on a fresh host) does not exist yet. The boundary config with its current paths rewritten is used for the check only.
-CHECK_TOML="/etc/kirocrew-on/boundary-$BOUNDARY.check.toml"
-sed -e "s#/opt/kirocrew-on/current/#$TARGET/#g" -e "s#/opt/kirocrew/current/#$KC/#g" "$BOUNDARY_TOML" > "$CHECK_TOML"
-chown "root:$CREW" "$CHECK_TOML"
-chmod 0640 "$CHECK_TOML"
-# --check seeds the poc-* templates into KIRO_HOME and verifies every route before the native tests read them.
-runuser -u "$CREW" -- "${CREW_ENV[@]}" "$KC/venv/bin/python" -s \
-  -m composition.gateway --config "$CHECK_TOML" --check
-runuser -u "$CREW" -- "${CREW_ENV[@]}" OCTOPUS_CONFIG="$CHECK_TOML" \
-  "$KC/venv/bin/python" -s -m unittest discover -s "$TARGET/tests/native"
-rm -f "$CHECK_TOML"
-if [ "$KIROCREW_VERSION" = "$KIROCREW_ACCEPTED_VERSION" ]; then
-  sed -i "s#^kirocrew_versions = .*#kirocrew_versions = [\"$KIROCREW_VERSION\"]#" "$BOUNDARY_TOML"
-fi
+boundary_check "$BOUNDARY" "$TARGET" "$KC"
+for OTHER in $(other_boundaries "$BOUNDARY"); do   # D49: every boundary on this host passes before the release switches
+  log "原生契约检查：边界 $OTHER"
+  boundary_check "$OTHER" "$TARGET" "$KC"
+done
+for NAME in "$BOUNDARY" $(other_boundaries "$BOUNDARY"); do
+  boundary_versions "$NAME" "$KIROCREW_VERSION" "$KIROCREW_ACCEPTED_VERSION"
+done
 log "切换到已通过检查的发布 $RELEASE 与 KiroCrew $KIROCREW_VERSION"
 ln -sfn "$TARGET" /opt/kirocrew-on/current
 ln -sfn "$KC" /opt/kirocrew/current
@@ -407,47 +396,12 @@ log "systemd"
 install -m 0644 /opt/kirocrew-on/current/deploy/systemd/*.service /etc/systemd/system/
 systemctl daemon-reload
 systemctl enable "octopus-gateway@$BOUNDARY" "octopus-worker@$BOUNDARY" >/dev/null
-# gateway:begin
-# The Gateway runs every native task: restart it only when what it loads changed (D34 §5.3), so a deploy of the
-# platform alone does not interrupt work in flight. The Worker and the API restart as before.
-GATEWAY_STAMP="$BASE/gateway.fingerprint"
-GATEWAY_PRINT="$( { readlink -f /opt/kirocrew/current
-  cat /opt/kirocrew-on/current/composition/*.py /opt/kirocrew-on/current/octopus/config.py \
-      /opt/kirocrew-on/current/octopus/prompts.py /opt/kirocrew-on/current/octopus/__init__.py \
-      /opt/kirocrew-on/current/pipeline_spec.py "$BOUNDARY_TOML" /etc/systemd/system/octopus-gateway@.service
-  cat /etc/systemd/system/octopus-gateway@.service.d/*.conf "/etc/systemd/system/octopus-gateway@$BOUNDARY.service.d/"*.conf \
-      "/etc/kirocrew-on/boundary-$BOUNDARY.env" 2>/dev/null || true; } | sha256sum | cut -d' ' -f1)"
-# A restart ends the native tasks in flight (postmortem #8, EC2 run-f7670bfb…): the Worker first stops taking work (its
-# .maintenance mark: the platform waits and retries) and the running tasks get up to DRAIN_MINUTES to end.
-MAINTENANCE="$BASE/worker/.maintenance"
-if [ "$(cat "$GATEWAY_STAMP" 2>/dev/null || true)" = "$GATEWAY_PRINT" ] && systemctl is-active --quiet "octopus-gateway@$BOUNDARY"; then
-  log "Gateway 未变化，保持运行（进行中的原生任务不中断）"
-else
-  if systemctl is-active --quiet "octopus-gateway@$BOUNDARY" && [ -d "$BASE/worker" ]; then
-    printf 'deploy %s\n' "$(date -u +%FT%TZ)" > "$MAINTENANCE"   # the Worker only checks that it exists
-    DEADLINE=$(( $(date +%s) + ${DRAIN_MINUTES:-30} * 60 ))
-    while [ "$(date +%s)" -lt "$DEADLINE" ]; do
-      RUNNING="$(runuser -u "$CREW" -- env PYTHONPATH=/opt/kirocrew-on/current "$KC/venv/bin/python" -s -c '
-import sys
-from pathlib import Path
-from octopus import gateway_client as g
-try:
-    agents = g.request("/api/spawn", port=int(sys.argv[1]), home=Path(sys.argv[2])).get("agents", [])
-    print(sum(1 for a in agents if not a.get("done")))
-except Exception:
-    print(0)
-' "$(grep -E '^gateway_port' "$BOUNDARY_TOML" | grep -oE '[0-9]+')" "$BASE/crew" 2>/dev/null || echo 0)"
-      [ "${RUNNING:-0}" = 0 ] && break
-      log "等待 $RUNNING 个原生任务结束后重启 Gateway（最多 ${DRAIN_MINUTES:-30} 分钟）"
-      sleep 20
-    done
-  fi
-  systemctl restart "octopus-gateway@$BOUNDARY"
-  printf '%s\n' "$GATEWAY_PRINT" > "$GATEWAY_STAMP"
-fi
-# gateway:end
-systemctl restart "octopus-worker@$BOUNDARY"
-rm -f "$MAINTENANCE"   # the restarted Worker takes work again
+boundary_restart "$BOUNDARY" "$KC"
+for OTHER in $(other_boundaries "$BOUNDARY"); do   # D49: then every other boundary on this host, one at a time
+  boundary_env "$OTHER"
+  systemctl enable "octopus-gateway@$OTHER" "octopus-worker@$OTHER" >/dev/null
+  boundary_restart "$OTHER" "$KC"
+done
 if [ -n "$WORKER_HOST" ] && [ -n "${WORKER_PREVIEW_TLS_PORT:-}" ] && [ -s "$BASE/worker.token" ]; then
   log "远程预览端口 $WORKER_PREVIEW_TLS_PORT（TLS；只转发到回环 47000–47999，校验头由 Worker Token 派生）"
   ( umask 077; render_worker_preview "$TARGET/deploy/nginx/kirocrew-worker-preview.conf" "$BASE/worker.token" \
