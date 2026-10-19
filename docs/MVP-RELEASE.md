@@ -508,7 +508,7 @@ Anthropic frontend-design，附许可证，去掉询问用户、提交推送、�
 本机完成，已部署 EC2：一台主机可放多人的 KiroCrew 边界（OS 用户 `crew-<名称>`、各自端口与 systemd 资源上限）；`deploy.sh boundary add`、
 `boundaries`、`kiro-login --boundary`、`tunnel`；个人会话未指定执行环境时在此人的专属边界执行。2026-10-19 在平台主机为 admin 建 owner 边界
 （Gateway 5481、Worker 9001），隔离检查通过，两个边界的同时升级已验证；kiro 待登录。待：owner 边界上的会话验收；第 2 期调度（Team 会话在
-提交者的边界执行、客户端带 `worker_id` 时的路由）待与负责人讨论。
+提交者的边界执行）：负责人 2026-10-19 选定无边界时回退到 Team 的环境并提示，本机完成（spec `2026-10-19-session-placement-design.md`；`GET /v1/placement`、控制台向导默认交给平台选择、原生入口只给边界主人），待 EC2 验收。
 
 ### 14.36 用量（D46 P6a）
 

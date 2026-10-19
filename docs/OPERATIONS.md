@@ -134,10 +134,20 @@ deploy/aws/deploy.sh tunnel --boundary alice       # 该边界的原生 KiroCrew
 - 移除一个边界（手工，root）：`systemctl disable --now octopus-gateway@alice octopus-worker@alice`；
   `mv /etc/kirocrew-on/boundary-alice.toml /var/lib/octopus/boundaries/alice/boundary.toml.removed`（之后的 `push` 不再检查它）；在控制台停用其 Worker。
   数据目录与 `crew-alice` 保留，确认不再需要后再删。
-- 个人会话自动选择：有**恰好一个**启用的专属 Worker 时选它，即使共享的 `personal` 也服务此人；两个以上时等待选择。Team 会话不变。
+- 自动选择（第 1 期个人会话，第 2 期 Team 会话同样）：有**恰好一个**启用的专属边界时选它，即使共享的 `personal` 也服务此人；两个以上时等待选择。
 - `deploy.sh space <run-id>` 在 `boundaries/*/worker/<run-id>` 中找会话所在的边界。
 - `personal`（共享）本期不加资源上限，避免在用的会话被终止。平台主机 m7i.xlarge（4 vCPU / 16 GiB）上放两三个边界；更多人时换更大的主机或增加 Worker 主机。
-- 第 2 期：Team 会话在提交者自己的边界执行、每个边界的公开原生入口、跨主机放置、空闲停 Gateway、用量按人归属。
+- 第 2 期（会话的执行位置）：
+  - Team 会话在**提交者自己的边界**执行（须为该 Team 成员）；没有边界的成员回退到 Team 的环境，会话页与 MCP 写明「你还没有自己的执行边界…」
+    （负责人 2026-10-19 选 A）；Team 没有环境而提交者有边界时照常执行，两者都没有时 409 `team_without_worker`。
+  - 会话固定在所选环境：其他成员续作、返工、诊断都在创建者的边界。创建者离开 Team、边界停用或退役后，下次派发前进入「等待执行环境」，
+    由 Team owner 或管理员在会话页「分配 Worker」改到 Team 的环境（可选项按创建者：Team 的环境与创建者的边界）。
+  - 位置由平台统一回答：`GET /v1/placement?team_id=`（新会话的默认位置、原因 `own` / `team` / `only` / `requested` 与提示、可选环境），
+    `?run_id=`（该会话可分配的环境）；控制台向导默认「自动：将在 X 执行」，MCP `octopus_environments` 标出 `default`。会话的 `placement`
+    记于视图、精简状态与时间线 `run.created`。
+  - Team 成员看得到会话的状态、报告、预览与下载；原生 KiroCrew 入口只开放给边界主人（`permissions.native_reason` 说明原因）。
+    Team 会话的 lessons 存于提交者的 Gateway、按 Team 空间标识区分；用量计入提交者的 kiro 账号。
+- 以后（第 3 期）：每个边界的公开原生入口、跨主机放置、空闲停 Gateway、退役共享 `personal`、按人的用量视图。
 
 ### Worker 主机：独立的执行环境（D28）
 
