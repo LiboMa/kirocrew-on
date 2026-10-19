@@ -147,6 +147,17 @@ describe("launch wizard", () => {
     expect(calls.find((c) => c.method === "POST" && c.path === "/v1/runs")?.body).not.toHaveProperty("worker_id");
   });
 
+  test("changing the space leaves the choice to the platform again (D49)", async () => {
+    start({ "GET /workers": [worker] });
+    const dialog = await openWizard();
+    const select = await within(dialog).findByLabelText("执行 Worker");
+    await waitFor(() => expect(within(select).getAllByRole("option")[0]).toHaveTextContent("自动：将在 personal 执行"));
+    await userEvent.selectOptions(select, "w1");
+    await userEvent.selectOptions(within(dialog).getByLabelText("执行空间"), "team-1");
+    expect(select).toHaveValue("");
+    await waitFor(() => expect(within(select).getAllByRole("option")[0]).toHaveTextContent("稍后分配 Worker"));   // the Team's own answer
+  });
+
   test("reference template: a picked card is submitted as that template", async () => {
     const calls = start();
     const dialog = await openWizard();

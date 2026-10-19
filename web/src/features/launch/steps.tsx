@@ -61,7 +61,7 @@ export function NeedStep({ draft, update, workflowMode }: { draft: Draft; update
           <Label htmlFor="new-space">执行空间</Label>
           <NativeSelect id="new-space" value={draft.space} onChange={(e) => {
             const space = e.target.value;
-            update((d) => ({ ...d, space, worker: spaceWorkers(workers, space, me).some((w) => w.id === d.worker) ? d.worker : "" }));
+            update((d) => ({ ...d, space, worker: "" }));   // D49: the new space's own answer, from the platform
           }}>
             <option value="">我的私有空间</option>
             {teams.filter((team) => !team.archived).map((team) => <option key={team.id} value={team.id}>{team.name} · Team 共同可见</option>)}
