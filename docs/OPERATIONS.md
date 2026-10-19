@@ -44,6 +44,7 @@ deploy/aws/deploy.sh admin-password  # 经 SSM 读取主机上的 /etc/kirocrew-
 ```
 
 `al2023.sh` 可重复执行；KiroCrew 按 `deploy/versions.env` 锁定的 commit 从官方源码构建，版本不在已验证集合时须原生契约检查通过才会被接受。
+每次执行都安装 Agent 的 Playwright Chromium 所需的系统库（libX11、mesa-libgbm、pango 等 16 个），审查与前端验证才能打开页面（2026-10-19 起）。
 
 注册 Worker（管理员 token 登录后）：`POST /v1/workers`，body 为
 `{"name":"personal","owner_id":"<用户 ID>","connection":{"url":"http://127.0.0.1:8928","token":"<worker.token 内容>"}}`。
@@ -146,6 +147,10 @@ deploy/aws/deploy.sh tunnel --boundary alice       # 该边界的原生 KiroCrew
     `?run_id=`（该会话可分配的环境）；控制台向导默认「自动：将在 X 执行」，MCP `octopus_environments` 标出 `default`。会话的 `placement`
     记于视图、精简状态与时间线 `run.created`。
   - Team 成员看得到会话的状态、报告、预览与下载；原生 KiroCrew 入口只开放给边界主人（`permissions.native_reason` 说明原因）。
+  - 在某人边界上的会话只有边界主人下达指令（R10）：续作、诊断、确认计划、补充说明与答复批准请求对其他成员与管理员返回 403
+    `boundary_owner_only`（控制台停用并写明原因，`permissions.direct_reason`）；他们可以查看、停止、关闭、发布与确认验收。需要接手时，
+    创建者、Team owner 或管理员在会话页「改派到 Team 的环境」（blocked / failed / stopped 的会话；工作区在新环境重新准备，已完成的任务保留），
+    之后照常续作。
     Team 会话的 lessons 存于提交者的 Gateway、按 Team 空间标识区分；用量计入提交者的 kiro 账号。
 - 以后（第 3 期）：每个边界的公开原生入口、跨主机放置、空闲停 Gateway、退役共享 `personal`、按人的用量视图。
 
