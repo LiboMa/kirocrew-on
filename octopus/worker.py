@@ -765,6 +765,7 @@ class Worker:
                 "role_cards": True,   # D46 P2: a contract may carry a role
                 "knowledge": True,    # D46 P4: repository mark, lessons on request, /knowledge/write and /forget
                 "continue": True,     # D46 P5a: a rework may continue its task's native conversation
+                "steer": True,        # D46 P5b: a running task may be given a note
                 "boundary": hashlib.sha256(boundary.encode()).hexdigest(),
                 "host_principal": hashlib.sha256(f"{socket.gethostname()}:{os.getuid()}".encode()).hexdigest(),
                 "routing_evidence": bool(self.routing_log and self.routing_log.is_file()),
@@ -1239,6 +1240,51 @@ class Worker:
                 return {"stopped": False, "finished": True}
         return {"stopped": True}
 
+    def steer(self, body):
+        """A note for a running task of this Session (D46 P5b), through KiroCrew's steer: ``interrupt`` puts it into the
+        running turn, ``follow_up`` delivers it after the turn."""
+        run, _ = self.binding(body["run_id"])
+        attempt = body.get("attempt_id")
+        require(isinstance(attempt, str) and re.fullmatch(r"attempt-[a-f0-9]{32}", attempt), "Attempt ID 无效")
+        message, mode = body.get("message"), body.get("mode", "interrupt")
+        require(isinstance(message, str) and 0 < len(message.strip()) and len(message) <= 4000, "补充说明须为 1–4000 字符")
+        require(mode in {"interrupt", "follow_up"}, "mode 只能是 interrupt 或 follow_up")
+        record = run / "attempts" / attempt / "dispatch.json"
+        require(record.is_file() and not record.is_symlink(), "该任务不在此会话中运行", 404, "not_found")
+        native_id = json.loads(record.read_text()).get("native_id")
+        require(native_id, "该任务尚未开始运行", 409, "not_running")
+        try:
+            answer = self.native("/api/spawn/" + quote(str(native_id), safe="") + "/steer", {"message": message, "mode": mode},
+                                 "POST")
+        except crew_api.GatewayError as exc:
+            if exc.status == 503:
+                raise Error(503, "native_unavailable", "原生任务正在启动，请稍后再补充说明") from None
+            if exc.status in {404, 409}:
+                raise Error(409, "not_running", "任务已不在运行，补充说明未送达") from None
+            raise Error(502, "native_error", "KiroCrew 未接受补充说明：" + str(exc).splitlines()[0][:200]) from None
+        return {"ok": True, "status": str(answer.get("status") or "steered")}
+
+    def _release(self, run):
+        """The Session's continuable native conversations released when it is deleted (D46 P5b): each continuation chain's
+        first run; one that is busy or already gone is left as it is. Returns how many were released."""
+        roots = set()
+        for record in (run / "attempts").glob("attempt-*/dispatch.json"):
+            try:
+                value = json.loads(record.read_text())
+            except (OSError, ValueError):
+                continue
+            chain = (value.get("continued") or {}).get("conversation")
+            if chain or value.get("native_id"):
+                roots.add(str(chain or value["native_id"]))
+        released = 0
+        for conversation in sorted(roots):
+            try:
+                self.native("/api/spawn/" + quote(conversation, safe="") + "/release", {}, "POST")
+                released += 1
+            except Exception:   # busy, gone or the Gateway away: the delete goes on
+                continue
+        return released
+
     def control(self, body):
         with self.lock:
             return self._control(body)
@@ -1323,6 +1369,7 @@ class Worker:
                     raise
                 receipt = {"ok": True}   # KiroCrew holds no history for it: already gone
             require(receipt.get("ok"), "原生删除未确认", 409, "native_unavailable")
+            current["released"] = self._release(run)   # D46 P5b: its continuable conversations go with it
             current["status"] = "deleted"
             write(lifecycle, current)
         return {"status": "stopped", "lifecycle": current["status"], "backup_kind": current.get("backup_kind")}
@@ -1431,7 +1478,8 @@ def serve(worker, port=8928, host="127.0.0.1"):
                                "/candidate": worker.candidate, "/verify/start": worker.verify_start,
                                "/verify/status": worker.verify_status, "/approvals": worker.approvals,
                                "/approvals/answer": worker.approvals_answer, "/attempt/stop": worker.attempt_stop,
-                               "/knowledge/write": worker.knowledge_write, "/knowledge/forget": worker.knowledge_forget}
+                               "/knowledge/write": worker.knowledge_write, "/knowledge/forget": worker.knowledge_forget,
+                               "/steer": worker.steer}
                     require(self.path in methods and self.command == "POST", "接口不存在", 404, "not_found")
                     result = methods[self.path](body)
                 status = 200

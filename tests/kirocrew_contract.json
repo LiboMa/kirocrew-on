@@ -164,6 +164,17 @@
         "model",
         "max_turns"
       ]
+    },
+    "POST /api/spawn/{}/steer": {
+      "module": "dashboard/messaging_api/run_control.py",
+      "reads": [
+        "message",
+        "mode"
+      ]
+    },
+    "POST /api/spawn/{}/release": {
+      "module": "dashboard/messaging_api/run_control.py",
+      "reads": []
     }
   }
 }
