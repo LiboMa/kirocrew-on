@@ -502,7 +502,12 @@ CloudFront 只使用 us-east-1 的证书）：分发加上别名与证书（SNI�
 - 对话 ID 是这一串中第一个 Attempt 的原生 ID；Worker 只续接本会话 Attempt 的对话。续接被拒（对话不存在、正忙、不可续接）时改为全新派发，
   证据记 `continue_refused`；容量已满与全新派发相同（核对后再派发）。
 - 可见：任务卡片「返工：续接上一轮的对话（保留上下文）」或「续接被拒，已重新派发：原因」；MCP `latest.continued` / `continue_refused`；报告「返工：」。
-- P5b（未做）：运行中补充说明（`steer`）、会话关闭时释放可续接的对话（`release`）。
+- 运行中补充说明（D46 P5b）：运行中（`running` / `waiting_approval`）的任务卡片「补充说明」、MCP `octopus_steer`、`POST /v1/runs/<id>/steer
+  {task_id, message ≤4000, mode?}`（创建者、Team owner、管理员；已归档 Team 不可）。经 Worker `POST /steer` → KiroCrew `POST /api/spawn/{id}/steer`：
+  `interrupt`（默认）插入正在运行的这一轮，`follow_up` 在这一轮结束后送达。写审计 `task.steer` 与时间线「已补充说明」。任务已结束 409 `not_running`；
+  原生任务正在启动 503（稍后再试）；Worker 未升级 409 `steer_unsupported`。
+- 释放对话（D46 P5b）：会话**删除**时 Worker 释放本会话的可续接对话（`POST /api/spawn/{conversation}/release`，各续接链的第一个），尽力而为；
+  lifecycle 记 `released`。关闭不释放（重新打开后仍可续接）。
 
 ### Knowledge（D46 P4）
 
