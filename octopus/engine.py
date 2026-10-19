@@ -935,6 +935,8 @@ class Engine:
             contract = {key: spec[key] for key in CONTRACT if key in spec}
             if not (config.get("capabilities") or {}).get("role_cards"):   # D46 P2: an older Worker refuses the field
                 contract.pop("role", None)
+            if not (config.get("capabilities") or {}).get("skills"):   # D50: nor does one without the skill pack
+                contract.pop("skills", None)
             plan = snapshot.get("planning") or {}
             if contract.get("depends_on"):
                 upstream = [item for item in upstream if item["id"] in contract["depends_on"]]

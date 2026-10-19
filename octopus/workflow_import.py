@@ -100,6 +100,18 @@ def normalize(raw, notes, known=(), planned=False):
             if role not in roles.KINDS or role in roles.PLATFORM or (kind is not None and kind not in roles.KINDS[role]):
                 notes.append(f"任务「{picked['name'] or index}」的角色 {role!r} 无效或与类别 {kind} 不相容，已忽略")
                 del contract["role"]
+        if planned and "skills" in contract:   # D50: what the planner named outside the pack never sinks a plan
+            from . import skills as pack
+            raw = contract["skills"] if isinstance(contract["skills"], list) else []
+            kept = [x for x in dict.fromkeys(raw) if isinstance(x, str) and x in pack.CATALOG][:pack.LIMIT]
+            if kept != raw:
+                dropped = [str(x) for x in raw if x not in kept]
+                notes.append(f"任务「{picked['name'] or index}」的技能 {'、'.join(dropped[:4]) or '（重复或超过 4 个）'} "
+                             "不在平台的技能包中或超过 4 个，已忽略")
+            if kept:
+                contract["skills"] = kept
+            else:
+                del contract["skills"]
         result.append({"id": sid, "name": picked["name"] or f"任务 {index}",
                        "tool": tool, "model": wanted.get("model") or item.get("model") or "auto", "effort": effort,
                        "prompt": picked["prompt"], **contract, **({"requested": wanted} if wanted else {})})

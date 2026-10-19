@@ -22,6 +22,7 @@ import zipfile
 
 from . import __version__
 from . import gateway_client as crew_api
+from . import skills as pack
 from . import sources as workspace
 from .db import dumps
 from .domain import CONTRACT, steps
@@ -766,6 +767,7 @@ class Worker:
                 "knowledge": True,    # D46 P4: repository mark, lessons on request, /knowledge/write and /forget
                 "continue": True,     # D46 P5a: a rework may continue its task's native conversation
                 "steer": True,        # D46 P5b: a running task may be given a note
+                "skills": list(pack.CATALOG),   # D50: the skill pack it carries
                 "boundary": hashlib.sha256(boundary.encode()).hexdigest(),
                 "host_principal": hashlib.sha256(f"{socket.gethostname()}:{os.getuid()}".encode()).hexdigest(),
                 "routing_evidence": bool(self.routing_log and self.routing_log.is_file()),
@@ -958,6 +960,14 @@ class Worker:
                                  if body["repair"].get("rerun") else
                                  ("\n\n## 本轮协调者纠错与复审要求\n" + dumps(body["repair"]) +
                                   "\n完整阅读失败证据，优先执行本轮具体修复要求；再次运行相关验证，不能沿用旧通过结论。"))
+            given = []
+            if contract.get("skills"):   # D50: each Attempt its own copy beside its instructions, on every backend
+                (folder / "skills").mkdir(exist_ok=True)
+                for name in contract["skills"]:
+                    data = pack.path(name).read_bytes()
+                    (folder / "skills" / (name + ".md")).write_bytes(data)
+                    given.append({"name": name, "sha256": hashlib.sha256(data).hexdigest()})
+                extra_prompt += pack.method_section(contract["skills"], folder)
             if body.get("design"):
                 from .designs import instructions
                 require(spec["tool"] == "kiro", "工作流设计须使用 Kiro 后端")
@@ -977,6 +987,8 @@ class Worker:
             prompt = f"{marker}\n完整阅读 {folder / 'instructions.md'}，在指定源码目录完成本次任务。"
             value = {"request_hash": hashlib.sha256(dumps(body).encode()).hexdigest(),
                      "status": "dispatching", "attempt_id": attempt, "context_hash": context_hash}
+            if given:
+                value["skills"] = given
             if resume is not None and unresumable is None:
                 value["continuing"] = resume   # kept for a reconcile: a lost receipt still knows the chain
             write(record, value)  # Persist before the native side effect.
@@ -1216,6 +1228,8 @@ class Worker:
             if isinstance(updated, (int, float)) and not isinstance(updated, bool):
                 signal.update(updated_at=updated, idle_seconds=max(0.0, time.time() - updated))
             progress = {"progress": signal}
+        if dispatch.get("skills"):
+            evidence["skills"] = dispatch["skills"]   # D50: the methods it was given, by content
         if native.get("done"):
             evidence["usage"] = self._usage(folder, dispatch, native, state)   # D46 P6a
         return {**dispatch, "native": native, "evidence": evidence, "handoff": handoff_text, **reports, **progress}

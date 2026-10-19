@@ -39,7 +39,7 @@ def name(value):
 
 
 # Optional task structure (D34 §6.1): what a task delivers and how it is checked, kept in its spec only when given.
-CONTRACT = ("kind", "role", "deliverables", "acceptance", "verify", "depends_on", "paths")
+CONTRACT = ("kind", "role", "deliverables", "acceptance", "verify", "depends_on", "paths", "skills")
 KINDS = ("implement", "review", "test", "deliver", "design")
 LIMITS = {"deliverables": (20, 500), "acceptance": (20, 500), "verify": (10, 500), "paths": (20, 500), "depends_on": (8, 48)}
 
@@ -97,6 +97,16 @@ def steps(value, known=(), planned=False):
         for field, (items, chars) in LIMITS.items():
             if field in step:
                 item[field] = strings(step[field], field, items, chars)
+        if "skills" in step:   # D50: methods from the platform's skill pack the task's Agent works by
+            from . import skills as pack
+            chosen = step["skills"]
+            require(isinstance(chosen, list) and all(isinstance(x, str) for x in chosen), "skills 须为技能名列表")
+            unknown = [x for x in chosen if x not in pack.CATALOG]
+            require(not unknown, "未知的技能：" + "、".join(unknown[:4]) + "；可选：" + "、".join(pack.CATALOG))
+            chosen = list(dict.fromkeys(chosen))
+            require(len(chosen) <= pack.LIMIT, f"每个任务至多 {pack.LIMIT} 个技能")
+            if chosen:
+                item["skills"] = chosen
         if "requested" in step and planned:   # the tool / model the requirement names for this task (D45)
             item["requested"] = requested(step["requested"], tool)
         # Only earlier tasks: dependencies follow the order the Engine runs them in.
