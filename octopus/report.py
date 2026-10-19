@@ -89,6 +89,8 @@ def _attempt(attempt, spec):
                      "paths": [_line(x) for x in spec.get("paths") or []][:20]},
         "suggestions": [_line(s) for s in outcome.get("suggestions") or []][:20],
         "reviewed": str(evidence["reviewed"])[:7] if evidence.get("reviewed") else None,
+        # D50: the methods the Worker gave the Attempt (its evidence), not those planned
+        "skills": [_line(s.get("name"), 60) for s in evidence.get("skills") or [] if isinstance(s, dict)][:4],
     }
 
 
@@ -204,6 +206,8 @@ def markdown(view, now=None):
             out.append("- 检查命令（契约）：" + "、".join(f"`{x.replace('`', '')}`" for x in contract["verify"]))
         if contract["paths"]:
             out.append("- 可改动：" + "、".join(_md(x) for x in contract["paths"]))
+        if final["skills"]:
+            out.append("- 方法：" + "、".join(_md(x) for x in final["skills"]))
         if final["error"]:
             out.append(f"- 未通过：{_md(final['error'])}")
         if task["kind"] == "review":
@@ -294,6 +298,8 @@ def html(view, now=None):
                               ("可改动", contract["paths"])):
             if values:
                 items.append(f"{label}：" + "、".join(f"<code>{e(v)}</code>" for v in values))
+        if final["skills"]:
+            items.append("方法：" + "、".join(e(x) for x in final["skills"]))
         if final["decision"]:
             items.append(f"结论：{e(final['decision'])}")
         if final["error"]:

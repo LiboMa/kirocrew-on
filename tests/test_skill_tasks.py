@@ -117,12 +117,14 @@ class WorkerTests(unittest.TestCase):
             self.assertEqual(self.node.health()["skills"], list(skills.CATALOG))
 
 
-class EngineTests(ConfirmationCase):
+class SkillsCase(ConfirmationCase):
     def caps(self, capabilities):
         with self.db.transaction() as db:
             db.execute("UPDATE workers SET config=? WHERE id='worker'",
                        (dumps({"url": "fixture", "token": "fixture", "capabilities": capabilities}),))
 
+
+class EngineTests(SkillsCase):
     def contracts(self, rid):
         return [b.get("contract") or {} for b in self.bodies.values() if b["run_id"] == rid]
 
@@ -137,6 +139,34 @@ class EngineTests(ConfirmationCase):
         rid = self.start(steps=[{**STEP, "skills": ["test-driven-development"]}])
         self.tick(rid)
         self.assertEqual(self.contracts(rid)[0]["skills"], ["test-driven-development"])
+
+
+class DisplayTests(SkillsCase):
+    def request(self, config, path, body, **kwargs):
+        result = super().request(config, path, body, **kwargs)
+        chosen = (self.bodies[body["attempt_id"]].get("contract") or {}).get("skills") if path == "/inspect" else None
+        if chosen:   # what a D50 Worker says it gave the Attempt
+            result["evidence"] = {**result["evidence"], "skills": [{"name": n, "sha256": skills.sha256(n)} for n in chosen]}
+        return result
+
+    def finished(self, capabilities):
+        self.caps(capabilities)
+        run = self.tick(self.start(steps=[{**STEP, "skills": ["test-driven-development", "frontend-design"]}]))
+        self.assertEqual(run["status"], "completed")
+        return run
+
+    def test_the_report_says_which_methods_the_task_was_given(self):
+        from octopus import report
+        run = self.finished({"skills": list(skills.CATALOG)})
+        self.assertIn("- 方法：test-driven-development、frontend-design", report.markdown(run))
+        self.assertIn("<li>方法：test-driven-development、frontend-design</li>", report.html(run))
+        older = self.finished({})   # planned, but its Worker had no pack: nothing is claimed
+        self.assertNotIn("方法：", report.markdown(older))
+
+    def test_the_compact_status_names_the_skills(self):
+        from octopus import mcp
+        view = mcp.compact_status(self.finished({"skills": list(skills.CATALOG)}), [])["session"]
+        self.assertEqual(view["tasks"][0]["skills"], ["test-driven-development", "frontend-design"])
 
 
 if __name__ == "__main__":

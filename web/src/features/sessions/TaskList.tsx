@@ -35,6 +35,7 @@ export function TaskList({ run, onContinue }: { run: Run; onContinue: (taskId: s
                   <p className="mt-0.5 text-xs text-muted-foreground">
                     {TOOLS[spec.tool] ?? spec.tool} · {spec.model} · Effort {spec.effort || "继承默认"}
                     {spec.role && <>{" · "}<span>角色：{ROLE_LABELS[spec.role] ?? spec.role}</span></>}
+                    {spec.skills?.length ? <>{" · "}<span>方法：{spec.skills.join("、")}</span></> : null}
                     {task.mapping && <>{" · "}<span>来源：{task.mapping.label}</span></>}
                   </p>
                 </div>

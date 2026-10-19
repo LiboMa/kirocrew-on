@@ -19,6 +19,8 @@ export interface Step {
   verify?: string[];
   depends_on?: string[];
   paths?: string[];
+  /** D50: methods from the platform's skill pack the task's Agent reads first (at most 4). */
+  skills?: string[];
 }
 
 export interface Me {

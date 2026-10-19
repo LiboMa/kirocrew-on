@@ -49,6 +49,9 @@ KiroCrew ON 在远端执行开发任务：KiroCrew 的 Kiro Agent 先识别意�
   可先用 `octopus_parse_workflow` 预览规范化结果。
 - 自己写 `steps` 时，每个任务可带 `role`（`spec`、`sde`、`integration_test`、`security_test`、`challenge`、`evaluator`）：Agent 按对应的
   角色卡片工作，`kind` 仍决定门禁；审查类角色（`security_test` / `challenge` / `evaluator`）不要用实现该改动的工具（会被拒绝）。
+  还可带 `skills`（至多 4 个，取自平台技能包：`test-driven-development`、`systematic-debugging`、`verification-before-completion`、
+  `receiving-code-review`、`frontend-design`）：Agent 开始前读取并按其方法工作，如界面任务带 `frontend-design`、实现任务带
+  `test-driven-development`。由 KiroCrew 规划时规划者自己推荐，不必替它写。
 - `worker_id` 通常省略：空间内只有一个可用 Worker 时由后台自动选用。
 - 提交到 Team 返回 409 `team_without_worker`（该 Team 尚未分配执行环境）或 `environment_disabled`（执行环境已停用）时，
   原样告诉用户需要平台管理员在控制台分配或启用执行环境；也可以建议改在个人空间提交。不要换一个 Team 重试。

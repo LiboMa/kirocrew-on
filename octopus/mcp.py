@@ -445,6 +445,7 @@ def compact_status(session, events):
     view["tasks"] = [{"id": task["id"], "name": task["spec"].get("name"), "status": task["status"],
                       "tool": task["spec"].get("tool"), "model": task["spec"].get("model"),
                       **({"role": task["spec"]["role"]} if task["spec"].get("role") else {}),   # D46 P2
+                      **({"skills": task["spec"]["skills"]} if task["spec"].get("skills") else {}),   # D50
                       **({"mapping": task["mapping"]["label"]} if (task.get("mapping") or {}).get("label") else {}),
                       "attempts": len(task.get("attempts") or []), "latest": latest(task.get("attempts")),
                       # what the user is to confirm (D44): each task's acceptance and checks, only while the plan waits

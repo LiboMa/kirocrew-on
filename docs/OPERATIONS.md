@@ -533,6 +533,22 @@ CloudFront 只使用 us-east-1 的证书）：分发加上别名与证书（SNI�
 - 前提：KiroCrew `memory.persistence_enabled` 与 `memory.inject_lessons` 为 true（0.10.0 默认；关闭前者时写入被拒，台账记
   `persistence_disabled`）。KiroCrew 自身的自动 lessons（task-runner、整理提取）不经平台，`include_lessons` 时同样注入——专属环境内属于同一空间。
 
+### 编码技能包（D50）
+
+- 平台维护五个**方法类**技能，随发布固定版本：`octopus/skills/<名称>/SKILL.md`（头部 `name`、`description`、`source`、`license`）——
+  `test-driven-development`、`systematic-debugging`、`verification-before-completion`、`receiving-code-review`（改编自 superpowers 6.4.1，MIT，
+  Jesse Vincent）、`frontend-design`（改编自 Anthropic claude-plugins-official，Apache-2.0）。改编只去掉与无人值守任务冲突的部分（询问用户、
+  提交 / 推送、开 worktree、写计划文件），改为平台的说法（交接、outcome.json、blocked + `failure_type: input`），每个文件开头写明改动；
+  原许可证 `octopus/skills/LICENSE-*`。重新生成：`SKILL_SOURCES=<claude-plugins-official 插件缓存> python3 tools/build_skill_pack.py`。
+- **流程类**（brainstorming、写计划、执行计划、worktree、收尾）不交给任务：由平台的规划、计划确认、派发、门禁与 Evaluator 承担。
+- 选择：任务契约 `skills`（至多 4 个、取自技能包、去重保序）。KiroCrew 规划者按任务推荐（规划提示列出技能与用途）；提交者也可在 steps 里写——
+  名称不在技能包中或超过 4 个时拒绝；规划者给出的则丢弃并在规划说明中记下。平台不内置「角色 → 技能」对照。
+- 交付：Worker 把所选技能复制到 Attempt 目录 `skills/<名称>.md`（与 instructions.md 同处，三个后端读同一份），instructions.md 增「## 方法」：
+  名称、用途与路径，「开始前完整阅读并遵循；与本任务契约冲突时以契约为准」。每个 Attempt 各自一份，返工（含保留上下文的续作）同样附上。
+- 兼容：Worker `/health` 的 `skills` 列出它带的技能包；对没有该能力的 Worker 平台不发 `skills`（与 `role` 相同），任务照常执行。
+- 可审计：dispatch.json 与 Attempt 证据 `skills: [{name, sha256}]`；控制台任务卡片「方法：…」（计划的）、报告任务一节「方法：…」（实际交付的，
+  取自证据）、MCP 精简状态任务的 `skills`。
+
 ### 停用的 Coding 工具（K01）
 
 - Worker 配置 `disabled_tools`（默认 `["opencode"]`）：所列工具在 `/health` 的 `tools` 中报告为不可用，原因「已停用（K01…）」。

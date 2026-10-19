@@ -44,6 +44,17 @@ describe("session detail", () => {
     expect(within(panel).getByText("依赖用 pnpm 安装")).toBeInTheDocument();
   });
 
+  test("names the methods a task works by (D50)", async () => {
+    const skilled = { ...spec("code", "实现界面", "claude"), skills: ["frontend-design", "test-driven-development"] };
+    open(makeRun({ id: "run-m", status: "running", tasks: [
+      { id: "code", run_id: "run-m", ordinal: 0, status: "running", current_attempt: null, spec: skilled, attempts: [] },
+      { id: "review", run_id: "run-m", ordinal: 1, status: "pending", current_attempt: null, spec: spec("review", "独立审查", "codex"),
+        attempts: [] }] }));
+    await screen.findByText("实现界面");
+    expect(document.querySelector('[data-task="code"]')).toHaveTextContent("方法：frontend-design、test-driven-development");
+    expect(document.querySelector('[data-task="review"]')).not.toHaveTextContent("方法：");
+  });
+
   test("shows why the Session stopped, the evidence of each attempt and the recovery record", async () => {
     open(blocked);
     expect(await screen.findByText("模拟交接缺失", { selector: "#attention-detail" })).toBeInTheDocument();
