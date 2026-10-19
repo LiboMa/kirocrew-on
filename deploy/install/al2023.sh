@@ -189,11 +189,7 @@ npm install --global --no-audit --no-fund --prefix /opt/kirocrew-tools \
 
 log "执行边界 $BOUNDARY 的环境（Bedrock 经实例角色）"
 boundary_env "$BOUNDARY"
-if [ ! -f "$BASE/home/.codex/config.toml" ]; then
-  install -d -m 0700 -o "$CREW" -g "$CREW" "$BASE/home/.codex"
-  printf 'model_provider = "amazon-bedrock"\nmodel = "openai.gpt-6-astra"\n' > "$BASE/home/.codex/config.toml"
-  chown "$CREW:$CREW" "$BASE/home/.codex/config.toml"
-fi
+boundary_codex "$BOUNDARY"
 
 log "平台与边界配置"
 if [ -z "$WORKER_HOST" ]; then

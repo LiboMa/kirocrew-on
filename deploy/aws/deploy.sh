@@ -3,8 +3,10 @@
 #   deploy/aws/deploy.sh up            # validate, look up CloudFront prefix list and AZ, deploy the stack
 #   deploy/aws/deploy.sh push          # publish the committed HEAD to S3 and install it on the host via SSM
 #   deploy/aws/deploy.sh status        # stack outputs, SSM ping, https://<cloudfront>/health
-#   deploy/aws/deploy.sh tunnel        # SSM port forwarding to the native KiroCrew entry (localhost:15476)
-#   deploy/aws/deploy.sh kiro-login [--host <name>]  # one-time kiro-cli device-flow login as crew-<boundary>
+#   deploy/aws/deploy.sh tunnel [--boundary <name>]  # SSM port forwarding to a boundary's native KiroCrew (localhost:10000+port)
+#   deploy/aws/deploy.sh kiro-login [--host <name> | --boundary <name>]  # one-time kiro-cli device-flow login as crew-<boundary>
+#   deploy/aws/deploy.sh boundary add <name> --owner <user> [--memory <GiB>] [--cpu <%>]  # one person's boundary (D49)
+#   deploy/aws/deploy.sh boundaries    # the boundaries on the platform host: ports and service state
 #   deploy/aws/deploy.sh worker-host <add|up|push|tls|native|register|status> <name>  # a Worker host for Teams (D28)
 #   deploy/aws/deploy.sh space <run-id> [stop]  # run a worker run's project on the host and forward it (local = remote + 10000)
 #   deploy/aws/deploy.sh spaces        # list the run projects running on the host
@@ -294,9 +296,17 @@ status() {
   [ -n "$DRY" ] || curl -fsS "https://$domain/health" && echo
 }
 
-tunnel() {
-  run ssm start-session --target "$(output InstanceId)" --document-name AWS-StartPortForwardingSession \
-    --parameters '{"portNumber":["5476"],"localPortNumber":["15476"]}'
+tunnel() {  # tunnel [--boundary <name>]: the native KiroCrew of a boundary on localhost:<10000 + its Gateway port>
+  local port=5476 instance
+  instance="$(output InstanceId)"
+  if [ -n "${1:-}" ]; then
+    [ "$1" = --boundary ] && [[ "${2:-}" =~ ^[a-z][a-z0-9-]{1,19}$ ]] || {
+      echo "用法：deploy.sh tunnel [--boundary <边界名称>]" >&2; exit 2; }
+    local script="grep -E '^gateway_port' /etc/kirocrew-on/boundary-$2.toml | grep -oE '[0-9]+'"
+    if [ -n "$DRY" ]; then printf '%s\n' "$script"; port=5481; else port="$(remote "$instance" "$script")"; fi
+  fi
+  run ssm start-session --target "$instance" --document-name AWS-StartPortForwardingSession \
+    --parameters "{\"portNumber\":[\"$port\"],\"localPortNumber\":[\"$((port + 10000))\"]}"
 }
 
 remote() {  # run a shell command on the host through SSM; print its stdout, or its stderr and fail when it fails
@@ -356,8 +366,11 @@ space() {
     if [ -n "$DRY" ]; then printf '%s\n' "$script"; else remote "$instance" "$script"; fi
     return
   fi
-  script="DIR=/var/lib/octopus/boundaries/$BOUNDARY/worker/$run/workspace/project UNIT=$unit CREW=crew-$BOUNDARY"
-  script="$script CREW_HOME=/var/lib/octopus/boundaries/$BOUNDARY/home NODE_BIN=/opt/kirocrew-node/bin"$'\n'"$SPACE_START"
+  # D49: whichever boundary on the host holds the Session
+  script="D=\"\$(ls -d /var/lib/octopus/boundaries/*/worker/$run 2>/dev/null | head -1)\"; B=\"\${D%/worker/$run}\"; B=\"\${B##*/}\""$'\n'
+  script="$script"'[ -n "$D" ] || { echo "主机上没有会话 '"$run"' 的工作区" >&2; exit 3; }'$'\n'
+  script="${script}DIR=\"/var/lib/octopus/boundaries/\$B/worker/$run/workspace/project\" UNIT=$unit CREW=\"crew-\$B\""
+  script="$script CREW_HOME=\"/var/lib/octopus/boundaries/\$B/home\" NODE_BIN=/opt/kirocrew-node/bin"$'\n'"$SPACE_START"
   if [ -n "$DRY" ]; then printf '%s\n' "$script"; port=5173
   else port="$(remote "$instance" "$script" | sed -n 's/^PORT=//p')"; fi
   echo "远端 $unit 监听 127.0.0.1:${port}；本机打开 http://localhost:$((port + 10000))/"
@@ -594,8 +607,13 @@ kiro_login() {
   local login="kiro-cli login --use-device-flow" instance shown="" finished="" boundary="$BOUNDARY" stack="$STACK_NAME"
   local log whoami
   if [ "${1:-}" = "--host" ]; then   # a Worker host (D28): its boundary carries the host's name
-    [[ "${2:-}" =~ ^[a-z][a-z0-9-]{1,19}$ ]] || { echo "用法：deploy.sh kiro-login [--host <Worker 主机名称>]" >&2; exit 2; }
+    [[ "${2:-}" =~ ^[a-z][a-z0-9-]{1,19}$ ]] || { echo "用法：deploy.sh kiro-login [--host <Worker 主机名称> | --boundary <边界名称>]" >&2; exit 2; }
     boundary="$2"; stack="$STACK_NAME-worker-$2"
+  elif [ "${1:-}" = "--boundary" ]; then   # another boundary on the platform host (D49): that person's own account
+    [[ "${2:-}" =~ ^[a-z][a-z0-9-]{1,19}$ ]] || { echo "用法：deploy.sh kiro-login [--host <Worker 主机名称> | --boundary <边界名称>]" >&2; exit 2; }
+    boundary="$2"
+  elif [ -n "${1:-}" ]; then
+    echo "用法：deploy.sh kiro-login [--host <Worker 主机名称> | --boundary <边界名称>]" >&2; exit 2
   fi
   log="/var/lib/octopus/boundaries/$boundary/logs/kiro-login-$(date -u +%Y%m%dT%H%M%SZ).log"
   [ -z "${KIRO_LICENSE:-}" ] || login="$login --license $KIRO_LICENSE"
@@ -640,6 +658,37 @@ PY
   [[ "$whoami" == "Logged in"* ]] || { echo "kiro-cli login 未完成（${finished:-超时}），日志：$log" >&2; exit 1; }
 }
 
+boundary() {  # boundary add <name> --owner <username> [--memory <GiB>] [--cpu <percent>]: one person's boundary (D49)
+  local usage="用法：deploy.sh boundary add <名称> --owner <平台用户名> [--memory <GiB>] [--cpu <百分比>]"
+  [ "${1:-}" = add ] || { echo "$usage" >&2; exit 2; }
+  local name="${2:-}" owner="" memory=8 cpu=300
+  shift 2 || true
+  while [ $# -gt 0 ]; do
+    case "$1" in
+      --owner) owner="${2:-}"; shift 2 || shift ;;
+      --memory) memory="${2:-}"; shift 2 || shift ;;
+      --cpu) cpu="${2:-}"; shift 2 || shift ;;
+      *) echo "$usage" >&2; exit 2 ;;
+    esac
+  done
+  # The values become part of a root shell command on the host: only these forms reach it.
+  [[ "$name" =~ ^[a-z][a-z0-9-]{1,19}$ ]] && [ "$name" != personal ] && [[ "$owner" =~ ^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$ ]] &&
+    [[ "$memory" =~ ^[1-9][0-9]?$ ]] && [[ "$cpu" =~ ^[1-9][0-9]{1,3}$ ]] || { echo "$usage" >&2; exit 2; }
+  local script="test -x /opt/kirocrew-on/current/deploy/install/boundary.sh || { echo '当前发布没有 boundary.sh：先 deploy.sh push' >&2; exit 3; }; "
+  script="${script}bash /opt/kirocrew-on/current/deploy/install/boundary.sh $name --owner $owner --memory $memory --cpu $cpu"
+  if [ -n "$DRY" ]; then printf '%s\n' "$script"; return; fi
+  remote "$(output InstanceId)" "$script"
+}
+
+boundaries() {  # every boundary on the platform host: its ports and whether its Gateway and Worker run (D49)
+  local script='for f in /etc/kirocrew-on/boundary-*.toml; do n="${f##*/boundary-}"; n="${n%.toml}"
+  case "$n" in *.*) continue ;; esac
+  g="$(grep -E "^gateway_port" "$f" | grep -oE "[0-9]+")"; w="$(grep -E "^worker_port" "$f" | grep -oE "[0-9]+")"
+  echo "$n gateway 127.0.0.1:$g ($(systemctl is-active "octopus-gateway@$n")) worker 127.0.0.1:$w ($(systemctl is-active "octopus-worker@$n"))"
+done'
+  if [ -n "$DRY" ]; then printf '%s\n' "$script"; else remote "$(output InstanceId)" "$script"; fi
+}
+
 admin_password() {  # generated on the host at first install, root-only; never kept in SSM Parameter Store
   local instance
   instance="$(output InstanceId)"
@@ -661,12 +710,14 @@ case "${1:-}" in
   up) up ;;
   push) push ;;
   status) status ;;
-  tunnel) tunnel ;;
+  tunnel) tunnel "${2:-}" "${3:-}" ;;
+  boundary) shift; boundary "$@" ;;
+  boundaries) boundaries ;;
   kiro-login) kiro_login "${2:-}" "${3:-}" ;;
   worker-host) worker_host "${2:-}" "${3:-}" ;;
   space) space "${2:-}" "${3:-}" ;;
   spaces) spaces ;;
   admin-password) admin_password ;;
   down) down "${2:-}" ;;
-  *) sed -n '2,13p' "$0"; exit 2 ;;
+  *) sed -n '2,15p' "$0"; exit 2 ;;
 esac

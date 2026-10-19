@@ -757,8 +757,9 @@ class ScriptTests(unittest.TestCase):
         result = space("space", run)
         self.assertEqual(result.returncode, 0, result.stderr)
         printed = result.stdout + result.stderr
-        for part in (f"DIR=/var/lib/octopus/boundaries/personal/worker/{run}/workspace/project",
-                     f"UNIT=kirocrew-space-{run}", "CREW=crew-personal", "NODE_BIN=/opt/kirocrew-node/bin",
+        # D49: the boundary that holds the Session, found on the host (tests/test_boundaries)
+        for part in (f'DIR="/var/lib/octopus/boundaries/$B/worker/{run}/workspace/project"',
+                     f"UNIT=kirocrew-space-{run}", 'CREW="crew-$B"', "NODE_BIN=/opt/kirocrew-node/bin",
                      '"$NODE_BIN/npm" run dev', "systemd-run",
                      "--strictPort", "ssm start-session", "AWS-StartPortForwardingSession",
                      '"portNumber":["5173"]', '"localPortNumber":["15173"]'):

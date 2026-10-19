@@ -49,6 +49,15 @@ EOF
   chmod 0644 "$ETC/boundary-$1.env"
 }
 
+boundary_codex() {  # boundary_codex NAME: Codex through Amazon Bedrock for the boundary's OS user (written once, kept after)
+  local crew="crew-$1" home="$DATA/$1/home"
+  if [ ! -f "$home/.codex/config.toml" ]; then
+    install -d -m 0700 -o "$crew" -g "$crew" "$home/.codex"
+    printf 'model_provider = "amazon-bedrock"\nmodel = "openai.gpt-6-astra"\n' > "$home/.codex/config.toml"
+    chown "$crew:$crew" "$home/.codex/config.toml"
+  fi
+}
+
 boundary_limits() {  # boundary_limits NAME MEMORY_GIB CPU_PERCENT: drop-ins capping the boundary's Gateway and Worker
   [[ "$2" =~ ^[1-9][0-9]?$ ]] && [[ "$3" =~ ^[1-9][0-9]{1,3}$ ]] || {
     echo "资源上限无效：内存 $2 GiB、CPU $3%" >&2; return 2; }
@@ -78,7 +87,9 @@ boundary_check() {  # boundary_check NAME TARGET KC: the native contract check o
 
 boundary_versions() {  # boundary_versions NAME VERSION ACCEPTED: record the KiroCrew release the platform accepts for this boundary
   if [ "$2" = "$3" ]; then
-    sed -i "s#^kirocrew_versions = .*#kirocrew_versions = [\"$2\"]#" "$ETC/boundary-$1.toml"
+    # -i.bak: the same on GNU sed (the host) and BSD sed
+    sed -i.bak "s#^kirocrew_versions = .*#kirocrew_versions = [\"$2\"]#" "$ETC/boundary-$1.toml"
+    rm -f "$ETC/boundary-$1.toml.bak"
   fi
 }
 

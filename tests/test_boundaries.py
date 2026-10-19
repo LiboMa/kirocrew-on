@@ -182,5 +182,142 @@ class InstallerTests(unittest.TestCase):
             self.assertNotIn("$BOUNDARY\"", body.replace('other_boundaries "$BOUNDARY"', ""))
 
 
+class BoundaryScriptTests(HostCase):
+    """deploy/install/boundary.sh on a fake host: the current release and KiroCrew, the platform's Python, the admin file."""
+
+    def setUp(self):
+        super().setUp()
+        on = self.root / "release"
+        (on / "deploy/config").mkdir(parents=True)
+        (on / "deploy/install").mkdir(parents=True)
+        (on / "deploy/config/boundary.toml.example").write_text((ROOT / "deploy/config/boundary.toml.example").read_text())
+        (on / "deploy/versions.env").write_text((ROOT / "deploy/versions.env").read_text())
+        python = self.root / "kc/releases/1/venv/bin/python"
+        python.parent.mkdir(parents=True)
+        python.write_text("#!/bin/sh\necho 0.10.0\n")
+        python.chmod(0o755)
+        self.platform = self.root / "platform-python"
+        self.platform.write_text(f'#!/bin/sh\necho "register $*" >> {self.calls}\n')
+        self.platform.chmod(0o755)
+        (self.root / "admin-password").write_text("not-for-output-0123456789")
+
+    def add(self, *args, token=True, check=True):
+        if token:
+            (self.root / "data/alice").mkdir(parents=True, exist_ok=True)
+            (self.root / "data/alice/worker.token").write_text("t" * 40)
+        stubs = ('id() { [ "$1" = -u ] && echo 0 || return 0; }\n'
+                 'useradd() { echo "useradd $*" >> CALLS; }\n'
+                 'install() { local a=(); while [ $# -gt 0 ]; do case "$1" in -d) shift;; -m|-o|-g) shift 2;; *) a+=("$1"); shift;; esac; done; '
+                 'mkdir -p "${a[@]}"; }\n').replace("CALLS", str(self.calls))
+        body = (stubs + f"export ON_CURRENT={self.root}/release PLATFORM_PYTHON={self.platform} ADMIN_FILE={self.root}/admin-password\n"
+                f"set -- {' '.join(args)}\n. {ROOT}/deploy/install/boundary.sh\n")
+        return self.bash(body, check=check)
+
+    def config_of(self, name):
+        import tomllib
+        return tomllib.loads((self.root / f"etc/boundary-{name}.toml").read_text())
+
+    def test_boundary_script_writes_its_own_ports_and_dedicated_config(self):
+        self.config("personal", worker_port=8928, gateway_port=5476)
+        result = self.add("alice", "--owner", "alice")
+        config = self.config_of("alice")
+        self.assertTrue(5481 <= config["gateway_port"] <= 5580 and 9001 <= config["worker_port"] <= 9100)
+        self.assertEqual(config["worker_isolation"], "dedicated")
+        self.assertEqual(config["crew_url"], f"http://localhost:{config['gateway_port'] + 10000}")
+        self.assertEqual(config["crew_entry_ttl"], "1h")
+        self.assertIn("/boundaries/alice/", config["crew_home"])
+        self.assertNotIn("/boundaries/personal/", (self.root / "etc/boundary-alice.toml").read_text())
+        calls = self.calls.read_text()
+        self.assertIn("systemctl enable octopus-gateway@alice octopus-worker@alice", calls)
+        self.assertIn("-m composition.gateway --config", calls)   # the native contract check ran
+        self.assertIn(f"--worker-url http://127.0.0.1:{config['worker_port']}", calls)
+        self.assertIn("--name alice", calls)
+        self.assertIn("--owner alice", calls)
+        self.assertTrue((self.root / "systemd/octopus-gateway@alice.service.d/limits.conf").is_file())
+        self.assertNotIn("not-for-output", result.stdout + result.stderr)
+        self.assertIn("kiro-login --boundary alice", result.stdout)
+
+    def test_adding_again_only_fills_in(self):
+        self.add("alice", "--owner", "alice")
+        first = (self.root / "etc/boundary-alice.toml").read_text()
+        self.listening = {self.config_of("alice")["gateway_port"]}   # its own Gateway now listens
+        self.add("alice", "--owner", "alice")
+        self.assertEqual((self.root / "etc/boundary-alice.toml").read_text(), first)
+
+    def test_a_second_boundary_gets_other_ports(self):
+        self.add("alice", "--owner", "alice")
+        (self.root / "data/bob").mkdir(parents=True)
+        (self.root / "data/bob/worker.token").write_text("t" * 40)
+        self.add("bob", "--owner", "bob", token=False)
+        self.assertNotEqual(self.config_of("alice")["gateway_port"], self.config_of("bob")["gateway_port"])
+        self.assertNotEqual(self.config_of("alice")["worker_port"], self.config_of("bob")["worker_port"])
+
+    def test_names_owners_and_limits_are_checked(self):
+        for args in (("Alice", "--owner", "alice"), ("a;b", "--owner", "alice"), ("personal", "--owner", "alice"),
+                     ("alice",), ("alice", "--owner", "a b"), ("alice", "--owner", "alice", "--memory", "0")):
+            with self.subTest(args=args):
+                self.assertNotEqual(self.add(*[f"'{a}'" for a in args], check=False).returncode, 0)
+        self.assertEqual(sorted(f.name for f in (self.root / "etc").iterdir()), [])   # refused before anything is written
+        self.assertEqual(self.calls.read_text(), "")
+
+
+class DeployCommandTests(unittest.TestCase):
+    def deploy(self, *args):
+        env = {**os.environ, "DEPLOY_DRY_RUN": "1"}
+        return subprocess.run(["bash", str(ROOT / "deploy/aws/deploy.sh"), *args], cwd=ROOT, env=env, capture_output=True,
+                              text=True)
+
+    def test_boundary_add_runs_the_boundary_script_through_ssm(self):
+        result = self.deploy("boundary", "add", "alice", "--owner", "alice")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn("bash /opt/kirocrew-on/current/deploy/install/boundary.sh alice --owner alice --memory 8 --cpu 300",
+                      result.stdout)
+        sized = self.deploy("boundary", "add", "bob", "--owner", "bob", "--memory", "12", "--cpu", "200")
+        self.assertIn("boundary.sh bob --owner bob --memory 12 --cpu 200", sized.stdout)
+        for args in (("boundary", "add", "Alice", "--owner", "alice"), ("boundary", "add", "a;b", "--owner", "x"),
+                     ("boundary", "add", "alice"), ("boundary", "add", "alice", "--owner", "x;y"),
+                     ("boundary", "add", "alice", "--owner", "alice", "--memory", "x"), ("boundary", "remove", "alice")):
+            with self.subTest(args=args):
+                self.assertEqual(self.deploy(*args).returncode, 2)
+
+    def test_boundaries_lists_name_ports_and_state(self):
+        result = self.deploy("boundaries")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        for part in ("/etc/kirocrew-on/boundary-*.toml", "gateway_port", "worker_port", "systemctl is-active"):
+            self.assertIn(part, result.stdout)
+
+    def test_kiro_login_takes_a_boundary_on_the_platform_host(self):
+        result = self.deploy("kiro-login", "--boundary", "alice")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn("sudo -iu crew-alice", result.stdout)
+        self.assertIn("/var/lib/octopus/boundaries/alice/logs/kiro-login-", result.stdout)
+        self.assertNotIn("kirocrew-on-m1-worker-", result.stdout + result.stderr)   # the platform host's stack
+        self.assertEqual(self.deploy("kiro-login", "--boundary", "A;b").returncode, 2)
+
+    def test_tunnel_takes_a_boundary(self):
+        result = self.deploy("tunnel", "--boundary", "alice")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn("/etc/kirocrew-on/boundary-alice.toml", result.stdout)
+        self.assertIn('"localPortNumber":["15481"]', result.stdout)   # the dry run's placeholder port 5481
+        self.assertIn('"localPortNumber":["15476"]', self.deploy("tunnel").stdout)   # personal, as before
+        self.assertEqual(self.deploy("tunnel", "--boundary", "a b").returncode, 2)
+
+    def test_space_finds_the_boundary_that_holds_the_session(self):
+        run = "run-" + "0123456789abcdef" * 2
+        result = self.deploy("space", run)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn(f"/var/lib/octopus/boundaries/*/worker/{run}", result.stdout)
+        self.assertIn('CREW="crew-$B"', result.stdout)
+        # the lookup itself, against a fake tree
+        lookup = "\n".join(result.stdout.splitlines()[:2])
+        with tempfile.TemporaryDirectory() as tmp:
+            (Path(tmp) / f"var/lib/octopus/boundaries/alice/worker/{run}").mkdir(parents=True)
+            script = lookup.replace("/var/lib/octopus/boundaries", f"{tmp}/var/lib/octopus/boundaries") + '\necho "B=$B"'
+            found = subprocess.run(["bash", "-c", script], capture_output=True, text=True)
+            self.assertEqual(found.stdout.strip(), "B=alice", found.stderr)
+            missing = subprocess.run(["bash", "-c", script.replace(run, "run-" + "f" * 32)], capture_output=True, text=True)
+            self.assertEqual(missing.returncode, 3)
+
+
 if __name__ == "__main__":
     unittest.main()
