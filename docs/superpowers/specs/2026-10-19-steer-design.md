@@ -13,7 +13,7 @@ KiroCrew 0.10.0（2026-10-19 核对 `dashboard/messaging_api/run_control.py`）�
 
 | 编号 | 决定 |
 |---|---|
-| R1 | 补充说明：会话中正在运行（`running` / `waiting_approval`）的任务，可由创建者、Team owner、管理员发一段补充说明（≤4000 字符），默认 `interrupt`，可选 `follow_up`（「本轮结束后再告诉它」）。平台经 Worker 调 KiroCrew `steer`，写审计与时间线（`task.steered`，含说明前 500 字符与方式）。已归档 Team 的会话不可。 |
+| R1 | 补充说明：会话中正在运行（`running` / `waiting_approval`）的 **Kiro** 任务，可由创建者、Team owner、管理员发一段补充说明（≤4000 字符），`interrupt` 送入正在运行的这一轮。平台经 Worker 调 KiroCrew `steer`，写审计与时间线（`task.steered`，含说明前 500 字符）。已归档 Team 的会话不可。终审 2026-10-19：不提供 `follow_up`（KiroCrew 以平台不跟踪的续接运行送达）；只支持 Kiro 后端（codex 拒绝、Claude Code 丢弃）。 |
 | R2 | 拒绝如实转达：任务不在运行（409）、原生任务正在启动（503，稍后再试）、Worker 未升级（409「执行环境尚未支持」）。 |
 | R3 | 入口：控制台运行中任务卡片「补充说明」（文本框 + 方式）；MCP `octopus_steer {run_id, task_id, message, mode?}`；API `POST /v1/runs/{id}/steer`。 |
 | R4 | 释放对话：会话**删除**时 Worker 释放本会话的可续接对话（各续接链的第一个原生 ID），尽力而为（404 / 409 忽略），记在 lifecycle；关闭不释放（重新打开后仍可续接）。 |

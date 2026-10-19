@@ -1100,18 +1100,21 @@ class Service:
         return exc
 
     def steer(self, actor, rid, body):
-        """A note for a running task (D46 P5b), through the Worker to KiroCrew's steer: those who may publish the Session;
-        audited and on the timeline. ``interrupt`` reaches the running turn, ``follow_up`` the next one."""
+        """A note for a running task (D46 P5b), through the Worker to KiroCrew's steer into the turn it is in: those who may
+        publish the Session; audited and on the timeline. Only Kiro tasks: KiroCrew 0.10.0 steers the kiro backend alone
+        (codex refuses; Claude Code would drop it); never as a follow-up, which would start a run the platform does not track."""
         require(isinstance(body, dict) and set(body) <= {"task_id", "message", "mode"}, "只接受 task_id、message 与 mode")
         message, mode = body.get("message"), body.get("mode", "interrupt")
         require(isinstance(message, str) and message.strip() and len(message) <= 4000, "补充说明须为 1–4000 字符")
-        require(mode in {"interrupt", "follow_up"}, "mode 只能是 interrupt 或 follow_up")
+        require(mode == "interrupt", "只支持 interrupt：补充说明送入正在运行的这一轮")
         with self.db.read() as db:
             run = run_access(db, actor, rid)
             require(may_publish(db, actor, run), "只有会话创建者、Team owner 或管理员可以补充说明", 403, "forbidden")
             require(run_permissions(db, actor, run)["resume"], "Team 已归档，不能补充说明", 409, "team_archived")
             task = db.execute("SELECT * FROM tasks WHERE run_id=? AND id=?", (rid, body.get("task_id"))).fetchone()
             require(task is not None, "任务不存在", 404, "not_found")
+            require(json.loads(task["spec"]).get("tool") == "kiro", "只有 Kiro 后端的任务支持补充说明（KiroCrew 0.10.0）", 409,
+                    "steer_unsupported")
             attempt = db.execute("SELECT * FROM attempts WHERE id=?", (task["current_attempt"],)).fetchone() \
                 if task["current_attempt"] else None
             require(attempt is not None and attempt["status"] in {"running", "waiting_approval"} and attempt["native_id"],
@@ -1132,8 +1135,7 @@ class Service:
             raise self._worker_refusal(exc) from None
         with self.db.transaction() as db:
             audit(db, actor, "task.steer", "run", rid, {"task": task["id"], "mode": mode, "message": message[:200]})
-            journal.record(db, rid, "task.steered", journal.person(actor),
-                           reason=("补充说明：" if mode == "interrupt" else "本轮结束后补充说明：") + message[:500],
+            journal.record(db, rid, "task.steered", journal.person(actor), reason="补充说明：" + message[:500],
                            task=task["id"], mode=mode)
         return {"ok": True, "status": result.get("status"), "task_id": task["id"]}
 

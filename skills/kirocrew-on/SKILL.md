@@ -120,9 +120,10 @@ KiroCrew ON 在远端执行开发任务：KiroCrew 的 Kiro Agent 先识别意�
 
 ## 给运行中的任务补充说明
 
-- 用户要纠正或补充一个**正在运行**的任务时，用 `octopus_steer {run_id, task_id, message, mode?}`：`mode` 为 `interrupt`（默认，插入它正在进行的这一轮）
-  或 `follow_up`（这一轮结束后送达）。把要发送的原文给用户确认后再发；只能由会话创建者、Team owner 或管理员发送，写入审计与时间线。
-- `409 not_running`：任务已结束或尚未开始，改用 `octopus_continue`；`steer_unsupported`：执行环境的 Worker 尚未升级。
+- 用户要纠正或补充一个**正在运行的 Kiro 任务**时，用 `octopus_steer {run_id, task_id, message}`，说明插入它正在进行的这一轮。把要发送的原文给用户确认后再发；
+  只能由会话创建者、Team owner 或管理员发送，写入审计与时间线。
+- `409 not_running`：任务已结束，改用 `octopus_continue`（尚未开始时等它开始）；`steer_unsupported`：任务不是 Kiro 后端（claude / codex 不支持），
+  或执行环境的 Worker 尚未升级——等它结束后用 `octopus_continue` 修改。
 
 ## 批准原生工具请求
 

@@ -5,18 +5,17 @@ import { api } from "@/api/client";
 import { keys } from "@/api/hooks";
 import type { Run, RunTask } from "@/api/types";
 import { Button } from "@/components/ui/button";
-import { NativeSelect } from "@/components/NativeSelect";
 import { Textarea } from "@/components/ui/textarea";
 
-/** D46 P5b: a note for a running task (KiroCrew steer) — now, or after the turn it is in. */
+/** D46 P5b: a note into the running turn of a Kiro task (KiroCrew steer; other backends cannot take one). */
 export function SteerControl({ run, task }: { run: Run; task: RunTask }) {
   const client = useQueryClient();
   const [open, setOpen] = useState(false);
   const [message, setMessage] = useState("");
-  const [mode, setMode] = useState<"interrupt" | "follow_up">("interrupt");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  if (!["running", "waiting_approval"].includes(task.status) || run.permissions?.publish === false) return null;
+  if (!["running", "waiting_approval"].includes(task.status) || task.spec.tool !== "kiro"
+      || run.permissions?.publish === false) return null;
   if (!open) {
     return <Button type="button" size="sm" variant="outline" onClick={() => setOpen(true)}>补充说明</Button>;
   }
@@ -25,8 +24,8 @@ export function SteerControl({ run, task }: { run: Run; task: RunTask }) {
     setBusy(true);
     setError(null);
     try {
-      await api(`/runs/${encodeURIComponent(run.id)}/steer`, "POST", { task_id: task.id, message, mode });
-      toast.success(mode === "interrupt" ? "补充说明已送达正在运行的任务" : "补充说明将在这一轮结束后送达");
+      await api(`/runs/${encodeURIComponent(run.id)}/steer`, "POST", { task_id: task.id, message });
+      toast.success("补充说明已送达正在运行的任务");
       setOpen(false);
       setMessage("");
     } catch (e) {
@@ -41,10 +40,6 @@ export function SteerControl({ run, task }: { run: Run; task: RunTask }) {
       <Textarea aria-label="补充说明" value={message} maxLength={4000} rows={3} onChange={(e) => setMessage(e.target.value)}
         placeholder="告诉正在运行的任务要注意或调整什么" />
       <div className="flex flex-wrap items-center gap-2">
-        <NativeSelect aria-label="送达方式" value={mode} onChange={(e) => setMode(e.target.value as "interrupt" | "follow_up")}>
-          <option value="interrupt">现在告诉它</option>
-          <option value="follow_up">这一轮结束后</option>
-        </NativeSelect>
         <Button type="button" size="sm" disabled={busy || !message.trim()} onClick={send}>发送</Button>
         <Button type="button" size="sm" variant="outline" onClick={() => setOpen(false)}>取消</Button>
       </div>

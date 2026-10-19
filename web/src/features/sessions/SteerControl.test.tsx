@@ -9,10 +9,10 @@ import { SteerControl } from "@/features/sessions/SteerControl";
 
 afterEach(() => vi.unstubAllGlobals());
 
-const spec = { id: "code", name: "实现", tool: "claude" as const, model: "auto", effort: "", prompt: "实现" };
-const running = (status: string, publish = true): Run => makeRun({ id: "run-s", status: "running",
+const spec = { id: "code", name: "实现", tool: "kiro" as const, model: "auto", effort: "", prompt: "实现" };
+const running = (status: string, publish = true, tool: "kiro" | "claude" = "kiro"): Run => makeRun({ id: "run-s", status: "running",
   permissions: { operate: true, delete: true, native: true, resume: true, publish },
-  tasks: [{ id: "code", run_id: "run-s", ordinal: 0, status, current_attempt: "att-1", spec, attempts: [] }] });
+  tasks: [{ id: "code", run_id: "run-s", ordinal: 0, status, current_attempt: "att-1", spec: { ...spec, tool }, attempts: [] }] });
 
 function show(run: Run) {
   setToken("oct_fixture");
@@ -27,14 +27,19 @@ describe("steer a running task (D46 P5b)", () => {
     const calls = show(running("running"));
     await userEvent.click(screen.getByRole("button", { name: "补充说明" }));
     await userEvent.type(screen.getByRole("textbox", { name: "补充说明" }), "先只改 README");
-    await userEvent.selectOptions(screen.getByRole("combobox", { name: "送达方式" }), "follow_up");
+    expect(screen.queryByRole("combobox", { name: "送达方式" })).not.toBeInTheDocument();   // interrupt only
     await userEvent.click(screen.getByRole("button", { name: "发送" }));
     await waitFor(() => expect(calls.find((c) => c.path.endsWith("/steer"))?.body)
-      .toEqual({ task_id: "code", message: "先只改 README", mode: "follow_up" }));
+      .toEqual({ task_id: "code", message: "先只改 README" }));
   });
 
   test("only a running task of someone who may publish offers it", () => {
     show(running("accepted"));
+    expect(screen.queryByRole("button", { name: "补充说明" })).not.toBeInTheDocument();
+  });
+
+  test("a task on another backend than Kiro is not offered it", () => {
+    show(running("running", true, "claude"));
     expect(screen.queryByRole("button", { name: "补充说明" })).not.toBeInTheDocument();
   });
 

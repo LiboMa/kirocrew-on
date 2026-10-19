@@ -26,8 +26,9 @@ class SteerCase(ConfirmationCase):
             return {"native_id": body["attempt_id"][-8:], "native": {}}   # still running
         return super().request(config, path, body, **kwargs)
 
-    def running_session(self):
-        rid = self.start()
+    def running_session(self, tool="kiro"):
+        rid = self.start(steps=[{"id": "code", "name": "实现", "tool": tool, "prompt": "实现", "kind": "deliver",
+                                 "acceptance": ["完成"]}])
         run = self.tick(rid, 5)
         self.assertEqual(next(t for t in run["tasks"] if t["id"] == "code")["status"], "running")
         return rid
@@ -43,12 +44,20 @@ class SteerCase(ConfirmationCase):
 class SteerTests(SteerCase):
     def test_the_creator_steers_a_running_task(self):
         rid = self.running_session()
-        answer = self.steer(rid, mode="follow_up")
+        answer = self.steer(rid)
         self.assertEqual(answer["status"], "steered")
         path, payload = self.sent[0]
         attempt = next(t for t in self.service.run(self.actor, rid)["tasks"] if t["id"] == "code")["current_attempt"]
         self.assertEqual((path, payload), ("/steer", {"run_id": rid, "attempt_id": attempt, "message": "先只改 README",
-                                                     "mode": "follow_up"}))
+                                                     "mode": "interrupt"}))
+
+    def test_only_a_kiro_task_takes_a_note(self):
+        # KiroCrew 0.10.0 steers only the kiro backend: codex refuses, Claude Code would drop it (review 2026-10-19)
+        rid = self.running_session(tool="claude")
+        with self.assertRaises(Error) as caught:
+            self.steer(rid)
+        self.assertEqual(caught.exception.code, "steer_unsupported")
+        self.assertEqual(self.sent, [])
 
     def test_the_timeline_and_audit_record_it(self):
         rid = self.running_session()
@@ -76,7 +85,8 @@ class SteerTests(SteerCase):
 
     def test_only_a_running_task_is_steered(self):
         self.running = False
-        rid = self.start()
+        rid = self.start(steps=[{"id": "code", "name": "实现", "tool": "kiro", "prompt": "实现", "kind": "deliver",
+                                 "acceptance": ["完成"]}])
         self.assertEqual(self.tick(rid)["status"], "completed")
         with self.assertRaises(Error) as caught:
             self.steer(rid)
@@ -85,7 +95,7 @@ class SteerTests(SteerCase):
 
     def test_what_is_said_is_checked(self):
         rid = self.running_session()
-        for body in ({"message": ""}, {"message": "x" * 4001}, {"mode": "now"}, {"task_id": "nope"}):
+        for body in ({"message": ""}, {"message": "x" * 4001}, {"mode": "now"}, {"mode": "follow_up"}, {"task_id": "nope"}):
             with self.subTest(body=str(body)[:30]), self.assertRaises(Error):
                 self.steer(rid, **body)
         self.assertEqual(self.sent, [])
@@ -103,6 +113,7 @@ class InterfaceTests(unittest.TestCase):
         tools = {t["name"]: t for t in mcp.TOOLS}
         self.assertIn("octopus_steer", tools)
         self.assertEqual(set(tools["octopus_steer"]["inputSchema"]["required"]), {"run_id", "task_id", "message"})
+        self.assertNotIn("mode", tools["octopus_steer"]["inputSchema"]["properties"])   # interrupt only
         seen = []
 
         class Client:

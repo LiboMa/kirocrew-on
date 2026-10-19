@@ -60,10 +60,12 @@ class SteerWorkerTests(unittest.TestCase):
         self.assertEqual((path, body, method), ("/api/spawn/aaaa1111/steer", {"message": "先只改 README，不动测试", "mode": "interrupt"},
                                                 "POST"))
 
-    def test_follow_up_is_passed_on(self):
+    def test_follow_up_is_refused(self):
+        # KiroCrew delivers a follow-up as a new run of the conversation the platform would never track (review 2026-10-19)
         self.dispatch(FIRST)
-        self.assertEqual(self.steer(mode="follow_up")["status"], "follow_up_queued")
-        self.assertEqual(self.calls[-1][1]["mode"], "follow_up")
+        with self.assertRaises(Error):
+            self.steer(mode="follow_up")
+        self.assertFalse(any(p.endswith("/steer") for p, _, _ in self.calls))
 
     def test_another_sessions_attempt_is_refused(self):
         self.dispatch(FIRST, rid=OTHER)
@@ -78,13 +80,18 @@ class SteerWorkerTests(unittest.TestCase):
 
     def test_refusals_are_said_as_they_are(self):
         self.dispatch(FIRST)
-        for status, code, expected in ((409, "not_running", 409), (503, "session_starting", 503), (404, "not_found", 409)):
-            with self.subTest(code):
-                self.answers["/api/spawn/aaaa1111/steer"] = crew_api.GatewayError(status, json.dumps({"error": "x", "code": code}))
+        for status, error, code, expected in (
+                (409, "not_running", "not_running", (409, "not_running")),
+                (503, "session_starting", "session_starting", (503, "native_unavailable")),
+                (404, "not_found", "not_found", (409, "not_running")),
+                (502, "steer_unsupported: the codex backend cannot steer; use mode='follow_up'", "steer_failed",
+                 (409, "steer_unsupported")),
+                (502, "shutting_down", "steer_failed", (503, "native_unavailable"))):
+            with self.subTest(error[:20]):
+                self.answers["/api/spawn/aaaa1111/steer"] = crew_api.GatewayError(status, json.dumps({"error": error, "code": code}))
                 with self.assertRaises(Error) as caught:
                     self.steer()
-                self.assertEqual(caught.exception.status, expected)
-                self.assertIn(caught.exception.code, {"not_running", "native_unavailable"})
+                self.assertEqual((caught.exception.status, caught.exception.code), expected)
 
     def test_delete_releases_the_sessions_conversations(self):
         self.dispatch(FIRST)

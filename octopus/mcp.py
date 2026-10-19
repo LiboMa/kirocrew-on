@@ -82,10 +82,9 @@ TOOLS = [
                                   ["run_id", "origin", "request_id", "decision"]),
      "annotations": {"destructiveHint": True}},
     {"name": "octopus_steer",
-     "description": "给正在运行的任务补充说明（D46 P5b）：mode=interrupt（默认）插入它正在进行的这一轮，follow_up 在这一轮结束后送达。"
-                    "只用于用户要求的纠正或补充（把要发送的原文给用户确认），不要用它替用户决定；任务不在运行时返回 not_running。",
-     "inputSchema": object_schema({"run_id": STRING, "task_id": STRING, "message": STRING,
-                                   "mode": {"type": "string", "enum": ["interrupt", "follow_up"]}},
+     "description": "给正在运行的 Kiro 任务补充说明（D46 P5b），插入它正在进行的这一轮。只用于用户要求的纠正或补充（把要发送的原文"
+                    "给用户确认），不要用它替用户决定；任务不在运行时 not_running，非 Kiro 后端或 Worker 未升级时 steer_unsupported。",
+     "inputSchema": object_schema({"run_id": STRING, "task_id": STRING, "message": STRING},
                                   ["run_id", "task_id", "message"]),
      "annotations": {"destructiveHint": True}},
     {"name": "octopus_parse_workflow",

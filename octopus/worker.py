@@ -1241,14 +1241,14 @@ class Worker:
         return {"stopped": True}
 
     def steer(self, body):
-        """A note for a running task of this Session (D46 P5b), through KiroCrew's steer: ``interrupt`` puts it into the
-        running turn, ``follow_up`` delivers it after the turn."""
+        """A note for a running task of this Session (D46 P5b), through KiroCrew's steer into the running turn. Only
+        ``interrupt``: KiroCrew delivers a ``follow_up`` as a new run of the conversation that the platform would not track."""
         run, _ = self.binding(body["run_id"])
         attempt = body.get("attempt_id")
         require(isinstance(attempt, str) and re.fullmatch(r"attempt-[a-f0-9]{32}", attempt), "Attempt ID 无效")
         message, mode = body.get("message"), body.get("mode", "interrupt")
         require(isinstance(message, str) and 0 < len(message.strip()) and len(message) <= 4000, "补充说明须为 1–4000 字符")
-        require(mode in {"interrupt", "follow_up"}, "mode 只能是 interrupt 或 follow_up")
+        require(mode == "interrupt", "只支持 interrupt：补充说明送入正在运行的这一轮")
         record = run / "attempts" / attempt / "dispatch.json"
         require(record.is_file() and not record.is_symlink(), "该任务不在此会话中运行", 404, "not_found")
         native_id = json.loads(record.read_text()).get("native_id")
@@ -1257,10 +1257,16 @@ class Worker:
             answer = self.native("/api/spawn/" + quote(str(native_id), safe="") + "/steer", {"message": message, "mode": mode},
                                  "POST")
         except crew_api.GatewayError as exc:
-            if exc.status == 503:
-                raise Error(503, "native_unavailable", "原生任务正在启动，请稍后再补充说明") from None
+            try:
+                detail = str(json.loads(str(exc).partition(": ")[2]).get("error") or "")
+            except (ValueError, AttributeError):
+                detail = ""
+            if exc.status == 503 or detail.startswith("shutting_down"):
+                raise Error(503, "native_unavailable", "原生任务正在启动或结束，请稍后再补充说明") from None
             if exc.status in {404, 409}:
                 raise Error(409, "not_running", "任务已不在运行，补充说明未送达") from None
+            if detail.startswith("steer_unsupported"):   # a backend KiroCrew cannot steer (codex)
+                raise Error(409, "steer_unsupported", "该任务的后端不支持补充说明") from None
             raise Error(502, "native_error", "KiroCrew 未接受补充说明：" + str(exc).splitlines()[0][:200]) from None
         return {"ok": True, "status": str(answer.get("status") or "steered")}
 

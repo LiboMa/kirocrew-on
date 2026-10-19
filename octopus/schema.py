@@ -90,8 +90,8 @@ def openapi():
                        "credentials": obj({"source": text})}, ["request_id", "input", "source"]),
         "Rebind": obj({"source": {"type": ["string", "null"]}}, ["source"]),
         "KnowledgeForget": obj({"id": text}, ["id"]),   # D46 P4: one item of the Session's knowledge.items
-        "Steer": obj({"task_id": text, "message": text, "mode": {"enum": ["interrupt", "follow_up"]}},
-                     ["task_id", "message"]),   # D46 P5b
+        "Steer": obj({"task_id": text, "message": text, "mode": {"enum": ["interrupt"]}},
+                     ["task_id", "message"]),   # D46 P5b: into the running turn only
         "Continue": obj({**command, "task_id": text, "input": text, "execution": ref("Execution"),
                          "recovery": ref("RecoveryPolicy"), "rerun": {"type": "array", "items": text, "maxItems": 8}},
                         ["request_id", "expected_version", "task_id"]),
