@@ -92,6 +92,13 @@
 - ~~缺项、缺证据记为 failure_type gate；报告一节在门禁不适用的会话也出现~~（2026-10-18 修复：contract，fail 为 implementation；报告只在门禁生效时）。原文：报告的「验收（以 Evaluator 为准）」在门禁不适用的会话也会出现。
 - 「验收待确认」时控制台的发布区不显示发布按钮（服务端允许手动发布）：保持保守，待负责人决定是否在确认前允许发布。
 
+## D46 P6 用量的后续（2026-10-19）
+- 工具时间线：KiroCrew 0.10.0 的子任务不写 crew log，`state.json` 只有 `turns` / `last_tool`；需要 KiroCrew 为 subagent 记录工具调用，或平台以 PostToolUse
+  hook（带 `subagent_id`）自记时间。
+- KiroCrew 只把最后一次尝试的用量写成一行（`_RunCreditAccounting.total` 未持久化）：同一运行内的瞬时重试的 token 不在其中；credits 已含全部。
+- 按人 / 按 Team 的用量汇总（管理员视图，每人一个边界后即按人的 Kiro credit）；按费用设预算（负责人决定）。
+- 协调者诊断（recoveries）的用量未计入会话合计。
+
 ## D46 P5a 保留上下文的返工的终审延后项（2026-10-19）
 - P5b：运行中补充说明（`steer`，控制台与 MCP，写审计；看门狗停止前先 `follow_up` 提醒）；会话关闭 / 删除时 `release` 可续接的对话。
 - 时间线不说明续接被拒（只在事件内容中有 `continue_refused`）：给 `attempt.dispatched` 加原因。

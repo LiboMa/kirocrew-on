@@ -480,6 +480,16 @@ CloudFront 只使用 us-east-1 的证书）：分发加上别名与证书（SNI�
 - pending（需要人判断，如观感、文案）且无 fail → 会话停在「验收待确认」（`awaiting_acceptance`）：会话页「确认通过」或 MCP `octopus_accept`
   （创建者、Team owner、管理员；已归档 Team 不可），记确认者，不计入预算；也可续作返工。报告「验收（以 Evaluator 为准）」列出判定与确认者。
 
+### 用量（D46 P6a）
+
+- 原生任务结束时 Worker 为 Attempt 记 `evidence.usage`：`credits`（kiro 的 Kiro credit；claude / codex 经 Bedrock 为 0）、`seconds`（墙钟）、`turns`
+  （来自 `GET /api/spawn/{id}`），以及 KiroCrew 用量行（`GET /api/usage/turns?slot=subagent:<对话>`，每次运行结束时一行）中这次运行的
+  `input_tokens / output_tokens / cache_read_tokens / cache_write_tokens`、`cost_usd`、`model`。续接的各轮共用对话的 slot，按运行时间窗匹配各自的一行；
+  没有那一行（因回合上限或异常结束、超过 7 天）时只有前三项并标 `tokens: "unavailable"`。结果缓存在 Attempt 目录的 `usage.json`；读不到不影响判定。
+- 会话视图 `usage` 汇总全部 Attempt（重试、返工、平台追加的任务；协调者诊断不计）；任务卡片的 Attempt 行「用量」、会话页「本会话用量」、
+  报告「用量」一节（每个任务一行与合计）、MCP `session.usage` 与 `latest.usage`。
+- 预算（D42）不变：用量只显示。按费用设预算、按人 / Team 汇总与工具时间线（KiroCrew 子任务没有可用的工具记录）见 BACKLOG。
+
 ### 保留上下文的返工（D46 P5a）
 
 - 适用：执行契约 4 的会话、Worker 报告 `continue`。平台安排的返工——协调者修复目标任务、返工后的审查 / 测试复验、上游返工后重新执行的任务——
