@@ -92,6 +92,17 @@
 - ~~缺项、缺证据记为 failure_type gate；报告一节在门禁不适用的会话也出现~~（2026-10-18 修复：contract，fail 为 implementation；报告只在门禁生效时）。原文：报告的「验收（以 Evaluator 为准）」在门禁不适用的会话也会出现。
 - 「验收待确认」时控制台的发布区不显示发布按钮（服务端允许手动发布）：保持保守，待负责人决定是否在确认前允许发布。
 
+## D49 每人一个边界第 1 期的终审延后项（2026-10-19）
+- 再次 `boundary add` 未带 `--memory` / `--cpu` 时资源上限回到默认值，并因 drop-in 变化排空重启 Gateway：应只在缺少或显式给出时写。
+- `al2023.sh` 以 `env` 参数传管理员密码（短暂出现在 `/proc/<pid>/cmdline`，同主机现有多个 `crew-*` 用户）：改为赋值前缀（`boundary.sh` 已改）。
+- `--owner` 区分大小写（用户名存为小写）；`boundary add` 未传 `AWS_REGION`（默认 us-east-1，当前栈无碍）。
+- 启动向导的 KiroCrew 建议（`/designs`）用 `eligible[0]`（共享的 personal），没有优先此人自己的边界（R6 只在服务端）。
+- 边界在 `kiro-login --boundary` 之前就登记并开始接收此人的会话（Kiro 任务等待登录）：可先以停用状态登记、登录后启用。
+- 每次 `push` 都 enable 每个边界（有意停掉的边界会回来）；`push` 与 `boundary add` 之间没有 `flock`；`toml_set` 迁移只作用于主边界配置；
+  库的变量名（ETC、DATA、SYSTEMD）过于通用。
+- 测试缺口：Team 会话不受 R6 影响；登记测试 patch 了 `validate_worker`（与 personal 的 host_principal 交叉检查未覆盖）；`boundary.sh` 不在 `bash -n` 列表。
+- 边界的移除目前为手工步骤（OPERATIONS）：可加 `deploy.sh boundary remove`。
+
 ## D46 P4 Knowledge 的终审延后项（2026-10-19）
 - 团队层知识（负责人 2026-10-19：P4 验收后排入）：Knowledge 任务的条目以 Draft PR 提到仓库的知识文件（如 `.octopus/knowledge.md`），由人审核合并；
   跨人、跨执行环境，补上 KiroCrew lessons（个人层）自动写入、无人审核的缺口。
