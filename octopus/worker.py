@@ -1071,8 +1071,8 @@ class Worker:
                 if started is None or started - 5 <= at <= end:
                     mine.append((at, item))
             row = max(mine, key=lambda pair: pair[0])[1] if mine else None
-        except (crew_api.GatewayError, OSError, ValueError, AttributeError, TypeError):
-            row = None   # an older Gateway or a refusal: the run's own numbers still stand
+        except Exception:   # best effort (an older Gateway, a refusal, a broken row): the run's own numbers still stand
+            row = None
         if row is None:
             usage["tokens"] = "unavailable"
         else:
