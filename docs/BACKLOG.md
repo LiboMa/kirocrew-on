@@ -92,6 +92,15 @@
 - ~~缺项、缺证据记为 failure_type gate；报告一节在门禁不适用的会话也出现~~（2026-10-18 修复：contract，fail 为 implementation；报告只在门禁生效时）。原文：报告的「验收（以 Evaluator 为准）」在门禁不适用的会话也会出现。
 - 「验收待确认」时控制台的发布区不显示发布按钮（服务端允许手动发布）：保持保守，待负责人决定是否在确认前允许发布。
 
+## D46 P5a 保留上下文的返工的终审延后项（2026-10-19）
+- P5b：运行中补充说明（`steer`，控制台与 MCP，写审计；看门狗停止前先 `follow_up` 提醒）；会话关闭 / 删除时 `release` 可续接的对话。
+- 时间线不说明续接被拒（只在事件内容中有 `continue_refused`）：给 `attempt.dispatched` 加原因。
+- `health()["continue"]` 恒为 true：前置的 KiroCrew 早于 0.10 时每次返工都记 `continue_refused: HTTP 404`，可与接受的 KiroCrew 版本挂钩。
+- `from` 只校验格式，未核对它的 dispatch.json 确有该对话。
+- 原生错误或看门狗停止之后的返工也会续接坏掉的那个对话：可只在质量类失败（implementation、gate、contract、findings）后续接。
+- 文案在 spec、任务卡片与报告间略有不同；MCP `latest.continued` 易与 `octopus_continue` 混淆；Skill 未提及。
+- 测试缺口：引擎侧 `continue_refused` 的证据 / MCP / 报告、`rerun` 类的续接、经引擎的外来对话。
+
 ## D49 每人一个边界第 1 期的终审延后项（2026-10-19）
 - 再次 `boundary add` 未带 `--memory` / `--cpu` 时资源上限回到默认值，并因 drop-in 变化排空重启 Gateway：应只在缺少或显式给出时写。
 - `al2023.sh` 以 `env` 参数传管理员密码（短暂出现在 `/proc/<pid>/cmdline`，同主机现有多个 `crew-*` 用户）：改为赋值前缀（`boundary.sh` 已改）。
