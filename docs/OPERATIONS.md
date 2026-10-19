@@ -480,6 +480,17 @@ CloudFront 只使用 us-east-1 的证书）：分发加上别名与证书（SNI�
 - pending（需要人判断，如观感、文案）且无 fail → 会话停在「验收待确认」（`awaiting_acceptance`）：会话页「确认通过」或 MCP `octopus_accept`
   （创建者、Team owner、管理员；已归档 Team 不可），记确认者，不计入预算；也可续作返工。报告「验收（以 Evaluator 为准）」列出判定与确认者。
 
+### 保留上下文的返工（D46 P5a）
+
+- 适用：执行契约 4 的会话、Worker 报告 `continue`。平台安排的返工——协调者修复目标任务、返工后的审查 / 测试复验、上游返工后重新执行的任务——
+  在该任务上一个 Attempt 的原生对话上续接（KiroCrew `POST /api/spawn/{conversation}/continue`，沿用原会话的上下文、cwd、模型设定与批准方式），
+  消息另加「这是同一任务的返工：你上一轮的工作与对话都在……不要从头重写」；instructions.md 照常写本轮要求。
+- 不续接（全新派发）：第一次派发、用户续作之后、协调者换了工具、工具 / 模型 / Effort 与上一轮不同、瞬时失败的自动重试。
+- 对话 ID 是这一串中第一个 Attempt 的原生 ID；Worker 只续接本会话 Attempt 的对话。续接被拒（对话不存在、正忙、不可续接）时改为全新派发，
+  证据记 `continue_refused`；容量已满与全新派发相同（核对后再派发）。
+- 可见：任务卡片「返工：续接上一轮的对话（保留上下文）」或「续接被拒，已重新派发：原因」；MCP `latest.continued` / `continue_refused`；报告「返工：」。
+- P5b（未做）：运行中补充说明（`steer`）、会话关闭时释放可续接的对话（`release`）。
+
 ### Knowledge（D46 P4）
 
 - 适用：执行契约 4 的会话、源码来自仓库、执行环境为专属（`dedicated`）且 Worker 报告 `role_cards` 与 `knowledge`。
