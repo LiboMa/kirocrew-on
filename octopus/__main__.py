@@ -77,10 +77,11 @@ def build_parser(settings, environ=None):
     boot = sub.add_parser("bootstrap-worker", help="部署引导：以管理员登录并注册执行边界 Worker（可重复执行）")
     boot.add_argument("--username", default="admin")
     boot.add_argument("--password-env", default="OCTOPUS_ADMIN_PASSWORD")
-    boot.add_argument("--worker-url", required=True)
-    boot.add_argument("--token-file", required=True)
+    boot.add_argument("--worker-url")
+    boot.add_argument("--token-file")
     boot.add_argument("--name", required=True)
     boot.add_argument("--owner", help="其专属执行环境的平台用户名（D49：每人一个边界；默认管理员本人）")
+    boot.add_argument("--check-only", action="store_true", help="只核对 --owner（存在、尚无自己的执行环境），不登记")
     boot.add_argument("--spare", action="store_true", help="登记为空闲专属执行环境，由管理员在控制台分配给 Team")
     backup_cmd = sub.add_parser("backup", help="平台数据库一致性备份")
     backup_cmd.add_argument("--dest", required=True)
@@ -204,9 +205,11 @@ def main(argv=None):
     elif args.command == "bootstrap-worker":
         from .bootstrap import register_boundary_worker
         url = f"http://{probe_host(settings.api_host)}:{settings.api_port}"
+        if not args.check_only and not (args.worker_url and args.token_file):
+            raise SystemExit("bootstrap-worker 需要 --worker-url 与 --token-file（只核对用户时用 --check-only）")
         print(dumps(register_boundary_worker(url, args.username, os.environ[args.password_env], args.worker_url,
-                                             Path(args.token_file).read_text().strip(), args.name, spare=args.spare,
-                                             owner=args.owner)))
+                                             Path(args.token_file).read_text().strip() if args.token_file else None,
+                                             args.name, spare=args.spare, owner=args.owner, check_only=args.check_only)))
     elif args.command == "backup":
         from .backup import backup_database
         print(dumps(backup_database(settings.data_dir / "octopus.sqlite3", Path(args.dest))))

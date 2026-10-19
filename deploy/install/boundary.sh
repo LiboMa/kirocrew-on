@@ -39,6 +39,15 @@ KIROCREW_VERSION="$("$KC/venv/bin/python" -c 'import kiro_crew; print(kiro_crew.
 CREW="crew-$NAME"
 BASE="$DATA/$NAME"
 TOML="$ETC/boundary-$NAME.toml"
+platform() {  # bootstrap-worker as the admin: the password reaches it in its environment only, never a command line
+  ( cd "$ON_CURRENT"
+    OCTOPUS_ADMIN_PASSWORD="$(cat "$ADMIN_FILE")" PYTHONPATH="$ON_CURRENT" \
+      "$PLATFORM_PYTHON" -m octopus --config "$ETC/platform.toml" bootstrap-worker "$@" --name "$NAME" --owner "$OWNER" )
+}
+
+# The platform refuses an unknown user or a second own environment before anything exists on the host.
+log "边界 ${NAME}：核对平台用户 $OWNER"
+platform --check-only >/dev/null
 
 log "边界 ${NAME}：OS 用户与目录"
 install -d -m 0700 "$BASE"
@@ -81,7 +90,5 @@ done
 [ -s "$BASE/worker.token" ] || { echo "Worker 未生成 $BASE/worker.token：journalctl -u octopus-worker@$NAME" >&2; exit 1; }
 
 log "边界 ${NAME}：登记为 $OWNER 的专属执行环境"
-(cd "$ON_CURRENT" && env PYTHONPATH="$ON_CURRENT" OCTOPUS_ADMIN_PASSWORD="$(cat "$ADMIN_FILE")" \
-  "$PLATFORM_PYTHON" -m octopus --config "$ETC/platform.toml" bootstrap-worker \
-  --worker-url "http://127.0.0.1:$WORKER_PORT" --token-file "$BASE/worker.token" --name "$NAME" --owner "$OWNER")
+platform --worker-url "http://127.0.0.1:$WORKER_PORT" --token-file "$BASE/worker.token"
 log "完成：边界 ${NAME}（${OWNER}）。下一步：$OWNER 用自己的账号执行 deploy/aws/deploy.sh kiro-login --boundary $NAME"

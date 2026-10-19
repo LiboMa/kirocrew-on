@@ -75,9 +75,11 @@ class LibraryTests(HostCase):
     def test_limits_are_drop_ins_the_gateway_fingerprint_reads(self):
         self.bash("boundary_limits alice 8 300")
         gateway = (self.root / "systemd/octopus-gateway@alice.service.d/limits.conf").read_text()
-        for line in ("[Service]", "MemoryHigh=6144M", "MemoryMax=8G", "CPUQuota=300%", "TasksMax=4096"):
+        for line in ("[Service]", "MemoryHigh=6144M", "MemoryMax=8G", "CPUQuota=300%", "TasksMax=4096",
+                     "OOMPolicy=continue"):   # an agent's build over the limit ends that process, not every task
             self.assertIn(line, gateway.splitlines())
-        self.assertEqual((self.root / "systemd/octopus-worker@alice.service.d/limits.conf").read_text(), "[Service]\nMemoryMax=2G\n")
+        worker = (self.root / "systemd/octopus-worker@alice.service.d/limits.conf").read_text().splitlines()
+        self.assertEqual(worker, ["[Service]", "MemoryMax=4G", "OOMPolicy=continue"])   # previews run under the Worker
         for memory, cpu in (("0", "300"), ("8", "abc"), ("8;reboot", "300")):
             with self.subTest(memory=memory, cpu=cpu):
                 self.assertNotEqual(self.bash(f"boundary_limits alice '{memory}' '{cpu}'", check=False).returncode, 0)
@@ -127,6 +129,19 @@ class LibraryTests(HostCase):
         self.assertLess(calls.index("runuser -u crew-alice"), calls.index("restart octopus-gateway@alice"))
         self.assertFalse((self.root / "data/alice/worker/.maintenance").exists())
 
+    def test_a_gateway_that_does_not_restart_fails_and_leaves_no_mark(self):
+        self.config("alice", gateway_port=5481)
+        (self.root / "data/alice/worker").mkdir(parents=True)
+        (self.root / "active").write_text("")
+        failing = self.bash('systemctl() { echo "systemctl $*" >> ' + str(self.calls) +
+                            '; [ "$1" = restart ] && [ "$2" = octopus-gateway@alice ] && return 1; '
+                            'if [ "$1" = is-active ]; then return 0; fi; }\n'
+                            'if boundary_restart alice /k; then echo RESTARTED; else echo FAILED; fi', check=False)
+        self.assertIn("FAILED", failing.stdout)
+        self.assertFalse((self.root / "data/alice/worker/.maintenance").exists())
+        self.assertFalse((self.root / "data/alice/gateway.fingerprint").exists())   # the next deploy tries again
+        self.assertNotIn("restart octopus-worker@alice", self.calls.read_text())
+
     def test_the_gateway_restarts_when_anything_it_loads_changes(self):
         self.config("b1", gateway_port=5481)
         (self.root / "data/b1").mkdir(parents=True)
@@ -175,6 +190,27 @@ class InstallerTests(unittest.TestCase):
         self.assertIn('systemctl enable "octopus-gateway@$OTHER" "octopus-worker@$OTHER"', block)
         self.assertLess(self.text.index("systemctl daemon-reload"), loop)
 
+    def test_other_boundaries_restart_after_the_platform_is_up_and_a_failure_does_not_stop_the_rest(self):
+        # One person's boundary must not hold up the platform (review 2026-10-19): the API and personal come first.
+        loop = self.text.index('boundary_restart "$OTHER" "$KC"')
+        self.assertGreater(loop, self.text.index("systemctl restart octopus-api"))
+        self.assertGreater(loop, self.text.index('bootstrap-worker --worker-url "http://127.0.0.1:$WORKER_PORT"'))
+        block = self.text[self.text.index("# others:begin"):self.text.index("# others:end")]
+        calls = []
+        stubs = ('other_boundaries() { echo alice; echo bob; echo carol; }\nboundary_env() { :; }\nlog() { echo "LOG $*"; }\n'
+                 'systemctl() { :; }\nboundary_restart() { echo "restart $1"; [ "$1" != bob ]; }\nBOUNDARY=personal KC=/k\n')
+        result = subprocess.run(["bash", "-c", "set -euo pipefail\n" + stubs + block + "\necho END"], capture_output=True, text=True)
+        self.assertNotEqual(result.returncode, 0)   # the deploy reports the failure
+        self.assertIn("restart carol", result.stdout)   # after bob failed, carol still restarted
+        self.assertIn("bob", result.stderr)
+        self.assertNotIn("END", result.stdout)
+
+    def test_a_drain_cut_short_leaves_no_maintenance_mark(self):
+        self.assertIn('[ -z "${BOUNDARY_DRAINING:-}" ] || rm -f "$BOUNDARY_DRAINING"',
+                      self.text[self.text.index("cleanup() {"):].split("\n")[0])
+        library = LIB.read_text()
+        self.assertIn('BOUNDARY_DRAINING="$maintenance"', library)
+
     def test_a_host_with_only_personal_upgrades_as_before(self):
         # The loops run their bodies only for other boundaries; with none, the primary's steps are all there is.
         for start in (m.start() for m in re.finditer(r'for OTHER in \$\(other_boundaries "\$BOUNDARY"\)', self.text)):
@@ -197,7 +233,8 @@ class BoundaryScriptTests(HostCase):
         python.write_text("#!/bin/sh\necho 0.10.0\n")
         python.chmod(0o755)
         self.platform = self.root / "platform-python"
-        self.platform.write_text(f'#!/bin/sh\necho "register $*" >> {self.calls}\n')
+        self.platform.write_text(f'#!/bin/sh\necho "register $*" >> {self.calls}\n'
+                                 'case "$*" in *"--check-only"*"--owner nobody"*) echo "平台上没有用户 nobody" >&2; exit 1 ;; esac\n')
         self.platform.chmod(0o755)
         (self.root / "admin-password").write_text("not-for-output-0123456789")
 
@@ -252,6 +289,14 @@ class BoundaryScriptTests(HostCase):
         self.assertNotEqual(self.config_of("alice")["gateway_port"], self.config_of("bob")["gateway_port"])
         self.assertNotEqual(self.config_of("alice")["worker_port"], self.config_of("bob")["worker_port"])
 
+    def test_an_owner_the_platform_refuses_leaves_nothing_behind(self):
+        result = self.add("alice", "--owner", "nobody", check=False)
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("nobody", result.stderr)
+        self.assertEqual(sorted(f.name for f in (self.root / "etc").iterdir()), [])
+        self.assertNotIn("systemctl", self.calls.read_text())
+        self.assertIn("--check-only", self.calls.read_text())
+
     def test_names_owners_and_limits_are_checked(self):
         for args in (("Alice", "--owner", "alice"), ("a;b", "--owner", "alice"), ("personal", "--owner", "alice"),
                      ("alice",), ("alice", "--owner", "a b"), ("alice", "--owner", "alice", "--memory", "0")):
@@ -279,6 +324,11 @@ class DeployCommandTests(unittest.TestCase):
                      ("boundary", "add", "alice", "--owner", "alice", "--memory", "x"), ("boundary", "remove", "alice")):
             with self.subTest(args=args):
                 self.assertEqual(self.deploy(*args).returncode, 2)
+
+    def test_a_push_may_take_as_long_as_its_drains(self):
+        text = (ROOT / "deploy/aws/deploy.sh").read_text()
+        push = text[text.index("push() {"):text.index("wait_command() {")]
+        self.assertIn('"executionTimeout": ["10800"]', push)
 
     def test_boundaries_lists_name_ports_and_state(self):
         result = self.deploy("boundaries")

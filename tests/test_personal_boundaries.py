@@ -63,6 +63,24 @@ class RegistrationTests(unittest.TestCase):
         with self.db.read() as db:
             self.assertEqual(db.execute("SELECT count(*) FROM workers").fetchone()[0], 0)
 
+    def test_the_owner_can_be_checked_before_anything_is_provisioned(self):
+        self.assertEqual(register_boundary_worker(self.api_url, "admin", PASSWORD, None, None, "alice", owner="alice",
+                                                  check_only=True), {"ok": True, "owner": "alice"})
+        with self.assertRaises(Exception) as caught:
+            register_boundary_worker(self.api_url, "admin", PASSWORD, None, None, "alice", owner="nobody", check_only=True)
+        self.assertIn("nobody", str(caught.exception))
+        with self.db.read() as db:
+            self.assertEqual(db.execute("SELECT count(*) FROM workers").fetchone()[0], 0)
+
+    def test_a_worker_host_never_takes_over_a_persons_boundary(self):
+        own = self.register()
+        with patch("octopus.server.validate_worker", return_value={**HEALTH, "boundary": "b-host", "host_principal": "host"}):
+            host = register_boundary_worker(self.api_url, "admin", PASSWORD, "https://10.0.0.9:8943", "h" * 40, "alice",
+                                            spare=True)
+        self.assertNotEqual(host["id"], own["id"])   # a spare of its own, as for the platform's own Worker of that name
+        self.assertEqual(self.worker_row(own["id"])["config"].count(self.worker_url), 1)   # still its own connection
+        self.assertEqual(self.worker_row(own["id"])["owner_id"], self.alice["id"])
+
     def test_a_second_own_environment_is_refused(self):
         self.register()
         with self.assertRaises(Exception) as caught:

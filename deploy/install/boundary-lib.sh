@@ -63,9 +63,11 @@ boundary_limits() {  # boundary_limits NAME MEMORY_GIB CPU_PERCENT: drop-ins cap
     echo "资源上限无效：内存 $2 GiB、CPU $3%" >&2; return 2; }
   install -d -m 0755 "$SYSTEMD/octopus-gateway@$1.service.d" "$SYSTEMD/octopus-worker@$1.service.d"
   # MemoryHigh throttles before MemoryMax ends the tasks; the Gateway's fingerprint reads these files (boundary_restart).
-  printf '[Service]\nMemoryHigh=%sM\nMemoryMax=%sG\nCPUQuota=%s%%\nTasksMax=4096\n' "$(( $2 * 768 ))" "$2" "$3" \
+  # OOMPolicy=continue: a process over the limit (one agent's build, one preview) ends alone, not every task of the unit.
+  printf '[Service]\nMemoryHigh=%sM\nMemoryMax=%sG\nCPUQuota=%s%%\nTasksMax=4096\nOOMPolicy=continue\n' "$(( $2 * 768 ))" "$2" "$3" \
     > "$SYSTEMD/octopus-gateway@$1.service.d/limits.conf"
-  printf '[Service]\nMemoryMax=2G\n' > "$SYSTEMD/octopus-worker@$1.service.d/limits.conf"
+  # The Worker also runs the Session previews (npm install, dev servers): octopus/apps.py.
+  printf '[Service]\nMemoryMax=4G\nOOMPolicy=continue\n' > "$SYSTEMD/octopus-worker@$1.service.d/limits.conf"
 }
 
 boundary_check() {  # boundary_check NAME TARGET KC: the native contract check of one boundary against the release being installed
@@ -113,6 +115,7 @@ boundary_restart() {  # boundary_restart NAME KC: the Gateway restarted only whe
   else
     if systemctl is-active --quiet "octopus-gateway@$name" && [ -d "$base/worker" ]; then
       printf 'deploy %s\n' "$(date -u +%FT%TZ)" > "$maintenance"   # the Worker only checks that it exists
+      BOUNDARY_DRAINING="$maintenance"   # the installer's EXIT trap removes it if the drain is cut short
       deadline=$(( $(date +%s) + ${DRAIN_MINUTES:-30} * 60 ))
       while [ "$(date +%s)" -lt "$deadline" ]; do
         running="$(runuser -u "$crew" -- env PYTHONPATH="$ON_CURRENT" "$kc/venv/bin/python" -s -c '
@@ -130,10 +133,22 @@ except Exception:
         sleep 20
       done
     fi
-    systemctl restart "octopus-gateway@$name"
+    # Explicit: called as a condition (al2023.sh, the other boundaries), set -e does not stop a failing step here.
+    if ! systemctl restart "octopus-gateway@$name"; then
+      rm -f "$maintenance"
+      BOUNDARY_DRAINING=""
+      echo "边界 ${name}：Gateway 未能重启（journalctl -u octopus-gateway@${name}）" >&2
+      return 1
+    fi
     printf '%s\n' "$print" > "$stamp"
   fi
   # gateway:end
-  systemctl restart "octopus-worker@$name"
+  if ! systemctl restart "octopus-worker@$name"; then
+    rm -f "$maintenance"
+    BOUNDARY_DRAINING=""
+    echo "边界 ${name}：Worker 未能重启（journalctl -u octopus-worker@${name}）" >&2
+    return 1
+  fi
   rm -f "$maintenance"   # the restarted Worker takes work again
+  BOUNDARY_DRAINING=""
 }

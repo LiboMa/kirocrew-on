@@ -225,6 +225,9 @@ class Apps:
             exited = next(((name, proc.returncode) for name, proc in app.processes if proc.poll() is not None), None)
             if exited:
                 return self._fail(app, f"进程 {exited[0]} 已退出（代码 {exited[1]}）")
+            owner = self._listener_uid(app.port)
+            if owner is not None and owner != os.getuid():   # D49: another boundary's app on a port both probed free
+                return self._fail(app, f"端口 {app.port} 上是其他用户的进程（同一主机上的另一个执行边界），请重新启动预览")
             if self._answers(app.port, ready["path"]):
                 with app.lock:
                     if not app.stopping.is_set():
@@ -234,6 +237,21 @@ class Apps:
                 return self._fail(app, f"{ready['timeout']} 秒内未就绪（GET {ready['path']}）：检查日志与 "
                                        f"{preview_spec.DECLARATION} 的 ready")
             app.stopping.wait(self.poll)
+
+    @staticmethod
+    def _listener_uid(port, tables=("/proc/net/tcp", "/proc/net/tcp6")):
+        """The uid listening on a local port, from the kernel's socket tables (Linux); None when nothing listens on it or
+        there are no tables (another platform)."""
+        for table in tables:
+            try:
+                rows = Path(table).read_text().splitlines()[1:]
+            except OSError:
+                continue
+            for row in rows:
+                fields = row.split()
+                if len(fields) > 7 and fields[3] == "0A" and int(fields[1].rsplit(":", 1)[1], 16) == port:
+                    return int(fields[7])
+        return None
 
     @staticmethod
     def _answers(port, path):

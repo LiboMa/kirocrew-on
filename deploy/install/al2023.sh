@@ -22,7 +22,7 @@ log() { printf '[%s] %s\n' "$(date -u +%H:%M:%S)" "$*"; }
 # shellcheck source=boundary-lib.sh
 . "$SOURCE/deploy/install/boundary-lib.sh"
 SCRATCH="$(mktemp -d)"
-cleanup() { rm -rf "$SCRATCH"; }
+cleanup() { rm -rf "$SCRATCH"; [ -z "${BOUNDARY_DRAINING:-}" ] || rm -f "$BOUNDARY_DRAINING"; }   # never a stale mark
 trap cleanup EXIT
 
 log "系统依赖"
@@ -393,11 +393,6 @@ install -m 0644 /opt/kirocrew-on/current/deploy/systemd/*.service /etc/systemd/s
 systemctl daemon-reload
 systemctl enable "octopus-gateway@$BOUNDARY" "octopus-worker@$BOUNDARY" >/dev/null
 boundary_restart "$BOUNDARY" "$KC"
-for OTHER in $(other_boundaries "$BOUNDARY"); do   # D49: then every other boundary on this host, one at a time
-  boundary_env "$OTHER"
-  systemctl enable "octopus-gateway@$OTHER" "octopus-worker@$OTHER" >/dev/null
-  boundary_restart "$OTHER" "$KC"
-done
 if [ -n "$WORKER_HOST" ] && [ -n "${WORKER_PREVIEW_TLS_PORT:-}" ] && [ -s "$BASE/worker.token" ]; then
   log "远程预览端口 $WORKER_PREVIEW_TLS_PORT（TLS；只转发到回环 47000–47999，校验头由 Worker Token 派生）"
   ( umask 077; render_worker_preview "$TARGET/deploy/nginx/kirocrew-worker-preview.conf" "$BASE/worker.token" \
@@ -429,6 +424,18 @@ WORKER_PORT="$(grep -E '^worker_port' "$BOUNDARY_TOML" | grep -oE '[0-9]+')"
   --token-file "$BASE/worker.token" --name "$BOUNDARY")
   # platform:end
 fi
+# others:begin
+# D49: then every other boundary on this host, one at a time — after the platform is up, so one person's drain or a
+# Gateway that does not restart never holds up the API, personal or the others; failures are reported at the end.
+FAILED_BOUNDARIES=""
+for OTHER in $(other_boundaries "$BOUNDARY"); do
+  log "边界 ${OTHER}：升级"
+  boundary_env "$OTHER"
+  systemctl enable "octopus-gateway@$OTHER" "octopus-worker@$OTHER" >/dev/null
+  boundary_restart "$OTHER" "$KC" || FAILED_BOUNDARIES="$FAILED_BOUNDARIES $OTHER"
+done
+[ -z "$FAILED_BOUNDARIES" ] || { echo "这些边界未能重启：${FAILED_BOUNDARIES}（其余已完成）" >&2; exit 1; }
+# others:end
 if [ -n "$WORKER_HOST" ]; then
   log "完成：Worker 主机 $BOUNDARY（KiroCrew $KIROCREW_VERSION）；下一步 deploy.sh worker-host tls / register，并以 $CREW 登录 kiro-cli"
 else

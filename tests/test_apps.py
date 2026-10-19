@@ -267,6 +267,34 @@ class ReviewFixTests(AppsTests):
         self.assertEqual((project / "installed.txt").read_text(), "done\ndone\n")
 
 
+class SharedHostTests(AppsTests):
+    """D49: several Workers on one host share the loopback app ports; an app is never another person's server."""
+
+    def test_a_port_another_user_listens_on_fails_the_app(self):
+        from unittest.mock import patch
+        with patch("octopus.apps.Apps._listener_uid", staticmethod(lambda port: os.getuid() + 1)):
+            _, _, folder = self.start(declaration={"processes": [{"command": SERVE, "port": "$PORT"}]})
+            view = self.settle(RID, folder)
+        self.assertEqual(view["status"], "failed", view)
+        self.assertIn("其他用户", view["error"])
+
+    def test_its_own_listener_is_ready(self):
+        from unittest.mock import patch
+        with patch("octopus.apps.Apps._listener_uid", staticmethod(lambda port: os.getuid())):
+            _, _, folder = self.start(declaration={"processes": [{"command": SERVE, "port": "$PORT"}]})
+            self.assertEqual(self.settle(RID, folder)["status"], "running")
+
+    def test_the_listener_is_read_from_the_kernels_socket_tables(self):
+        from octopus.apps import Apps as Manager
+        table = Path(self.tmp.name) / "tcp"
+        table.write_text("  sl  local_address rem_address   st tx_queue rx_queue tr tm->when retrnsmt   uid  timeout inode\n"
+                         "   0: 0100007F:B798 00000000:0000 0A 00000000:00000000 00:00000000 00000000  1001        0 1\n"
+                         "   1: 0100007F:B799 0100007F:B798 01 00000000:00000000 00:00000000 00000000  1002        0 2\n")
+        self.assertEqual(Manager._listener_uid(0xB798, tables=(str(table),)), 1001)
+        self.assertIsNone(Manager._listener_uid(0xB799, tables=(str(table),)))   # connected, not listening
+        self.assertIsNone(Manager._listener_uid(47000, tables=(str(table) + ".missing",)))   # not Linux: no answer
+
+
 class DetectedProjectTests(AppsTests):
     def test_a_detected_project_with_its_dependencies_installed_starts_without_installing(self):
         if not shutil.which("npm") or not shutil.which("node"):

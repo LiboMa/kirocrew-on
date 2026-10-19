@@ -265,7 +265,8 @@ script = (f"set -euo pipefail; mkdir -p {d}; aws s3 cp s3://{bucket}/releases/{s
           f"ORIGIN_SECRET_PARAM={params}/origin-secret "
           f"AWS_REGION={region} "
           f"bash {d}/kirocrew-on-{sha}/deploy/install/al2023.sh {boundary}")
-print(json.dumps({"commands": [script], "executionTimeout": ["3600"]}))
+# Up to DRAIN_MINUTES per boundary whose Gateway restarts, one after another (D49): more than an hour on a busy host.
+print(json.dumps({"commands": [script], "executionTimeout": ["10800"]}))
 PY
   command_id="$(query cmd-dryrun ssm send-command --instance-ids "$instance" --document-name AWS-RunShellScript \
     --comment "kirocrew-on $sha" --parameters "file://$WORK/commands.json" --query Command.CommandId --output text)"
