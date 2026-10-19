@@ -128,6 +128,7 @@ def openapi():
         "/v1/workflows/{id}/shares": {"post": "Grant", "delete": "Grant"},
         "/v1/workflows/{id}/archive": {"post": "Archive"},
         "/v1/workers": {"get": None, "post": "Worker"},
+        "/v1/placement": {"get": None},
         "/v1/admin/environments": {"get": None}, "/v1/admin/audit": {"get": None},
         "/v1/me/password": {"post": "PasswordChange"}, "/v1/users/{id}/password": {"post": "PasswordReset"},
         "/v1/users/{id}/active": {"post": "Active"}, "/v1/users/{id}/admin": {"post": "AdminFlag"},

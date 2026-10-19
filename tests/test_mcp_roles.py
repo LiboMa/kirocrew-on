@@ -46,13 +46,16 @@ class RoleToolTests(unittest.TestCase):
         self.assertEqual(me["teams"], [{"id": "t1", "name": "平台组", "role": "owner", "archived": False,
                                         "environment": {"worker_id": "w1", "name": "w1", "scope": "dedicated"}}])
 
-    def test_environments_are_the_ones_a_space_can_use(self):
-        client = Fake({("GET", "/v1/me"): ME, ("GET", "/v1/workers"): WORKERS})
+    def test_environments_are_the_platforms_answer(self):   # D49: the rule lives on the server (tests/test_session_placement.py)
+        answer = {"space": "personal", "hint": None, "default": {"id": "my-own", "name": "mine", "scope": "dedicated", "placement": "own"},
+                  "options": [{"id": "shared-me", "models": {"claude": ["auto"]}}, {"id": "my-own", "models": {}}]}
+        client = Fake({("GET", "/v1/placement"): answer})
         personal = mcp.call(client, "octopus_environments", {})
-        self.assertEqual([w["id"] for w in personal["environments"]], ["shared-me", "my-own"])
+        self.assertEqual([(w["id"], w["default"]) for w in personal["environments"]], [("shared-me", False), ("my-own", True)])
         self.assertEqual(personal["environments"][0]["models"], {"claude": ["auto"]})
-        team = mcp.call(client, "octopus_environments", {"team_id": "t1"})
-        self.assertEqual([w["id"] for w in team["environments"]], ["shared-team", "team-own"])
+        self.assertEqual(personal["placement"], "own")
+        mcp.call(client, "octopus_environments", {"team_id": "t1"})
+        self.assertEqual([c[1] for c in client.calls], ["/v1/placement", "/v1/placement?team_id=t1"])
 
     def test_assign_worker_and_changes_call_the_api(self):
         client = Fake()

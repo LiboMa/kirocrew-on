@@ -983,6 +983,31 @@ class Service:
             return self._command(db, actor, "design" if design is not None else "start", None,
                                  {**body, "_design": design} if design is not None else body, execute)
 
+    def placement(self, actor, team=None, rid=None):
+        """Where a new Session would run in a space, or the environments a Session may move to (D49 R4, R6): the one
+        answer the console and Coding Agents show, so neither keeps its own copy of the rule."""
+        with self.db.read() as db:
+            if rid:
+                run = run_access(db, actor, rid)
+                user, team = run["owner_id"], run["team_id"]
+                options = space_workers(db, user, team)   # the Session's creator's, not the operator's (R4)
+                placed = json.loads(run["snapshot"]).get("placement") or {}
+                answer = {"worker": next((w for w in options if w["id"] == run["worker_id"]), None),
+                          "placement": placed.get("kind"), "hint": placed.get("hint"), "options": options}
+            else:
+                if team:
+                    member(db, actor["id"], team)   # a non-member learns nothing about the Team
+                user, answer = actor["id"], placement(db, actor["id"], team)
+
+        def row(w):
+            capabilities = json.loads(w["config"]).get("capabilities", {})
+            return {"id": w["id"], "name": w["name"], "scope": w["scope"], "own": own(w, user),
+                    "isolation": capabilities.get("isolation"), "models": capabilities.get("models", {})}
+        chosen = answer["worker"]
+        return {"space": team or "personal", "hint": answer["hint"], "options": [row(w) for w in answer["options"]],
+                "default": {"id": chosen["id"], "name": chosen["name"], "scope": chosen["scope"],
+                            "placement": answer["placement"]} if chosen else None}
+
     @staticmethod
     def _worker(db, user, worker, team):
         row = next((r for r in space_workers(db, user, team) if r["id"] == worker), None)

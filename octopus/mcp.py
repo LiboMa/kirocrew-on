@@ -157,8 +157,9 @@ TOOLS += [
                                          "以及所在的 Team、角色与各 Team 的执行环境。",
      "inputSchema": object_schema(), "annotations": READ},
     {"name": "octopus_environments",
-     "description": "某个空间可用的执行环境（不传 team_id 为个人空间）。会话处于 waiting_worker 时，从这里取 worker_id 交给 octopus_assign_worker。",
-     "inputSchema": object_schema({"team_id": STRING}), "annotations": READ},
+     "description": "某个空间可用的执行环境与平台的默认选择（不传 team_id 为个人空间；default 为 true 的即不传 worker_id 时的执行位置，"
+                    "hint 原样告诉用户）。会话处于 waiting_worker 时传 run_id：列出该会话可分配的环境，取 worker_id 交给 octopus_assign_worker。",
+     "inputSchema": object_schema({"team_id": STRING, "run_id": STRING}), "annotations": READ},
     {"name": "octopus_assign_worker", "description": "为处于 waiting_worker 的 Session 分配执行环境（worker_id 取自 octopus_environments）；"
                                                     "换到另一个执行环境时工作区重新准备，已完成的任务保留。",
      "inputSchema": object_schema({"run_id": STRING, "request_id": STRING, "expected_version": {"type": "integer"},
@@ -231,16 +232,6 @@ def scoped_tools(client):
 
 def tools_for(client):
     return scoped_tools(client)[0]
-
-
-def usable(worker, me, team):
-    """Whether a Worker serves the space (a Team, or the caller's personal space), as the platform chooses it."""
-    if not worker.get("enabled") or worker.get("scope") == "spare":
-        return False
-    if worker.get("scope") == "shared":
-        return any((space.get("team_id") == team) if team else (space.get("user_id") == me["id"])
-                   for space in worker.get("spaces") or [])
-    return worker.get("team_id") == team if team else worker.get("owner_id") == me["id"]
 
 
 def extract(archive, target):
@@ -427,6 +418,8 @@ def compact_status(session, events):
     for key in ("publish_policy", "publish_auto", "publish_target", "publish_suggestion"):   # D47, D48
         if session.get(key):
             view[key] = session[key]
+    if session.get("placement"):   # D49: where it runs and, on a Team's environment for want of one's own boundary, why
+        view["placement"] = session["placement"]
     if session.get("usage"):   # D46 P6a: what its Attempts used
         view["usage"] = session["usage"]
     if session.get("knowledge"):   # D46 P4: what this Session wrote to the environment's lessons
@@ -512,12 +505,13 @@ def call(client, name, args):
                 "elevated": bool(me.get("admin")) and "admin" in me.get("scopes", []),
                 "teams": [{"id": t["id"], "name": t["name"], "role": t["role"], "archived": bool(t.get("archived")),
                            "environment": t.get("environment")} for t in teams if t.get("role")]}
-    if name == "octopus_environments":
-        me, team = client.request("GET", "/v1/me"), args.get("team_id")
-        return {"space": team or "personal", "environments": [
-            {"id": w["id"], "name": w["name"], "scope": w.get("scope"), "isolation": (w.get("capabilities") or {}).get("isolation"),
-             "models": (w.get("capabilities") or {}).get("models", {})}
-            for w in client.request("GET", "/v1/workers") if usable(w, me, team)]}
+    if name == "octopus_environments":   # D49: the platform's own answer, not a copy of its rule
+        query = {"run_id": args["run_id"]} if args.get("run_id") else {"team_id": args["team_id"]} if args.get("team_id") else {}
+        answer = client.request("GET", "/v1/placement" + ("?" + urlencode(query) if query else ""))
+        chosen = (answer.get("default") or {}).get("id")
+        return {"space": answer.get("space"), "hint": answer.get("hint"),
+                "placement": (answer.get("default") or {}).get("placement"),
+                "environments": [{**item, "default": item["id"] == chosen} for item in answer.get("options") or []]}
     if name == "octopus_download":
         return download(client, args)
     if name == "octopus_app":

@@ -740,6 +740,10 @@ def server(database, port=8918, host="127.0.0.1", allowed_hosts=(), origin_secre
                                                                             "team_id": team, "owner_id": None if spare else user})
                     return self.respond({"id": wid, "name": body["name"], "scope": "spare" if spare else "dedicated",
                                          "capabilities": health}, 201)
+                if path == "/v1/placement":   # D49: where a new Session would run, or where a Session may move
+                    require(method == "GET", "Method not allowed", 405)
+                    return self.respond(service.placement(actor, query.get("team_id", [None])[0] or None,
+                                                          query.get("run_id", [None])[0] or None))
                 if path == "/v1/runs":
                     require(method in {"GET", "POST"}, "Method not allowed", 405)
                     return self.respond(service.runs(actor, all=query.get("all") == ["1"]) if method == "GET"

@@ -3,7 +3,10 @@ Team's environment with a hint (owner 2026-10-19, option A); whether an environm
 creator; the platform alone answers where a new Session would go."""
 import json
 import tempfile
+import threading
 import unittest
+from unittest.mock import patch
+import urllib.request
 
 from octopus import domain
 from octopus.db import Database, dumps
@@ -24,7 +27,8 @@ class PlacementCase(unittest.TestCase):
             self.admin = authenticate(db, issue_token(db, create_user(db, "admin", "admin-password-123", admin=True)["id"])["token"])
             users = {name: create_user(db, name, name + "-password-123", admin=False) for name in ("alice", "bob", "dave")}
             self.ids = {name: row["id"] for name, row in users.items()}
-            self.people = {name: authenticate(db, issue_token(db, row["id"])["token"]) for name, row in users.items()}
+            self.tokens = {name: issue_token(db, row["id"])["token"] for name, row in users.items()}
+            self.people = {name: authenticate(db, token) for name, token in self.tokens.items()}
             db.execute("INSERT INTO teams(id,name,created) VALUES('team-a','研发组',1)")
             for name, role in (("alice", "member"), ("bob", "member"), ("dave", "owner")):
                 db.execute("INSERT INTO members(team_id,user_id,role) VALUES('team-a',?,?)", (self.ids[name], role))
@@ -133,6 +137,83 @@ class ServingTests(PlacementCase):
             names = {w["id"] for w in domain.space_workers(db, self.ids["alice"], "team-a")}
             others = {w["id"] for w in domain.space_workers(db, self.ids["bob"], "team-a")}
         self.assertEqual((names, others), ({"alice-b", "teamenv"}, {"teamenv"}))
+
+
+class InterfaceTests(PlacementCase):
+    def test_the_placement_endpoint_answers_the_default(self):
+        mine = self.service.placement(self.people["alice"], "team-a")
+        self.assertEqual((mine["space"], mine["default"]["id"], mine["default"]["placement"], mine["hint"]),
+                         ("team-a", "alice-b", "own", None))
+        self.assertEqual({(o["id"], o["own"]) for o in mine["options"]}, {("alice-b", True), ("teamenv", False)})
+        theirs = self.service.placement(self.people["bob"], "team-a")
+        self.assertEqual((theirs["default"]["id"], theirs["default"]["placement"]), ("teamenv", "team"))
+        self.assertIn("boundary add", theirs["hint"])
+        self.assertEqual(self.service.placement(self.people["alice"])["default"]["placement"], "own")
+        with self.db.transaction() as db:
+            eve = authenticate(db, issue_token(db, create_user(db, "eve", "eve-password-123", admin=False)["id"])["token"])
+        with self.assertRaises(Error) as caught:
+            self.service.placement(eve, "team-a")
+        self.assertIn(caught.exception.status, {403, 404})
+
+    def test_the_options_for_a_session_follow_its_creator(self):
+        created, _ = self.start("alice")
+        self.own("dave-b", "dave")   # the Team owner's own boundary is not the Session's to move to
+        answer = self.service.placement(self.people["dave"], rid=created["id"])
+        self.assertEqual({o["id"] for o in answer["options"]}, {"alice-b", "teamenv"})
+        self.assertEqual((answer["default"]["id"], answer["default"]["placement"]), ("alice-b", "own"))
+
+    def test_only_the_boundary_owner_opens_the_native_entry(self):
+        from octopus import crew_entry
+        created, _ = self.start("alice")
+        with self.db.transaction() as db:   # prepared: the native Session exists on alice's boundary
+            db.execute("UPDATE runs SET native_parent='octopus-x', status='ready' WHERE id=?", (created["id"],))
+        with patch("octopus.crew_entry.worker_request", side_effect=AssertionError("no network")):
+            with self.assertRaises(Error) as caught:
+                crew_entry.create(self.service, self.people["bob"], created["id"])
+        self.assertEqual(caught.exception.status, 403)
+
+    def test_other_members_see_the_session_and_its_report(self):
+        from octopus import report
+        created, _ = self.start("alice")
+        run = self.service.run(self.people["bob"], created["id"])
+        self.assertEqual(run["worker_id"], "alice-b")
+        self.assertIn("实现登录功能", report.markdown(run))
+
+    def test_the_mcp_lists_environments_with_the_default(self):
+        from octopus import mcp
+        seen, answer = [], self.service.placement(self.people["bob"], "team-a")
+
+        class Client:
+            def request(self, method, path, body=None):
+                seen.append((method, path))
+                return answer
+        listed = mcp.call(Client(), "octopus_environments", {"team_id": "team-a"})
+        self.assertEqual(seen[-1], ("GET", "/v1/placement?team_id=team-a"))
+        self.assertEqual([(e["id"], e["default"]) for e in listed["environments"]], [("teamenv", True)])
+        self.assertIn("boundary add", listed["hint"])
+        mcp.call(Client(), "octopus_environments", {"run_id": "run-1"})
+        self.assertEqual(seen[-1], ("GET", "/v1/placement?run_id=run-1"))
+
+    def test_the_compact_status_carries_the_placement(self):
+        from octopus import mcp
+        created, _ = self.start("bob")
+        view = mcp.compact_status(self.service.run(self.people["bob"], created["id"]), [])["session"]
+        self.assertEqual(view["placement"]["kind"], "team")
+        self.assertIn("boundary add", view["placement"]["hint"])
+
+    def test_the_route_and_schema(self):
+        from octopus.schema import openapi
+        from octopus.server import required_scope, server
+        self.assertEqual(required_scope("GET", "/v1/placement"), "read")
+        self.assertIn("/v1/placement", set(openapi()["paths"]))
+        api = server(self.db, 0)
+        threading.Thread(target=api.serve_forever, daemon=True).start()
+        self.addCleanup(api.server_close)
+        self.addCleanup(api.shutdown)
+        request = urllib.request.Request(f"http://127.0.0.1:{api.server_address[1]}/v1/placement?team_id=team-a",
+                                         headers={"Authorization": "Bearer " + self.tokens["alice"]})
+        with urllib.request.urlopen(request, timeout=10) as answer:
+            self.assertEqual(json.load(answer)["default"]["id"], "alice-b")
 
 
 if __name__ == "__main__":
