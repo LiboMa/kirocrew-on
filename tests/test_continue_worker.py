@@ -150,5 +150,57 @@ class ContractTests(unittest.TestCase):
         self.assertTrue({"task", "parent_session", "agent", "model"} <= set(entry["reads"]))
 
 
+class RoutingEvidenceTests(unittest.TestCase):
+    """KiroCrew writes one routing line per run, at its start, under its conversation's key: a continued run's is the
+    first run's (EC2 2026-10-19: every continued rework failed identity_match,「实际 ACP 后端未核实」)."""
+    def setUp(self):
+        tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(tmp.cleanup)
+        root, self.parent = Path(tmp.name), None
+        self.home, log = root / "crew", root / "provider-routing.jsonl"
+        self.node = Worker(root / "worker", "x" * 40, crew_home=self.home, routing_log=log)
+
+        def native(path, body=None, method=None, timeout=None, headers=None):
+            if path.startswith("/api/chat/slots/octopus-") and body is None:
+                raise crew_api.GatewayError(404, '{"error":"not found"}')
+            if path == "/api/chat/slots":
+                return {"key": body["name"]}
+            if path == "/api/spawn" and body is not None:
+                return {"id": "aaaa1111"}
+            if path.endswith("/continue"):
+                return {"id": "bbbb2222", "conversation": "aaaa1111", "status": "spawned"}
+            if path == "/api/spawn":
+                return {"agents": [{"id": run, "parent": self.parent, "done": False} for run in ("aaaa1111", "bbbb2222")]}
+            return {"ok": True}
+        self.node.native = native
+        self.node.prepare({"run_id": RID, "source": {"type": "new"}})
+        self.parent = self.node.binding(RID)[1]["parent"]
+        for attempt, extra in ((FIRST, {}), (SECOND, {"continue": {"conversation": "aaaa1111", "from": FIRST}})):
+            self.node.dispatch({"run_id": RID, "attempt_id": attempt, "input": "需求", "spec": SPEC, "upstream": [], **extra})
+        for run, started in (("aaaa1111", 1000.0), ("bbbb2222", 2000.0)):   # what KiroCrew wrote for each run
+            folder = self.home / "subagents" / run
+            folder.mkdir(parents=True)
+            (folder / "state.json").write_text(json.dumps({"id": run, "parent_session": self.parent, "started": started,
+                                                           "conversation_key": "subagent:aaaa1111", "resolved_model": ""}))
+        log.write_text("".join(json.dumps({"time": at, "session_key": "subagent:aaaa1111", "actual_backend": "claude",
+                                           "requested_model": model}) + "\n"
+                               for at, model in ((1000.02, "auto"), (2000.03, "claude-opus-5.5"))))
+
+    def evidence(self, attempt):
+        return self.node.inspect({"run_id": RID, "attempt_id": attempt})["evidence"]
+
+    def test_a_continued_run_is_found_under_its_conversation(self):
+        evidence = self.evidence(SECOND)
+        self.assertEqual(evidence["actual_backend"], "claude")
+        self.assertEqual(evidence["routing"]["time"], 2000.03)
+
+    def test_the_first_run_keeps_its_own_line(self):
+        self.assertEqual(self.evidence(FIRST)["routing"]["time"], 1000.02)   # not its continuation's, written later
+
+    def test_without_state_the_dispatch_names_the_conversation(self):
+        (self.home / "subagents" / "bbbb2222" / "state.json").unlink()
+        self.assertEqual(self.evidence(SECOND)["actual_backend"], "claude")
+
+
 if __name__ == "__main__":
     unittest.main()

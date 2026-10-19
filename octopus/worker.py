@@ -1182,14 +1182,23 @@ class Worker:
             if effort:
                 evidence["actual_effort"] = effort.group(1)
         if self.routing_log and self.routing_log.is_file():
-            for line in reversed(self.routing_log.read_text().splitlines()):
+            # KiroCrew writes one line per run, at its start, under the conversation's key: a continued run (D46 P5a)
+            # shares its first run's, so this run's line is the first from its start on (state.json's, this host's clock).
+            key = state.get("conversation_key") or "subagent:" + ((dispatch.get("continued") or {}).get("conversation")
+                                                                   or dispatch["native_id"])
+            started = state.get("started")
+            routes = []
+            for line in self.routing_log.read_text().splitlines():
                 try:
                     route = json.loads(line)
                 except ValueError:
                     continue
-                if route.get("session_key") == "subagent:" + dispatch["native_id"]:
-                    evidence.update(actual_backend=route.get("actual_backend"), routing=route)
-                    break
+                if isinstance(route, dict) and route.get("session_key") == key:
+                    routes.append(route)
+            if isinstance(started, (int, float)) and not isinstance(started, bool):
+                routes = [r for r in routes if isinstance(r.get("time"), (int, float)) and r["time"] >= started - 1][:1]
+            if routes:   # without a start time, the latest as before
+                evidence.update(actual_backend=routes[-1].get("actual_backend"), routing=routes[-1])
         # Only use native returned model observations, never the requested config.
         evidence["actual_model"] = evidence.get("actual_model") or native.get("resolved_model")
         handoff = folder / "handoff.md"
