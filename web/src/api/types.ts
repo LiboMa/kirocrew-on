@@ -239,7 +239,22 @@ export interface RunSource {
   ref?: string;
 }
 
+/** D46 P4: one item a Session's Knowledge task listed, and what became of it in the execution environment's lessons. */
+export interface KnowledgeItem {
+  id: string;
+  task_id: string;
+  rule: string;
+  avoid: string | null;
+  result: "written" | "refused" | "superseded" | "skipped";
+  reason: string | null;
+  created: number;
+  removed: number | null;
+  removed_by: string | null;
+}
+
 export interface Run {
+  /** D46 P4: this Session's 「本次沉淀的知识」, and why a shared environment gathers none. */
+  knowledge?: { items: KnowledgeItem[]; note: string | null } | null;
   /** Who submitted the Session (D35 §4). */
   created_by?: { id: string; username?: string | null };
   /** The source credential pinned at submission (D35 §4); never the secret. */

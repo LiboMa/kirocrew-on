@@ -415,6 +415,11 @@ def compact_status(session, events):
     for key in ("publish_policy", "publish_auto", "publish_target", "publish_suggestion"):   # D47, D48
         if session.get(key):
             view[key] = session[key]
+    if session.get("knowledge"):   # D46 P4: what this Session wrote to the environment's lessons
+        view["knowledge"] = {"note": session["knowledge"].get("note"), "items": [
+            {"id": item["id"], "rule": item["rule"], "result": "removed" if item.get("removed") else item["result"],
+             **({"reason": item["reason"]} if item.get("reason") and not item.get("removed") else {})}
+            for item in session["knowledge"].get("items") or []]}
     if session.get("recovery"):
         recovery, last = session["recovery"], session["recovery"].get("latest") or {}
         decision = last.get("decision") or {}

@@ -89,6 +89,7 @@ def openapi():
                                        "repository": repository, "credential": text}),
                        "credentials": obj({"source": text})}, ["request_id", "input", "source"]),
         "Rebind": obj({"source": {"type": ["string", "null"]}}, ["source"]),
+        "KnowledgeForget": obj({"id": text}, ["id"]),   # D46 P4: one item of the Session's knowledge.items
         "Continue": obj({**command, "task_id": text, "input": text, "execution": ref("Execution"),
                          "recovery": ref("RecoveryPolicy"), "rerun": {"type": "array", "items": text, "maxItems": 8}},
                         ["request_id", "expected_version", "task_id"]),
@@ -156,6 +157,7 @@ def openapi():
         "/v1/runs/{id}/confirm": {"post": "Control"}, "/v1/runs/{id}/accept": {"post": "Control"},
         "/v1/runs/{id}/publish": {"post": "Publish"},
         "/v1/runs/{id}/publish-policy": {"post": "PublishPolicy"},
+        "/v1/runs/{id}/knowledge/forget": {"post": "KnowledgeForget"},
         "/v1/runs/{id}/continue": {"post": "Continue"}, "/v1/runs/{id}/assign-worker": {"post": "AssignWorker"},
         **{"/v1/runs/{id}/" + action: {"post": "Control"} for action in ["stop", "close", "reopen", "delete"]},
     }

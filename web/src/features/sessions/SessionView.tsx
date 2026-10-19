@@ -22,6 +22,7 @@ import { ChangesPanel } from "@/features/sessions/ChangesPanel";
 import { CredentialControl } from "@/features/sessions/CredentialControl";
 import { PublishControl } from "@/features/sessions/PublishControl";
 import { RevisionsPanel } from "@/features/sessions/RevisionsPanel";
+import { KnowledgePanel } from "@/features/sessions/KnowledgePanel";
 import { ApprovalsCard } from "@/features/sessions/ApprovalsCard";
 import { RecoveryPanel } from "@/features/sessions/RecoveryPanel";
 import { ReportButton } from "@/features/sessions/ReportDialog";
@@ -250,6 +251,7 @@ export function SessionView({ id }: { id: string }) {
           <NativeSessionPanel run={run} />
           <RevisionsPanel run={run} />
           <ChangesPanel run={run} />
+          <KnowledgePanel run={run} />
         </section>
         <aside className="space-y-4">
           {!design && <AppPreviewPanel run={run} onOpen={actions.openApp} />}

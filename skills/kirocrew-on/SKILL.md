@@ -95,7 +95,7 @@ KiroCrew ON 在远端执行开发任务：KiroCrew 的 Kiro Agent 先识别意�
 | `waiting_approval` | 原生任务在等待批准一次工具调用：用 `octopus_approvals` 列出，把工具、完整的命令或文件与用途告诉用户；用户同意后用 `octopus_approve` 答复（approve），不同意则 reject。不要替用户决定 |
 | `awaiting_acceptance` | 验收待确认：改代码的会话由 Evaluator 逐项验收，它把需要人判断的项（Evaluator 任务的 `latest.pending`：验收项与证据）留给用户；把这些项列给用户，同意后用 `octopus_accept {run_id, request_id, expected_version}`，不同意时用 `octopus_continue` 返工，不要替用户确认 |
 | `awaiting_confirmation` | 计划待确认：把各任务（名称、工具与模型及 `mapping` 来源、验收项、检查命令）列给用户；用户同意后用 `octopus_confirm {run_id, request_id, expected_version}` 开始执行，要修改时用 `octopus_continue`（修改后续作即视为确认），不要替用户确认 |
-| `completed` | 完成；用 `octopus_preview` 给出预览 |
+| `completed` | 完成；用 `octopus_preview` 给出预览。`session.knowledge` 列出本次沉淀的项目知识（见下） |
 
 ## 4．迭代：`octopus_continue` / `octopus_recover`
 
@@ -108,6 +108,15 @@ KiroCrew ON 在远端执行开发任务：KiroCrew 的 Kiro Agent 先识别意�
   依赖重跑任务的任务、其后的审查 / 测试任务、尚未完成的任务会由平台自动一并重跑；其余沿用上一版结果。
   回复用户时说明重跑了哪些任务、沿用了哪些（`octopus_status` 的修订摘要与 `kept`）。
 - 任务暂停（`blocked` / `failed` / `stopped`）时，可用 `octopus_recover` 请 KiroCrew 协调者按失败证据诊断并安排修复。
+
+## 沉淀的项目知识
+
+- 来自仓库、改了代码的会话在专属执行环境中完成前，平台追加「Knowledge 沉淀」任务（`mapping`「平台追加（沉淀项目知识）」），
+  把长期有效的项目知识（约定、决策、踩过的坑）写成该执行环境 KiroCrew 的 lessons，只给同一仓库、同一空间今后的任务。
+  **不要自己规划 knowledge 角色的任务**，也不要替平台写 lessons。
+- `octopus_status` 的 `session.knowledge.items` 列出每条及结果（`written` / `superseded` / `refused` / `skipped` / `removed` 与 `reason`）；
+  `note` 为「共享执行环境不沉淀、不注入知识」时，该会话在共享环境中，什么也不写也不注入。
+- 用户认为某条不对时，请其在控制台会话页「本次沉淀的知识」中删除（创建者、Team owner、管理员）。
 
 ## 批准原生工具请求
 

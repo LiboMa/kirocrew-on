@@ -37,6 +37,13 @@ function open(run: Run, extra: Record<string, unknown> = {}) {
 }
 
 describe("session detail", () => {
+  test("shows what the Session wrote to the environment's knowledge (D46 P4)", async () => {
+    open(makeRun({ id: "run-k", status: "completed", knowledge: { note: null, items: [{ id: "knowledge-1", task_id: "knowledge",
+      rule: "依赖用 pnpm 安装", avoid: null, result: "written", reason: null, created: 1, removed: null, removed_by: null }] } }));
+    const panel = await screen.findByRole("region", { name: "本次沉淀的知识" });
+    expect(within(panel).getByText("依赖用 pnpm 安装")).toBeInTheDocument();
+  });
+
   test("shows why the Session stopped, the evidence of each attempt and the recovery record", async () => {
     open(blocked);
     expect(await screen.findByText("模拟交接缺失", { selector: "#attention-detail" })).toBeInTheDocument();

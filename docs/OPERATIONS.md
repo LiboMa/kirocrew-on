@@ -452,6 +452,25 @@ CloudFront 只使用 us-east-1 的证书）：分发加上别名与证书（SNI�
 - pending（需要人判断，如观感、文案）且无 fail → 会话停在「验收待确认」（`awaiting_acceptance`）：会话页「确认通过」或 MCP `octopus_accept`
   （创建者、Team owner、管理员；已归档 Team 不可），记确认者，不计入预算；也可续作返工。报告「验收（以 Evaluator 为准）」列出判定与确认者。
 
+### Knowledge（D46 P4）
+
+- 适用：执行契约 4 的会话、源码来自仓库、执行环境为专属（`dedicated`）且 Worker 报告 `role_cards` 与 `knowledge`。
+  共享执行环境不沉淀、不注入（KiroCrew 的成员只是路由，不能按空间隔离 lessons；负责人 2026-10-18），会话页写明。
+- 仓库标记：准备检出时 Worker 在项目根写空文件 `.octopus-kb/<仓库标识>.<空间散列>`（`host_owner_repo` 小写，空间散列为 Team 或个人 ID 的
+  sha256 前 12 位：执行环境换到另一个 Team 后，不把前一个空间同一仓库的知识注入新空间），并写入 `.git/info/exclude`（不提交、不发布）。
+- 沉淀：有 implement / deliver 任务的会话即将完成时（Evaluator 之后），平台追加「Knowledge 沉淀」（`role: knowledge`、`kind: design`、只读；
+  工具优先 kiro，否则第一个可用工具）。它在 outcome.json 写 `knowledge: [{rule ≤300, avoid? ≤200}]`，至多 5 条。续作后它会重新运行并再写一次。
+- 写入：平台丢弃超长、含疑似秘密（与发布相同的扫描，文本不保存）、超过 5 条、此执行环境同一仓库已记录的条目；其余经 Worker
+  `POST /knowledge/write` → KiroCrew `POST /api/lessons`（`category: knowledge`、`applies: always`、`repo_scope` 为标记、`negative` 为 avoid，
+  `X-Session-Key: dashboard:ui`，写入该 Gateway 的全局存储）。每条记入台账表 `knowledge`（结果 written / superseded / refused / skipped 与原因）。
+  Worker 未升级（404）记 skipped；执行环境暂不可用时最多等 10 分钟再记 skipped——写入从不阻止会话完成。时间线 `run.knowledge`。
+- 注入：适用的会话派发任务时 `include_lessons: true`（`include_memory` 仍为 false），按当前执行环境判断；KiroCrew 只注入 `repo_scope` 标记存在于
+  检出目录的 lessons。协调者的 `excludedTools` 与 `managedToolPolicy.exclude` 含 `learn_add`、`learn_remove`：平台是唯一的写入方。
+- 删除：会话页「本次沉淀的知识」或 `POST /v1/runs/<id>/knowledge/forget {id}`（创建者、Team owner、管理员，写审计）：经写入它的执行环境
+  `DELETE /api/lessons {rule, exact: true, repo_scope}`，台账记删除者。MCP 精简状态 `session.knowledge`。
+- 前提：KiroCrew `memory.persistence_enabled` 与 `memory.inject_lessons` 为 true（0.10.0 默认；关闭前者时写入被拒，台账记
+  `persistence_disabled`）。KiroCrew 自身的自动 lessons（task-runner、整理提取）不经平台，`include_lessons` 时同样注入——专属环境内属于同一空间。
+
 ### 停用的 Coding 工具（K01）
 
 - Worker 配置 `disabled_tools`（默认 `["opencode"]`）：所列工具在 `/health` 的 `tools` 中报告为不可用，原因「已停用（K01…）」。

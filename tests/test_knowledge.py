@@ -245,6 +245,23 @@ class WriteTests(KnowledgeCase):
         self.assertEqual({i["result"] for i in run["knowledge"]["items"]}, {"skipped"})
 
 
+class StatusTests(KnowledgeCase):
+    def test_the_compact_status_lists_what_was_written(self):
+        from octopus import mcp
+        self.knowledge = [{"rule": "依赖用 pnpm 安装"}, {"rule": "x" * 301}]
+        _, run = self.run_()
+        view = mcp.compact_status(run, [])["session"]["knowledge"]
+        self.assertEqual([(i["rule"], i["result"]) for i in view["items"]][0], ("依赖用 pnpm 安装", "written"))
+        self.assertIn("reason", view["items"][1])
+        self.assertEqual(set(view["items"][0]), {"id", "rule", "result"})
+
+    def test_a_shared_sessions_compact_status_says_why(self):
+        from octopus import mcp
+        self.configure(CAPS, "shared")
+        _, run = self.run_()
+        self.assertEqual(mcp.compact_status(run, [])["session"]["knowledge"], {"note": "共享执行环境不沉淀、不注入知识", "items": []})
+
+
 class ForgetTests(KnowledgeCase):
     def forget(self, actor, rid, kid):
         with patch("octopus.transport.worker_request", side_effect=lambda config, path, body, **k: self.request(config, path, body)):
@@ -273,6 +290,33 @@ class ForgetTests(KnowledgeCase):
             self.forget(self.actor, rid, "knowledge-" + "0" * 32)
         self.assertEqual(missing.exception.status, 404)
         self.assertEqual(self.forgets, [])
+
+    def test_the_api_documents_and_serves_the_delete(self):
+        from octopus.schema import openapi
+        from octopus.server import required_scope
+        self.assertIn("/v1/runs/{id}/knowledge/forget", openapi()["paths"])
+        self.assertEqual(required_scope("POST", "/v1/runs/run-1/knowledge/forget"), "execute")
+
+    def test_the_route_reaches_the_service(self):
+        import threading
+        import urllib.error
+        import urllib.request
+        from octopus.security import issue_token
+        from octopus.server import server
+        rid, _ = self.run_()
+        with self.db.transaction() as db:
+            token = issue_token(db, self.actor["id"])["token"]
+        app = server(self.db, 0)
+        thread = threading.Thread(target=app.serve_forever, daemon=True)
+        thread.start()
+        self.addCleanup(lambda: (app.shutdown(), app.server_close(), thread.join(2)))
+        request = urllib.request.Request(f"http://127.0.0.1:{app.server_address[1]}/v1/runs/{rid}/knowledge/forget", method="POST",
+                                         data=b'{"id": "knowledge-none"}', headers={"Authorization": "Bearer " + token,
+                                                                                    "Content-Type": "application/json"})
+        with self.assertRaises(urllib.error.HTTPError) as caught:
+            urllib.request.urlopen(request, timeout=5)
+        with caught.exception as response:
+            self.assertEqual((response.code, json.load(response)["error"]), (404, "知识条目不存在"))
 
     def test_forget_goes_to_the_environment_that_wrote_it(self):
         rid, run = self.run_()
