@@ -170,14 +170,39 @@ def workflow_access(db, user, wid, role="viewer"):
 
 
 def space_workers(db, user, team):
-    """Enabled Workers usable in a space: dedicated by owner/team, shared through worker_spaces; spare never (D28)."""
+    """Enabled Workers usable in a space: dedicated by owner/team, shared through worker_spaces; spare never (D28). In a
+    Team's space also the member's own boundary (D49 phase 2: a Team Session runs on its submitter's boundary)."""
     if team:
         query = ("SELECT w.* FROM workers w WHERE w.enabled=1 AND ((w.scope='dedicated' AND w.team_id=?) OR "
-                 "(w.scope='shared' AND EXISTS(SELECT 1 FROM worker_spaces s WHERE s.worker_id=w.id AND s.team_id=?)))")
-    else:
-        query = ("SELECT w.* FROM workers w WHERE w.enabled=1 AND ((w.scope='dedicated' AND w.owner_id=?) OR "
-                 "(w.scope='shared' AND EXISTS(SELECT 1 FROM worker_spaces s WHERE s.worker_id=w.id AND s.user_id=?)))")
-    return db.execute(query + " ORDER BY w.name", (team or user, team or user)).fetchall()
+                 "(w.scope='shared' AND EXISTS(SELECT 1 FROM worker_spaces s WHERE s.worker_id=w.id AND s.team_id=?)) OR "
+                 "(w.scope='dedicated' AND w.team_id IS NULL AND w.owner_id=? AND "
+                 "EXISTS(SELECT 1 FROM members m WHERE m.team_id=? AND m.user_id=?)))")
+        return db.execute(query + " ORDER BY w.name", (team, team, user, team, user)).fetchall()
+    query = ("SELECT w.* FROM workers w WHERE w.enabled=1 AND ((w.scope='dedicated' AND w.owner_id=?) OR "
+             "(w.scope='shared' AND EXISTS(SELECT 1 FROM worker_spaces s WHERE s.worker_id=w.id AND s.user_id=?)))")
+    return db.execute(query + " ORDER BY w.name", (user, user)).fetchall()
+
+
+HINT = ("你还没有自己的执行边界：本次在 Team 的环境执行，与其他成员共用并发与 kiro 额度；"
+        "可请平台管理员为你建立（deploy.sh boundary add <名称> --owner <用户名>）")
+
+
+def own(row, user):
+    """The person's own boundary: a dedicated Worker of theirs, not a Team's (D49)."""
+    return row["scope"] == "dedicated" and not row["team_id"] and row["owner_id"] == user
+
+
+def placement(db, user, team):
+    """Where a new Session of this person in this space runs when no Worker is named (D49 R2): their one own boundary;
+    else the space's only environment (a Team's with a hint to get a boundary, owner 2026-10-19); else a choice waits."""
+    options = space_workers(db, user, team)
+    mine = [w for w in options if own(w, user)]
+    if len(mine) == 1:
+        return {"worker": mine[0], "placement": "own", "hint": None, "options": options}
+    if len(options) == 1:
+        return {"worker": options[0], "placement": "team" if team else "only", "hint": HINT if team else None,
+                "options": options}
+    return {"worker": None, "placement": None, "hint": None, "options": options}
 
 
 def publish_policy(value):
@@ -246,6 +271,9 @@ def unserved(db, run):
     if not row["enabled"]:
         return "执行环境已停用"
     if all(w["id"] != run["worker_id"] for w in space_workers(db, run["owner_id"], run["team_id"])):
+        mine = db.execute("SELECT scope,team_id,owner_id FROM workers WHERE id=?", (run["worker_id"],)).fetchone()
+        if run["team_id"] and own(mine, run["owner_id"]):   # D49 R3: the creator's boundary served the Team while they were in it
+            return "会话创建者已不在该 Team：请 Team owner 或管理员把会话分配到 Team 的环境"
         return "执行环境已更换或已移出该空间"
     return None
 
@@ -834,25 +862,25 @@ class Service:
         require(body.get("admission") in (None, "confirm", "auto"), "admission 须为 confirm 或 auto")
         if "publish" in body:
             publish_policy(body["publish"])
+        placed = {"kind": "requested"} if body.get("worker_id") else None   # D49 R5: recorded with the Session
         if not body.get("worker_id"):
-            # The space's only usable Worker runs it; a Team without an execution environment takes no new Sessions (D28).
+            # Where it runs (D49 R2); a Team with neither an environment nor the submitter's boundary takes none (D28).
             team = body.get("team_id") or None
             with self.db.read() as db:
                 if team:
                     member(db, actor["id"], team)   # a non-member learns nothing about the Team
                     active_team(db, team)
-                usable = space_workers(db, actor["id"], team)
-                if team and not usable:
+                chosen = placement(db, actor["id"], team)
+                if team and not chosen["options"]:
                     row = db.execute("SELECT name FROM teams WHERE id=?", (team,)).fetchone()
                     if row is not None and team_environment(db, team) is not None:
                         raise Error(409, "environment_disabled", f"Team「{row['name']}」的执行环境已停用，请联系平台管理员")
                     if row is not None:
-                        raise Error(409, "team_without_worker", f"Team「{row['name']}」尚未分配执行环境，请联系平台管理员分配")
-            own = [w for w in usable if w["scope"] == "dedicated"] if not team else []
-            if len(usable) == 1:
-                body = {**body, "worker_id": usable[0]["id"]}
-            elif len(own) == 1:   # D49: a person's own boundary before a shared environment that also serves them
-                body = {**body, "worker_id": own[0]["id"]}
+                        raise Error(409, "team_without_worker", f"Team「{row['name']}」尚未分配执行环境，你也还没有自己的执行边界："
+                                                                "请联系平台管理员分配")
+            if chosen["worker"] is not None:   # D49: one's own boundary first, in a Team's space too
+                body = {**body, "worker_id": chosen["worker"]["id"]}
+                placed = {"kind": chosen["placement"], **({"hint": chosen["hint"]} if chosen["hint"] else {})}
         planning = design is None and (body.get("plan") == "agent" or (not selected and body.get("plan") != "match"))
         if planning:
             # A real KiroCrew Agent recognises the intent, enriches the requirement and plans the tasks (planning.py).
@@ -929,6 +957,8 @@ class Service:
                     snapshot["publish_policy"] = {**publish_policy(body["publish"]), "source": "user"}
                 if bound:
                     snapshot["credentials"] = {"source": bound}
+                if placed and worker:
+                    snapshot["placement"] = placed
                 if design is not None:
                     snapshot.update(purpose="workflow_design", design=design)
                 if planning:
@@ -943,12 +973,13 @@ class Service:
                                (rid, step["id"], i, dumps(step)))
                 from .revisions import record
                 record(db, rid, 1, "created", f"创建：{len(spec)} 个任务", actor["id"], now, input=goal, steps=spec)
-                journal.record(db, rid, "run.created", journal.person(actor), worker_assigned=bool(worker))
+                journal.record(db, rid, "run.created", journal.person(actor), worker_assigned=bool(worker),
+                               **({"placement": placed["kind"]} if placed and worker else {}))
                 if bound:
                     journal.record(db, rid, "run.credentials", journal.person(actor),
                                    source={k: bound[k] for k in ("id", "name", "scope", "hint")})
                 return {"id": rid, "session_id": rid, "version": 1,
-                        "status": "preparing" if worker else "waiting_worker"}
+                        "status": "preparing" if worker else "waiting_worker", **({"placement": placed} if placed and worker else {})}
             return self._command(db, actor, "design" if design is not None else "start", None,
                                  {**body, "_design": design} if design is not None else body, execute)
 
@@ -1669,7 +1700,7 @@ class Service:
         value.update({key: snapshot.get(key) for key in ("name", "workflow_name", "workflow_version",
                                                        "selection", "match_mode", "match_reason", "purpose", "planning", "replan",
                                                        "admission", "confirmed", "publish_policy", "publish_auto",
-                                                       "publish_target", "publish_suggestion")})
+                                                       "publish_target", "publish_suggestion", "placement")})
         value["source"] = json.loads(value["source"])
         value["session_id"] = run["id"]
         creator = db.execute("SELECT username FROM users WHERE id=?", (run["owner_id"],)).fetchone()
