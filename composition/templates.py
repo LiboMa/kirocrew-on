@@ -11,6 +11,7 @@ LEGACY_COMMON = ("这是用户授权的本地多 ACP PoC。只操作明确指定
 
 MONITORS = ("@kirocrew-core/monitor_watch", "@kirocrew-core/monitor_start", "@kirocrew-core/monitor_update",
             "@kirocrew-core/monitor_inspect", "@kirocrew-core/monitor_stop")
+LEARN = ("@kirocrew-core/learn_add", "@kirocrew-core/learn_remove")
 
 
 def agent_prompt(name):
@@ -111,9 +112,11 @@ def seed(*, crew_home, kiro_home, allowed_roots, legacy_pipeline, yolo=True):
             spec["toolsSettings"] = {"subagent": {"availableAgents": (
                 [n for n in LEGACY_BACKENDS if n != name] if name == "poc-pipeline-coordinator"
                 else ["poc-kiro", "poc-claude", "poc-codex", "poc-opencode", "poc-diagnose"])}}
-            spec["excludedTools"] = sorted(MONITORS)   # the observer does not arm loops that add turns of their own
+            # The observer does not arm loops that add turns of their own, and neither adds nor removes KiroCrew lessons:
+            # the platform is their one writer (D46 P4).
+            spec["excludedTools"] = sorted(MONITORS + LEARN)
             # kiro-cli applies excludedTools; KiroCrew's own kirocrew-core filters by managedToolPolicy (both, so neither alone)
-            spec["managedToolPolicy"] = {"exclude": sorted(tool.rsplit("/", 1)[1] for tool in MONITORS)}
+            spec["managedToolPolicy"] = {"exclude": sorted(tool.rsplit("/", 1)[1] for tool in MONITORS + LEARN)}
         if name.startswith("poc-pipeline-"):
             from pipeline_spec import COORDINATOR_PROMPT, WORKER_PROMPTS
             spec["description"] = f"App PoC / {backend or 'Kiro CLI'}" + (" coordinator" if coordinator else " worker")

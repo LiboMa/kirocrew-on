@@ -132,6 +132,28 @@
       "reads": [
         "slot"
       ]
+    },
+    "POST /api/lessons": {
+      "module": "dashboard/handlers/cron.py",
+      "reads": [
+        "rule",
+        "category",
+        "negative",
+        "repo_scope",
+        "applies",
+        "scope",
+        "workspace"
+      ]
+    },
+    "DELETE /api/lessons": {
+      "module": "dashboard/handlers/cron.py",
+      "reads": [
+        "rule",
+        "exact",
+        "repo_scope",
+        "scope",
+        "workspace"
+      ]
     }
   }
 }

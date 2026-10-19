@@ -339,10 +339,60 @@ class Worker:
             raise Error(502, "native_error", "KiroCrew 未接受答复：" + str(exc).splitlines()[0][:200]) from None
         return {"ok": True, "origin": origin, "request_id": wanted[1], "decision": decision}
 
-    def native(self, path, body=None, method=None, timeout=None):
-        if timeout is None:
-            return crew_api.request(path, body, method, port=self.port, home=self.home)
-        return crew_api.request(path, body, method, port=self.port, home=self.home, timeout=timeout)
+    def native(self, path, body=None, method=None, timeout=None, headers=None):
+        extra = {k: v for k, v in (("timeout", timeout), ("headers", headers)) if v is not None}
+        return crew_api.request(path, body, method, port=self.port, home=self.home, **extra)
+
+    # KiroCrew trusts the dashboard's own key for lesson writes (handlers/_shared.py); without a silo they go to the
+    # Gateway's global store, and the repository mark keeps each lesson to its repository (D46 P4).
+    LESSONS = {"X-Session-Key": "dashboard:ui"}
+
+    @staticmethod
+    def _knowledge_scope(value):
+        require(isinstance(value, str) and re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._-]{0,119}", value), "知识范围标识无效")
+        return ".octopus-kb/" + value
+
+    def knowledge_write(self, body):
+        """Write the platform-checked items as lessons of this repository: always injected into its later tasks."""
+        self.binding(body["run_id"])
+        scope = self._knowledge_scope(body.get("scope"))
+        items = body.get("items")
+        require(isinstance(items, list) and 0 < len(items) <= 5, "知识条目须为 1–5 条")
+        for item in items:
+            require(isinstance(item, dict) and isinstance(item.get("rule"), str) and 0 < len(item["rule"]) <= 500
+                    and isinstance(item.get("avoid", ""), str) and len(item.get("avoid", "")) <= 500, "知识条目无效")
+        results = []
+        for item in items:
+            lesson = {"rule": item["rule"], "category": "knowledge", "applies": "always", "repo_scope": scope}
+            if item.get("avoid"):
+                lesson["negative"] = item["avoid"]
+            try:
+                answer = self.native("/api/lessons", lesson, "POST", headers=self.LESSONS)
+            except crew_api.GatewayError as exc:
+                text = str(exc).partition(": ")[2]
+                try:
+                    code = json.loads(text).get("code")
+                except (ValueError, AttributeError):
+                    code = None
+                results.append({"rule": item["rule"], "result": "refused", "reason": f"HTTP {exc.status} " + (code or text[:200])})
+                continue
+            if not answer.get("ok"):
+                results.append({"rule": item["rule"], "result": "refused",
+                                "reason": str(answer.get("reason") or answer.get("outcome") or "未写入")[:200]})
+            elif answer.get("superseded"):
+                results.append({"rule": item["rule"], "result": "superseded",
+                                "reason": "替代了：" + "；".join(str(r)[:100] for r in answer["superseded"][:3])})
+            else:
+                results.append({"rule": item["rule"], "result": "written"})
+        return {"results": results}
+
+    def knowledge_forget(self, body):
+        self.binding(body["run_id"])
+        scope = self._knowledge_scope(body.get("scope"))
+        rule = body.get("rule")
+        require(isinstance(rule, str) and 0 < len(rule) <= 500, "知识条目无效")
+        self.native("/api/lessons", {"rule": rule, "exact": True, "repo_scope": scope}, "DELETE", headers=self.LESSONS)
+        return {"ok": True}
 
     def path(self, rid):
         require(isinstance(rid, str) and re.fullmatch(r"run-[a-f0-9]{32}", rid), "Run ID 无效")
@@ -689,6 +739,7 @@ class Worker:
                 "tool_auth": {"kiro": self.tool_auth()}, "tools": self.tools(), "commands": self.checks.commands(),
                 "coordinator_recovery": True, "quality_outcome": True, "baseline_checks": True, "attempt_stop": True,
                 "role_cards": True,   # D46 P2: a contract may carry a role
+                "knowledge": True,    # D46 P4: repository mark, lessons on request, /knowledge/write and /forget
                 "boundary": hashlib.sha256(boundary.encode()).hexdigest(),
                 "host_principal": hashlib.sha256(f"{socket.gethostname()}:{os.getuid()}".encode()).hexdigest(),
                 "routing_evidence": bool(self.routing_log and self.routing_log.is_file()),
@@ -734,6 +785,8 @@ class Worker:
                                           new=source["type"] == "new", auth=auth)
             except ValueError as exc:   # the reason as sources cleaned it, instead of 「Worker 操作未完成」
                 raise Error(409, "source_failed", str(exc)) from None
+            if body.get("knowledge_scope") is not None:
+                self._mark(workspace.project_dir(run), body["knowledge_scope"])
             slot = "octopus-" + rid
             parent_file = run / "parent.json"
             if not parent_file.exists():
@@ -762,6 +815,18 @@ class Worker:
                 write(run / "parent-note.json", {"recorded": True})
             return {"native_parent": slot, "workspace": str(workspace.project_dir(run)),
                     "project": workspace.read_record(run)}
+
+    def _mark(self, project, key):
+        """The repository mark KiroCrew scopes this repository's lessons to: a file only on this host, never committed."""
+        mark = project / self._knowledge_scope(key)
+        require(not any(p.is_symlink() for p in (mark.parent, project / ".git/info")), "知识标记路径不可为符号链接")
+        mark.parent.mkdir(exist_ok=True)
+        mark.touch()
+        exclude = project / ".git/info/exclude"
+        exclude.parent.mkdir(exist_ok=True)
+        lines = exclude.read_text().splitlines() if exclude.is_file() else []
+        if "/.octopus-kb/" not in lines:
+            exclude.write_text("".join(line + "\n" for line in lines + ["/.octopus-kb/"]))
 
     def binding(self, rid):
         run = self.path(rid)
@@ -883,7 +948,7 @@ class Worker:
                     "agent": "poc-diagnose" if body.get("coordination") else "poc-" + spec["tool"],
                     "model": spec["model"], "reasoning_effort": spec["effort"],
                     "cwd": str(workspace.project_dir(run)), "keep": True, "include_memory": False,
-                    "include_lessons": False, "include_project": False,
+                    "include_lessons": body.get("lessons") is True, "include_project": False,
                     "silent": True}
                 if self.approval_mode == "auto":
                     # Owner-authenticated request for native per-spawn auto approval (D14, K19).
@@ -1209,7 +1274,8 @@ def serve(worker, port=8928, host="127.0.0.1"):
                                "/archive/plan": worker.archive_summary, "/app": worker.app,
                                "/candidate": worker.candidate, "/verify/start": worker.verify_start,
                                "/verify/status": worker.verify_status, "/approvals": worker.approvals,
-                               "/approvals/answer": worker.approvals_answer, "/attempt/stop": worker.attempt_stop}
+                               "/approvals/answer": worker.approvals_answer, "/attempt/stop": worker.attempt_stop,
+                               "/knowledge/write": worker.knowledge_write, "/knowledge/forget": worker.knowledge_forget}
                     require(self.path in methods and self.command == "POST", "接口不存在", 404, "not_found")
                     result = methods[self.path](body)
                 status = 200

@@ -68,12 +68,12 @@ def chat_entry_url(slot, port=5476, *, home=None, origin=None, ttl="8h"):
     })
 
 
-def request(path, body=None, method=None, *, port=5476, home=None, timeout=30):
+def request(path, body=None, method=None, *, port=5476, home=None, timeout=30, headers=None):
     req = urllib.request.Request(
         f"http://127.0.0.1:{port}{path}",
         data=json.dumps(body).encode() if body is not None else None,
         method=method,
-        headers={"Cookie": f"mc_token_{port}={token(port, home)}", "Content-Type": "application/json",
+        headers={**(headers or {}), "Cookie": f"mc_token_{port}={token(port, home)}", "Content-Type": "application/json",
                  "Origin": f"http://127.0.0.1:{port}"},
     )
     try:
