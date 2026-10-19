@@ -23,7 +23,18 @@ class ContinueCase(ConfirmationCase):
             db.execute("UPDATE workers SET config=? WHERE id='worker'",
                        (dumps({"url": "fixture", "token": "fixture", "capabilities": capabilities}),))
 
+    lost = False
+
     def request(self, config, path, body, **kwargs):
+        if path == "/dispatch" and body.get("continue") and self.lost:
+            self.bodies.setdefault(body["attempt_id"], dict(body))
+            self.reconciling = body
+            self.lost = False
+            return {"status": "dispatch_unknown", "error": "回执未确认"}   # the receipt was lost
+        if path == "/inspect" and getattr(self, "reconciling", None) and body["attempt_id"] == self.reconciling["attempt_id"]:
+            resumed, self.reconciling = self.reconciling, None   # what the Worker's reconcile answers
+            return {"status": "running", "native_id": body["attempt_id"][-8:], "reconciled": True,
+                    "continued": resumed["continue"]}
         result = super().request(config, path, body, **kwargs)
         if path == "/dispatch" and body.get("continue"):
             result = {**result, "continued": body["continue"]}   # what a Worker of D46 P5a answers
@@ -68,7 +79,14 @@ class FlowTests(ContinueCase):
                                                            "task_id": "code", "input": "改一下需求：再加一个减法"})
         self.assertEqual(self.tick(rid, 40)["status"], "completed")
         latest = self.attempts(rid, "code")[-1]
+        self.assertIsNotNone(self.bodies[latest["id"]].get("repair"))   # the platform still sees a rework: not vacuous
         self.assertIsNone(self.sent(latest))
+
+    def test_a_reconciled_continuation_keeps_its_mark(self):
+        self.lost = True
+        rid, _ = self.rework()
+        first, second = self.attempts(rid, "code")
+        self.assertEqual(json.loads(second["evidence"])["continued"], {"conversation": first["native_id"], "from": first["id"]})
 
     def test_an_older_worker_is_never_asked(self):
         self.caps({})
@@ -109,6 +127,8 @@ class RuleTests(unittest.TestCase):
                  "no native id": dict(previous={**self.PREVIOUS, "native_id": None}),
                  "another tool": dict(spec={**self.SPEC, "tool": "codex"}), "another model": dict(spec={**self.SPEC, "model": "m"}),
                  "another effort": dict(spec={**self.SPEC, "effort": "high"}),
+                 "an explicit effort": dict(previous={**self.PREVIOUS, "spec": json.dumps({**self.SPEC, "effort": "high"})},
+                                            spec={**self.SPEC, "effort": "high"}),   # /continue cannot set it
                  "switched": dict(attempt={**self.ATTEMPT, "evidence": json.dumps({"switched_from": {"tool": "codex"}})}),
                  "automatic retry": dict(attempt={**self.ATTEMPT, "evidence": json.dumps({"transient_retry_of": "x"})}),
                  "user continue since": dict(changed=True)}

@@ -78,8 +78,8 @@ def continuation(previous, attempt, spec, repair, changed):
     if evidence.get("switched_from") or evidence.get("transient_retry_of"):
         return None
     before = json.loads(previous.get("spec") or "{}")
-    if any((before.get(k) or "") != (spec.get(k) or "") for k in ("tool", "model", "effort")):
-        return None
+    if any((before.get(k) or "") != (spec.get(k) or "") for k in ("tool", "model", "effort")) or spec.get("effort"):
+        return None   # an explicit effort: /continue cannot set it, so the run would ignore it
     chain = (json.loads(previous.get("evidence") or "{}").get("continued") or {}).get("conversation")
     return {"conversation": chain or previous["native_id"], "from": previous["id"]}
 
@@ -980,9 +980,11 @@ class Engine:
             return
         native = result.get("native")
         if not native:
+            resumed = {k: result[k] for k in ("continued", "continue_refused") if result.get(k)}   # a reconciled dispatch
             with self.db.transaction() as db:
                 journal.change(db, "attempts", attempt["id"], journal.WORKER, "attempt.running",
-                               status="running", native_id=result["native_id"])
+                               status="running", native_id=result["native_id"],
+                               **({"evidence": dumps({**json.loads(attempt["evidence"] or "{}"), **resumed})} if resumed else {}))
             self.update(rid, "running", actor=journal.WORKER)
             return
         evidence = result.get("evidence", {})

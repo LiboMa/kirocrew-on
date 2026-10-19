@@ -18,10 +18,10 @@ REWORK = "这是同一任务的返工"
 
 
 class ContinueWorkerTests(unittest.TestCase):
-    def setUp(self):
+    def setUp(self, **worker):
         self.tmp = tempfile.TemporaryDirectory()
         self.addCleanup(self.tmp.cleanup)
-        self.node = Worker(Path(self.tmp.name) / "worker", "x" * 40, crew_home=Path(self.tmp.name) / "crew")
+        self.node = Worker(Path(self.tmp.name) / "worker", "x" * 40, crew_home=Path(self.tmp.name) / "crew", **worker)
         self.calls, self.continue_answer, self.agents = [], None, []
 
         def native(path, body=None, method=None, timeout=None, headers=None):
@@ -85,9 +85,10 @@ class ContinueWorkerTests(unittest.TestCase):
                 self.assertEqual(value["status"], "running")
 
     def test_a_conversation_of_another_session_is_refused(self):
-        self.dispatch(FIRST, rid=OTHER)   # aaaa1111 is the other Session's
-        with self.assertRaises(Exception):
-            self.dispatch(SECOND, **{"continue": {"conversation": "aaaa1111", "from": FIRST}})
+        self.dispatch(FIRST, rid=OTHER)   # aaaa1111 is the other Session's (or this Session moved to another Worker)
+        value = self.dispatch(SECOND, **{"continue": {"conversation": "aaaa1111", "from": FIRST}})
+        self.assertEqual(self.spawns()[-1][0], "/api/spawn")   # a fresh spawn, never the other Session's conversation
+        self.assertEqual((value["status"], value["continue_refused"]), ("running", "not_this_session"))
         for bad in ({"conversation": "../x", "from": FIRST}, {"conversation": "aaaa1111", "from": "attempt-x"}, "aaaa1111"):
             with self.subTest(bad=bad), self.assertRaises(Exception):
                 self.dispatch("attempt-" + "d" * 32, **{"continue": bad})
@@ -101,11 +102,44 @@ class ContinueWorkerTests(unittest.TestCase):
         self.agents = [{"id": "bbbb2222", "parent": "dashboard:octopus-" + RID, "task": task}]
         value = self.dispatch(SECOND, **{"continue": {"conversation": "aaaa1111", "from": FIRST}})
         self.assertEqual(value["native_id"], "bbbb2222")
+        self.assertEqual(value["continued"], {"conversation": "aaaa1111", "from": FIRST})   # the chain is kept
         self.assertEqual(len([1 for p, _ in self.spawns() if p.endswith("/continue")]), 1)   # never sent twice
+
+    def test_the_rework_words_follow_the_kind_of_work(self):
+        self.dispatch(FIRST)
+        cases = (("attempt-" + "c" * 32, {"kind": "review"}, {"recheck": True}, "不修改代码", "在已有改动上修复"),
+                 ("attempt-" + "d" * 32, {"kind": "design"}, {"instruction": "补充"}, "不修改业务代码", "在已有改动上修复"),
+                 ("attempt-" + "e" * 32, {"kind": "implement"}, {"instruction": "修复"}, "在已有改动上修复", "不修改代码"))
+        for attempt, contract, repair, said, not_said in cases:
+            with self.subTest(contract["kind"]):
+                self.dispatch(attempt, contract=contract, repair=repair, **{"continue": {"conversation": "aaaa1111", "from": FIRST}})
+                task = self.spawns()[-1][1]["task"]
+                self.assertIn(said, task)
+                self.assertNotIn(not_said, task)
+                self.assertIn("instructions.md", task)
 
     def test_the_worker_says_it_continues(self):
         with patch.object(Worker, "tools", lambda self: {}), patch.object(Worker, "tool_auth", lambda self: "ok"):
             self.assertIs(self.node.health()["continue"], True)
+
+
+class UnattendedTests(ContinueWorkerTests):
+    """approval_mode auto with the boundary's standing YOLO off: a continuation cannot ask for auto approval."""
+
+    def setUp(self):
+        super().setUp(approval_mode="auto", crew_yolo=False)
+
+    def test_a_rework_spawns_afresh_with_auto_approval(self):
+        self.dispatch(FIRST)
+        value = self.dispatch(SECOND, **{"continue": {"conversation": "aaaa1111", "from": FIRST}})
+        path, body = self.spawns()[-1]
+        self.assertEqual((path, body["approval_mode"]), ("/api/spawn", "auto"))
+        self.assertEqual(value["continue_refused"], "approval_mode")
+
+    # the inherited cases that expect a continuation do not apply here
+    test_a_rework_continues_its_conversation = test_an_explicit_model_is_sent = None
+    test_a_lost_continue_receipt_is_reconciled = test_the_rework_words_follow_the_kind_of_work = None
+    test_a_refused_continue_spawns_afresh_with_its_own_words = None
 
 
 class ContractTests(unittest.TestCase):

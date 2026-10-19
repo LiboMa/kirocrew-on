@@ -483,9 +483,12 @@ CloudFront 只使用 us-east-1 的证书）：分发加上别名与证书（SNI�
 ### 保留上下文的返工（D46 P5a）
 
 - 适用：执行契约 4 的会话、Worker 报告 `continue`。平台安排的返工——协调者修复目标任务、返工后的审查 / 测试复验、上游返工后重新执行的任务——
-  在该任务上一个 Attempt 的原生对话上续接（KiroCrew `POST /api/spawn/{conversation}/continue`，沿用原会话的上下文、cwd、模型设定与批准方式），
-  消息另加「这是同一任务的返工：你上一轮的工作与对话都在……不要从头重写」；instructions.md 照常写本轮要求。
-- 不续接（全新派发）：第一次派发、用户续作之后、协调者换了工具、工具 / 模型 / Effort 与上一轮不同、瞬时失败的自动重试。
+  在该任务上一个 Attempt 的原生对话上续接（KiroCrew `POST /api/spawn/{conversation}/continue`：沿用原会话的上下文与 cwd，不带 Effort 与批准方式），
+  消息另加一句返工说明（按任务类别：修复「在已有改动上修复，不要从头重写」；审查 / 测试复验「只针对本轮重新核对，不修改代码」；分析「不修改业务代码」）；
+  instructions.md 照常写本轮要求。
+- 不续接（全新派发）：第一次派发、用户续作之后、协调者换了工具、工具 / 模型 / Effort 与上一轮不同、任务设了显式 Effort、瞬时失败的自动重试；
+  `approval_mode = "auto"` 而 YOLO 关闭（`crew_yolo = false`）的边界（续接不能要求自动批准，记 `continue_refused: approval_mode`）；
+  对话不是这个 Worker 上本会话的（如改派到另一执行环境之后，记 `not_this_session`）。
 - 对话 ID 是这一串中第一个 Attempt 的原生 ID；Worker 只续接本会话 Attempt 的对话。续接被拒（对话不存在、正忙、不可续接）时改为全新派发，
   证据记 `continue_refused`；容量已满与全新派发相同（核对后再派发）。
 - 可见：任务卡片「返工：续接上一轮的对话（保留上下文）」或「续接被拒，已重新派发：原因」；MCP `latest.continued` / `continue_refused`；报告「返工：」。

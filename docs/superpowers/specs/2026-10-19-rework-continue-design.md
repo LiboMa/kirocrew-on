@@ -9,7 +9,8 @@ KiroCrew 0.10.0（`dashboard/messaging_api/spawn.py:397`，2026-10-19 核对）�
 - `POST /api/spawn/{conversation}/continue {task, parent_session, agent?, model?, max_turns?}`：在该对话（第一次 `keep: true` 运行的 ID）的同一原生会话上
   新开一轮（session/load），沿用其累计上下文与原 cwd；返回 `{id: 新一轮的 ID, conversation, status: "spawned"}`。
 - 拒绝：`conversation_busy` 409（上一轮仍在运行）、不可续接 409、`conversation_gone` 404、容量已满 429、其他 400。
-- 不接受 `reasoning_effort`、`approval_mode`、`include_*`：续接沿用原会话的设定。
+- 不接受 `reasoning_effort`、`approval_mode`、`include_*`；续接**不继承** Effort 与批准方式（终审 2026-10-19 核对 KiroCrew 源码），
+  所以显式 Effort、以及 `approval_mode = auto` 而 YOLO 关闭的边界都改为全新派发。
 - 平台的派发都是 `keep: true`，第一次派发的原生 ID 即对话 ID。
 
 ## 2．已确定（第 1 期：续接；`steer` 为 P5b）

@@ -173,7 +173,7 @@ def main(argv=None):
                       kiro_cli=settings.tools.get("kiro_cli"), path_prepend=settings.path_prepend,
                       tool_paths=settings.tools, adapters_dir=settings.adapters_dir,
                       preview_tls_port=settings.preview_tls_port, preview_tls_name=settings.preview_tls_name,
-                      disabled_tools=settings.disabled_tools)
+                      disabled_tools=settings.disabled_tools, crew_yolo=settings.crew_yolo)
         httpd = serve(node, args.port, args.host)
         signal.signal(signal.SIGTERM, lambda *_: threading.Thread(target=httpd.shutdown, daemon=True).start())
         print(f"KiroCrew ON Worker: http://{args.host}:{httpd.server_address[1]} ({args.isolation})", flush=True)

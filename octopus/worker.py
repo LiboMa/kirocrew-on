@@ -186,15 +186,26 @@ OBSERVATIONS = {"native_empty_observation": "empty-session-observation.json",
 REFUSED_EXPORTS = {"export_bundle_empty": "native_empty_observation", "export_slot_not_persistent": "native_restricted_observation"}
 
 
-# The rework's own words when it resumes its conversation (D46 P5a); a fresh spawn never says it.
-REWORK = "\n这是同一任务的返工：你上一轮的工作与对话都在，先核对本轮要求，在已有改动上修复，不要从头重写。"
+def rework_note(kind, repair):
+    """What a resumed conversation is told (D46 P5a), by the kind of work: a re-check never changes code. A fresh spawn
+    (a refused continuation included) is never told any of it."""
+    if kind in ("review", "test") or (repair or {}).get("recheck"):
+        return ("\n这是同一任务的复验：你上一轮的审查与对话都在；只针对本轮的源码与候选重新核对，不修改代码；"
+                "结论与交接写到本轮 instructions.md 指定的文件，不沿用上一轮的文件。")
+    if kind == "design":
+        return ("\n这是同一任务的重新分析：你上一轮的分析与对话都在；按本轮 instructions.md 的要求补充或修正结论，"
+                "不修改业务代码，结论写到本轮指定的文件。")
+    return ("\n这是同一任务的返工：你上一轮的工作与对话都在，先核对本轮 instructions.md 的要求，在已有改动上修复，"
+            "不要从头重写；交接与结论写到本轮指定的文件。")
 
 class Worker:
     def __init__(self, root, token, gateway_port=5476, crew_home=None, isolation="trusted-local", routing_log=None,
                  crew_url=None, approval_mode="", crew_entry_ttl="8h", kiro_cli=None, path_prepend=(),
-                 tool_paths=None, adapters_dir=None, preview_tls_port=0, preview_tls_name="", disabled_tools=("opencode",)):
+                 tool_paths=None, adapters_dir=None, preview_tls_port=0, preview_tls_name="", disabled_tools=("opencode",),
+                 crew_yolo=True):
         self.root = Path(root).resolve()
         self.disabled_tools = frozenset(disabled_tools)   # reported unavailable, so nothing plans, switches to or runs them
+        self.crew_yolo = crew_yolo   # the boundary's standing YOLO: without it a continuation cannot ask for auto approval
         self.root.mkdir(parents=True, exist_ok=True, mode=0o700)
         self.token, self.port = token, gateway_port
         self.home = Path(crew_home or Path.home() / ".kiro/crew").resolve()
@@ -884,7 +895,11 @@ class Worker:
             require(isinstance(resume, dict) and set(resume) == {"conversation", "from"}
                     and re.fullmatch(r"[a-f0-9]{8,64}", str(resume.get("conversation", "")))
                     and re.fullmatch(r"attempt-[a-f0-9]{32}", str(resume.get("from", ""))), "续接对象无效")
-            require(resume["conversation"] in self._conversations(run), "续接的对话不属于此会话", 409, "conflict")
+        # Why this rework spawns afresh instead (D46 P5a): a conversation this Session's Worker never started (the Session was
+        # moved to another environment), or approvals the conversation cannot be asked to take automatically.
+        unresumable = None if resume is None else (
+            "not_this_session" if resume["conversation"] not in self._conversations(run) else
+            "approval_mode" if self.approval_mode == "auto" and not self.crew_yolo else None)
         folder = run / "attempts" / attempt
         # Checked before the lock: a slow kiro-cli must not hold every other request of this Worker.
         login = self.tool_auth() if spec["tool"] == "kiro" or body.get("coordination") or body.get("design") else "ok"
@@ -959,6 +974,8 @@ class Worker:
             prompt = f"{marker}\n完整阅读 {folder / 'instructions.md'}，在指定源码目录完成本次任务。"
             value = {"request_hash": hashlib.sha256(dumps(body).encode()).hexdigest(),
                      "status": "dispatching", "attempt_id": attempt, "context_hash": context_hash}
+            if resume is not None and unresumable is None:
+                value["continuing"] = resume   # kept for a reconcile: a lost receipt still knows the chain
             write(record, value)  # Persist before the native side effect.
             try:
                 spawn = {
@@ -972,14 +989,18 @@ class Worker:
                     # Owner-authenticated request for native per-spawn auto approval (D14, K19).
                     spawn["approval_mode"] = "auto"
                 result = None
-                if resume is not None:
-                    # The conversation keeps its own model settings, effort and approvals; the rework is a new run in it.
-                    again = {"task": prompt + REWORK, "parent_session": parent["parent"], "agent": spawn["agent"]}
+                if unresumable:
+                    value["continue_refused"] = unresumable
+                elif resume is not None:
+                    # A new run in the conversation: its context and cwd; /continue takes no effort or approval mode.
+                    again = {"task": prompt + rework_note((contract or {}).get("kind"), body.get("repair")),
+                             "parent_session": parent["parent"], "agent": spawn["agent"]}
                     if explicit:
                         again["model"] = spec["model"]
                     try:
                         result = self.native("/api/spawn/" + quote(resume["conversation"], safe="") + "/continue", again)
                         value["continued"] = {"conversation": resume["conversation"], "from": resume["from"]}
+                        value.pop("continuing", None)
                     except crew_api.GatewayError as exc:
                         if exc.status not in {400, 404, 409}:
                             raise   # capacity or the Gateway itself: as for a spawn, inspected before any retry
@@ -987,6 +1008,7 @@ class Worker:
                             code = json.loads(str(exc).partition(": ")[2]).get("code")
                         except (ValueError, AttributeError):
                             code = None
+                        value.pop("continuing", None)
                         value["continue_refused"] = str(code or f"HTTP {exc.status}")[:80]   # gone, busy: a fresh spawn
                 if result is None:
                     result = self.native("/api/spawn", spawn)
@@ -1026,6 +1048,8 @@ class Worker:
                    and "[OCTOPUS-ATTEMPT:" + attempt + "]" in t.get("task", "")]
         if len(matches) == 1:
             value.update(status="running", native_id=matches[0]["id"], reconciled=True)
+            if value.get("continuing"):   # D46 P5a: the run it found is the continuation that was asked for
+                value["continued"] = value.pop("continuing")
             write(run / "attempts" / attempt / "dispatch.json", value)
         else:
             value.update(status="dispatch_unknown", error="尚不能唯一确认原生派发；没有重发")
