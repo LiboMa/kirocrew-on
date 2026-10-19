@@ -579,7 +579,8 @@ describe("session detail", () => {
   const diffs: Record<string, unknown> = {
     "?from=2&to=3": { from: 2, to: 3, from_summary: "", to_summary: "", reconstructed: false, input: [same("做一个数字时钟")],
       tasks: [{ id: "plan", name: "规划", status: "same", fields: {}, prompt: [same("规划")] },
-        { id: "code", name: "实现", status: "changed", fields: { tool: ["claude", "codex"] },
+        { id: "code", name: "实现", status: "changed", fields: { tool: ["claude", "codex"],
+          skills: [["frontend-design"], ["frontend-design", "test-driven-development"]] },
           prompt: [same("实现数字时钟"), { op: "+", text: "12 小时制补零" }, same("不引入外部资源")] },
         { id: "review", name: "审查", status: "same", fields: {}, prompt: [same("审查")] }] },
     "?from=1&to=3": { from: 1, to: 3, from_summary: "", to_summary: "", reconstructed: false, input: [same("做一个数字时钟")],
@@ -593,6 +594,7 @@ describe("session detail", () => {
     const panel = await screen.findByRole("region", { name: "修订历史" });
     expect(await within(panel).findByText("续作「实现」：工具 claude → codex、提示词")).toBeInTheDocument();
     expect(await within(panel).findByText("工具 claude → codex")).toBeInTheDocument();
+    expect(panel).toHaveTextContent("方法 frontend-design → frontend-design；test-driven-development");   // D50
     const added = within(panel).getByText("12 小时制补零").closest("[data-op]");
     expect(added).toHaveAttribute("data-op", "+");
     expect(panel).toHaveTextContent("另有 2 个任务未变化");

@@ -36,6 +36,19 @@ class ContractTests(unittest.TestCase):
             self.assertIn(name, text)
         self.assertIn("skills", json.dumps(planning.EXAMPLE))
 
+    def test_a_malformed_planned_value_never_sinks_the_plan(self):   # final review 2026-10-19
+        for bad in ([{"name": "frontend-design"}], [["frontend-design"]], "frontend-design", 3):
+            with self.subTest(bad=bad):
+                notes = []
+                planned = normalize([{**STEP, "skills": bad}], notes, planned=True)
+                self.assertNotIn("skills", planned[0])
+                self.assertTrue(any("技能" in note for note in notes), notes)
+
+    def test_a_revision_records_a_change_of_skills(self):   # final review 2026-10-19
+        from octopus import domain, revisions
+        self.assertEqual(revisions.CONTRACT, domain.CONTRACT)
+        self.assertEqual(revisions.changes({"skills": ["frontend-design"]}, {"skills": ["test-driven-development"]}), "方法")
+
     def test_the_api_describes_the_field(self):
         from octopus.schema import openapi
         field = openapi()["components"]["schemas"]["Step"]["properties"]["skills"]
@@ -131,6 +144,15 @@ class EngineTests(SkillsCase):
     def test_an_older_worker_gets_no_skills(self):
         self.caps({})
         rid = self.start(steps=[{**STEP, "skills": ["test-driven-development"]}])
+        self.assertEqual(self.tick(rid)["status"], "completed")
+        self.assertTrue(all("skills" not in c for c in self.contracts(rid)))
+
+    def test_a_worker_gets_only_the_skills_it_has(self):   # final review 2026-10-19: a newer pack than the Worker's
+        self.caps({"skills": ["test-driven-development"]})
+        rid = self.start(steps=[{**STEP, "skills": ["frontend-design", "test-driven-development"]}])
+        self.assertEqual(self.tick(rid)["status"], "completed")
+        self.assertEqual(self.contracts(rid)[0]["skills"], ["test-driven-development"])
+        rid = self.start(steps=[{**STEP, "skills": ["frontend-design"]}])
         self.assertEqual(self.tick(rid)["status"], "completed")
         self.assertTrue(all("skills" not in c for c in self.contracts(rid)))
 

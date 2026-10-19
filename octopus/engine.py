@@ -935,7 +935,10 @@ class Engine:
             contract = {key: spec[key] for key in CONTRACT if key in spec}
             if not (config.get("capabilities") or {}).get("role_cards"):   # D46 P2: an older Worker refuses the field
                 contract.pop("role", None)
-            if not (config.get("capabilities") or {}).get("skills"):   # D50: nor does one without the skill pack
+            have = (config.get("capabilities") or {}).get("skills")
+            if contract.get("skills"):   # D50: only what the Worker's pack has (it refuses a name it lacks)
+                contract["skills"] = [name for name in contract["skills"] if isinstance(have, list) and name in have]
+            if not contract.get("skills"):   # an older Worker, without the pack, refuses the field itself
                 contract.pop("skills", None)
             plan = snapshot.get("planning") or {}
             if contract.get("depends_on"):
