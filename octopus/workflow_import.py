@@ -97,7 +97,7 @@ def normalize(raw, notes, known=(), planned=False):
         if planned and "role" in contract:   # D46 P2: an optional label never sinks a plan (as requested, D45)
             from . import roles
             role, kind = contract["role"], contract.get("kind")
-            if role not in roles.KINDS or (kind is not None and kind not in roles.KINDS[role]):
+            if role not in roles.KINDS or role in roles.PLATFORM or (kind is not None and kind not in roles.KINDS[role]):
                 notes.append(f"任务「{picked['name'] or index}」的角色 {role!r} 无效或与类别 {kind} 不相容，已忽略")
                 del contract["role"]
         result.append({"id": sid, "name": picked["name"] or f"任务 {index}",

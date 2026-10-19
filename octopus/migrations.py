@@ -126,8 +126,21 @@ CREATE TABLE IF NOT EXISTS credential_grants(
 ALTER TABLE workflow_versions ADD COLUMN credentials TEXT NOT NULL DEFAULT '{}';
 """
 
+# Knowledge (D46 P4): each item a Session's Knowledge task listed, what became of it in the execution environment's
+# KiroCrew lessons (written / refused / superseded, or skipped by the platform's checks) and who removed it.
+KNOWLEDGE = """
+CREATE TABLE IF NOT EXISTS knowledge(
+ id TEXT PRIMARY KEY, run_id TEXT NOT NULL REFERENCES runs(id), task_id TEXT NOT NULL,
+ worker_id TEXT NOT NULL REFERENCES workers(id), repo TEXT NOT NULL, rule TEXT NOT NULL, avoid TEXT,
+ result TEXT NOT NULL CHECK(result IN ('written','refused','superseded','skipped')), reason TEXT, created REAL NOT NULL,
+ removed REAL, removed_by TEXT REFERENCES users(id));
+CREATE INDEX IF NOT EXISTS knowledge_run ON knowledge(run_id);
+CREATE INDEX IF NOT EXISTS knowledge_repo ON knowledge(worker_id,repo);
+"""
+
 MIGRATIONS = [(1, "baseline", BASELINE), (2, "environments", ENVIRONMENTS), (3, "access", ACCESS),
-              (4, "teams_workers", TEAMS_WORKERS), (5, "apps", APPS), (6, "credentials", CREDENTIALS)]
+              (4, "teams_workers", TEAMS_WORKERS), (5, "apps", APPS), (6, "credentials", CREDENTIALS),
+              (7, "knowledge", KNOWLEDGE)]
 
 
 def _statements(script):

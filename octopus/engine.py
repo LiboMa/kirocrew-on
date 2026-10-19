@@ -9,7 +9,7 @@ import time
 
 from .db import dumps, uid
 from .transport import worker_request
-from . import evaluation, gates, journal, planning, recovery, waiting
+from . import evaluation, gates, journal, knowledge, planning, recovery, waiting
 from .security import Error
 from .domain import CONTRACT, awaits_confirmation, unserved
 from .gates import BLOCKED
@@ -232,11 +232,72 @@ class Engine:
     def _active(self, rid):
         with self.db.read() as db:
             row = db.execute(
-                "SELECT r.*,w.config worker_config,w.enabled worker_enabled FROM runs r "
+                "SELECT r.*,w.config worker_config,w.enabled worker_enabled,w.scope worker_scope FROM runs r "
                 "JOIN workers w ON w.id=r.worker_id WHERE r.id=? AND r.lifecycle!='deleted' AND "
                 "r.status IN ('preparing','ready','running','waiting_approval','dispatch_unknown','stopping','reopening','diagnosing')",
                 (rid,)).fetchone()
         return dict(row) if row else None
+    def _knowledge(self, run, config):
+        """Write what an accepted Knowledge task listed (D46 P4 R5) — once for each of its Attempts, before the Session
+        completes. A refusal or an older Worker is recorded and never holds the Session; an unavailable environment is
+        waited for up to knowledge.RETRY seconds. True when it acted this time."""
+        rid, snapshot = run["id"], json.loads(run["snapshot"])
+        added = snapshot.get("knowledge_added") or {}
+        if not added.get("tasks"):
+            return False
+        marks = ",".join("?" * len(added["tasks"]))
+        with self.db.read() as db:
+            row = db.execute(f"SELECT t.id, a.id attempt, a.evidence FROM tasks t JOIN attempts a ON a.id=t.current_attempt "
+                             f"WHERE t.run_id=? AND t.status='accepted' AND t.id IN ({marks}) ORDER BY t.ordinal LIMIT 1",
+                             (rid, *added["tasks"])).fetchone()
+            if row is None or row["attempt"] in (added.get("written") or []):
+                return False
+            source = json.loads(run["source"])
+            repo = knowledge.key(source, knowledge.space(run))
+            keep, rest = knowledge.items((json.loads(row["evidence"] or "{}")).get("outcome"),
+                                         knowledge.known(db, run["worker_id"], repo) if repo else ())
+        results = []
+        if keep and repo:
+            try:
+                answer = self.request(config, "/knowledge/write", {"run_id": rid, "scope": repo, "items": keep}, timeout=60)
+                results = answer.get("results") if isinstance(answer, dict) else None
+                results = results if isinstance(results, list) else []
+            except Error as exc:
+                since = added.get("waiting") or self.wall()
+                if exc.code in {"worker_unavailable", "native_unavailable"} and self.wall() - since < knowledge.RETRY:
+                    if not added.get("waiting"):
+                        with self.db.transaction() as db:
+                            fresh = json.loads(db.execute("SELECT snapshot FROM runs WHERE id=?", (rid,)).fetchone()["snapshot"])
+                            fresh["knowledge_added"] = {**(fresh.get("knowledge_added") or {}), "waiting": since}
+                            journal.change(db, "runs", rid, journal.ENGINE, "run.knowledge", "执行环境暂不可用，稍后写入知识",
+                                           quiet=("snapshot",), snapshot=dumps(fresh))
+                    return True
+                reason = ("执行环境不支持写入知识（Worker 尚未升级）" if exc.status == 404 and exc.code == "not_found"
+                          else ("执行环境暂不可用，未写入" if exc.code in {"worker_unavailable", "native_unavailable"}
+                                else "未写入：" + str(exc)[:160]))
+                results = [{"result": "skipped", "reason": reason} for _ in keep]
+        rows = []
+        for item, answer in zip(keep, results + [{}] * (len(keep) - len(results))):
+            answer = answer if isinstance(answer, dict) else {}
+            result = answer.get("result") if answer.get("result") in {"written", "refused", "superseded", "skipped"} else "skipped"
+            reason = str(answer.get("reason") or ("" if result == "written" else "执行环境未报告结果"))[:200] or None
+            rows.append({**item, "result": result, "reason": reason})
+        rows += rest
+        with self.db.transaction() as db:
+            if repo:
+                knowledge.record(db, rid, row["id"], run["worker_id"], repo, rows)
+            fresh = json.loads(db.execute("SELECT snapshot FROM runs WHERE id=?", (rid,)).fetchone()["snapshot"])
+            state = {k: v for k, v in (fresh.get("knowledge_added") or {}).items() if k != "waiting"}
+            fresh["knowledge_added"] = {**state, "written": [*(state.get("written") or []), row["attempt"]]}
+            journal.change(db, "runs", rid, journal.ENGINE, "run.knowledge", quiet=("snapshot",), snapshot=dumps(fresh))
+            counts = {result: sum(r["result"] == result for r in rows) for result in ("written", "refused", "superseded", "skipped")}
+            journal.record(db, rid, "run.knowledge", journal.ENGINE,
+                           reason="沉淀知识：" + ("、".join(f"{label} {counts[k]} 条" for k, label in
+                                                (("written", "写入"), ("superseded", "替代"), ("refused", "被拒"), ("skipped", "未写入"))
+                                                if counts[k]) or "没有可沉淀的知识"),
+                           task=row["id"], **counts)
+        return True
+
     def _failed(self, run, exc):
         code = getattr(exc, "code", "")
         unavailable = bool(self.retry_unavailable) and code in {"worker_unavailable", "native_unavailable", "tool_auth_expired"}
@@ -698,8 +759,13 @@ class Engine:
             auth = self.credentials.material(run)   # 409 credential_unavailable blocks the run with its reason
             if auth:
                 body["git_auth"] = auth
+            if knowledge.applies(json.loads(run["snapshot"]), body["source"], run.get("worker_scope"), config) \
+                    and knowledge.key(body["source"], knowledge.space(run)):   # D46 P4: the mark its lessons are scoped to
+                body["knowledge_scope"] = knowledge.key(body["source"], knowledge.space(run))
             result = self.request(config, "/prepare", body, timeout=240)
             self.update(rid, "ready", actor=journal.WORKER, native_parent=result["native_parent"], workspace=result["workspace"])
+            return
+        if run["status"] == "ready" and self._knowledge(run, config):   # D46 P4: before the Session completes
             return
         with self.db.transaction() as db:
             fresh = db.execute("SELECT * FROM runs WHERE id=?", (rid,)).fetchone()
@@ -708,6 +774,8 @@ class Engine:
             task = db.execute("SELECT * FROM tasks WHERE run_id=? AND status!='accepted' ORDER BY ordinal LIMIT 1", (rid,)).fetchone()
             if task is None:
                 if evaluation.append(db, rid, json.loads(fresh["snapshot"]), config):   # D46 P3: a verdict before completion
+                    return
+                if knowledge.append(db, rid, fresh, run.get("worker_scope"), config):   # D46 P4: then what it learned
                     return
                 journal.change(db, "runs", rid, journal.ENGINE, "run.completed",
                                event={"quality": "原生执行与交接核对完成；不是自动安全认证"}, status="completed", updated=time.time())
@@ -794,7 +862,10 @@ class Engine:
                 **({"repair": repair} if repair else {}),
                 **({"candidate": {"sha": latest["sha"], "parent": latest["parent"]}}
                    if gated and spec.get("kind") == "review" and latest else {}),
-                **({"design": snapshot["design"]} if snapshot.get("purpose") == "workflow_design" else {})})
+                **({"design": snapshot["design"]} if snapshot.get("purpose") == "workflow_design" else {}),
+                # D46 P4: the repository's lessons, only on a dedicated environment (the one it runs on now)
+                **({"lessons": True} if knowledge.applies(snapshot, json.loads(run["source"]), run.get("worker_scope"), config)
+                   else {})})
             state = result["status"]
             with self.db.transaction() as db:
                 journal.change(db, "attempts", attempt["id"], journal.WORKER, "attempt.dispatched",

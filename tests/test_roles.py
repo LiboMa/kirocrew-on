@@ -19,7 +19,8 @@ def step(**extra):
 
 class CardTests(unittest.TestCase):
     def test_every_role_has_a_kirocrew_style_card(self):
-        self.assertEqual(set(roles.KINDS), {"spec", "sde", "integration_test", "security_test", "challenge", "evaluator"})
+        self.assertEqual(set(roles.KINDS), {"spec", "sde", "integration_test", "security_test", "challenge", "evaluator",
+                                            "knowledge"})
         for role in roles.KINDS:
             with self.subTest(role):
                 text = (ROOT / "octopus/roles" / role / "SKILL.md").read_text()
@@ -32,6 +33,9 @@ class CardTests(unittest.TestCase):
     def test_the_catalogue_names_every_role_and_its_kind(self):
         text = roles.catalogue()
         for role, kinds in roles.KINDS.items():
+            if role in roles.PLATFORM:   # D46 P4: added by the platform, never planned
+                self.assertNotIn(f"{role}（", text)
+                continue
             self.assertIn(f"{role}（{roles.LABELS[role]}，kind {'/'.join(kinds)}）", text)
 
 

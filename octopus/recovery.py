@@ -109,6 +109,12 @@ result 只能是 pass、fail 或 pending（需要人判断时，写明已核对�
 result 只能是 pass、fail 或 n/a。验收标准之外、且不是必须修复的缺陷或安全问题的改进，写入
 "suggestions"（字符串列表），不作为 changes_requested 的理由；必须修复的问题仍按上面的规则判定。
 """
+    if contract and contract.get("role") == "knowledge":   # D46 P4: what the platform writes as the repository's lessons
+        accept += """
+在 outcome.json 中加入 "knowledge"：本会话中长期有效的项目知识，至多 5 条，没有就写 []：
+  "knowledge":[{"rule":"一句可直接照做的话（至多 300 字符）","avoid":"可选：不要怎么做（至多 200 字符）"}]
+平台核对后写入此执行环境的 KiroCrew lessons，只给同一仓库今后的任务；含秘密或超长的条目不写入。
+"""
     gates = ""
     if contract and contract.get("kind") == "test" and contract.get("verify"):
         gates += """

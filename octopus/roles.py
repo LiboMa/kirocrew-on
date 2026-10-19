@@ -7,10 +7,11 @@ import re
 
 ROOT = Path(__file__).with_name("roles")
 KINDS = {"spec": ("design",), "sde": ("implement", "deliver"), "integration_test": ("test",),
-         "security_test": ("review",), "challenge": ("review",), "evaluator": ("review",)}
+         "security_test": ("review",), "challenge": ("review",), "evaluator": ("review",), "knowledge": ("design",)}
 LABELS = {"spec": "Spec 分析", "sde": "SDE 开发", "integration_test": "集成测试", "security_test": "安全测试",
-          "challenge": "Challenge", "evaluator": "Evaluator"}
+          "challenge": "Challenge", "evaluator": "Evaluator", "knowledge": "Knowledge"}
 REVIEWERS = frozenset({"security_test", "challenge", "evaluator"})   # never the tool that wrote the change they look at
+PLATFORM = frozenset({"knowledge"})   # added by the platform when a Session completes (D46 P4), never planned
 
 
 def _read(role):
@@ -29,7 +30,8 @@ def description(role):
 
 def catalogue():
     """One line per role for the planner: its id, label, kind and what it is for."""
-    return "\n".join(f"   - {role}（{LABELS[role]}，kind {'/'.join(kinds)}）：{description(role)}" for role, kinds in KINDS.items())
+    return "\n".join(f"   - {role}（{LABELS[role]}，kind {'/'.join(kinds)}）：{description(role)}" for role, kinds in KINDS.items()
+                     if role not in PLATFORM)
 
 
 def unindependent(planned):

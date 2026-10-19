@@ -323,6 +323,8 @@ def mapping(snapshot, task, evidence=None):
                                                   + (f"：{reason}" if reason else "")}
     if task["id"] == (snapshot.get("evaluator_added") or {}).get("task"):   # D46 P3
         return {"source": "platform", "label": "平台追加（改代码的会话须经 Evaluator）"}
+    if task["id"] in ((snapshot.get("knowledge_added") or {}).get("tasks") or []):   # D46 P4
+        return {"source": "platform", "label": "平台追加（沉淀项目知识）"}
     spec, key = task["spec"], lambda s: (s.get("tool"), s.get("model") or "auto", s.get("effort") or "")
     original = next((s for s in snapshot.get("steps") or [] if s.get("id") == task["id"]), None)
     if original and key(original) != key(spec):
@@ -1055,6 +1057,36 @@ class Service:
                 return {"approvals": [], "supported": False}
             raise self._worker_refusal(exc) from None
 
+    def forget_knowledge(self, actor, rid, body):
+        """Delete one item this Session wrote to KiroCrew's lessons (D46 P4 R8), from the environment that holds it: those
+        who may publish the Session, audited."""
+        require(isinstance(body, dict) and set(body) == {"id"} and isinstance(body["id"], str), "只接受要删除的知识条目 id")
+        with self.db.read() as db:
+            run = run_access(db, actor, rid)
+            require(may_publish(db, actor, run), "只有会话创建者、Team owner 或管理员可以删除沉淀的知识", 403, "forbidden")
+            row = db.execute("SELECT * FROM knowledge WHERE id=? AND run_id=?", (body["id"], rid)).fetchone()
+            require(row is not None, "知识条目不存在", 404, "not_found")
+            require(row["removed"] is None, "该条知识已删除", 409, "conflict")
+            require(row["result"] in {"written", "superseded"}, "该条知识没有写入执行环境，无需删除", 409, "conflict")
+            config, retired = self._app_worker(db, row["worker_id"])
+        require(config and not retired, "写入该条知识的执行环境已不可用", 409, "worker_unavailable")
+        from . import transport
+        try:
+            transport.worker_request(config, "/knowledge/forget", {"run_id": rid, "scope": row["repo"], "rule": row["rule"]},
+                                     timeout=30)
+        except Error as exc:
+            if exc.status == 404 and exc.code == "not_found":
+                raise Error(409, "knowledge_unsupported", "执行环境的 Worker 尚未升级，暂不支持删除知识") from None
+            if exc.code in {"native_unavailable", "worker_unavailable"}:
+                raise Error(503, exc.code, "未删除：KiroCrew Gateway 或执行环境暂不可用，请稍后重试") from None
+            raise self._worker_refusal(exc) from None
+        with self.db.transaction() as db:
+            db.execute("UPDATE knowledge SET removed=?, removed_by=? WHERE id=? AND removed IS NULL", (time.time(), actor["id"], row["id"]))
+            audit(db, actor, "knowledge.forget", "run", rid, {"id": row["id"], "rule": row["rule"][:100]})
+            journal.record(db, rid, "run.knowledge_forgotten", journal.person(actor), reason="删除沉淀的知识：" + row["rule"][:60],
+                           id=row["id"])
+        return {"id": row["id"], "removed": True}
+
     @staticmethod
     def _worker_refusal(exc):
         """A Worker's 401 / 403 is about the platform's own credentials, not the user's: passed on as such, the console
@@ -1594,6 +1626,9 @@ class Service:
                                 else {"source": None, "removed": pinned["removed"]} if pinned.get("removed") else None)
         value["publish"] = snapshot.get("publish")
         value["verified"] = self._verified(db, run["id"])
+        from . import knowledge
+        scope = db.execute("SELECT scope FROM workers WHERE id=?", (run["worker_id"],)).fetchone() if run["worker_id"] else None
+        value["knowledge"] = knowledge.view(db, run, scope["scope"] if scope else None)
         value["tasks"] = []
         for row in db.execute("SELECT * FROM tasks WHERE run_id=? ORDER BY ordinal", (run["id"],)):
             task = dict(row)
