@@ -30,7 +30,7 @@ import { TaskList } from "@/features/sessions/TaskList";
 import { useSessionActions } from "@/features/sessions/useSessionActions";
 import { bindingLabel } from "@/lib/credentials";
 import { usageLine } from "@/lib/usage";
-import { canContinue, canDelete, canRecover, canStop, closeAction, crewEntryReason, deleteReason, resumeReason, statusText } from "@/lib/session";
+import { canContinue, canDelete, canMoveToTeam, canRecover, canStop, closeAction, crewEntryReason, deleteReason, directReason, resumeReason, statusText } from "@/lib/session";
 
 export function SessionView({ id }: { id: string }) {
   const { allTeams, workflows, workers, me, open } = useConsole();
@@ -160,6 +160,15 @@ export function SessionView({ id }: { id: string }) {
         {resumeReason(run) && <p id="resume-hint" className="text-xs text-muted-foreground">{resumeReason(run)}</p>}
         {crewReason && <p id="crew-entry-hint" className="text-xs text-muted-foreground">{crewReason}</p>}
         {run.placement?.hint && <p id="placement-hint" className="text-xs text-muted-foreground">{run.placement.hint}</p>}
+        {directReason(run) && (
+          <div className="flex flex-wrap items-center gap-2">
+            <p id="direct-hint" className="text-xs text-muted-foreground">{directReason(run)}</p>
+            {canMoveToTeam(run) && (
+              <Button size="sm" variant="outline" onClick={() => open({ kind: "assign", run })} id="move-to-team">
+                <UserCog /> 改派到 Team 的环境</Button>
+            )}
+          </div>
+        )}
         {workers.find((w) => w.id === run.worker_id)?.scope === "shared" && (
           <p id="shared-environment" className="text-xs text-muted-foreground">共享执行环境：环境内会话的 Agent 互相可读，记忆未分隔。</p>
         )}
@@ -170,7 +179,8 @@ export function SessionView({ id }: { id: string }) {
           <AlertTitle id="confirm-notice-title">{run.attention?.title ?? "计划待确认"}</AlertTitle>
           <AlertDescription className="flex flex-wrap items-center gap-3">
             <span>{[run.attention?.detail, run.attention?.action].filter(Boolean).join(" ")}</span>
-            <Button size="sm" onClick={actions.confirm} disabled={!!actions.busy || run.permissions?.operate === false || !!resumeReason(run)} id="run-confirm">
+            <Button size="sm" onClick={actions.confirm} id="run-confirm"
+              disabled={!!actions.busy || run.permissions?.operate === false || !!resumeReason(run) || !!directReason(run)}>
               <Play /> 确认并开始
             </Button>
           </AlertDescription>
@@ -247,7 +257,7 @@ export function SessionView({ id }: { id: string }) {
             : "自动纠错未开启 · 可手动诊断"}
         </p>
       )}
-      <ApprovalsCard run={run} canAnswer={run.permissions?.publish !== false} />
+      <ApprovalsCard run={run} canAnswer={run.permissions?.publish !== false && run.permissions?.direct !== false} />
       <RecoveryPanel run={run} />
 
       <div className="grid gap-5 lg:grid-cols-[minmax(0,1fr)_22rem]">

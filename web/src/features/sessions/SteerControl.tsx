@@ -15,7 +15,7 @@ export function SteerControl({ run, task }: { run: Run; task: RunTask }) {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   if (!["running", "waiting_approval"].includes(task.status) || task.spec.tool !== "kiro"
-      || run.permissions?.publish === false) return null;
+      || run.permissions?.publish === false || run.permissions?.direct === false) return null;
   if (!open) {
     return <Button type="button" size="sm" variant="outline" onClick={() => setOpen(true)}>补充说明</Button>;
   }

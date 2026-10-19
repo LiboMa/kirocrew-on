@@ -86,7 +86,8 @@ export function AssignWorkerDialog({ run }: { run: Run }) {
   const { close } = useConsole();
   const refresh = useRefreshRun();
   // Where this Session may move, as the platform answers it for its creator (D49 R4; an administrator may assign, A2).
-  const choices = usePlacement(run.team_id ?? "", run.id).data?.options ?? [];
+  // Moving a stopped Session off a member's boundary (D49 R10) never offers where it already is.
+  const choices = (usePlacement(run.team_id ?? "", run.id).data?.options ?? []).filter((w) => run.status === "waiting_worker" || w.id !== run.worker_id);
   const [picked, setWorker] = useState("");
   const worker = picked || choices[0]?.id || "";
   return (

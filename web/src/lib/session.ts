@@ -5,9 +5,22 @@ import { ACTIVE_STATES, ATTENTION_STATES, STATES } from "@/lib/labels";
 const open = (run: Run) => run.lifecycle === "open";
 const design = (run: Run) => run.purpose === "workflow_design";
 const resumable = (run: Run) => run.permissions?.resume !== false;
+/** D49 R10: on a person's own boundary only they give the work its instructions. */
+const directed = (run: Run) => run.permissions?.direct !== false;
+
+/** Why continuing, diagnosing, confirming, notes and approvals are not offered: another member's boundary (D49 R10). */
+export function directReason(run: Run): string {
+  return directed(run) ? "" : run.permissions?.direct_reason ?? "只有执行边界的主人能在上面下达指令。";
+}
+
+/** A Team owner or an administrator may move a stopped Session off a member's boundary so others can go on (D49 R10). */
+export function canMoveToTeam(run: Run): boolean {
+  return !directed(run) && !!run.team_id && open(run) && resumable(run) && run.permissions?.publish !== false &&
+    ["blocked", "failed", "stopped"].includes(run.status);
+}
 
 export function canContinue(run: Run): boolean {
-  return !ACTIVE_STATES.has(run.status) && open(run) && !design(run) && resumable(run);
+  return !ACTIVE_STATES.has(run.status) && open(run) && !design(run) && resumable(run) && directed(run);
 }
 
 /** Why continuing, diagnosing, reopening and reassigning are not offered (an archived Team, P3). */
@@ -39,7 +52,7 @@ export function canRetryTask(run: Run, index: number): boolean {
 }
 
 export function canRecover(run: Run): boolean {
-  return !design(run) && !ACTIVE_STATES.has(run.status) && open(run) && resumable(run) &&
+  return !design(run) && !ACTIVE_STATES.has(run.status) && open(run) && resumable(run) && directed(run) &&
     ["blocked", "failed", "stopped"].includes(run.status) && !!run.native_parent &&
     run.tasks.some((task) => task.status !== "accepted" && (task.attempts?.length ?? 0) > 0);
 }

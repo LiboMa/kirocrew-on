@@ -192,6 +192,25 @@ def own(row, user):
     return row["scope"] == "dedicated" and not row["team_id"] and row["owner_id"] == user
 
 
+def boundary_owner(db, run):
+    """The person whose own boundary runs the Session (D49 R10); None on a Team's or a shared environment."""
+    row = db.execute("SELECT scope,team_id,owner_id FROM workers WHERE id=?", (run["worker_id"],)).fetchone() \
+        if run["worker_id"] else None
+    return row["owner_id"] if row is not None and own(row, row["owner_id"]) else None
+
+
+def directs(db, actor, run):
+    """Why the actor may not give the work its instructions where it runs (D49 R10), or None: on a person's own boundary
+    the Agent runs as them — their OS user, kiro login and memory — so only they continue, diagnose, confirm, add a note
+    or answer an approval there (as only they open its native entry, R7)."""
+    holder = boundary_owner(db, run)
+    if holder is None or holder == actor["id"]:
+        return None
+    name = db.execute("SELECT username FROM users WHERE id=?", (holder,)).fetchone()
+    return (f"此会话在 {name['username'] if name else '创建者'} 的执行边界上运行：只有边界主人能在上面下达指令（续作、诊断、确认计划、"
+            "补充说明、批准工具）" + ("；需要接手时请 Team owner 或管理员把会话改派到 Team 的环境" if run["team_id"] else ""))
+
+
 def placement(db, user, team):
     """Where a new Session of this person in this space runs when no Worker is named (D49 R2): their one own boundary;
     else the space's only environment (a Team's with a hint to get a boundary, owner 2026-10-19); else a choice waits."""
@@ -420,8 +439,10 @@ def run_permissions(db, actor, run):
     # An archived Team's Sessions can be read and stopped, not continued, diagnosed, reopened or reassigned (P3).
     archived = bool(run["team_id"]) and bool(
         (db.execute("SELECT archived FROM teams WHERE id=?", (run["team_id"],)).fetchone() or {"archived": 0})["archived"])
+    instruct = directs(db, actor, run)   # D49 R10
     return {"operate": True, "delete": allowed(owner=True), "native": native, "resume": not archived,
-            "publish": may_publish(db, actor, run), **({"native_reason": reason} if reason else {})}
+            "publish": may_publish(db, actor, run), **({"native_reason": reason} if reason else {}),
+            "direct": instruct is None, **({"direct_reason": instruct} if instruct else {})}
 
 
 def _probe(config):
@@ -1181,6 +1202,8 @@ class Service:
         with self.db.read() as db:
             run = run_access(db, actor, rid)
             require(may_publish(db, actor, run), "只有会话创建者、Team owner 或管理员可以补充说明", 403, "forbidden")
+            instruct = directs(db, actor, run)   # D49 R10
+            require(instruct is None, instruct, 403, "boundary_owner_only")
             require(run_permissions(db, actor, run)["resume"], "Team 已归档，不能补充说明", 409, "team_archived")
             task = db.execute("SELECT * FROM tasks WHERE run_id=? AND id=?", (rid, body.get("task_id"))).fetchone()
             require(task is not None, "任务不存在", 404, "not_found")
@@ -1222,6 +1245,8 @@ class Service:
         with self.db.read() as db:
             run = run_access(db, actor, rid)
             require(may_publish(db, actor, run), "只有会话创建者、Team owner 或管理员可以答复批准请求", 403, "forbidden")
+            instruct = directs(db, actor, run)   # D49 R10
+            require(instruct is None, instruct, 403, "boundary_owner_only")
             config, retired = self._app_worker(db, run["worker_id"])
         require(config and not retired and run["native_parent"], "会话没有可用的执行环境", 409, "approvals_unsupported")
         from . import transport
@@ -1929,6 +1954,9 @@ class Service:
                 oversight = True   # allowed only as an elevated admin (A2): audited
             if run["team_id"] and action in {"continue", "recover", "reopen", "assign-worker", "confirm", "accept"}:
                 active_team(db, run["team_id"])   # an archived Team's Sessions stay readable and stoppable (P3)
+            if action in {"continue", "recover", "confirm"}:
+                instruct = directs(db, actor, run)
+                require(instruct is None, instruct, 403, "boundary_owner_only")
             require(action not in {"continue", "recover"} or json.loads(run["snapshot"]).get("purpose") != "workflow_design",
                     "工作流建议请按新需求重新生成；原建议保留作为证据", 409, "invalid_state")
             # A retired Worker is never called again (P6): its Sessions settle here, and cannot be reopened on it.
@@ -2032,7 +2060,11 @@ class Service:
                     restart_budget(db, rid, who)   # as a continue: the budget counts from the user's request
                     schedule(db, self.db, run, task, attempt, manual=True, actor=who)
                 elif action == "assign-worker":
-                    require(run["status"] == "waiting_worker" and run["lifecycle"] == "open",
+                    # D49 R10: a Team owner or an administrator (or its creator) moves a Session that is not running off a
+                    # person's boundary, so that others may go on with it
+                    moving = (run["status"] in {"blocked", "failed", "stopped"} and boundary_owner(db, run) is not None
+                              and body.get("worker_id") != run["worker_id"] and may_publish(db, actor, run))
+                    require(run["lifecycle"] == "open" and (run["status"] == "waiting_worker" or moving),
                             "运行已分配 Worker 或已关闭", 409, "invalid_state")
                     # The Session's own space, not the operator's (an admin may assign for someone else).
                     self._worker(db, run["owner_id"], body.get("worker_id"), run["team_id"])

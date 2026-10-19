@@ -230,5 +230,68 @@ class InterfaceTests(PlacementCase):
             self.assertEqual(json.load(answer)["default"]["id"], "alice-b")
 
 
+class DirectionTests(PlacementCase):
+    """R10 (final review 2026-10-20): on a person's own boundary only they give the work its instructions; the Agent there
+    runs as them. Others look, stop and publish; a Team owner or an administrator moves it to the Team's environment."""
+    def blocked(self, person="alice"):
+        created, _ = self.start(person)
+        with self.db.transaction() as db:
+            db.execute("UPDATE runs SET status='blocked', native_parent='octopus-x' WHERE id=?", (created["id"],))
+        return created["id"]
+
+    def operate(self, person, rid, action, **body):
+        self.requests += 1
+        return self.service.operate(self.admin if person == "admin" else self.people[person], rid, action,
+                                    {"request_id": f"direct-fixture-{self.requests}", "expected_version": self.row(rid)["version"], **body})
+
+    def test_only_the_boundary_owner_continues_diagnoses_or_confirms_there(self):
+        rid = self.blocked()
+        for person in ("bob", "dave", "admin"):
+            for action, body in (("continue", {"task_id": "code"}), ("recover", {}), ("confirm", {})):
+                with self.subTest(person=person, action=action), self.assertRaises(Error) as caught:
+                    self.operate(person, rid, action, **body)
+                self.assertEqual(caught.exception.code, "boundary_owner_only")
+        self.operate("alice", rid, "continue", task_id="code")   # the owner herself goes on
+
+    def test_notes_and_approvals_follow_the_same_rule(self):
+        rid = self.blocked()
+        with self.assertRaises(Error) as steered:
+            self.service.steer(self.people["dave"], rid, {"task_id": "code", "message": "先只改 README"})
+        with self.assertRaises(Error) as approved:
+            self.service.answer_approval(self.people["dave"], rid, {"origin": "native", "request_id": "r-1", "request_mid": "m-1",
+                                                                    "decision": "approve"})
+        self.assertEqual((steered.exception.code, approved.exception.code), ("boundary_owner_only", "boundary_owner_only"))
+
+    def test_others_still_stop_it(self):
+        rid = self.blocked()
+        self.operate("bob", rid, "stop")
+        self.assertEqual(self.row(rid)["desired"], "stop")
+
+    def test_the_team_owner_moves_it_to_the_teams_environment_then_anyone_continues(self):
+        rid = self.blocked()
+        self.operate("dave", rid, "assign-worker", worker_id="teamenv")
+        row = self.row(rid)
+        self.assertEqual((row["worker_id"], row["native_parent"], row["status"]), ("teamenv", None, "preparing"))
+        with self.db.transaction() as db:
+            db.execute("UPDATE runs SET status='blocked', native_parent='octopus-y' WHERE id=?", (rid,))
+        self.operate("bob", rid, "continue", task_id="code")
+
+    def test_a_running_session_is_not_moved_away(self):
+        rid = self.blocked()
+        with self.db.transaction() as db:
+            db.execute("UPDATE runs SET status='running' WHERE id=?", (rid,))
+        with self.assertRaises(Error) as caught:
+            self.operate("dave", rid, "assign-worker", worker_id="teamenv")
+        self.assertEqual(caught.exception.status, 409)
+
+    def test_the_console_is_told(self):
+        rid = self.blocked()
+        self.assertTrue(self.service.run(self.people["alice"], rid)["permissions"]["direct"])
+        theirs = self.service.run(self.people["bob"], rid)["permissions"]
+        self.assertFalse(theirs["direct"])
+        self.assertIn("只有边界主人", theirs["direct_reason"])
+        self.assertTrue(self.service.run(self.people["bob"], self.start("bob")[0]["id"])["permissions"]["direct"])   # Team env
+
+
 if __name__ == "__main__":
     unittest.main()

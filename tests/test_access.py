@@ -155,11 +155,11 @@ class SemanticsTests(AccessCase):
             # native: False — the Team's shared environment belongs to alice (K03).
             # publish: False on alice's Session (a member, not its creator or a Team owner), True on his own (D38 A3).
             self.assertEqual(call("GET", f"/v1/runs/{rid}", self.tokens["bob"])[1]["permissions"],
-                             {"operate": True, "delete": False, "native": False, "resume": True, "publish": False})
+                             {"operate": True, "delete": False, "native": False, "resume": True, "publish": False, "direct": True})
             self.assertEqual(call("GET", f"/v1/runs/{mine}", self.tokens["bob"])[1]["permissions"],
-                             {"operate": True, "delete": True, "native": False, "resume": True, "publish": True})
+                             {"operate": True, "delete": True, "native": False, "resume": True, "publish": True, "direct": True})
             listed = {r["id"]: r["permissions"] for r in call("GET", "/v1/runs", self.tokens["bob"])[1]}
-            self.assertEqual(listed[rid], {"operate": True, "delete": False, "native": False, "resume": True, "publish": False})
+            self.assertEqual(listed[rid], {"operate": True, "delete": False, "native": False, "resume": True, "publish": False, "direct": True})
 
     def test_viewer_cannot_edit_a_workflow_and_is_told_why(self):
         from octopus.security import Error

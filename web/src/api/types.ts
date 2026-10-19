@@ -331,7 +331,9 @@ export interface Run {
   /** publish: may publish the Session and answer its approvals (creator, Team owner, admin; D38 A3). */
   permissions?: { operate: boolean; delete: boolean; native?: boolean; resume?: boolean; publish?: boolean;
     /** D49 R7: why the native entry stays closed (e.g. another member's boundary). */
-    native_reason?: string };
+    native_reason?: string;
+    /** D49 R10: whether the actor may continue, diagnose, confirm, add a note or answer an approval, and why not. */
+    direct?: boolean; direct_reason?: string };
   /** KiroCrew Agent planning: intent recognition, requirement enrichment and the generated tasks. */
   planning?: { mode: "agent"; applied: boolean; intent?: string; summary?: string; name?: string; tasks?: string[]; notes?: string[] } | null;
 }
