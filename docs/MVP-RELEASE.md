@@ -497,7 +497,7 @@ Vite 客户端模块可用；打开链接第二次使用被拒、无 Cookie 时�
 
 ### 14.38 编码技能包（D50）
 
-本机完成，未部署：平台维护五个方法类技能——测试先行、系统化调试、完成前验证、按评审返工、前端设计（改编自 superpowers 6.4.1 与
+本机完成，已部署 EC2（30a377f，各 Worker 报告 5 个技能）：平台维护五个方法类技能——测试先行、系统化调试、完成前验证、按评审返工、前端设计（改编自 superpowers 6.4.1 与
 Anthropic frontend-design，附许可证，去掉询问用户、提交推送、开 worktree、写计划文件）。任务契约 `skills`（至多 4 个）由 KiroCrew 规划者按任务
 推荐，Worker 复制到每个 Attempt 目录并在任务说明加「## 方法」（与契约冲突时以契约为准），三个后端一致；证据记名称与 sha256；控制台、报告、MCP
 显示。流程类（brainstorming、计划、执行）由平台的规划、计划确认、门禁与 Evaluator 承担。终审 3 项已修（规划者的畸形 `skills` 不拒整份计划、
@@ -508,7 +508,7 @@ Anthropic frontend-design，附许可证，去掉询问用户、提交推送、�
 本机完成，已部署 EC2：一台主机可放多人的 KiroCrew 边界（OS 用户 `crew-<名称>`、各自端口与 systemd 资源上限）；`deploy.sh boundary add`、
 `boundaries`、`kiro-login --boundary`、`tunnel`；个人会话未指定执行环境时在此人的专属边界执行。2026-10-19 在平台主机为 admin 建 owner 边界
 （Gateway 5481、Worker 9001），隔离检查通过，两个边界的同时升级已验证；kiro 待登录。待：owner 边界上的会话验收；第 2 期调度（Team 会话在
-提交者的边界执行）：负责人 2026-10-19 选定无边界时回退到 Team 的环境并提示，本机完成（spec `2026-10-19-session-placement-design.md`；`GET /v1/placement`、控制台向导默认交给平台选择、原生入口只给边界主人），待 EC2 验收。
+提交者的边界执行）：负责人 2026-10-19 选定无边界时回退到 Team 的环境并提示，本机完成（spec `2026-10-19-session-placement-design.md`；`GET /v1/placement`、控制台向导默认交给平台选择、原生入口只给边界主人；R10 只有边界主人在自己的边界上下达指令），已部署 EC2（d9f57c3；主机装好无头浏览器依赖，Chromium 实测可启动），待 EC2 验收。
 
 ### 14.36 用量（D46 P6a）
 
@@ -517,7 +517,7 @@ Anthropic frontend-design，附许可证，去掉询问用户、提交推送、�
 
 ### 14.35 运行中的补充说明与释放对话（D46 P5b）
 
-本机完成，未部署：创建者、Team owner、管理员可给运行中的 Kiro 任务补充说明（控制台、MCP `octopus_steer`、`POST /v1/runs/<id>/steer`，经
+本机完成，已部署 EC2（30a377f，各 Worker 报告 `steer`）：创建者、Team owner、管理员可给运行中的 Kiro 任务补充说明（控制台、MCP `octopus_steer`、`POST /v1/runs/<id>/steer`，经
 KiroCrew steer 中断后送达，写审计与时间线）；codex 与 Claude Code 的任务如实拒绝（KiroCrew 0.10.0 只支持 kiro 后端）；删除会话时释放其可续接的
 原生对话。待 EC2 验收。
 
@@ -525,8 +525,7 @@ KiroCrew steer 中断后送达，写审计与时间线）；codex 与 Claude Cod
 
 本机完成，已部署 EC2（8b7c0ed）：平台安排的返工（同一工具、模型与 Effort）续接任务原来的 KiroCrew 对话（`/api/spawn/{对话}/continue`），
 被拒时重新派发并记原因；用户续作、换工具与自动重试不续接。2026-10-19 EC2 发现：续接的运行都以「实际 ACP 后端未核实」被 `identity_match` 拦下
-（KiroCrew 按对话的 key 写 routing 记录，Worker 按本次运行查找；5 次，kiro / codex / claude 都有），已修复（8a7c3f6，未部署），部署前以
-「配置并续作」绕过。待 EC2 验收：返工的 Agent 引用上一轮自己的工作，门禁通过。
+（KiroCrew 按对话的 key 写 routing 记录，Worker 按本次运行查找；5 次，kiro / codex / claude 都有），已修复（8a7c3f6，2026-10-20 随 30a377f 部署）。待 EC2 验收：返工的 Agent 引用上一轮自己的工作，门禁通过。
 
 ### 14.33 Knowledge（D46 P4）
 
