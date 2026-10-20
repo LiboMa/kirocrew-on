@@ -409,6 +409,14 @@ class StatusTests(KnowledgeCase):
         self.assertEqual([(i["result"], i["reason"]) for i in view["items"]], [("kept", knowledge.KEPT)] * 2)
 
 
+    def test_a_shared_sessions_timeline_counts_what_is_kept_for_the_repository(self):
+        self.configure(CAPS, "shared")
+        rid, _ = self.run_()
+        with self.db.read() as db:
+            payloads = [json.loads(r[0]) for r in db.execute("SELECT payload FROM events WHERE run_id=? AND kind='run.knowledge'", (rid,))]
+        reason = next(p["reason"] for p in payloads if "沉淀" in p.get("reason", ""))
+        self.assertEqual(reason, "沉淀知识：发布时提到仓库 2 条")   # D52 R4, not 「没有可沉淀的知识」
+
 class ForgetTests(KnowledgeCase):
     def forget(self, actor, rid, kid):
         with patch("octopus.transport.worker_request", side_effect=lambda config, path, body, **k: self.request(config, path, body)):
@@ -426,6 +434,14 @@ class ForgetTests(KnowledgeCase):
         with self.assertRaises(Error) as again:
             self.forget(self.actor, rid, item["id"])
         self.assertEqual(again.exception.status, 409)
+
+    def test_a_deleted_item_is_not_written_again(self):
+        rid, run = self.run_()
+        self.forget(self.actor, rid, run["knowledge"]["items"][0]["id"])
+        _, again = self.run_()
+        self.assertEqual(len(self.writes), 1)   # the next Session listing it again does not write it back
+        item = next(i for i in again["knowledge"]["items"] if i["rule"] == "依赖用 pnpm 安装")
+        self.assertEqual((item["result"], item["reason"]), ("skipped", knowledge.REMOVED))
 
     def test_forgetting_is_checked(self):
         rid, run = self.run_()

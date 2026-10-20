@@ -83,7 +83,7 @@
   实际后端，并把 test 任务算作作者。P3 的 Evaluator 门禁前统一。
 - 卡片文件格式错时在派发时才报 ValueError / AttributeError，且每次调用重读文件（可加缓存与明确报错；仓库内文件由 CardTests 覆盖）。
 - 续作不能去掉任务的角色（`null` / `""` 被拒）；改类别时须同时换成相容的角色。
-- 控制台修订对比中角色的取值显示为 id（security_test → evaluator），未用中文标题。
+- ~~控制台修订对比中角色的取值显示为 id（security_test → evaluator），未用中文标题~~（2026-10-20 修复：显示角色标题）。
 
 ## D46 P3 Evaluator 门禁的终审延后项（2026-10-18）
 - ~~平台追加的 Evaluator 被重新规划替换后再次追加时可能复用 id~~（2026-10-18 修复）。原文：可能复用 id `evaluator`（旧任务的 Attempt 显示在新任务下）：应像 `planning.expand` 一样排除历史 id。
@@ -129,7 +129,7 @@
 - 团队层知识（负责人 2026-10-19：P4 验收后排入）：Knowledge 任务的条目以 Draft PR 提到仓库的知识文件（如 `.octopus/knowledge.md`），由人审核合并；
   跨人、跨执行环境，补上 KiroCrew lessons（个人层）自动写入、无人审核的缺口。
 - 一个会话有两个平台追加的 Knowledge 任务时，只写第一个（`_knowledge` 取首个已通过的）：如把 Knowledge 任务续作改成 implement 后。
-- 删除过的条目以后被列出时会再次写入（`known()` 不算已删除的）。
+- ~~删除过的条目以后被列出时会再次写入（`known()` 不算已删除的）~~（2026-10-20 修复：同一执行环境、同一仓库不再写入，记为 skipped）。
 - Worker 删除时忽略 KiroCrew 的 `{"ok": false}`，`GatewayError` 未转译；写入时 KiroCrew 5xx / 401 记为最终的 refused，不重试。
 - 等待执行环境恢复期间没有退避（每个 tick 重发，最多 600 秒）。
 - 仓库标识可能碰撞（`github.com/o/r_x` 与 `github.com/o_r/x`）：可对 host/path 一并散列。
@@ -140,7 +140,7 @@
   KiroCrew 报告替代了旧条目时，旧的台账行仍为 written；会话删除后其写入的 lessons 只能在 KiroCrew 中删除（没有执行环境级的列表）。
 
 ## D50 编码技能包的终审延后项（2026-10-19）
-- 报告：Attempt 证据里的 `skills` 不是列表（如被改坏的 dispatch.json）时 `report._attempt` 抛 TypeError：加 `isinstance(..., list)`。
+- ~~报告：Attempt 证据里的 `skills` 不是列表（如被改坏的 dispatch.json）时 `report._attempt` 抛 TypeError~~（2026-10-20 修复）。
 - 重新规划的提示最长约 7838 / 8000 字符（各输入取上限时）：技能包再加两三个技能就会超出 Worker 的上限，可为重新规划用精简目录。
 - 任务卡片与 MCP 精简状态显示的是计划的 `skills`（旧 Worker 未交付时也显示）；报告取证据，是实际交付的——OPERATIONS 已写明，可在卡片上区分。
 - `systematic-debugging` 的 SKILL.md 仍有一处「Ask for help」：改编说明已覆盖（写 blocked），可直接替换为平台的说法。
@@ -162,8 +162,8 @@
   「KiroCrew 建议默认用 default」没有测试。
 
 ## D52 团队层知识的终审延后项（2026-10-20）
-- engine 的结果计数（约 346 行）不计 `kept`；`knowledge.py` 模块说明仍写「共享环境不沉淀」；`kept` 条目在控制台不能删除（删除只针对 lessons）。
-- `publish.check_branch` 未保留 `octopus/knowledge*` 前缀：代码发布可以指定这个分支名，被误认为打开的知识提议。
+- ~~engine 的结果计数（约 346 行）不计 `kept`；`knowledge.py` 模块说明仍写「共享环境不沉淀」~~（2026-10-20 修复）；`kept` 条目在控制台不能删除（删除只针对 lessons）。
+- ~~`publish.check_branch` 未保留 `octopus/knowledge*` 前缀：代码发布可以指定这个分支名，被误认为打开的知识提议~~（2026-10-20 修复：拒绝并说明）。
 - 「已含本会话的条目」路径不记凭证使用与审计（只有时间线）；GitLab 并发写同一提议分支时，`last_commit_id` 只在读到文件时带上。
 - 迁移 8 重建表依 rowid 顺序复制；发布时知识提议同步调用托管方 API，增加一次发布的耗时（数个请求）。
 

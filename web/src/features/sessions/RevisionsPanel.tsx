@@ -2,7 +2,7 @@ import { useEffect, useState } from "react";
 import { useRevisionDiff, useRevisions } from "@/api/hooks";
 import type { DiffLine, Run, TaskDiff } from "@/api/types";
 import { NativeSelect } from "@/components/NativeSelect";
-import { formatTime } from "@/lib/labels";
+import { ROLE_LABELS, formatTime } from "@/lib/labels";
 import { cn } from "@/lib/utils";
 
 const KINDS: Record<string, string> = { created: "创建", planned: "规划", continued: "续作", recovered: "自动纠错" };
@@ -11,7 +11,8 @@ const FIELD: Record<string, string> = {
   name: "名称", tool: "工具", model: "模型", effort: "Effort", kind: "类别", role: "角色", deliverables: "交付物", acceptance: "验收项",
   verify: "验证命令", depends_on: "依赖", paths: "可改动路径", skills: "方法",
 };
-const shown = (value: unknown) => (Array.isArray(value) ? value.join("；") : value as string) || "默认";
+const shown = (value: unknown, key: string) =>
+  (Array.isArray(value) ? value.join("；") : key === "role" ? ROLE_LABELS[value as string] ?? value as string : value as string) || "默认";
 
 const CONTEXT = 2;
 
@@ -99,7 +100,7 @@ export function RevisionsPanel({ run }: { run: Run }) {
                   <h3 className="flex flex-wrap items-center gap-2 text-xs font-semibold">
                     {task.name}<span className="rounded bg-muted px-1.5 font-normal">{STATUS[task.status]}</span>
                     {Object.entries(task.fields).map(([key, [a, b]]) => (
-                      <span key={key} className="font-normal text-muted-foreground">{FIELD[key] ?? key} {shown(a)} → {shown(b)}</span>
+                      <span key={key} className="font-normal text-muted-foreground">{FIELD[key] ?? key} {shown(a, key)} → {shown(b, key)}</span>
                     ))}
                   </h3>
                   {task.prompt.some((l) => l.op !== " ") ? <Lines lines={task.prompt} /> : <p className="text-xs text-muted-foreground">提示词未变化</p>}

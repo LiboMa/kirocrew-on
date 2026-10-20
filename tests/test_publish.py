@@ -678,3 +678,14 @@ class ReceiveTests(unittest.TestCase):
         self.assertEqual(FakeApi.created[0]["title"], "Draft: 订单系统")
         self.assertEqual(FakeApi.created[0]["target_branch"], "main")
         self.assertIn(("POST", "/api/v4/projects/group%2Fsub%2Fapp/merge_requests"), FakeApi.seen)
+
+
+class BranchNameTests(unittest.TestCase):
+    def test_knowledge_proposal_branches_are_not_for_code(self):
+        from octopus import publish
+        from octopus.security import Error
+        # what knowledge_repo takes for an open proposal (D52): every branch starting with octopus/knowledge
+        for branch in ("octopus/knowledge", "octopus/knowledge-run1-abc", "octopus/knowledge/x", "octopus/knowledgeable"):
+            with self.assertRaises(Error, msg=branch):
+                publish.check_branch(branch)
+        self.assertEqual(publish.check_branch("octopus/feature-x"), "octopus/feature-x")

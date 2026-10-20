@@ -18,6 +18,7 @@ import urllib.request
 
 from . import credentials as repo_credentials
 from . import sources
+from .knowledge_repo import BRANCH as KNOWLEDGE_BRANCH
 from .security import Error, require
 
 BRANCH = re.compile(r"octopus/[A-Za-z0-9._-]+(/[A-Za-z0-9._-]+)*")
@@ -45,6 +46,7 @@ def check_branch(branch, ref=None):
     require(isinstance(branch, str) and len(branch) <= 120 and BRANCH.fullmatch(branch) and ".." not in branch
             and not branch.endswith((".lock", ".")) and "/." not in branch, "分支名须为 octopus/<名称>（字母、数字、. _ - /）")
     require(branch != ref, "不能发布到会话的源分支", 400)
+    require(not branch.startswith(KNOWLEDGE_BRANCH), f"{KNOWLEDGE_BRANCH}… 留给知识提议（D52），请换一个分支名", 400)
     return branch
 
 

@@ -1,7 +1,9 @@
 """Knowledge (D46 P4): what a code-changing Session learned about its repository — gathered by a Knowledge task the platform
 appends after the Evaluator, checked here, and written by the Worker as KiroCrew lessons scoped to the repository's mark, so
-the repository's later tasks are given them. Only on a dedicated execution environment: a shared one cannot keep one space's
-lessons from another (KiroCrew members are routing, not a boundary), so it neither gathers nor injects (owner 2026-10-18)."""
+the repository's later tasks are given them. Lessons only on a dedicated execution environment: a shared one cannot keep one
+space's lessons from another (KiroCrew members are routing, not a boundary), so it neither writes nor injects them (owner
+2026-10-18); what its Knowledge task gathers is kept for the repository's reviewed knowledge file, proposed when the Session
+is published (D52 R4)."""
 import hashlib
 import json
 import re
@@ -13,6 +15,7 @@ ITEM = "列出可复用的项目知识（可为空）"
 LIMIT, RULE, AVOID = 5, 300, 200
 SHARED = "共享执行环境不写入、不注入 lessons：条目在发布时提到仓库的知识 PR（D52）"
 KEPT = "共享执行环境：仅在发布时提到仓库的知识 PR"
+REMOVED = "有人删除过同一条知识，不再写入"
 PROMPT = ("只读阅读本会话的需求、前序任务的交接与改动，列出长期有效的项目知识（约定、决策、踩过的坑、可复用的做法），"
           "至多 5 条写入 outcome.json 的 knowledge。不写本次进度、个人信息、秘密或模型身份；没有就写空列表。不修改文件。")
 WRITERS = ("implement", "deliver")
@@ -101,10 +104,11 @@ def append(db, rid, run, scope, config):
     return tid
 
 
-def items(report, known=()):
+def items(report, known=None):
     """(what to write, what is not written and why): at most five, each within its length, none with what looks like a
     secret (the publish scan) — whose text is then not kept either — and none this environment already holds for the
-    repository."""
+    repository or a person removed there (``known``: {rule: removed})."""
+    known = known or {}
     from .sources import SUSPICIOUS
     raw = (report or {}).get("knowledge")
     if raw is None:
@@ -125,7 +129,8 @@ def items(report, known=()):
             rest.append({"rule": rule[:RULE] + ("…" if len(rule) > RULE else ""), "avoid": avoid[:AVOID] or None,
                          "result": "skipped", "reason": f"超过长度（rule 至多 {RULE}、avoid 至多 {AVOID} 字符），未写入"})
         elif rule in known or any(k["rule"] == rule for k in keep):
-            rest.append({"rule": rule, "avoid": avoid or None, "result": "skipped", "reason": "此执行环境已记录同一条知识"})
+            rest.append({"rule": rule, "avoid": avoid or None, "result": "skipped",
+                         "reason": REMOVED if known.get(rule) else "此执行环境已记录同一条知识"})
         elif len(keep) >= LIMIT:
             rest.append({"rule": rule, "avoid": avoid or None, "result": "skipped", "reason": f"超过 {LIMIT} 条，未写入"})
         else:
@@ -134,8 +139,10 @@ def items(report, known=()):
 
 
 def known(db, worker, repo):
-    return {r[0] for r in db.execute("SELECT rule FROM knowledge WHERE worker_id=? AND repo=? AND removed IS NULL "
-                                     "AND result IN ('written','superseded')", (worker, repo))}
+    """{rule: removed} for what this environment wrote for the repository: one a person removed stays removed."""
+    return {r[0]: bool(r[1]) for r in db.execute(
+        "SELECT rule, MIN(removed IS NOT NULL) FROM knowledge WHERE worker_id=? AND repo=? "
+        "AND result IN ('written','superseded') GROUP BY rule", (worker, repo))}
 
 
 def record(db, rid, task, worker, repo, rows):

@@ -183,6 +183,12 @@ class ReportTests(unittest.TestCase):
             self.assertLess(len(text), 200000, render.__name__)
             self.assertIn("执行 50 次", text)
 
+    def test_a_damaged_skills_record_does_not_stop_the_report(self):
+        damaged = view()
+        damaged["tasks"][0]["attempts"][-1]["evidence"]["skills"] = 3   # e.g. a hand-edited dispatch.json (D50)
+        self.assertIn("## 任务", report.markdown(damaged))
+        report.html(damaged)
+
     def test_an_old_session_reports_without_gates(self):
         old = view(verified=None, publish=None, recovery=None, planning=None)
         for task in old["tasks"]:

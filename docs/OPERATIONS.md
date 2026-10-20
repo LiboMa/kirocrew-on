@@ -557,7 +557,7 @@ CloudFront 只使用 us-east-1 的证书）：分发加上别名与证书（SNI�
 - 注入：适用的会话派发任务时 `include_lessons: true`（`include_memory` 仍为 false），按当前执行环境判断；KiroCrew 只注入 `repo_scope` 标记存在于
   检出目录的 lessons。协调者的 `excludedTools` 与 `managedToolPolicy.exclude` 含 `learn_add`、`learn_remove`：平台是唯一的写入方。
 - 删除：会话页「本次沉淀的知识」或 `POST /v1/runs/<id>/knowledge/forget {id}`（创建者、Team owner、管理员，写审计）：经写入它的执行环境
-  `DELETE /api/lessons {rule, exact: true, repo_scope}`，台账记删除者。MCP 精简状态 `session.knowledge`。
+  `DELETE /api/lessons {rule, exact: true, repo_scope}`，台账记删除者。删除过的条目在同一执行环境、同一仓库不再写入（以后的会话再列出它时记为 skipped「有人删除过同一条知识」）。MCP 精简状态 `session.knowledge`。
 - 前提：KiroCrew `memory.persistence_enabled` 与 `memory.inject_lessons` 为 true（0.10.0 默认；关闭前者时写入被拒，台账记
   `persistence_disabled`）。KiroCrew 自身的自动 lessons（task-runner、整理提取）不经平台，`include_lessons` 时同样注入——专属环境内属于同一空间。
 

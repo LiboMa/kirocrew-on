@@ -303,7 +303,7 @@ class Engine:
             evidence = json.loads(row["evidence"] or "{}")
             skipped = str(evidence.get("knowledge_skipped") or "")[:300] or None
             keep, rest = ((), ()) if skipped else knowledge.items(
-                evidence.get("outcome"), knowledge.known(db, run["worker_id"], repo) if repo else ())
+                evidence.get("outcome"), knowledge.known(db, run["worker_id"], repo) if repo else None)
         results = []
         if keep and run.get("worker_scope") == "shared":   # D52 R4: for the repository's reviewed knowledge only
             results = [{"result": "kept", "reason": knowledge.KEPT} for _ in keep]
@@ -343,10 +343,12 @@ class Engine:
             fresh["knowledge_added"] = {**state, "written": [*(state.get("written") or []), row["attempt"]],
                                         **({"skipped": skipped} if skipped else {})}
             journal.change(db, "runs", rid, journal.ENGINE, "run.knowledge", quiet=("snapshot",), snapshot=dumps(fresh))
-            counts = {result: sum(r["result"] == result for r in rows) for result in ("written", "refused", "superseded", "skipped")}
+            counts = {result: sum(r["result"] == result for r in rows)
+                      for result in ("written", "refused", "superseded", "skipped", "kept")}
             journal.record(db, rid, "run.knowledge", journal.ENGINE,
                            reason="Knowledge 沉淀未完成：" + skipped if skipped else "沉淀知识：" + ("、".join(f"{label} {counts[k]} 条" for k, label in
-                                                (("written", "写入"), ("superseded", "替代"), ("refused", "被拒"), ("skipped", "未写入"))
+                                                (("written", "写入"), ("superseded", "替代"), ("refused", "被拒"), ("skipped", "未写入"),
+                                                 ("kept", "发布时提到仓库"))
                                                 if counts[k]) or "没有可沉淀的知识"),
                            task=row["id"], **counts)
         return True

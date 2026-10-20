@@ -90,7 +90,8 @@ def _attempt(attempt, spec):
         "suggestions": [_line(s) for s in outcome.get("suggestions") or []][:20],
         "reviewed": str(evidence["reviewed"])[:7] if evidence.get("reviewed") else None,
         # D50: the methods the Worker gave the Attempt (its evidence), not those planned
-        "skills": [_line(s.get("name"), 60) for s in evidence.get("skills") or [] if isinstance(s, dict)][:4],
+        "skills": [_line(s.get("name"), 60) for s in evidence.get("skills") if isinstance(s, dict)][:4]
+        if isinstance(evidence.get("skills"), list) else [],
     }
 
 

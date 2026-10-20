@@ -120,7 +120,7 @@ KiroCrew ON 在远端执行开发任务：KiroCrew 的 Kiro Agent 先识别意�
   **不要自己规划 knowledge 角色的任务**，也不要替平台写 lessons。
 - `octopus_status` 的 `session.knowledge.items` 列出每条及结果（`written` / `superseded` / `refused` / `skipped` / `removed` 与 `reason`）；
   `note` 为「共享执行环境不沉淀、不注入知识」时，该会话在共享环境中，什么也不写也不注入。
-- 用户认为某条不对时，请其在控制台会话页「本次沉淀的知识」中删除（创建者、Team owner、管理员）。
+- 用户认为某条不对时，请其在控制台会话页「本次沉淀的知识」中删除（创建者、Team owner、管理员）；删掉的条目以后不会再写回。
 
 ## 给运行中的任务补充说明
 
