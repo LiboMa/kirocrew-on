@@ -127,8 +127,8 @@
         {
           "id": "p4",
           "name": "P4 Knowledge（lessons 沉淀与注入）",
-          "status": "deployed",
-          "ref": "8b7c0ed",
+          "status": "accepted",
+          "ref": "EC2 2026-10-20",
           "deps": [
             "kiro-owner"
           ],
@@ -186,16 +186,16 @@
         {
           "id": "d49-2",
           "name": "第 2 期 会话的执行位置（回退到 Team 环境 + 提示）",
-          "status": "deployed",
-          "ref": "d9f57c3",
-          "more": "负责人选 A：无边界的成员回退到 Team 环境；/v1/placement 统一回答；控制台默认交给平台。"
+          "status": "accepted",
+          "ref": "EC2 2026-10-20 8/8",
+          "more": "admin 向 dev-2（Team 环境为共享 personal）与 Web应用开发组（无 Team 环境）提交：平台默认与会话都落在本人 owner 边界（placement own）并完成。其他成员的回退与提示需要另一个成员账号，未在 EC2 实测（本机测试覆盖）。"
         },
         {
           "id": "d49-r10",
           "name": "R10 只有边界主人在自己的边界上下达指令",
           "status": "deployed",
           "ref": "d9f57c3",
-          "more": "续作、诊断、确认、补充说明、批准只接受边界主人；去掉了会丢工作的『改派停下的会话』。"
+          "more": "续作、诊断、确认、补充说明、批准只接受边界主人；需要另一个成员账号在 EC2 实测（本机测试覆盖）。"
         },
         {
           "id": "d49-fix",
@@ -366,18 +366,19 @@
         {
           "id": "acc-p4",
           "name": "验收：Knowledge 写入 / 注入 / 删除（P4）",
-          "status": "doing",
+          "status": "accepted",
           "deps": [
             "kiro-owner",
             "creds"
           ],
-          "ref": "进行中"
+          "ref": "EC2 2026-10-20 6/6 + forget 1/1",
+          "more": "run-1bdfaf7a…：Evaluator 之后追加 Knowledge 任务，写入 5 条 lessons；run-4575809b… 的任务逐字收到；删除一条成功。"
         },
         {
           "id": "scan",
           "name": "推送前安全扫描（git-defender）",
           "status": "doing",
-          "ref": "317f8b9 通过",
+          "ref": "最终提交待扫描",
           "more": "最终提交需再扫一次。"
         },
         {
@@ -477,12 +478,15 @@
   "next": [
     {
       "who": "me",
-      "text": "已验收：route、p5、steer、d50、D51；P4 Knowledge 验收进行中（owner 边界），随后 forget",
-      "cmd": "ACCEPT_WORKER=<personal 的 worker id> ~/.kc-work/accept_d49_p4_p5.py https://d1atltv3sl7jdu.cloudfront.net <阶段>"
+      "text": "对最终提交做推送前安全扫描（git-defender scan + scan-history，干净克隆）"
     },
     {
       "who": "owner",
-      "text": "看验收结果，确认推送 60 个提交到 feat/m1-runtime-foundation（我先对最终提交再扫一次）"
+      "text": "确认推送：自上次推送以来的提交到 feat/m1-runtime-foundation（--no-verify，快进），并更新 PR #4 说明"
+    },
+    {
+      "who": "owner",
+      "text": "可选：建一个测试成员账号（我不经 MCP 建用户），以便在 EC2 实测 D49 第 2 期的成员回退与 R10"
     }
   ]
 }
