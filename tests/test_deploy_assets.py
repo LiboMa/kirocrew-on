@@ -725,13 +725,21 @@ class ScriptTests(unittest.TestCase):
         self.assertEqual(self.relay(log), [])
 
     def test_kiro_login_on_a_host_that_is_already_signed_in_does_not_start_a_device_flow(self):
-        state = {"stacks": {"kirocrew-on-m1-worker-w1": {"outputs": {"InstanceId": "i-w1"}}},
+        state = {"stacks": {"kirocrew-on-m1-worker-w1": {"outputs": {"InstanceId": "i-w1"}}}, "boundaries": ["w1"],
                  "whoami": "Logged in with IAM Identity Center (https://d-9067e1d68a.awsapps.com/start)"}
         result, log = self.fake_aws(state, "kiro-login", "--host", "w1")
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertIn("Logged in with IAM Identity Center", result.stdout)
         commands = [line for line in log if line.startswith("COMMAND ")]
         self.assertTrue(commands and all("kiro-cli login" not in line for line in commands), commands)
+
+    def test_kiro_login_refuses_a_boundary_the_host_does_not_have(self):
+        # 2026-10-20: "kiro-login --boundary kirocrew-on" waited for a device code that could never come
+        state = {"stacks": {"kirocrew-on-m1": {"outputs": {"InstanceId": "i-platform"}}}, "boundaries": ["owner", "personal"]}
+        result, log = self.fake_aws(state, "kiro-login", "--boundary", "kirocrew-on")
+        self.assertEqual(result.returncode, 2, result.stderr)
+        self.assertIn("主机上没有边界 kirocrew-on；现有边界：owner personal", result.stderr)
+        self.assertTrue(all("kiro-cli login" not in line for line in log if line.startswith("COMMAND ")))
 
     def test_the_relay_refuses_a_port_another_worker_host_already_listens_on(self):
         env = {**os.environ, "DEPLOY_DRY_RUN": "1"}

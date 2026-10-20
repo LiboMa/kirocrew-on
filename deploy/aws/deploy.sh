@@ -622,6 +622,12 @@ kiro_login() {
   instance="$(output InstanceId "$stack")"
   # kiro-cli refuses to log in again over a valid login (worker-host add reruns this step on an existing host).
   if [ -z "$DRY" ]; then
+    # A name that is no boundary of this host fails here, not after a wait for a device code that never comes.
+    local known
+    known="$(remote "$instance" "ls /etc/kirocrew-on | sed -n 's/^boundary-\(.*\)\.toml\$/\1/p' | grep -v '[.]check\$' | tr '\n' ' '" || true)"
+    if [[ " $known " != *" $boundary "* ]]; then
+      echo "主机上没有边界 ${boundary}；现有边界：${known:-（无）}" >&2; exit 2
+    fi
     whoami="$(remote "$instance" "sudo -iu crew-$boundary kiro-cli whoami 2>&1 | head -1" || true)"
     if [[ "$whoami" == "Logged in"* ]]; then
       printf '%s\ncrew-%s 已登录 kiro-cli；更换账号时先在主机上以 crew-%s 执行 kiro-cli logout\n' "$whoami" "$boundary" "$boundary"
