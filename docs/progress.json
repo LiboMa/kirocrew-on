@@ -414,11 +414,13 @@
       "items": [
         {
           "id": "team-kb",
-          "name": "团队层知识（Knowledge 以 Draft PR 提到仓库，人审核）",
-          "status": "todo",
+          "name": "D52 团队层知识（发布时提到仓库 .octopus/knowledge.md 的 Draft PR，人审核）",
+          "status": "doing",
           "deps": [
             "acc-p4"
-          ]
+          ],
+          "ref": "spec 1d5a409",
+          "more": "spec 已写，待负责人审阅（R3 范围、R4 共享环境为推荐方案）；EC2 验收要写测试仓库，需负责人确认仓库与凭证。"
         },
         {
           "id": "skills-next",
