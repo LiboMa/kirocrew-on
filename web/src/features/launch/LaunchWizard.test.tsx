@@ -176,6 +176,30 @@ describe("launch wizard", () => {
     await waitFor(() => expect(within(select).getAllByRole("option")[0]).toHaveTextContent("稍后分配 Worker"));   // the Team's own answer
   });
 
+  test("the task models are those of where it will run: the platform's default, then the one picked (D49)", async () => {
+    const cold = { ...worker, id: "b-own", name: "owner", scope: "dedicated", capabilities: { models: { claude: ["auto"] } } };
+    const warm = { ...worker, id: "w-shared", name: "personal", scope: "shared" };
+    start({ "GET /workers": [cold, warm], "GET /placement": { space: "personal", hint: null,
+      default: { id: "b-own", name: "owner", scope: "dedicated", placement: "own" },
+      options: [{ id: "b-own", name: "owner", scope: "dedicated", own: true, isolation: "dedicated", models: { claude: ["auto", "opus-from-placement"] } },
+        { id: "w-shared", name: "personal", scope: "shared", own: false, isolation: "trusted-local", models: { claude: ["auto", "sonnet"] } }] } });
+    const dialog = await openWizard();
+    await fillNeed(dialog);
+    await next(dialog);
+    await userEvent.click(within(dialog).getByRole("radio", { name: /参考模板/ }));
+    await userEvent.click(await within(dialog).findByRole("button", { name: /最小实现与审查/ }));
+    await next(dialog);
+    const model = () => within(dialog).getAllByLabelText("模型")[0];
+    // the platform's own answer for the default environment, not a copy kept elsewhere in the console
+    expect(within(model()).getAllByRole("option").map((o) => o.getAttribute("value"))).toEqual(["auto", "opus-from-placement"]);
+    await userEvent.click(within(dialog).getByRole("button", { name: "上一步" }));
+    await userEvent.click(within(dialog).getByRole("button", { name: "上一步" }));
+    await userEvent.selectOptions(within(dialog).getByLabelText("执行 Worker"), "w-shared");
+    await next(dialog);
+    await next(dialog);
+    expect(within(model()).getAllByRole("option").map((o) => o.getAttribute("value"))).toEqual(["auto", "sonnet"]);
+  });
+
   test("reference template: a picked card is submitted as that template", async () => {
     const calls = start();
     const dialog = await openWizard();

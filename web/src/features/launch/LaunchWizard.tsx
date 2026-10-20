@@ -36,7 +36,9 @@ export function LaunchWizard({ seed }: { seed: LaunchSeed }) {
   const [busy, setBusy] = useState(false);
   const placement = usePlacement(draft.space).data;
   const [recommendWorker, setRecommendWorker] = useState(() => draft.generation?.request?.worker_id ?? draft.worker ?? "");
-  const models = workers.find((w) => w.id === (draft.worker || recommendWorker || placement?.default?.id))?.capabilities.models;
+  // The models of where it will run: the chosen environment, else the platform's default (D49)
+  const target = draft.worker || placement?.default?.id || recommendWorker;
+  const models = placement?.options.find((o) => o.id === target)?.models ?? workers.find((w) => w.id === target)?.capabilities.models;
 
   useEffect(() => {   // the recommendation runs where the Session would (D49)
     const first = placement?.default?.id ?? placement?.options[0]?.id;

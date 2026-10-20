@@ -40,6 +40,21 @@ describe("workflow library", () => {
     await waitFor(() => expect(calls.find((c) => c.method === "POST" && c.path === "/v1/workflows")?.body).toEqual({ name: "退款流程", steps }));
   });
 
+  test("the model list is the one of where Sessions of this space run, on auto too", async () => {
+    start([], { "GET /workers": [{ id: "b-cold", name: "a-cold", owner_id: "u1", team_id: null, enabled: true, scope: "dedicated",
+      capabilities: { models: { claude: ["auto"] } } }], "GET /placement": { space: "personal", hint: null,
+      default: { id: "w-personal", name: "personal", scope: "shared", placement: "only" },
+      options: [{ id: "w-personal", name: "personal", scope: "shared", own: false, isolation: "trusted-local",
+        models: { claude: ["auto", "us.anthropic.claude-opus-5-5", "us.anthropic.claude-sonnet-5-5"] } }] } });
+    await openLibrary();
+    await userEvent.click(screen.getByRole("button", { name: /新建工作流/ }));
+    const dialog = await screen.findByRole("dialog");
+    const select = within(dialog).getAllByLabelText("模型")[0];
+    await waitFor(() => expect(within(select).getAllByRole("option").map((o) => o.getAttribute("value")))
+      .toEqual(["auto", "us.anthropic.claude-opus-5-5", "us.anthropic.claude-sonnet-5-5"]));
+    expect(select).toHaveValue("auto");
+  });
+
   test("editing creates a new version against the expected version; viewers only read", async () => {
     const calls = start([flow(), flow({ id: "flow-2", name: "别人的流程", role: "viewer", owner_id: "u2" })],
       { "POST /workflows/flow-1/versions": flow({ version: 4 }) });

@@ -3,20 +3,20 @@ import { Archive, Download, FileUp, Play, Share2, Sparkles } from "lucide-react"
 import { useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
 import { api } from "@/api/client";
-import { keys } from "@/api/hooks";
+import { keys, usePlacement } from "@/api/hooks";
 import type { ParsedWorkflow, Step, Workflow } from "@/api/types";
 import { FormDialog } from "@/components/FormDialog";
 import { TaskEditor } from "@/components/TaskEditor";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
-import { spaceWorkers, useConsole } from "@/features/console/context";
+import { useConsole } from "@/features/console/context";
 import { downloadJson } from "@/lib/download";
 
 const STARTERS = ["chain", "proof", "fix"];
 
 export function WorkflowEditor({ flow, template = "chain" }: { flow: Workflow | null; template?: string }) {
-  const { templates, close, open, workers, space, me } = useConsole();
+  const { templates, close, open, space } = useConsole();
   const client = useQueryClient();
   const canEdit = !flow || ["owner", "editor"].includes(flow.role);
   const copy = (id: string) => (templates.find((t) => t.id === id)?.steps ?? []).map((s) => ({ ...s, model: "auto", effort: "" }));
@@ -24,7 +24,9 @@ export function WorkflowEditor({ flow, template = "chain" }: { flow: Workflow | 
   const [steps, setSteps] = useState<Step[]>(() => structuredClone(flow?.steps ?? copy(template)));
   const [archiving, setArchiving] = useState(false);
   const file = useRef<HTMLInputElement>(null);
-  const models = spaceWorkers(workers, space, me)[0]?.capabilities.models;
+  // The models of where this space's Sessions run (D49: the platform's default), not of the first environment listed
+  const placement = usePlacement(space).data;
+  const models = (placement?.options.find((o) => o.id === placement.default?.id) ?? placement?.options[0])?.models;
   const refresh = () => client.invalidateQueries({ queryKey: keys.workflows });
 
   async function importFile(chosen: File) {
