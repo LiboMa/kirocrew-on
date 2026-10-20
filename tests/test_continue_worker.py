@@ -50,6 +50,19 @@ class ContinueWorkerTests(unittest.TestCase):
     def spawns(self):
         return [(p, b) for p, b in self.calls if (p == "/api/spawn" and b) or p.endswith("/continue")]
 
+    def test_an_auto_rework_keeps_the_model_its_conversation_ran_on(self):
+        # EC2 2026-10-20 (p5 acceptance): even with "auto" KiroCrew continued a claude "default" run on Opus — the first
+        # run's own model is sent instead, when it is a plain id a spawn takes; otherwise "auto"
+        for resolved, sent in (("default", "default"), ("openai.gpt-6-astra[low]", "auto"), ("", "auto")):
+            with self.subTest(resolved=resolved):
+                self.setUp()
+                self.dispatch(FIRST)
+                state = self.node.home / "subagents/aaaa1111/state.json"
+                state.parent.mkdir(parents=True, exist_ok=True)
+                state.write_text(json.dumps({"id": "aaaa1111", "resolved_model": resolved}))
+                self.dispatch(SECOND, **{"continue": {"conversation": "aaaa1111", "from": FIRST}})
+                self.assertEqual(self.spawns()[-1][1]["model"], sent)
+
     def test_a_rework_continues_its_conversation(self):
         self.dispatch(FIRST)
         value = self.dispatch(SECOND, **{"continue": {"conversation": "aaaa1111", "from": FIRST}})
@@ -142,7 +155,7 @@ class UnattendedTests(ContinueWorkerTests):
     # the inherited cases that expect a continuation do not apply here
     test_a_rework_continues_its_conversation = test_an_explicit_model_is_sent = None
     test_a_lost_continue_receipt_is_reconciled = test_the_rework_words_follow_the_kind_of_work = None
-    test_a_refused_continue_spawns_afresh_with_its_own_words = None
+    test_a_refused_continue_spawns_afresh_with_its_own_words = test_an_auto_rework_keeps_the_model_its_conversation_ran_on = None
 
 
 class ContractTests(unittest.TestCase):

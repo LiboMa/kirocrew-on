@@ -774,6 +774,19 @@ class Worker:
         result["via"] = {"port": self.preview_tls_port, "name": self.preview_tls_name} if self.preview_tls_port else None
         return result
 
+    def _continued_model(self, conversation, model):
+        """The model a continued rework asks for: the task's own; for "auto" the one its conversation first ran on, since
+        KiroCrew resolves "auto" on a continue to its global default (EC2 2026-10-20: a claude "default" run went on as
+        Opus). Only a plain id a spawn takes; otherwise "auto"."""
+        if model != "auto":
+            return model
+        state = self.home / "subagents" / conversation / "state.json"
+        try:
+            first = json.loads(state.read_text()).get("resolved_model") if state.is_file() and not state.is_symlink() else None
+        except (OSError, ValueError):
+            first = None
+        return first if isinstance(first, str) and re.fullmatch(r"[a-zA-Z0-9][a-zA-Z0-9._-]*", first) else "auto"
+
     def advertised(self):
         """The models KiroCrew recorded each tool's backend as publishing (its provider_models.json)."""
         cache = self.home / "provider_models.json"
@@ -1125,7 +1138,8 @@ class Worker:
                     # The model is always sent, "auto" too: without one KiroCrew continues on its global default model
                     # (EC2 2026-10-20: a claude "default" run became Opus; a codex one was asked for a Claude model).
                     again = {"task": prompt + rework_note((contract or {}).get("kind"), body.get("repair")),
-                             "parent_session": parent["parent"], "agent": spawn["agent"], "model": spec["model"]}
+                             "parent_session": parent["parent"], "agent": spawn["agent"],
+                             "model": self._continued_model(resume["conversation"], spec["model"])}
                     try:
                         result = self.native("/api/spawn/" + quote(resume["conversation"], safe="") + "/continue", again)
                         value["continued"] = {"conversation": resume["conversation"], "from": resume["from"]}
