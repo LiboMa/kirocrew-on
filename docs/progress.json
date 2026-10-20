@@ -1,6 +1,6 @@
 {
   "_comment": "进度看板与 docs/PROGRESS.md 的唯一数据源：任务状态在这里维护；提交记录由 tools/progress.py 从 git 生成（负责人 2026-10-20）。",
-  "checks": "1333 后端 + 195 控制台",
+  "checks": "1333 后端 + 195 控制台（0eca0b9）；EC2 运行 e0d8791",
   "status": {
     "accepted": {
       "label": "已验收",
@@ -142,7 +142,7 @@
           "deps": [
             "deploy-next"
           ],
-          "more": "续接返工被误判为『ACP 后端未核实』的缺陷已修复并部署，并在 run-9507ea17 的真实续接返工中实测通过（claude、codex）。续接时模型被换成全局默认的缺陷已修复（c9a3469），待部署。"
+          "more": "续接被误判『ACP 后端未核实』已修复并在 run-9507ea17 实测通过；续接换成全局默认模型的缺陷（c9a3469）已于 e0d8791 部署，p5 验收核对模型。"
         },
         {
           "id": "p5b",
@@ -175,12 +175,12 @@
         {
           "id": "d49-1",
           "name": "第 1 期 同主机多边界（端口、资源上限、升级）",
-          "status": "deployed",
-          "ref": "owner 边界已建",
+          "status": "accepted",
+          "ref": "EC2 2026-10-20",
           "deps": [
             "kiro-owner"
           ],
-          "more": "owner 边界（Gateway 5481、Worker 9001）隔离检查通过；kiro 尚未登录。"
+          "more": "owner 边界隔离检查通过、两个边界同时升级、新会话自动落到本人边界并完成（route 5/5）；kiro 登录属 P4 验收。"
         },
         {
           "id": "d49-2",
@@ -199,7 +199,7 @@
         {
           "id": "d49-fix",
           "name": "提示与记录修正（停用边界的提示、改派后的位置、预算）",
-          "status": "local",
+          "status": "deployed",
           "ref": "e882e10 · f5954f1",
           "deps": [
             "deploy-next"
@@ -242,7 +242,7 @@
         {
           "id": "d51-ui",
           "name": "模型下拉（自动时列出全部、跟随执行环境、未公布标明）",
-          "status": "local",
+          "status": "deployed",
           "ref": "092a19a",
           "deps": [
             "deploy-next"
@@ -251,16 +251,17 @@
         {
           "id": "d51-disc",
           "name": "模型自动发现（kiro 走目录 API，claude 一轮探测，至多 3 次）",
-          "status": "local",
+          "status": "deployed",
           "ref": "71d9467 · 0eca0b9",
           "deps": [
             "deploy-next"
-          ]
+          ],
+          "more": "部署后无人操作：owner 的 claude 探测一次即写入 14 个模型（2026-10-20 03:46 UTC）；kiro 待 owner 登录后由目录 API 取得。"
         },
         {
           "id": "d51-codex",
           "name": "codex 显示『自动』实际对应的模型",
-          "status": "local",
+          "status": "deployed",
           "ref": "71d9467",
           "deps": [
             "deploy-next"
@@ -291,9 +292,9 @@
         {
           "id": "deploy-next",
           "name": "部署 D51 + 续接模型修复 + 提示修正",
-          "status": "blocked",
-          "ref": "等 EC2 空闲",
-          "more": "全量回归已通过（0eca0b9）；EC2 上 run-48f02d32、run-9507ea17 在运行。"
+          "status": "accepted",
+          "ref": "e0d8791 已部署",
+          "more": "2026-10-20 部署 e0d8791：D51、续接模型修复、提示修正、kiro-login 边界校验；平台主机与 w1。"
         },
         {
           "id": "retest-9507",
@@ -305,19 +306,22 @@
         {
           "id": "acc-route",
           "name": "验收：新会话落到本人边界",
-          "status": "todo",
+          "status": "accepted",
           "deps": [
             "creds"
-          ]
+          ],
+          "ref": "2026-10-20 EC2 5/5",
+          "more": "run-183b36ec…：admin 的新会话不带 worker_id，落到本人 owner 边界并完成。"
         },
         {
           "id": "acc-p5",
           "name": "验收：续接返工 + 门禁 + 用量（P5a、P6a）",
-          "status": "todo",
+          "status": "doing",
           "deps": [
             "creds",
             "deploy-next"
-          ]
+          ],
+          "ref": "进行中"
         },
         {
           "id": "acc-steer",
@@ -458,11 +462,7 @@
     },
     {
       "who": "me",
-      "text": "EC2 空闲后部署 0eca0b9（D51、续接模型修复、提示修正），核对 owner 的 claude 模型列表自动出现"
-    },
-    {
-      "who": "me",
-      "text": "用 admin Token 跑验收：route、p5（续接 + 用量）、steer、d50；kiro 登录后跑 p4 与 forget",
+      "text": "验收进行中：route 已通过；p5（续接 + 用量）、steer、d50 依次在 personal 上跑；kiro 登录后跑 p4 与 forget",
       "cmd": "ACCEPT_WORKER=<personal 的 worker id> ~/.kc-work/accept_d49_p4_p5.py https://d1atltv3sl7jdu.cloudfront.net <阶段>"
     },
     {
