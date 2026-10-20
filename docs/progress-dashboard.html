@@ -1,0 +1,410 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>KiroCrew ON · 进度看板</title>
+<style>
+  :root {
+    --ink: #172033; --muted: #5b6577; --line: #e3e7ef; --bg: #f6f8fb; --card: #ffffff;
+    --brand: #5b4bdb; --brand-soft: #eeebff;
+    --accepted: #16794c; --accepted-soft: #e3f5ec;
+    --deployed: #2f6fd6; --deployed-soft: #e6effd;
+    --local: #7a4fd6; --local-soft: #f0e9fd;
+    --doing: #9a6700; --doing-soft: #fff4d6;
+    --blocked: #b42318; --blocked-soft: #fdecea;
+    --todo: #6b7280; --todo-soft: #eef0f4;
+    --dark: #121733;
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; font: 14px/1.6 -apple-system, BlinkMacSystemFont, "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei",
+         "Noto Sans CJK SC", "Segoe UI", sans-serif; color: var(--ink); background: var(--bg); }
+  .wrap { max-width: 1240px; margin: 0 auto; padding: 0 24px; }
+  header.top { background: linear-gradient(135deg, #121733 0%, #2a2163 60%, #5b4bdb 100%); color: #fff; padding: 28px 0 30px; }
+  header.top h1 { margin: 0; font-size: 26px; letter-spacing: -.3px; }
+  header.top p { margin: 6px 0 0; color: #cfd3f5; font-size: 13px; }
+  .hero { display: grid; grid-template-columns: auto auto 1fr; gap: 28px; align-items: center; margin-top: 22px; }
+  .ring { position: relative; width: 150px; height: 150px; }
+  .ring svg { transform: rotate(-90deg); }
+  .ring .num { position: absolute; inset: 0; display: grid; place-items: center; text-align: center; }
+  .ring .num b { font-size: 34px; line-height: 1; display: block; }
+  .ring .num span { font-size: 12px; color: #cfd3f5; }
+  .counts { display: grid; grid-template-columns: repeat(3, minmax(120px, 1fr)); gap: 10px; }
+  .count { background: rgba(255,255,255,.08); border: 1px solid rgba(255,255,255,.14); border-radius: 12px; padding: 10px 12px; cursor: pointer;
+           transition: background .15s; }
+  .count:hover, .count.on { background: rgba(255,255,255,.18); }
+  .count b { font-size: 22px; display: block; }
+  .count i { font-style: normal; font-size: 12px; color: #dfe2ff; }
+  .dot { display: inline-block; width: 9px; height: 9px; border-radius: 50%; margin-right: 6px; vertical-align: 1px; }
+  main { padding: 22px 0 60px; }
+  .toolbar { display: flex; flex-wrap: wrap; gap: 10px; align-items: center; margin-bottom: 18px; }
+  .toolbar input { flex: 1; min-width: 220px; padding: 9px 12px; border: 1px solid var(--line); border-radius: 10px; font: inherit; background: #fff; }
+  .chip { border: 1px solid var(--line); background: #fff; border-radius: 999px; padding: 6px 12px; cursor: pointer; font-size: 13px; color: var(--muted); }
+  .chip.on { background: var(--ink); color: #fff; border-color: var(--ink); }
+  .grid2 { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 18px; align-items: start; margin-top: 18px; }
+  .panel { background: var(--card); border: 1px solid var(--line); border-radius: 16px; padding: 18px; box-shadow: 0 1px 2px rgba(16,24,40,.04); }
+  .panel h2 { margin: 0 0 4px; font-size: 16px; }
+  .panel .sub { color: var(--muted); font-size: 12px; margin: 0 0 12px; }
+  .next li { margin: 0 0 12px; padding-left: 4px; }
+  .next ol { margin: 0; padding-left: 20px; }
+  .who { font-size: 11px; padding: 1px 7px; border-radius: 999px; margin-right: 6px; font-weight: 600; }
+  .who.owner { background: var(--blocked-soft); color: var(--blocked); }
+  .who.me { background: var(--deployed-soft); color: var(--deployed); }
+  code.cmd { display: block; margin-top: 4px; padding: 6px 9px; background: #0f1430; color: #d9ddff; border-radius: 8px; font-size: 12px;
+             word-break: break-all; position: relative; }
+  .copy { float: right; margin-left: 8px; border: 0; background: #2a2163; color: #fff; border-radius: 6px; font-size: 11px; padding: 1px 7px; cursor: pointer; }
+  .modules { display: grid; grid-template-columns: repeat(auto-fill, minmax(360px, 1fr)); gap: 16px; margin-top: 18px; }
+  .module { background: var(--card); border: 1px solid var(--line); border-radius: 16px; overflow: hidden; }
+  .module > header { padding: 14px 16px 10px; cursor: pointer; }
+  .module h3 { margin: 0; font-size: 15px; display: flex; justify-content: space-between; gap: 10px; }
+  .module h3 small { color: var(--muted); font-weight: 400; font-size: 12px; white-space: nowrap; }
+  .module .desc { color: var(--muted); font-size: 12px; margin: 4px 0 8px; }
+  .bar { height: 8px; background: var(--todo-soft); border-radius: 999px; overflow: hidden; display: flex; }
+  .bar span { height: 100%; transition: width .9s cubic-bezier(.2,.8,.2,1); width: 0; }
+  .items { border-top: 1px solid var(--line); }
+  .item { padding: 9px 16px; border-bottom: 1px solid var(--line); display: grid; grid-template-columns: 1fr auto; gap: 8px; cursor: pointer; }
+  .item:last-child { border-bottom: 0; }
+  .item:hover { background: #fafbfe; }
+  .item .name { font-weight: 600; font-size: 13px; }
+  .item .ref { color: var(--muted); font-size: 11px; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; }
+  .item .more { grid-column: 1 / -1; color: var(--muted); font-size: 12px; display: none; padding-top: 4px; }
+  .item.open .more { display: block; }
+  .item .deps { font-size: 11px; color: var(--muted); margin-top: 3px; }
+  .badge { font-size: 11px; padding: 2px 8px; border-radius: 999px; white-space: nowrap; height: fit-content; font-weight: 600; }
+  .module.collapsed .items { display: none; }
+  .hidden { display: none !important; }
+  #graph { width: 100%; overflow-x: auto; }
+  #graph svg { display: block; }
+  .node rect { rx: 10; ry: 10; stroke-width: 1.5; transition: opacity .15s; }
+  .node text { font-size: 12px; pointer-events: none; }
+  .edge { fill: none; stroke: #c3c9d6; stroke-width: 1.5; transition: opacity .15s, stroke .15s; }
+  .dim { opacity: .18; }
+  .hot { stroke: var(--brand) !important; stroke-width: 2.2 !important; }
+  .legend { display: flex; flex-wrap: wrap; gap: 12px; font-size: 12px; color: var(--muted); margin-top: 8px; }
+  .log li { margin-bottom: 6px; font-size: 12.5px; }
+  .log b { font-family: ui-monospace, Menlo, monospace; font-weight: 600; color: var(--brand); }
+  footer { color: var(--muted); font-size: 12px; text-align: center; padding: 24px 0 40px; }
+  @media (max-width: 920px) { .hero { grid-template-columns: 1fr; } .grid2 { grid-template-columns: 1fr; } .counts { grid-template-columns: repeat(2, 1fr); } }
+</style>
+</head>
+<body>
+<header class="top">
+  <div class="wrap">
+    <h1>KiroCrew ON · 进度看板</h1>
+    <p id="meta"></p>
+    <p id="split" style="color:#fff;font-size:14px;margin-top:10px"></p>
+    <div class="hero">
+      <div class="ring" id="ring-round"></div>
+      <div class="ring" id="ring-mvp"></div>
+      <div class="counts" id="counts"></div>
+    </div>
+  </div>
+</header>
+
+<main class="wrap">
+  <div class="toolbar">
+    <input id="q" placeholder="搜索：模块、任务、提交号、关键词（如 kiro、P5a、d9f57c3）">
+    <span id="filters"></span>
+    <button class="chip" id="toggle-all">全部收起</button>
+  </div>
+
+  <section class="panel">
+    <h2>依赖关系与关键路径</h2>
+    <p class="sub">悬停任意节点：高亮它依赖的（上游）与它会解锁的（下游）；点击跳到对应任务。红色是卡点，从左到右是推进顺序。</p>
+    <div id="graph"></div>
+    <div class="legend" id="legend"></div>
+  </section>
+  <div class="grid2">
+    <section class="panel next">
+      <h2>下一步（按顺序）</h2>
+      <p class="sub">卡点集中在需要你做的事；其余由平台按顺序推进。</p>
+      <ol id="next"></ol>
+    </section>
+    <section class="panel">
+      <h2>本轮修复的缺陷</h2>
+      <p class="sub">EC2 实际使用中发现、已写测试复现并修复。</p>
+      <ul class="log" id="bugs"></ul>
+    </section>
+  </div>
+
+  <div class="modules" id="modules"></div>
+</main>
+<footer>数据整理自 docs/MVP-RELEASE.md、docs/BACKLOG.md、执行台账与 2026-10-20 的 EC2 核对。完成度：已验收 = 1，已部署待验收 = 0.8，本机完成待部署 = 0.6，进行中 = 0.4，阻塞 / 未开始 = 0。</footer>
+
+<script>
+const UPDATED = "2026-10-20 11:00（UTC+8）";
+const HEAD = { sha: "0eca0b9", ahead: 60, tests: "1333 后端 + 195 控制台", deployed: "d9f57c3" };
+
+const STATUS = {
+  accepted: { label: "已验收", weight: 1 },
+  deployed: { label: "已部署 · 待验收", weight: 0.8 },
+  local:    { label: "本机完成 · 待部署", weight: 0.6 },
+  doing:    { label: "进行中", weight: 0.4 },
+  blocked:  { label: "卡点 · 等外部", weight: 0 },
+  todo:     { label: "未开始", weight: 0 },
+};
+const css = (name) => getComputedStyle(document.documentElement).getPropertyValue("--" + name).trim();
+
+// round: this round's goals (D46–D51, quality, acceptance and release); mvp: the MVP milestones
+const MODULES = [
+  { id: "mvp", title: "MVP 里程碑（M1–M5）", scope: "mvp", desc: "首个可用 MVP = M1 + M2 + M3 在 EC2 验收；M4、M5 之后立项。", items: [
+    { id: "m1", name: "M1 运行底座", status: "accepted", ref: "2026-10-14", more: "本地与 EC2 验收条件全部完成，负责人确认。" },
+    { id: "m2-core", name: "M2 核心闭环 · 主体", status: "accepted", ref: "§14.13–14.31", more: "KiroCrew 规划、命名门禁、候选提交、Feature 报告、发布 Draft PR / 新建仓库 / 自动发布、换工具、恢复阶梯（L0、看门狗、重新规划、预算、等待与自动恢复）、计划确认、映射来源、故障注入、已有仓库完整闭环。" },
+    { id: "m2-approval", name: "M2 批准代理：真实批准与 CLI", status: "deployed", ref: "D38 第 2 期", more: "列表与错误路径已在 EC2 验证；真实批准需要一个 crew_yolo=false 的边界；CLI 未做。" },
+    { id: "m2-rest", name: "M2 剩余：Request 表、schema 2、按仓库自动准入、个人 / Team 映射偏好", status: "todo", ref: "§14.2", more: "§6 验收条件 1（自然语言登记 Request）依赖 Request 表；6 缺回执丢失与远端变化的 EC2 核对。" },
+    { id: "m3-core", name: "M3 客户端直连与控制台 · 已上线部分", status: "accepted", ref: "§14.3", more: "Claude Code / Kiro CLI 的 connect + Skill + MCP（35 个工具），React 控制台（门禁、报告、修订对比、待批准、发布、用量）。" },
+    { id: "m3-rest", name: "M3 剩余：Codex / Kiro IDE connect、用户 CLI、pull / sync、服务端分页与全文搜索", status: "todo", ref: "§14.3" },
+    { id: "m4-team", name: "M4 Team 执行环境与会话共享", status: "accepted", ref: "D28–D30" },
+    { id: "m4-rest", name: "M4 剩余：组织层、Worker Token 移出数据库（K10）、单 Session 票据（K03）、排队与配额", status: "todo" },
+    { id: "m5", name: "M5 仓库闭环（GitHub Connector）", status: "todo", ref: "设计草案" },
+  ]},
+  { id: "d46", title: "D46 Agent 角色与提示体系", scope: "round", desc: "以 KiroCrew 为基准：提示一致性、隔离、角色卡片、Evaluator、Knowledge、保留上下文的返工、用量。", items: [
+    { id: "p1", name: "P1 提示一致性与正确性", status: "accepted", ref: "§14.25" },
+    { id: "p0", name: "P0 KiroCrew 配置与隔离（安全底线）", status: "accepted", ref: "§14.26" },
+    { id: "p2", name: "P2 角色卡片", status: "accepted", ref: "§14.30" },
+    { id: "p3", name: "P3 Evaluator 门禁", status: "accepted", ref: "§14.31" },
+    { id: "p4", name: "P4 Knowledge（lessons 沉淀与注入）", status: "deployed", ref: "8b7c0ed", deps: ["kiro-owner"],
+      more: "需要专属环境：验收放在 owner 边界上，等 kiro 登录。" },
+    { id: "p5a", name: "P5a 保留上下文的返工（续接）", status: "deployed", ref: "8b7c0ed · 8a7c3f6", deps: ["deploy-next"],
+      more: "续接返工被误判为『ACP 后端未核实』的缺陷已修复并部署，并在 run-9507ea17 的真实续接返工中实测通过（claude、codex）。续接时模型被换成全局默认的缺陷已修复（c9a3469），待部署。" },
+    { id: "p5b", name: "P5b 运行中补充说明（steer）", status: "deployed", ref: "30a377f", more: "仅 Kiro 后端；各 Worker 报告 steer。" },
+    { id: "p6a", name: "P6a 用量（credits / token / 费用 / 时长）", status: "deployed", ref: "8b7c0ed" },
+    { id: "p6b", name: "P6b 工具时间线", status: "blocked", ref: "KiroCrew", more: "KiroCrew 0.10.0 的子任务不记录工具调用；需 KiroCrew 支持或平台以 hook 自记。" },
+  ]},
+  { id: "d49", title: "D49 每人一个执行边界", scope: "round", desc: "KiroCrew 是个人助手：每人一个边界，Team 会话在提交者边界执行，Team 只共享平台层。", items: [
+    { id: "d49-1", name: "第 1 期 同主机多边界（端口、资源上限、升级）", status: "deployed", ref: "owner 边界已建",
+      deps: ["kiro-owner"], more: "owner 边界（Gateway 5481、Worker 9001）隔离检查通过；kiro 尚未登录。" },
+    { id: "d49-2", name: "第 2 期 会话的执行位置（回退到 Team 环境 + 提示）", status: "deployed", ref: "d9f57c3",
+      more: "负责人选 A：无边界的成员回退到 Team 环境；/v1/placement 统一回答；控制台默认交给平台。" },
+    { id: "d49-r10", name: "R10 只有边界主人在自己的边界上下达指令", status: "deployed", ref: "d9f57c3", more: "续作、诊断、确认、补充说明、批准只接受边界主人；去掉了会丢工作的『改派停下的会话』。" },
+    { id: "d49-fix", name: "提示与记录修正（停用边界的提示、改派后的位置、预算）", status: "local", ref: "e882e10 · f5954f1", deps: ["deploy-next"] },
+    { id: "d49-3", name: "第 3 期 公开原生入口、跨主机放置、空闲停机、退役 personal", status: "todo" },
+  ]},
+  { id: "d50", title: "D50 编码技能包", scope: "round", desc: "测试先行、系统化调试、完成前验证、按评审返工、前端设计：随任务交给三个后端。", items: [
+    { id: "d50-pack", name: "技能包与任务契约 skills（规划者推荐、Worker 交付、证据 sha256）", status: "deployed", ref: "30a377f" },
+    { id: "d50-browser", name: "主机无头浏览器依赖（前端验证打开页面）", status: "accepted", ref: "3f9352d", more: "EC2 实测 Chromium 以 crew-personal 启动并输出页面。" },
+  ]},
+  { id: "d51", title: "D51 模型列表与自动发现", scope: "round", desc: "负责人：用 Prompt 或界面指定模型；『自动』时也有列表；自动刷新，无须人为干预。", items: [
+    { id: "d51-ui", name: "模型下拉（自动时列出全部、跟随执行环境、未公布标明）", status: "local", ref: "092a19a", deps: ["deploy-next"] },
+    { id: "d51-disc", name: "模型自动发现（kiro 走目录 API，claude 一轮探测，至多 3 次）", status: "local", ref: "71d9467 · 0eca0b9", deps: ["deploy-next"] },
+    { id: "d51-codex", name: "codex 显示『自动』实际对应的模型", status: "local", ref: "71d9467", deps: ["deploy-next"] },
+  ]},
+  { id: "release", title: "验收与发布", scope: "round", desc: "按 CLAUDE.md：E2E 验收通过并经负责人确认后再推送。", items: [
+    { id: "creds", name: "验收凭证（admin Token）", status: "accepted", ref: "2026-10-20", more: "已保存在 ~/.kc-work/.oct_token（0600），MCP 配置已更新。" },
+    { id: "kiro-owner", name: "owner 边界 kiro 登录", status: "blocked", ref: "负责人", more: "P4 验收、owner 上的 kiro 任务与 kiro 模型列表都依赖它。" },
+    { id: "deploy-next", name: "部署 D51 + 续接模型修复 + 提示修正", status: "blocked", ref: "等 EC2 空闲", more: "全量回归已通过（0eca0b9）；EC2 上 run-48f02d32、run-9507ea17 在运行。" },
+    { id: "retest-9507", name: "重测 run-9507ea17（ACP 后端门禁）", status: "accepted", ref: "2026-10-20 EC2",
+      more: "续接修复实测通过：delivery #2（claude）与 evaluator #2（codex）为续接返工，identity_match 均 pass、实际后端一致。同时实测到续接换模型（delivery 由 default 变为 claude-opus-5-5），由 c9a3469 修复，待部署。" },
+    { id: "acc-route", name: "验收：新会话落到本人边界", status: "todo", deps: ["creds"] },
+    { id: "acc-p5", name: "验收：续接返工 + 门禁 + 用量（P5a、P6a）", status: "todo", deps: ["creds", "deploy-next"] },
+    { id: "acc-steer", name: "验收：运行中补充说明（P5b）", status: "todo", deps: ["creds"] },
+    { id: "acc-d50", name: "验收：界面类需求按技能交付（D50）", status: "todo", deps: ["creds"] },
+    { id: "acc-d51", name: "验收：owner 上自动出现模型列表（D51）", status: "todo", deps: ["deploy-next", "kiro-owner"] },
+    { id: "acc-p4", name: "验收：Knowledge 写入 / 注入 / 删除（P4）", status: "todo", deps: ["kiro-owner", "creds"] },
+    { id: "scan", name: "推送前安全扫描（git-defender）", status: "doing", ref: "317f8b9 通过", more: "最终提交需再扫一次。" },
+    { id: "confirm", name: "负责人确认推送", status: "todo", ref: "负责人", deps: ["acc-route", "acc-p5", "acc-steer", "acc-d50", "acc-d51", "acc-p4"] },
+    { id: "push", name: "推送 60 个提交（--no-verify）并更新 PR #4", status: "todo", deps: ["confirm", "scan"] },
+  ]},
+  { id: "later", title: "以后（已排期）", scope: "later", desc: "不计入本轮完成度。", items: [
+    { id: "team-kb", name: "团队层知识（Knowledge 以 Draft PR 提到仓库，人审核）", status: "todo", deps: ["acc-p4"] },
+    { id: "skills-next", name: "KiroCrew builtin skill 评估纳入；返工自动附调试 / 评审技能", status: "todo", deps: ["acc-d50"] },
+    { id: "minors", name: "终审延后的小问题（D49、D50、D51、R10，约 25 项）", status: "todo", ref: "BACKLOG" },
+  ]},
+];
+
+const BUGS = [
+  ["8a7c3f6", "续接返工都被判『实际 ACP 后端未核实』：KiroCrew 按对话 key 记 routing，Worker 按本次运行查。已部署，run-9507ea17 的续接返工实测通过。"],
+  ["c9a3469", "续接时不带模型，KiroCrew 换成全局默认（Opus）：claude 的 default 变 Opus、codex 被要求用 Claude 模型。待部署。"],
+  ["d9f57c3", "R10 可被『等待执行环境时的分配』绕过；『改派停下的会话』会卡死并丢失已完成任务的改动——已去掉。"],
+  ["6c2bc7c", "发起向导切换执行空间时 ReferenceError（构建的 tsc -b 发现）。"],
+  ["f5954f1", "分配执行环境时覆盖了预算重置（全量回归发现）。"],
+  ["0eca0b9", "kiro 的模型探测在 0.10.0 中永远填不出列表、每 2 小时白花一轮——改走目录 API 并设上限。"],
+  ["3f9352d", "主机缺 16 个系统库，审查与前端验证无法启动浏览器。"],
+];
+
+const NEXT = [
+  { who: "owner", text: "登录 owner 边界的 kiro（解锁 P4 验收、owner 上的 kiro 任务与模型列表）",
+    cmd: "! cd /tmp/kc-deploy.d47 && bash deploy/aws/deploy.sh kiro-login --boundary owner" },
+  { who: "me", text: "EC2 空闲后部署 0eca0b9（D51、续接模型修复、提示修正），核对 owner 的 claude 模型列表自动出现" },
+  { who: "me", text: "用 admin Token 跑验收：route、p5（续接 + 用量）、steer、d50；kiro 登录后跑 p4 与 forget",
+    cmd: "ACCEPT_WORKER=<personal 的 worker id> ~/.kc-work/accept_d49_p4_p5.py https://d1atltv3sl7jdu.cloudfront.net <阶段>" },
+  { who: "owner", text: "看验收结果，确认推送 60 个提交到 feat/m1-runtime-foundation（我先对最终提交再扫一次）" },
+];
+
+// ---------- computation ----------
+const all = MODULES.flatMap((m) => m.items.map((i) => ({ ...i, module: m })));
+const byId = Object.fromEntries(all.map((i) => [i.id, i]));
+const score = (items) => items.length ? items.reduce((s, i) => s + STATUS[i.status].weight, 0) / items.length : 0;
+const round = all.filter((i) => i.module.scope === "round");
+const mvp = all.filter((i) => i.module.scope === "mvp");
+
+function ring(el, value, label, sub) {
+  const r = 64, c = 2 * Math.PI * r;
+  el.innerHTML = `<svg width="150" height="150"><circle cx="75" cy="75" r="${r}" stroke="rgba(255,255,255,.15)" stroke-width="12" fill="none"/>
+    <circle cx="75" cy="75" r="${r}" stroke="url(#g-${el.id})" stroke-width="12" fill="none" stroke-linecap="round"
+      stroke-dasharray="${c}" stroke-dashoffset="${c}" style="transition: stroke-dashoffset 1.2s cubic-bezier(.2,.8,.2,1)"/>
+    <defs><linearGradient id="g-${el.id}" x1="0" x2="1"><stop offset="0" stop-color="#7ce0b4"/><stop offset="1" stop-color="#9f94ff"/></linearGradient></defs></svg>
+    <div class="num"><div><b>0%</b><span>${label}</span><br><span style="font-size:11px">${sub}</span></div></div>`;
+  const arc = el.querySelectorAll("circle")[1], num = el.querySelector("b");
+  requestAnimationFrame(() => { arc.style.strokeDashoffset = c * (1 - value); });
+  const t0 = performance.now();
+  (function tick(t) {
+    const k = Math.min(1, (t - t0) / 1200);
+    num.textContent = Math.round(value * 100 * (1 - Math.pow(1 - k, 3))) + "%";
+    if (k < 1) requestAnimationFrame(tick);
+  })(t0);
+}
+
+document.getElementById("meta").textContent =
+  `更新于 ${UPDATED} · 分支 feat/m11-gates @ ${HEAD.sha}（领先远端 ${HEAD.ahead} 个提交）· EC2 运行 ${HEAD.deployed} · 回归 ${HEAD.tests} 全部通过`;
+ring(document.getElementById("ring-round"), score(round), "本轮完成度", "D46–D51 + 发布");
+// development (code written, deployed or not) apart from acceptance on EC2, for the features of this round
+const features = round.filter((i) => i.module.id !== "release");
+const built = features.filter((i) => ["accepted", "deployed", "local"].includes(i.status)).length;
+const accepted = features.filter((i) => i.status === "accepted").length;
+const deployedOrBetter = features.filter((i) => ["accepted", "deployed"].includes(i.status)).length;
+document.getElementById("split").innerHTML =
+  `本轮功能 <b>${features.length}</b> 项：开发完成 <b>${built}</b>（${Math.round(built / features.length * 100)}%）· 已上 EC2 <b>${deployedOrBetter}</b>` +
+  ` · EC2 验收通过 <b>${accepted}</b>（${Math.round(accepted / features.length * 100)}%）——差距主要在验收，卡点见「下一步」。`;
+ring(document.getElementById("ring-mvp"), score(mvp), "MVP 完成度", "M1–M5");
+
+let active = null, query = "";
+const counts = document.getElementById("counts");
+Object.entries(STATUS).forEach(([key, s]) => {
+  const n = all.filter((i) => i.status === key && i.module.scope !== "later").length;
+  const div = document.createElement("div");
+  div.className = "count"; div.dataset.status = key;
+  div.innerHTML = `<b>${n}</b><i><span class="dot" style="background:${css(key)}"></span>${s.label}</i>`;
+  div.onclick = () => { active = active === key ? null : key; render(); };
+  counts.appendChild(div);
+});
+
+const filters = document.getElementById("filters");
+[["全部", null], ...Object.entries(STATUS).map(([k, s]) => [s.label, k])].forEach(([label, key]) => {
+  const b = document.createElement("button");
+  b.className = "chip"; b.textContent = label; b.dataset.status = key ?? "";
+  b.onclick = () => { active = key; render(); };
+  filters.appendChild(b);
+});
+document.getElementById("q").oninput = (e) => { query = e.target.value.trim().toLowerCase(); render(); };
+let collapsed = false;
+document.getElementById("toggle-all").onclick = (e) => {
+  collapsed = !collapsed; e.target.textContent = collapsed ? "全部展开" : "全部收起";
+  document.querySelectorAll(".module").forEach((m) => m.classList.toggle("collapsed", collapsed));
+};
+
+function badge(status) {
+  return `<span class="badge" style="color:${css(status)};background:${css(status + "-soft")}">${STATUS[status].label}</span>`;
+}
+function matches(i) {
+  const text = [i.name, i.ref, i.more, i.id, i.module.title].join(" ").toLowerCase();
+  return (!active || i.status === active) && (!query || text.includes(query));
+}
+
+const modulesEl = document.getElementById("modules");
+MODULES.forEach((m) => {
+  const card = document.createElement("article");
+  card.className = "module"; card.dataset.module = m.id;
+  const parts = Object.keys(STATUS).map((k) => [k, m.items.filter((i) => i.status === k).length]);
+  card.innerHTML = `<header><h3>${m.title}<small>${Math.round(score(m.items) * 100)}% · ${m.items.length} 项</small></h3>
+      <p class="desc">${m.desc}</p>
+      <div class="bar">${parts.map(([k, n]) => `<span data-w="${n / m.items.length * 100}" style="background:${css(k)}"></span>`).join("")}</div></header>
+    <div class="items">${m.items.map((i) => `<div class="item" data-id="${i.id}">
+        <div><div class="name">${i.name}</div><div class="ref">${i.ref ?? ""}</div>
+          ${i.deps ? `<div class="deps">依赖：${i.deps.map((d) => byId[d]?.name ?? d).join("；")}</div>` : ""}</div>
+        ${badge(i.status)}${i.more ? `<div class="more">${i.more}</div>` : ""}</div>`).join("")}</div>`;
+  card.querySelector("header").onclick = () => card.classList.toggle("collapsed");
+  card.querySelectorAll(".item").forEach((el) => el.onclick = () => el.classList.toggle("open"));
+  modulesEl.appendChild(card);
+});
+requestAnimationFrame(() => document.querySelectorAll(".bar span").forEach((s) => s.style.width = s.dataset.w + "%"));
+
+function render() {
+  document.querySelectorAll(".count").forEach((c) => c.classList.toggle("on", c.dataset.status === active));
+  document.querySelectorAll("#filters .chip").forEach((c) => c.classList.toggle("on", (c.dataset.status || null) === active));
+  document.querySelectorAll(".item").forEach((el) => el.classList.toggle("hidden", !matches(byId[el.dataset.id])));
+  document.querySelectorAll(".module").forEach((card) =>
+    card.classList.toggle("hidden", !card.querySelector(".item:not(.hidden)")));
+}
+render();
+
+// ---------- next steps and bugs ----------
+document.getElementById("next").innerHTML = NEXT.map((n) => `<li><span class="who ${n.who}">${n.who === "owner" ? "需要你" : "平台推进"}</span>${n.text}
+  ${n.cmd ? `<code class="cmd"><button class="copy" data-cmd="${n.cmd.replace(/"/g, "&quot;")}">复制</button>${n.cmd}</code>` : ""}</li>`).join("");
+document.querySelectorAll(".copy").forEach((b) => b.onclick = async () => {
+  try { await navigator.clipboard.writeText(b.dataset.cmd); b.textContent = "已复制"; } catch { b.textContent = "请手动复制"; }
+  setTimeout(() => b.textContent = "复制", 1500);
+});
+document.getElementById("bugs").innerHTML = BUGS.map(([sha, text]) => `<li><b>${sha}</b> ${text}</li>`).join("");
+document.getElementById("legend").innerHTML = Object.entries(STATUS).map(([k, s]) =>
+  `<span><span class="dot" style="background:${css(k)}"></span>${s.label}</span>`).join("");
+
+// ---------- dependency graph: the release path ----------
+const GRAPH = ["kiro-owner", "creds", "deploy-next", "p4", "p5a", "d51-disc", "d50-pack", "retest-9507",
+               "acc-route", "acc-p5", "acc-steer", "acc-d50", "acc-d51", "acc-p4", "scan", "confirm", "push", "team-kb"];
+const extra = { p4: ["acc-p4"], p5a: ["acc-p5"], "d51-disc": ["acc-d51"], "d50-pack": ["acc-d50"], "retest-9507": ["acc-p5"] };
+const edges = [];
+GRAPH.forEach((id) => (byId[id].deps ?? []).forEach((d) => GRAPH.includes(d) && edges.push([d, id])));
+Object.entries(extra).forEach(([from, tos]) => tos.forEach((to) => edges.push([from, to])));
+const depth = {};
+const level = (id, seen = new Set()) => {
+  if (id in depth) return depth[id];
+  if (seen.has(id)) return 0;   // a cycle in the data: draw it rather than hang
+  seen.add(id);
+  return depth[id] = Math.max(0, ...edges.filter(([, to]) => to === id).map(([from]) => level(from, seen) + 1));
+};
+GRAPH.forEach((id) => level(id));
+const cols = {};
+GRAPH.forEach((id) => (cols[depth[id]] ??= []).push(id));
+const W = 168, H = 38, GX = 54, GY = 14;
+const pos = {};
+Object.entries(cols).forEach(([c, ids]) => ids.forEach((id, r) => pos[id] = { x: 10 + c * (W + GX), y: 10 + r * (H + GY) }));
+const width = 20 + (Object.keys(cols).length) * (W + GX), height = 20 + Math.max(...Object.values(cols).map((l) => l.length)) * (H + GY);
+const label = (id) => { const n = byId[id].name; return n.length > 13 ? n.slice(0, 13) + "…" : n; };
+let svg = `<svg width="${width}" height="${height}" viewBox="0 0 ${width} ${height}">`;
+edges.forEach(([a, b], k) => {
+  const p = pos[a], q = pos[b];
+  const x1 = p.x + W, y1 = p.y + H / 2, x2 = q.x, y2 = q.y + H / 2, mx = (x1 + x2) / 2;
+  svg += `<path class="edge" data-a="${a}" data-b="${b}" d="M${x1},${y1} C${mx},${y1} ${mx},${y2} ${x2},${y2}"/>`;
+});
+GRAPH.forEach((id) => {
+  const { x, y } = pos[id], s = byId[id].status;
+  svg += `<g class="node" data-id="${id}" transform="translate(${x},${y})"><title>${byId[id].name} · ${STATUS[s].label}</title>
+    <rect width="${W}" height="${H}" fill="${css(s + "-soft")}" stroke="${css(s)}"></rect>
+    <circle cx="14" cy="${H / 2}" r="4" fill="${css(s)}"></circle>
+    <text x="26" y="${H / 2 + 4}" fill="${css("ink")}">${label(id)}</text></g>`;
+});
+svg += "</svg>";
+const graph = document.getElementById("graph");
+graph.innerHTML = svg;
+const reach = (id, dir) => {
+  const seen = new Set([id]), stack = [id];
+  while (stack.length) {
+    const cur = stack.pop();
+    edges.forEach(([a, b]) => {
+      const next = dir === "up" ? (b === cur ? a : null) : (a === cur ? b : null);
+      if (next && !seen.has(next)) { seen.add(next); stack.push(next); }
+    });
+  }
+  return seen;
+};
+graph.querySelectorAll(".node").forEach((n) => {
+  n.onmouseenter = () => {
+    const id = n.dataset.id, keep = new Set([...reach(id, "up"), ...reach(id, "down")]);
+    graph.querySelectorAll(".node").forEach((o) => o.classList.toggle("dim", !keep.has(o.dataset.id)));
+    graph.querySelectorAll(".edge").forEach((e) => {
+      const on = keep.has(e.dataset.a) && keep.has(e.dataset.b);
+      e.classList.toggle("dim", !on); e.classList.toggle("hot", on);
+    });
+  };
+  n.onmouseleave = () => graph.querySelectorAll(".dim, .hot").forEach((e) => e.classList.remove("dim", "hot"));
+  n.onclick = () => {
+    const el = document.querySelector(`.item[data-id="${n.dataset.id}"]`);
+    if (!el) return;
+    el.closest(".module").classList.remove("collapsed");
+    el.classList.add("open"); el.scrollIntoView({ behavior: "smooth", block: "center" });
+  };
+});
+</script>
+</body>
+</html>
