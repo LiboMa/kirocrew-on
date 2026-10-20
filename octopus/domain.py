@@ -2079,7 +2079,8 @@ class Service:
                     restart_budget(db, rid, who)   # waiting for an environment is not automatic work
                     # where it now runs, as the platform would have said (D49 R5; the hint was for the old choice)
                     placed = {"kind": "own" if own(target, run["owner_id"]) else "team" if run["team_id"] else "only"}
-                    fields.update(snapshot=dumps({**json.loads(run["snapshot"]), "placement": placed}))
+                    current = json.loads(db.execute("SELECT snapshot FROM runs WHERE id=?", (rid,)).fetchone()["snapshot"])
+                    fields.update(snapshot=dumps({**current, "placement": placed}))   # after restart_budget's own write
                     if run["worker_id"] not in (None, body["worker_id"]):
                         # Another environment has no native parent of this Session: prepare there afresh (P5).
                         fields.update(worker_id=body["worker_id"], native_parent=None, workspace=None, status="preparing", error=None)
