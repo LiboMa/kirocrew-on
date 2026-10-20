@@ -197,5 +197,49 @@ class PublishProposalTests(PublishCase):
         self.assertNotIn("knowledge", record)
 
 
+class InjectionTests(unittest.TestCase):
+    """R5: a task is pointed at the repository's reviewed knowledge, on every environment."""
+    def setUp(self):
+        import tempfile
+        from pathlib import Path
+        from octopus import gateway_client
+        from octopus.worker import Worker
+        tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(tmp.cleanup)
+        self.node = Worker(Path(tmp.name) / "worker", "x" * 40, crew_home=Path(tmp.name) / "crew")
+
+        def native(path, body=None, method=None, timeout=None, headers=None):
+            if path.startswith("/api/chat/slots/octopus-") and body is None:
+                raise gateway_client.GatewayError(404, '{"error":"not found"}')
+            if path == "/api/chat/slots":
+                return {"key": body["name"]}
+            if path == "/api/spawn" and body is not None:
+                return {"id": "aaaa1111"}
+            return {"ok": True}
+        self.node.native = native
+        self.rid = "run-" + "2" * 32
+        self.node.prepare({"run_id": self.rid, "source": {"type": "new"}})
+
+    def dispatch(self):
+        from octopus import sources
+        attempt = "attempt-" + "c" * 32
+        self.node.dispatch({"run_id": self.rid, "attempt_id": attempt, "input": "需求", "upstream": [],
+                            "spec": {"id": "code", "name": "编码", "tool": "claude", "model": "auto", "effort": "", "prompt": "实现"}})
+        return (self.node.path(self.rid) / "attempts" / attempt / "instructions.md").read_text(), sources.project_dir(self.node.path(self.rid))
+
+    def test_a_task_is_pointed_at_the_reviewed_knowledge(self):
+        from octopus import sources
+        project = sources.project_dir(self.node.path(self.rid))
+        (project / ".octopus").mkdir(exist_ok=True)
+        (project / ".octopus/knowledge.md").write_text("# 项目知识\n")
+        text, project = self.dispatch()
+        self.assertIn("## 项目知识（经评审）", text)
+        self.assertIn(str(project / ".octopus/knowledge.md"), text)
+
+    def test_without_the_file_nothing_is_added(self):
+        text, _ = self.dispatch()
+        self.assertNotIn("项目知识（经评审）", text)
+
+
 if __name__ == "__main__":
     unittest.main()

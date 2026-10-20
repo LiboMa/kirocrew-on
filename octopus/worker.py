@@ -1095,6 +1095,10 @@ class Worker:
                     (folder / "skills" / (name + ".md")).write_bytes(data)
                     given.append({"name": name, "sha256": hashlib.sha256(data).hexdigest()})
                 extra_prompt += pack.method_section(contract["skills"], folder)
+            reviewed = workspace.project_dir(run) / ".octopus/knowledge.md"
+            if reviewed.is_file() and not reviewed.is_symlink():   # D52 R5: the repository's knowledge, merged by people
+                extra_prompt += (f"\n\n## 项目知识（经评审）\n{reviewed} 是经人审核合并的项目知识：开始前完整阅读并遵循；"
+                                 "与本任务契约冲突时以契约为准。")
             if body.get("design"):
                 from .designs import instructions
                 require(spec["tool"] == "kiro", "工作流设计须使用 Kiro 后端")
