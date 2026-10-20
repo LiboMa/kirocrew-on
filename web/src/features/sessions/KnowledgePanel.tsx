@@ -6,7 +6,7 @@ import type { KnowledgeItem, Run } from "@/api/types";
 import { Button } from "@/components/ui/button";
 
 const RESULTS: Record<KnowledgeItem["result"], string> = {
-  written: "已写入", superseded: "已写入（替代旧条目）", refused: "KiroCrew 未接受", skipped: "未写入",
+  written: "已写入", superseded: "已写入（替代旧条目）", refused: "KiroCrew 未接受", skipped: "未写入", kept: "仅提到仓库（发布时）",
 };
 
 function Item({ run, item, canDelete }: { run: Run; item: KnowledgeItem; canDelete: boolean }) {

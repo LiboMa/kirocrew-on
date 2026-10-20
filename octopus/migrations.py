@@ -138,9 +138,24 @@ CREATE INDEX IF NOT EXISTS knowledge_run ON knowledge(run_id);
 CREATE INDEX IF NOT EXISTS knowledge_repo ON knowledge(worker_id,repo);
 """
 
+# D52 R4: an item gathered on a shared environment is kept for the repository's reviewed knowledge only ('kept'); SQLite
+# cannot widen a CHECK in place, so the table is rebuilt with its rows and indexes.
+KNOWLEDGE_KEPT = """
+CREATE TABLE knowledge_next(
+ id TEXT PRIMARY KEY, run_id TEXT NOT NULL REFERENCES runs(id), task_id TEXT NOT NULL,
+ worker_id TEXT NOT NULL REFERENCES workers(id), repo TEXT NOT NULL, rule TEXT NOT NULL, avoid TEXT,
+ result TEXT NOT NULL CHECK(result IN ('written','refused','superseded','skipped','kept')), reason TEXT, created REAL NOT NULL,
+ removed REAL, removed_by TEXT REFERENCES users(id));
+INSERT INTO knowledge_next SELECT id,run_id,task_id,worker_id,repo,rule,avoid,result,reason,created,removed,removed_by FROM knowledge;
+DROP TABLE knowledge;
+ALTER TABLE knowledge_next RENAME TO knowledge;
+CREATE INDEX IF NOT EXISTS knowledge_run ON knowledge(run_id);
+CREATE INDEX IF NOT EXISTS knowledge_repo ON knowledge(worker_id,repo);
+"""
+
 MIGRATIONS = [(1, "baseline", BASELINE), (2, "environments", ENVIRONMENTS), (3, "access", ACCESS),
               (4, "teams_workers", TEAMS_WORKERS), (5, "apps", APPS), (6, "credentials", CREDENTIALS),
-              (7, "knowledge", KNOWLEDGE)]
+              (7, "knowledge", KNOWLEDGE), (8, "knowledge_kept", KNOWLEDGE_KEPT)]
 
 
 def _statements(script):

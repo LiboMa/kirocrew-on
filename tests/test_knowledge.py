@@ -90,8 +90,8 @@ class ScopeTests(KnowledgeCase):
         self.assertTrue(self.work())
         self.assertEqual({b.get("lessons") for b in self.work()}, {True})
 
-    def test_shared_new_or_unsupported_sessions_gather_nothing(self):
-        cases = {"shared": (CAPS, "shared", SOURCE), "new source": (CAPS, "dedicated", {"type": "new"}),
+    def test_new_or_unsupported_sessions_gather_nothing(self):   # a shared environment gathers for the repository (D52)
+        cases = {"new source": (CAPS, "dedicated", {"type": "new"}),
                  "older Worker": (CAPABILITIES, "dedicated", SOURCE)}
         for name, (capabilities, scope, source) in cases.items():
             with self.subTest(name):
@@ -105,11 +105,11 @@ class ScopeTests(KnowledgeCase):
                 self.assertNotIn("knowledge", self.tasks(run))
                 self.assertEqual(self.writes, [])
 
-    def test_a_shared_session_says_it_gathers_nothing(self):
+    def test_a_shared_session_says_its_items_go_to_the_repository_only(self):   # D52 R4
         self.configure(CAPS, "shared")
         _, run = self.run_()
-        self.assertEqual(run["knowledge"]["note"], "共享执行环境不沉淀、不注入知识")
-        self.assertEqual(run["knowledge"]["items"], [])
+        self.assertEqual(run["knowledge"]["note"], knowledge.SHARED)
+        self.assertEqual({i["result"] for i in run["knowledge"]["items"]}, {"kept"})
 
     def test_older_contracts_do_not_apply(self):
         self.assertFalse(knowledge.applies({"execution_contract": 3}, SOURCE, "dedicated", {"capabilities": CAPS}))
@@ -123,7 +123,7 @@ class ScopeTests(KnowledgeCase):
         run = self.tick(rid)
         self.assertEqual(run["status"], "completed")
         self.assertEqual({b.get("lessons") for b in self.work()}, {None})
-        self.assertNotIn("knowledge", self.tasks(run))
+        self.assertEqual(self.writes, [])   # gathered for the repository only (D52 R4)
 
 
 class KeyTests(unittest.TestCase):
@@ -404,7 +404,9 @@ class StatusTests(KnowledgeCase):
         from octopus import mcp
         self.configure(CAPS, "shared")
         _, run = self.run_()
-        self.assertEqual(mcp.compact_status(run, [])["session"]["knowledge"], {"note": "共享执行环境不沉淀、不注入知识", "items": []})
+        view = mcp.compact_status(run, [])["session"]["knowledge"]   # D52 R4: kept for the repository only
+        self.assertEqual(view["note"], knowledge.SHARED)
+        self.assertEqual([(i["result"], i["reason"]) for i in view["items"]], [("kept", knowledge.KEPT)] * 2)
 
 
 class ForgetTests(KnowledgeCase):

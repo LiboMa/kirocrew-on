@@ -305,7 +305,9 @@ class Engine:
             keep, rest = ((), ()) if skipped else knowledge.items(
                 evidence.get("outcome"), knowledge.known(db, run["worker_id"], repo) if repo else ())
         results = []
-        if keep and repo:
+        if keep and run.get("worker_scope") == "shared":   # D52 R4: for the repository's reviewed knowledge only
+            results = [{"result": "kept", "reason": knowledge.KEPT} for _ in keep]
+        elif keep and repo:
             try:
                 # the Worker writes the items one by one, up to 30 s each (gateway_client.request)
                 answer = self.request(config, "/knowledge/write", {"run_id": rid, "scope": repo, "items": keep},
@@ -329,7 +331,7 @@ class Engine:
         rows = []
         for item, answer in zip(keep, results + [{}] * (len(keep) - len(results))):
             answer = answer if isinstance(answer, dict) else {}
-            result = answer.get("result") if answer.get("result") in {"written", "refused", "superseded", "skipped"} else "skipped"
+            result = answer.get("result") if answer.get("result") in {"written", "refused", "superseded", "skipped", "kept"} else "skipped"
             reason = str(answer.get("reason") or ("" if result == "written" else "执行环境未报告结果"))[:200] or None
             rows.append({**item, "result": result, "reason": reason})
         rows += rest

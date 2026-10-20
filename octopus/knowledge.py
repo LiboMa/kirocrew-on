@@ -11,7 +11,8 @@ from urllib.parse import urlsplit
 ROLE = "knowledge"
 ITEM = "列出可复用的项目知识（可为空）"
 LIMIT, RULE, AVOID = 5, 300, 200
-SHARED = "共享执行环境不沉淀、不注入知识"
+SHARED = "共享执行环境不写入、不注入 lessons：条目在发布时提到仓库的知识 PR（D52）"
+KEPT = "共享执行环境：仅在发布时提到仓库的知识 PR"
 PROMPT = ("只读阅读本会话的需求、前序任务的交接与改动，列出长期有效的项目知识（约定、决策、踩过的坑、可复用的做法），"
           "至多 5 条写入 outcome.json 的 knowledge。不写本次进度、个人信息、秘密或模型身份；没有就写空列表。不修改文件。")
 WRITERS = ("implement", "deliver")
@@ -22,6 +23,14 @@ def applies(snapshot, source, scope, config):
     capabilities = config.get("capabilities") or {}
     return (snapshot.get("execution_contract", 1) >= 4 and (source or {}).get("type") == "git" and scope == "dedicated"
             and bool(capabilities.get("role_cards")) and bool(capabilities.get("knowledge")))
+
+
+def gathers(snapshot, source, scope, config):
+    """A Knowledge task is added (D52 R4): where lessons are written (``applies``), and on a shared environment too, whose
+    items go only to the repository's reviewed knowledge when the Session is published."""
+    capabilities = config.get("capabilities") or {}
+    return (snapshot.get("execution_contract", 1) >= 4 and (source or {}).get("type") == "git" and bool(capabilities.get("role_cards"))
+            and (scope == "shared" or applies(snapshot, source, scope, config)))
 
 
 def platform(snapshot, task_id):
@@ -75,7 +84,7 @@ def append(db, rid, run, scope, config):
     rows = [dict(r) for r in db.execute("SELECT id, ordinal, spec FROM tasks WHERE run_id=? ORDER BY ordinal", (rid,))]
     tasks = [json.loads(r["spec"]) for r in rows]
     tool = _tool(config)
-    if not tool or not applies(snapshot, json.loads(run["source"]), scope, config) or not needed(tasks, added) \
+    if not tool or not gathers(snapshot, json.loads(run["source"]), scope, config) or not needed(tasks, added) \
             or not key(json.loads(run["source"]), space(run)):
         return None
     ids = {r["id"] for r in rows} | {r[0] for r in db.execute("SELECT DISTINCT task_id FROM attempts WHERE run_id=?", (rid,))} \

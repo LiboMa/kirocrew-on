@@ -120,6 +120,23 @@ class MigrationTests(unittest.TestCase):
             db.execute("INSERT INTO teams(id,name,created) VALUES('t9','新 Team',0)")
             self.assertEqual(db.execute("SELECT archived FROM teams WHERE id='t9'").fetchone()[0], 0)
 
+    def test_knowledge_migration_keeps_rows_and_takes_kept(self):   # D52 R4: items kept for the repository only
+        self.legacy_database()
+        migrations.apply(self.path, [m for m in migrations.MIGRATIONS if m[0] <= 7], backup_dir=self.backups)
+        with sqlite3.connect(self.path) as db:
+            db.execute("INSERT INTO workers(id,name,owner_id,config) VALUES('w1','w','u1','{}')")
+            db.execute("INSERT INTO runs(id,owner_id,snapshot,input,source,status,created,updated) "
+                       "VALUES('r1','u1','{}','x','{}','completed',0,0)")
+            db.execute("INSERT INTO knowledge(id,run_id,task_id,worker_id,repo,rule,result,created) "
+                       "VALUES('k1','r1','knowledge','w1','repo','依赖用 pnpm','written',0)")
+        self.assertEqual(migrations.apply(self.path, backup_dir=self.backups)["to"], LATEST)
+        with sqlite3.connect(self.path) as db:
+            self.assertEqual(db.execute("SELECT rule, result FROM knowledge").fetchall(), [("依赖用 pnpm", "written")])
+            db.execute("INSERT INTO knowledge(id,run_id,task_id,worker_id,repo,rule,result,created) "
+                       "VALUES('k2','r1','knowledge','w1','repo','接口测试','kept',0)")
+            indexes = {row[1] for row in db.execute("PRAGMA index_list(knowledge)")}
+        self.assertTrue({"knowledge_run", "knowledge_repo"} <= indexes)
+
     def test_newer_database_is_refused(self):
         self.legacy_database()
         with sqlite3.connect(self.path) as db:

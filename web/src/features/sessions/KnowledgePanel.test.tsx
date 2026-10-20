@@ -59,6 +59,13 @@ describe("knowledge panel (D46 P4)", () => {
     expect(screen.getByText("共享执行环境不沉淀、不注入知识")).toBeInTheDocument();
   });
 
+  test("on a shared environment an item is kept for the repository's knowledge only (D52)", () => {
+    show(makeRun({ knowledge: { note: "共享执行环境不写入、不注入 lessons：条目在发布时提到仓库的知识 PR（D52）",
+      items: [item({ result: "kept", reason: "共享执行环境：仅在发布时提到仓库的知识 PR" })] } }));
+    expect(screen.getByText(/^仅提到仓库（发布时）/)).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "删除" })).not.toBeInTheDocument();   // no lesson to delete
+  });
+
   test("a Session without knowledge shows no panel", () => {
     show(makeRun({ knowledge: null }));
     expect(screen.queryByRole("region", { name: "本次沉淀的知识" })).not.toBeInTheDocument();

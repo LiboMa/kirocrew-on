@@ -252,7 +252,7 @@ export interface KnowledgeItem {
   task_id: string;
   rule: string;
   avoid: string | null;
-  result: "written" | "refused" | "superseded" | "skipped";
+  result: "written" | "refused" | "superseded" | "skipped" | "kept";
   reason: string | null;
   created: number;
   removed: number | null;
