@@ -42,7 +42,7 @@ export const EVENT_LABELS: Record<string, string> = {
   "run.awaiting_confirmation": "计划待确认", "command.confirm": "收到确认请求", "run.confirmed": "已确认计划",
   "run.publish_auto": "自动发布", "run.publish_policy": "发布设置已修改", "run.published": "已发布到仓库", "run.repository": "已新建仓库", "run.repository_used": "发布到已有的空仓库",
   "run.awaiting_acceptance": "验收待确认", "run.accepted": "已确认验收", "command.accept": "收到验收确认", "run.evaluator": "平台追加 Evaluator",
-  "task.steered": "已补充说明", "run.knowledge_task": "平台追加 Knowledge 沉淀", "run.knowledge": "沉淀项目知识", "run.knowledge_forgotten": "已删除沉淀的知识",
+  "task.steered": "已补充说明", "run.knowledge_task": "平台追加 Knowledge 沉淀", "run.knowledge": "沉淀项目知识", "run.knowledge_forgotten": "已删除沉淀的知识", "run.knowledge_proposed": "提出仓库知识",
   "run.credentials": "凭证已更换", "run.downloaded": "已下载源码", "run.planning": "需求已改，原规划已过期",
   "run.budget": "等待时间不计入预算", "session.reopen": "原生会话已重新打开", "app.started": "远程预览已启动",
   "app.stopped": "远程预览已停止", "approval.answered": "已答复工具审批", "attempt.checking": "正在运行检查命令",

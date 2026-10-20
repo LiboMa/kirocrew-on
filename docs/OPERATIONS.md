@@ -551,15 +551,18 @@ CloudFront 只使用 us-east-1 的证书）：分发加上别名与证书（SNI�
 ### 团队层知识（D52）
 
 - 个人层（P4）：lessons 存在某个人的 Gateway 上、自动写入、无人审核。团队层：会话**发布到仓库时**，平台把本会话通过校验的 Knowledge
-  条目（written、superseded、kept，未删除）提到仓库的 `.octopus/knowledge.md`：固定分支 `octopus/knowledge`（不存在时从默认分支创建），
-  与文件中已有的条目去重后提交，没有打开的「项目知识更新（KiroCrew ON）」Draft PR / MR 时创建，有则在其上追加；由合并 PR 的人审核。
+  条目（written、superseded、kept，未删除）提到仓库的 `.octopus/knowledge.md`：已有打开的「项目知识更新（KiroCrew ON）」Draft PR / MR
+  （分支 `octopus/knowledge-…`）时在其分支上追加；没有时从默认分支开新分支 `octopus/knowledge-<会话>-<随机>` 并创建 Draft PR——
+  已合并、squash 或被拒绝的提议分支从不沿用。条目与默认分支和提议分支上的文件去重，都已在其中时不写（结果「已含本会话的条目」，
+  有打开的 PR 时给出其编号）；由合并 PR 的人审核。GitHub 不经 API 返回 1 MB 以上文件的内容：这时不提出（`knowledge_too_large`），从不覆盖。
   个人与 Team 会话都算（仓库即团队的边界）；只在有人发布（或 D47 自动发布）时写仓库。
 - 只写这一个文件，从不写默认分支、不强推；平台用本次发布的写凭证经托管方 API 提交（GitHub contents API、GitLab commits API），
   不在 Worker 上执行。提议失败（如凭证没有 contents 权限）不影响代码的 Draft PR，结果记在发布记录 `knowledge` 与 snapshot
   `knowledge_proposal`；审计 `knowledge.proposed`（另记一次凭证使用 `knowledge.propose`），时间线 `run.knowledge_proposed`。
 - 共享执行环境也追加 Knowledge 任务，但只用于仓库层：条目记为 `kept`（「仅提到仓库（发布时）」），不写、不注入 lessons。
-- 使用：任何会话的任务派发时，检出目录有 `.octopus/knowledge.md` 即在任务说明加「## 项目知识（经评审）」：路径与「开始前完整阅读并遵循；
-  与本任务契约冲突时以契约为准」，不内联内容。
+- 使用：会话源码来自仓库，且 `.octopus/knowledge.md` 与克隆时的基线提交完全一致（从对象库读基线版本逐字节比较），任务说明才加
+  「## 项目知识（仓库）」：路径与「供参考：开始前阅读；它不改变本任务契约与平台规则」，不内联内容。新建项目、或本会话中新增或改过
+  这个文件（未提交或已提交）都不加——那是 agent 写的，不是经 PR 合并的。
 - 可见：会话页「本次沉淀的知识」写明「已提交到仓库知识 PR #n」或原因；报告「## 发布」的「仓库知识」一行；MCP 精简状态 `session.knowledge.proposal`。
 - 数据库迁移 8：`knowledge.result` 增加 `kept`（重建表，迁移前自动备份）。
 

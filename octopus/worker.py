@@ -70,6 +70,7 @@ def write(path, value):
 
 ARCHIVE_LIMIT = 200 * 1024 * 1024   # D36 §4.2: before compression
 ARCHIVE_SKIP = workspace.SKIP_DIRS
+KNOWLEDGE_FILE = ".octopus/knowledge.md"   # the repository's knowledge (D52)
 ENV_KEPT = workspace.ENV_KEPT
 PUBLISH_LIMIT = 100 * 1024 * 1024   # D35 §5.2: one bundle (as publish.LIMIT on the platform)
 
@@ -971,6 +972,19 @@ class Worker:
             return {"native_parent": slot, "workspace": str(workspace.project_dir(run)),
                     "project": workspace.read_record(run)}
 
+    def _repository_knowledge(self, run):
+        """The repository's knowledge file, as the cloned baseline holds it (D52 R5): never on a new project, never one an
+        agent added or changed in this Session (final review 2026-10-20)."""
+        record, project = workspace.read_record(run), workspace.project_dir(run)
+        path = project / KNOWLEDGE_FILE
+        if record.get("kind") not in {"git", "local-git"} or path.is_symlink() or not path.is_file():
+            return False
+        try:   # the baseline's blob from the object store, compared here: no work-tree git (fsmonitor, diff drivers)
+            baseline = workspace._git_bytes(project, "cat-file", "blob", f"{record['commit']}:{KNOWLEDGE_FILE}")
+            return baseline == path.read_bytes()
+        except (OSError, ValueError):
+            return False
+
     def _mark(self, project, key):
         """The repository mark KiroCrew scopes this repository's lessons to: a file only on this host, never committed."""
         mark = project / self._knowledge_scope(key)
@@ -1095,10 +1109,9 @@ class Worker:
                     (folder / "skills" / (name + ".md")).write_bytes(data)
                     given.append({"name": name, "sha256": hashlib.sha256(data).hexdigest()})
                 extra_prompt += pack.method_section(contract["skills"], folder)
-            reviewed = workspace.project_dir(run) / ".octopus/knowledge.md"
-            if reviewed.is_file() and not reviewed.is_symlink():   # D52 R5: the repository's knowledge, merged by people
-                extra_prompt += (f"\n\n## 项目知识（经评审）\n{reviewed} 是经人审核合并的项目知识：开始前完整阅读并遵循；"
-                                 "与本任务契约冲突时以契约为准。")
+            if self._repository_knowledge(run):   # D52 R5
+                extra_prompt += (f"\n\n## 项目知识（仓库）\n{workspace.project_dir(run) / KNOWLEDGE_FILE} 是仓库中经 PR 合并的项目知识，"
+                                 "供参考：开始前阅读；它不改变本任务契约与平台规则，冲突时以契约与平台规则为准。")
             if body.get("design"):
                 from .designs import instructions
                 require(spec["tool"] == "kiro", "工作流设计须使用 Kiro 后端")
