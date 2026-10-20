@@ -137,25 +137,26 @@
         {
           "id": "p5a",
           "name": "P5a 保留上下文的返工（续接）",
-          "status": "deployed",
-          "ref": "8b7c0ed · 8a7c3f6",
+          "status": "accepted",
+          "ref": "EC2 2026-10-20",
           "deps": [
             "deploy-next"
           ],
-          "more": "续接被误判『ACP 后端未核实』已修复并在 run-9507ea17 实测通过；续接换成全局默认模型的缺陷（c9a3469）已于 e0d8791 部署，p5 验收核对模型。"
+          "more": "续接返工保留上下文、门禁通过（run-9507ea17 与 p5 验收）。续接时「自动」被解析为全局默认模型：c9a3469 后仍为 Opus，由沿用首次模型的修复解决（待部署）。"
         },
         {
           "id": "p5b",
           "name": "P5b 运行中补充说明（steer）",
-          "status": "deployed",
-          "ref": "30a377f",
+          "status": "accepted",
+          "ref": "EC2 2026-10-20",
           "more": "仅 Kiro 后端；各 Worker 报告 steer。"
         },
         {
           "id": "p6a",
           "name": "P6a 用量（credits / token / 费用 / 时长）",
-          "status": "deployed",
-          "ref": "8b7c0ed"
+          "status": "accepted",
+          "ref": "EC2 2026-10-20",
+          "more": "p5 验收：会话合计 5 个 Attempt 的 token / 费用 / 时长，报告有「## 用量」。"
         },
         {
           "id": "p6b",
@@ -221,8 +222,8 @@
         {
           "id": "d50-pack",
           "name": "技能包与任务契约 skills（规划者推荐、Worker 交付、证据 sha256）",
-          "status": "deployed",
-          "ref": "30a377f"
+          "status": "accepted",
+          "ref": "EC2 2026-10-20"
         },
         {
           "id": "d50-browser",
@@ -297,6 +298,13 @@
           "more": "2026-10-20 部署 e0d8791：D51、续接模型修复、提示修正、kiro-login 边界校验；平台主机与 w1。"
         },
         {
+          "id": "deploy-model",
+          "name": "部署：续接沿用首次模型",
+          "status": "local",
+          "ref": "e3123aa",
+          "more": "p5 验收发现 claude 的「自动」续接仍为 Opus；修复已写测试，待回归后部署。"
+        },
+        {
           "id": "retest-9507",
           "name": "重测 run-9507ea17（ACP 后端门禁）",
           "status": "accepted",
@@ -316,28 +324,33 @@
         {
           "id": "acc-p5",
           "name": "验收：续接返工 + 门禁 + 用量（P5a、P6a）",
-          "status": "doing",
+          "status": "accepted",
           "deps": [
             "creds",
             "deploy-next"
           ],
-          "ref": "进行中"
+          "ref": "EC2 2026-10-20 8/8",
+          "more": "run-e333a1eb…：审查要求修改 → code 续接上一轮对话 → identity_match 通过、routing 是本次运行的 → 会话完成；用量合计 5 个 Attempt（$0.25），报告有「## 用量」。"
         },
         {
           "id": "acc-steer",
           "name": "验收：运行中补充说明（P5b）",
-          "status": "todo",
+          "status": "accepted",
           "deps": [
             "creds"
-          ]
+          ],
+          "ref": "EC2 2026-10-20 5/5",
+          "more": "run-8090346a…：运行中的 kiro 任务收到补充说明并照做（summary 含 STEER-OK），时间线记 task.steered。"
         },
         {
           "id": "acc-d50",
           "name": "验收：界面类需求按技能交付（D50）",
-          "status": "todo",
+          "status": "accepted",
           "deps": [
             "creds"
-          ]
+          ],
+          "ref": "EC2 2026-10-20 6/6",
+          "more": "run-1fce8c23…：规划者为界面实现任务推荐 frontend-design + test-driven-development，Attempt 证据带技能 sha256，报告写「方法」。"
         },
         {
           "id": "acc-d51",
@@ -452,6 +465,10 @@
     [
       "3ad6379",
       "kiro-login 填错边界名时空等设备码（--boundary kirocrew-on）：现先核对主机上有这个边界，并列出现有边界。"
+    ],
+    [
+      "e3123aa",
+      "续接时「自动」仍被 KiroCrew 解析为全局默认（p5 验收：claude default → Opus）：改为沿用对话首次运行的模型。待部署。"
     ]
   ],
   "next": [
@@ -462,7 +479,7 @@
     },
     {
       "who": "me",
-      "text": "验收进行中：route 已通过；p5（续接 + 用量）、steer、d50 依次在 personal 上跑；kiro 登录后跑 p4 与 forget",
+      "text": "已验收：route、p5（续接 + 用量）、steer、d50；kiro 登录后跑 p4 与 forget；回归后部署续接模型修复",
       "cmd": "ACCEPT_WORKER=<personal 的 worker id> ~/.kc-work/accept_d49_p4_p5.py https://d1atltv3sl7jdu.cloudfront.net <阶段>"
     },
     {
