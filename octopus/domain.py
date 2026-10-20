@@ -1469,24 +1469,54 @@ class Service:
                                               f"由 KiroCrew ON 会话 {rid} 发布。", secret)
         except Error as exc:
             failure = exc
+        proposal = self._propose_knowledge(rid, source, row["kind"], host, path, secret)   # D52, never the publish's failure
         record = {"branch": branch, "commit": commit, "url": request["url"], "number": request["number"],
                   "kind": request["kind"], "reused": request["reused"], "created_branch": pushed["created"], "at": time.time(),
-                  "by": {"id": actor["id"], "username": actor.get("username")}, **({"request_error": str(failure)} if failure else {})}
+                  "by": {"id": actor["id"], "username": actor.get("username")}, **({"request_error": str(failure)} if failure else {}),
+                  **({"knowledge": proposal} if proposal else {})}
         with self.db.transaction() as db:
             snapshot = json.loads(db.execute("SELECT snapshot FROM runs WHERE id=?", (rid,)).fetchone()["snapshot"])
             if source.get("type") != "git":   # D48: where the new project went
                 record["repository"] = (snapshot.get("publish_target") or {}).get("web") or f"https://{host}/{path}"
             snapshot["publish"] = record
+            if proposal:   # D52: the repository's knowledge proposal of this publish
+                snapshot["knowledge_proposal"] = {**proposal, "at": time.time()}
             journal.change(db, "runs", rid, journal.person(actor), "run.published",
                            event={**{k: record[k] for k in ("branch", "commit", "url", "number", "reused")},
                                   "request": record["kind"], **({"error": record["request_error"]} if failure else {}),
                                   **({"repository": record["repository"]} if record.get("repository") else {})},
                            snapshot=dumps(snapshot))
             self._used(db, actor, row["id"], rid, path, branch, "pushed" if failure else "published")
+            if proposal:
+                from .knowledge_repo import BRANCH
+                summary = {k: proposal[k] for k in ("result", "items", "url", "number", "code") if k in proposal}
+                journal.record(db, rid, "run.knowledge_proposed", journal.person(actor),
+                               {"proposed": f"已提到仓库知识 PR #{proposal.get('number')}", "unchanged": "仓库知识已含这些条目",
+                                "failed": "仓库知识未提出：" + str(proposal.get("reason", ""))[:160]}[proposal["result"]], **summary)
+                audit(db, actor, "knowledge.proposed", "run", rid, summary)
+                if proposal["result"] != "unchanged":
+                    self._used(db, actor, row["id"], rid, path, BRANCH, proposal["result"], action="knowledge.propose")
         if failure:
             what = "Draft PR" if row["kind"] == "github_pat" else "Draft MR"
             raise Error(failure.status, failure.code, f"分支 {branch} 已推送，但 {what} 未创建：{failure}。处理后再次发布即可（沿用该分支）")
         return record
+
+    def _propose_knowledge(self, rid, source, kind, host, path, secret):
+        """D52: this Session's Knowledge items (written, superseded or kept, not removed) proposed to the repository's
+        reviewed knowledge; None without items. A refusal is recorded, never raised: the code's request stands."""
+        from . import knowledge_repo
+        with self.db.read() as db:
+            items = [{"rule": r["rule"], **({"avoid": r["avoid"]} if r["avoid"] else {})} for r in db.execute(
+                "SELECT rule, avoid FROM knowledge WHERE run_id=? AND removed IS NULL AND result IN ('written','superseded','kept') "
+                "ORDER BY created, rowid", (rid,))]
+        if not items or source.get("type") != "git":
+            return None
+        try:
+            return knowledge_repo.propose(kind, host, path, items, rid, secret)
+        except Error as exc:
+            return {"result": "failed", "code": exc.code, "reason": str(exc)[:300]}
+        except Exception as exc:   # an unexpected answer from the host
+            return {"result": "failed", "code": "publish_failed", "reason": type(exc).__name__}
 
     @staticmethod
     def _used(db, actor, credential, rid, repo, branch, result, action=None):
