@@ -392,9 +392,9 @@
         {
           "id": "scan",
           "name": "推送前安全扫描（git-defender）",
-          "status": "doing",
-          "ref": "最终提交待扫描",
-          "more": "最终提交需再扫一次。"
+          "status": "accepted",
+          "ref": "c36ebad",
+          "more": "2026-10-20 干净克隆 feat/m11-gates（c36ebad）：git-defender scan 与 scan-history 都是 No secrets found。"
         },
         {
           "id": "confirm",
@@ -496,10 +496,6 @@
     {
       "who": "owner",
       "text": "D52 EC2 验收：指定一个可写入的测试仓库与写凭证（会在其上开 octopus/knowledge-… 分支与 Draft PR）"
-    },
-    {
-      "who": "me",
-      "text": "对最终提交做推送前安全扫描（git-defender scan + scan-history，干净克隆）"
     },
     {
       "who": "owner",
