@@ -166,7 +166,7 @@ You MUST complete each phase before proceeding to the next.
 4. **When You Don't Know**
    - Say "I don't understand X"
    - Don't pretend to know
-   - Ask for help
+   - Write `decision: "blocked"` in outcome.json with the question in findings (the platform passes it to the user)
    - Research more
 
 ### Phase 4: Implementation

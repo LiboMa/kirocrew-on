@@ -28,7 +28,7 @@ class PackTests(unittest.TestCase):
                 self.assertGreater(len(body), 1500)
 
     def test_no_skill_tells_a_task_to_commit_open_worktrees_or_ask(self):
-        forbidden = re.compile(r"git commit|git push|git worktree|using-git-worktrees|human partner|your partner|docs/superpowers|问用户|询问用户|ask the user",
+        forbidden = re.compile(r"git commit|git push|git worktree|using-git-worktrees|human partner|your partner|docs/superpowers|问用户|询问用户|ask the user|ask for help",
                                re.I)
         for name in NAMES:
             with self.subTest(name):

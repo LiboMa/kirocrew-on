@@ -83,6 +83,12 @@ def continuation(previous, attempt, spec, repair, changed):
     chain = (json.loads(previous.get("evidence") or "{}").get("continued") or {}).get("conversation")
     return {"conversation": chain or previous["native_id"], "from": previous["id"]}
 
+
+def refused(resumed):
+    """The timeline's reason when the Worker could not continue the conversation (D46 P5a): the rework starts afresh."""
+    code = resumed.get("continue_refused")
+    return f"未能续接上一轮对话（{str(code)[:120]}），本轮从新对话开始" if code else None
+
 class Engine:
     def __init__(self, database, request=worker_request, workers=1, retry_unavailable=0.0, clock=time.monotonic,
                  credentials_key_file=None, credentials_private_hosts=(), wall=time.time, poll_backoff=False):
@@ -968,7 +974,7 @@ class Engine:
             state = result["status"]
             resumed = {k: result[k] for k in ("continued", "continue_refused") if result.get(k)}
             with self.db.transaction() as db:
-                journal.change(db, "attempts", attempt["id"], journal.WORKER, "attempt.dispatched",
+                journal.change(db, "attempts", attempt["id"], journal.WORKER, "attempt.dispatched", refused(resumed),
                                event={"id": attempt["id"], "task_id": task["id"], "status": state, **resumed},
                                status=state, native_id=result.get("native_id"), context_hash=result.get("context_hash"),
                                error=result.get("error"), updated=time.time(),
@@ -991,7 +997,7 @@ class Engine:
         if not native:
             resumed = {k: result[k] for k in ("continued", "continue_refused") if result.get(k)}   # a reconciled dispatch
             with self.db.transaction() as db:
-                journal.change(db, "attempts", attempt["id"], journal.WORKER, "attempt.running",
+                journal.change(db, "attempts", attempt["id"], journal.WORKER, "attempt.running", refused(resumed),
                                status="running", native_id=result["native_id"],
                                **({"evidence": dumps({**json.loads(attempt["evidence"] or "{}"), **resumed})} if resumed else {}))
             self.update(rid, "running", actor=journal.WORKER)

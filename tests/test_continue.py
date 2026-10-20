@@ -24,6 +24,7 @@ class ContinueCase(ConfirmationCase):
                        (dumps({"url": "fixture", "token": "fixture", "capabilities": capabilities}),))
 
     lost = False
+    refused = None   # what a Worker answers when it cannot continue the conversation
 
     def request(self, config, path, body, **kwargs):
         if path == "/dispatch" and body.get("continue") and self.lost:
@@ -36,8 +37,8 @@ class ContinueCase(ConfirmationCase):
             return {"status": "running", "native_id": body["attempt_id"][-8:], "reconciled": True,
                     "continued": resumed["continue"]}
         result = super().request(config, path, body, **kwargs)
-        if path == "/dispatch" and body.get("continue"):
-            result = {**result, "continued": body["continue"]}   # what a Worker of D46 P5a answers
+        if path == "/dispatch" and body.get("continue"):   # what a Worker of D46 P5a answers
+            result = {**result, **({"continue_refused": self.refused} if self.refused else {"continued": body["continue"]})}
         return result
 
     def attempts(self, rid, task):
@@ -103,6 +104,17 @@ class FlowTests(ContinueCase):
         text = report.markdown(run)
         self.assertIn("续接上一轮", text)
 
+
+    def test_a_refused_continue_is_explained_on_the_timeline(self):
+        self.refused = "not_this_session"
+        rid, _ = self.rework()
+        with self.db.read() as db:
+            payloads = [json.loads(r[0]) for r in db.execute("SELECT payload FROM events WHERE run_id=? AND kind='attempt.dispatched'",
+                                                             (rid,))]
+        refused = [p for p in payloads if p.get("continue_refused")]
+        self.assertEqual([p["task_id"] for p in refused], ["code", "review"])   # both reworked tasks asked to continue
+        for event in refused:
+            self.assertEqual(event.get("reason"), "未能续接上一轮对话（not_this_session），本轮从新对话开始")
 
 class RuleTests(unittest.TestCase):
     PREVIOUS = {"id": "attempt-" + "a" * 32, "native_id": "aaaa1111", "spec": json.dumps({"tool": "claude", "model": "auto", "effort": ""}),

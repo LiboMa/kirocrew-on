@@ -107,7 +107,7 @@
   `follow_up` 需由平台跟踪 KiroCrew 另起的续接运行（或改为下一次返工时附上）；claude / codex 的补充说明待 KiroCrew 支持；超时时说「送达情况未确认」；
   `queued_not_started` 单独提示；`task_id` 类型与控制字符校验、schema 的长度约束；控制台在会话刷新后保留错误、归档 Team 不显示；
   release 用短超时、记录未释放的对话；补测试（续接后的 Attempt、Team 成员 403、waiting_approval、上游 502 经平台）。
-- 时间线不说明续接被拒（只在事件内容中有 `continue_refused`）：给 `attempt.dispatched` 加原因。
+- ~~时间线不说明续接被拒（只在事件内容中有 `continue_refused`）~~（2026-10-20 修复：`attempt.dispatched` / `attempt.running` 带原因，变更记录可见）。
 - `health()["continue"]` 恒为 true：前置的 KiroCrew 早于 0.10 时每次返工都记 `continue_refused: HTTP 404`，可与接受的 KiroCrew 版本挂钩。
 - `from` 只校验格式，未核对它的 dispatch.json 确有该对话。
 - 原生错误或看门狗停止之后的返工也会续接坏掉的那个对话：可只在质量类失败（implementation、gate、contract、findings）后续接。
@@ -122,7 +122,7 @@
 - 边界在 `kiro-login --boundary` 之前就登记并开始接收此人的会话（Kiro 任务等待登录）：可先以停用状态登记、登录后启用。
 - 每次 `push` 都 enable 每个边界（有意停掉的边界会回来）；`push` 与 `boundary add` 之间没有 `flock`；`toml_set` 迁移只作用于主边界配置；
   库的变量名（ETC、DATA、SYSTEMD）过于通用。
-- 测试缺口：Team 会话不受 R6 影响；登记测试 patch 了 `validate_worker`（与 personal 的 host_principal 交叉检查未覆盖）；`boundary.sh` 不在 `bash -n` 列表。
+- 测试缺口：Team 会话不受 R6 影响；登记测试 patch 了 `validate_worker`（与 personal 的 host_principal 交叉检查未覆盖）；~~`boundary.sh` 不在 `bash -n` 列表~~（2026-10-20 已加入）。
 - 边界的移除目前为手工步骤（OPERATIONS）：可加 `deploy.sh boundary remove`。
 
 ## D46 P4 Knowledge 的终审延后项（2026-10-19）
@@ -136,14 +136,14 @@
 - `_mark` 不拒绝符号链接的标记文件（仓库提交了 `.octopus-kb/<key>` 符号链接时 `touch` 会跟随）。
 - 测试缺口：共享 → 专属（改派后重新准备写标记、`lessons: true`）、第二个 Knowledge 任务的写入。
 - OPERATIONS「专属环境内属于同一空间」没有考虑先共享、后改为专属的 Worker（带着当时的 KiroCrew 自动 lessons）。
-- 控制台：任务已完成而没有可沉淀的条目时仍写「Knowledge 任务完成后…」；`steps()` 接受用户提交的 `role: knowledge`（不沉淀）；
+- 控制台：~~任务已完成而没有可沉淀的条目时仍写「Knowledge 任务完成后…」~~（2026-10-20 修复）；`steps()` 接受用户提交的 `role: knowledge`（不沉淀）；
   KiroCrew 报告替代了旧条目时，旧的台账行仍为 written；会话删除后其写入的 lessons 只能在 KiroCrew 中删除（没有执行环境级的列表）。
 
 ## D50 编码技能包的终审延后项（2026-10-19）
 - ~~报告：Attempt 证据里的 `skills` 不是列表（如被改坏的 dispatch.json）时 `report._attempt` 抛 TypeError~~（2026-10-20 修复）。
 - 重新规划的提示最长约 7838 / 8000 字符（各输入取上限时）：技能包再加两三个技能就会超出 Worker 的上限，可为重新规划用精简目录。
 - 任务卡片与 MCP 精简状态显示的是计划的 `skills`（旧 Worker 未交付时也显示）；报告取证据，是实际交付的——OPERATIONS 已写明，可在卡片上区分。
-- `systematic-debugging` 的 SKILL.md 仍有一处「Ask for help」：改编说明已覆盖（写 blocked），可直接替换为平台的说法。
+- ~~`systematic-debugging` 的 SKILL.md 仍有一处「Ask for help」~~（2026-10-20 修复：改为写 blocked，测试禁止该说法）。
 - 丢失回执的重派发跨 Worker 升级时（请求体多了 `skills`）按请求散列判为 409 conflict：与 `role_cards` 同一个已有问题。
 - 以后（规格 §3）：KiroCrew builtin skill 按后端评估后纳入；返工自动附 `systematic-debugging` / `receiving-code-review`（需负责人认可）；
   要求交接写明读过的技能（使用证据）。

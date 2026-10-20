@@ -13,7 +13,7 @@ export interface Step {
   /** Optional task contract (D34): what the task delivers and how it is checked. */
   kind?: "implement" | "review" | "test" | "deliver" | "design";
   /** D46 P2: the role the task's Agent works in (its card); kind decides the gates. */
-  role?: "spec" | "sde" | "integration_test" | "security_test" | "challenge" | "evaluator";
+  role?: "spec" | "sde" | "integration_test" | "security_test" | "challenge" | "evaluator" | "knowledge";
   deliverables?: string[];
   acceptance?: string[];
   verify?: string[];

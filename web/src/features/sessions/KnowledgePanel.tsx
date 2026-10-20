@@ -68,11 +68,14 @@ export function KnowledgePanel({ run }: { run: Run }) {
   const value = run.knowledge;
   if (!value) return null;
   const canDelete = run.permissions?.publish !== false;
+  const done = run.tasks.some((t) => t.spec.role === "knowledge" && t.status === "accepted");
   return (
     <section aria-label="本次沉淀的知识" className="space-y-2 rounded-xl border bg-card p-4">
       <h2 className="text-sm font-semibold">本次沉淀的知识</h2>
       {value.note ? <p className="text-xs text-muted-foreground">{value.note}</p> : !value.items.length ? (
-        <p className="text-xs text-muted-foreground">Knowledge 任务完成后，在此列出写入执行环境的项目知识；同一仓库今后的任务会收到这些知识。</p>
+        <p className="text-xs text-muted-foreground">{done
+          ? "Knowledge 任务已完成：本次没有可沉淀的项目知识。"
+          : "Knowledge 任务完成后，在此列出写入执行环境的项目知识；同一仓库今后的任务会收到这些知识。"}</p>
       ) : <p className="text-xs text-muted-foreground">已写入的条目，同一仓库今后的任务会收到；删除后不再提供。</p>}
       {!!value.items.length && (
         <ul className="space-y-2">{value.items.map((item) => <Item key={item.id} run={run} item={item} canDelete={canDelete} />)}</ul>

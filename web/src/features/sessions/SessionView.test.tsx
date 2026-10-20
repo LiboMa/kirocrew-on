@@ -55,6 +55,14 @@ describe("session detail", () => {
     expect(within(panel).getByText("依赖用 pnpm 安装")).toBeInTheDocument();
   });
 
+  test("a finished Knowledge task with nothing to keep says so (D46 P4)", async () => {
+    const knowledgeTask = { id: "knowledge", run_id: "run-k0", ordinal: 1, status: "accepted", current_attempt: null,
+      spec: { ...spec("knowledge", "沉淀项目知识", "claude"), kind: "design", role: "knowledge" }, attempts: [] };
+    open(makeRun({ id: "run-k0", status: "completed", tasks: [knowledgeTask], knowledge: { note: null, items: [] } } as Partial<Run>));
+    const panel = await screen.findByRole("region", { name: "本次沉淀的知识" });
+    expect(within(panel).getByText("Knowledge 任务已完成：本次没有可沉淀的项目知识。")).toBeInTheDocument();
+  });
+
   test("names the methods a task works by (D50)", async () => {
     const skilled = { ...spec("code", "实现界面", "claude"), skills: ["frontend-design", "test-driven-development"] };
     open(makeRun({ id: "run-m", status: "running", tasks: [

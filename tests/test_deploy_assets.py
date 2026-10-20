@@ -216,7 +216,7 @@ class ScriptTests(unittest.TestCase):
             self.assertIn(part, block)
 
     def test_scripts_are_valid_bash_without_mac_assumptions(self):
-        for name in ("deploy/install/al2023.sh", "deploy/install/boundary-lib.sh", "deploy/aws/deploy.sh"):
+        for name in ("deploy/install/al2023.sh", "deploy/install/boundary-lib.sh", "deploy/install/boundary.sh", "deploy/aws/deploy.sh"):
             script = ROOT / name
             subprocess.run(["bash", "-n", str(script)], check=True)
             text = script.read_text()
