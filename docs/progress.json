@@ -1,6 +1,6 @@
 {
   "_comment": "进度看板与 docs/PROGRESS.md 的唯一数据源：任务状态在这里维护；提交记录由 tools/progress.py 从 git 生成（负责人 2026-10-20）。",
-  "checks": "1333 后端 + 195 控制台（0eca0b9）；EC2 运行 e0d8791",
+  "checks": "1341 后端 + 195 控制台（e3123aa）；EC2 运行 78639f0",
   "status": {
     "accepted": {
       "label": "已验收",
@@ -142,7 +142,7 @@
           "deps": [
             "deploy-next"
           ],
-          "more": "续接返工保留上下文、门禁通过（run-9507ea17 与 p5 验收）。续接时「自动」被解析为全局默认模型：c9a3469 后仍为 Opus，由沿用首次模型的修复解决（待部署）。"
+          "more": "续接返工保留上下文、门禁通过（run-9507ea17、p5 两次验收）；续接沿用首次运行的模型（e3123aa，p5 重跑核实 default → default）。"
         },
         {
           "id": "p5b",
@@ -243,7 +243,7 @@
         {
           "id": "d51-ui",
           "name": "模型下拉（自动时列出全部、跟随执行环境、未公布标明）",
-          "status": "deployed",
+          "status": "accepted",
           "ref": "092a19a",
           "deps": [
             "deploy-next"
@@ -252,17 +252,17 @@
         {
           "id": "d51-disc",
           "name": "模型自动发现（kiro 走目录 API，claude 一轮探测，至多 3 次）",
-          "status": "deployed",
+          "status": "accepted",
           "ref": "71d9467 · 0eca0b9",
           "deps": [
             "deploy-next"
           ],
-          "more": "部署后无人操作：owner 的 claude 探测一次即写入 14 个模型（2026-10-20 03:46 UTC）；kiro 待 owner 登录后由目录 API 取得。"
+          "more": "EC2 实测：claude 一轮探测、kiro 目录 API，各 1 次即 found；codex 显示「自动（openai.gpt-6-astra）」。"
         },
         {
           "id": "d51-codex",
           "name": "codex 显示『自动』实际对应的模型",
-          "status": "deployed",
+          "status": "accepted",
           "ref": "71d9467",
           "deps": [
             "deploy-next"
@@ -286,9 +286,9 @@
         {
           "id": "kiro-owner",
           "name": "owner 边界 kiro 登录",
-          "status": "blocked",
-          "ref": "负责人",
-          "more": "P4 验收、owner 上的 kiro 任务与 kiro 模型列表都依赖它。"
+          "status": "accepted",
+          "ref": "2026-10-20",
+          "more": "负责人已登录 owner 边界的 kiro。"
         },
         {
           "id": "deploy-next",
@@ -300,9 +300,9 @@
         {
           "id": "deploy-model",
           "name": "部署：续接沿用首次模型",
-          "status": "local",
-          "ref": "e3123aa",
-          "more": "p5 验收发现 claude 的「自动」续接仍为 Opus；修复已写测试，待回归后部署。"
+          "status": "accepted",
+          "ref": "78639f0 已部署",
+          "more": "p5 重跑 8/8（run-0b7adfdd…）：claude 续接返工请求与实际模型均为 default，与首次运行一致。"
         },
         {
           "id": "retest-9507",
@@ -355,20 +355,23 @@
         {
           "id": "acc-d51",
           "name": "验收：owner 上自动出现模型列表（D51）",
-          "status": "todo",
+          "status": "accepted",
           "deps": [
             "deploy-next",
             "kiro-owner"
-          ]
+          ],
+          "ref": "EC2 2026-10-20",
+          "more": "部署后无人操作：owner 的 claude 一次探测得到列表，kiro 登录后经目录 API 一次取得 20 个；平台与控制台随健康检查带上。"
         },
         {
           "id": "acc-p4",
           "name": "验收：Knowledge 写入 / 注入 / 删除（P4）",
-          "status": "todo",
+          "status": "doing",
           "deps": [
             "kiro-owner",
             "creds"
-          ]
+          ],
+          "ref": "进行中"
         },
         {
           "id": "scan",
@@ -440,7 +443,7 @@
     ],
     [
       "c9a3469",
-      "续接时不带模型，KiroCrew 换成全局默认（Opus）：claude 的 default 变 Opus、codex 被要求用 Claude 模型。待部署。"
+      "续接时不带模型，KiroCrew 换成全局默认（Opus）：claude 的 default 变 Opus、codex 被要求用 Claude 模型。已部署，p5 重跑核实。"
     ],
     [
       "d9f57c3",
@@ -468,18 +471,13 @@
     ],
     [
       "e3123aa",
-      "续接时「自动」仍被 KiroCrew 解析为全局默认（p5 验收：claude default → Opus）：改为沿用对话首次运行的模型。待部署。"
+      "续接时「自动」仍被 KiroCrew 解析为全局默认（p5 验收：claude default → Opus）：改为沿用对话首次运行的模型。已部署，p5 重跑核实。"
     ]
   ],
   "next": [
     {
-      "who": "owner",
-      "text": "登录 owner 边界的 kiro（解锁 P4 验收、owner 上的 kiro 任务与模型列表）",
-      "cmd": "! cd /tmp/kc-deploy.d47 && bash deploy/aws/deploy.sh kiro-login --boundary owner"
-    },
-    {
       "who": "me",
-      "text": "已验收：route、p5（续接 + 用量）、steer、d50；kiro 登录后跑 p4 与 forget；回归后部署续接模型修复",
+      "text": "已验收：route、p5、steer、d50、D51；P4 Knowledge 验收进行中（owner 边界），随后 forget",
       "cmd": "ACCEPT_WORKER=<personal 的 worker id> ~/.kc-work/accept_d49_p4_p5.py https://d1atltv3sl7jdu.cloudfront.net <阶段>"
     },
     {
