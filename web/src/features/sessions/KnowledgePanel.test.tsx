@@ -66,6 +66,18 @@ describe("knowledge panel (D46 P4)", () => {
     expect(screen.queryByRole("button", { name: "删除" })).not.toBeInTheDocument();   // no lesson to delete
   });
 
+  test("the repository's knowledge proposal is linked, or why there is none (D52)", () => {
+    show(makeRun({ knowledge: { note: null, items: [item()], proposal: { result: "proposed", url: "https://github.com/o/r/pull/9",
+      number: 9, kind: "pull_request", items: 1 } } }));
+    expect(screen.getByRole("link", { name: "PR #9" })).toHaveAttribute("href", "https://github.com/o/r/pull/9");
+    expect(screen.getByText(/已提交到仓库知识/)).toBeInTheDocument();
+  });
+
+  test("a refused proposal says why (D52)", () => {
+    show(makeRun({ knowledge: { note: null, items: [item()], proposal: { result: "failed", reason: "凭证没有此操作的权限" } } }));
+    expect(screen.getByText(/仓库知识未提出：凭证没有此操作的权限/)).toBeInTheDocument();
+  });
+
   test("a Session without knowledge shows no panel", () => {
     show(makeRun({ knowledge: null }));
     expect(screen.queryByRole("region", { name: "本次沉淀的知识" })).not.toBeInTheDocument();

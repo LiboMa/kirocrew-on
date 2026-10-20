@@ -278,13 +278,24 @@ export interface Placement {
   options: PlacementOption[];
 }
 
+/** D52: this Session's items proposed to the repository's reviewed knowledge when it was published. */
+export interface KnowledgeProposal {
+  result: "proposed" | "unchanged" | "failed";
+  url?: string;
+  number?: number;
+  kind?: "pull_request" | "merge_request";
+  items?: number;
+  reused?: boolean;
+  reason?: string;
+}
+
 export interface Run {
   /** D49: where it runs and, on a Team's environment for want of one's own boundary, why. */
   placement?: { kind: PlacementKind; hint?: string } | null;
   /** D46 P6a: what the Session's Attempts used in total. */
   usage?: import("@/lib/usage").Usage | null;
   /** D46 P4: this Session's 「本次沉淀的知识」, and why a shared environment gathers none. */
-  knowledge?: { items: KnowledgeItem[]; note: string | null } | null;
+  knowledge?: { items: KnowledgeItem[]; note: string | null; proposal?: KnowledgeProposal } | null;
   /** Who submitted the Session (D35 §4). */
   created_by?: { id: string; username?: string | null };
   /** The source credential pinned at submission (D35 §4); never the secret. */

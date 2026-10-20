@@ -156,4 +156,7 @@ def view(db, run, scope):
     skipped = (snapshot.get("knowledge_added") or {}).get("skipped")
     note = (SHARED if scope == "shared" and snapshot.get("execution_contract", 1) >= 4
             else "Knowledge 沉淀未完成：" + skipped if skipped else None)
-    return {"items": rows, "note": note} if rows or note or snapshot.get("knowledge_added") else None
+    proposal = snapshot.get("knowledge_proposal")   # D52: where the items went in the repository's reviewed knowledge
+    if rows or note or snapshot.get("knowledge_added") or proposal:
+        return {"items": rows, "note": note, **({"proposal": proposal} if proposal else {})}
+    return None

@@ -148,7 +148,16 @@ def model(view, now=None):
             "publish": publish and {"branch": _line(publish.get("branch"), 200), "url": str(publish.get("url") or ""),
                                     "commit": str(publish.get("commit") or "")[:7],
                                     "number": publish.get("number"), "kind": publish.get("kind"),
-                                    "error": _line(publish.get("request_error"))}}
+                                    "error": _line(publish.get("request_error")),
+                                    "knowledge": _knowledge(publish.get("knowledge"))}}
+
+
+def _knowledge(proposal):
+    """D52: the repository's knowledge proposal of the publish, as the report states it."""
+    if not isinstance(proposal, dict):
+        return None
+    return {"result": proposal.get("result"), "url": str(proposal.get("url") or ""), "number": proposal.get("number"),
+            "kind": proposal.get("kind") or "pull_request", "items": proposal.get("items"), "reason": _line(proposal.get("reason"))}
 
 
 def _label(publish):
@@ -258,6 +267,12 @@ def markdown(view, now=None):
                        else f"- {_label(publish)}：{_md(publish['url'])}")
         if publish["error"]:
             out.append(f"- 拉取请求未创建：{_md(publish['error'])}")
+        known = publish["knowledge"]
+        if known and known["result"] == "proposed":
+            label = f"[{_label(known)}](<{known['url']}>)" if _link(known) else f"{_label(known)}：{_md(known['url'])}"
+            out.append(f"- 仓库知识：{label}（{known['items']} 条）")
+        elif known:
+            out.append("- 仓库知识：已含本会话的条目" if known["result"] == "unchanged" else f"- 仓库知识未提出：{_md(known['reason'])}")
     else:
         out.append("尚未发布")
     return "\n".join(out) + "\n"
@@ -350,6 +365,13 @@ def html(view, now=None):
                          else f"{e(_label(publish))}：{e(publish['url'])}")
         if publish["error"]:
             items.append(f"拉取请求未创建：{e(publish['error'])}")
+        known = publish["knowledge"]
+        if known and known["result"] == "proposed":
+            label = (f"<a href=\"{e(known['url'])}\">{e(_label(known))}</a>" if _link(known)
+                     else f"{e(_label(known))}：{e(known['url'])}")
+            items.append(f"仓库知识：{label}（{known['items']} 条）")
+        elif known:
+            items.append("仓库知识：已含本会话的条目" if known["result"] == "unchanged" else f"仓库知识未提出：{e(known['reason'])}")
     out.append("<ul>" + "".join(f"<li>{item}</li>" for item in items) + "</ul>" if publish else
                ("<ul>" + "".join(f"<li>{item}</li>" for item in items) + "</ul>" if items else "") + "<p>尚未发布</p>")
     out.append("</body></html>")

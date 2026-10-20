@@ -423,7 +423,9 @@ def compact_status(session, events):
     if session.get("usage"):   # D46 P6a: what its Attempts used
         view["usage"] = session["usage"]
     if session.get("knowledge"):   # D46 P4: what this Session wrote to the environment's lessons
-        view["knowledge"] = {"note": session["knowledge"].get("note"), "items": [
+        view["knowledge"] = {"note": session["knowledge"].get("note"),
+                             **({"proposal": session["knowledge"]["proposal"]} if session["knowledge"].get("proposal") else {}),
+                             "items": [
             {"id": item["id"], "rule": item["rule"], "result": "removed" if item.get("removed") else item["result"],
              **({"reason": item["reason"]} if item.get("reason") and not item.get("removed") else {})}
             for item in session["knowledge"].get("items") or []]}

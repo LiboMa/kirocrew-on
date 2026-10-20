@@ -2,7 +2,7 @@ import { useState } from "react";
 import { useQueryClient } from "@tanstack/react-query";
 import { api } from "@/api/client";
 import { keys } from "@/api/hooks";
-import type { KnowledgeItem, Run } from "@/api/types";
+import type { KnowledgeItem, KnowledgeProposal, Run } from "@/api/types";
 import { Button } from "@/components/ui/button";
 
 const RESULTS: Record<KnowledgeItem["result"], string> = {
@@ -50,6 +50,19 @@ function Item({ run, item, canDelete }: { run: Run; item: KnowledgeItem; canDele
   );
 }
 
+/** D52: where the items went in the repository's reviewed knowledge, a draft request people review and merge. */
+function Proposal({ proposal }: { proposal: KnowledgeProposal }) {
+  const label = `${proposal.kind === "merge_request" ? "MR" : "PR"} #${proposal.number}`;
+  return (
+    <p className="text-xs text-muted-foreground">
+      {proposal.result === "proposed" ? (
+        <>已提交到仓库知识 {proposal.url?.startsWith("https://")
+          ? <a className="underline" href={proposal.url} target="_blank" rel="noreferrer">{label}</a> : label}（{proposal.items} 条，经审核合并后同一仓库的任务都会阅读）</>
+      ) : proposal.result === "unchanged" ? "仓库知识已含本会话的条目" : `仓库知识未提出：${proposal.reason ?? "原因未报告"}`}
+    </p>
+  );
+}
+
 /** D46 P4: what this Session wrote to its execution environment's KiroCrew lessons; the repository's later tasks get them. */
 export function KnowledgePanel({ run }: { run: Run }) {
   const value = run.knowledge;
@@ -65,6 +78,7 @@ export function KnowledgePanel({ run }: { run: Run }) {
         <ul className="space-y-2">{value.items.map((item) => <Item key={item.id} run={run} item={item} canDelete={canDelete} />)}</ul>
       )}
       {!!value.items.length && !canDelete && <p className="text-xs text-muted-foreground">只有会话创建者、Team owner 或管理员可以删除。</p>}
+      {value.proposal && <Proposal proposal={value.proposal} />}
     </section>
   );
 }

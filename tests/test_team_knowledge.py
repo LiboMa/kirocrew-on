@@ -176,6 +176,12 @@ class PublishProposalTests(PublishCase):
         self.assertEqual(json.loads(event["payload"])["number"], 9)
         self.assertEqual(json.loads(audited["detail"])["items"], 2)
         self.assertEqual(snapshot["knowledge_proposal"]["url"], answer["url"])
+        from octopus import mcp, report   # R7: where it went, on the session page, in the status and the report
+        view = self.service.run(self.b, rid)
+        self.assertEqual(view["knowledge"]["proposal"]["number"], 9)
+        self.assertEqual(mcp.compact_status(view, [])["session"]["knowledge"]["proposal"]["url"], answer["url"])
+        self.assertIn("- 仓库知识：[PR #9](<https://forge.example/owner/app/pull/9>)（2 条）", report.markdown(view))
+        self.assertIn('仓库知识：<a href="https://forge.example/owner/app/pull/9">PR #9</a>（2 条）', report.html(view))
 
     def test_a_refusal_never_fails_the_publish(self):
         rid, project = self.session(cred=self.cred["id"])
@@ -188,6 +194,8 @@ class PublishProposalTests(PublishCase):
             record = self.service.publish(self.b, rid, {})
         self.assertEqual(record["kind"], "pull_request")   # the code's request stands
         self.assertEqual((record["knowledge"]["result"], record["knowledge"]["code"]), ("failed", "credential_permission"))
+        from octopus import report
+        self.assertIn("- 仓库知识未提出：凭证没有此操作的权限（HTTP 403）", report.markdown(self.service.run(self.b, rid)))
 
     def test_without_items_no_proposal_is_made(self):
         rid, project = self.session(cred=self.cred["id"])

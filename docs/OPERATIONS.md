@@ -548,6 +548,21 @@ CloudFront 只使用 us-east-1 的证书）：分发加上别名与证书（SNI�
 - 前提：KiroCrew `memory.persistence_enabled` 与 `memory.inject_lessons` 为 true（0.10.0 默认；关闭前者时写入被拒，台账记
   `persistence_disabled`）。KiroCrew 自身的自动 lessons（task-runner、整理提取）不经平台，`include_lessons` 时同样注入——专属环境内属于同一空间。
 
+### 团队层知识（D52）
+
+- 个人层（P4）：lessons 存在某个人的 Gateway 上、自动写入、无人审核。团队层：会话**发布到仓库时**，平台把本会话通过校验的 Knowledge
+  条目（written、superseded、kept，未删除）提到仓库的 `.octopus/knowledge.md`：固定分支 `octopus/knowledge`（不存在时从默认分支创建），
+  与文件中已有的条目去重后提交，没有打开的「项目知识更新（KiroCrew ON）」Draft PR / MR 时创建，有则在其上追加；由合并 PR 的人审核。
+  个人与 Team 会话都算（仓库即团队的边界）；只在有人发布（或 D47 自动发布）时写仓库。
+- 只写这一个文件，从不写默认分支、不强推；平台用本次发布的写凭证经托管方 API 提交（GitHub contents API、GitLab commits API），
+  不在 Worker 上执行。提议失败（如凭证没有 contents 权限）不影响代码的 Draft PR，结果记在发布记录 `knowledge` 与 snapshot
+  `knowledge_proposal`；审计 `knowledge.proposed`（另记一次凭证使用 `knowledge.propose`），时间线 `run.knowledge_proposed`。
+- 共享执行环境也追加 Knowledge 任务，但只用于仓库层：条目记为 `kept`（「仅提到仓库（发布时）」），不写、不注入 lessons。
+- 使用：任何会话的任务派发时，检出目录有 `.octopus/knowledge.md` 即在任务说明加「## 项目知识（经评审）」：路径与「开始前完整阅读并遵循；
+  与本任务契约冲突时以契约为准」，不内联内容。
+- 可见：会话页「本次沉淀的知识」写明「已提交到仓库知识 PR #n」或原因；报告「## 发布」的「仓库知识」一行；MCP 精简状态 `session.knowledge.proposal`。
+- 数据库迁移 8：`knowledge.result` 增加 `kept`（重建表，迁移前自动备份）。
+
 ### 编码技能包（D50）
 
 - 平台维护五个**方法类**技能，随发布固定版本：`octopus/skills/<名称>/SKILL.md`（头部 `name`、`description`、`source`、`license`）——
