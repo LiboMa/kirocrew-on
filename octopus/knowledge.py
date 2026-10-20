@@ -97,8 +97,9 @@ def append(db, rid, run, scope, config):
             "kind": "design", "role": ROLE, "acceptance": [ITEM]}
     db.execute("INSERT INTO tasks(run_id,id,ordinal,spec) VALUES(?,?,?,?)", (rid, tid, rows[-1]["ordinal"] + 1, dumps(spec)))
     snapshot["knowledge_added"] = {**(snapshot.get("knowledge_added") or {}), "tasks": [*added, tid]}
+    from .revisions import appended
     journal.change(db, "runs", rid, journal.ENGINE, "run.knowledge_task", quiet=("snapshot",), snapshot=dumps(snapshot),
-                   updated=time.time())
+                   version=appended(db, rid, tid, "平台追加 Knowledge 沉淀"), updated=time.time())
     journal.record(db, rid, "run.knowledge_task", journal.ENGINE, reason="平台追加 Knowledge 沉淀：整理本次会话中可复用的项目知识",
                    task=tid, tool=tool)
     return tid

@@ -77,7 +77,7 @@ KiroCrew ON 在远端执行开发任务：KiroCrew 的 Kiro Agent 先识别意�
 - `octopus_runs` 列出用户可见的全部会话；`octopus_me` 返回当前身份、是否管理员、Token scope 与所在 Team。
 - `octopus_changes`（传 `run_id`）列出会话的变更记录：谁（用户与客户端，或 Engine / Worker / KiroCrew / 协调者）在什么时候改了什么、
   前后值与原因；`who: "user"` 只看人的操作。用户问“谁停止了这个会话”“上一轮改了什么设置”时用它。
-- `octopus_revisions`（传 `run_id`）列出修订历史（创建、规划、续作、自动纠错）；加 `to`（以及可选的 `from`）返回两版之间需求与各任务的变化：工具、模型等字段的前后值，以及 Prompt 新增（+）与删除（-）的行。用户问“上一轮改了什么”时用它。
+- `octopus_revisions`（传 `run_id`）列出修订历史（创建、规划、续作、自动纠错、平台追加的 Evaluator / Knowledge 任务）；加 `to`（以及可选的 `from`）返回两版之间需求与各任务的变化：工具、模型等字段的前后值，以及 Prompt 新增（+）与删除（-）的行。用户问“上一轮改了什么”时用它。
 - `octopus_observe`（传 `run_id`）读取原生 KiroCrew 会话里协调者与子 Agent 的最近对话（默认 20 条，单条超过 4000 字截断；`has_more` 为 true 时传 `before: next_before` 读更早的），用来向用户说明 Agent 正在做什么；不需要打开 KiroCrew。
 
 - 门禁（D37，新会话）：每个任务的 `latest.gates` 给出通过的个数、失败的门禁（`failed`，带原因首行）与跳过的门禁。

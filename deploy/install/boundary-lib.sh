@@ -9,6 +9,18 @@
 : "${KC_CURRENT:=/opt/kirocrew/current}"
 BOUNDARY_NAME='^[a-z][a-z0-9-]{1,30}$'
 
+prune_releases() {  # prune_releases DIR CURRENT TARGET KEEP: remove releases but the current one, the one being installed and
+  # the newest KEEP others (2026-10-20: 73 releases filled the 100 GB root disk); each is in the artifact bucket
+  # (releases/<sha>.tar.gz) should a rollback need an older one
+  local name kept=0
+  for name in $(ls -1t "$1"); do
+    [ -d "$1/$name" ] || continue
+    if [ "$1/$name" = "$2" ] || [ "$1/$name" = "$3" ]; then continue; fi
+    if [ "$kept" -lt "$4" ]; then kept=$((kept + 1)); continue; fi
+    rm -rf -- "${1:?}/$name"
+  done
+}
+
 toml_port() {  # toml_port FILE KEY: the port a top-level key of a boundary config holds
   grep -E "^$2[[:space:]]*=" "$1" | grep -oE '[0-9]+' | head -1 || true
 }

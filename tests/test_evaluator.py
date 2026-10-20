@@ -71,6 +71,17 @@ class VerdictTests(EvaluatorCase):
         self.assertEqual(run["status"], "blocked")
 
 
+class RevisionTests(EvaluatorCase):
+    def test_the_appended_evaluator_is_its_own_revision(self):
+        rid, run = self.run_(steps=TEAM[:1])
+        self.assertIn("evaluator", [t["id"] for t in run["tasks"]])
+        added = [r for r in self.service.revisions(self.actor, rid) if r["kind"] == "platform"]
+        self.assertEqual([r["summary"] for r in added], ["平台追加 Evaluator 验收"])
+        self.service.operate(self.actor, rid, "continue", {"request_id": "revision-fixture-1", "expected_version": run["version"],
+                                                           "task_id": "code", "input": "补上错误密码提示的文案"})
+        diff = self.service.revision_diff(self.actor, rid)   # the user's continue against the revision before it
+        self.assertEqual([t["id"] for t in diff["tasks"] if t["status"] == "added"], [])
+
 class AcceptanceTests(EvaluatorCase):
     def setUp(self):
         super().setUp()

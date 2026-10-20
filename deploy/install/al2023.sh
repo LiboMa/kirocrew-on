@@ -125,6 +125,8 @@ install -d -m 0755 /etc/kirocrew-on /opt/kirocrew-on/releases /opt/kirocrew /opt
 
 log "KiroCrew ON 发布 $RELEASE"
 TARGET="/opt/kirocrew-on/releases/$RELEASE"
+prune_releases /opt/kirocrew-on/releases "$(readlink -f /opt/kirocrew-on/current || true)" "$TARGET" 3
+find /opt/kirocrew-on/incoming -mindepth 1 -maxdepth 1 -mmin +1440 ! -name "*$RELEASE*" -exec rm -rf {} +
 if [ ! -f "$TARGET/.installed" ]; then
   rm -rf "$TARGET"
   cp -a "$SOURCE" "$TARGET"

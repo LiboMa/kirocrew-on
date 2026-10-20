@@ -525,6 +525,8 @@ CloudFront 只使用 us-east-1 的证书）：分发加上别名与证书（SNI�
   消息另加一句返工说明（按任务类别：修复「在已有改动上修复，不要从头重写」；审查 / 测试复验「只针对本轮重新核对，不修改代码」；分析「不修改业务代码」）；
   instructions.md 照常写本轮要求。
 - 不续接（全新派发）：第一次派发、用户续作之后、协调者换了工具、工具 / 模型 / Effort 与上一轮不同、任务设了显式 Effort、瞬时失败的自动重试；
+  上一轮的对话本身出了问题（原生错误、被停止、看门狗停止、登录过期、实际后端或模型不对：failure_type 为 native_error、native_stopped、auth、tool、model）——
+  只有工作没做到位（implementation、contract、gate、input 等）才续接；
   `approval_mode = "auto"` 而 YOLO 关闭（`crew_yolo = false`）的边界（续接不能要求自动批准，记 `continue_refused: approval_mode`）；
   对话不是这个 Worker 上本会话的（如改派到另一执行环境之后，记 `not_this_session`）。
 - 对话 ID 是这一串中第一个 Attempt 的原生 ID；Worker 只续接本会话 Attempt 的对话。续接被拒（对话不存在、正忙、不可续接）时改为全新派发，
@@ -760,6 +762,13 @@ sudo du -sh /var/lib/octopus/boundaries/personal/worker/* | sort -h | tail
 ```
 
 只清理已关闭且已备份的 Session 的 Workspace；删除通过 Session 的受控删除操作完成，不直接删除目录。
+
+- 发布目录：每次安装先删除 `/opt/kirocrew-on/releases/` 里的旧版本，保留当前、正在安装的与最新的 3 个（`prune_releases`），
+  并删除 `incoming/` 里一天前的安装包；更早的版本要回滚时从构件桶 `releases/<sha>.tar.gz` 取回。2026-10-20 之前不清理：73 个版本（77 GB）
+  占满了 100 GB 根卷，SSM 命令随之失败（`ipc messaging received timeout signal`）、安装中止。
+- 扩容根卷（不中断服务）：`aws ec2 modify-volume --volume-id <根卷> --size <GiB>`，进入 optimizing 后经 SSM 执行
+  `growpart /dev/nvme0n1 1 && xfs_growfs -d /`。不要改 `stack.env` 的 `VOLUME_SIZE_GIB`：卷大小在实例的 BlockDeviceMappings 里，
+  CloudFormation 改它会替换实例。kirocrew-on-m1 的根卷 2026-10-20 由 100 GiB 扩到 500 GiB。
 
 ## 11．队列异常
 

@@ -115,7 +115,9 @@ def append(db, rid, snapshot, config):
     db.execute("INSERT INTO tasks(run_id,id,ordinal,spec) VALUES(?,?,?,?)", (rid, tid, rows[-1]["ordinal"] + 1, dumps(spec)))
     fresh = json.loads(db.execute("SELECT snapshot FROM runs WHERE id=?", (rid,)).fetchone()["snapshot"])
     fresh["evaluator_added"] = {"task": tid, "tool": tool, "independent": independent}
-    journal.change(db, "runs", rid, journal.ENGINE, "run.evaluator", quiet=("snapshot",), snapshot=dumps(fresh), updated=time.time())
+    from .revisions import appended
+    journal.change(db, "runs", rid, journal.ENGINE, "run.evaluator", quiet=("snapshot",), snapshot=dumps(fresh),
+                   version=appended(db, rid, tid, "平台追加 Evaluator 验收"), updated=time.time())
     journal.record(db, rid, "run.evaluator", journal.ENGINE, "平台追加 Evaluator：改代码的会话须经 Evaluator 验收"
                    + ("" if independent else "（审查不独立：没有作者以外的可用工具）"), task=tid, tool=tool)
     return tid

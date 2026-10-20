@@ -67,20 +67,27 @@ def handoff(row):
     return item
 
 
+BROKEN = frozenset({"native_error", "native_stopped", "auth", "tool", "model"})   # the conversation itself failed
+
+
 def continuation(previous, attempt, spec, repair, changed):
     """D46 P5a: a rework the platform arranged (``repair``) resumes the task's previous native conversation when that
-    Attempt ran natively with the same tool, model and effort, this one is neither the Coordinator's switch nor the
-    automatic retry, and the user did not continue the Session since (``changed``). The conversation is the chain's
-    first: the one the first Attempt started."""
+    Attempt ran natively with the same tool, model and effort and its work fell short (not a conversation that broke:
+    a native error, a stop, the watchdog, an expired login or the wrong backend), this one is neither the Coordinator's
+    switch nor the automatic retry, and the user did not continue the Session since (``changed``). The conversation is
+    the chain's first: the one the first Attempt started."""
     if not repair or changed or not previous or not previous.get("native_id"):
         return None
     evidence = json.loads(attempt.get("evidence") or "{}")
     if evidence.get("switched_from") or evidence.get("transient_retry_of"):
         return None
+    before_evidence = json.loads(previous.get("evidence") or "{}")
+    if before_evidence.get("failure_type") in BROKEN or before_evidence.get("watchdog"):
+        return None
     before = json.loads(previous.get("spec") or "{}")
     if any((before.get(k) or "") != (spec.get(k) or "") for k in ("tool", "model", "effort")) or spec.get("effort"):
         return None   # an explicit effort: /continue cannot set it, so the run would ignore it
-    chain = (json.loads(previous.get("evidence") or "{}").get("continued") or {}).get("conversation")
+    chain = (before_evidence.get("continued") or {}).get("conversation")
     return {"conversation": chain or previous["native_id"], "from": previous["id"]}
 
 

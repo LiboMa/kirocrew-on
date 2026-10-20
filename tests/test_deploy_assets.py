@@ -215,6 +215,12 @@ class ScriptTests(unittest.TestCase):
                      '"$SYSTEMD/octopus-gateway@$name.service.d/"*.conf', '"$ETC/boundary-$name.env"'):
             self.assertIn(part, block)
 
+    def test_each_install_prunes_old_releases_first(self):
+        text = (ROOT / "deploy/install/al2023.sh").read_text()
+        prune = text.index('prune_releases /opt/kirocrew-on/releases "$(readlink -f /opt/kirocrew-on/current')
+        self.assertLess(prune, text.index('cp -a "$SOURCE" "$TARGET"'))   # room for the new one first
+        self.assertIn('find /opt/kirocrew-on/incoming -mindepth 1 -maxdepth 1 -mmin +1440 ! -name "*$RELEASE*"', text)
+
     def test_scripts_are_valid_bash_without_mac_assumptions(self):
         for name in ("deploy/install/al2023.sh", "deploy/install/boundary-lib.sh", "deploy/install/boundary.sh", "deploy/aws/deploy.sh"):
             script = ROOT / name

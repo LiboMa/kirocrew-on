@@ -2,6 +2,7 @@
 differences between any two revisions, for the console and for Coding Agents (MCP)."""
 import difflib
 import json
+import time
 
 from .db import dumps
 from .domain import CONTRACT   # one list of contract fields: a new one is recorded without being added here
@@ -27,6 +28,14 @@ def record(db, rid, version, kind, summary, actor, at, **legacy):
     """Write a revision with its snapshot; ``legacy`` keeps the keys older readers expect (input, steps, task …)."""
     db.execute("INSERT INTO revisions VALUES(?,?,?,?,?)",
                (rid, version, dumps({**legacy, "kind": kind, "summary": summary, "snapshot": snapshot(db, rid)}), actor, at))
+
+
+def appended(db, rid, task, summary):
+    """The version a task the platform appended takes (the Evaluator, D46 P3; Knowledge, P4), written as a revision of its
+    own so that the next continue's differences are the user's alone; the caller sets the run's version to it."""
+    row = db.execute("SELECT version, owner_id FROM runs WHERE id=?", (rid,)).fetchone()
+    record(db, rid, row["version"] + 1, "platform", summary, row["owner_id"], time.time(), platform={"task": task})
+    return row["version"] + 1
 
 
 def changes(before, after):

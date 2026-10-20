@@ -51,6 +51,17 @@ class HostCase(unittest.TestCase):
 
 
 class LibraryTests(HostCase):
+    def test_old_releases_are_pruned_keeping_the_current_the_new_and_the_newest(self):
+        releases = self.root / "releases"   # 2026-10-20: 73 releases filled the 100 GB root disk
+        for n in range(8):
+            (releases / f"r{n}").mkdir(parents=True)
+            os.utime(releases / f"r{n}", (1000 + n, 1000 + n))
+        (releases / "r7" / "a").write_text("x")
+        self.bash(f"prune_releases {releases} {releases}/r1 {releases}/r0 2")   # r1 current (a rollback), r0 being installed
+        self.assertEqual(sorted(p.name for p in releases.iterdir()), ["r0", "r1", "r6", "r7"])
+        self.bash(f"prune_releases {releases} {releases}/r1 {releases}/r9 2")   # the next install: r0 is now just old
+        self.assertEqual(sorted(p.name for p in releases.iterdir()), ["r1", "r6", "r7"])
+
     def test_free_ports_skip_what_boundaries_use_and_what_listens(self):
         self.config("personal", worker_port=8928, gateway_port=5476)
         self.config("alice", worker_port=9001, gateway_port=5481)

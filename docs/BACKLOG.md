@@ -87,7 +87,7 @@
 
 ## D46 P3 Evaluator 门禁的终审延后项（2026-10-18）
 - ~~平台追加的 Evaluator 被重新规划替换后再次追加时可能复用 id~~（2026-10-18 修复）。原文：可能复用 id `evaluator`（旧任务的 Attempt 显示在新任务下）：应像 `planning.expand` 一样排除历史 id。
-- 追加 Evaluator 不记修订、不升版本，也不进规划说明（时间线有记录）：下一次续作的修订差异会把它算作用户的改动。
+- ~~追加 Evaluator 不记修订、不升版本：下一次续作的修订差异会把它算作用户的改动~~（2026-10-20 修复：平台追加的 Evaluator 与 Knowledge 任务各记一次修订「平台追加」并升版本）；仍不进规划说明（时间线有记录）。
 - ~~停在「验收待确认」时停止、再请求诊断~~（2026-10-18 修复：诊断入口拒绝并说明）。原文：Evaluator 任务仍为 awaiting_acceptance，被当作 native_error 交给协调者；应要求首个未通过任务为 blocked / failed，或停止时重置。
 - ~~缺项、缺证据记为 failure_type gate；报告一节在门禁不适用的会话也出现~~（2026-10-18 修复：contract，fail 为 implementation；报告只在门禁生效时）。原文：报告的「验收（以 Evaluator 为准）」在门禁不适用的会话也会出现。
 - 「验收待确认」时控制台的发布区不显示发布按钮（服务端允许手动发布）：保持保守，待负责人决定是否在确认前允许发布。
@@ -110,7 +110,7 @@
 - ~~时间线不说明续接被拒（只在事件内容中有 `continue_refused`）~~（2026-10-20 修复：`attempt.dispatched` / `attempt.running` 带原因，变更记录可见）。
 - `health()["continue"]` 恒为 true：前置的 KiroCrew 早于 0.10 时每次返工都记 `continue_refused: HTTP 404`，可与接受的 KiroCrew 版本挂钩。
 - `from` 只校验格式，未核对它的 dispatch.json 确有该对话。
-- 原生错误或看门狗停止之后的返工也会续接坏掉的那个对话：可只在质量类失败（implementation、gate、contract、findings）后续接。
+- ~~原生错误或看门狗停止之后的返工也会续接坏掉的那个对话~~（2026-10-20 修复：上一轮对话本身出错时全新派发，工作没做到位时才续接）。
 - 文案在 spec、任务卡片与报告间略有不同；MCP `latest.continued` 易与 `octopus_continue` 混淆；Skill 未提及。
 - 测试缺口：引擎侧 `continue_refused` 的证据 / MCP / 报告、`rerun` 类的续接、经引擎的外来对话。
 

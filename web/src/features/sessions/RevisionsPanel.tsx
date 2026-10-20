@@ -5,7 +5,7 @@ import { NativeSelect } from "@/components/NativeSelect";
 import { ROLE_LABELS, formatTime } from "@/lib/labels";
 import { cn } from "@/lib/utils";
 
-const KINDS: Record<string, string> = { created: "创建", planned: "规划", continued: "续作", recovered: "自动纠错" };
+const KINDS: Record<string, string> = { created: "创建", planned: "规划", continued: "续作", recovered: "自动纠错", platform: "平台追加" };
 const STATUS: Record<TaskDiff["status"], string> = { added: "新增", removed: "删除", changed: "修改", same: "未变化" };
 const FIELD: Record<string, string> = {
   name: "名称", tool: "工具", model: "模型", effort: "Effort", kind: "类别", role: "角色", deliverables: "交付物", acceptance: "验收项",

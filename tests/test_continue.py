@@ -130,6 +130,12 @@ class RuleTests(unittest.TestCase):
     def test_a_rework_continues_the_previous_conversation(self):
         self.assertEqual(self.rule(), {"conversation": "aaaa1111", "from": self.PREVIOUS["id"]})
 
+    def test_work_that_fell_short_is_continued(self):
+        for kind in ("implementation", "contract", "gate", "input"):
+            with self.subTest(kind):
+                previous = {**self.PREVIOUS, "evidence": json.dumps({"failure_type": kind})}
+                self.assertEqual(self.rule(previous=previous)["conversation"], "aaaa1111")
+
     def test_a_chain_keeps_its_first_conversation(self):
         previous = {**self.PREVIOUS, "native_id": "bbbb2222", "evidence": json.dumps({"continued": {"conversation": "aaaa1111"}})}
         self.assertEqual(self.rule(previous=previous)["conversation"], "aaaa1111")
@@ -143,7 +149,14 @@ class RuleTests(unittest.TestCase):
                                             spec={**self.SPEC, "effort": "high"}),   # /continue cannot set it
                  "switched": dict(attempt={**self.ATTEMPT, "evidence": json.dumps({"switched_from": {"tool": "codex"}})}),
                  "automatic retry": dict(attempt={**self.ATTEMPT, "evidence": json.dumps({"transient_retry_of": "x"})}),
-                 "user continue since": dict(changed=True)}
+                 "user continue since": dict(changed=True),
+                 # a conversation that broke is not resumed: only one whose work fell short (BACKLOG D46 P5a)
+                 "a native error": dict(previous={**self.PREVIOUS, "evidence": json.dumps({"failure_type": "native_error"})}),
+                 "a watchdog stop": dict(previous={**self.PREVIOUS, "evidence": json.dumps(
+                     {"failure_type": "native_error", "watchdog": {"reason": "31 分钟没有进展"}})}),
+                 "a stopped run": dict(previous={**self.PREVIOUS, "evidence": json.dumps({"failure_type": "native_stopped"})}),
+                 "an expired login": dict(previous={**self.PREVIOUS, "evidence": json.dumps({"failure_type": "auth"})}),
+                 "the wrong backend": dict(previous={**self.PREVIOUS, "evidence": json.dumps({"failure_type": "tool"})})}
         for name, kwargs in cases.items():
             with self.subTest(name):
                 self.assertIsNone(self.rule(**kwargs))
