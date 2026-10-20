@@ -234,6 +234,16 @@ class PublishProposalTests(PublishCase):
         from octopus import report
         self.assertIn("- 仓库知识未提出：凭证没有此操作的权限（HTTP 403）", report.markdown(self.service.run(self.b, rid)))
 
+    def test_a_proposal_with_nothing_new_still_audits_the_credential_use(self):   # D35 §6: every use, whatever came of it
+        rid, project = self.session(cred=self.cred["id"])
+        (project / "a.txt").write_text("1")
+        self.knowledge(rid, [("依赖用 pnpm 安装", "written", None)])
+        with patch("octopus.knowledge_repo.propose", lambda *args, **kw: {"result": "unchanged", "items": 0}):
+            self.service.publish(self.b, rid, {})
+        with self.db.read() as db:
+            uses = [json.loads(r["detail"]) for r in db.execute("SELECT detail FROM audit WHERE action='credential.use'")]
+        self.assertIn(("knowledge.propose", "unchanged"), [(u.get("action"), u["result"]) for u in uses])
+
     def test_without_items_no_proposal_is_made(self):
         rid, project = self.session(cred=self.cred["id"])
         (project / "a.txt").write_text("1")

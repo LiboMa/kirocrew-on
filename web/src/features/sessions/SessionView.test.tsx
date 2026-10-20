@@ -74,6 +74,24 @@ describe("session detail", () => {
     expect(document.querySelector('[data-task="review"]')).not.toHaveTextContent("方法：");
   });
 
+  test("the methods shown are those the Worker delivered, once an attempt ran (D50)", async () => {
+    const skilled = { ...spec("code", "实现界面", "claude"), skills: ["frontend-design", "test-driven-development"] };
+    const attempt = (id: string, evidence: Record<string, unknown>) => ({ id, number: 1, status: "running", spec: skilled,
+      native_id: "n-" + id, context_hash: "h", evidence, result: null, error: null, created: 1, updated: 2 });
+    open(makeRun({ id: "run-d", status: "running", tasks: [
+      { id: "code", run_id: "run-d", ordinal: 0, status: "running", current_attempt: "a1", spec: skilled,
+        attempts: [attempt("a1", { skills: [{ name: "frontend-design", sha256: "x" }] })] },
+      { id: "old", run_id: "run-d", ordinal: 1, status: "blocked", current_attempt: "a2", spec: { ...skilled, id: "old", name: "旧 Worker" },
+        attempts: [{ ...attempt("a2", {}), status: "blocked" }] },
+      { id: "new", run_id: "run-d", ordinal: 2, status: "running", current_attempt: "a3", spec: { ...skilled, id: "new", name: "刚派发" },
+        attempts: [attempt("a3", {})] }] } as Partial<Run>));
+    await screen.findByText("实现界面");
+    expect(document.querySelector('[data-task="code"]')).toHaveTextContent("方法：frontend-design");
+    expect(document.querySelector('[data-task="code"]')).not.toHaveTextContent("test-driven-development");
+    expect(document.querySelector('[data-task="old"]')).toHaveTextContent("方法（计划，执行环境未交付）：frontend-design、test-driven-development");
+    expect(document.querySelector('[data-task="new"]')).toHaveTextContent("方法：frontend-design、test-driven-development");   // evidence to come
+  });
+
   test("shows why the Session stopped, the evidence of each attempt and the recovery record", async () => {
     open(blocked);
     expect(await screen.findByText("模拟交接缺失", { selector: "#attention-detail" })).toBeInTheDocument();

@@ -125,6 +125,20 @@ class PlannedRoleTests(ConfirmationCase):
         self.assertTrue(any("审查不独立" in note and "评估" in note for note in run["planning"]["notes"]))
 
 
+class ContinueRoleTests(ConfirmationCase):
+    def test_a_continue_may_clear_a_tasks_role(self):
+        rid = self.start(steps=[step(id="code", name="实现", role="sde", kind="implement")])
+        run = self.tick(rid)
+        for number, cleared in enumerate((None, "")):
+            with self.subTest(cleared):
+                self.service.operate(self.actor, rid, "continue", {
+                    "request_id": f"role-fixture-{number}", "expected_version": run["version"], "task_id": "code",
+                    "input": "去掉角色，按普通任务实现", "execution": {"role": cleared}})
+                run = self.tick(rid)
+                spec = run["tasks"][0]["spec"]
+                self.assertNotIn("role", spec)
+                self.assertEqual(spec["kind"], "implement")   # the kind stays: it decides the gates
+
 class ReplannedRoleTests(ReplanCase):
     def test_a_replan_notes_a_reviewer_on_the_authors_tool(self):
         self.plan = REPLANNED   # the kept task "code" (claude, implement) wrote the change

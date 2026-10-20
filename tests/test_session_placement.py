@@ -182,6 +182,13 @@ class InterfaceTests(PlacementCase):
             self.service.placement(eve, "team-a")
         self.assertIn(caught.exception.status, {403, 404})
 
+    def test_an_archived_team_has_no_place_for_a_new_session(self):   # as start() refuses one there
+        with self.db.transaction() as db:
+            db.execute("UPDATE teams SET archived=1 WHERE id='team-a'")
+        with self.assertRaises(Error) as caught:
+            self.service.placement(self.people["alice"], "team-a")
+        self.assertEqual((caught.exception.status, caught.exception.code), (409, "team_archived"))
+
     def test_the_options_say_what_auto_runs(self):   # D51 R5: codex publishes no list; its "auto" is a configured model
         with self.db.transaction() as db:
             db.execute("UPDATE workers SET config=? WHERE id='teamenv'", (dumps({"url": "fixture", "token": "fixture", "capabilities": {

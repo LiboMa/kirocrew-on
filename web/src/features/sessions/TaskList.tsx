@@ -17,6 +17,18 @@ function Meta({ label, value }: { label: string; value: string | null | undefine
   );
 }
 
+/** D50: the methods the latest Attempt was given (its evidence), the planned ones until one runs — and said so when the
+ * execution environment did not deliver them (a Worker before the skill pack). */
+function methods(planned: string[] | undefined, attempts: NonNullable<Run["tasks"][number]["attempts"]>) {
+  if (!planned?.length) return null;
+  const latest = attempts[attempts.length - 1];
+  const given = latest?.evidence?.skills;
+  const names = Array.isArray(given) ? given.map((s) => (s as { name?: string }).name).filter(Boolean) : [];
+  const ended = !!latest && !["pending", "dispatching", "running"].includes(latest.status);   // the evidence is complete
+  if (!ended || names.length) return <>{" · "}<span>方法：{(names.length ? names : planned).join("、")}</span></>;
+  return <>{" · "}<span>方法（计划，执行环境未交付）：{planned.join("、")}</span></>;
+}
+
 export function TaskList({ run, onContinue }: { run: Run; onContinue: (taskId: string) => void }) {
   return (
     <ol id="task-list" className="space-y-3" aria-label="开发任务">
@@ -35,7 +47,7 @@ export function TaskList({ run, onContinue }: { run: Run; onContinue: (taskId: s
                   <p className="mt-0.5 text-xs text-muted-foreground">
                     {TOOLS[spec.tool] ?? spec.tool} · {spec.model} · Effort {spec.effort || "继承默认"}
                     {spec.role && <>{" · "}<span>角色：{ROLE_LABELS[spec.role] ?? spec.role}</span></>}
-                    {spec.skills?.length ? <>{" · "}<span>方法：{spec.skills.join("、")}</span></> : null}
+                    {methods(spec.skills, attempts)}
                     {task.mapping && <>{" · "}<span>来源：{task.mapping.label}</span></>}
                   </p>
                 </div>

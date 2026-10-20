@@ -1032,6 +1032,7 @@ class Service:
             else:
                 if team:
                     member(db, actor["id"], team)   # a non-member learns nothing about the Team
+                    active_team(db, team)   # nor is a place offered where start() refuses a new Session
                 user, answer = actor["id"], placement(db, actor["id"], team)
 
         def row(w):
@@ -1494,8 +1495,8 @@ class Service:
                                {"proposed": f"已提到仓库知识 PR #{proposal.get('number')}", "unchanged": "仓库知识已含这些条目",
                                 "failed": "仓库知识未提出：" + str(proposal.get("reason", ""))[:160]}[proposal["result"]], **summary)
                 audit(db, actor, "knowledge.proposed", "run", rid, summary)
-                if proposal["result"] != "unchanged":
-                    self._used(db, actor, row["id"], rid, path, BRANCH, proposal["result"], action="knowledge.propose")
+                # read with the write credential even when nothing new was proposed (D35 §6: every use is audited)
+                self._used(db, actor, row["id"], rid, path, BRANCH, proposal["result"], action="knowledge.propose")
         if failure:
             what = "Draft PR" if row["kind"] == "github_pat" else "Draft MR"
             raise Error(failure.status, failure.code, f"分支 {branch} 已推送，但 {what} 未创建：{failure}。处理后再次发布即可（沿用该分支）")
@@ -2034,8 +2035,10 @@ class Service:
                     before = json.loads(ordered[index]["spec"])
                     # D45: the user's own new tool or model for the task takes the place of what the requirement named
                     changed = any(key in override and override[key] != before.get(key) for key in ("tool", "model"))
-                    current = steps([{**{k: v for k, v in before.items() if not (changed and k == "requested")}, **override}],
-                                    known=[t["id"] for t in ordered[:index]], planned=True)[0]
+                    merged = {**{k: v for k, v in before.items() if not (changed and k == "requested")}, **override}
+                    if override.get("role", "x") in (None, ""):   # the user takes the role away; the kind stays
+                        merged.pop("role")
+                    current = steps([merged], known=[t["id"] for t in ordered[:index]], planned=True)[0]
                     # D46 P2: the user's own change never puts a reviewer on the tool that wrote the change (one the plan
                     # already had was noted when it was planned, and does not stop the continue)
                     from . import roles

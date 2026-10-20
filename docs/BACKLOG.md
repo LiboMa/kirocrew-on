@@ -82,7 +82,7 @@
 - 审查独立性的「作者」口径与恢复换工具的 `reviewed_backend` 不同：没写 kind 的任务不算作者；`reviewed_backend` 取最新已验收的非审查任务的
   实际后端，并把 test 任务算作作者。P3 的 Evaluator 门禁前统一。
 - 卡片文件格式错时在派发时才报 ValueError / AttributeError，且每次调用重读文件（可加缓存与明确报错；仓库内文件由 CardTests 覆盖）。
-- 续作不能去掉任务的角色（`null` / `""` 被拒）；改类别时须同时换成相容的角色。
+- ~~续作不能去掉任务的角色（`null` / `""` 被拒）~~（2026-10-20 修复：去掉角色，类别不变）；改类别时须同时换成相容的角色。
 - ~~控制台修订对比中角色的取值显示为 id（security_test → evaluator），未用中文标题~~（2026-10-20 修复：显示角色标题）。
 
 ## D46 P3 Evaluator 门禁的终审延后项（2026-10-18）
@@ -142,7 +142,7 @@
 ## D50 编码技能包的终审延后项（2026-10-19）
 - ~~报告：Attempt 证据里的 `skills` 不是列表（如被改坏的 dispatch.json）时 `report._attempt` 抛 TypeError~~（2026-10-20 修复）。
 - 重新规划的提示最长约 7838 / 8000 字符（各输入取上限时）：技能包再加两三个技能就会超出 Worker 的上限，可为重新规划用精简目录。
-- 任务卡片与 MCP 精简状态显示的是计划的 `skills`（旧 Worker 未交付时也显示）；报告取证据，是实际交付的——OPERATIONS 已写明，可在卡片上区分。
+- ~~任务卡片显示的是计划的 `skills`（旧 Worker 未交付时也显示）~~（2026-10-20 修复：卡片取最近 Attempt 的证据，结束而未交付时写明）；MCP 精简状态仍是计划的；报告取证据。
 - ~~`systematic-debugging` 的 SKILL.md 仍有一处「Ask for help」~~（2026-10-20 修复：改为写 blocked，测试禁止该说法）。
 - 丢失回执的重派发跨 Worker 升级时（请求体多了 `skills`）按请求散列判为 409 conflict：与 `role_cards` 同一个已有问题。
 - 以后（规格 §3）：KiroCrew builtin skill 按后端评估后纳入；返工自动附 `systematic-debugging` / `receiving-code-review`（需负责人认可）；
@@ -158,13 +158,13 @@
 - 向导：TasksStep 的模型优先取「生成建议的 Worker」而非默认位置；切换空间不重置建议 Worker（原有问题）；localStorage 中的旧草稿恢复原先预选的
   Worker（记为 requested）。
 - `/v1/placement?run_id` 向其他成员列出创建者的边界名称与模型，`own` 指「创建者的」：在接口说明中写清。
-- `Service.placement(team)` 不看归档；其他成员打开原生入口时得到「Worker 不属于本次执行空间」而非 R7 的原因；测试替身 `placementOf` 不含成员边界规则；
+- ~~`Service.placement(team)` 不看归档~~（2026-10-20 修复：与新建会话一样 409 team_archived）；其他成员打开原生入口时得到「Worker 不属于本次执行空间」而非 R7 的原因；测试替身 `placementOf` 不含成员边界规则；
   「KiroCrew 建议默认用 default」没有测试。
 
 ## D52 团队层知识的终审延后项（2026-10-20）
 - ~~engine 的结果计数（约 346 行）不计 `kept`；`knowledge.py` 模块说明仍写「共享环境不沉淀」~~（2026-10-20 修复）；`kept` 条目在控制台不能删除（删除只针对 lessons）。
 - ~~`publish.check_branch` 未保留 `octopus/knowledge*` 前缀：代码发布可以指定这个分支名，被误认为打开的知识提议~~（2026-10-20 修复：拒绝并说明）。
-- 「已含本会话的条目」路径不记凭证使用与审计（只有时间线）；GitLab 并发写同一提议分支时，`last_commit_id` 只在读到文件时带上。
+- ~~「已含本会话的条目」路径不记凭证使用与审计（只有时间线）~~（2026-10-20 修复：记 credential.use，result unchanged）；GitLab 并发写同一提议分支时，`last_commit_id` 只在读到文件时带上。
 - 迁移 8 重建表依 rowid 顺序复制；发布时知识提议同步调用托管方 API，增加一次发布的耗时（数个请求）。
 
 ## 已知的次要问题（审查延后项）
