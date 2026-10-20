@@ -14,6 +14,7 @@ import shutil
 import socket
 import stat
 import subprocess
+import sys
 import threading
 import time
 import urllib.error
@@ -27,6 +28,27 @@ from . import sources as workspace
 from .db import dumps
 from .domain import CONTRACT, steps
 from .security import Error, require
+
+
+# D51: KiroCrew learns a backend's models only from a real session (model_registry.seed_available_models), so the Worker
+# opens one per tool that has none yet, with no one asking (owner 2026-10-20); codex never publishes its models.
+DISCOVERY_PROMPT = "这是 KiroCrew ON 平台的模型发现探测：不要读取或修改任何文件，不要调用任何工具，只回复 OK。"
+DISCOVERY_TOOLS = ("kiro", "claude", "opencode")
+DISCOVERY_RETRY = 2 * 3600   # a probe that left no models is tried again after this
+NAMESPACES = {"kiro": "acp", "claude": "claude_code", "codex": "codex", "opencode": "opencode"}
+
+
+def discovery_loop(worker, stop, first=60, every=900):
+    """The Worker's own background check (D51 R1): soon after it starts, then every quarter hour, until it stops."""
+    if stop.wait(first):
+        return
+    while True:
+        try:
+            worker.discover_models()
+        except Exception as exc:   # the Gateway may be restarting: the next round tries again
+            print(f"KiroCrew ON Worker: 模型发现未完成（{type(exc).__name__}）", file=sys.stderr, flush=True)
+        if stop.wait(every):
+            return
 
 
 def write(path, value):
@@ -751,13 +773,64 @@ class Worker:
         result["via"] = {"port": self.preview_tls_port, "name": self.preview_tls_name} if self.preview_tls_port else None
         return result
 
+    def advertised(self):
+        """The models KiroCrew recorded each tool's backend as publishing (its provider_models.json)."""
+        cache = self.home / "provider_models.json"
+        models = json.loads(cache.read_text()) if cache.is_file() else {}
+        return {tool: [m for m in models.get(ns, []) if isinstance(m, str)] for tool, ns in NAMESPACES.items()}
+
+    @staticmethod
+    def model_defaults():
+        """The configured model each tool's "auto" stands for, where the tool publishes no list (D51 R5): codex's."""
+        try:
+            import tomllib
+            model = tomllib.loads((Path.home() / ".codex/config.toml").read_text()).get("model")
+        except (OSError, ValueError):
+            return {}
+        return {"codex": model} if isinstance(model, str) and model else {}
+
+    def discover_models(self):
+        """Probe each available tool KiroCrew has not yet published models for (D51 R2–R4): one turn with a fixed
+        prompt under the platform's own parent session, never while real work runs, at most once in two hours each.
+        Returns the tools probed."""
+        record_file = self.root / "model-discovery.json"
+        record = json.loads(record_file.read_text()) if record_file.is_file() else {}
+        published, tools = self.advertised(), self.tools()
+        due = [tool for tool in DISCOVERY_TOOLS
+               if (tools.get(tool) or {}).get("available") and not published.get(tool)
+               and (tool != "kiro" or tools["kiro"].get("login") == "ok")   # never a login flow (R3)
+               and time.time() - (record.get(tool) or {}).get("at", 0) >= DISCOVERY_RETRY]
+        if not due or any(not row.get("done") for row in self.native("/api/spawn").get("agents", [])):
+            return []
+        slot = "octopus-models"
+        try:
+            self.native("/api/chat/slots/" + slot)
+        except crew_api.GatewayError as exc:
+            if exc.status != 404:
+                raise
+            present = self.native("/api/chat/slots", {"name": slot, "agent": "poc-coordinator", "agent_kind": "template",
+                                                      "model": "auto", "memory_mode": "temporary"})
+            require(present.get("key", present.get("slot")) == slot, "原生父 Session 身份不一致")
+        (self.root / "model-discovery").mkdir(exist_ok=True)
+        for tool in due:
+            entry = {"at": time.time()}
+            try:
+                spawn = {"task": DISCOVERY_PROMPT, "parent_session": "dashboard:" + slot, "agent": "poc-" + tool,
+                         "model": "auto", "max_turns": 1, "cwd": str(self.root / "model-discovery"), "keep": False,
+                         "include_memory": False, "include_lessons": False, "include_project": False, "silent": True}
+                if self.approval_mode == "auto":
+                    spawn["approval_mode"] = "auto"
+                entry.update(result="spawned", native_id=self.native("/api/spawn", spawn).get("id"))
+            except Exception as exc:   # recorded, not raised: the other tools still get their probe
+                entry.update(result="failed", error=type(exc).__name__)
+            record[tool] = entry
+            write(record_file, record)
+        return due
+
     def health(self):
         # Descriptive boundary, not cryptographic proof of OS isolation.
         boundary = f"{socket.gethostname()}:{os.getuid()}:{self.home}"
-        cache = self.home / "provider_models.json"
-        models = json.loads(cache.read_text()) if cache.is_file() else {}
-        namespace = {"kiro": "acp", "claude": "claude_code", "codex": "codex", "opencode": "opencode"}
-        advertised = {tool: [m for m in models.get(ns, []) if isinstance(m, str)] for tool, ns in namespace.items()}
+        advertised = self.advertised()
         return {"version": __version__, "isolation": self.isolation, "workflow_design": True,
                 "spawn_approval": "auto" if self.approval_mode == "auto" else "interactive",
                 "crew_entry": True, "crew_origin": self.crew_origin, "observe": True, "app_preview": True,
@@ -773,6 +846,7 @@ class Worker:
                 "routing_evidence": bool(self.routing_log and self.routing_log.is_file()),
                 "model_source": "KiroCrew provider_models.json; ACP session/new advertised cache",
                 "advertised_models": advertised,
+                "model_defaults": self.model_defaults(),   # D51 R5: what "auto" runs where the tool publishes no list
                 "models": {tool: list(dict.fromkeys(["auto"] + [m for m in ids if re.fullmatch(r"[a-zA-Z0-9][a-zA-Z0-9._-]*", m)]))
                            for tool, ids in advertised.items()},
                 "limitations": ["当前原生 spawn 模型格式不支持 /、:、[]；这些已公布的 ID 不列为可直接派发模型。",

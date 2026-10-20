@@ -28,6 +28,12 @@ describe("the model a task runs on", () => {
     expect(within(select).getByRole("option", { name: /claude-opus-4\.8.*未公布/ })).toBeInTheDocument();
   });
 
+  test("auto says which model it runs where the tool publishes none (D51)", () => {
+    render(<AgentFields idPrefix="t" models={models} defaults={{ codex: "openai.gpt-6-astra" }}
+      value={{ tool: "codex", model: "auto", effort: "" }} onChange={() => {}} />);
+    expect(screen.getByRole("option", { name: "自动（openai.gpt-6-astra）" })).toBeInTheDocument();
+  });
+
   test("with only auto it says why and what to do", () => {
     render(<AgentFields idPrefix="t" models={models} value={{ tool: "codex", model: "auto", effort: "" }} onChange={() => {}} />);
     expect(screen.getByText(/尚未公布 Codex 的模型/)).toBeInTheDocument();

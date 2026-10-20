@@ -386,7 +386,8 @@ function ImportPanel({ draft, update, onImported }: PlanProps) {
   );
 }
 
-export function TasksStep({ draft, update, origin, models }: { draft: Draft; update: Update; origin: string; models?: Parameters<typeof AgentFields>[0]["models"] }) {
+export function TasksStep({ draft, update, origin, models, defaults }: { draft: Draft; update: Update; origin: string;
+  models?: Parameters<typeof AgentFields>[0]["models"]; defaults?: Parameters<typeof AgentFields>[0]["defaults"] }) {
   if (draft.method === "agent") {
     return (
       <p className="rounded-xl border bg-card p-5 text-sm leading-7 text-muted-foreground">
@@ -396,7 +397,7 @@ export function TasksStep({ draft, update, origin, models }: { draft: Draft; upd
   }
   return (
     <div className="space-y-3">
-      <TaskEditor tasks={draft.tasks} models={models} idPrefix="launch" title="本次任务列表"
+      <TaskEditor tasks={draft.tasks} models={models} defaults={defaults} idPrefix="launch" title="本次任务列表"
         hint={<p id="launch-origin" className="text-xs text-muted-foreground">{origin}</p>}
         onChange={(tasks) => update((d) => editTasks(d, tasks))} />
     </div>

@@ -38,7 +38,8 @@ export function LaunchWizard({ seed }: { seed: LaunchSeed }) {
   const [recommendWorker, setRecommendWorker] = useState(() => draft.generation?.request?.worker_id ?? draft.worker ?? "");
   // The models of where it will run: the chosen environment, else the platform's default (D49)
   const target = draft.worker || placement?.default?.id || recommendWorker;
-  const models = placement?.options.find((o) => o.id === target)?.models ?? workers.find((w) => w.id === target)?.capabilities.models;
+  const environment = placement?.options.find((o) => o.id === target);
+  const models = environment?.models ?? workers.find((w) => w.id === target)?.capabilities.models;
 
   useEffect(() => {   // the recommendation runs where the Session would (D49)
     const first = placement?.default?.id ?? placement?.options[0]?.id;
@@ -164,7 +165,7 @@ export function LaunchWizard({ seed }: { seed: LaunchSeed }) {
                   if (job?.id && job.native_parent) openCrewSession(job.id, job.native_parent).catch((e: Error) => toast.error(e.message));
                 }} />
             )}
-            {step === 2 && <TasksStep draft={draft} update={update} origin={origin} models={models} />}
+            {step === 2 && <TasksStep draft={draft} update={update} origin={origin} models={models} defaults={environment?.defaults} />}
             {step === 3 && <ConfirmStep draft={draft} update={update} workflowMode={workflowMode} />}
           </div>
           {error && <p role="alert" className="px-6 pb-2 text-sm text-destructive" id="wizard-error">{error}</p>}

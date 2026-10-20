@@ -180,6 +180,13 @@ class InterfaceTests(PlacementCase):
             self.service.placement(eve, "team-a")
         self.assertIn(caught.exception.status, {403, 404})
 
+    def test_the_options_say_what_auto_runs(self):   # D51 R5: codex publishes no list; its "auto" is a configured model
+        with self.db.transaction() as db:
+            db.execute("UPDATE workers SET config=? WHERE id='teamenv'", (dumps({"url": "fixture", "token": "fixture", "capabilities": {
+                "isolation": "dedicated", "model_defaults": {"codex": "openai.gpt-6-astra"}}}),))
+        option = next(o for o in self.service.placement(self.people["bob"], "team-a")["options"] if o["id"] == "teamenv")
+        self.assertEqual(option["defaults"], {"codex": "openai.gpt-6-astra"})
+
     def test_the_options_for_a_session_follow_its_creator(self):
         created, _ = self.start("alice")
         self.own("dave-b", "dave")   # the Team owner's own boundary is not the Session's to move to

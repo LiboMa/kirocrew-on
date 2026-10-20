@@ -26,7 +26,8 @@ export function WorkflowEditor({ flow, template = "chain" }: { flow: Workflow | 
   const file = useRef<HTMLInputElement>(null);
   // The models of where this space's Sessions run (D49: the platform's default), not of the first environment listed
   const placement = usePlacement(space).data;
-  const models = (placement?.options.find((o) => o.id === placement.default?.id) ?? placement?.options[0])?.models;
+  const environment = placement?.options.find((o) => o.id === placement.default?.id) ?? placement?.options[0];
+  const models = environment?.models;
   const refresh = () => client.invalidateQueries({ queryKey: keys.workflows });
 
   async function importFile(chosen: File) {
@@ -85,7 +86,7 @@ export function WorkflowEditor({ flow, template = "chain" }: { flow: Workflow | 
       <p className="text-xs leading-6 text-muted-foreground">
         先定义任务，再选择工具与模型。显式模型在执行 Worker 校验；当前原生 spawn 不接受含 /、:、[] 的模型 ID。
       </p>
-      <TaskEditor tasks={steps} onChange={setSteps} models={models} idPrefix="step" title="任务" readOnly={!canEdit} />
+      <TaskEditor tasks={steps} onChange={setSteps} models={models} defaults={environment?.defaults} idPrefix="step" title="任务" readOnly={!canEdit} />
       {flow && (
         <div className="flex flex-wrap gap-2 border-t pt-4">
           <Button type="button" size="sm" variant="outline" id="export-flow"

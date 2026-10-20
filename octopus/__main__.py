@@ -162,7 +162,7 @@ def main(argv=None):
                 print("KiroCrew ON API: 在途推进未在宽限期内结束；状态已持久化，重启后核对", flush=True)
                 os._exit(0)
     elif args.command == "worker":
-        from .worker import Worker, serve
+        from .worker import Worker, discovery_loop, serve
         token_path = Path(args.token_file)
         if not token_path.exists():
             token_path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
@@ -176,10 +176,14 @@ def main(argv=None):
                       disabled_tools=settings.disabled_tools, crew_yolo=settings.crew_yolo)
         httpd = serve(node, args.port, args.host)
         signal.signal(signal.SIGTERM, lambda *_: threading.Thread(target=httpd.shutdown, daemon=True).start())
+        # D51: each Coding tool's models are found without anyone asking (owner 2026-10-20)
+        stop_discovery = threading.Event()
+        threading.Thread(target=discovery_loop, args=(node, stop_discovery), daemon=True, name="octopus-model-discovery").start()
         print(f"KiroCrew ON Worker: http://{args.host}:{httpd.server_address[1]} ({args.isolation})", flush=True)
         try:
             httpd.serve_forever()
         finally:
+            stop_discovery.set()
             node.apps.stop_all()   # under systemd the unit's cgroup ends them anyway; elsewhere they would linger
             httpd.server_close()
     elif args.command == "wait-ready":

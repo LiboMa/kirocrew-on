@@ -268,6 +268,8 @@ export interface PlacementOption {
   own: boolean;
   isolation?: string | null;
   models: Record<string, string[]>;
+  /** D51: the configured model "auto" runs where the tool publishes no list (codex). */
+  defaults?: Record<string, string>;
 }
 export interface Placement {
   space: string;

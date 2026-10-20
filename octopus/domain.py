@@ -1037,7 +1037,8 @@ class Service:
         def row(w):
             capabilities = json.loads(w["config"]).get("capabilities", {})
             return {"id": w["id"], "name": w["name"], "scope": w["scope"], "own": own(w, user),
-                    "isolation": capabilities.get("isolation"), "models": capabilities.get("models", {})}
+                    "isolation": capabilities.get("isolation"), "models": capabilities.get("models", {}),
+                    "defaults": capabilities.get("model_defaults", {})}   # D51 R5: what "auto" runs
         chosen = answer["worker"]
         return {"space": team or "personal", "hint": answer["hint"], "options": [row(w) for w in answer["options"]],
                 "default": {"id": chosen["id"], "name": chosen["name"], "scope": chosen["scope"],
