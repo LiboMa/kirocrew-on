@@ -185,6 +185,14 @@ def space_workers(db, user, team):
 
 HINT = ("你还没有自己的执行边界：本次在 Team 的环境执行，与其他成员共用并发与 kiro 额度；"
         "可请平台管理员为你建立（deploy.sh boundary add <名称> --owner <用户名>）")
+DISABLED_HINT = ("你的执行边界目前已停用：本次在 Team 的环境执行，与其他成员共用并发与 kiro 额度；"
+                 "请平台管理员重新启用（不要再建第二个：有两个时会话会等待选择）")
+
+
+def disabled_own(db, user):
+    """Whether the person has an own boundary that is disabled (not retired): the hints say so instead of "none" (D49)."""
+    return db.execute("SELECT 1 FROM workers WHERE owner_id=? AND team_id IS NULL AND scope='dedicated' AND enabled=0 "
+                      "AND retired=0", (user,)).fetchone() is not None
 
 
 def own(row, user):
@@ -219,8 +227,8 @@ def placement(db, user, team):
     if len(mine) == 1:
         return {"worker": mine[0], "placement": "own", "hint": None, "options": options}
     if len(options) == 1:
-        return {"worker": options[0], "placement": "team" if team else "only", "hint": HINT if team else None,
-                "options": options}
+        hint = (DISABLED_HINT if disabled_own(db, user) else HINT) if team else None
+        return {"worker": options[0], "placement": "team" if team else "only", "hint": hint, "options": options}
     return {"worker": None, "placement": None, "hint": None, "options": options}
 
 
@@ -902,8 +910,9 @@ class Service:
                     if row is not None and team_environment(db, team) is not None:
                         raise Error(409, "environment_disabled", f"Team「{row['name']}」的执行环境已停用，请联系平台管理员")
                     if row is not None:
-                        raise Error(409, "team_without_worker", f"Team「{row['name']}」尚未分配执行环境，你也还没有自己的执行边界："
-                                                                "请联系平台管理员分配")
+                        mine = "你的执行边界也已停用" if disabled_own(db, actor["id"]) else "你也还没有自己的执行边界"
+                        raise Error(409, "team_without_worker", f"Team「{row['name']}」尚未分配执行环境，{mine}："
+                                                                "请联系平台管理员")
             if chosen["worker"] is not None:   # D49: one's own boundary first, in a Team's space too
                 body = {**body, "worker_id": chosen["worker"]["id"]}
                 placed = {"kind": chosen["placement"], **({"hint": chosen["hint"]} if chosen["hint"] else {})}
@@ -2068,6 +2077,9 @@ class Service:
                     require(not own(target, target["owner_id"]) or target["owner_id"] == actor["id"],
                             "只有边界主人能把会话放到自己的执行边界上；其他人可以分配 Team 的环境", 403, "boundary_owner_only")
                     restart_budget(db, rid, who)   # waiting for an environment is not automatic work
+                    # where it now runs, as the platform would have said (D49 R5; the hint was for the old choice)
+                    placed = {"kind": "own" if own(target, run["owner_id"]) else "team" if run["team_id"] else "only"}
+                    fields.update(snapshot=dumps({**json.loads(run["snapshot"]), "placement": placed}))
                     if run["worker_id"] not in (None, body["worker_id"]):
                         # Another environment has no native parent of this Session: prepare there afresh (P5).
                         fields.update(worker_id=body["worker_id"], native_parent=None, workspace=None, status="preparing", error=None)

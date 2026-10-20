@@ -154,8 +154,7 @@
   才能提供；`accept` 仍可由其他成员确认（会在创建者边界上启动 Evaluator / Knowledge 平台任务，规格允许）；`/classic/` 不认识 `direct`；
   普通成员分配时的 409 文案；MCP `octopus_continue` 带 `credentials` 时先重绑再被 403 拒绝（非原子）；Team owner 删除创建者边界上的 Team
   lessons、任一成员启动预览（以创建者身份运行 `.octopus/preview.json`）未在 R10 中列出。
-- 改派后 snapshot 的 `placement` 不更新（改到 Team 的环境后仍显示 own）。
-- 本人的边界停用时，Team 会话回退到 Team 的环境，提示却说「你还没有自己的执行边界」（409 的文案同）：应区分「已停用」。
+- ~~改派后 placement 不更新；本人边界停用时提示说「没有边界」~~（2026-10-20 修复：分配后记新的位置；停用时提示「已停用，请重新启用」）。
 - 向导：TasksStep 的模型优先取「生成建议的 Worker」而非默认位置；切换空间不重置建议 Worker（原有问题）；localStorage 中的旧草稿恢复原先预选的
   Worker（记为 requested）。
 - `/v1/placement?run_id` 向其他成员列出创建者的边界名称与模型，`own` 指「创建者的」：在接口说明中写清。

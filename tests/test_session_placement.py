@@ -91,6 +91,21 @@ class RuleTests(PlacementCase):
         self.assertIsNone(run["worker_id"])
         self.assertEqual(run["status"], "waiting_worker")
 
+    def test_a_disabled_own_boundary_is_named_in_the_hint(self):   # review minor: "you have none" sent them for a second
+        with self.db.transaction() as db:
+            db.execute("UPDATE workers SET enabled=0 WHERE id='alice-b'")
+        _, run = self.start("alice")
+        self.assertEqual(run["worker_id"], "teamenv")
+        self.assertIn("已停用", run["placement"]["hint"])
+        self.assertNotIn("还没有自己的执行边界", run["placement"]["hint"])
+        with self.db.transaction() as db:   # a Team with no environment at all
+            db.execute("INSERT INTO teams(id,name,created) VALUES('team-b','空组',1)")
+            db.execute("INSERT INTO members(team_id,user_id,role) VALUES('team-b',?,'member')", (self.ids["alice"],))
+        with self.assertRaises(Error) as caught:
+            self.start("alice", team="team-b")
+        self.assertEqual(caught.exception.code, "team_without_worker")
+        self.assertIn("已停用", str(caught.exception))
+
     def test_a_named_environment_is_kept_and_recorded(self):
         _, run = self.start("alice", worker_id="teamenv")
         self.assertEqual((run["worker_id"], run["placement"]), ("teamenv", {"kind": "requested"}))
@@ -124,6 +139,16 @@ class ServingTests(PlacementCase):
                              {"request_id": "assign-fixture-1", "worker_id": "teamenv",
                               "expected_version": self.row(created["id"])["version"]})
         self.assertEqual(self.row(created["id"])["worker_id"], "teamenv")
+
+    def test_assigning_records_where_it_now_runs(self):   # review minor: it still said "own" on the Team's environment
+        created, _ = self.start("alice")
+        with self.db.transaction() as db:
+            db.execute("UPDATE workers SET enabled=0 WHERE id='alice-b'")
+            db.execute("UPDATE runs SET status='waiting_worker' WHERE id=?", (created["id"],))
+        self.service.operate(self.people["dave"], created["id"], "assign-worker",
+                             {"request_id": "assign-fixture-2", "worker_id": "teamenv",
+                              "expected_version": self.row(created["id"])["version"]})
+        self.assertEqual(self.service.run(self.people["alice"], created["id"])["placement"], {"kind": "team"})
 
     def test_a_team_environment_change_leaves_member_boundaries_alone(self):
         created, _ = self.start("alice")
