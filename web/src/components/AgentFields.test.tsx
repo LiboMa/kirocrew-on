@@ -35,7 +35,18 @@ describe("the model a task runs on", () => {
   });
 
   test("with only auto it says why and what to do", () => {
+    render(<AgentFields idPrefix="t" models={models} value={{ tool: "kiro", model: "auto", effort: "" }} onChange={() => {}} />);
+    expect(screen.getByText(/尚未公布 Kiro CLI 的模型/)).toBeInTheDocument();
+  });
+
+  test("codex is said to publish no list even without its configured model (review)", () => {
     render(<AgentFields idPrefix="t" models={models} value={{ tool: "codex", model: "auto", effort: "" }} onChange={() => {}} />);
-    expect(screen.getByText(/尚未公布 Codex 的模型/)).toBeInTheDocument();
+    expect(screen.getByText(/Codex 不公布模型列表/)).toBeInTheDocument();
+  });
+
+  test("default is the tool's own default, never marked unpublished (review)", () => {
+    render(<AgentFields idPrefix="t" models={{ claude: ["auto"] }} value={{ tool: "claude", model: "default", effort: "" }} onChange={() => {}} />);
+    expect(screen.getByLabelText("模型")).toHaveValue("default");
+    expect(screen.queryByRole("option", { name: /未公布/ })).toBeNull();
   });
 });

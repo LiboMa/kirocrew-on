@@ -568,11 +568,12 @@ CloudFront 只使用 us-east-1 的证书）：分发加上别名与证书（SNI�
 
 - 任务的模型在控制台从下拉中选择：「自动」之外列出该执行环境公布的模型（发起向导按所选或平台默认的执行环境，工作流编辑器按平台的默认位置）；
   已填但此环境未公布的模型保留并标明（派发时会被拒绝）。也可以在需求中写明模型，KiroCrew 规划时照用（D45）。
-- 模型列表取自 KiroCrew 的 `provider_models.json`：KiroCrew 只在某个后端真正开过一次会话后才记下它公布的模型。为此每个 Worker 进程在后台
-  （启动 60 秒后、之后每 15 分钟）对**可用且尚无模型**的 kiro / claude / opencode 各跑一轮固定的探测（专用父会话 `octopus-models`、
-  「只回复 OK」、`max_turns: 1`、不带记忆与 lessons），无须任何人操作（负责人 2026-10-20）；平台 10 分钟内的健康检查即带上新列表。
-  kiro 只在登录正常时探测（不打开登录流程）；该 Gateway 有运行中的子任务时跳过；每个工具 2 小时内最多一次；记录在 Worker 数据目录
-  `model-discovery.json`。每次探测在该边界上以边界主人的身份运行一轮，消耗很少的额度。
+- 模型列表取自 KiroCrew 的 `provider_models.json`。每个 Worker 进程在后台（启动 60 秒后、之后每 15 分钟）补齐**可用且尚无模型**的工具，
+  无须任何人操作（负责人 2026-10-20），平台 10 分钟内的健康检查即带上新列表：kiro 调用 KiroCrew 的模型目录（`GET /api/models`，
+  内部 `kiro-cli --list-models`，不消耗模型回合，只在登录正常时）；claude / opencode 在会话开始时公布模型，Worker 在专用父会话
+  `octopus-models` 下开一轮固定探测（「只回复 OK」、`max_turns: 1`、不带记忆与 lessons，每轮最多一个，以边界主人的身份、消耗很少的额度）。
+  部署排空时、有运行中的子任务时、边界既非 YOLO 也非自动批准时不开探测会话；每个工具至多 3 次（相隔 2 小时），之后放弃；记录在
+  Worker 数据目录 `model-discovery.json`，健康信息 `model_discovery`。
 - codex 不公布模型列表：健康信息 `model_defaults.codex` 报告边界 `~/.codex/config.toml` 的 `model`，控制台写成「自动（openai.gpt-6-astra）」。
 
 ### 停用的 Coding 工具（K01）

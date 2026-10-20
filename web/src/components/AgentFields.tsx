@@ -14,7 +14,8 @@ export function AgentFields({ value, onChange, models, defaults, idPrefix }: {
 }) {
   const generated = useId();
   const prefix = idPrefix ?? generated;
-  const published = [...new Set(["auto", ...(models?.[value.tool] ?? [])])];
+  // "default" is the tool's own default: the Worker always takes it, as it takes "auto"
+  const published = [...new Set(["auto", ...(models?.[value.tool] ?? []), ...(value.model === "default" ? ["default"] : [])])];
   const known = published.includes(value.model);
   const configured = defaults?.[value.tool];   // D51: what "auto" runs where the tool publishes no list
   return (
@@ -34,9 +35,9 @@ export function AgentFields({ value, onChange, models, defaults, idPrefix }: {
         </NativeSelect>
         {published.length === 1 && (
           <p className="text-[11px] text-muted-foreground">
-            {configured
-              ? `${TOOLS[value.tool] ?? value.tool} 不公布模型列表：「自动」即此执行环境配置的 ${configured}。`
-              : `此执行环境尚未公布 ${TOOLS[value.tool] ?? value.tool} 的模型（平台会自动发现，稍后出现）：可保持自动，或在需求中写明模型，或换到已有模型的执行环境。`}
+            {value.tool === "codex" || configured
+              ? `${TOOLS[value.tool] ?? value.tool} 不公布模型列表：「自动」即此执行环境配置的${configured ? " " + configured : "模型"}。`
+              : `此执行环境尚未公布 ${TOOLS[value.tool] ?? value.tool} 的模型（平台会自动尝试发现）：可保持自动，或在需求中写明模型，或换到已有模型的执行环境。`}
           </p>
         )}
       </div>

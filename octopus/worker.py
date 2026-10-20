@@ -34,7 +34,8 @@ from .security import Error, require
 # opens one per tool that has none yet, with no one asking (owner 2026-10-20); codex never publishes its models.
 DISCOVERY_PROMPT = "这是 KiroCrew ON 平台的模型发现探测：不要读取或修改任何文件，不要调用任何工具，只回复 OK。"
 DISCOVERY_TOOLS = ("kiro", "claude", "opencode")
-DISCOVERY_RETRY = 2 * 3600   # a probe that left no models is tried again after this
+DISCOVERY_RETRY = 2 * 3600   # a try that left no models is repeated after this
+DISCOVERY_TRIES = 3          # then the tool is given up on (reported in health) until its list appears
 NAMESPACES = {"kiro": "acp", "claude": "claude_code", "codex": "codex", "opencode": "opencode"}
 
 
@@ -790,18 +791,64 @@ class Worker:
         return {"codex": model} if isinstance(model, str) and model else {}
 
     def discover_models(self):
-        """Probe each available tool KiroCrew has not yet published models for (D51 R2–R4): one turn with a fixed
-        prompt under the platform's own parent session, never while real work runs, at most once in two hours each.
-        Returns the tools probed."""
+        """Fill KiroCrew's model lists for the tools that have none yet (D51 R2–R4), at most one probe session a round and
+        three tries per tool: kiro's list is KiroCrew's catalog (GET /api/models, kiro-cli --list-models; no model turn),
+        the others publish theirs when a session starts. Never during a deploy drain, while real work runs, or where a
+        session would wait for an approval. Returns the tools tried."""
+        if (self.root / ".maintenance").exists():
+            return []
         record_file = self.root / "model-discovery.json"
         record = json.loads(record_file.read_text()) if record_file.is_file() else {}
-        published, tools = self.advertised(), self.tools()
-        due = [tool for tool in DISCOVERY_TOOLS
-               if (tools.get(tool) or {}).get("available") and not published.get(tool)
-               and (tool != "kiro" or tools["kiro"].get("login") == "ok")   # never a login flow (R3)
-               and time.time() - (record.get(tool) or {}).get("at", 0) >= DISCOVERY_RETRY]
-        if not due or any(not row.get("done") for row in self.native("/api/spawn").get("agents", [])):
-            return []
+        published, tools, now = self.advertised(), self.tools(), time.time()
+        for tool, entry in record.items():   # a list that appeared ends that tool's discovery
+            if published.get(tool):
+                entry["result"] = "found"
+
+        def due(tool):
+            entry = record.get(tool) or {}
+            if not (tools.get(tool) or {}).get("available") or published.get(tool) or entry.get("result") == "gave_up":
+                return False
+            if tool == "kiro" and tools["kiro"].get("login") != "ok":   # never a login flow (R3)
+                return False
+            if now - entry.get("at", 0) < DISCOVERY_RETRY:
+                return False
+            if entry.get("attempts", 0) >= DISCOVERY_TRIES:
+                entry["result"] = "gave_up"
+                return False
+            return True
+
+        def tried(tool, **result):
+            entry = record.setdefault(tool, {})
+            entry.update(at=now, attempts=entry.get("attempts", 0) + 1, **result)
+            write(record_file, record)
+
+        done = []
+        if due("kiro"):
+            try:
+                self.native("/api/models")
+                tried("kiro", result="asked")
+            except Exception as exc:
+                tried("kiro", result="failed", error=type(exc).__name__)
+            done.append("kiro")
+        session = next((tool for tool in DISCOVERY_TOOLS if tool != "kiro" and due(tool)), None)
+        if session and (self.crew_yolo or self.approval_mode == "auto") and \
+                not any(not row.get("done") for row in self.native("/api/spawn").get("agents", [])):
+            try:
+                slot = self._discovery_slot()
+                spawn = {"task": DISCOVERY_PROMPT, "parent_session": "dashboard:" + slot, "agent": "poc-" + session,
+                         "model": "auto", "max_turns": 1, "cwd": str(self.root / "model-discovery"), "keep": False,
+                         "include_memory": False, "include_lessons": False, "include_project": False, "silent": True}
+                if self.approval_mode == "auto":
+                    spawn["approval_mode"] = "auto"
+                tried(session, result="spawned", native_id=self.native("/api/spawn", spawn).get("id"))
+            except Exception as exc:   # recorded, not raised: the next round tries again
+                tried(session, result="failed", error=type(exc).__name__)
+            done.append(session)
+        write(record_file, record)
+        return done
+
+    def _discovery_slot(self):
+        """The platform's own parent session for probes (D51), kept apart from every Session's octopus-run-* slot."""
         slot = "octopus-models"
         try:
             self.native("/api/chat/slots/" + slot)
@@ -812,20 +859,12 @@ class Worker:
                                                       "model": "auto", "memory_mode": "temporary"})
             require(present.get("key", present.get("slot")) == slot, "原生父 Session 身份不一致")
         (self.root / "model-discovery").mkdir(exist_ok=True)
-        for tool in due:
-            entry = {"at": time.time()}
-            try:
-                spawn = {"task": DISCOVERY_PROMPT, "parent_session": "dashboard:" + slot, "agent": "poc-" + tool,
-                         "model": "auto", "max_turns": 1, "cwd": str(self.root / "model-discovery"), "keep": False,
-                         "include_memory": False, "include_lessons": False, "include_project": False, "silent": True}
-                if self.approval_mode == "auto":
-                    spawn["approval_mode"] = "auto"
-                entry.update(result="spawned", native_id=self.native("/api/spawn", spawn).get("id"))
-            except Exception as exc:   # recorded, not raised: the other tools still get their probe
-                entry.update(result="failed", error=type(exc).__name__)
-            record[tool] = entry
-            write(record_file, record)
-        return due
+        return slot
+
+    def discovery_state(self):
+        """What model discovery has done on this boundary (D51), for the health report."""
+        record_file = self.root / "model-discovery.json"
+        return json.loads(record_file.read_text()) if record_file.is_file() else {}
 
     def health(self):
         # Descriptive boundary, not cryptographic proof of OS isolation.
@@ -847,6 +886,7 @@ class Worker:
                 "model_source": "KiroCrew provider_models.json; ACP session/new advertised cache",
                 "advertised_models": advertised,
                 "model_defaults": self.model_defaults(),   # D51 R5: what "auto" runs where the tool publishes no list
+                "model_discovery": self.discovery_state(),
                 "models": {tool: list(dict.fromkeys(["auto"] + [m for m in ids if re.fullmatch(r"[a-zA-Z0-9][a-zA-Z0-9._-]*", m)]))
                            for tool, ids in advertised.items()},
                 "limitations": ["当前原生 spawn 模型格式不支持 /、:、[]；这些已公布的 ID 不列为可直接派发模型。",
