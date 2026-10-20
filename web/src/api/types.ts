@@ -140,6 +140,8 @@ export interface AttemptEvidence {
   continue_refused?: string | null;
   /** Verify commands still running (D37 §5). */
   checks?: { job: string; started: number; commands: number } | null;
+  /** What the Evaluator left to a person (D46 P3). */
+  evaluation?: { pending?: { item: string; result?: string; evidence: string }[] } | null;
   [key: string]: unknown;
 }
 

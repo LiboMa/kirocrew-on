@@ -33,7 +33,7 @@ export function DialogHost({ dialog }: { dialog: Dialog | null }) {
     case "password":
       return <PasswordDialog />;
     case "continue":
-      return <ContinueDialog run={dialog.run} taskId={dialog.taskId} />;
+      return <ContinueDialog run={dialog.run} taskId={dialog.taskId} note={dialog.note} />;
     case "assign":
       return <AssignWorkerDialog run={dialog.run} />;
     case "control":

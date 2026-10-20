@@ -23,7 +23,7 @@ export type Dialog =
   | { kind: "password" }
   // Session dialogs carry the Session as it was when they opened: commands then send that expected_version, and a
   // concurrent change is rejected by the server instead of silently retargeting the dialog.
-  | { kind: "continue"; run: Run; taskId?: string }
+  | { kind: "continue"; run: Run; taskId?: string; note?: string }
   | { kind: "assign"; run: Run }
   | { kind: "control"; run: Run; action: "close" | "reopen" | "delete" };
 

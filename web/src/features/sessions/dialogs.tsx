@@ -14,13 +14,13 @@ import { useConsole } from "@/features/console/context";
 import { useRefreshRun } from "@/features/sessions/useSessionActions";
 import { rerunPlan } from "@/lib/session";
 
-export function ContinueDialog({ run, taskId }: { run: Run; taskId?: string }) {
+export function ContinueDialog({ run, taskId, note }: { run: Run; taskId?: string; note?: string }) {
   const { close, workers } = useConsole();
   const refresh = useRefreshRun();
   const [task] = useState(() => run.tasks.find((t) => t.id === taskId) ?? run.tasks.find((t) => t.status !== "accepted") ?? run.tasks[0]);
   const [input, setInput] = useState(run.input);
   const [name, setName] = useState(task.spec.name);
-  const [prompt, setPrompt] = useState(task.spec.prompt);
+  const [prompt, setPrompt] = useState(note ? task.spec.prompt + "\n\n" + note : task.spec.prompt);
   const [agent, setAgent] = useState({ tool: task.spec.tool, model: task.spec.model, effort: task.spec.effort });
   const [recovery, setRecovery] = useState(run.recovery?.policy ?? DEFAULT_RECOVERY);
   const models = workers.find((w) => w.id === run.worker_id)?.capabilities.models;

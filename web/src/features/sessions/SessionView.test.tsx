@@ -276,6 +276,26 @@ describe("session detail", () => {
     await waitFor(() => expect(calls.find((c) => c.path === "/v1/runs/run-a/accept")?.body).toMatchObject({ expected_version: 4 }));
   });
 
+  test("what the Evaluator left to a person can be rejected into a rework of the reviewed change (D46 P3)", async () => {
+    const pending = [{ item: "错误密码提示", result: "pending", evidence: "文案需产品确认" }];
+    const waiting = { ...blocked, status: "awaiting_acceptance", error: null,
+      attention: { title: "验收待确认", detail: "Evaluator 判为需要人判断：错误密码提示（文案需产品确认）", action: "核对后确认通过", task_id: "review" },
+      tasks: [
+        { ...blocked.tasks[0], status: "accepted", spec: { ...blocked.tasks[0].spec, kind: "implement" } },
+        { ...blocked.tasks[1], status: "awaiting_acceptance", current_attempt: "att-2",
+          spec: { ...blocked.tasks[1].spec, kind: "review", role: "evaluator" },
+          attempts: [{ id: "att-2", number: 1, status: "awaiting_acceptance", spec: blocked.tasks[1].spec, native_id: "native-78",
+            context_hash: "def", evidence: { evaluation: { pending } }, result: "验收", error: null, created: 3, updated: 4 }] },
+      ] } as Run;
+    const calls = open(waiting, { "POST /runs/run-a/continue": { id: "run-a", status: "accepted" } });
+    await userEvent.click(await screen.findByRole("button", { name: /不通过，返工/ }));
+    expect(await screen.findByText("继续此 Session · 实现与测试")).toBeInTheDocument();
+    expect((screen.getByLabelText("任务说明") as HTMLTextAreaElement).value).toMatch(/验收未通过[\s\S]*错误密码提示（文案需产品确认）/);
+    await userEvent.click(screen.getByRole("button", { name: "保存并续作" }));
+    await waitFor(() => expect(calls.find((c) => c.path === "/v1/runs/run-a/continue")?.body).toMatchObject({
+      task_id: "code", execution: { prompt: expect.stringContaining("错误密码提示") } }));
+  });
+
   test("an acceptance that may not be given is not offered (D46 P3)", async () => {
     open({ ...blocked, status: "awaiting_acceptance", error: null, permissions: { operate: true, delete: true, resume: false, publish: false },
       attention: { title: "验收待确认", detail: "待判定", action: "核对后确认通过" } } as Run);

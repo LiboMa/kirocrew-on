@@ -30,7 +30,9 @@ import { TaskList } from "@/features/sessions/TaskList";
 import { useSessionActions } from "@/features/sessions/useSessionActions";
 import { bindingLabel } from "@/lib/credentials";
 import { usageLine } from "@/lib/usage";
-import { canContinue, canDelete, canRecover, canStop, closeAction, crewEntryReason, deleteReason, directReason, resumeReason, statusText } from "@/lib/session";
+import {
+  canContinue, canDelete, canRecover, canStop, closeAction, crewEntryReason, deleteReason, directReason, resumeReason, rework, statusText,
+} from "@/lib/session";
 
 export function SessionView({ id }: { id: string }) {
   const { allTeams, workflows, workers, me, open } = useConsole();
@@ -186,6 +188,10 @@ export function SessionView({ id }: { id: string }) {
             <Button size="sm" onClick={actions.accept} id="run-accept"
               disabled={!!actions.busy || run.permissions?.publish === false || !!resumeReason(run)}>
               <Play /> 确认通过
+            </Button>
+            <Button size="sm" variant="outline" onClick={() => open({ kind: "continue", run, ...rework(run) })} id="run-rework"
+              disabled={!!actions.busy || !canContinue(run)}>
+              <RotateCcw /> 不通过，返工…
             </Button>
           </AlertDescription>
         </Alert>

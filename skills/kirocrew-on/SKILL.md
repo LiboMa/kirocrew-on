@@ -97,7 +97,7 @@ KiroCrew ON 在远端执行开发任务：KiroCrew 的 Kiro Agent 先识别意�
 | `waiting_worker` | 还没有 Worker 执行，或原来的执行环境已更换、已移出该空间、已停用或已退役（`error` 写明原因）：把 `attention.title` / `attention.action` 告诉用户。`attention.workers` 为 0 时该空间没有可用的执行环境（尚未分配或已停用），请管理员分配或启用，或改在个人空间重新提交；大于 0 时用 `octopus_environments`（传 `run_id`）列出这个会话可分配的环境，经用户确认后用 `octopus_assign_worker` 分配 |
 | `blocked` / `failed` | 读 `attention.title` / `attention.action` 告诉用户；可用 `octopus_recover` 诊断修复，或用 `octopus_continue` 修改后重跑。`attention.title` 为「需要换用工具或模型」时，向用户说明原因（`attention.detail`）并建议换用一个可用的工具；经用户同意后用 `octopus_continue` 的 `execution.tool` / `execution.model` 续作，不要自行决定 |
 | `waiting_approval` | 原生任务在等待批准一次工具调用：用 `octopus_approvals` 列出，把工具、完整的命令或文件与用途告诉用户；用户同意后用 `octopus_approve` 答复（approve），不同意则 reject。不要替用户决定 |
-| `awaiting_acceptance` | 验收待确认：改代码的会话由 Evaluator 逐项验收，它把需要人判断的项（Evaluator 任务的 `latest.pending`：验收项与证据）留给用户；把这些项列给用户，同意后用 `octopus_accept {run_id, request_id, expected_version}`，不同意时用 `octopus_continue` 返工，不要替用户确认 |
+| `awaiting_acceptance` | 验收待确认：改代码的会话由 Evaluator 逐项验收，它把需要人判断的项（Evaluator 任务的 `latest.pending`：验收项与证据）留给用户；把这些项列给用户，同意后用 `octopus_accept {run_id, request_id, expected_version}`，不同意时用 `octopus_continue` 返工：`task_id` 用 Evaluator 之前那个改代码的任务（kind 为 implement / deliver），把没通过的项写进它的 `prompt`；不要替用户确认 |
 | `awaiting_confirmation` | 计划待确认：把各任务（名称、工具与模型及 `mapping` 来源、验收项、检查命令）列给用户；用户同意后用 `octopus_confirm {run_id, request_id, expected_version}` 开始执行，要修改时用 `octopus_continue`（修改后续作即视为确认），不要替用户确认 |
 | `completed` | 完成；用 `octopus_preview` 给出预览。`session.knowledge` 列出本次沉淀的项目知识（见下） |
 

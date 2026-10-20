@@ -18,6 +18,18 @@ export function canContinue(run: Run): boolean {
   return !ACTIVE_STATES.has(run.status) && open(run) && !design(run) && resumable(run) && directed(run);
 }
 
+/** D46 P3: not passing what the Evaluator left to a person reworks the change it reviewed, with the open items in hand. */
+export function rework(run: Run): { taskId: string; note: string } | null {
+  const at = run.tasks.findIndex((t) => t.status === "awaiting_acceptance");
+  if (at < 0) return null;
+  const before = run.tasks.slice(0, at);
+  const target = [...before].reverse().find((t) => t.spec.kind === "implement" || t.spec.kind === "deliver")
+    ?? before[before.length - 1] ?? run.tasks[at];
+  const attempts = run.tasks[at].attempts ?? [];
+  const pending = attempts[attempts.length - 1]?.evidence?.evaluation?.pending ?? [];
+  return { taskId: target.id, note: ["验收未通过，请按以下各项返工：", ...pending.map((p) => `- ${p.item}（${p.evidence}）`)].join("\n") };
+}
+
 /** Why continuing, diagnosing, reopening and reassigning are not offered (an archived Team, P3). */
 export function resumeReason(run: Run): string {
   return resumable(run) ? "" : "Team 已归档：会话可查看与停止，不能续作、诊断、确认计划、重新打开或重新分配 Worker。";

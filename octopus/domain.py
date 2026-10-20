@@ -1911,7 +1911,8 @@ class Service:
             pending = ((((task or {}).get("attempts") or [{}])[-1].get("evidence") or {}).get("evaluation") or {}).get("pending") or []
             return {"title": "验收待确认",
                     "detail": "Evaluator 判为需要人判断：" + "；".join(f"{p['item']}（{p['evidence']}）" for p in pending[:5]),
-                    "action": "核对后在会话页点「确认通过」，或续作返工；Coding Agent 经用户同意后用 octopus_accept。",
+                    "action": "核对后在会话页点「确认通过」；不通过就点「不通过，返工…」，把这些验收项交回被审查的任务重做。"
+                              "Coding Agent 经用户同意后用 octopus_accept，返工用 octopus_continue。",
                     "task_id": task["id"] if task else None}
         if run["status"] == "awaiting_confirmation":
             planned = (run.get("planning") or {}).get("applied")
