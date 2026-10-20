@@ -94,6 +94,9 @@ class KiroLoginTests(WaitingCase):
         run = self.tick(rid)
         self.assertEqual(run["status"], "blocked")
         self.assertEqual(run["attention"]["title"], "等待 Kiro 登录恢复")
+        # D53: what each person does — the administrator starts the login, the boundary's owner authorizes it
+        self.assertIn("请平台管理员发起 kiro 重新登录", run["attention"]["action"])
+        self.assertIn("设备码", run["attention"]["action"])
         self.login = "expired"
         self.engine.probe()
         self.assertEqual(self.tick(rid)["status"], "blocked")   # still expired

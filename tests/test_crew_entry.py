@@ -164,9 +164,8 @@ class CrewEntryTests(unittest.TestCase):
         with self.assertRaises(Error) as caught:
             self.create()
         self.assertEqual(caught.exception.code, "crew_origin_required")
-        # crew_url is written by worker-host push; native only adds the relay (both are steps of worker-host add).
-        self.assertIn("deploy.sh worker-host add", str(caught.exception))
-        self.assertIn("push", str(caught.exception))
+        # D53: the user is told to ask the administrator; worker-host add (push, then native) is in OPERATIONS
+        self.assertIn("请平台管理员为它开通", str(caught.exception))
         self.assertTrue(all(path == "/health" for path, _ in self.calls))
 
     def test_wrong_redirect_and_changed_lifecycle_never_return_link(self):

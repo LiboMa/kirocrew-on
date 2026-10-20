@@ -37,6 +37,17 @@ function open(run: Run, extra: Record<string, unknown> = {}) {
 }
 
 describe("session detail", () => {
+  test("the local preview command is for administrators only (D53)", async () => {
+    const run = makeRun({ id: "run-l", status: "completed" });
+    open(run, { "GET /me": { id: "u2", username: "dev1", admin: 0, scopes: ["read", "execute", "manage"] } });
+    await screen.findByText("Workspace 与原生会话");
+    expect(screen.queryByText(/deploy\.sh/)).toBeNull();
+    window.history.replaceState(null, "", "/");
+    document.body.innerHTML = "";
+    open(run);
+    expect(await screen.findByText("deploy/aws/deploy.sh space run-l")).toBeInTheDocument();
+  });
+
   test("shows what the Session wrote to the environment's knowledge (D46 P4)", async () => {
     open(makeRun({ id: "run-k", status: "completed", knowledge: { note: null, items: [{ id: "knowledge-1", task_id: "knowledge",
       rule: "依赖用 pnpm 安装", avoid: null, result: "written", reason: null, created: 1, removed: null, removed_by: null }] } }));

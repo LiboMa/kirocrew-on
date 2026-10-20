@@ -86,7 +86,7 @@ def upstream(config, port, via):
         require(isinstance(via, dict) and isinstance(via.get("port"), int) and not isinstance(via["port"], bool)
                 and 1 <= via["port"] <= 65535 and isinstance(via.get("name"), str) and NAME.fullmatch(via["name"]),
                 "Worker 报告的预览端口或名称无效", 502, "worker_invalid")
-    require(via, "此 Worker 主机尚未配置预览端口：执行 deploy.sh worker-host push <名称>", 409, "app_unreachable")
+    require(via, "此 Worker 主机尚未配置预览端口：请平台管理员为它配置远程预览", 409, "app_unreachable")
     return {"url": f"https://{host}:{via['port']}", "name": via["name"], "verify": verify_value(config["token"]),
             "port": port}
 

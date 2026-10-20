@@ -50,7 +50,7 @@ TOOLS = [
     {"name": "octopus_preview",
      "description": "返回某个 Session 产出的 Web 预览链接（Workspace 中的 index.html 等静态页面，10 分钟有效，在隔离环境中运行，"
                     "页面内 localStorage、sessionStorage、IndexedDB 与 Cookie 不可用）；"
-                    "需要开发服务器的项目请用 deploy/aws/deploy.sh space <run_id> 在本机预览。",
+                    "需要开发服务器的项目用 octopus_app 在执行环境启动预览，或用 octopus_download 下载后在本机运行。",
      "inputSchema": object_schema({"run_id": STRING}, ["run_id"]), "annotations": {"readOnlyHint": True}},
     {"name": "octopus_observe",
      "description": "读取 Session 的原生 KiroCrew 会话（协调者与子 Agent 的对话、是否仍在运行），只读，不需要打开 KiroCrew。"

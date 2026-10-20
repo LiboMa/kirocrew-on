@@ -17,7 +17,7 @@ def create(service, actor, body):
     require(health.get("boundary") == connection["capabilities"]["boundary"],
             "Worker 执行边界发生变化，请重新核查", 409, "worker_changed")
     require(health.get("workflow_design") is True,
-            "此 Worker 尚未支持工作流建议，请更新并重启 Worker", 409, "worker_upgrade_required")
+            "此执行环境的 Worker 版本尚不支持工作流建议：请平台管理员更新它", 409, "worker_upgrade_required")
     spec = [{"id": "design", "name": "推荐工作流与 Agent 提示词", "tool": "kiro", "model": "auto", "effort": "",
              "prompt": "根据完整用户需求与当前模板/任务基线，生成可编辑的工作流 JSON。"
                        "为每个 Task 写具体输入、实施步骤、交付物与验证方式；只设计工作流，不执行其中的开发任务。"}]

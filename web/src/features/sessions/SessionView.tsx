@@ -272,13 +272,13 @@ export function SessionView({ id }: { id: string }) {
               <div><dt className="text-muted-foreground">来源</dt><dd className="font-mono break-all">{run.source.url ? `${run.source.url}${run.source.ref ? " @ " + run.source.ref : ""}` : "新建项目"}</dd></div>
             </dl>
             <p className="text-muted-foreground">运行与源码由此空间的 Worker 保管。</p>
-            <div className="space-y-1 border-t pt-2">
-              <p className="text-muted-foreground">需要开发服务器的项目，在本机仓库目录运行后打开 localhost:&lt;远端端口+10000&gt;：</p>
+            {!!me.admin && <div className="space-y-1 border-t pt-2">
+              <p className="text-muted-foreground">管理员：在本机 kirocrew-on 仓库目录运行后打开 localhost:&lt;远端端口+10000&gt;：</p>
               <button type="button" className="flex w-full items-center gap-2 rounded-md bg-muted px-2 py-1.5 text-left font-mono text-[11px] hover:bg-accent"
                 onClick={() => navigator.clipboard?.writeText(`deploy/aws/deploy.sh space ${run.id}`).then(() => toast.success("已复制本地预览命令"))}>
                 <span className="min-w-0 flex-1 break-all">deploy/aws/deploy.sh space {run.id}</span><Copy className="size-3.5 shrink-0" />
               </button>
-            </div>
+            </div>}
           </section>
         </aside>
       </div>

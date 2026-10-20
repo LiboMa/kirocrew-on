@@ -184,7 +184,7 @@ def space_workers(db, user, team):
 
 
 HINT = ("你还没有自己的执行边界：本次在 Team 的环境执行，与其他成员共用并发与 kiro 额度；"
-        "可请平台管理员为你建立（deploy.sh boundary add <名称> --owner <用户名>）")
+        "可请平台管理员为你建立一个")
 DISABLED_HINT = ("你的执行边界目前已停用：本次在 Team 的环境执行，与其他成员共用并发与 kiro 额度；"
                  "请平台管理员重新启用（不要再建第二个：有两个时会话会等待选择）")
 
@@ -1967,7 +1967,8 @@ class Service:
                 action = "失败后检查到 Kiro 登录正常（未见过期，或检查前已恢复），平台不会自动重跑：确认后续作。"
             else:   # the platform reads Kiro's login and continues on its own (D43)
                 title = "等待 Kiro 登录恢复"
-                action = "请管理员执行 deploy.sh kiro-login；登录恢复后自动继续（平台每分钟检查一次）。"
+                action = ("请平台管理员发起 kiro 重新登录；在你自己的执行边界上时，由你用自己的账号授权管理员给出的设备码。"
+                          "登录恢复后自动继续（平台每分钟检查一次）。")
         elif failure in {"auth", "model"}:
             title, action = "等待处理认证、权限或模型配置", "在原生 KiroCrew 处理权限，或修改本任务配置后重跑。"
         elif latest and latest["status"] == "blocked":

@@ -69,7 +69,8 @@ class RuleTests(PlacementCase):
         _, run = self.start("bob")
         self.assertEqual(run["worker_id"], "teamenv")
         self.assertEqual(run["placement"]["kind"], "team")
-        self.assertIn("boundary add", run["placement"]["hint"])
+        self.assertIn("请平台管理员", run["placement"]["hint"])   # D53: the user is pointed to the administrator,
+        self.assertNotIn("deploy.sh", run["placement"]["hint"])   # never handed an ops command
 
     def test_a_team_without_an_environment_takes_a_member_with_a_boundary(self):
         with self.db.transaction() as db:
@@ -172,7 +173,8 @@ class InterfaceTests(PlacementCase):
         self.assertEqual({(o["id"], o["own"]) for o in mine["options"]}, {("alice-b", True), ("teamenv", False)})
         theirs = self.service.placement(self.people["bob"], "team-a")
         self.assertEqual((theirs["default"]["id"], theirs["default"]["placement"]), ("teamenv", "team"))
-        self.assertIn("boundary add", theirs["hint"])
+        self.assertIn("请平台管理员", theirs["hint"])   # D53: the user is pointed to the administrator,
+        self.assertNotIn("deploy.sh", theirs["hint"])   # never handed an ops command
         self.assertEqual(self.service.placement(self.people["alice"])["default"]["placement"], "own")
         with self.db.transaction() as db:
             eve = authenticate(db, issue_token(db, create_user(db, "eve", "eve-password-123", admin=False)["id"])["token"])
@@ -229,7 +231,8 @@ class InterfaceTests(PlacementCase):
         listed = mcp.call(Client(), "octopus_environments", {"team_id": "team-a"})
         self.assertEqual(seen[-1], ("GET", "/v1/placement?team_id=team-a"))
         self.assertEqual([(e["id"], e["default"]) for e in listed["environments"]], [("teamenv", True)])
-        self.assertIn("boundary add", listed["hint"])
+        self.assertIn("请平台管理员", listed["hint"])   # D53: the user is pointed to the administrator,
+        self.assertNotIn("deploy.sh", listed["hint"])   # never handed an ops command
         mcp.call(Client(), "octopus_environments", {"run_id": "run-1"})
         self.assertEqual(seen[-1], ("GET", "/v1/placement?run_id=run-1"))
 
@@ -238,7 +241,8 @@ class InterfaceTests(PlacementCase):
         created, _ = self.start("bob")
         view = mcp.compact_status(self.service.run(self.people["bob"], created["id"]), [])["session"]
         self.assertEqual(view["placement"]["kind"], "team")
-        self.assertIn("boundary add", view["placement"]["hint"])
+        self.assertIn("请平台管理员", view["placement"]["hint"])   # D53: the user is pointed to the administrator,
+        self.assertNotIn("deploy.sh", view["placement"]["hint"])   # never handed an ops command
 
     def test_the_skill_lists_a_waiting_sessions_environments_by_run(self):   # final review: team_id gave 404 / 403
         from pathlib import Path

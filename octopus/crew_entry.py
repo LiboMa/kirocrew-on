@@ -79,12 +79,11 @@ def create(service, actor, rid):
     require(not run["team_id"] or worker["scope"] == "shared" or health.get("isolation") == "dedicated",
             "Team 原生入口需要该 Team 的专属 Worker", 403, "forbidden")
     require(health.get("crew_entry") is True,
-            "此 Worker 尚未支持原生会话入口，请更新并重启 Worker", 409, "worker_upgrade_required")
+            "此执行环境的 Worker 版本尚不支持原生会话入口：请平台管理员更新它", 409, "worker_upgrade_required")
     origin = browser_origin(health.get("crew_origin"))
     require(urlsplit(config["url"]).hostname in {"localhost", "127.0.0.1", "::1"} or
             urlsplit(origin).hostname not in {"localhost", "127.0.0.1", "::1"},
-            "该执行环境尚未开通原生 KiroCrew 入口：请平台管理员执行 deploy.sh worker-host add <名称>"
-            "（或依次 push、native；docs/OPERATIONS.md「Worker 主机」）",
+            "该执行环境尚未开通原生 KiroCrew 入口：请平台管理员为它开通",
             409, "crew_origin_required")
     result = worker_request(config, "/crew-entry", {"run_id": rid, "native_parent": run["native_parent"]})
     target = urlsplit(result.get("url", ""))

@@ -204,6 +204,19 @@ SSM 隧道（`localhost:15476`）方式仍可用：`crew_url` 指向本地端口
   （此前各步已完成、服务已重启）；写入后重新 `push` 即可。
   从旧版本迁移：在实例角色收窄之前，以 root 把现有密码写入该文件后再执行 `up` 与 `push`。
 
+### 使用者看到的提示与管理员的处理（D53）
+
+使用者的提示（错误、等待原因、MCP 工具说明、Skill）只写原因与「请平台管理员……」，不给运维命令；对应的处理在这里。
+
+| 使用者看到 | 代码 | 管理员的处理 |
+|---|---|---|
+| 你还没有自己的执行边界 / 你的执行边界目前已停用（会话在 Team 的环境执行） | `placement.hint` | `deploy.sh boundary add <名称> --owner <用户名>`；已停用的在控制台重新启用（不要再建第二个） |
+| 等待 Kiro 登录恢复 / Worker 上 kiro-cli 登录已过期 | `tool_auth_expired` | `deploy.sh kiro-login --boundary <边界>`（Worker 主机用 `--host <名称>`）；边界主人用自己的 IdC 账号在浏览器授权设备码（15 分钟内有效） |
+| 该执行环境尚未开通原生 KiroCrew 入口 | `crew_origin_required` | `deploy.sh worker-host add <名称>`（或依次 `push`、`native`；见「Worker 主机」） |
+| 此执行环境的 Worker 版本尚不支持原生会话入口 / 工作流建议 | `worker_upgrade_required` | 更新该 Worker：`deploy.sh push`（平台主机）或 `deploy.sh worker-host push <名称>` |
+| 此 Worker 主机尚未配置预览端口 | `app_unreachable` | `deploy.sh worker-host push <名称>` |
+| 未找到可预览的 index.html | `no_preview` | 无需处理；管理员要在本机运行开发服务器时用 `deploy.sh space <run-id>`（会话页只对管理员显示这条命令） |
+
 ## 4．升级
 
 1. 一致性备份：`sudo -u octopus /opt/kirocrew-on/venv/bin/python -m octopus --config /etc/kirocrew-on/platform.toml backup --dest /var/lib/octopus/platform/backups`

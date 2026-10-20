@@ -490,8 +490,8 @@ class Worker:
         if not relative:
             entry = next((e for e in self.PREVIEW_ENTRIES if (project / e).is_file()), None)
             entry = entry or next((p.name for p in sorted(project.glob("*.html"))), None)
-            require(entry is not None, "未找到可预览的 index.html；需要开发服务器的项目请在本机执行 "
-                    "deploy/aws/deploy.sh space " + body["run_id"], 404, "no_preview")
+            require(entry is not None, "未找到可预览的 index.html；需要开发服务器的项目请在会话页「远程预览」里启动，或「下载源码」在本机运行",
+                    404, "no_preview")
             return {"entry": entry}
         target = (project / relative).resolve()
         require(target.is_relative_to(project) and target.is_file(), "文件不存在", 404, "not_found")
@@ -1060,7 +1060,7 @@ class Worker:
                 return self.reconcile(run, parent, attempt, value)
             if login == "expired":
                 # Refused before anything is recorded or spawned: the platform dispatches this Attempt again later.
-                raise Error(503, "tool_auth_expired", "Worker 上 kiro-cli 登录已过期：请管理员执行 deploy.sh kiro-login")
+                raise Error(503, "tool_auth_expired", "Worker 上 kiro-cli 登录已过期：请平台管理员发起 kiro 重新登录")
             folder.mkdir(parents=True, exist_ok=True)
             handoff = folder / "handoff.md"
             context = {"input": body["input"], "task": spec, "upstream": body.get("upstream", []),
