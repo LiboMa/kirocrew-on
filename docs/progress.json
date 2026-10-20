@@ -1,6 +1,6 @@
 {
   "_comment": "进度看板与 docs/PROGRESS.md 的唯一数据源：任务状态在这里维护；提交记录由 tools/progress.py 从 git 生成（负责人 2026-10-20）。",
-  "checks": "1341 后端 + 195 控制台（e3123aa）；EC2 运行 78639f0",
+  "checks": "1363 后端 + 92 + 198 控制台（3ece2e6）；EC2 运行 3ece2e6（迁移 8 已生效，route 冒烟 5/5）",
   "status": {
     "accepted": {
       "label": "已验收",
@@ -415,12 +415,12 @@
         {
           "id": "team-kb",
           "name": "D52 团队层知识（发布时提到仓库 .octopus/knowledge.md 的 Draft PR，人审核）",
-          "status": "doing",
+          "status": "deployed",
           "deps": [
             "acc-p4"
           ],
-          "ref": "spec 1d5a409",
-          "more": "spec 已写，待负责人审阅（R3 范围、R4 共享环境为推荐方案）；EC2 验收要写测试仓库，需负责人确认仓库与凭证。"
+          "ref": "spec 1d5a409 · 932ad53..3ece2e6",
+          "more": "已实现并部署（共享环境仅仓库层、发布时的知识 Draft PR、任务说明指向与基线一致的知识文件）；opus 终审 3 项 Important 已修复。EC2 验收要在测试仓库开分支与 Draft PR，需负责人确认仓库与写凭证。"
         },
         {
           "id": "skills-next",
@@ -478,6 +478,10 @@
     ]
   ],
   "next": [
+    {
+      "who": "owner",
+      "text": "D52 EC2 验收：指定一个可写入的测试仓库与写凭证（会在其上开 octopus/knowledge-… 分支与 Draft PR）"
+    },
     {
       "who": "me",
       "text": "对最终提交做推送前安全扫描（git-defender scan + scan-history，干净克隆）"
