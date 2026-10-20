@@ -55,7 +55,10 @@ class ContinueWorkerTests(unittest.TestCase):
         value = self.dispatch(SECOND, **{"continue": {"conversation": "aaaa1111", "from": FIRST}})
         path, body = self.spawns()[-1]
         self.assertEqual(path, "/api/spawn/aaaa1111/continue")
-        self.assertEqual(set(body), {"task", "parent_session", "agent"})   # auto model: none sent
+        # EC2 2026-10-20: with no model KiroCrew continued on its global default (claude-opus-5.5): a claude "default" run
+        # became Opus, a codex one was asked for a Claude model. "auto" is sent as on the first spawn.
+        self.assertEqual(set(body), {"task", "parent_session", "agent", "model"})
+        self.assertEqual(body["model"], "auto")
         self.assertEqual((body["parent_session"], body["agent"]), ("dashboard:octopus-" + RID, "poc-claude"))
         self.assertIn("[OCTOPUS-ATTEMPT:" + SECOND + "]", body["task"])
         self.assertIn(REWORK, body["task"])

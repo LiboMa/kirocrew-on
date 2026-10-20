@@ -1082,10 +1082,10 @@ class Worker:
                     value["continue_refused"] = unresumable
                 elif resume is not None:
                     # A new run in the conversation: its context and cwd; /continue takes no effort or approval mode.
+                    # The model is always sent, "auto" too: without one KiroCrew continues on its global default model
+                    # (EC2 2026-10-20: a claude "default" run became Opus; a codex one was asked for a Claude model).
                     again = {"task": prompt + rework_note((contract or {}).get("kind"), body.get("repair")),
-                             "parent_session": parent["parent"], "agent": spawn["agent"]}
-                    if explicit:
-                        again["model"] = spec["model"]
+                             "parent_session": parent["parent"], "agent": spawn["agent"], "model": spec["model"]}
                     try:
                         result = self.native("/api/spawn/" + quote(resume["conversation"], safe="") + "/continue", again)
                         value["continued"] = {"conversation": resume["conversation"], "from": resume["from"]}
