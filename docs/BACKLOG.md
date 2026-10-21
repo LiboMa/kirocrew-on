@@ -111,7 +111,7 @@
 - `health()["continue"]` 恒为 true：前置的 KiroCrew 早于 0.10 时每次返工都记 `continue_refused: HTTP 404`，可与接受的 KiroCrew 版本挂钩。
 - `from` 只校验格式，未核对它的 dispatch.json 确有该对话。
 - ~~原生错误或看门狗停止之后的返工也会续接坏掉的那个对话~~（2026-10-20 修复：上一轮对话本身出错时全新派发，工作没做到位时才续接）。
-- 文案在 spec、任务卡片与报告间略有不同；MCP `latest.continued` 易与 `octopus_continue` 混淆；Skill 未提及。
+- 文案在 spec、任务卡片与报告间略有不同；~~MCP `latest.continued` 易与 `octopus_continue` 混淆；Skill 未提及~~（2026-10-21 Skill 写明二者无关）。
 - 测试缺口：引擎侧 `continue_refused` 的证据 / MCP / 报告、`rerun` 类的续接、经引擎的外来对话。
 
 ## D49 每人一个边界第 1 期的终审延后项（2026-10-19）
