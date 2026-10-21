@@ -32,7 +32,7 @@
       "id": "mvp",
       "title": "MVP 里程碑（M1–M5）",
       "scope": "mvp",
-      "desc": "首个可用 MVP = M1 + M2 + M3 在 EC2 验收；M4、M5 之后立项。",
+      "desc": "首个可用 MVP = M1 + M2 + M3 在 EC2 验收；M4、M5 之后立项。条目按 MVP-RELEASE §6 / §7 与 BACKLOG 拆开（2026-10-21）；写「需设计」的尚无设计文档与实施计划。",
       "items": [
         {
           "id": "m1",
@@ -49,6 +49,48 @@
           "more": "KiroCrew 规划、命名门禁、候选提交、Feature 报告、发布 Draft PR / 新建仓库 / 自动发布、换工具、恢复阶梯（L0、看门狗、重新规划、预算、等待与自动恢复）、计划确认、映射来源、故障注入、已有仓库完整闭环。"
         },
         {
+          "id": "m2-request",
+          "name": "M2-1 Request 表与 API（来源客户端、仓库与 ref、与 Session 关联）",
+          "status": "todo",
+          "ref": "MVP-RELEASE §6 #1",
+          "more": "§6 验收 1（自然语言登记 Request 并返回 Pipeline）依赖它；现由 Session 的 request_id 幂等登记。需设计：尚无设计文档与实施计划。"
+        },
+        {
+          "id": "m2-schema2",
+          "name": "M2-2 Pipeline schema 2 与规划阶段的只读源码检查",
+          "status": "todo",
+          "ref": "§6 #2",
+          "more": "KiroCrew 规划、规则匹配、工作流文档导入已上线（§14.2 #2）。需设计：尚无设计文档与实施计划。"
+        },
+        {
+          "id": "m2-gate-catalog",
+          "name": "M2-3 门禁目录补齐：candidate_unchanged",
+          "status": "todo",
+          "ref": "§6 #3",
+          "more": "其余门禁已上线（D37：native_completed … review_bound、tests_fail_on_baseline、artifacts_locked）。"
+        },
+        {
+          "id": "m2-mapping-pref",
+          "name": "M2-4 个人 / Team 映射偏好",
+          "status": "todo",
+          "ref": "§6 #4",
+          "more": "显式指定、需求中指定（D45）、协调者换工具（D38）、映射来源已上线；不内置回退链（负责人）。需设计：尚无设计文档与实施计划。"
+        },
+        {
+          "id": "m2-admission",
+          "name": "M2-5 按仓库范围的自动准入与策略快照",
+          "status": "todo",
+          "ref": "§6 #5",
+          "more": "计划确认（D44）已上线。需设计：尚无设计文档与实施计划。"
+        },
+        {
+          "id": "m2-fault",
+          "name": "M2-6 故障注入：「工具空结果」的 EC2 证据",
+          "status": "doing",
+          "ref": "§6 验收 4",
+          "more": "测试失败、Gateway 重启、回执丢失、Attempt 卡住已有 EC2 证据（§14.21）。"
+        },
+        {
           "id": "m2-approval",
           "name": "M2 批准代理：真实批准与 CLI",
           "status": "deployed",
@@ -56,11 +98,11 @@
           "more": "列表与错误路径已在 EC2 验证；真实批准需要一个 crew_yolo=false 的边界；CLI 未做。"
         },
         {
-          "id": "m2-rest",
-          "name": "M2 剩余：Request 表、schema 2、按仓库自动准入、个人 / Team 映射偏好",
+          "id": "m2-push",
+          "name": "M2-9 推送：回执丢失与远端变化不重复、不覆盖的 EC2 核对",
           "status": "todo",
-          "ref": "§14.2",
-          "more": "§6 验收条件 1（自然语言登记 Request）依赖 Request 表；6 缺回执丢失与远端变化的 EC2 核对。"
+          "ref": "§6 验收 6",
+          "more": "推送、Draft PR、自动发布、新建仓库已验收（§14.11、14.27、14.29）。"
         },
         {
           "id": "m3-core",
@@ -70,10 +112,46 @@
           "more": "Claude Code / Kiro CLI 的 connect + Skill + MCP（35 个工具），React 控制台（门禁、报告、修订对比、待批准、发布、用量）。"
         },
         {
-          "id": "m3-rest",
-          "name": "M3 剩余：Codex / Kiro IDE connect、用户 CLI、pull / sync、服务端分页与全文搜索",
+          "id": "m3-connect",
+          "name": "M3-1 connect：Codex、Kiro IDE 与写前备份核对",
           "status": "todo",
-          "ref": "§14.3"
+          "ref": "§7 #1",
+          "more": "Claude Code、Kiro CLI 已上线；Codex / Kiro IDE 现为 docs/CONNECT.md 的手动说明。"
+        },
+        {
+          "id": "m3-cli",
+          "name": "M3-2 用户 CLI（login / submit / plan / confirm / status / watch / report / pull / sync / continue / approvals / search）",
+          "status": "todo",
+          "ref": "§7 #2",
+          "more": "现有命令为运维类；使用者经 MCP 与控制台操作。需设计：尚无设计文档与实施计划。"
+        },
+        {
+          "id": "m3-mcp",
+          "name": "M3-3 MCP 补齐：Request、搜索、会话关联",
+          "status": "doing",
+          "ref": "§7 #3",
+          "more": "已有 35 个工具（含计划确认、验收、报告、批准、修订、补充说明）。"
+        },
+        {
+          "id": "m3-sync",
+          "name": "M3-4 本地 / 远端联动：pull、sync、--push-base、.octopus/session.json",
+          "status": "todo",
+          "ref": "§7 #4",
+          "more": "§7 验收 1（四个客户端 connect → … → sync → 复审）依赖它；现用 deploy.sh space 与远程预览替代。需设计：尚无设计文档与实施计划。"
+        },
+        {
+          "id": "m3-console",
+          "name": "M3-5 控制台：服务端分页、按仓库 / 分支 / 工具 / 客户端 / 提交者 / 时间过滤、全文搜索",
+          "status": "todo",
+          "ref": "§7 #5",
+          "more": "列表、详情、门禁、报告、修订对比、变更记录已上线；搜索现为客户端关键字。"
+        },
+        {
+          "id": "m3-classic",
+          "name": "M3-6 移除旧版控制台 /classic/",
+          "status": "todo",
+          "ref": "BACKLOG",
+          "more": "React 版功能对齐并经负责人确认后。"
         },
         {
           "id": "m4-team",
@@ -82,15 +160,64 @@
           "ref": "D28–D30"
         },
         {
-          "id": "m4-rest",
-          "name": "M4 剩余：组织层、Worker Token 移出数据库（K10）、单 Session 票据（K03）、排队与配额",
-          "status": "todo"
+          "id": "m4-org",
+          "name": "M4-1 组织层：会话共享给个人 / Team / 公司",
+          "status": "todo",
+          "ref": "BACKLOG 共享与组织",
+          "more": "需设计：尚无设计文档与实施计划。"
         },
         {
-          "id": "m5",
-          "name": "M5 仓库闭环（GitHub Connector）",
+          "id": "m4-k10",
+          "name": "M4-2 Worker Token 移出数据库（K10）",
           "status": "todo",
-          "ref": "设计草案"
+          "ref": "继承问题 K10"
+        },
+        {
+          "id": "m4-k03",
+          "name": "M4-3 原生入口改为单 Session 票据（K03）",
+          "status": "todo",
+          "ref": "继承问题 K03"
+        },
+        {
+          "id": "m4-quota",
+          "name": "M4-4 排队与配额",
+          "status": "todo",
+          "ref": "BACKLOG",
+          "more": "需设计：尚无设计文档与实施计划。"
+        },
+        {
+          "id": "m5-conn01",
+          "name": "M5 CONN-01 GitHub App：连接、列仓库、只读克隆",
+          "status": "todo",
+          "ref": "2026-10-11-github-connector-design.md",
+          "more": "设计草案：决策 C1–C8 已定，§6 待细化；私有仓库目前靠 D35 的 PAT 凭证。"
+        },
+        {
+          "id": "m5-conn02",
+          "name": "M5 CONN-02 事件：Webhook / Issue 输入的签名校验、去重、事件映射",
+          "status": "todo",
+          "ref": "CONNECTORS.md",
+          "more": "需设计：尚无设计文档与实施计划。"
+        },
+        {
+          "id": "m5-conn03",
+          "name": "M5 CONN-03 经 App 写回：新分支、Draft PR / MR、回执丢失不重复",
+          "status": "todo",
+          "ref": "CONNECTORS.md",
+          "more": "D35 / D47 / D48 已用 PAT 实现推送、Draft PR 与新建仓库。"
+        },
+        {
+          "id": "m5-conn04",
+          "name": "M5 CONN-04 状态与审计：测试结果对应 SHA、失效 review 不写回、撤权立即生效",
+          "status": "todo",
+          "ref": "CONNECTORS.md",
+          "more": "需设计：尚无设计文档与实施计划。"
+        },
+        {
+          "id": "m5-conn05",
+          "name": "M5 CONN-05 双平台闭环：GitHub 与 GitLab 测试仓库实测",
+          "status": "todo",
+          "ref": "CONNECTORS.md"
         }
       ]
     },
