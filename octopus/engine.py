@@ -306,10 +306,12 @@ class Engine:
             return False
         marks = ",".join("?" * len(added["tasks"]))
         with self.db.read() as db:
-            row = db.execute(f"SELECT t.id, a.id attempt, a.evidence FROM tasks t JOIN attempts a ON a.id=t.current_attempt "
-                             f"WHERE t.run_id=? AND t.status='accepted' AND t.id IN ({marks}) ORDER BY t.ordinal LIMIT 1",
-                             (rid, *added["tasks"])).fetchone()
-            if row is None or row["attempt"] in (added.get("written") or []):
+            rows = db.execute(f"SELECT t.id, a.id attempt, a.evidence FROM tasks t JOIN attempts a ON a.id=t.current_attempt "
+                              f"WHERE t.run_id=? AND t.status='accepted' AND t.id IN ({marks}) ORDER BY t.ordinal",
+                              (rid, *added["tasks"])).fetchall()
+            # every platform Knowledge task's Attempt once: a later one (after a continue changed code again) as well
+            row = next((r for r in rows if r["attempt"] not in (added.get("written") or [])), None)
+            if row is None:
                 return False
             source = json.loads(run["source"])
             repo = knowledge.key(source, knowledge.space(run))
@@ -321,6 +323,8 @@ class Engine:
         if keep and run.get("worker_scope") == "shared":   # D52 R4: for the repository's reviewed knowledge only
             results = [{"result": "kept", "reason": knowledge.KEPT} for _ in keep]
         elif keep and repo:
+            if self.wall() < (added.get("next") or 0):
+                return True   # waiting for the environment: tried again knowledge.BACKOFF seconds after the last
             try:
                 # the Worker writes the items one by one, up to 30 s each (gateway_client.request)
                 answer = self.request(config, "/knowledge/write", {"run_id": rid, "scope": repo, "items": keep},
@@ -330,12 +334,12 @@ class Engine:
             except Error as exc:
                 since = added.get("waiting") or self.wall()
                 if exc.code in {"worker_unavailable", "native_unavailable"} and self.wall() - since < knowledge.RETRY:
-                    if not added.get("waiting"):
-                        with self.db.transaction() as db:
-                            fresh = json.loads(db.execute("SELECT snapshot FROM runs WHERE id=?", (rid,)).fetchone()["snapshot"])
-                            fresh["knowledge_added"] = {**(fresh.get("knowledge_added") or {}), "waiting": since}
-                            journal.change(db, "runs", rid, journal.ENGINE, "run.knowledge", "执行环境暂不可用，稍后写入知识",
-                                           quiet=("snapshot",), snapshot=dumps(fresh))
+                    with self.db.transaction() as db:
+                        fresh = json.loads(db.execute("SELECT snapshot FROM runs WHERE id=?", (rid,)).fetchone()["snapshot"])
+                        fresh["knowledge_added"] = {**(fresh.get("knowledge_added") or {}), "waiting": since,
+                                                    "next": self.wall() + knowledge.BACKOFF}
+                        journal.change(db, "runs", rid, journal.ENGINE, "run.knowledge", "执行环境暂不可用，稍后写入知识",
+                                       quiet=("snapshot",), snapshot=dumps(fresh))
                     return True
                 reason = ("执行环境不支持写入知识（Worker 尚未升级）" if exc.status == 404 and exc.code == "not_found"
                           else ("执行环境暂不可用，未写入" if exc.code in {"worker_unavailable", "native_unavailable"}
@@ -352,7 +356,7 @@ class Engine:
             if repo:
                 knowledge.record(db, rid, row["id"], run["worker_id"], repo, rows)
             fresh = json.loads(db.execute("SELECT snapshot FROM runs WHERE id=?", (rid,)).fetchone()["snapshot"])
-            state = {k: v for k, v in (fresh.get("knowledge_added") or {}).items() if k not in {"waiting", "skipped"}}
+            state = {k: v for k, v in (fresh.get("knowledge_added") or {}).items() if k not in {"waiting", "next", "skipped"}}
             fresh["knowledge_added"] = {**state, "written": [*(state.get("written") or []), row["attempt"]],
                                         **({"skipped": skipped} if skipped else {})}
             journal.change(db, "runs", rid, journal.ENGINE, "run.knowledge", quiet=("snapshot",), snapshot=dumps(fresh))

@@ -432,7 +432,14 @@ class Worker:
         scope = self._knowledge_scope(body.get("scope"))
         rule = body.get("rule")
         require(isinstance(rule, str) and 0 < len(rule) <= 500, "知识条目无效")
-        self.native("/api/lessons", {"rule": rule, "exact": True, "repo_scope": scope}, "DELETE", headers=self.LESSONS)
+        try:
+            answer = self.native("/api/lessons", {"rule": rule, "exact": True, "repo_scope": scope}, "DELETE", headers=self.LESSONS)
+        except crew_api.GatewayError as exc:   # the platform reads a Worker 404 as "not supported": never pass one on
+            if exc.status == 404:
+                return {"ok": True, "absent": True}   # KiroCrew holds no such lesson (deleted there already)
+            raise Error(502, "native_error", "KiroCrew 未删除：" + str(exc).splitlines()[0][:200]) from None
+        if isinstance(answer, dict) and answer.get("ok") is False:
+            raise Error(409, "forget_refused", "KiroCrew 未删除：" + str(answer.get("reason") or "原因未报告")[:200])
         return {"ok": True}
 
     def path(self, rid):

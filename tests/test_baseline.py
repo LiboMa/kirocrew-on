@@ -134,8 +134,10 @@ class BaselineTests(unittest.TestCase):
     def test_a_running_baseline_is_not_undone_by_another_request(self):
         code = self.candidate({"src/a.py": "a = 1\n"})
         tests = self.candidate({"tests/test_a.py": "t\n"}, parent=code["sha"])
-        started = self.baseline(tests, ["sleep 1"])
-        time.sleep(0.3)
+        started = self.baseline(tests, ["sleep 2"])
+        deadline = time.time() + 10   # until the job has switched to the baseline (not a fixed sleep: a loaded host is slow)
+        while (self.project / "src/a.py").exists() and time.time() < deadline:
+            time.sleep(0.02)
         self.node._undo_baseline(self.node.path(RID))   # e.g. the console polling the preview meanwhile
         self.assertFalse((self.project / "src/a.py").exists())   # still on the baseline: the job puts it back itself
         while self.node.verify_status({"job": started["job"]})["state"] != "done":

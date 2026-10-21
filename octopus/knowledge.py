@@ -20,6 +20,7 @@ PROMPT = ("只读阅读本会话的需求、前序任务的交接与改动，列
           "至多 5 条写入 outcome.json 的 knowledge。不写本次进度、个人信息、秘密或模型身份；没有就写空列表。不修改文件。")
 WRITERS = ("implement", "deliver")
 RETRY = 600   # seconds an unavailable environment is waited for before the items are recorded as not written
+BACKOFF = 30   # seconds between tries while it is waited for
 
 
 def applies(snapshot, source, scope, config):

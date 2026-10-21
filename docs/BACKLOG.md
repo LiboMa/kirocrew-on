@@ -128,10 +128,10 @@
 ## D46 P4 Knowledge 的终审延后项（2026-10-19）
 - 团队层知识（负责人 2026-10-19：P4 验收后排入）：Knowledge 任务的条目以 Draft PR 提到仓库的知识文件（如 `.octopus/knowledge.md`），由人审核合并；
   跨人、跨执行环境，补上 KiroCrew lessons（个人层）自动写入、无人审核的缺口。
-- 一个会话有两个平台追加的 Knowledge 任务时，只写第一个（`_knowledge` 取首个已通过的）：如把 Knowledge 任务续作改成 implement 后。
+- ~~一个会话有两个平台追加的 Knowledge 任务时，只写第一个（`_knowledge` 取首个已通过的）~~（2026-10-21 修复：每个 Attempt 各写一次）。
 - ~~删除过的条目以后被列出时会再次写入（`known()` 不算已删除的）~~（2026-10-20 修复：同一执行环境、同一仓库不再写入，记为 skipped）。
-- Worker 删除时忽略 KiroCrew 的 `{"ok": false}`，`GatewayError` 未转译；写入时 KiroCrew 5xx / 401 记为最终的 refused，不重试。
-- 等待执行环境恢复期间没有退避（每个 tick 重发，最多 600 秒）。
+- ~~Worker 删除时忽略 KiroCrew 的 `{"ok": false}`，`GatewayError` 未转译~~（2026-10-21 修复：拒绝报 409、出错报 502、KiroCrew 已没有时视为已删除）；写入时 KiroCrew 5xx / 401 记为最终的 refused，不重试。
+- ~~等待执行环境恢复期间没有退避（每个 tick 重发，最多 600 秒）~~（2026-10-21 修复：每 30 秒重试一次）。
 - 仓库标识可能碰撞（`github.com/o/r_x` 与 `github.com/o_r/x`）：可对 host/path 一并散列。
 - ~~`_mark` 不拒绝符号链接的标记文件（仓库提交了 `.octopus-kb/<key>` 符号链接时 `touch` 会跟随）~~（2026-10-20 修复：标记文件与 `.git/info/exclude` 也拒绝符号链接）。
 - 测试缺口：共享 → 专属（改派后重新准备写标记、`lessons: true`）、第二个 Knowledge 任务的写入。

@@ -219,6 +219,24 @@ class WriteTests(KnowledgeCase):
         self.assertEqual(self.writes, [])
         self.assertEqual(run["knowledge"]["items"], [])
 
+    def test_a_second_platform_knowledge_task_is_written_too(self):   # e.g. after a continue that changed code again
+        rid, run = self.run_()
+        self.assertEqual(len(self.writes), 1)
+        with self.db.transaction() as db:
+            row = db.execute("SELECT snapshot FROM runs WHERE id=?", (rid,)).fetchone()
+            snapshot = json.loads(row["snapshot"])
+            snapshot["knowledge_added"]["tasks"].append("knowledge-2")
+            spec = {"id": "knowledge-2", "name": "Knowledge 沉淀", "tool": "kiro", "model": "auto", "effort": "", "prompt": "沉淀",
+                    "kind": "design", "role": "knowledge", "acceptance": [knowledge.ITEM]}
+            evidence = {"outcome": {"decision": "pass", "knowledge": [{"rule": "第二轮学到的约定"}]}}
+            db.execute("INSERT INTO tasks(run_id,id,ordinal,spec,status,current_attempt) VALUES(?,?,?,?,?,?)",
+                       (rid, "knowledge-2", 99, dumps(spec), "accepted", "attempt-k2"))
+            db.execute("INSERT INTO attempts(id,run_id,task_id,number,spec,status,evidence,created,updated) VALUES(?,?,?,?,?,?,?,?,?)",
+                       ("attempt-k2", rid, "knowledge-2", 1, dumps(spec), "accepted", dumps(evidence), 1, 1))
+            db.execute("UPDATE runs SET status='ready', snapshot=? WHERE id=?", (dumps(snapshot), rid))
+        self.tick(rid)
+        self.assertEqual([[i["rule"] for i in w["items"]] for w in self.writes][1:], [["第二轮学到的约定"]])
+
     def test_what_this_environment_already_holds_is_skipped(self):
         self.run_()
         _, run = self.run_()
@@ -248,7 +266,13 @@ class WriteTests(KnowledgeCase):
 
     def test_an_unavailable_worker_is_waited_for(self):
         self.write_errors = [Error(503, "native_unavailable", "KiroCrew Gateway 暂不可用")]
-        _, run = self.run_()
+        clock = [1000.0]
+        self.engine.wall = lambda: clock[0]
+        rid = self.start(steps=TEAM, source=SOURCE, recovery={"enabled": False, "max_cycles": 2})
+        self.assertNotEqual(self.tick(rid)["status"], "completed")
+        self.assertEqual(len(self.writes), 1)   # not sent again on every tick
+        clock[0] += knowledge.BACKOFF + 1
+        run = self.tick(rid)
         self.assertEqual(run["status"], "completed")
         self.assertEqual(len(self.writes), 2)
         self.assertEqual({i["result"] for i in run["knowledge"]["items"]}, {"written"})

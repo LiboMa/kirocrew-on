@@ -125,6 +125,27 @@ class KnowledgeWorkerTests(unittest.TestCase):
                                                                  "repo_scope": ".octopus-kb/h_o_r"}, "DELETE"))
         self.assertEqual(headers["X-Session-Key"], "dashboard:ui")
 
+    def test_a_forget_kirocrew_did_not_carry_out_is_not_reported_done(self):
+        from octopus.security import Error
+        self.prepare()
+        body = {"run_id": RID, "scope": "h_o_r", "rule": "用 pnpm 安装依赖"}
+        self.answer = lambda path, value: {"ok": False, "reason": "lesson is pinned"}
+        with self.assertRaises(Error) as refused:
+            self.node.knowledge_forget(body)
+        self.assertEqual((refused.exception.status, refused.exception.code), (409, "forget_refused"))
+        self.assertIn("lesson is pinned", str(refused.exception))
+
+        def fail(status):
+            def answer(path, value):
+                raise crew_api.GatewayError(status, '{"error":"x"}')
+            return answer
+        self.answer = fail(500)
+        with self.assertRaises(Error) as broken:
+            self.node.knowledge_forget(body)
+        self.assertEqual((broken.exception.status, broken.exception.code), (502, "native_error"))   # never a bare 500
+        self.answer = fail(404)   # KiroCrew no longer holds it (deleted there): done, and never a 404 the platform
+        self.assertEqual(self.node.knowledge_forget(body), {"ok": True, "absent": True})   # would read as "not supported"
+
     def test_writes_and_deletes_check_what_they_are_given(self):
         self.prepare()
         for body in ({"run_id": RID, "scope": "../x", "items": [{"rule": "a"}]},
