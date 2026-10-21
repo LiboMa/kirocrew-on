@@ -131,7 +131,7 @@ deploy/aws/deploy.sh boundary native alice         # 对外开通它的原生入
   `bootstrap-worker --owner alice` 登记为 alice 的专属 Worker。**开通前先核对用户**（存在、尚无自己的执行环境；`--check-only`），不符时主机上什么也不留下。
   不重启平台 API；重复执行只补缺（端口与配置不变）。主机须已 `push` 过含 `boundary.sh` 的发布。登记后此人的会话即落到新边界：先完成 `kiro-login --boundary`。
 - `boundary native <名称>`（D49 第 3 期，2026-10-21）：建栈 `<平台栈>-native-<名称>`（`kirocrew-on-native.yaml`，只有一个 CloudFront 分发，带源站密钥），中转端口与 Worker 主机共用 `NativePort + 1`–`NativeRelayEnd`（安全组只放行 CloudFront）；在平台主机渲染
-  `/etc/nginx/conf.d/kirocrew-boundary-<名称>.conf`（只转发带源站密钥的请求到该边界的回环 Gateway），把边界的 `crew_url` 改为该分发，排空后重启它的 Gateway 与 Worker（Gateway 只信任 `crew_url` 这个来源）。
+  `/etc/nginx/conf.d/kirocrew-relay-boundary-<名称>.conf`（只转发带源站密钥的请求到该边界的回环 Gateway），把边界的 `crew_url` 改为该分发，排空后重启它的 Gateway 与 Worker（Gateway 只信任 `crew_url` 这个来源）。
   之后的 `push` 保留它（只改主边界的 `crew_url`）；重复执行沿用端口。未开通时使用者点「在 KiroCrew 中打开」看到「入口还没有对外开通」，会话照常执行。
 - 之后每次 `deploy.sh push`：`al2023.sh` 对主机上**全部** `boundary-*.toml` 做原生契约检查，全部通过才切换 `current`；重启顺序为 personal →
   平台 API → 其余边界逐个排空、重启（一个边界未能重启时其余照常，命令最后以非零退出并列出）。SSM 时限 3 小时（每个边界排空至多 `DRAIN_MINUTES`）。

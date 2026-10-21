@@ -780,13 +780,16 @@ class ScriptTests(unittest.TestCase):
         native = deploy("boundary", "native", "owner")
         self.assertEqual(native.returncode, 0, native.stderr)
         for part in ("kirocrew-on-native.yaml", "kirocrew-on-m1-native-owner", "create-change-set", "RelayPort",
-                     "PlatformOriginDomain", "kirocrew-boundary.conf", "/etc/nginx/conf.d/kirocrew-boundary-owner.conf",
+                     "PlatformOriginDomain", "kirocrew-boundary.conf", "/etc/nginx/conf.d/kirocrew-relay-boundary-owner.conf",
                      "/etc/kirocrew-on/origin-secret", "nginx -t", "crew_url", "boundary_restart"):
             self.assertIn(part, native.stdout)
         self.assertNotIn(secret, native.stdout + native.stderr)
         for name in ("personal", "Bad", "x"):   # personal has the platform's own distribution
             with self.subTest(name):
                 self.assertEqual(deploy("boundary", "native", name).returncode, 2)
+        # nginx reads conf.d in name order: a relay uses log_format kirocrew_native, defined in kirocrew-native.conf (EC2
+        # 2026-10-21: "kirocrew-boundary-owner.conf" came first and nginx -t refused "unknown log format")
+        self.assertLess("kirocrew-native.conf", "kirocrew-relay-boundary-owner.conf")
         text = (ROOT / "deploy/aws/deploy.sh").read_text()   # one relay port per distribution, Worker hosts' and boundaries'
         self.assertIn("starts_with(StackName, '$STACK_NAME-worker-') || starts_with(StackName, '$STACK_NAME-native-')", text)
 
@@ -797,7 +800,7 @@ class ScriptTests(unittest.TestCase):
         tmp = Path(tempfile.mkdtemp())
         self.addCleanup(shutil.rmtree, tmp, True)
         script = printed[printed.index("set -euo pipefail"):].replace("/etc/nginx/conf.d", str(tmp)).replace("/etc/kirocrew-on", str(tmp))
-        head = f"NAME=owner PORT=8921 NATIVE=d1234abcd.cloudfront.net CONF={tmp}/kirocrew-boundary-owner.conf\n"
+        head = f"NAME=owner PORT=8921 NATIVE=d1234abcd.cloudfront.net CONF={tmp}/kirocrew-relay-boundary-owner.conf\n"
         run = lambda: subprocess.run(["bash", "-c", head + script], capture_output=True, text=True)
         missing = run()
         self.assertEqual(missing.returncode, 3)

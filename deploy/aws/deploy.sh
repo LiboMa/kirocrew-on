@@ -700,7 +700,7 @@ TOML=/etc/kirocrew-on/boundary-$NAME.toml
 [ -f "$TOML" ] || { echo "主机上没有边界 ${NAME}：先执行 deploy.sh boundary add ${NAME} --owner <平台用户名>" >&2; exit 3; }
 [[ "$NATIVE" =~ ^[a-z0-9]+\.cloudfront\.net$ ]] || { echo "原生分发的域名无效：${NATIVE}" >&2; exit 3; }
 # Two relays on one port: nginx only warns, and the later distribution would reach the earlier one's Gateway.
-for other in /etc/nginx/conf.d/kirocrew-relay-*.conf /etc/nginx/conf.d/kirocrew-boundary-*.conf; do
+for other in /etc/nginx/conf.d/kirocrew-relay-*.conf; do   # Worker hosts' and boundaries' relays alike
   if [ -e "$other" ] && [ "$other" != "$CONF" ] && grep -qE "^[[:space:]]*listen $PORT;" "$other"; then
     echo "中转端口 ${PORT} 已被 ${other} 使用：重新执行 deploy.sh boundary native ${NAME} 换端口；对方已删除时删除此文件" >&2
     exit 3
@@ -781,7 +781,8 @@ print(json.dumps([dict(p, ParameterValue="****") if p["ParameterKey"] == "Origin
   change_stack "$stack" "$NATIVE_TEMPLATE" "$WORK/native-parameters.json" "$type"
   native="$(output NativeDomain "$stack")"
   [ -n "$DRY" ] || [[ "$native" =~ ^[a-z0-9]+\.cloudfront\.net$ ]] || { echo "原生分发尚未就绪：${native}" >&2; exit 1; }
-  script="NAME=$name PORT=$relay NATIVE=$native CONF=/etc/nginx/conf.d/kirocrew-boundary-$name.conf"
+  # kirocrew-relay-*: nginx reads conf.d in name order, after kirocrew-native.conf whose log_format the relay uses
+  script="NAME=$name PORT=$relay NATIVE=$native CONF=/etc/nginx/conf.d/kirocrew-relay-boundary-$name.conf"
   script="$script"$'\n'"$BOUNDARY_NATIVE_INSTALL"
   if [ -n "$DRY" ]; then printf '%s\n' "$script"; return; fi
   remote "$(output InstanceId)" "$script"
