@@ -68,7 +68,7 @@ def rules(count, depends, compact=False):
 def environment(models, tools, limitations, commands, compact=False):
     """The execution environment's facts, clipped so the planning prompt fits the Worker's 8000 characters (D46);
     ``compact`` for the replan, whose failure and decision take their own share."""
-    size = (450, 250, 300, 400) if compact else (700, 600, 400, 1200)
+    size = (450, 250, 250, 400) if compact else (700, 600, 400, 1200)   # every common command's line is under 200
     return f"""## 此执行环境的 Coding 工具与已知限制
 {_clip(dumps(tools or {}), size[0])}
 available 为 false 的工具不要选择（需求明确指定的除外，见下；reason 为原因）；没有列出时表示执行环境未报告。
@@ -82,7 +82,22 @@ available 为 false 的工具不要选择（需求明确指定的除外，见下
 不在上面列表中的具体模型一律写 model=auto（需求明确指定的除外，见上）。"""
 
 
-def plan_step(models=None, tools=None, limitations=None, commands=None):
+def preference_section(preferences, limit):
+    """The user's own mapping preferences (D55 §6.2): the planner weighs them, never the platform's default chain —
+    what the requirement names comes first, and an unavailable tool is not chosen."""
+    if not preferences:
+        return ""
+    shown = "\n".join(f"- {'个人' if p.get('scope') == 'personal' else 'Team'}："
+                      + (f"role {p['role']}" if p.get("role") else f"kind {p.get('kind')}") + f" → {p.get('tool')}"
+                      + (f"（model {p['model']}）" if p.get("model") else "") for p in preferences)
+    return f"""## 用户的映射偏好（个人 / Team）
+{_clip(shown, limit)}
+选工具时优先采纳（先看 role 再看 kind），不采纳须在交接文件中写明理由；需求中指定的（requested）优先；available 为 false 的工具不选。
+
+"""
+
+
+def plan_step(models=None, tools=None, limitations=None, commands=None, preferences=None):
     """The first task of an Agent-planned Session (always Kiro; it plans and does not change business code)."""
     prompt = intent_prompt(dumps(EXAMPLE), "（见上方完整用户需求）", "本任务的工作目录（即本 Session 的源码检出）", prepared=True) + f"""
 
@@ -94,7 +109,7 @@ def plan_step(models=None, tools=None, limitations=None, commands=None):
 
 {environment(models, tools, limitations, commands)}
 
-最终回复必须包含且仅包含一个 JSON 代码块（字段：intent、summary、name、steps）；不要加入第二个 JSON/YAML 代码块。
+{preference_section(preferences, 600)}最终回复必须包含且仅包含一个 JSON 代码块（字段：intent、summary、name、steps）；不要加入第二个 JSON/YAML 代码块。
 同时按本任务要求写交接文件，说明规划依据与待用户核实的条件。
 """
     return {"id": PLAN_ID, "name": "需求分析与任务规划（KiroCrew）", "tool": "kiro", "model": "auto", "effort": "",
@@ -278,7 +293,7 @@ def kept_section(kept):
     if not kept:
         return ""
     return f"""## 保留任务的检查命令（复核）
-{_clip(dumps(kept), 800)}
+{_clip(dumps(kept), 600)}
 这些已验收的任务不重跑，但以后返工时仍按上面的 verify 检查。若其中有检查会因会话后来的变化而误判（例如扫描到项目内的依赖目录
 .venv / node_modules，或用了本环境没有的命令），在计划 JSON 顶层写 "verify_fixes": [{{"task_id": "…", "verify": ["修正后的命令"]}}]：
 只修正检查的范围与可执行性，不放宽它要证明的事；没有问题时省略。
@@ -286,7 +301,8 @@ def kept_section(kept):
 """
 
 
-def replan_step(task_id, replaced, failure, decision, models=None, tools=None, limitations=None, commands=None, kept=None):
+def replan_step(task_id, replaced, failure, decision, models=None, tools=None, limitations=None, commands=None, kept=None,
+                preferences=None):
     """The Coordinator's replan (D41 §3.2): a Kiro task that plans only the remaining work, under the first plan's rules
     (D46). What the dispatch carries anyway is referred to, not copied — the requirement, the first plan's completion and
     the accepted tasks' conclusions — so the prompt stays within the Worker's 8000 characters whatever the Session holds."""
@@ -309,7 +325,7 @@ def replan_step(task_id, replaced, failure, decision, models=None, tools=None, l
 
 {environment(models, tools, limitations, commands, compact=True)}
 
-最终回复必须包含且仅包含一个 JSON 代码块（字段：intent、summary、name、steps），每个任务的字段与写法如下例，prompt 必须写出：
+{preference_section(preferences, 200)}最终回复必须包含且仅包含一个 JSON 代码块（字段：intent、summary、name、steps），每个任务的字段与写法如下例，prompt 必须写出：
 {dumps(EXAMPLE["steps"])}
 不要加入第二个 JSON/YAML 代码块（需要修正保留任务的检查时，verify_fixes 写在同一个 JSON 顶层）。同时按本任务要求写交接文件，说明重新规划的依据。
 """

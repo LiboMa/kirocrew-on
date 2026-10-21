@@ -690,7 +690,7 @@ class Coordinator:
             "SELECT id, spec FROM tasks WHERE run_id=? AND status='accepted' AND ordinal<? ORDER BY ordinal", (rid, failed["ordinal"]))
             if (spec := json.loads(row["spec"])).get("verify")]   # D54 §9 a: their checks are reviewed with the plan
         spec = planning.replan_step(task_id, replaced, failure, decision, environment.get("models"), environment.get("tools"),
-                                    environment.get("limitations"), environment.get("commands"), kept)
+                                    environment.get("limitations"), environment.get("commands"), kept, snapshot.get("preferences"))
         journal.remove_rows(db, "tasks", "run_id=? AND ordinal>=?", (rid, failed["ordinal"]), journal.RECOVERY, "task.replaced",
                             decision.get("reason"), event={"tasks": replaced})
         db.execute("INSERT INTO tasks(run_id,id,ordinal,spec) VALUES(?,?,?,?)", (rid, spec["id"], failed["ordinal"], dumps(spec)))

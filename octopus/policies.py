@@ -38,9 +38,39 @@ def admission_rule(rule):
     return {"repos": repos, "mode": rule["mode"]}
 
 
+def mapping_rule(rule):
+    """A preference: a task kind or a role, the tool for it and optionally a model — for the planner to weigh (D55 §6.2)."""
+    from . import roles
+    from .domain import KINDS as TASK_KINDS, TOOLS
+    require(isinstance(rule, dict) and set(rule) <= {"kind", "role", "tool", "model"} and ("kind" in rule) != ("role" in rule),
+            "映射偏好须为 {\"kind\" 或 \"role\"（二选一）, \"tool\", \"model\"?}")
+    if "kind" in rule:
+        require(rule["kind"] in TASK_KINDS, "kind 须为 " + " / ".join(TASK_KINDS))
+    else:
+        require(rule["role"] in roles.KINDS, "role 不是平台的角色")
+    require(rule.get("tool") in TOOLS, "tool 须为 " + " / ".join(TOOLS))
+    require("model" not in rule or isinstance(rule["model"], str) and 0 < len(rule["model"].strip()) <= 200, "model 须为 1–200 个字符")
+    return {k: v.strip() if k == "model" else v for k, v in rule.items()}
+
+
 def rule(kind, value):
     require(kind in KINDS, "kind 须为 admission 或 mapping")
-    return admission_rule(value)
+    return admission_rule(value) if kind == "admission" else mapping_rule(value)
+
+
+def preferences(db, actor_id, team):
+    """The mapping preferences a new Session is planned with: the submitter's own first, then the Team's (for a Team
+    Session); on one kind or role the submitter's own wins, and within a scope the newest."""
+    result, taken = [], set()
+    layers = [("personal", "owner_id", actor_id)] + ([("team", "team_id", team)] if team else [])
+    for scope, column, holder in layers:
+        for row in db.execute(f"SELECT * FROM policies WHERE kind='mapping' AND {column}=? ORDER BY created DESC", (holder,)):
+            value = json.loads(row["rule"])
+            key = ("role", value["role"]) if "role" in value else ("kind", value["kind"])
+            if key not in taken:
+                taken.add(key)
+                result.append({"id": row["id"], "scope": scope, **value})
+    return result
 
 
 def _best(rows, repo):

@@ -389,6 +389,17 @@ def _active_admins(db):
     return db.execute("SELECT count(*) FROM users WHERE admin=1 AND active=1").fetchone()[0]
 
 
+def _followed(snapshot, spec):
+    """「（按个人偏好）」 when the planner's tool is the one the Session's preferences name for the task's role — or, without
+    one for the role, its kind (D55)."""
+    preferences = snapshot.get("preferences") or []
+    chosen = next((p for p in preferences if spec.get("role") and p.get("role") == spec["role"]), None) or \
+        next((p for p in preferences if p.get("kind") and p["kind"] == spec.get("kind")), None)
+    if chosen is None or chosen.get("tool") != spec.get("tool"):
+        return ""
+    return "（按个人偏好）" if chosen.get("scope") == "personal" else "（按 Team 偏好）"
+
+
 def mapping(snapshot, task, evidence=None):
     """Where a task's tool and model came from (M2 §6 acceptance 2): the Coordinator's switch, the user's continue (the
     configuration differs from the one it was created or planned with), the KiroCrew planner, a saved workflow, a template,
@@ -415,11 +426,11 @@ def mapping(snapshot, task, evidence=None):
     if task["id"] == replan.get("task"):
         return {"source": "platform", "label": "平台：重新规划（Kiro）"}
     if task["id"] in (replan.get("tasks") or []):
-        return {"source": "planner", "label": "KiroCrew 重新规划"}
+        return {"source": "planner", "label": "KiroCrew 重新规划" + _followed(snapshot, spec)}
     if task["id"] == "plan" and planned.get("mode") == "agent":
         return {"source": "platform", "label": "平台：需求分析与规划（Kiro）"}
     if task["id"] in (planned.get("tasks") or []):
-        return {"source": "planner", "label": "KiroCrew 规划"}
+        return {"source": "planner", "label": "KiroCrew 规划" + _followed(snapshot, spec)}
     if snapshot.get("origin") == "document":
         return {"source": "document", "label": "导入的工作流文档"}
     selection = snapshot.get("selection") or {}
@@ -930,6 +941,8 @@ class Service:
                 body = {**body, "worker_id": chosen["worker"]["id"]}
                 placed = {"kind": chosen["placement"], **({"hint": chosen["hint"]} if chosen["hint"] else {})}
         planning = design is None and (body.get("plan") == "agent" or (not selected and body.get("plan") != "match"))
+        with self.db.read() as db:   # D55: the submitter's and the Team's mapping preferences, for the planner to weigh
+            preferences = policies.preferences(db, actor["id"], body.get("team_id") or None) if design is None else []
         if planning:
             # A real KiroCrew Agent recognises the intent, enriches the requirement and plans the tasks (planning.py).
             from .planning import plan_step
@@ -941,7 +954,7 @@ class Service:
             # The planner sees which tools this environment can start and its known limits, and chooses (D38 A5).
             body = {**{k: v for k, v in body.items() if k != "plan"},
                     "steps": [plan_step(capabilities.get("models", {}), capabilities.get("tools"), capabilities.get("limitations"),
-                                       capabilities.get("commands"))]}
+                                       capabilities.get("commands"), preferences)]}
         resolved = self.resolve_workflow(actor, {k: v for k, v in body.items() if k != "plan"})
         with self.db.transaction() as db:
             wid = resolved["selection"].get("workflow_id")
@@ -1006,6 +1019,8 @@ class Service:
                     snapshot["publish_policy"] = {**publish_policy(body["publish"]), "source": "user"}
                 if bound:
                     snapshot["credentials"] = {"source": bound}
+                if preferences:
+                    snapshot["preferences"] = preferences
                 if placed and worker:
                     snapshot["placement"] = placed
                 if design is not None:

@@ -217,9 +217,12 @@ class ReplanReviewTests(ReplanCase):
         with_kept = planning.replan_step("replan-1", [{"id": "t%d" % i, "name": "任务" * 40, "kind": "implement"} for i in range(12)],
                                          long, {"reason": long, "instructions": long}, {"claude": ["m" * 60] * 60},
                                          {"kiro": {"available": True, "reason": long}}, [long] * 5,
-                                         {"available": ["c" * 40] * 60, "missing": ["d" * 40] * 60}, kept)
+                                         {"available": ["c" * 40] * 60, "missing": ["d" * 40] * 60}, kept,
+                                         [{"id": "policy-%d" % i, "scope": "team", "role": "security_test", "tool": "opencode",
+                                           "model": "m" * 200} for i in range(30)])
         steps([with_kept])
-        self.assertLessEqual(len(with_kept["prompt"]), 7800)   # the kept tasks' checks to review (D54 §9 a) fit too
+        self.assertLessEqual(len(with_kept["prompt"]), 7800)   # the kept tasks' checks (D54 §9 a) and preferences (D55) fit too
+        self.assertIn("用户的映射偏好", with_kept["prompt"])
         for name in ("test-driven-development", "evaluator"):   # the compact catalogues still name every choice
             self.assertIn(name, spec["prompt"])
 

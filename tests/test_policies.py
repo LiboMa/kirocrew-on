@@ -3,7 +3,8 @@ for their plan's confirmation (the platform default is now confirm). Order: subm
 import json
 import unittest
 
-from octopus import policies
+from octopus import planning, policies
+from octopus.domain import mapping
 from octopus.domain import Service
 from octopus.security import Error
 from tests.test_access import AccessCase
@@ -111,6 +112,72 @@ class AdmissionTests(AccessCase):
         self.assertEqual(request["policy"]["admission"]["policy_id"], made["id"])
         other = self.service.run(self.b, self.start(self.b, "start-0000000002")["id"])
         self.assertEqual((other["admission"], other["admission_basis"]), ("confirm", {"mode": "confirm", "basis": "default"}))
+
+
+class PreferenceTests(AccessCase):
+    def prefer(self, actor, scope="personal", team=None, **rule):
+        return self.service.create_policy(actor, {"kind": "mapping", "scope": scope, "rule": rule, **({"team_id": team} if team else {})})
+
+    def test_preferences_reach_the_planner(self):
+        self.prefer(self.b, role="evaluator", tool="codex")
+        rid = self.service.start(self.b, {"request_id": "prefer-00000001", "input": "实现登录页并验证", "source": {"type": "new"},
+                                          "plan": "agent"})["id"]
+        run = self.service.run(self.b, rid)
+        prompt = run["tasks"][0]["spec"]["prompt"]
+        self.assertIn("用户的映射偏好", prompt)
+        self.assertIn("- 个人：role evaluator → codex", prompt)
+        with self.db.read() as db:
+            snapshot = json.loads(db.execute("SELECT snapshot FROM runs WHERE id=?", (rid,)).fetchone()["snapshot"])
+        self.assertEqual([(p["scope"], p["role"], p["tool"]) for p in snapshot["preferences"]], [("personal", "evaluator", "codex")])
+        plain = self.service.start(self.e, {"request_id": "prefer-00000002", "input": "实现登录页并验证", "source": {"type": "new"},
+                                            "plan": "agent"})["id"]
+        self.assertNotIn("用户的映射偏好", self.service.run(self.e, plain)["tasks"][0]["spec"]["prompt"])
+
+    def test_personal_overrides_team_on_the_same_role(self):
+        tid = self.team()
+        self.prefer(self.a, "team", tid, kind="review", tool="kiro")
+        self.prefer(self.a, "team", tid, kind="test", tool="claude")
+        mine = self.prefer(self.b, kind="review", tool="codex", model="gpt-5")
+        with self.db.read() as db:
+            found = policies.preferences(db, self.b["id"], tid)
+            alone = policies.preferences(db, self.b["id"], None)
+        self.assertEqual([(p["scope"], p["kind"], p["tool"]) for p in found], [("personal", "review", "codex"), ("team", "test", "claude")])
+        self.assertEqual((found[0]["id"], found[0]["model"]), (mine["id"], "gpt-5"))
+        self.assertEqual([p["id"] for p in alone], [mine["id"]])   # a Team's preferences are for its Sessions
+
+    def test_a_planned_task_that_follows_a_preference_says_so(self):
+        snapshot = {"planning": {"mode": "agent", "tasks": ["t1"]}, "replan": {"task": "replan-1", "tasks": ["t2"]},
+                    "preferences": [{"scope": "personal", "kind": "review", "tool": "codex"},
+                                    {"scope": "team", "role": "evaluator", "tool": "kiro"}]}
+        task = lambda tid, **spec: {"id": tid, "spec": {"tool": "claude", **spec}}
+        self.assertEqual(mapping(snapshot, task("t1", kind="review", tool="codex")),
+                         {"source": "planner", "label": "KiroCrew 规划（按个人偏好）"})
+        self.assertEqual(mapping(snapshot, task("t1", kind="review", tool="kiro"))["label"], "KiroCrew 规划")
+        self.assertEqual(mapping(snapshot, task("t1", kind="review", role="evaluator", tool="kiro"))["label"],
+                         "KiroCrew 规划（按 Team 偏好）")   # the role's preference comes first
+        self.assertEqual(mapping(snapshot, task("t1", kind="review", role="evaluator", tool="codex"))["label"], "KiroCrew 规划")
+        self.assertEqual(mapping(snapshot, task("t2", kind="review", tool="codex"))["label"], "KiroCrew 重新规划（按个人偏好）")
+        self.assertEqual(mapping({**snapshot, "preferences": None}, task("t1", kind="review", tool="codex"))["label"], "KiroCrew 规划")
+        requested = task("t1", kind="review", tool="codex", requested={"tool": "codex", "quote": "审查用 codex"})
+        self.assertEqual(mapping(snapshot, requested)["source"], "requested")   # what the requirement named comes first
+
+    def test_a_bad_preference_is_refused(self):
+        for rule in ({"tool": "codex"}, {"kind": "review", "role": "evaluator", "tool": "codex"}, {"kind": "review", "tool": "gemini"},
+                     {"kind": "review"}, {"kind": "plan", "tool": "codex"}, {"role": "boss", "tool": "codex"},
+                     {"kind": "review", "tool": "codex", "model": "m" * 201}, {"kind": "review", "tool": "codex", "model": ""},
+                     {"kind": "review", "tool": "codex", "extra": 1}):
+            with self.assertRaises(Error) as caught:
+                self.service.create_policy(self.b, {"kind": "mapping", "scope": "personal", "rule": rule})
+            self.assertEqual(caught.exception.status, 400, rule)
+
+    def test_the_section_is_clipped_and_states_its_rules(self):
+        self.assertEqual(planning.preference_section([], 600), "")
+        section = planning.preference_section([{"id": "policy-x", "scope": "personal", "kind": "review", "tool": "codex"}] * 40, 300)
+        self.assertIn("## 用户的映射偏好（个人 / Team）", section)
+        for rule in ("交接", "requested", "available 为 false"):
+            self.assertIn(rule, section)
+        self.assertLess(len(section), 300 + 200)
+        self.assertNotIn("policy-x", section)   # the planner needs what is preferred, not the rule's id
 
 
 class PolicyRouteTests(AccessCase):

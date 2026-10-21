@@ -56,6 +56,13 @@ class PlannerPromptTests(unittest.TestCase):
         models = {"claude": ["model-%03d" % i for i in range(200)], "codex": ["auto"] + ["c%03d" % i for i in range(200)]}
         tools = {t: {"available": True} for t in ("kiro", "claude", "codex")}
         steps([planning.plan_step(models, tools, ["很长的限制说明" * 50] * 10)])   # the Worker refuses a task prompt over 8000
+        preferences = [{"id": "policy-%d" % i, "scope": "team", "role": "security_test", "tool": "opencode", "model": "m" * 200}
+                       for i in range(30)]
+        long = "很长的内容" * 3000
+        worst = planning.plan_step(models, {t: {"available": True, "reason": long} for t in ("kiro", "claude", "codex", "opencode")},
+                                   [long] * 10, {"available": ["c" * 40] * 60, "missing": ["d" * 40] * 60}, preferences)
+        steps([worst])   # D55: the user's preferences fit with every other input at its clip
+        self.assertIn("用户的映射偏好", worst["prompt"])
 
 
 class SharedPromptTests(unittest.TestCase):
