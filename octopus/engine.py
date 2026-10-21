@@ -657,9 +657,11 @@ class Engine:
         records.append(gates.record("no_secrets", "pass"))
         locked = self._locked(run, task, spec, candidate)
         if locked:
-            status, detail = locked
+            status, detail, *files = locked
             if status == "fail":
-                return fail("artifacts_locked", detail)
+                result = fail("artifacts_locked", detail)
+                records[-1]["files"] = files[0]   # D54: what the Coordinator may give this task (context.locked_files)
+                return result
             records.append(gates.record("artifacts_locked", status, detail))
         commands = spec.get("verify") or []
         if not commands:
@@ -708,7 +710,7 @@ class Engine:
         if not broken:
             return "pass", None
         listed = "；".join(f"改动了已验收任务「{owner}」的交付物：{'、'.join(files[:10])}" for owner, files in broken.items())
-        return "fail", listed + "；如需修改，请在本任务的 paths 中列出"
+        return "fail", listed + "；如需修改，请在本任务的 paths 中列出", sorted(n for files in broken.values() for n in files)
 
     def _start_baseline(self, run, config, attempt, evidence):
         """tests_fail_on_baseline (D37 §11.1): the second run of the verify commands, on the Session's baseline."""

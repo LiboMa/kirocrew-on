@@ -170,6 +170,9 @@ evidence.watchdog 存在时是看门狗停止了没有进展的任务：先判�
 重试或返工无法修改它——未重新规划过时用 replan 并写明改用的命令，否则用 wait_for_user，请用户续作时修改该任务的 verify。
 判断是否已有足够源码、依赖与输入；缺少仓库、需要用户授权或认证时 wait_for_user，不猜测项目地址。
 若是当前任务可自行修复的问题用 retry；若审查问题需要上游实现者修复用 rework。
+失败门是 artifacts_locked 时 context 有 locked_files（门禁拒绝的、此前已验收任务的文件）：这些修改确应由失败的任务完成时，
+retry / rework 失败的任务并在决定中加 "paths_add": [locked_files 中的文件]（至多 10 个），平台把它们加入该任务的 paths 后门禁放行；
+reason 写明为什么由它修改。不能加 locked_files 之外的文件，不能用于其他任务或其他动作。
 目标只能是失败步骤或其上游步骤：target_task_id 只能取 context.allowed_targets 中的 id。排在失败任务之后的任务（例如计划中
 审查之后的「按审查修复」任务）不能作为目标——审查发现的问题交给产出该代码的上游任务 rework，其后的任务会自动重跑。
 context.previous_decisions 是此前各轮的决定及其结果（status）；带 refused 的是平台拒绝过的决定，refused 写明原因——不要重复同一决定。
@@ -254,6 +257,22 @@ def switch(db, run, failed, decision, context):
     earlier = [r["id"] for r in db.execute("SELECT id FROM tasks WHERE run_id=? AND ordinal<? ORDER BY ordinal",
                                           (run["id"], failed["ordinal"]))]
     return steps([{**spec, "tool": tool, "model": model, "effort": effort}], known=earlier)[0], before
+
+
+def widen(decision, context, failed, target):
+    """D54: the failed task's paths with the files artifacts_locked refused that the Coordinator names — only those, only
+    for a retry or rework of that task itself; the merged list, or Error with the reason."""
+    add = decision.get("paths_add")
+    require(decision["action"] in {"retry", "rework"} and target is not None and target["id"] == failed["id"],
+            "paths_add 只用于重试或返工失败的任务")
+    locked = set(context.get("locked_files") or [])
+    require(locked, "失败的不是 artifacts_locked 门禁：不扩大可改动路径")
+    require(isinstance(add, list) and 1 <= len(add) <= 10 and all(isinstance(p, str) for p in add), "paths_add 须为 1–10 个文件路径")
+    outside = [p for p in add if p not in locked]
+    require(not outside, f"{'、'.join(p[:80] for p in outside[:3])} 不是门禁锁住的文件（只能取 locked_files 中的文件）")
+    merged = list(dict.fromkeys([*(json.loads(failed["spec"]).get("paths") or []), *add]))
+    require(len(merged) <= 20, "扩大后的可改动路径超过 20 项")
+    return merged
 
 
 def switched_from(db, run_id, task_id, spec):
@@ -393,6 +412,11 @@ def schedule(db, database, run, task, attempt, *, manual=False, actor=None):
                                     "kind": json.loads(t["spec"]).get("kind")}
                                    for t in ordered if t["ordinal"] <= task["ordinal"]],
                "manual": manual}
+    # D54: the files artifacts_locked refused, which a retry / rework of this task may add to its paths (paths_add)
+    locked = next((g.get("files") for g in (context["evidence"].get("gates") or [])
+                   if g.get("name") == "artifacts_locked" and g.get("status") == "fail" and g.get("files")), None)
+    if locked:
+        context["locked_files"] = locked
     worker = db.execute("SELECT config FROM workers WHERE id=?", (run["worker_id"],)).fetchone() if run["worker_id"] else None
     capabilities = (json.loads(worker["config"]).get("capabilities") or {}) if worker else {}
     # What the Coordinator may switch to, saved with the diagnosis: its recommendation is checked against the same (D38 §3.1).
@@ -536,7 +560,7 @@ class Coordinator:
             raw = result.get("decision", "")
             require(isinstance(raw, str) and len(raw) <= 64000, "协调者决定缺失或过大")
             decision = json.loads(raw)
-            fields = {"action", "target_task_id", "reason", "instructions", "tool", "model", "effort"}
+            fields = {"action", "target_task_id", "reason", "instructions", "tool", "model", "effort", "paths_add"}
             require(isinstance(decision, dict) and set(decision) <= fields, "协调者决定字段无效")
             require(decision.get("action") in {"retry", "rework", "switch_tool", "replan", "wait_for_user"}, "协调者动作无效")
             require(all(isinstance(decision.get(k), str) and 0 < len(decision[k]) <= 8000
@@ -560,10 +584,13 @@ class Coordinator:
                 journal.change(db, "recoveries", item["id"], journal.RECOVERY, "recovery.state", "会话已变化，诊断结果不再适用",
                                event={"id": item["id"]}, status="cancelled", updated=now)
                 return
-            if decision and decision["action"] == "replan":
+            if decision and decision.get("paths_add") is not None and decision["action"] not in {"retry", "rework"}:
+                error = "协调者扩大可改动路径未通过核对：paths_add 只用于重试或返工失败的任务"
+                decision = {**decision, "refused": error}
+            elif decision and decision["action"] == "replan":
                 return self._replan(db, fresh, failed, item, decision, now)
-            target = None
-            if decision and decision["action"] != "wait_for_user":
+            target, widened = None, None
+            if decision and not error and decision["action"] != "wait_for_user":
                 target = db.execute("SELECT * FROM tasks WHERE run_id=? AND id=?",
                                     (run["id"], decision.get("target_task_id"))).fetchone()
                 if decision["action"] == "retry" and target and target["ordinal"] < failed["ordinal"]:
@@ -586,6 +613,12 @@ class Coordinator:
                     error = (f"协调者{decision['action']}的目标 {named} {where}：目标只能是 {allowed} 之一。"
                              "问题出在上游产出的代码时用 rework 指向该上游任务，其后的任务会自动重跑。")
                     decision = {**decision, "refused": error}   # the next diagnosis sees why (previous_decisions)
+                if not error and decision.get("paths_add") is not None:
+                    try:
+                        widened = widen(decision, json.loads(item["context"]), failed, target)
+                    except Error as exc:
+                        error = "协调者扩大可改动路径未通过核对：" + str(exc)
+                        decision = {**decision, "refused": error}
             if error or decision["action"] == "wait_for_user":
                 message = error or (decision["reason"] + "；" + decision["instructions"])
                 journal.change(db, "recoveries", item["id"], journal.RECOVERY, "recovery.state", event={"id": item["id"]},
@@ -597,6 +630,11 @@ class Coordinator:
                 "SELECT id FROM tasks WHERE run_id=? AND ordinal>=? ORDER BY ordinal", (run["id"], target["ordinal"]))]
             journal.change_rows(db, "tasks", "run_id=? AND ordinal>=?", (run["id"], target["ordinal"]), journal.RECOVERY,
                                 "task.reset", decision.get("reason"), status="pending", current_attempt=None)
+            if widened:   # D54: the revision below records the wider paths
+                spec = json.loads(db.execute("SELECT spec FROM tasks WHERE run_id=? AND id=?", (run["id"], target["id"])).fetchone()[0])
+                journal.change(db, "tasks", (run["id"], target["id"]), journal.RECOVERY, "task.paths_added", decision.get("reason"),
+                               event={"task_id": target["id"], "added": decision["paths_add"], "recovery": item["number"]},
+                               spec=dumps({**spec, "paths": widened}))
             if decision["action"] == "switch_tool":
                 journal.change(db, "tasks", (run["id"], target["id"]), journal.RECOVERY, "task.tool_switched", decision["reason"],
                                event={"task_id": target["id"], "from": decision["switched_from"],
@@ -617,6 +655,8 @@ class Coordinator:
                          + (f"（{reason}）" if reason else ""))
             else:
                 title = f"自动纠错：退回「{name}」" + (f"（{reason}）" if reason else "")
+            if widened:
+                title += f"；扩大「{name}」的可改动路径：{'、'.join(decision['paths_add'])}"
             record(db, run["id"], version, "recovered", title, fresh["owner_id"], now, recovery_id=item["id"],
                    decision=decision, invalidated=invalidated)
 

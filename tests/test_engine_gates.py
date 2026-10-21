@@ -297,6 +297,55 @@ class EngineGateTests(TeamsWorkersCase):
         failed = [g for g in evidence["gates"] if g["name"] == "artifacts_locked"][0]
         self.assertIn("「实现」的交付物：src/a.py", failed["detail"])
 
+    def locked_session(self, decision):
+        """docs changes the implementation's src/a.py without listing it: artifacts_locked, then the Coordinator decides."""
+        worker, seen = FakeWorker(), []
+        names = {"code": ["src/a.py"], "docs": ["src/a.py", "README.md"]}
+        shas = {"code": C1, "docs": "d" * 40}
+        worker.candidate = lambda body: {"sha": shas[worker.dispatched[body["attempt_id"]]["spec"]["id"]],
+                                         "parent": body.get("parent", BASE), "changed": True, "files": 2, "insertions": 1,
+                                         "deletions": 0, "rewritten": False, "secrets": [],
+                                         "names": names[worker.dispatched[body["attempt_id"]]["spec"]["id"]]}
+        decisions = [decision, {"action": "wait_for_user", "reason": "等待", "instructions": "检查"}]
+
+        def call(config, path, body=None, **kwargs):
+            if path == "/inspect" and worker.dispatched[body["attempt_id"]].get("coordination"):
+                seen.append(worker.dispatched[body["attempt_id"]]["coordination"])
+                return {"status": "running", "native": {"done": True, "result": "完成", "error": ""},
+                        "evidence": {"actual_backend": "kiro"}, "handoff": "交接", "decision": dumps(decisions.pop(0))}
+            return worker(config, path, body, **kwargs)
+        docs = {"id": "docs", "name": "文档", "tool": "claude", "prompt": "写文档", "kind": "deliver",
+                "acceptance": ["有文档"], "paths": ["README.md"]}
+        rid = self.session([IMPLEMENT, docs], recovery=True)
+        self.run_engine(call, ticks=40)
+        return rid, seen
+
+    # D54 (owner 2026-10-21): the Coordinator may give the failed task the files the gate locked
+    def test_the_coordinator_may_give_the_failed_task_the_files_the_gate_locked(self):
+        rid, seen = self.locked_session({"action": "retry", "target_task_id": "docs", "reason": "文档须同步修改 src/a.py 的注释",
+                                         "instructions": "保留改动并重跑", "paths_add": ["src/a.py"]})
+        self.assertEqual(seen[0]["locked_files"], ["src/a.py"])
+        run = self.service.run(self.c, rid)
+        docs = next(t for t in run["tasks"] if t["id"] == "docs")
+        self.assertEqual((docs["status"], docs["spec"]["paths"]), ("accepted", ["README.md", "src/a.py"]))
+        recovered = [r for r in self.service.revisions(self.c, rid) if r["kind"] == "recovered"]
+        self.assertIn("扩大「文档」的可改动路径：src/a.py", recovered[-1]["summary"])
+        self.assertIn("task.paths_added", [e["kind"] for e in self.service.events(self.c, rid)])
+
+    def test_a_path_the_gate_did_not_lock_is_refused(self):
+        for extra in ("src/other.py", "src/*", "../etc/passwd"):
+            with self.subTest(extra):
+                rid, _ = self.locked_session({"action": "retry", "target_task_id": "docs", "reason": "r", "instructions": "i",
+                                              "paths_add": ["src/a.py", extra]})
+                run = self.service.run(self.c, rid)
+                self.assertIn("不是门禁锁住的文件", run["error"])
+                self.assertEqual(next(t for t in run["tasks"] if t["id"] == "docs")["spec"]["paths"], ["README.md"])
+
+    def test_the_paths_go_only_to_the_failed_task(self):
+        rid, _ = self.locked_session({"action": "rework", "target_task_id": "code", "reason": "r", "instructions": "i",
+                                      "paths_add": ["src/a.py"]})
+        self.assertIn("只用于重试或返工失败的任务", self.service.run(self.c, rid)["error"])
+
     def test_a_task_without_paths_is_not_locked(self):
         worker = FakeWorker()
         worker.candidate = lambda body: {"sha": C1, "parent": body.get("parent", BASE), "changed": True, "files": 1,

@@ -1,6 +1,6 @@
 {
   "_comment": "进度看板与 docs/PROGRESS.md 的唯一数据源：任务状态在这里维护；提交记录由 tools/progress.py 从 git 生成（负责人 2026-10-20）。",
-  "checks": "1396 后端 + 92 + 204 控制台；EC2 运行 17687ec（重新规划复核保留检查、凭证编辑范围、边界运维、owner 原生入口）",
+  "checks": "1401 后端 + 92 + 204 控制台（D54 本机）；EC2 运行 17687ec",
   "status": {
     "accepted": {
       "label": "已验收",
@@ -327,6 +327,13 @@
           "status": "deployed",
           "ref": "EC2 17687ec",
           "more": "负责人 2026-10-21 选 (a)：重新规划的提示列出保留任务的 verify，计划可带 verify_fixes，平台核对后写入并记在这次重新规划的修订里；EC2 run-25c7aaa7 因保留任务的检查扫到后来的 backend/.venv 而停下。"
+        },
+        {
+          "id": "d54-paths",
+          "name": "D54 协调者的返工可扩大可改动路径（paths_add）",
+          "status": "local",
+          "ref": "2026-10-21",
+          "more": "artifacts_locked 记下被拒文件，协调者在 context.locked_files 中看到；重试 / 返工失败的任务时可加 paths_add（只取这些文件），平台核对后扩大 paths 并记修订与时间线。EC2 run-25c7aaa7 曾因此卡 13 轮。"
         }
       ]
     },
@@ -686,10 +693,6 @@
     {
       "who": "owner",
       "text": "下一个大项的先后：M2 剩余、M3 剩余、M4 剩余、M5 仓库闭环、D49 第 3 期、返工自动附技能（skills-next）"
-    },
-    {
-      "who": "owner",
-      "text": "D54 主体（协调者的返工可附带扩大 paths，docs/superpowers/specs/2026-10-21-coordinator-paths-design.md）待确认后实现"
     }
   ]
 }

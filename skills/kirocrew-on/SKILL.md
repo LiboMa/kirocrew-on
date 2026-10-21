@@ -109,6 +109,7 @@ KiroCrew ON 在远端执行开发任务：KiroCrew 的 Kiro Agent 先识别意�
   更新后的 `input`；可选 `execution`（`name`、`prompt`、`tool`、`model`、`effort`，以及任务契约 `acceptance`、`verify` 等），
   工具本身失败时，自动纠错会请 KiroCrew 协调者推荐换用的工具（`octopus_status` 的 `latest.switched_from` 写明从哪个工具换来、原因）；
   会话关闭了换工具（`recovery.switch_tools: false`）或协调者等待用户时，由你向用户建议并经同意后续作。
+  `artifacts_locked`（改了此前已验收任务的文件）时，协调者可为失败的任务扩大可改动路径（修订摘要「扩大「X」的可改动路径」）；它没有这样做而在等待时，经用户同意后用 `octopus_continue` 的 `execution.paths` 补上这些文件。
   自动纠错的返工会接着该任务上一轮的原生对话做（保留上下文）：`latest.continued: true` 表示这一次接上了——它与你的 `octopus_continue`（续作）无关；`latest.continue_refused` 是没能接上的原因，这一次从新对话开始。
 - 只重跑受影响的任务：用 `rerun` 列出这次修改会影响的后续任务（例如只改前端时不列后端），省略则重跑之后的全部任务。
   依赖重跑任务的任务、其后的审查 / 测试任务、尚未完成的任务会由平台自动一并重跑；其余沿用上一版结果。
