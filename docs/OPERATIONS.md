@@ -403,13 +403,35 @@ CloudFront 只使用 us-east-1 的证书）：分发加上别名与证书（SNI�
 
 ### 计划确认（D44，准入第 1 期）
 
-- 会话的 `admission`：`confirm`（确认后执行）或 `auto`（立即执行）；未写时取平台配置 `default_admission`（`platform.toml`，默认 `auto`，
-  可改为 `confirm` 让所有新会话先确认）。
+- 会话的 `admission`：`confirm`（确认后执行）或 `auto`（立即执行）；未写时先看提交者与 Team 的准入规则（D55，见下节），
+  都不命中时取平台配置 `default_admission`（`platform.toml`；D55 起默认 `confirm`，写 `default_admission = "auto"` 恢复立即执行）。
 - `confirm` 的会话：规划（`plan`、`replan-*`）照常完成，第一个执行任务派发前停在「计划待确认」（`awaiting_confirmation`）；
   控制台会话页「确认并开始」、API `POST /v1/runs/<id>/confirm` 或 MCP `octopus_confirm` 确认后执行；修改任务后续作也视为确认；也可停止或关闭。
 - 只确认一次：之后的返工、重试、换工具与重新规划不再停下。确认者与时间记在会话的 `confirmed`、时间线「已确认计划」与报告抬头。
 - 只有 KiroCrew 规划会话的规划任务（`plan`）与重新规划任务在确认前运行；提交或模板中名为 `plan` 的任务同样等待确认。
 - 等待确认的时间不计入会话预算；确认与续作一样重新计算预算，并停止正在运行的远程预览。已归档 Team 的会话不能确认。
+
+### Request、准入规则与映射偏好（D55）
+
+- **默认先确认**（负责人 2026-10-21）：`default_admission` 的默认值改为 `confirm`。升级后，没有带 `admission`、也没有命中规则的新会话
+  都先停在「计划待确认」；已有会话不受影响。平台想维持立即执行时在 `platform.toml` 写 `default_admission = "auto"`。
+- **Request**：每次提交（控制台、API、MCP `octopus_start`）登记一条 Request（迁移 9 的 `requests` 表），记提交者、Team、来源客户端
+  （取自 Token 标签：控制台登录为 `console`，`octopus connect` 签发的为 `claude` / `kiro` / `codex` / `kiro-ide`，其余为 `api`）、需求原文、源码、
+  显式选择（工作流 / 模板 ID、steps 个数、文档格式、规划方式，不复制正文）与策略快照（准入及其依据、自动纠错、发布）。会话的 `request`
+  指向它；状态取其最近一个会话的。同一 `request_id` 重复提交返回原有的 Request 与会话。工作流设计会话与升级前的会话没有 Request。
+  `GET /v1/requests`（`status`、`q`、`client`、`limit`）、`GET /v1/requests/<id>`；看不到其会话的人得 404。MCP `octopus_requests`。
+- **准入规则**：个人或 Team 的 `{"repos": "github.com/o/*", "mode": "auto" | "confirm"}`（`policies` 表 kind `admission`）。仓库按
+  `主机/所有者/仓库` 小写比较，`https://…/.git`、`ssh://`、`git@host:path` 同一结果；`*` 匹配全部（新建项目不命中任何规则）。
+  判定顺序：提交时的 `admission` → 提交者的个人规则 → 会话所在 Team 的规则 → 平台默认；同层多条命中时通配最少的、再最新的胜。
+  会话视图的 `admission_basis` 写明依据（`submitted` / `rule` 及 `pattern`、`policy_id` / `default`），会话页显示「按准入规则…自动开始」
+  或「按平台默认等待确认」。
+- **映射偏好**：`{"kind": "review"}` 或 `{"role": "evaluator"}`（二选一）加 `"tool"`、可选 `"model"`（kind `mapping`）。提交时把提交者与
+  Team 的偏好写进会话快照（同一类别或角色上个人覆盖 Team），首次规划与重新规划的提示多一节「用户的映射偏好」：规划者优先采纳、
+  不采纳写明理由；需求中指定的（D45）优先；不可用的工具不选。平台不按偏好改写任务，也不把偏好当失败时的回退链。规划者的任务与偏好
+  一致时映射来源写「KiroCrew 规划（按个人偏好 / 按 Team 偏好）」。
+- **维护**：控制台「设置 → 准入与映射偏好」；个人规则只有本人能增删，Team 的规则只有 Team owner 与平台管理员能增删，已归档的 Team 不能新增；
+  每次增删写审计 `policy.create` / `policy.delete`。API：`GET /v1/policies`（`team_id`）、`POST /v1/policies`、`DELETE /v1/policies/<id>`。
+  MCP 只读（`octopus_policies`），Coding Agent 不能改准入。
 - MCP 精简状态在等待确认时带出各任务的 `acceptance` 与 `verify`，供客户端展示给用户。
 
 ### 等待与自动恢复（D43）

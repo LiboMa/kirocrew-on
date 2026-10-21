@@ -51,9 +51,9 @@
         {
           "id": "m2-request",
           "name": "M2-1 Request 表与 API（来源客户端、仓库与 ref、与 Session 关联）",
-          "status": "todo",
-          "ref": "MVP-RELEASE §6 #1",
-          "more": "§6 验收 1（自然语言登记 Request 并返回 Pipeline）依赖它；现由 Session 的 request_id 幂等登记。需设计：尚无设计文档与实施计划。"
+          "status": "local",
+          "ref": "D55 8cff53b",
+          "more": "迁移 9 的 requests 表：每次提交登记（来源客户端取自 Token 标签、需求、源码、显式选择、策略快照），会话带 request；GET /v1/requests[/<id>]、MCP octopus_requests、start 回执带 request_id、会话页「来自请求…」。先一对一。待：部署与 EC2 验收（§6 验收 1）。"
         },
         {
           "id": "m2-schema2",
@@ -72,16 +72,16 @@
         {
           "id": "m2-mapping-pref",
           "name": "M2-4 个人 / Team 映射偏好",
-          "status": "todo",
-          "ref": "§6 #4",
-          "more": "显式指定、需求中指定（D45）、协调者换工具（D38）、映射来源已上线；不内置回退链（负责人）。需设计：尚无设计文档与实施计划。"
+          "status": "local",
+          "ref": "D55 4703429",
+          "more": "个人 / Team 映射偏好（按类别或角色 → 工具 / 模型）进入首次规划（600）与重新规划（200）的提示，规划者优先采纳、不采纳写理由；映射来源写「按个人 / Team 偏好」；不做平台默认链。tool: auto 本期不做（契约无 auto 工具）。待：部署。"
         },
         {
           "id": "m2-admission",
           "name": "M2-5 按仓库范围的自动准入与策略快照",
-          "status": "todo",
-          "ref": "§6 #5",
-          "more": "计划确认（D44）已上线。需设计：尚无设计文档与实施计划。"
+          "status": "local",
+          "ref": "D55 37197fb",
+          "more": "平台默认改为 confirm；个人 / Team 按仓库范围的准入规则（https / ssh / scp 写法同一结果，最具体的胜），依据写进会话 admission_basis 与 Request 策略快照；控制台「准入与映射偏好」维护、写审计，MCP 只读。待：部署与 EC2 验收。"
         },
         {
           "id": "m2-fault",
