@@ -53,4 +53,32 @@ describe("repository credentials", () => {
     expect(within(used).queryByRole("button", { name: "删除" })).not.toBeInTheDocument();
     expect(within(mine).getByRole("button", { name: "删除" })).toBeInTheDocument();
   });
+
+  test("editing the repository range starts from the current one and saves only repos", async () => {
+    const { calls, dialog } = await openCredentials({
+      "GET /credentials": [cred({ repos: ["LiboMa/bedrock-claude-call"] }), team],
+      "PATCH /credentials/cred-1": cred({ repos: ["LiboMa/bedrock-claude-call", "LiboMa/*"] }) });
+    const mine = within(dialog).getByText("bob 的 GitHub").closest("[data-credential]") as HTMLElement;
+    await userEvent.click(within(mine).getByRole("button", { name: "编辑范围" }));
+    const field = within(mine).getByLabelText("仓库范围") as HTMLTextAreaElement;
+    expect(field.value).toBe("LiboMa/bedrock-claude-call");
+    await userEvent.type(field, "{Enter}LiboMa/*");
+    await userEvent.click(within(mine).getByRole("button", { name: "保存范围" }));
+    await waitFor(() => expect(calls.some((c) => c.method === "PATCH" && c.path === "/v1/credentials/cred-1")).toBe(true));
+    expect(calls.find((c) => c.method === "PATCH")?.body).toEqual({ repos: ["LiboMa/bedrock-claude-call", "LiboMa/*"] });
+    await waitFor(() => expect(within(mine).queryByLabelText("仓库范围")).not.toBeInTheDocument());
+    const used = within(dialog).getByText("Team GitLab").closest("[data-credential]") as HTMLElement;
+    expect(within(used).queryByRole("button", { name: "编辑范围" })).not.toBeInTheDocument();
+  });
+
+  test("a refused range keeps the editor open with what was typed", async () => {
+    const { dialog } = await openCredentials({ "PATCH /credentials/cred-1": () => new Response(
+      JSON.stringify({ error: "仓库范围须为 owner/repo、owner/* 或 group/sub/*", code: "invalid_request" }), { status: 400 }) });
+    const mine = within(dialog).getByText("bob 的 GitHub").closest("[data-credential]") as HTMLElement;
+    await userEvent.click(within(mine).getByRole("button", { name: "编辑范围" }));
+    await userEvent.type(within(mine).getByLabelText("仓库范围"), "not a range");
+    await userEvent.click(within(mine).getByRole("button", { name: "保存范围" }));
+    expect(await screen.findByText("仓库范围须为 owner/repo、owner/* 或 group/sub/*")).toBeInTheDocument();
+    expect((within(mine).getByLabelText("仓库范围") as HTMLTextAreaElement).value).toBe("not a range");
+  });
 });

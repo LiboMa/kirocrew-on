@@ -20,11 +20,16 @@ const SECTIONS: { scope: CredentialScope; title: string }[] = [
   { scope: "user", title: "个人" }, { scope: "team", title: "Team" }, { scope: "platform", title: "平台" }];
 
 const day = (seconds: number | null) => (seconds ? new Date(seconds * 1000).toLocaleDateString() : "");
+/** Repository ranges as typed: one per line (or comma-separated); empty means every repository on the host. */
+const parseRepos = (text: string) => text.split(/[\n,，]/).map((r) => r.trim()).filter(Boolean);
+const REPOS_PLACEHOLDER = "每行一个：owner/repo、owner/* 或 group/sub/*；留空表示该主机全部仓库";
 
-/** One credential: metadata, and for those who manage it test / disable / rotate / delete (D35 §6). */
+/** One credential: metadata, and for those who manage it test / edit range / disable / rotate / delete (D35 §6). */
 function Row({ credential }: { credential: Credential }) {
   const client = useQueryClient();
   const [result, setResult] = useState("");
+  const [editing, setEditing] = useState(false);
+  const [repos, setRepos] = useState("");
   const [rotating, setRotating] = useState(false);
   const [secret, setSecret] = useState("");
   const [confirming, setConfirming] = useState(false);
@@ -57,6 +62,8 @@ function Row({ credential }: { credential: Credential }) {
                 return refresh();
               }).catch((error: Error) => toast.error(error.message))}>测试</Button>
           <Button type="button" size="sm" variant="outline"
+            onClick={() => { setRepos(credential.repos.join("\n")); setEditing(!editing); }}>编辑范围</Button>
+          <Button type="button" size="sm" variant="outline"
             onClick={() => run(() => api(path, "PATCH", { disabled: !credential.disabled }))}>
             {credential.disabled ? "启用" : "停用"}
           </Button>
@@ -65,6 +72,17 @@ function Row({ credential }: { credential: Credential }) {
             onClick={() => (confirming ? run(() => api(path, "DELETE", {})) : setConfirming(true))}>
             {confirming ? "确认删除" : "删除"}
           </Button>
+        </div>
+      )}
+      {editing && (
+        <div className="flex items-start gap-2">
+          <Label htmlFor={"repos-" + credential.id} className="sr-only">仓库范围</Label>
+          <Textarea id={"repos-" + credential.id} rows={2} value={repos} placeholder={REPOS_PLACEHOLDER}
+            onChange={(event) => setRepos(event.target.value)} />
+          {/* Kept open on failure so the typed range is not lost. */}
+          <Button type="button" size="sm" onClick={() =>
+            api(path, "PATCH", { repos: parseRepos(repos) }).then(refresh).then(() => setEditing(false))
+              .catch((error: Error) => toast.error(error.message))}>保存范围</Button>
         </div>
       )}
       {rotating && (
@@ -102,7 +120,7 @@ export function CredentialsDialog() {
         const scope = owner === "user" || owner === "platform" ? owner : "team";
         await api("/credentials", "POST", {
           name, kind, host: host.trim(), scope, ...(scope === "team" ? { team_id: owner } : {}),
-          repos: repos.split(/[\n,，]/).map((r) => r.trim()).filter(Boolean), access, secret,
+          repos: parseRepos(repos), access, secret,
         });
         setName(""); setRepos(""); setSecret("");
         await client.invalidateQueries({ queryKey: keys.credentials });
@@ -151,7 +169,7 @@ export function CredentialsDialog() {
         <div className="space-y-1.5 sm:col-span-2">
           <Label htmlFor="credential-repos">仓库范围（可选）</Label>
           <Textarea id="credential-repos" rows={2} value={repos} onChange={(e) => setRepos(e.target.value)}
-            placeholder="每行一个：owner/repo、owner/* 或 group/sub/*；留空表示该主机全部仓库" />
+            placeholder={REPOS_PLACEHOLDER} />
         </div>
         <div className="space-y-1.5">
           <Label htmlFor="credential-access">权限</Label>
