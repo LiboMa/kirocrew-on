@@ -17,6 +17,16 @@ const runs = [
 ];
 
 describe("console shell", () => {
+  test("the session list asks for the list view, not every task's prompt (M3-5)", async () => {
+    const searches: string[] = [];
+    setToken("oct_fixture");
+    mockApi({ ...workspaceRoutes(runs), "GET /runs": (_body: unknown, url: URL) => { searches.push(url.search); return runs; } });
+    render(<App />);
+    expect(await screen.findByRole("navigation", { name: "会话列表" })).toBeInTheDocument();
+    await waitFor(() => expect(searches.length).toBeGreaterThan(0));
+    expect(searches.every((search) => new URLSearchParams(search).get("view") === "list")).toBe(true);
+  });
+
   test("login stores the shared token and opens the workspace", async () => {
     const calls = mockApi({ ...workspaceRoutes(runs), "POST /login": { token: "oct_new", id: "t1", scopes: [], expires: 0 } });
     render(<App />);
@@ -57,7 +67,7 @@ describe("console shell", () => {
     const searches: string[] = [];
     setToken("oct_fixture");
     mockApi({ ...workspaceRoutes([]), "GET /users": [{ id: "u1", username: "fixture-owner" }, { id: "u2", username: "dev1" }],
-      "GET /runs": (_body: unknown, url: URL) => { searches.push(url.search); return url.search === "?all=1" ? [theirs] : []; } });
+      "GET /runs": (_body: unknown, url: URL) => { searches.push(url.search); return new URLSearchParams(url.search).get("all") === "1" ? [theirs] : []; } });
     render(<App />);
     const toggle = await screen.findByRole("button", { name: "全部会话" });
     expect(toggle).toHaveAttribute("aria-pressed", "false");
@@ -65,7 +75,7 @@ describe("console shell", () => {
     const list = await screen.findByRole("navigation", { name: "会话列表" });
     expect(await within(list).findByText("别人的个人会话")).toBeInTheDocument();
     expect(list).toHaveTextContent("dev1");
-    expect(searches).toContain("?all=1");
+    expect(searches).toContain("?all=1&view=list");
   });
 
   test("an administrator signed in before the admin scope existed is asked to sign in again", async () => {
@@ -78,7 +88,7 @@ describe("console shell", () => {
   test("switching to all Sessions keeps the console on screen while the list loads", async () => {
     let release: (value: unknown) => void = () => {};
     setToken("oct_fixture");
-    mockApi({ ...workspaceRoutes([]), "GET /runs": (_b: unknown, url: URL) => url.search === "?all=1"
+    mockApi({ ...workspaceRoutes([]), "GET /runs": (_b: unknown, url: URL) => new URLSearchParams(url.search).get("all") === "1"
       ? new Promise((resolve) => { release = resolve; }).then(() => new Response("[]", { headers: { "Content-Type": "application/json" } }))
       : [] });
     render(<App />);
@@ -93,7 +103,7 @@ describe("console shell", () => {
     setToken("oct_fixture");
     window.history.replaceState(null, "", "/?run=run-z");
     mockApi({ ...workspaceRoutes([]), "GET /runs/run-z": theirs, "GET /runs/run-z/events": [],
-      "GET /runs": (_b: unknown, url: URL) => (url.search === "?all=1" ? [theirs] : []) });
+      "GET /runs": (_b: unknown, url: URL) => (new URLSearchParams(url.search).get("all") === "1" ? [theirs] : []) });
     render(<App />);
     expect(await screen.findByRole("heading", { name: "别人的会话" })).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "全部会话" })).toHaveAttribute("aria-pressed", "true");

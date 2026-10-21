@@ -22,8 +22,21 @@ class ServiceListingTests(ConfirmationCase):
         self.assertEqual([r["id"] for r in self.service.runs(self.actor, limit=2)], [self.ids[2], self.ids[1]])
         self.assertEqual(len(self.service.runs(self.actor)), 3)   # without filters: as before
 
+    def test_the_list_view_leaves_out_what_only_the_session_page_shows(self):   # tasks' prompts were two thirds of it
+        full, slim = self.service.runs(self.actor), self.service.runs(self.actor, view="list")
+        self.assertEqual([r["id"] for r in slim], [r["id"] for r in full])
+        for run in slim:
+            self.assertTrue(run["tasks"])
+            for task in run["tasks"]:
+                self.assertEqual(set(task), {"id", "status", "spec"})
+                self.assertLessEqual(set(task["spec"]), {"id", "name", "tool", "model", "kind", "role"})
+            self.assertNotIn("summary", run.get("planning") or {})
+            for key in ("id", "name", "input", "status", "lifecycle", "progress", "updated", "team_id", "owner_id"):
+                self.assertIn(key, run)
+        self.assertLess(len(json.dumps(slim, ensure_ascii=False)), len(json.dumps(full, ensure_ascii=False)))
+
     def test_a_bad_filter_is_refused(self):
-        for kwargs in ({"status": "nope"}, {"limit": 0}, {"limit": 201}, {"q": "x" * 201}):
+        for kwargs in ({"status": "nope"}, {"limit": 0}, {"limit": 201}, {"q": "x" * 201}, {"view": "everything"}):
             with self.subTest(kwargs), self.assertRaises(Error):
                 self.service.runs(self.actor, **kwargs)
 
@@ -46,7 +59,7 @@ class McpListingTests(unittest.TestCase):
     def test_the_list_is_compact_filtered_and_says_when_there_is_more(self):
         client = Client([{**VIEW, "id": f"run-{n}"} for n in range(3)])
         result = mcp.call(client, "octopus_runs", {"status": "blocked", "q": "登录", "limit": 2})
-        self.assertEqual(client.paths, ["/v1/runs?status=blocked&q=%E7%99%BB%E5%BD%95&limit=3"])
+        self.assertEqual(client.paths, ["/v1/runs?status=blocked&q=%E7%99%BB%E5%BD%95&limit=3&view=list"])
         self.assertEqual([i["id"] for i in result["items"]], ["run-0", "run-1"])
         self.assertTrue(result["more"])
         self.assertEqual(set(result["items"][0]), {"id", "name", "status", "created", "updated", "progress", "attention",
@@ -58,7 +71,7 @@ class McpListingTests(unittest.TestCase):
     def test_by_default_the_newest_twenty(self):
         client = Client([{**VIEW, "id": "run-a"}])
         result = mcp.call(client, "octopus_runs", {})
-        self.assertEqual(client.paths, ["/v1/runs?limit=21"])
+        self.assertEqual(client.paths, ["/v1/runs?limit=21&view=list"])
         self.assertFalse(result["more"])
         schema = next(t for t in mcp.TOOLS if t["name"] == "octopus_runs")["inputSchema"]["properties"]
         self.assertEqual(set(schema), {"status", "q", "limit"})

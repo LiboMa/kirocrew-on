@@ -752,7 +752,7 @@ def server(database, port=8918, host="127.0.0.1", allowed_hosts=(), origin_secre
                     limit = one("limit")
                     require(limit is None or limit.isdigit(), "limit 须为 1–200 的整数")
                     return self.respond(service.runs(actor, all=query.get("all") == ["1"], status=one("status"), q=one("q"),
-                                                     limit=int(limit) if limit else None))
+                                                     limit=int(limit) if limit else None, view=one("view")))
                 if len(segments) in {4, 5} and segments[:2] == ["v1", "runs"] and segments[3] == "revisions":
                     require(method == "GET", "Method not allowed", 405)
                     rid = segments[2]

@@ -471,7 +471,7 @@ def runs(client, args):
     if type(limit) is not int or not 1 <= limit <= 50:
         raise ValueError("limit 须为 1–50 的整数")
     query = {key: args[key] for key in ("status", "q") if args.get(key)}
-    views = client.request("GET", "/v1/runs?" + urlencode({**query, "limit": limit + 1}))   # one more: is there more?
+    views = client.request("GET", "/v1/runs?" + urlencode({**query, "limit": limit + 1, "view": "list"}))   # one more: is there more?
     return {"items": [compact_run(v) for v in views[:limit]], "more": len(views) > limit}
 
 

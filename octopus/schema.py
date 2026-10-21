@@ -261,7 +261,9 @@ def openapi():
                                     {"in": "query", "name": "q", "schema": {"type": "string", "minLength": 1, "maxLength": 200},
                                      "description": "Part of the Session id, name or requirement."},
                                     {"in": "query", "name": "limit", "schema": {"type": "integer", "minimum": 1, "maximum": 200},
-                                     "description": "At most this many, newest first."}]
+                                     "description": "At most this many, newest first."},
+                                    {"in": "query", "name": "view", "schema": {"enum": ["list"]},
+                                     "description": "What a list needs: tasks by name and state, the plan without its summary."}]
             if path.endswith("/dedicate"):
                 op["description"] = "Administrator only. A shared Worker host serving exactly one Team becomes that Team's dedicated environment; every member then opens its native KiroCrew entry."
             if path.endswith("/events"):
