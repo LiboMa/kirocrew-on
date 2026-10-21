@@ -1,6 +1,6 @@
 {
   "_comment": "进度看板与 docs/PROGRESS.md 的唯一数据源：任务状态在这里维护；提交记录由 tools/progress.py 从 git 生成（负责人 2026-10-20）。",
-  "checks": "1401 后端 + 92 + 204 控制台（D54 本机）；EC2 运行 17687ec",
+  "checks": "1407 后端 + 92 + 204 控制台（会话列表过滤 本机）；EC2 运行 245d2ea（D54）",
   "status": {
     "accepted": {
       "label": "已验收",
@@ -64,10 +64,10 @@
         },
         {
           "id": "m2-gate-catalog",
-          "name": "M2-3 门禁目录补齐：candidate_unchanged",
-          "status": "todo",
-          "ref": "§6 #3",
-          "more": "其余门禁已上线（D37：native_completed … review_bound、tests_fail_on_baseline、artifacts_locked）。"
+          "name": "M2-3 门禁目录（含 candidate_unchanged）",
+          "status": "accepted",
+          "ref": "D37 §7 · EC2 2026-10-14",
+          "more": "candidate_unchanged 以「只发布已验证候选」实现（审查之后有改代码的任务时发布返回 409 publish_unverified）；设计中的「审查失效后自动复审」由 D46 P3 承担：Evaluator 总在改代码任务之后，审查的是最终代码。"
         },
         {
           "id": "m2-mapping-pref",
@@ -130,7 +130,7 @@
           "name": "M3-3 MCP 补齐：Request、搜索、会话关联",
           "status": "doing",
           "ref": "§7 #3",
-          "more": "已有 35 个工具（含计划确认、验收、报告、批准、修订、补充说明）。"
+          "more": "已有 35 个工具（含计划确认、验收、报告、批准、修订、补充说明）；2026-10-21 octopus_runs 改为精简列表（status / q / limit、more），EC2 上完整列表约 55 万字符超出 MCP 结果上限。剩余：Request、会话关联。"
         },
         {
           "id": "m3-sync",
@@ -142,9 +142,9 @@
         {
           "id": "m3-console",
           "name": "M3-5 控制台：服务端分页、按仓库 / 分支 / 工具 / 客户端 / 提交者 / 时间过滤、全文搜索",
-          "status": "todo",
+          "status": "doing",
           "ref": "§7 #5",
-          "more": "列表、详情、门禁、报告、修订对比、变更记录已上线；搜索现为客户端关键字。"
+          "more": "2026-10-21 GET /v1/runs 支持 status / q / limit 的服务端过滤；剩余：控制台改用服务端分页与按仓库 / 分支 / 工具 / 客户端 / 提交者 / 时间过滤、全文搜索。列表、详情、门禁、报告、修订对比、变更记录已上线。"
         },
         {
           "id": "m3-classic",
@@ -331,8 +331,8 @@
         {
           "id": "d54-paths",
           "name": "D54 协调者的返工可扩大可改动路径（paths_add）",
-          "status": "local",
-          "ref": "2026-10-21",
+          "status": "deployed",
+          "ref": "EC2 245d2ea",
           "more": "artifacts_locked 记下被拒文件，协调者在 context.locked_files 中看到；重试 / 返工失败的任务时可加 paths_add（只取这些文件），平台核对后扩大 paths 并记修订与时间线。EC2 run-25c7aaa7 曾因此卡 13 轮。"
         }
       ]

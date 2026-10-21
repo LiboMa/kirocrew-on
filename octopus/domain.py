@@ -21,6 +21,7 @@ ROLES = {"viewer": 1, "runner": 2, "editor": 3, "owner": 4}
 ROLE_LABELS = {"viewer": "查看", "runner": "运行", "editor": "编辑", "owner": "所有者"}
 # Statuses in which an open Session is not running on its Worker (it can be continued).
 SETTLED = ("failed", "blocked", "completed", "stopped", "waiting_worker", "awaiting_confirmation", "awaiting_acceptance")
+RUN_STATES = SETTLED + ("preparing", "ready", "running", "waiting_approval", "dispatch_unknown", "stopping", "reopening", "diagnosing")
 # What the admin environment listing shows of a live /health (no boundary or principal hashes).
 HEALTH_FIELDS = ("isolation", "crew_entry", "crew_origin", "version", "tool_auth")
 
@@ -1741,17 +1742,29 @@ class Service:
         result = worker_request(json.loads(worker["config"]), "/files", {"run_id": rid, "path": relative})
         return base64.b64decode(result["content"])
 
-    def runs(self, actor, all=False):
-        """The actor's own and Team Sessions; with all=True an elevated admin gets every Session (B5)."""
-        oversee = all and elevated(actor)
+    def runs(self, actor, all=False, status=None, q=None, limit=None):
+        """The actor's own and Team Sessions, newest first; with all=True an elevated admin gets every Session (B5).
+        Filtered on the server (M3-5, 2026-10-21): ``status``, ``q`` (part of the id, name or requirement) and ``limit``."""
+        require(status is None or status in RUN_STATES, "status 不是会话的状态")
+        require(q is None or isinstance(q, str) and 0 < len(q) <= 200, "q 须为 1–200 个字符")
+        require(limit is None or type(limit) is int and 1 <= limit <= 200, "limit 须为 1–200 的整数")
+        oversee, needle = all and elevated(actor), (q or "").lower()
+        sql, params = "SELECT id, snapshot, input FROM runs", []
+        if status:
+            sql, params = sql + " WHERE status=?", [status]
         with self.db.read() as db:
             result = []
-            for row in db.execute("SELECT id FROM runs ORDER BY created DESC"):
+            for row in db.execute(sql + " ORDER BY created DESC", params):
+                if needle and needle not in " ".join((row["id"], str(json.loads(row["snapshot"]).get("name") or ""),
+                                                      row["input"] or "")).lower():
+                    continue
                 try:
                     run = run_access(db, actor, row["id"], admin=oversee)
-                    result.append(self._view(db, run, actor, detail=False))
                 except Error:
-                    pass
+                    continue
+                result.append(self._view(db, run, actor, detail=False))
+                if limit and len(result) >= limit:
+                    break
             return result
 
     def report(self, actor, rid, fmt):

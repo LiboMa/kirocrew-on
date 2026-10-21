@@ -256,7 +256,12 @@ def openapi():
                                     {"in": "query", "name": "limit", "schema": {"type": "integer", "minimum": 1, "maximum": 200}}]
             if path == "/v1/runs" and method == "get":
                 op["parameters"] = [{"in": "query", "name": "all", "schema": {"enum": ["1"]},
-                                     "description": "Elevated admins only: every Session instead of their own and their Teams'."}]
+                                     "description": "Elevated admins only: every Session instead of their own and their Teams'."},
+                                    {"in": "query", "name": "status", "schema": {"type": "string"}, "description": "One Session status."},
+                                    {"in": "query", "name": "q", "schema": {"type": "string", "minLength": 1, "maxLength": 200},
+                                     "description": "Part of the Session id, name or requirement."},
+                                    {"in": "query", "name": "limit", "schema": {"type": "integer", "minimum": 1, "maximum": 200},
+                                     "description": "At most this many, newest first."}]
             if path.endswith("/dedicate"):
                 op["description"] = "Administrator only. A shared Worker host serving exactly one Team becomes that Team's dedicated environment; every member then opens its native KiroCrew entry."
             if path.endswith("/events"):

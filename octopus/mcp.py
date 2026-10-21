@@ -42,7 +42,11 @@ TOOLS = [
                                   ["request_id", "input", "worker_id"])},
     {"name": "octopus_workflow_recommendation", "description": "读取 KiroCrew 工作流建议状态、已校验的草稿及真实 ACP 证据。",
      "inputSchema": object_schema({"id": STRING}, ["id"]), "annotations": {"readOnlyHint": True}},
-    {"name": "octopus_runs", "description": "列出当前用户有权读取的开发 Sessions", "inputSchema": object_schema()},
+    {"name": "octopus_runs",
+     "description": "列出当前用户有权读取的开发 Sessions（最新的在前，精简：状态、进度、需要处理的事与错误首行）。默认最近 20 个；"
+                    "可按 status 过滤、按 q（会话 ID、名称或需求中的片段）搜索；more 为 true 表示还有更多，缩小条件或加大 limit。"
+                    "详情用 octopus_status。",
+     "inputSchema": object_schema({"status": STRING, "q": STRING, "limit": {"type": "integer", "minimum": 1, "maximum": 50}})},
     {"name": "octopus_status",
      "description": "查询真实任务状态。默认返回精简视图：Session 状态、version、attention、规划、最近一次纠错决定、各任务最近一次尝试的结论"
                     "（decision、summary、findings、交接文件）和最近 10 条事件；detail=true 返回完整记录（含各次尝试的原始输出与证据，可能很大）。",
@@ -452,9 +456,30 @@ def compact_status(session, events):
     return {"session": view, "events": recent}
 
 
+def compact_run(view):
+    """One line of the session list for a Coding Agent (M3-3): what it is, how far it is and what needs a person."""
+    error = str(view.get("error") or "").splitlines()
+    return {"id": view["id"], "name": view.get("name"), "status": view.get("status"), "created": view.get("created"),
+            "updated": view.get("updated"), "progress": view.get("progress"),
+            "attention": (view.get("attention") or {}).get("title"), "error": error[0][:200] if error else None,
+            "placement": (view.get("placement") or {}).get("kind"), "worker_id": view.get("worker_id")}
+
+
+def runs(client, args):
+    """The session list, filtered on the server and compact (the whole list outgrew an MCP result: 101 Sessions, ~550 KB)."""
+    limit = args.get("limit", 20)
+    if type(limit) is not int or not 1 <= limit <= 50:
+        raise ValueError("limit 须为 1–50 的整数")
+    query = {key: args[key] for key in ("status", "q") if args.get(key)}
+    views = client.request("GET", "/v1/runs?" + urlencode({**query, "limit": limit + 1}))   # one more: is there more?
+    return {"items": [compact_run(v) for v in views[:limit]], "more": len(views) > limit}
+
+
 def call(client, name, args):
     args = dict(args)
-    if name in {"octopus_workflows", "octopus_teams", "octopus_runs"}:
+    if name == "octopus_runs":
+        return runs(client, args)
+    if name in {"octopus_workflows", "octopus_teams"}:
         return client.request("GET", "/v1/" + name.removeprefix("octopus_"))
     if name == "octopus_match_workflow":
         return client.request("POST", "/v1/workflows/resolve", args)

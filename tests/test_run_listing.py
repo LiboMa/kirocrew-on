@@ -1,0 +1,68 @@
+"""M3-3 / M3-5 (owner 2026-10-21): the session list filtered on the server, and a compact list for Coding Agents — the
+whole list (101 Sessions, about 550 000 characters on EC2) was too large for an MCP result."""
+import json
+import unittest
+
+from octopus import mcp
+from octopus.security import Error
+from tests.test_confirmation import ConfirmationCase
+
+
+class ServiceListingTests(ConfirmationCase):
+    def setUp(self):
+        super().setUp()
+        self.ids = [self.start(input=words) for words in ("实现登录页", "修复导出报表", "实现登录接口")]
+        with self.db.transaction() as db:
+            db.execute("UPDATE runs SET status='blocked' WHERE id=?", (self.ids[0],))
+
+    def test_the_list_is_filtered_on_the_server_newest_first(self):
+        self.assertEqual([r["id"] for r in self.service.runs(self.actor, status="blocked")], [self.ids[0]])
+        self.assertEqual([r["id"] for r in self.service.runs(self.actor, q="登录")], [self.ids[2], self.ids[0]])
+        self.assertEqual([r["id"] for r in self.service.runs(self.actor, q=self.ids[1][:12])], [self.ids[1]])
+        self.assertEqual([r["id"] for r in self.service.runs(self.actor, limit=2)], [self.ids[2], self.ids[1]])
+        self.assertEqual(len(self.service.runs(self.actor)), 3)   # without filters: as before
+
+    def test_a_bad_filter_is_refused(self):
+        for kwargs in ({"status": "nope"}, {"limit": 0}, {"limit": 201}, {"q": "x" * 201}):
+            with self.subTest(kwargs), self.assertRaises(Error):
+                self.service.runs(self.actor, **kwargs)
+
+
+class Client:
+    def __init__(self, views):
+        self.views, self.paths = views, []
+
+    def request(self, method, path, body=None):
+        self.paths.append(path)
+        return self.views
+
+
+VIEW = {"name": "会话", "status": "blocked", "created": 1.0, "updated": 2.0, "worker_id": "w", "input": "需" * 3000,
+        "error": "协调者需要你处理具体阻塞\n" + "详情" * 2000, "attention": {"title": "协调者需要你处理具体阻塞", "detail": "x" * 5000},
+        "progress": {"accepted": 1, "total": 3}, "placement": {"kind": "own"}, "tasks": [{"spec": {"prompt": "p" * 5000}}]}
+
+
+class McpListingTests(unittest.TestCase):
+    def test_the_list_is_compact_filtered_and_says_when_there_is_more(self):
+        client = Client([{**VIEW, "id": f"run-{n}"} for n in range(3)])
+        result = mcp.call(client, "octopus_runs", {"status": "blocked", "q": "登录", "limit": 2})
+        self.assertEqual(client.paths, ["/v1/runs?status=blocked&q=%E7%99%BB%E5%BD%95&limit=3"])
+        self.assertEqual([i["id"] for i in result["items"]], ["run-0", "run-1"])
+        self.assertTrue(result["more"])
+        self.assertEqual(set(result["items"][0]), {"id", "name", "status", "created", "updated", "progress", "attention",
+                                                   "error", "placement", "worker_id"})
+        self.assertEqual(result["items"][0]["attention"], "协调者需要你处理具体阻塞")
+        self.assertLessEqual(len(result["items"][0]["error"]), 200)
+        self.assertLess(len(json.dumps(result, ensure_ascii=False)), 1500)
+
+    def test_by_default_the_newest_twenty(self):
+        client = Client([{**VIEW, "id": "run-a"}])
+        result = mcp.call(client, "octopus_runs", {})
+        self.assertEqual(client.paths, ["/v1/runs?limit=21"])
+        self.assertFalse(result["more"])
+        schema = next(t for t in mcp.TOOLS if t["name"] == "octopus_runs")["inputSchema"]["properties"]
+        self.assertEqual(set(schema), {"status", "q", "limit"})
+
+
+if __name__ == "__main__":
+    unittest.main()

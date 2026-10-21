@@ -75,7 +75,7 @@ KiroCrew ON 在远端执行开发任务：KiroCrew 的 Kiro Agent 先识别意�
   `recovery.latest`（最近一次纠错决定）、各任务 `status` 与最近一次尝试 `latest`（`decision`、`summary`、`findings`、交接文件），以及最近 10 条事件。
 - 需要某次尝试的原始输出或完整证据时才传 `detail: true`；完整记录可能有十几万字符，超出客户端的输出上限。
 - 任务通常需要几分钟到几十分钟；每 30–60 秒查询一次，向用户汇报真实状态。状态不是 `completed` 时不要宣称完成。
-- `octopus_runs` 列出用户可见的全部会话；`octopus_me` 返回当前身份、是否管理员、Token scope 与所在 Team。
+- `octopus_runs` 列出用户可见的会话（最新的在前，每个只有状态、进度、需要处理的事与错误首行；默认 20 个，`status` 过滤、`q` 按会话 ID / 名称 / 需求片段搜索，`more: true` 时缩小条件或加大 `limit`）；详情用 `octopus_status`；`octopus_me` 返回当前身份、是否管理员、Token scope 与所在 Team。
 - `octopus_changes`（传 `run_id`）列出会话的变更记录：谁（用户与客户端，或 Engine / Worker / KiroCrew / 协调者）在什么时候改了什么、
   前后值与原因；`who: "user"` 只看人的操作。用户问“谁停止了这个会话”“上一轮改了什么设置”时用它。
 - `octopus_revisions`（传 `run_id`）列出修订历史（创建、规划、续作、自动纠错、平台追加的 Evaluator / Knowledge 任务）；加 `to`（以及可选的 `from`）返回两版之间需求与各任务的变化：工具、模型等字段的前后值，以及 Prompt 新增（+）与删除（-）的行。用户问“上一轮改了什么”时用它。
