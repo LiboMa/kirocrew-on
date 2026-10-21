@@ -2,6 +2,7 @@
 what a KiroCrew planning task plans for the remaining work; accepted tasks stay; once per session."""
 import copy
 import json
+from pathlib import Path
 import tempfile
 import unittest
 
@@ -159,6 +160,49 @@ class ReplanTests(ReplanCase):
         self.assertEqual(contexts[:2], [False, True])
 
 
+
+OLD_CHECK = "find . -name '*.py' -print0 | xargs -0 -r python3 -m py_compile && echo PYOK"
+FIXED_CHECK = "find . -name '*.py' -not -path '*/.venv/*' -print0 | xargs -0 -r python3 -m py_compile && echo PYOK"
+KEPT_STEPS = [{**STEPS[0], "verify": [OLD_CHECK]}] + STEPS[1:]
+
+
+def plan_with(fixes):
+    body = json.loads(NEW_PLAN[NEW_PLAN.index("{"):NEW_PLAN.rindex("}") + 1])
+    return "```json\n" + json.dumps({**body, "verify_fixes": fixes}, ensure_ascii=False) + "\n```"
+
+
+class KeptChecksTests(ReplanCase):
+    """Owner 2026-10-21 (D54 §9 a): the replan reviews the kept tasks' checks; a correction is part of the plan."""
+
+    def test_the_replan_is_shown_the_kept_tasks_checks(self):
+        self.plan = "没有计划"
+        self.tick(self.start(KEPT_STEPS))
+        prompt = self.dispatched("replan-1")[0]["spec"]["prompt"]
+        for words in ("保留任务的检查命令", "echo PYOK", "verify_fixes"):
+            self.assertIn(words, prompt)
+
+    def test_a_replan_corrects_a_kept_tasks_checks(self):
+        self.plan = plan_with([{"task_id": "code", "verify": [FIXED_CHECK]}])
+        rid = self.start(KEPT_STEPS)
+        run = self.tick(rid, 40)
+        code = run["tasks"][0]
+        self.assertEqual((code["spec"]["verify"], code["status"], len(code["attempts"])), ([FIXED_CHECK], "accepted", 1))   # not rerun
+        self.assertIn("保留任务「实现」的检查命令由重新规划修正", run["replan"]["notes"])
+        diff = self.service.revision_diff(self.actor, rid)   # the replan's revision against the one before
+        change = next(t for t in diff["tasks"] if t["id"] == "code")
+        self.assertEqual(change["fields"]["verify"], [[OLD_CHECK], [FIXED_CHECK]])
+        self.assertIn("task.verify_revised", [e["kind"] for e in self.service.events(self.actor, rid)])
+        labels = (Path(__file__).resolve().parents[1] / "web/src/lib/labels.ts").read_text()
+        self.assertIn('"task.verify_revised":', labels)   # the timeline names it
+
+    def test_a_correction_for_a_task_not_kept_or_emptying_a_check_is_ignored(self):
+        self.plan = plan_with([{"task_id": "deliver", "verify": ["true"]}, {"task_id": "code", "verify": []}, "x"])
+        run = self.tick(self.start(KEPT_STEPS), 40)
+        self.assertEqual(run["tasks"][0]["spec"]["verify"], [OLD_CHECK])
+        notes = "；".join(run["replan"]["notes"])
+        self.assertIn("deliver 不是保留的已验收任务", notes)
+        self.assertIn("「实现」须保留至少 1 条检查命令", notes)
+
 class ReplanReviewTests(ReplanCase):
     def test_the_replan_prompt_fits_the_worker_limit(self):
         long = "很长的内容" * 3000
@@ -169,6 +213,13 @@ class ReplanReviewTests(ReplanCase):
                                     {"available": ["c" * 40] * 60, "missing": ["d" * 40] * 60})   # every input at its clip
         steps([spec])   # the Worker refuses prompts over 8000 characters
         self.assertLessEqual(len(spec["prompt"]), 7400)   # room for a few more skills or roles (BACKLOG D50)
+        kept = [{"id": f"task-{i}", "name": "很长的任务名" * 10, "verify": ["c" * 400] * 10} for i in range(8)]
+        with_kept = planning.replan_step("replan-1", [{"id": "t%d" % i, "name": "任务" * 40, "kind": "implement"} for i in range(12)],
+                                         long, {"reason": long, "instructions": long}, {"claude": ["m" * 60] * 60},
+                                         {"kiro": {"available": True, "reason": long}}, [long] * 5,
+                                         {"available": ["c" * 40] * 60, "missing": ["d" * 40] * 60}, kept)
+        steps([with_kept])
+        self.assertLessEqual(len(with_kept["prompt"]), 7800)   # the kept tasks' checks to review (D54 §9 a) fit too
         for name in ("test-driven-development", "evaluator"):   # the compact catalogues still name every choice
             self.assertIn(name, spec["prompt"])
 

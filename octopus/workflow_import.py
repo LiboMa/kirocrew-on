@@ -10,7 +10,7 @@ from .documents import parse_document
 from .domain import CONTRACT, TOOLS, steps
 from .security import Error, require
 
-DOCUMENT_KEYS = {"name", "steps", "schema", "id", "revision", "description", "intent", "summary"}
+DOCUMENT_KEYS = {"name", "steps", "schema", "id", "revision", "description", "intent", "summary", "publish", "verify_fixes"}
 FIELD_ALIASES = {"tool": ("tool", "agent", "backend"), "prompt": ("prompt", "instructions", "description", "task"),
                  "name": ("name", "title")}
 TOOL_ALIASES = {"kiro": "kiro", "kirocli": "kiro", "claude": "claude", "claudecode": "claude",
@@ -157,6 +157,8 @@ def import_workflow(content, format=None, known=(), planned=False):
     result = {"name": " ".join(name.split())[:80], "steps": normalized, "notes": notes}
     if isinstance(document, dict):
         result.update({key: document[key] for key in ("intent", "summary") if isinstance(document.get(key), str)})
+        if isinstance(document.get("verify_fixes"), list):   # D54 §9 a: a replan's corrections of kept tasks' checks
+            result["verify_fixes"] = document["verify_fixes"][:8]
         if isinstance(document.get("publish"), dict):   # D47: the requirement asked for a pull / merge request
             result["publish"] = {"quote": str(document["publish"].get("quote") or "")[:200]}
             if document["publish"].get("repository") is not None:   # D48: a new repository it named — a suggestion only

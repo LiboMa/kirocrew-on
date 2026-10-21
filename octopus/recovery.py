@@ -646,8 +646,11 @@ class Coordinator:
         used = {row[0] for row in db.execute("SELECT id FROM tasks WHERE run_id=? UNION SELECT task_id FROM attempts WHERE run_id=?",
                                              (rid, rid))}
         task_id = next(planning.REPLAN_PREFIX + str(n) for n in range(1, 100) if planning.REPLAN_PREFIX + str(n) not in used)
+        kept = [{"id": row["id"], "name": spec.get("name", row["id"]), "verify": spec["verify"]} for row in db.execute(
+            "SELECT id, spec FROM tasks WHERE run_id=? AND status='accepted' AND ordinal<? ORDER BY ordinal", (rid, failed["ordinal"]))
+            if (spec := json.loads(row["spec"])).get("verify")]   # D54 §9 a: their checks are reviewed with the plan
         spec = planning.replan_step(task_id, replaced, failure, decision, environment.get("models"), environment.get("tools"),
-                                    environment.get("limitations"), environment.get("commands"))
+                                    environment.get("limitations"), environment.get("commands"), kept)
         journal.remove_rows(db, "tasks", "run_id=? AND ordinal>=?", (rid, failed["ordinal"]), journal.RECOVERY, "task.replaced",
                             decision.get("reason"), event={"tasks": replaced})
         db.execute("INSERT INTO tasks(run_id,id,ordinal,spec) VALUES(?,?,?,?)", (rid, spec["id"], failed["ordinal"], dumps(spec)))

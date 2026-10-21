@@ -47,7 +47,7 @@ export const EVENT_LABELS: Record<string, string> = {
   "run.budget": "等待时间不计入预算", "session.reopen": "原生会话已重新打开", "app.started": "远程预览已启动",
   "app.stopped": "远程预览已停止", "approval.answered": "已答复工具审批", "attempt.checking": "正在运行检查命令",
   "attempt.waiting": "等待条件满足", "attempt.watchdog": "无进展检查", "attempt.budget": "预算用完，未自动处理",
-  "task.replaced": "重新规划替换了后续任务", "task.tool_switched": "已切换执行工具",
+  "task.replaced": "重新规划替换了后续任务", "task.tool_switched": "已切换执行工具", "task.verify_revised": "重新规划修正了检查命令",
 };
 
 /** D46 P2: the roles a task's Agent works in (octopus/roles.py LABELS; kept equal by tests/test_roles.py). */

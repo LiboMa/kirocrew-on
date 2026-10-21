@@ -1,6 +1,6 @@
 {
   "_comment": "进度看板与 docs/PROGRESS.md 的唯一数据源：任务状态在这里维护；提交记录由 tools/progress.py 从 git 生成（负责人 2026-10-20）。",
-  "checks": "1393 后端 + 92 + 202 控制台（边界运维修复 本机）；EC2 运行 d02325d，owner 原生入口已开通",
+  "checks": "1396 后端 + 92 + 204 控制台（重新规划复核保留任务的检查 本机）；EC2 运行 b733fc6（凭证编辑范围，另一会话部署）",
   "status": {
     "accepted": {
       "label": "已验收",
@@ -171,6 +171,13 @@
           "status": "blocked",
           "ref": "KiroCrew",
           "more": "KiroCrew 0.10.0 的子任务不记录工具调用；需 KiroCrew 支持或平台以 hook 自记。"
+        },
+        {
+          "id": "d54-verify",
+          "name": "重新规划复核保留任务的检查命令（D54 §9 a）",
+          "status": "local",
+          "ref": "2026-10-21",
+          "more": "负责人 2026-10-21 选 (a)：重新规划的提示列出保留任务的 verify，计划可带 verify_fixes，平台核对后写入并记在这次重新规划的修订里；EC2 run-25c7aaa7 因保留任务的检查扫到后来的 backend/.venv 而停下。"
         }
       ]
     },

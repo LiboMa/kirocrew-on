@@ -68,7 +68,7 @@ def rules(count, depends, compact=False):
 def environment(models, tools, limitations, commands, compact=False):
     """The execution environment's facts, clipped so the planning prompt fits the Worker's 8000 characters (D46);
     ``compact`` for the replan, whose failure and decision take their own share."""
-    size = (450, 350, 300, 600) if compact else (700, 600, 400, 1200)
+    size = (450, 250, 300, 400) if compact else (700, 600, 400, 1200)
     return f"""## 此执行环境的 Coding 工具与已知限制
 {_clip(dumps(tools or {}), size[0])}
 available 为 false 的工具不要选择（需求明确指定的除外，见下；reason 为原因）；没有列出时表示执行环境未报告。
@@ -186,8 +186,9 @@ def expand(db, rid, text, models=None, replan=False, tools=None):
                     notes.append("需求要求新建仓库，但规划给出的仓库名不合法，未记为建议：会话完成后在会话页填写")
             notes.append("需求要求提交 PR，但此会话的源码不来自远端仓库，没有远端仓库，未开启自动发布")
     if replan:
+        fixed = _fix_kept_checks(db, rid, kept, plan.get("verify_fixes"), notes)
         snapshot["replan"] = {**(snapshot.get("replan") or {}), "applied": True, "tasks": [s["id"] for s in steps], "notes": notes,
-                              "intent": str(plan.get("intent") or "")[:500]}
+                              "intent": str(plan.get("intent") or "")[:500], **({"verify_fixed": fixed} if fixed else {})}
         snapshot["steps"] = snapshot.get("steps", []) + steps
         from . import journal
         journal.change(db, "runs", rid, journal.KIROCREW, "plan.applied",
@@ -210,6 +211,37 @@ def expand(db, rid, text, models=None, replan=False, tools=None):
     record(db, rid, row["version"] + 1, "planned", f"规划：追加 {len(steps)} 个任务", row["owner_id"], time.time(),
            planning={"intent": applied["intent"], "tasks": applied["tasks"]})
     return applied
+
+
+def _fix_kept_checks(db, rid, kept, fixes, notes):
+    """The replan's corrections of kept tasks' checks (D54 §9 a), applied before its revision is written so that the
+    revision shows them; one that names a task not kept, or leaves an implement / test task without a check, is ignored
+    and said so. Returns the ids corrected."""
+    from . import journal
+    from .domain import LIMITS, strings
+    fixed = []
+    for fix in fixes if isinstance(fixes, list) else []:
+        tid = fix.get("task_id") if isinstance(fix, dict) else None
+        if tid not in kept:
+            notes.append(f"检查命令的修正：{str(tid)[:48]} 不是保留的已验收任务，已忽略")
+            continue
+        row = db.execute("SELECT spec FROM tasks WHERE run_id=? AND id=?", (rid, tid)).fetchone()
+        spec = json.loads(row["spec"])
+        try:
+            verify = strings(fix.get("verify"), "verify", *LIMITS["verify"])
+        except Error as exc:
+            notes.append(f"检查命令的修正（「{spec.get('name', tid)}」）无效，已忽略：{exc}")
+            continue
+        if not verify and spec.get("kind") in {"implement", "test"}:
+            notes.append(f"检查命令的修正：「{spec.get('name', tid)}」须保留至少 1 条检查命令，已忽略")
+            continue
+        if verify == (spec.get("verify") or []):
+            continue
+        journal.change(db, "tasks", (rid, tid), journal.KIROCREW, "task.verify_revised", "重新规划修正了保留任务的检查命令",
+                       event={"task_id": tid, "verify": verify}, spec=dumps({**spec, "verify": verify}))
+        notes.append(f"保留任务「{spec.get('name', tid)}」的检查命令由重新规划修正")
+        fixed.append(tid)
+    return fixed
 
 
 def pending(snapshot, task_id=PLAN_ID):
@@ -239,7 +271,22 @@ def _clip(text, limit):
     return text if len(text) <= limit else text[:limit] + "…"
 
 
-def replan_step(task_id, replaced, failure, decision, models=None, tools=None, limitations=None, commands=None):
+def kept_section(kept):
+    """The kept tasks' checks for the replan to review (owner 2026-10-21, D54 §9 a): they do not run again now, but a
+    later rework of one is checked by them — a check the Session's own work has since broken (one that scans a .venv
+    a later task created) would fail a correct rework."""
+    if not kept:
+        return ""
+    return f"""## 保留任务的检查命令（复核）
+{_clip(dumps(kept), 800)}
+这些已验收的任务不重跑，但以后返工时仍按上面的 verify 检查。若其中有检查会因会话后来的变化而误判（例如扫描到项目内的依赖目录
+.venv / node_modules，或用了本环境没有的命令），在计划 JSON 顶层写 "verify_fixes": [{{"task_id": "…", "verify": ["修正后的命令"]}}]：
+只修正检查的范围与可执行性，不放宽它要证明的事；没有问题时省略。
+
+"""
+
+
+def replan_step(task_id, replaced, failure, decision, models=None, tools=None, limitations=None, commands=None, kept=None):
     """The Coordinator's replan (D41 §3.2): a Kiro task that plans only the remaining work, under the first plan's rules
     (D46). What the dispatch carries anyway is referred to, not copied — the requirement, the first plan's completion and
     the accepted tasks' conclusions — so the prompt stays within the Worker's 8000 characters whatever the Session holds."""
@@ -249,14 +296,14 @@ def replan_step(task_id, replaced, failure, decision, models=None, tools=None, l
 失败任务已有的改动仍在会话分支上（工作区中），可在其基础上继续。保留用户只做分析、只审查、离线、标准库等明确约束。
 
 ## 被替换的任务（原计划的剩余部分，不再执行）
-{_clip(dumps(replaced), 900)}
+{_clip(dumps(replaced), 600)}
 
 ## 失败与协调者的判断
-失败：{_clip(failure, 600)}
+失败：{_clip(failure, 500)}
 协调者的原因：{_clip(decision.get("reason"), 400)}
 协调者的要求：{_clip(decision.get("instructions"), 900)}
 
-## 本任务的交付
+{kept_section(kept)}## 本任务的交付
 只规划剩余的工作，不重复已完成的任务。
 {rules("1–6", "depends_on 可列本计划中前面的任务或前序交接中已验收任务的 id；", compact=True)}
 
@@ -264,7 +311,7 @@ def replan_step(task_id, replaced, failure, decision, models=None, tools=None, l
 
 最终回复必须包含且仅包含一个 JSON 代码块（字段：intent、summary、name、steps），每个任务的字段与写法如下例，prompt 必须写出：
 {dumps(EXAMPLE["steps"])}
-不要加入第二个 JSON/YAML 代码块。同时按本任务要求写交接文件，说明重新规划的依据。
+不要加入第二个 JSON/YAML 代码块（需要修正保留任务的检查时，verify_fixes 写在同一个 JSON 顶层）。同时按本任务要求写交接文件，说明重新规划的依据。
 """
     return {"id": task_id, "name": "重新规划剩余工作（KiroCrew）", "tool": "kiro", "model": "auto", "effort": "",
             "prompt": prompt}
