@@ -515,6 +515,10 @@
     [
       "ff7e42a",
       "自 10-20 会话落在本人的 owner 边界后，「在 KiroCrew 中打开」远程不可用（owner 的 crew_url 只是本机隧道）：新增 deploy.sh boundary native 并为 owner 开通；首次执行因 nginx 按文件名读 conf.d、日志格式未定义而被 nginx -t 拒绝（已回退），改名后通过。"
+    ],
+    [
+      "17687ec",
+      "EC2 run-25c7aaa7（M0 脚手架）两次停在契约层：协调者让 task-3-2 修复其他任务的文件却不能扩大 paths（路径 A 续作解开），保留任务的检查扫到后来的 backend/.venv（修正 verify 续作解开）；之后 Evaluator 的 3 项高危发现经返工修复，会话 2026-10-21 14:07 完成。两类问题分别由 D54（待确认）与重新规划复核保留检查（已做）处理。"
     ]
   ],
   "next": [
@@ -536,7 +540,7 @@
     },
     {
       "who": "owner",
-      "text": "run-25c7aaa7 卡在 artifacts_locked：协调者让 task-3-2 修复其他任务的 8 个文件却无权扩大其 paths——选路径 A（扩充 paths 后重跑）或 B（拆回各任务）；以及是否让协调者的返工决定可附带 paths"
+      "text": "D54 主体（协调者的返工可附带扩大 paths，docs/superpowers/specs/2026-10-21-coordinator-paths-design.md）待确认后实现"
     }
   ]
 }
