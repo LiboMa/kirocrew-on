@@ -751,8 +751,12 @@ def server(database, port=8918, host="127.0.0.1", allowed_hosts=(), origin_secre
                     one = lambda key: (query.get(key) or [None])[-1]
                     limit = one("limit")
                     require(limit is None or limit.isdigit(), "limit 须为 1–200 的整数")
-                    return self.respond(service.runs(actor, all=query.get("all") == ["1"], status=one("status"), q=one("q"),
-                                                     limit=int(limit) if limit else None, view=one("view")))
+                    status = [s for s in (one("status") or "").split(",") if s] or None   # D56: one or several
+                    filters = {key: one(key) for key in ("lifecycle", "space", "repo", "branch", "stage", "tool", "client",
+                                                         "submitter", "since", "until") if one(key)}
+                    return self.respond(service.runs(actor, all=query.get("all") == ["1"], status=status, q=one("q"),
+                                                     limit=int(limit) if limit else None, view=one("view"),
+                                                     page=one("page") == "1", cursor=one("cursor"), **filters))
                 if segments[:2] == ["v1", "policies"] and len(segments) in {2, 3}:   # D55: admission rules, mapping preferences
                     if len(segments) == 3:
                         require(method == "DELETE", "Method not allowed", 405)

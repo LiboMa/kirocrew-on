@@ -1776,33 +1776,42 @@ class Service:
         result = worker_request(json.loads(worker["config"]), "/files", {"run_id": rid, "path": relative})
         return base64.b64decode(result["content"])
 
-    def runs(self, actor, all=False, status=None, q=None, limit=None, view=None):
+    def runs(self, actor, all=False, status=None, q=None, limit=None, view=None, page=False, cursor=None, **filters):
         """The actor's own and Team Sessions, newest first; with all=True an elevated admin gets every Session (B5).
-        Filtered on the server (M3-5, 2026-10-21): ``status``, ``q`` (part of the id, name or requirement) and ``limit``;
-        ``view="list"`` leaves out what only the session page shows (tasks' prompts and contracts, the plan's summary)."""
+        Filtered on the server (M3-5): ``status`` (one or a list), ``q`` (full text, every word) and ``limit``, and D56's
+        ``lifecycle``, ``space``, ``repo``, ``branch``, ``stage``, ``tool``, ``client``, ``submitter``, ``since``, ``until``
+        (listing.py); ``view="list"`` leaves out what only the session page shows; ``page=True`` answers
+        ``{items, next, total}`` from ``cursor``, without it a list as before."""
+        from . import listing
         require(view in (None, "list"), "view 只能是 list")
-        require(status is None or status in RUN_STATES, "status 不是会话的状态")
-        require(q is None or isinstance(q, str) and 0 < len(q) <= 200, "q 须为 1–200 个字符")
         require(limit is None or type(limit) is int and 1 <= limit <= 200, "limit 须为 1–200 的整数")
-        oversee, needle = all and elevated(actor), (q or "").lower()
-        sql, params = "SELECT id, snapshot, input FROM runs", []
-        if status:
-            sql, params = sql + " WHERE status=?", [status]
+        found = listing.criteria(status=status, q=q, cursor=cursor, **filters)
+        size = (limit or 50) if page else limit
+        oversee = all and elevated(actor)
+        sql, params = listing.sql(found)
         with self.db.read() as db:
-            result = []
-            for row in db.execute(sql + " ORDER BY created DESC", params):
-                if needle and needle not in " ".join((row["id"], str(json.loads(row["snapshot"]).get("name") or ""),
-                                                      row["input"] or "")).lower():
-                    continue
+            items, total, more = [], 0, False
+            for row in db.execute(sql, params):
                 try:
                     run = run_access(db, actor, row["id"], admin=oversee)
                 except Error:
                     continue
+                if not listing.matches(db, run, found):
+                    continue
+                total += 1
+                if found["after"] and (run["created"], run["id"]) >= found["after"]:
+                    continue   # on an earlier page
+                if size and len(items) >= size:
+                    more = True
+                    if not page:
+                        break
+                    continue
                 value = self._view(db, run, actor, detail=False)
-                result.append(listed(value) if view == "list" else value)
-                if limit and len(result) >= limit:
-                    break
-            return result
+                items.append(listed(value) if view == "list" else value)
+            if not page:
+                return items
+            last = items[-1] if items and more else None
+            return {"items": items, "next": listing.cursor(last["created"], last["id"]) if last else None, "total": total}
 
     def requests(self, actor, status=None, q=None, client=None, limit=None):
         """The actor's Requests (D55), newest first: those with a Session they can read, filtered like Sessions."""
