@@ -6,6 +6,7 @@
 #   deploy/aws/deploy.sh tunnel [--boundary <name>]  # SSM port forwarding to a boundary's native KiroCrew (localhost:10000+port)
 #   deploy/aws/deploy.sh kiro-login [--host <name> | --boundary <name>]  # one-time kiro-cli device-flow login as crew-<boundary>
 #   deploy/aws/deploy.sh boundary add <name> --owner <user> [--memory <GiB>] [--cpu <%>]  # one person's boundary (D49)
+#   deploy/aws/deploy.sh boundary native <name>      # that boundary's public native entry (D49 phase 3)
 #   deploy/aws/deploy.sh boundaries    # the boundaries on the platform host: ports and service state
 #   deploy/aws/deploy.sh worker-host <add|up|push|tls|native|register|status> <name>  # a Worker host for Teams (D28)
 #   deploy/aws/deploy.sh space <run-id> [stop]  # run a worker run's project on the host and forward it (local = remote + 10000)
@@ -672,7 +673,7 @@ boundary() {  # boundary add <name> --owner <username> [--memory <GiB>] [--cpu <
   local usage="用法：deploy.sh boundary add <名称> --owner <平台用户名> [--memory <GiB>] [--cpu <百分比>] | boundary native <名称>"
   if [ "${1:-}" = native ]; then boundary_native "${2:-}"; return; fi
   [ "${1:-}" = add ] || { echo "$usage" >&2; exit 2; }
-  local name="${2:-}" owner="" memory=8 cpu=300
+  local name="${2:-}" owner="" memory="" cpu="" sized=""
   shift 2 || true
   while [ $# -gt 0 ]; do
     case "$1" in
@@ -684,9 +685,12 @@ boundary() {  # boundary add <name> --owner <username> [--memory <GiB>] [--cpu <
   done
   # The values become part of a root shell command on the host: only these forms reach it.
   [[ "$name" =~ ^[a-z][a-z0-9-]{1,19}$ ]] && [ "$name" != personal ] && [[ "$owner" =~ ^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$ ]] &&
-    [[ "$memory" =~ ^[1-9][0-9]?$ ]] && [[ "$cpu" =~ ^[1-9][0-9]{1,3}$ ]] || { echo "$usage" >&2; exit 2; }
+    [[ "${memory:-8}" =~ ^[1-9][0-9]?$ ]] && [[ "${cpu:-300}" =~ ^[1-9][0-9]{1,3}$ ]] || { echo "$usage" >&2; exit 2; }
+  # Only the limits given: a re-run without them keeps the boundary's own (boundary.sh)
+  [ -z "$memory" ] || sized="$sized --memory $memory"
+  [ -z "$cpu" ] || sized="$sized --cpu $cpu"
   local script="test -x /opt/kirocrew-on/current/deploy/install/boundary.sh || { echo '当前发布没有 boundary.sh：先 deploy.sh push' >&2; exit 3; }; "
-  script="${script}bash /opt/kirocrew-on/current/deploy/install/boundary.sh $name --owner $owner --memory $memory --cpu $cpu"
+  script="${script}AWS_REGION=$REGION bash /opt/kirocrew-on/current/deploy/install/boundary.sh $name --owner $owner$sized"
   if [ -n "$DRY" ]; then printf '%s\n' "$script"; return; fi
   remote "$(output InstanceId)" "$script"
 }

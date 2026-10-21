@@ -330,6 +330,8 @@ fi
 log "原生契约检查（以 $CREW 身份，隔离边界配置）"
 boundary_check "$BOUNDARY" "$TARGET" "$KC"
 for OTHER in $(other_boundaries "$BOUNDARY"); do   # D49: every boundary on this host passes before the release switches
+  # one an administrator stopped (systemctl disable) stays stopped: neither checked nor brought back by a push
+  systemctl is-enabled --quiet "octopus-worker@$OTHER" || { log "边界 ${OTHER}：已停用，跳过检查"; continue; }
   log "原生契约检查：边界 $OTHER"
   boundary_check "$OTHER" "$TARGET" "$KC"
 done
@@ -434,6 +436,7 @@ fi
 # Gateway that does not restart never holds up the API, personal or the others; failures are reported at the end.
 FAILED_BOUNDARIES=""
 for OTHER in $(other_boundaries "$BOUNDARY"); do
+  systemctl is-enabled --quiet "octopus-worker@$OTHER" || { log "边界 ${OTHER}：已停用（systemctl disable），不重启"; continue; }
   log "边界 ${OTHER}：升级"
   boundary_env "$OTHER"
   systemctl enable "octopus-gateway@$OTHER" "octopus-worker@$OTHER" >/dev/null

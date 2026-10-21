@@ -115,12 +115,12 @@
 - 测试缺口：引擎侧 `continue_refused` 的证据 / MCP / 报告、`rerun` 类的续接、经引擎的外来对话。
 
 ## D49 每人一个边界第 1 期的终审延后项（2026-10-19）
-- 再次 `boundary add` 未带 `--memory` / `--cpu` 时资源上限回到默认值，并因 drop-in 变化排空重启 Gateway：应只在缺少或显式给出时写。
+- ~~再次 `boundary add` 未带 `--memory` / `--cpu` 时资源上限回到默认值，并因 drop-in 变化排空重启 Gateway~~（2026-10-21 修复：未给出的沿用现有值）。
 - ~~`al2023.sh` 以 `env` 参数传管理员密码（短暂出现在 `/proc/<pid>/cmdline`，同主机现有多个 `crew-*` 用户）~~（2026-10-21 修复：赋值前缀，测试防回退）。
-- `--owner` 区分大小写（用户名存为小写）；`boundary add` 未传 `AWS_REGION`（默认 us-east-1，当前栈无碍）。
+- ~~`--owner` 区分大小写（用户名存为小写）；`boundary add` 未传 `AWS_REGION`~~（2026-10-21 修复）。
 - ~~启动向导的 KiroCrew 建议（`/designs`）用 `eligible[0]`（共享的 personal），没有优先此人自己的边界~~（D49 第 2 期已改为平台的默认位置 `placement.default`）。
 - 边界在 `kiro-login --boundary` 之前就登记并开始接收此人的会话（Kiro 任务等待登录）：可先以停用状态登记、登录后启用。
-- 每次 `push` 都 enable 每个边界（有意停掉的边界会回来）；`push` 与 `boundary add` 之间没有 `flock`；`toml_set` 迁移只作用于主边界配置；
+- ~~每次 `push` 都 enable 每个边界（有意停掉的边界会回来）~~（2026-10-21 修复：`systemctl disable` 的边界不检查、不重启）；`push` 与 `boundary add` 之间没有 `flock`；`toml_set` 迁移只作用于主边界配置；
   库的变量名（ETC、DATA、SYSTEMD）过于通用。
 - 测试缺口：Team 会话不受 R6 影响；登记测试 patch 了 `validate_worker`（与 personal 的 host_principal 交叉检查未覆盖）；~~`boundary.sh` 不在 `bash -n` 列表~~（2026-10-20 已加入）。
 - 边界的移除目前为手工步骤（OPERATIONS）：可加 `deploy.sh boundary remove`。

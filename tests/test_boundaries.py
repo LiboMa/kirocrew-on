@@ -192,6 +192,13 @@ class InstallerTests(unittest.TestCase):
         self.assertIn('boundary_check "$OTHER" "$TARGET" "$KC"', loop)
         self.assertTrue(self.text.startswith("#!/usr/bin/env bash") and "set -euo pipefail" in self.text)
 
+    def test_a_boundary_an_administrator_disabled_is_left_alone(self):   # BACKLOG D49: every push brought it back
+        loop = self.text[self.text.index("# others:begin"):self.text.index("# others:end")]
+        skip = loop.index('systemctl is-enabled --quiet "octopus-worker@$OTHER"')
+        self.assertLess(skip, loop.index('systemctl enable "octopus-gateway@$OTHER"'))
+        checks = self.text[self.text.index('for OTHER in $(other_boundaries "$BOUNDARY"); do   # D49'):]
+        self.assertLess(checks.index("is-enabled"), checks.index('boundary_check "$OTHER"'))   # nor checked against the release
+
     def test_every_other_boundary_is_restarted_after_the_primary(self):
         primary = self.text.index('boundary_restart "$BOUNDARY" "$KC"')
         loop = self.text.index('boundary_restart "$OTHER" "$KC"')
@@ -292,6 +299,21 @@ class BoundaryScriptTests(HostCase):
         self.add("alice", "--owner", "alice")
         self.assertEqual((self.root / "etc/boundary-alice.toml").read_text(), first)
 
+    def test_adding_again_keeps_the_limits_unless_given(self):   # BACKLOG D49: a re-run reset them and drained the Gateway
+        limits = lambda: (self.root / "systemd/octopus-gateway@alice.service.d/limits.conf").read_text()
+        self.add("alice", "--owner", "alice", "--memory", "12", "--cpu", "400")
+        self.assertIn("MemoryMax=12G", limits())
+        self.add("alice", "--owner", "alice")
+        self.assertIn("MemoryMax=12G", limits())
+        self.assertIn("CPUQuota=400%", limits())
+        self.add("alice", "--owner", "alice", "--memory", "6")
+        self.assertIn("MemoryMax=6G", limits())
+
+    def test_the_owner_is_matched_as_the_platform_stores_it(self):   # user names are kept in lower case
+        self.add("alice", "--owner", "Alice")
+        self.assertIn("--owner alice", self.calls.read_text())
+        self.assertNotIn("--owner Alice", self.calls.read_text())
+
     def test_a_second_boundary_gets_other_ports(self):
         self.add("alice", "--owner", "alice")
         (self.root / "data/bob").mkdir(parents=True)
@@ -326,8 +348,9 @@ class DeployCommandTests(unittest.TestCase):
     def test_boundary_add_runs_the_boundary_script_through_ssm(self):
         result = self.deploy("boundary", "add", "alice", "--owner", "alice")
         self.assertEqual(result.returncode, 0, result.stderr)
-        self.assertIn("bash /opt/kirocrew-on/current/deploy/install/boundary.sh alice --owner alice --memory 8 --cpu 300",
+        self.assertIn("AWS_REGION=us-east-1 bash /opt/kirocrew-on/current/deploy/install/boundary.sh alice --owner alice",
                       result.stdout)
+        self.assertNotIn("--memory", result.stdout)   # unless given: a re-run keeps the boundary's limits
         sized = self.deploy("boundary", "add", "bob", "--owner", "bob", "--memory", "12", "--cpu", "200")
         self.assertIn("boundary.sh bob --owner bob --memory 12 --cpu 200", sized.stdout)
         for args in (("boundary", "add", "Alice", "--owner", "alice"), ("boundary", "add", "a;b", "--owner", "x"),

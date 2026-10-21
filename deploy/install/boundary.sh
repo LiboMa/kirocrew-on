@@ -6,7 +6,7 @@
 set -euo pipefail
 NAME="${1:-}"
 [ $# -eq 0 ] || shift
-OWNER="" MEMORY=8 CPU=300
+OWNER="" MEMORY="" CPU=""   # limits not given keep the boundary's own (else 8 GiB, 300%)
 while [ $# -gt 0 ]; do
   case "$1" in
     --owner) OWNER="${2:-}"; shift 2 ;;
@@ -19,7 +19,9 @@ USAGE="用法：boundary.sh <名称> --owner <平台用户名> [--memory <GiB>] 
 [[ "$NAME" =~ ^[a-z][a-z0-9-]{1,19}$ ]] && [ "$NAME" != personal ] || {
   echo "${USAGE}；名称为小写字母开头的 2–20 位小写字母、数字或连字符，不能是 personal" >&2; exit 2; }
 [[ "$OWNER" =~ ^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$ ]] || { echo "${USAGE}（--owner 为平台用户名）" >&2; exit 2; }
-[[ "$MEMORY" =~ ^[1-9][0-9]?$ ]] && [[ "$CPU" =~ ^[1-9][0-9]{1,3}$ ]] || { echo "${USAGE}（内存 1–99 GiB，CPU 10–9999%）" >&2; exit 2; }
+[[ "${MEMORY:-8}" =~ ^[1-9][0-9]?$ ]] && [[ "${CPU:-300}" =~ ^[1-9][0-9]{1,3}$ ]] || {
+  echo "${USAGE}（内存 1–99 GiB，CPU 10–9999%）" >&2; exit 2; }
+OWNER="$(printf '%s' "$OWNER" | tr '[:upper:]' '[:lower:]')"   # the platform keeps user names in lower case
 [ "$(id -u)" -eq 0 ] || { echo "需要 root" >&2; exit 2; }
 
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -73,7 +75,12 @@ if [ ! -f "$TOML" ]; then
   mv -f "$TOML.new" "$TOML"
 fi
 WORKER_PORT="$(toml_port "$TOML" worker_port)"
-boundary_limits "$NAME" "$MEMORY" "$CPU"
+# A re-run without --memory / --cpu writes the limits it has: unchanged drop-ins do not drain and restart the Gateway.
+LIMITS="$SYSTEMD/octopus-gateway@$NAME.service.d/limits.conf"
+current() { grep -oE "^$1=[0-9]+" "$LIMITS" 2>/dev/null | grep -oE '[0-9]+$' || true; }
+MEMORY="${MEMORY:-$(current MemoryMax)}"
+CPU="${CPU:-$(current CPUQuota)}"
+boundary_limits "$NAME" "${MEMORY:-8}" "${CPU:-300}"
 
 log "边界 ${NAME}：原生契约检查（以 $CREW 身份）"
 boundary_check "$NAME" "$RELEASE" "$KC"
