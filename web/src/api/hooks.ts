@@ -2,7 +2,7 @@ import { useEffect, useState } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { api } from "@/api/client";
 import { followRunEvents, type StreamState } from "@/api/events";
-import type { ApprovalList, AppPreview, ChangeEntry, Credential, Environment, Me, Observation, Placement, RevisionDiff, RevisionEntry, Run, RunEvent, Team, Template, User, Worker, Workflow } from "@/api/types";
+import type { ApprovalList, AppPreview, ChangeEntry, Credential, Environment, Me, Observation, Placement, Policy, RevisionDiff, RevisionEntry, Run, RunEvent, Team, Template, User, Worker, Workflow } from "@/api/types";
 
 export const keys = {
   me: ["me"] as const,
@@ -18,6 +18,7 @@ export const keys = {
   observe: (id: string) => ["observe", id] as const,
   app: (id: string) => ["app", id] as const,
   credentials: ["credentials"] as const,
+  policies: ["policies"] as const,
   placement: (space: string, run?: string) => ["placement", space, run ?? ""] as const,
 };
 
@@ -70,6 +71,11 @@ export function useObservation(id: string | null, live: boolean, limit = 50) {
 /** The repository credentials the user may use or manage (D35); metadata only. */
 export function useCredentials(enabled = true) {
   return useQuery({ queryKey: keys.credentials, queryFn: () => api<Credential[]>("/credentials"), enabled, retry: false });
+}
+
+/** D55: the user's own admission rules and mapping preferences, and those of their Teams. */
+export function usePolicies() {
+  return useQuery({ queryKey: keys.policies, queryFn: () => api<Policy[]>("/policies"), retry: false });
 }
 
 /** The run's remote preview: every 3 s while it installs or starts, every 15 s while it runs. */

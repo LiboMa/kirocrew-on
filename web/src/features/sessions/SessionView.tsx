@@ -30,6 +30,7 @@ import { TaskList } from "@/features/sessions/TaskList";
 import { useSessionActions } from "@/features/sessions/useSessionActions";
 import { bindingLabel } from "@/lib/credentials";
 import { usageLine } from "@/lib/usage";
+import { basisText, clientLabel } from "@/lib/policies";
 import {
   canContinue, canDelete, canRecover, canStop, closeAction, crewEntryReason, deleteReason, directReason, resumeReason, rework, statusText,
 } from "@/lib/session";
@@ -80,6 +81,13 @@ export function SessionView({ id }: { id: string }) {
               <p id="run-goal" className="line-clamp-3 text-sm leading-6 whitespace-pre-wrap text-muted-foreground">{run.input}</p>
             )}
             <p id="run-id" className="font-mono text-[11px] text-muted-foreground">{run.id} · revision {run.version}</p>
+            {(run.request || basisText(run.admission_basis)) && (
+              <p id="run-request" className="text-xs text-muted-foreground">
+                {run.request && <>来自请求 {run.request.id.slice(0, 14)} · {clientLabel(run.request.client)}</>}
+                {run.request && basisText(run.admission_basis) && "；"}
+                {basisText(run.admission_basis)}
+              </p>
+            )}
             {run.created_by && (
               <p id="run-owner" className="text-xs text-muted-foreground" title={run.credentials?.source?.name}>
                 创建者 {run.created_by.username ?? run.created_by.id}

@@ -98,6 +98,11 @@ describe("session list search and filters", () => {
     expect(filterRuns(runs, { space: "", query: "RUN-A", filter: "all" }).map((r) => r.id)).toEqual(["run-a"]);
   });
 
+  test("the search also finds a Session by the client it was submitted from (D55)", () => {
+    const runs = [run({ id: "run-c", request: { id: "request-1", client: "codex" } }), run({ id: "run-k", request: null })];
+    expect(filterRuns(runs, { space: null, query: "Codex", filter: "all" }).map((r) => r.id)).toEqual(["run-c"]);
+  });
+
   test("status filters group the lifecycle", () => {
     expect(filterRuns(runs, { space: "", query: "", filter: "active" }).map((r) => r.id)).toEqual(["run-b"]);
     expect(filterRuns(runs, { space: "", query: "", filter: "attention" }).map((r) => r.id)).toEqual(["run-a"]);

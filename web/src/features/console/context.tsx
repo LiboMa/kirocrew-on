@@ -18,6 +18,7 @@ export type Dialog =
   | { kind: "team" }
   | { kind: "tokens" }
   | { kind: "credentials" }
+  | { kind: "policies" }
   | { kind: "workers" }
   | { kind: "users" }
   | { kind: "password" }

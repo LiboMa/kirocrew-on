@@ -263,6 +263,31 @@ export interface KnowledgeItem {
 
 /** D49: where a new Session would run, or where a Session may move (GET /v1/placement). */
 export type PlacementKind = "own" | "team" | "only" | "requested";
+
+/** D55: the client a Request was submitted from (the token's label; octopus/requests.py). */
+export type RequestClient = "console" | "claude" | "kiro" | "codex" | "kiro-ide" | "api";
+
+/** D55: how a new Session was admitted and why — the submission's own word, a person's or Team's rule, or the default. */
+export interface AdmissionBasis {
+  mode: "auto" | "confirm";
+  basis: "submitted" | "rule" | "default";
+  policy_id?: string;
+  pattern?: string;
+  scope?: "personal" | "team";
+}
+
+/** D55: an admission rule by repository, or a mapping preference for the planner to weigh. */
+export interface Policy {
+  id: string;
+  kind: "admission" | "mapping";
+  scope: "personal" | "team";
+  team_id: string | null;
+  team_name: string | null;
+  rule: { repos?: string; mode?: "auto" | "confirm"; kind?: string; role?: string; tool?: string; model?: string };
+  created_by: string;
+  created: number;
+  deletable: boolean;
+}
 export interface PlacementOption {
   id: string;
   name: string;
@@ -292,6 +317,9 @@ export interface KnowledgeProposal {
 }
 
 export interface Run {
+  /** D55: the submission this Session came from; none for a Session from before. */
+  request?: { id: string; client: RequestClient } | null;
+  admission_basis?: AdmissionBasis | null;
   /** D49: where it runs and, on a Team's environment for want of one's own boundary, why. */
   placement?: { kind: PlacementKind; hint?: string } | null;
   /** D46 P6a: what the Session's Attempts used in total. */

@@ -1,6 +1,7 @@
 // Session rules shared by the list and the detail view; they mirror the classic console so both behave alike.
 import type { Run } from "@/api/types";
 import { ACTIVE_STATES, ATTENTION_STATES, STATES } from "@/lib/labels";
+import { clientLabel } from "@/lib/policies";
 
 const open = (run: Run) => run.lifecycle === "open";
 const design = (run: Run) => run.purpose === "workflow_design";
@@ -118,7 +119,7 @@ export function filterRuns(runs: Run[], { space, query, filter }: { space: strin
   const terms = query.trim().toLowerCase().split(/\s+/).filter(Boolean);
   return runs.filter((run) => {
     if ((space !== null && (run.team_id ?? "") !== space) || run.lifecycle === "deleted" || !matches(run, filter)) return false;
-    const text = [run.name, run.input, run.id, run.workflow_name].filter(Boolean).join(" ").toLowerCase();
+    const text = [run.name, run.input, run.id, run.workflow_name, clientLabel(run.request?.client)].filter(Boolean).join(" ").toLowerCase();
     return terms.every((term) => text.includes(term));
   });
 }

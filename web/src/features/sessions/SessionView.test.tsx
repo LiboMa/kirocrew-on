@@ -48,6 +48,20 @@ describe("session detail", () => {
     expect(await screen.findByText("deploy/aws/deploy.sh space run-l")).toBeInTheDocument();
   });
 
+  test("says which request it came from and why it started (D55)", async () => {
+    open(makeRun({ id: "run-r", status: "running", request: { id: "request-abc", client: "codex" },
+      admission_basis: { mode: "auto", basis: "rule", pattern: "github.com/o/*", scope: "personal", policy_id: "policy-1" } }));
+    expect(await screen.findByText(/来自请求 request-abc · Codex/)).toBeInTheDocument();
+    expect(screen.getByText(/按准入规则「github\.com\/o\/\*」自动开始/)).toBeInTheDocument();
+  });
+
+  test("a Session waiting by the platform default says so; a submitted choice is not repeated (D55)", async () => {
+    open(makeRun({ id: "run-w", status: "awaiting_confirmation", request: { id: "request-0123456789abcdef", client: "claude" },
+      admission_basis: { mode: "confirm", basis: "default" } }));
+    expect(await screen.findByText(/来自请求 request-012345 · Claude Code/)).toBeInTheDocument();
+    expect(screen.getByText(/按平台默认等待确认/)).toBeInTheDocument();
+  });
+
   test("shows what the Session wrote to the environment's knowledge (D46 P4)", async () => {
     open(makeRun({ id: "run-k", status: "completed", knowledge: { note: null, items: [{ id: "knowledge-1", task_id: "knowledge",
       rule: "依赖用 pnpm 安装", avoid: null, result: "written", reason: null, created: 1, removed: null, removed_by: null }] } }));
