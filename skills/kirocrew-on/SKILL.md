@@ -62,8 +62,11 @@ KiroCrew ON 在远端执行开发任务：KiroCrew 的 Kiro Agent 先识别意�
 - 提交到 Team 返回 409 `team_without_worker`（该 Team 尚未分配执行环境）或 `environment_disabled`（执行环境已停用）时，
   原样告诉用户需要平台管理员在控制台分配或启用执行环境；也可以建议改在个人空间提交。不要换一个 Team 重试。
 - 返回 409 `team_archived` 时该 Team 已归档：不能提交新会话或续作，已有会话仍可查看与停止；告诉用户需要平台管理员恢复，或改在其他空间提交。
-- 用户想先看计划再执行时传 `admission: "confirm"`：规划照常完成，第一个执行任务开始前会话停在 `awaiting_confirmation`（见第 3 节）。
-  不传时按平台默认（通常立即执行）。
+- 准入：平台默认先确认——规划照常完成，第一个执行任务开始前会话停在 `awaiting_confirmation`（见第 3 节）。用户在控制台
+  「准入与映射偏好」中为信任的仓库写了规则（`auto`）时直接开始；会话的 `admission_basis` 写明依据（`submitted` / `rule` 及其
+  `pattern` / `default`），原样告诉用户「按准入规则…自动开始」或「按平台默认等待确认」。用户明确说「直接开始 / 不用确认」时才传
+  `admission: "auto"`，明确要先看计划时传 `admission: "confirm"`；不要为了省一步替用户传 `auto`。
+- 回执带 `request_id`（`request-…`）：每次提交登记一个 Request（来源客户端、需求、显式选择与准入依据），`octopus_requests` 可查。
 - 用户明确要求完成后提交 PR / MR 时传 `publish: {"auto": true}`：会话完成并通过审查后平台自动推送 `octopus/<run>` 分支并创建 Draft PR / MR
   （需要绑定有写权限的凭证）。没有要求时不传，完成后先问用户，同意后再用 `octopus_publish`。不要安排 Agent 自己推送或建 PR 的任务——Agent 没有仓库写凭证。
   会话中途可用 `octopus_publish_policy {run_id, auto}` 开关（用户同意后）。
@@ -80,6 +83,8 @@ KiroCrew ON 在远端执行开发任务：KiroCrew 的 Kiro Agent 先识别意�
 - 需要某次尝试的原始输出或完整证据时才传 `detail: true`；完整记录可能有十几万字符，超出客户端的输出上限。
 - 任务通常需要几分钟到几十分钟；每 30–60 秒查询一次，向用户汇报真实状态。状态不是 `completed` 时不要宣称完成。
 - `octopus_runs` 列出用户可见的会话（最新的在前，每个只有状态、进度、需要处理的事与错误首行；默认 20 个，`status` 过滤、`q` 按会话 ID / 名称 / 需求片段搜索，`more: true` 时缩小条件或加大 `limit`）；详情用 `octopus_status`；`octopus_me` 返回当前身份、是否管理员、Token scope 与所在 Team。
+- `octopus_requests` 列出用户提交过的需求（Request：来源客户端 `client`、需求前 200 字、准入方式与依据、对应会话；`status`、`client`、`q`
+  过滤，`more` 同上）。`octopus_policies`（可传 `team_id`）只读地列出用户的准入规则与映射偏好；规则只能由用户在控制台维护，不要替用户改准入。
 - `octopus_changes`（传 `run_id`）列出会话的变更记录：谁（用户与客户端，或 Engine / Worker / KiroCrew / 协调者）在什么时候改了什么、
   前后值与原因；`who: "user"` 只看人的操作。用户问“谁停止了这个会话”“上一轮改了什么设置”时用它。
 - `octopus_revisions`（传 `run_id`）列出修订历史（创建、规划、续作、自动纠错、平台追加的 Evaluator / Knowledge 任务）；加 `to`（以及可选的 `from`）返回两版之间需求与各任务的变化：工具、模型等字段的前后值，以及 Prompt 新增（+）与删除（-）的行。用户问“上一轮改了什么”时用它。
@@ -103,7 +108,7 @@ KiroCrew ON 在远端执行开发任务：KiroCrew 的 Kiro Agent 先识别意�
 | `blocked` / `failed` | 读 `attention.title` / `attention.action` 告诉用户；可用 `octopus_recover` 诊断修复，或用 `octopus_continue` 修改后重跑。`attention.title` 为「需要换用工具或模型」时，向用户说明原因（`attention.detail`）并建议换用一个可用的工具；经用户同意后用 `octopus_continue` 的 `execution.tool` / `execution.model` 续作，不要自行决定 |
 | `waiting_approval` | 原生任务在等待批准一次工具调用：用 `octopus_approvals` 列出，把工具、完整的命令或文件与用途告诉用户；用户同意后用 `octopus_approve` 答复（approve），不同意则 reject。不要替用户决定 |
 | `awaiting_acceptance` | 验收待确认：改代码的会话由 Evaluator 逐项验收，它把需要人判断的项（Evaluator 任务的 `latest.pending`：验收项与证据）留给用户；把这些项列给用户，同意后用 `octopus_accept {run_id, request_id, expected_version}`，不同意时用 `octopus_continue` 返工：`task_id` 用 Evaluator 之前那个改代码的任务（kind 为 implement / deliver），把没通过的项写进它的 `prompt`；不要替用户确认 |
-| `awaiting_confirmation` | 计划待确认：把各任务（名称、工具与模型及 `mapping` 来源、验收项、检查命令）列给用户；用户同意后用 `octopus_confirm {run_id, request_id, expected_version}` 开始执行，要修改时用 `octopus_continue`（修改后续作即视为确认），不要替用户确认 |
+| `awaiting_confirmation` | 计划待确认：把各任务（名称、工具与模型及 `mapping` 来源——如「KiroCrew 规划（按个人偏好）」表示规划者采纳了用户的映射偏好——、验收项、检查命令）列给用户；用户同意后用 `octopus_confirm {run_id, request_id, expected_version}` 开始执行，要修改时用 `octopus_continue`（修改后续作即视为确认），不要替用户确认 |
 | `completed` | 完成；用 `octopus_preview` 给出预览。`session.knowledge` 列出本次沉淀的项目知识（见下） |
 
 ## 4．迭代：`octopus_continue` / `octopus_recover`

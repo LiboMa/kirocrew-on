@@ -47,6 +47,12 @@ TOOLS = [
                     "可按 status 过滤、按 q（会话 ID、名称或需求中的片段）搜索；more 为 true 表示还有更多，缩小条件或加大 limit。"
                     "详情用 octopus_status。",
      "inputSchema": object_schema({"status": STRING, "q": STRING, "limit": {"type": "integer", "minimum": 1, "maximum": 50}})},
+    {"name": "octopus_requests",
+     "description": "列出你提交过的需求（Request，最新的在前，精简：来源客户端、需求前 200 字、准入方式与依据、对应的会话）。"
+                    "每次 octopus_start 登记一个 Request，回执中的 request_id 即它；状态取其最近一个会话的。默认最近 20 个；"
+                    "可按 status、client（console / claude / kiro / codex / kiro-ide / api）过滤，按 q（Request ID 或需求片段）搜索。",
+     "inputSchema": object_schema({"status": STRING, "q": STRING, "client": STRING,
+                                   "limit": {"type": "integer", "minimum": 1, "maximum": 50}}), "annotations": {"readOnlyHint": True}},
     {"name": "octopus_status",
      "description": "查询真实任务状态。默认返回精简视图：Session 状态、version、attention、规划、最近一次纠错决定、各任务最近一次尝试的结论"
                     "（decision、summary、findings、交接文件）和最近 10 条事件；detail=true 返回完整记录（含各次尝试的原始输出与证据，可能很大）。",
@@ -183,6 +189,11 @@ TOOLS += [
                     "可按 host 过滤。私有仓库提交时以 octopus_start 的 credentials.source 指定其 ID，不指定时平台按仓库自动匹配。"
                     "凭证只能由用户在控制台「设置 → 代码仓库凭证」创建：不要向用户索要 Token。",
      "inputSchema": object_schema({"host": STRING}), "annotations": READ},
+    {"name": "octopus_policies",
+     "description": "只读：你的个人规则与你所在 Team 的规则（team_id：只看该 Team）。准入规则按仓库（repos，如 github.com/o/*）决定新会话"
+                    "直接开始（auto）还是先停在「计划待确认」（confirm）；映射偏好按任务类别或角色对应工具 / 模型，供 KiroCrew 规划者参考。"
+                    "规则只能由用户在控制台「准入与映射偏好」中维护：不要替用户改准入。",
+     "inputSchema": object_schema({"team_id": STRING}), "annotations": READ},
     {"name": "octopus_publish",
      "description": "把会话成果发布到它的源仓库：推送分支（默认 octopus/<run-id>）并创建或沿用 Draft PR（GitHub）/ Draft MR（GitLab）。"
                     "需要会话绑定一枚有写权限的凭证，且会话已结束执行；工作区未提交的改动会先提交（不含 .env 与依赖目录），"
@@ -475,10 +486,28 @@ def runs(client, args):
     return {"items": [compact_run(v) for v in views[:limit]], "more": len(views) > limit}
 
 
+def requests(client, args):
+    """The submissions, compact (D55): what was asked from which client, how it was admitted and its Sessions."""
+    limit = args.get("limit", 20)
+    if type(limit) is not int or not 1 <= limit <= 50:
+        raise ValueError("limit 须为 1–50 的整数")
+    query = {key: args[key] for key in ("status", "q", "client") if args.get(key)}
+    items = client.request("GET", "/v1/requests?" + urlencode({**query, "limit": limit + 1}))
+    shown = lambda text: text if len(text) <= 200 else text[:200] + "…"
+    return {"items": [{"id": r["id"], "client": r["client"], "input": shown(r.get("input") or ""), "status": r.get("status"),
+                       "created": r.get("created"), "admission": (r.get("policy") or {}).get("admission"),
+                       "sessions": [{k: s.get(k) for k in ("id", "name", "status")} for s in r.get("sessions") or []]}
+                      for r in items[:limit]], "more": len(items) > limit}
+
+
 def call(client, name, args):
     args = dict(args)
     if name == "octopus_runs":
         return runs(client, args)
+    if name == "octopus_requests":
+        return requests(client, args)
+    if name == "octopus_policies":
+        return client.request("GET", "/v1/policies" + ("?" + urlencode({"team_id": args["team_id"]}) if args.get("team_id") else ""))
     if name in {"octopus_workflows", "octopus_teams"}:
         return client.request("GET", "/v1/" + name.removeprefix("octopus_"))
     if name == "octopus_match_workflow":

@@ -1048,7 +1048,7 @@ class Service:
                 if bound:
                     journal.record(db, rid, "run.credentials", journal.person(actor),
                                    source={k: bound[k] for k in ("id", "name", "scope", "hint")})
-                return {"id": rid, "session_id": rid, "version": 1,
+                return {"id": rid, "session_id": rid, "version": 1, **({"request_id": request} if request else {}),
                         "status": "preparing" if worker else "waiting_worker", **({"placement": placed} if placed and worker else {})}
             return self._command(db, actor, "design" if design is not None else "start", None,
                                  {**body, "_design": design} if design is not None else body, execute)
