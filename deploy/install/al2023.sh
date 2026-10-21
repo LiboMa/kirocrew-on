@@ -369,8 +369,9 @@ fi
 chown root:root "$ADMIN_FILE"
 chmod 0600 "$ADMIN_FILE"
 ADMIN_PASSWORD="$(cat "$ADMIN_FILE")"
-if ! INIT_OUT="$(cd /opt/kirocrew-on/current && runuser -u octopus -- env PYTHONPATH=/opt/kirocrew-on/current \
-    OCTOPUS_ADMIN_PASSWORD="$ADMIN_PASSWORD" "${OCTO[@]}" init --username admin --password-env OCTOPUS_ADMIN_PASSWORD 2>&1)"; then
+# The password reaches the platform in its environment only (runuser -u keeps it), never a command line others can read
+if ! INIT_OUT="$(cd /opt/kirocrew-on/current && OCTOPUS_ADMIN_PASSWORD="$ADMIN_PASSWORD" runuser -u octopus -- \
+    env PYTHONPATH=/opt/kirocrew-on/current "${OCTO[@]}" init --username admin --password-env OCTOPUS_ADMIN_PASSWORD 2>&1)"; then
   case "$INIT_OUT" in
     *已有用户*)
       if [ -n "$NEW_ADMIN" ]; then
@@ -423,7 +424,7 @@ systemctl enable octopus-api >/dev/null
 systemctl restart octopus-api
 log "注册执行边界 Worker（已注册时跳过）"
 WORKER_PORT="$(grep -E '^worker_port' "$BOUNDARY_TOML" | grep -oE '[0-9]+')"
-(cd /opt/kirocrew-on/current && env PYTHONPATH=/opt/kirocrew-on/current OCTOPUS_ADMIN_PASSWORD="$ADMIN_PASSWORD" \
+(cd /opt/kirocrew-on/current && OCTOPUS_ADMIN_PASSWORD="$ADMIN_PASSWORD" PYTHONPATH=/opt/kirocrew-on/current \
   "${OCTO[@]}" bootstrap-worker --worker-url "http://127.0.0.1:$WORKER_PORT" \
   --token-file "$BASE/worker.token" --name "$BOUNDARY")
   # platform:end

@@ -116,9 +116,9 @@
 
 ## D49 每人一个边界第 1 期的终审延后项（2026-10-19）
 - 再次 `boundary add` 未带 `--memory` / `--cpu` 时资源上限回到默认值，并因 drop-in 变化排空重启 Gateway：应只在缺少或显式给出时写。
-- `al2023.sh` 以 `env` 参数传管理员密码（短暂出现在 `/proc/<pid>/cmdline`，同主机现有多个 `crew-*` 用户）：改为赋值前缀（`boundary.sh` 已改）。
+- ~~`al2023.sh` 以 `env` 参数传管理员密码（短暂出现在 `/proc/<pid>/cmdline`，同主机现有多个 `crew-*` 用户）~~（2026-10-21 修复：赋值前缀，测试防回退）。
 - `--owner` 区分大小写（用户名存为小写）；`boundary add` 未传 `AWS_REGION`（默认 us-east-1，当前栈无碍）。
-- 启动向导的 KiroCrew 建议（`/designs`）用 `eligible[0]`（共享的 personal），没有优先此人自己的边界（R6 只在服务端）。
+- ~~启动向导的 KiroCrew 建议（`/designs`）用 `eligible[0]`（共享的 personal），没有优先此人自己的边界~~（D49 第 2 期已改为平台的默认位置 `placement.default`）。
 - 边界在 `kiro-login --boundary` 之前就登记并开始接收此人的会话（Kiro 任务等待登录）：可先以停用状态登记、登录后启用。
 - 每次 `push` 都 enable 每个边界（有意停掉的边界会回来）；`push` 与 `boundary add` 之间没有 `flock`；`toml_set` 迁移只作用于主边界配置；
   库的变量名（ETC、DATA、SYSTEMD）过于通用。
@@ -141,7 +141,7 @@
 
 ## D50 编码技能包的终审延后项（2026-10-19）
 - ~~报告：Attempt 证据里的 `skills` 不是列表（如被改坏的 dispatch.json）时 `report._attempt` 抛 TypeError~~（2026-10-20 修复）。
-- 重新规划的提示最长约 7838 / 8000 字符（各输入取上限时）：技能包再加两三个技能就会超出 Worker 的上限，可为重新规划用精简目录。
+- ~~重新规划的提示最长约 7838 / 8000 字符（各输入取上限时）~~（2026-10-21 修复：重新规划用精简的角色与技能目录，最长约 7350，测试要求 ≤ 7400）。
 - ~~任务卡片显示的是计划的 `skills`（旧 Worker 未交付时也显示）~~（2026-10-20 修复：卡片取最近 Attempt 的证据，结束而未交付时写明）；MCP 精简状态仍是计划的；报告取证据。
 - ~~`systematic-debugging` 的 SKILL.md 仍有一处「Ask for help」~~（2026-10-20 修复：改为写 blocked，测试禁止该说法）。
 - 丢失回执的重派发跨 Worker 升级时（请求体多了 `skills`）按请求散列判为 409 conflict：与 `role_cards` 同一个已有问题。
@@ -157,7 +157,7 @@
 - ~~改派后 placement 不更新；本人边界停用时提示说「没有边界」~~（2026-10-20 修复：分配后记新的位置；停用时提示「已停用，请重新启用」）。
 - 向导：TasksStep 的模型优先取「生成建议的 Worker」而非默认位置；切换空间不重置建议 Worker（原有问题）；localStorage 中的旧草稿恢复原先预选的
   Worker（记为 requested）。
-- `/v1/placement?run_id` 向其他成员列出创建者的边界名称与模型，`own` 指「创建者的」：在接口说明中写清。
+- ~~`/v1/placement?run_id` 向其他成员列出创建者的边界名称与模型，`own` 指「创建者的」：在接口说明中写清~~（2026-10-21 写入 OPERATIONS）。
 - ~~`Service.placement(team)` 不看归档~~（2026-10-20 修复：与新建会话一样 409 team_archived）；其他成员打开原生入口时得到「Worker 不属于本次执行空间」而非 R7 的原因；测试替身 `placementOf` 不含成员边界规则；
   「KiroCrew 建议默认用 default」没有测试。
 

@@ -33,10 +33,13 @@ def description(role):
     return _read(role)[0]["description"]
 
 
-def catalogue():
-    """One line per role for the planner: its id, label, kind and what it is for."""
-    return "\n".join(f"   - {role}（{LABELS[role]}，kind {'/'.join(kinds)}）：{description(role)}" for role, kinds in KINDS.items()
-                     if role not in PLATFORM)
+def catalogue(compact=False):
+    """One line per role for the planner: its id, label, kind and what it is for; ``compact``, without what it is for, on
+    one line (the replan)."""
+    planned = [(role, kinds) for role, kinds in KINDS.items() if role not in PLATFORM]
+    if compact:
+        return "   " + "、".join(f"{role}（{LABELS[role]}，kind {'/'.join(kinds)}）" for role, kinds in planned)
+    return "\n".join(f"   - {role}（{LABELS[role]}，kind {'/'.join(kinds)}）：{description(role)}" for role, kinds in planned)
 
 
 def unindependent(planned):

@@ -163,10 +163,14 @@ class ReplanReviewTests(ReplanCase):
     def test_the_replan_prompt_fits_the_worker_limit(self):
         long = "很长的内容" * 3000
         spec = planning.replan_step("replan-1",
-                                    [{"id": "t%d" % i, "name": "任务" * 40, "kind": "implement"} for i in range(8)], long,
-                                    {"reason": long, "instructions": long}, {"claude": ["m" * 60] * 30}, {"kiro": {"available": True}},
-                                    [long], {"available": ["c" * 40] * 30, "missing": ["d" * 40] * 30})
+                                    [{"id": "t%d" % i, "name": "任务" * 40, "kind": "implement"} for i in range(12)], long,
+                                    {"reason": long, "instructions": long}, {"claude": ["m" * 60] * 60},
+                                    {"kiro": {"available": True, "reason": long}}, [long] * 5,
+                                    {"available": ["c" * 40] * 60, "missing": ["d" * 40] * 60})   # every input at its clip
         steps([spec])   # the Worker refuses prompts over 8000 characters
+        self.assertLessEqual(len(spec["prompt"]), 7400)   # room for a few more skills or roles (BACKLOG D50)
+        for name in ("test-driven-development", "evaluator"):   # the compact catalogues still name every choice
+            self.assertIn(name, spec["prompt"])
 
     def test_the_planners_are_told_which_commands_a_check_can_run(self):
         commands = {"available": ["python3", "git"], "missing": ["python", "npm"]}

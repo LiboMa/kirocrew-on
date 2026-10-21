@@ -144,7 +144,8 @@ deploy/aws/deploy.sh tunnel --boundary alice       # 该边界的原生 KiroCrew
   - 会话固定在所选环境：其他成员续作、返工、诊断都在创建者的边界。创建者离开 Team、边界停用或退役后，下次派发前进入「等待执行环境」，
     由 Team owner 或管理员在会话页「分配 Worker」改到 Team 的环境（可选项按创建者：Team 的环境与创建者的边界）。
   - 位置由平台统一回答：`GET /v1/placement?team_id=`（新会话的默认位置、原因 `own` / `team` / `only` / `requested` 与提示、可选环境），
-    `?run_id=`（该会话可分配的环境）；控制台向导默认「自动：将在 X 执行」，MCP `octopus_environments` 标出 `default`。会话的 `placement`
+    `?run_id=`（该会话可分配的环境：按**会话创建者**回答——其他成员查询时也列出创建者的边界名称与模型，`own` 指「创建者的」）；已归档 Team 的新会话位置返回 409 `team_archived`；
+    控制台向导默认「自动：将在 X 执行」，MCP `octopus_environments` 标出 `default`。会话的 `placement`
     记于视图、精简状态与时间线 `run.created`。
   - Team 成员看得到会话的状态、报告、预览与下载；原生 KiroCrew 入口只开放给边界主人（`permissions.native_reason` 说明原因）。
   - 在某人边界上的会话只有边界主人下达指令（R10）：续作、诊断、确认计划、补充说明与答复批准请求对其他成员与管理员返回 403

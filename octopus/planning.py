@@ -36,8 +36,9 @@ def commands_line(commands):
             f"没有：{'、'.join(commands.get('missing') or []) or '无'}。verify 只用可用的命令。\n")
 
 
-def rules(count, depends):
-    """What every planned task carries and the gates it meets — the same for the first plan and a replan (D46)."""
+def rules(count, depends, compact=False):
+    """What every planned task carries and the gates it meets — the same for the first plan and a replan (D46);
+    ``compact``: the role and skill catalogues by name only (the replan's prompt is the tighter one)."""
     from . import roles, skills
     return f"""3. 任务拆分与 Agent 映射：steps 为 {count} 个顺序任务，每个任务选择最合适的工具并写出具体 prompt；
    后续任务将在同一个 Session、同一份源码检出上依次执行。
@@ -53,11 +54,11 @@ def rules(count, depends):
    需求明确要求提交 PR / MR 时，在计划 JSON 顶层写 "publish": {{"quote": "需求原文片段"}}：会话完成并通过审查后平台自动发布 Draft PR。
    需求要求新建仓库时再写 "repository": {{"owner": "账户或组织", "name": "仓库名"}}：平台只记为建议，由用户确认后发布，不安排建仓库的任务。
    每个任务可给出 role（担任的角色，决定 Agent 拿到的角色卡片；kind 仍决定门禁），可选：
-{roles.catalogue()}
+{roles.catalogue(compact)}
    审查类角色（security_test / challenge / evaluator）不得使用被审查改动的作者工具（此前 implement / deliver 任务的 tool）。
    改代码的计划最后安排一个 evaluator 任务（与作者不同的工具），其验收项为 summary 的验收标准；没有时平台会追加。
    每个任务可给出 skills（至多 4 个，Agent 开始前读取并按其方法工作），按任务性质从平台的技能包中选择：
-{skills.catalogue()}
+{skills.catalogue(compact)}
 5. 可运行的产出：交付物是可以运行的应用时，最后的交付任务须在项目根目录写 .octopus/preview.json
    （processes：命令、cwd、端口或 "$PORT"、哪个是入口；install：依赖安装；前后端分开时各写一个进程），
    并把「.octopus/preview.json 能按声明启动应用」列为该任务的验收项；用户据此下载到本机或远程预览。
@@ -257,7 +258,7 @@ def replan_step(task_id, replaced, failure, decision, models=None, tools=None, l
 
 ## 本任务的交付
 只规划剩余的工作，不重复已完成的任务。
-{rules("1–6", "depends_on 可列本计划中前面的任务或前序交接中已验收任务的 id；")}
+{rules("1–6", "depends_on 可列本计划中前面的任务或前序交接中已验收任务的 id；", compact=True)}
 
 {environment(models, tools, limitations, commands, compact=True)}
 

@@ -215,6 +215,12 @@ class ScriptTests(unittest.TestCase):
                      '"$SYSTEMD/octopus-gateway@$name.service.d/"*.conf', '"$ETC/boundary-$name.env"'):
             self.assertIn(part, block)
 
+    def test_the_admin_password_never_reaches_a_command_line(self):   # other crew-* users on the host can read /proc/*/cmdline
+        for name in ("deploy/install/al2023.sh", "deploy/install/boundary.sh"):
+            joined = (ROOT / name).read_text().replace("\\\n", " ")
+            with self.subTest(name):
+                self.assertIsNone(re.search(r"(\benv|--)\s[^;|&\n]*OCTOPUS_ADMIN_PASSWORD=", joined))
+
     def test_each_install_prunes_old_releases_first(self):
         text = (ROOT / "deploy/install/al2023.sh").read_text()
         prune = text.index('prune_releases /opt/kirocrew-on/releases "$(readlink -f /opt/kirocrew-on/current')

@@ -30,8 +30,11 @@ def sha256(name):
     return hashlib.sha256(path(name).read_bytes()).hexdigest()
 
 
-def catalogue():
-    """One line per skill for the planner: its name and what it is for."""
+def catalogue(compact=False):
+    """One line per skill for the planner: its name and what it is for; ``compact``, the names on one line (the replan,
+    whose prompt carries the failure and the Coordinator's decision within the Worker's 8000 characters)."""
+    if compact:
+        return "   " + "、".join(CATALOG)
     return "\n".join(f"   - {name}：{description(name)}" for name in CATALOG)
 
 
