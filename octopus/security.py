@@ -80,7 +80,8 @@ def authenticate(db, raw):
     from .journal import client
     value = dict(row)
     value["scopes"] = json.loads(value["scopes"])
-    value["client"] = client(value.pop("label"))   # console / Coding Agent (MCP) / API, for the change journal (D34)
+    value["token_label"] = value.pop("label")   # which client a Request came from (D55)
+    value["client"] = client(value["token_label"])   # console / Coding Agent (MCP) / API, for the change journal (D34)
     return value
 
 

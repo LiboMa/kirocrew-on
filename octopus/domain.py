@@ -12,7 +12,7 @@ import threading
 import time
 import unicodedata
 
-from . import journal, remote_preview
+from . import journal, remote_preview, requests as submissions
 from .db import dumps, uid
 from .security import Error, check_password, elevated, password_hash, require
 
@@ -902,6 +902,7 @@ class Service:
 
     def start(self, actor, body, *, design=None):
         from .recovery import policy
+        chosen_explicitly = submissions.explicit(body)   # D55: what the submitter chose, before planning replaces it
         selected = any(body.get(key) is not None for key in ("workflow_id", "template_id", "steps", "document"))
         require(body.get("plan") in (None, "agent", "match"), "plan 只能是 agent 或 match")
         require(not (selected and body.get("plan") == "agent"), "plan=agent 时不要同时指定工作流、模板、steps 或 document")
@@ -1011,10 +1012,17 @@ class Service:
                 if planning:
                     snapshot.update(planning={"mode": "agent", "applied": False}, workflow_name="KiroCrew 规划",
                                     match_mode="agent", match_reason="由 KiroCrew Agent 识别意图、补全需求并拆分任务")
-                db.execute("INSERT INTO runs(id,owner_id,team_id,worker_id,workflow_id,snapshot,input,source,status,created,updated) "
-                           "VALUES(?,?,?,?,?,?,?,?,?,?,?)",
+                request = None
+                if design is None:   # D55: the submission as made; a workflow design Session is not one
+                    explicit = {**chosen_explicitly, **({"workflow_version": version} if wid else {})}
+                    admission = {"mode": snapshot["admission"], "basis": "submitted" if body.get("admission") else "default"}
+                    request = submissions.register(db, actor, body["request_id"], team, goal, source, explicit,
+                                                   {"admission": admission, "recovery": snapshot["recovery"],
+                                                    "publish": snapshot.get("publish_policy")}, now)
+                db.execute("INSERT INTO runs(id,owner_id,team_id,worker_id,workflow_id,snapshot,input,source,status,created,updated,"
+                           "request_id) VALUES(?,?,?,?,?,?,?,?,?,?,?,?)",
                            (rid, actor["id"], team, worker, wid, dumps(snapshot), goal, dumps(source),
-                            "preparing" if worker else "waiting_worker", now, now))
+                            "preparing" if worker else "waiting_worker", now, now, request))
                 for i, step in enumerate(spec):
                     db.execute("INSERT INTO tasks(run_id,id,ordinal,spec) VALUES(?,?,?,?)",
                                (rid, step["id"], i, dumps(step)))
@@ -1781,6 +1789,47 @@ class Service:
                     break
             return result
 
+    def requests(self, actor, status=None, q=None, client=None, limit=None):
+        """The actor's Requests (D55), newest first: those with a Session they can read, filtered like Sessions."""
+        require(status is None or status in RUN_STATES, "status 不是会话的状态")
+        require(q is None or isinstance(q, str) and 0 < len(q) <= 200, "q 须为 1–200 个字符")
+        require(client is None or client in submissions.CLIENTS, "client 不是已知的客户端")
+        require(limit is None or type(limit) is int and 1 <= limit <= 200, "limit 须为 1–200 的整数")
+        needle, sql, params = (q or "").lower(), "SELECT * FROM requests", []
+        if client:
+            sql, params = sql + " WHERE client=?", [client]
+        with self.db.read() as db:
+            result = []
+            for row in db.execute(sql + " ORDER BY created DESC", params):
+                if needle and needle not in (row["id"] + " " + row["input"]).lower():
+                    continue
+                runs = submissions.sessions(db, row["id"])
+                if not any(self._readable(db, actor, r["id"], admin=False) for r in runs):
+                    continue
+                if status and (not runs or runs[0]["status"] != status):
+                    continue
+                result.append(submissions.view(db, row, runs))
+                if limit and len(result) >= limit:
+                    break
+            return result
+
+    def request(self, actor, request_id):
+        """One Request with its Sessions, for whoever can read one of them (404 otherwise, never revealing it exists)."""
+        require(isinstance(request_id, str) and len(request_id) <= 100, "Request 不存在或无权限", 404, "not_found")
+        with self.db.read() as db:
+            row = db.execute("SELECT * FROM requests WHERE id=?", (request_id,)).fetchone()
+            runs = submissions.sessions(db, request_id) if row else []
+            require(any(self._readable(db, actor, r["id"]) for r in runs), "Request 不存在或无权限", 404, "not_found")
+            return submissions.view(db, row, runs)
+
+    @staticmethod
+    def _readable(db, actor, rid, admin=True):
+        try:
+            run_access(db, actor, rid, admin=admin)
+            return True
+        except Error:
+            return False
+
     def report(self, actor, rid, fmt):
         """The Session's Feature report (D37 phase 2), as it can be seen: the same access and read audit as its detail."""
         from . import report
@@ -1817,7 +1866,10 @@ class Service:
         return head
 
     def _view(self, db, run, actor, detail=True):
-        value = {k: v for k, v in run.items() if k != "snapshot"}
+        value = {k: v for k, v in run.items() if k not in {"snapshot", "request_id"}}
+        request = db.execute("SELECT id,client FROM requests WHERE id=?", (run["request_id"],)).fetchone() \
+            if run.get("request_id") else None
+        value["request"] = dict(request) if request else None   # D55; Sessions from before have none
         value["permissions"] = run_permissions(db, actor, run)
         snapshot = json.loads(run["snapshot"])
         value.update({key: snapshot.get(key) for key in ("name", "workflow_name", "workflow_version",

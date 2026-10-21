@@ -153,9 +153,27 @@ CREATE INDEX IF NOT EXISTS knowledge_run ON knowledge(run_id);
 CREATE INDEX IF NOT EXISTS knowledge_repo ON knowledge(worker_id,repo);
 """
 
+# D55: every submission is a Request (its client, explicit choices and the policy it started under) and its Session
+# names it; policies are a person's or a Team's admission rules by repository and mapping preferences.
+REQUESTS_POLICIES = """
+CREATE TABLE IF NOT EXISTS requests(
+ id TEXT PRIMARY KEY, owner_id TEXT NOT NULL REFERENCES users(id), team_id TEXT REFERENCES teams(id), key TEXT NOT NULL,
+ client TEXT NOT NULL, input TEXT NOT NULL, source TEXT NOT NULL, explicit TEXT NOT NULL, policy TEXT NOT NULL,
+ created REAL NOT NULL, UNIQUE(owner_id,key));
+CREATE INDEX IF NOT EXISTS requests_created ON requests(created);
+CREATE TABLE IF NOT EXISTS policies(
+ id TEXT PRIMARY KEY, kind TEXT NOT NULL CHECK(kind IN ('admission','mapping')), owner_id TEXT REFERENCES users(id),
+ team_id TEXT REFERENCES teams(id), rule TEXT NOT NULL, created_by TEXT NOT NULL REFERENCES users(id), created REAL NOT NULL,
+ CHECK((owner_id IS NULL) != (team_id IS NULL)));
+CREATE INDEX IF NOT EXISTS policies_scope ON policies(kind,owner_id,team_id);
+ALTER TABLE runs ADD COLUMN request_id TEXT REFERENCES requests(id);
+CREATE INDEX IF NOT EXISTS runs_request ON runs(request_id);
+"""
+
 MIGRATIONS = [(1, "baseline", BASELINE), (2, "environments", ENVIRONMENTS), (3, "access", ACCESS),
               (4, "teams_workers", TEAMS_WORKERS), (5, "apps", APPS), (6, "credentials", CREDENTIALS),
-              (7, "knowledge", KNOWLEDGE), (8, "knowledge_kept", KNOWLEDGE_KEPT)]
+              (7, "knowledge", KNOWLEDGE), (8, "knowledge_kept", KNOWLEDGE_KEPT),
+              (9, "requests_policies", REQUESTS_POLICIES)]
 
 
 def _statements(script):

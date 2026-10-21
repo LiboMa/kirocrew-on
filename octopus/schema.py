@@ -146,6 +146,7 @@ def openapi():
         "/v1/credentials/{id}/test": {"post": "Empty"},
         "/v1/credentials/{id}/grants": {"post": "CredentialGrant", "delete": "CredentialGrant"},
         "/v1/runs": {"get": None, "post": "Start"}, "/v1/runs/{id}": {"get": None},
+        "/v1/requests": {"get": None}, "/v1/requests/{id}": {"get": None},
         "/v1/runs/{id}/events": {"get": None}, "/v1/runs/{id}/export": {"get": None},
         "/v1/runs/{id}/crew-entry": {"post": "Empty"}, "/v1/runs/{id}/preview": {"post": "Empty"},
         "/v1/runs/{id}/observe": {"get": None},
@@ -264,6 +265,16 @@ def openapi():
                                      "description": "At most this many, newest first."},
                                     {"in": "query", "name": "view", "schema": {"enum": ["list"]},
                                      "description": "What a list needs: tasks by name and state, the plan without its summary."}]
+            if path.startswith("/v1/requests"):
+                op["description"] = {
+                    "/v1/requests": "Read scope. Every submission with a Session the caller can read, newest first: client (console / claude / kiro / codex / kiro-ide / api), requirement, source, explicit choices, the policy it started under (admission mode and basis) and its Sessions; status is its latest Session's.",
+                    "/v1/requests/{id}": "Read scope. One Request with its Sessions (404 unless the caller can read one of them)."}[path]
+                if path == "/v1/requests":
+                    op["parameters"] = [{"in": "query", "name": "status", "schema": {"type": "string"}, "description": "Its latest Session's status."},
+                                        {"in": "query", "name": "q", "schema": {"type": "string", "minLength": 1, "maxLength": 200},
+                                         "description": "Part of the Request id or requirement."},
+                                        {"in": "query", "name": "client", "schema": {"enum": ["console", "claude", "kiro", "codex", "kiro-ide", "api"]}},
+                                        {"in": "query", "name": "limit", "schema": {"type": "integer", "minimum": 1, "maximum": 200}}]
             if path.endswith("/dedicate"):
                 op["description"] = "Administrator only. A shared Worker host serving exactly one Team becomes that Team's dedicated environment; every member then opens its native KiroCrew entry."
             if path.endswith("/events"):
