@@ -66,6 +66,15 @@ class ReportTests(unittest.TestCase):
         self.assertIn("| claude | KiroCrew 规划 |", md)
         self.assertIn("<th>来源</th>", report.html(value))
 
+    def test_the_report_says_why_it_started_or_waited(self):   # D55 §3, final review
+        md = report.markdown(view(admission_basis={"mode": "auto", "basis": "rule", "pattern": "github.com/o/*"}))
+        self.assertIn("准入：按准入规则「github.com/o/\\*」自动开始", md)   # Markdown escapes the *, rendered as written
+        self.assertIn("按准入规则「github.com/o/*」自动开始", report.html(view(admission_basis={"mode": "auto", "basis": "rule",
+                                                                                         "pattern": "github.com/o/*"})))
+        self.assertIn("准入：按平台默认等待确认", report.markdown(view(admission_basis={"mode": "confirm", "basis": "default"})))
+        self.assertNotIn("准入：", report.markdown(view(admission_basis={"mode": "auto", "basis": "submitted"})))
+        self.assertNotIn("准入：", report.markdown(view()))
+
     def test_a_watchdog_stop_is_written_in_the_task_section(self):
         value = view()
         value["tasks"][0]["attempts"][-1]["evidence"]["watchdog"] = {"reason": "原生任务 31 分钟没有进展，看门狗已停止"}

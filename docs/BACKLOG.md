@@ -173,6 +173,13 @@
 - 模板 / 工作流中 `tool: auto` 的步骤按偏好补上（设计 §4 第 2 点）：现有契约的工具只能是 kiro / claude / codex / opencode。
 - 用户 CLI 的 Request 与规则命令（M3-2）。
 - 预算按个人 / Team 配置（设计 §8.1，可放进 `policies`）。
+- 平台追加 Evaluator 时参考用户的 evaluator 偏好（工具可用且不是作者工具时采用）：现有契约里唯一由平台自己选工具的地方，最接近设计 §4 第 2 点。
+- 终审延后的次要项：`https://…/R.GIT` 的大写 `.GIT` 不去掉（规则侧先小写再去后缀，两边应一致）；没有仓库段的模式（`github.com/LiboMa`）
+  永不命中却能保存，应提示或要求 `*`；偏好的 `model` 限制字符集；偏好一节按整行截断；`plan=match` 选中工作流时 `explicit` 不应记
+  `workflow_version`；规格 §2 的「用户给出的检查命令」与规划后的 `requested` 尚未进 Request；重试期间偏好变化使同一 `request_id`
+  得到 409；每个作用域的规则数无上限；Skill 写明回执的 `request_id` 不是幂等键；`octopus_start` 说明写默认先确认；控制台删除规则无二次确认、
+  按钮无区分的无障碍名称、已归档 Team 出现在作用域下拉、opencode 默认禁用仍列出；`_followed` 不比模型；OPERATIONS「Coding Agent 不能改准入」
+  应改为「MCP 不提供写入工具」（connect 的 Token 带 manage scope）。
 
 ## 已知的次要问题（审查延后项）
 - 访问管理第 1 期（审查延后项）：预览复核按账号的管理员身份而非签发 Token 的 scope

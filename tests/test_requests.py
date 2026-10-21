@@ -63,6 +63,17 @@ class RequestTests(ConfirmationCase):
         self.assertEqual(self.service.requests(self.other), [])
         self.assertEqual([r["id"] for r in self.service.requests(self.actor)], [request])
 
+    def test_an_administrator_reading_someone_elses_request_is_audited(self):   # final review: as for Sessions (A2)
+        rid = self.service.start(self.other, {"request_id": "request-fixture-9", "input": "实现登录页", "source": {"type": "new"},
+                                              "steps": ONE})["id"]
+        request = self.service.run(self.other, rid)["request"]["id"]
+        self.service.request(self.other, request)
+        self.service.request(self.actor, request)
+        self.service.request(self.actor, request)
+        with self.db.read() as db:
+            rows = db.execute("SELECT actor_id,action,target FROM audit WHERE kind='request'").fetchall()
+        self.assertEqual([tuple(r) for r in rows], [(self.actor["id"], "request.view", request)])
+
     def test_requests_are_filtered_like_sessions(self):
         self.start(steps=ONE, input="实现登录页")
         self.start(steps=ONE, input="修复导出")

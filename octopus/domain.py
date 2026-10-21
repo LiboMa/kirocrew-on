@@ -1835,7 +1835,11 @@ class Service:
             row = db.execute("SELECT * FROM requests WHERE id=?", (request_id,)).fetchone()
             runs = submissions.sessions(db, request_id) if row else []
             require(any(self._readable(db, actor, r["id"]) for r in runs), "Request 不存在或无权限", 404, "not_found")
-            return submissions.view(db, row, runs)
+            value = submissions.view(db, row, runs)
+            oversight = not any(self._readable(db, actor, r["id"], admin=False) for r in runs)
+        if oversight:   # an administrator reading someone else's submission, as for their Sessions (A2)
+            self._audit_oversight(actor, "request.view", "request", request_id)
+        return value
 
     def policies(self, actor, team_id=None):
         """The actor's own rules and those of their Teams (D55), or one Team's; a non-member learns nothing of a Team."""
@@ -1847,7 +1851,7 @@ class Service:
                 roles = {r["team_id"]: r["role"] for r in db.execute("SELECT team_id,role FROM members WHERE user_id=?", (actor["id"],))}
                 rows = db.execute("SELECT * FROM policies WHERE owner_id=? ORDER BY kind, created", (actor["id"],)).fetchall()
                 rows += [r for r in db.execute("SELECT * FROM policies WHERE team_id IS NOT NULL ORDER BY kind, created")
-                         if r["team_id"] in roles]
+                         if r["team_id"] in roles or elevated(actor)]   # an administrator maintains every Team's
             names = {r["id"]: r["name"] for r in db.execute("SELECT id,name FROM teams")}
             return [policies.view(r, names.get(r["team_id"]),
                                   not r["team_id"] or elevated(actor) or roles.get(r["team_id"]) == "owner") for r in rows]
@@ -2338,6 +2342,16 @@ class Service:
             db.execute("UPDATE users SET password=? WHERE id=?", (hashed, actor["id"]))
             revoke_tokens(db, actor["id"], keep=actor["token_id"])
         return {"ok": True}
+
+    def _audit_oversight(self, actor, action, kind, target):
+        """One audit row per administrator, action and target an hour; best effort: never fails the read."""
+        try:
+            with self.db.transaction() as db:
+                if not db.execute("SELECT 1 FROM audit WHERE actor_id=? AND action=? AND target=? AND at>?",
+                                  (actor["id"], action, target, time.time() - 3600)).fetchone():
+                    audit(db, actor, action, kind, target)
+        except sqlite3.OperationalError:
+            pass
 
     def audit_read(self, actor, rid, action):
         """An elevated admin reading someone else's Session (A2): one audit row per admin, Session and action an hour

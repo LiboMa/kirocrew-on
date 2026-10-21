@@ -59,6 +59,24 @@ class AdmissionTests(AccessCase):
         self.rule(self.b, "github.com/o/*", "confirm")
         self.assertEqual(self.decide(self.b, APP)["policy_id"], exact["id"])
 
+    def test_an_older_specific_rule_beats_a_newer_broad_one(self):   # final review: wildcards alone tied '*' with 'o/*'
+        team = self.rule(self.b, "github.com/o/*", "confirm")
+        self.rule(self.b, "github.com/*", "auto")
+        self.rule(self.b, "*", "auto")
+        self.assertEqual(self.decide(self.b, APP)["policy_id"], team["id"])
+        self.assertEqual(self.decide(self.b, {"type": "git", "url": "https://github.com/x/y"})["pattern"], "github.com/*")
+
+    def test_an_administrator_sees_the_rules_they_wrote_for_a_team_they_are_not_in(self):   # final review
+        with self.db.transaction() as db:
+            db.execute("INSERT INTO teams(id,name,created) VALUES('team-x','X 组',0)")
+            db.execute("INSERT INTO members VALUES('team-x',?,'owner')", (self.b["id"],))
+        made = self.rule(self.a, "*", "auto", "team", "team-x")
+        listed = {p["id"]: p for p in self.service.policies(self.a)}
+        self.assertIn(made["id"], listed)
+        self.assertTrue(listed[made["id"]]["deletable"])
+        self.assertEqual(listed[made["id"]]["team_name"], "X 组")
+        self.assertNotIn(made["id"], [p["id"] for p in self.service.policies(self.e)])
+
     def test_a_bad_rule_is_refused(self):
         for rule in ({"repos": "github.com/o/*"}, {"repos": "github.com/o/*", "mode": "later"}, {"repos": "", "mode": "auto"},
                      {"repos": "https://github.com/o/*", "mode": "auto"}, {"repos": "a b", "mode": "auto"},

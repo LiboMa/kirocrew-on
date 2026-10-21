@@ -50,6 +50,16 @@ class McpRequestTests(unittest.TestCase):
         self.assertEqual([t["name"] for t in mcp.TOOLS if t["name"].startswith("octopus_polic")], ["octopus_policies"])
 
 
+class StatusTests(unittest.TestCase):
+    def test_the_compact_status_says_why_it_waits_and_where_it_came_from(self):   # final review
+        session = {"id": "run-1", "status": "awaiting_confirmation", "tasks": [], "admission": "confirm",
+                   "admission_basis": {"mode": "confirm", "basis": "default"}, "request": {"id": "request-1", "client": "claude"}}
+        view = mcp.compact_status(session, [])["session"]
+        self.assertEqual(view["admission_basis"], {"mode": "confirm", "basis": "default"})
+        self.assertEqual(view["admission"], "confirm")
+        self.assertEqual(view["request"], {"id": "request-1", "client": "claude"})
+
+
 class StartReceiptTests(ConfirmationCase):
     def test_the_receipt_names_its_request(self):
         body = {"request_id": "receipt-00000001", "input": "实现登录页", "source": {"type": "new"}, "worker_id": "worker", "steps": ONE}

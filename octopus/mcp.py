@@ -388,7 +388,8 @@ def admin_environments(client, args):
 
 
 SESSION_FIELDS = ("id", "name", "status", "desired", "lifecycle", "version", "error", "attention", "progress", "input",
-                  "planning", "team_id", "worker_id", "workflow_name", "match_mode", "created", "updated", "kept", "verified")
+                  "planning", "team_id", "worker_id", "workflow_name", "match_mode", "created", "updated", "kept", "verified",
+                  "admission", "admission_basis", "request")   # D55: why it waits or started, and the submission it came from
 
 
 def compact_status(session, events):

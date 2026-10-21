@@ -74,9 +74,20 @@ def preferences(db, actor_id, team):
 
 
 def _best(rows, repo):
-    """The most specific rule that matches: fewest wildcards, then the newest."""
-    matched = [r for r in rows if fnmatchcase(repo, json.loads(r["rule"])["repos"])]
-    return min(matched, key=lambda r: (json.loads(r["rule"])["repos"].count("*"), -r["created"]), default=None)
+    """The most specific rule that matches: the most literal characters (github.com/o/* over github.com/* over *), then
+    the fewest wildcards, then the newest."""
+    patterns = {r["id"]: json.loads(r["rule"])["repos"] for r in rows}
+    matched = [r for r in rows if fnmatchcase(repo, patterns[r["id"]])]
+    return min(matched, key=lambda r: (-len(patterns[r["id"]].replace("*", "")), patterns[r["id"]].count("*"), -r["created"]),
+               default=None)
+
+
+def basis_text(basis):
+    """Why a Session started at once or waits for its plan's confirmation; "" when the submission said so itself."""
+    if not basis or basis.get("basis") == "submitted":
+        return ""
+    mode = "自动开始" if basis.get("mode") == "auto" else "等待确认"
+    return f"按准入规则「{basis.get('pattern') or ''}」{mode}" if basis.get("basis") == "rule" else f"按平台默认{mode}"
 
 
 def admission(db, actor_id, team, source, submitted, default):

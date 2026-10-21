@@ -6,7 +6,7 @@ import html as markup
 import re
 import time
 
-from . import roles
+from . import policies, roles
 
 MARK = {"pass": "✓", "fail": "✗", "skip": "–"}
 SUMMARY, DETAIL, INPUT, PLAN = 2000, 300, 12000, 8000   # the request and the plan keep their own limits (domain, planning)
@@ -141,6 +141,7 @@ def model(view, now=None):
             "evaluation": evaluation, "usage": used,
             "status": view.get("status"), "creator": (view.get("created_by") or {}).get("username") or "—",
             "confirmed": _line((view.get("confirmed") or {}).get("by"), 100) or None,
+            "admission": _line(policies.basis_text(view.get("admission_basis")), 400) or None,   # D55 §3
             "generated": time.strftime("%Y-%m-%d %H:%M UTC", time.gmtime(now or time.time())),
             "request": {"input": _clip(view.get("input"), INPUT), "intent": _line(planning.get("intent"), 500),
                         "summary": _clip(planning.get("summary"), PLAN)},
@@ -185,6 +186,7 @@ def markdown(view, now=None):
     m = model(view, now)
     out = [f"# {_md(m['title'])}", "",
            f"- 会话：`{m['id']}` · 状态：{_md(m['status'])} · 创建者：{_md(m['creator'])}"
+           + (f" · 准入：{_md(m['admission'])}" if m["admission"] else "")
            + (f" · 计划确认：{_md(m['confirmed'])}" if m["confirmed"] else "") + f" · 生成：{m['generated']}",
            "", "## 需求", ""] + (_block(m["request"]["input"]) if m["request"]["input"] else ["—"])
     if m["request"]["intent"]:
@@ -285,6 +287,7 @@ def html(view, now=None):
            f"<title>{e(m['title'])} · KiroCrew ON 报告</title><base target=\"_blank\"><style>{STYLE}</style></head><body>",
            f"<h1>{e(m['title'])}</h1>",
            f"<p class=\"meta\">会话 <code>{e(m['id'])}</code> · 状态 {e(m['status'])} · 创建者 {e(m['creator'])}"
+           + (f" · 准入：{e(m['admission'])}" if m["admission"] else "")
            + (f" · 计划确认 {e(m['confirmed'])}" if m["confirmed"] else "") + f" · 生成 {e(m['generated'])}</p>",
            "<h2>需求</h2>", f"<pre>{e(m['request']['input'] or '—')}</pre>"]
     if m["request"]["intent"]:
