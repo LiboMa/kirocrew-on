@@ -93,7 +93,35 @@
   .commit .sha { font-family: ui-monospace, Menlo, monospace; color: var(--brand); }
   .commit .date { color: var(--muted); }
   footer { color: var(--muted); font-size: 12px; text-align: center; padding: 24px 0 40px; }
-  @media (max-width: 920px) { .hero { grid-template-columns: 1fr; } .grid2 { grid-template-columns: 1fr; } .counts { grid-template-columns: repeat(2, 1fr); } }
+  /* milestones: one bar each, opened one by one or all at once (owner 2026-10-21) */
+  .ms-head { display: flex; justify-content: space-between; align-items: flex-start; gap: 12px; }
+  .switch { display: inline-flex; align-items: center; gap: 8px; border: 0; background: none; font: inherit; font-size: 13px;
+            color: var(--muted); cursor: pointer; padding: 4px 2px; white-space: nowrap; }
+  .switch .track { width: 34px; height: 20px; border-radius: 999px; background: var(--todo-soft); border: 1px solid var(--line);
+                   position: relative; transition: background .15s, border-color .15s; }
+  .switch .knob { position: absolute; top: 2px; left: 2px; width: 14px; height: 14px; border-radius: 50%; background: #fff;
+                  box-shadow: 0 1px 2px rgba(16,24,40,.25); transition: transform .15s; }
+  .switch[aria-checked="true"] { color: var(--ink); }
+  .switch[aria-checked="true"] .track { background: var(--brand); border-color: var(--brand); }
+  .switch[aria-checked="true"] .knob { transform: translateX(14px); }
+  .switch:focus-visible, .ms > button:focus-visible { outline: 2px solid var(--brand); outline-offset: 2px; border-radius: 8px; }
+  .ms { border-top: 1px solid var(--line); }
+  .ms > button { width: 100%; display: grid; grid-template-columns: 264px minmax(0, 1fr) 52px 96px 12px; gap: 14px; align-items: center;
+                 padding: 12px 4px; border: 0; background: none; font: inherit; color: inherit; text-align: left; cursor: pointer; }
+  .ms > button:hover { background: #fafbfe; }
+  .ms .ms-name { font-weight: 600; }
+  .ms .bar { height: 10px; }
+  .ms .pct { font-weight: 700; font-variant-numeric: tabular-nums; text-align: right; }
+  .ms .tally { color: var(--muted); font-size: 12px; font-variant-numeric: tabular-nums; }
+  .ms .chev { width: 8px; height: 8px; border-right: 2px solid var(--muted); border-bottom: 2px solid var(--muted);
+              transform: rotate(-45deg); transition: transform .15s; }
+  .ms.open .chev { transform: rotate(45deg); }
+  .ms .ms-items { display: none; margin: 0 4px 12px; border: 1px solid var(--line); border-radius: 12px; overflow: hidden; }
+  .ms.open .ms-items { display: block; }
+  body.live .bar span { transition: none; }
+  @media (prefers-reduced-motion: reduce) { .bar span, .switch .track, .switch .knob, .ms .chev { transition: none; } }
+  @media (max-width: 920px) { .hero { grid-template-columns: 1fr; } .grid2 { grid-template-columns: 1fr; } .counts { grid-template-columns: repeat(2, 1fr); }
+    .ms > button { grid-template-columns: minmax(0, 1fr) 52px 12px; } .ms .bar { grid-column: 1 / -1; grid-row: 2; } .ms .tally { display: none; } }
 </style>
 </head>
 <body>
@@ -136,6 +164,15 @@
     </section>
   </div>
 
+  <section class="panel" style="margin-top:18px" aria-labelledby="ms-title">
+    <div class="ms-head">
+      <div><h2 id="ms-title">MVP 里程碑</h2>
+        <p class="sub">每个里程碑一条进度，按状态分段；点一行展开它的条目。</p></div>
+      <button class="switch" id="ms-all" role="switch" aria-checked="false"><span class="track"><span class="knob"></span></span>展开全部</button>
+    </div>
+    <div id="milestones"></div>
+  </section>
+
   <div class="modules" id="modules"></div>
 
   <section class="panel" style="margin-top:18px">
@@ -153,6 +190,8 @@ const DATA = {"_comment": "进度看板与 docs/PROGRESS.md 的唯一数据源�
 /* DATA:END */
 const { status: STATUS, modules: MODULES, bugs: BUGS, next: NEXT, record: RECORD } = DATA;
 const css = (name) => getComputedStyle(document.documentElement).getPropertyValue("--" + name).trim();
+const LIVE = !!document.querySelector('meta[http-equiv="refresh"]');
+if (LIVE) document.body.classList.add("live");
 
 // ---------- computation ----------
 const all = MODULES.flatMap((m) => m.items.map((i) => ({ ...i, module: m })));
@@ -169,6 +208,7 @@ function ring(el, value, label, sub) {
     <defs><linearGradient id="g-${el.id}" x1="0" x2="1"><stop offset="0" stop-color="#7ce0b4"/><stop offset="1" stop-color="#9f94ff"/></linearGradient></defs></svg>
     <div class="num"><div><b>0%</b><span>${label}</span><br><span style="font-size:11px">${sub}</span></div></div>`;
   const arc = el.querySelectorAll("circle")[1], num = el.querySelector("b");
+  if (LIVE) { arc.style.transition = "none"; arc.style.strokeDashoffset = c * (1 - value); num.textContent = Math.round(value * 100) + "%"; return; }
   requestAnimationFrame(() => { arc.style.strokeDashoffset = c * (1 - value); });
   const t0 = performance.now();
   (function tick(t) {
@@ -224,22 +264,60 @@ function matches(i) {
   return (!active || i.status === active) && (!query || text.includes(query));
 }
 
+const itemHtml = (i) => `<div class="item" data-id="${i.id}">
+    <div><div class="name">${i.name}</div><div class="ref">${i.ref ?? ""}</div>
+      ${i.deps ? `<div class="deps">依赖：${i.deps.map((d) => byId[d]?.name ?? d).join("；")}</div>` : ""}</div>
+    ${badge(i.status)}${i.more ? `<div class="more">${i.more}</div>` : ""}</div>`;
+// ``open``: what is not started shows as the empty track, so the bar reads as how far the milestone has come
+const barHtml = (items, open = false) => `<div class="bar">${Object.keys(STATUS).map((k) =>
+  `<span data-w="${items.filter((i) => i.status === k).length / (items.length || 1) * 100}"
+     style="background:${css(open && k === "todo" ? "todo-soft" : k)}"></span>`).join("")}</div>`;
+
 const modulesEl = document.getElementById("modules");
-MODULES.forEach((m) => {
+MODULES.filter((m) => !m.milestones).forEach((m) => {   // the MVP module is drawn as its milestones below
   const card = document.createElement("article");
   card.className = "module"; card.dataset.module = m.id;
-  const parts = Object.keys(STATUS).map((k) => [k, m.items.filter((i) => i.status === k).length]);
   card.innerHTML = `<header><h3>${m.title}<small>${Math.round(score(m.items) * 100)}% · ${m.items.length} 项</small></h3>
-      <p class="desc">${m.desc}</p>
-      <div class="bar">${parts.map(([k, n]) => `<span data-w="${n / m.items.length * 100}" style="background:${css(k)}"></span>`).join("")}</div></header>
-    <div class="items">${m.items.map((i) => `<div class="item" data-id="${i.id}">
-        <div><div class="name">${i.name}</div><div class="ref">${i.ref ?? ""}</div>
-          ${i.deps ? `<div class="deps">依赖：${i.deps.map((d) => byId[d]?.name ?? d).join("；")}</div>` : ""}</div>
-        ${badge(i.status)}${i.more ? `<div class="more">${i.more}</div>` : ""}</div>`).join("")}</div>`;
+      <p class="desc">${m.desc}</p>${barHtml(m.items)}</header>
+    <div class="items">${m.items.map(itemHtml).join("")}</div>`;
   card.querySelector("header").onclick = () => card.classList.toggle("collapsed");
   card.querySelectorAll(".item").forEach((el) => el.onclick = () => el.classList.toggle("open"));
   modulesEl.appendChild(card);
 });
+
+// ---------- milestones: one bar each; a row opens its items, the switch opens them all; kept across reloads ----------
+const MS_KEY = "kirocrew-on.progress.milestones";
+const msState = (() => { try { return JSON.parse(localStorage.getItem(MS_KEY)) || {}; } catch { return {}; } })();
+const saveMs = () => { try { localStorage.setItem(MS_KEY, JSON.stringify(msState)); } catch { /* private mode */ } };
+const msEl = document.getElementById("milestones"), msAll = document.getElementById("ms-all");
+const mvpModule = MODULES.find((m) => m.milestones);
+const MILESTONES = (mvpModule?.milestones ?? []).map((ms) =>
+  ({ ...ms, items: mvpModule.items.filter((i) => i.id === ms.id || i.id.startsWith(ms.id + "-")) }));
+MILESTONES.forEach((ms) => {
+  const row = document.createElement("div");
+  row.className = "ms" + ((msState.open ?? []).includes(ms.id) ? " open" : ""); row.dataset.ms = ms.id;
+  const done = ms.items.filter((i) => i.status === "accepted").length;
+  row.innerHTML = `<button type="button" aria-expanded="${row.classList.contains("open")}" aria-controls="ms-${ms.id}">
+      <span class="ms-name">${ms.title}</span>${barHtml(ms.items, true)}<span class="pct">${Math.round(score(ms.items) * 100)}%</span>
+      <span class="tally">已验收 ${done} / ${ms.items.length}</span><span class="chev" aria-hidden="true"></span></button>
+    <div class="ms-items" id="ms-${ms.id}">${ms.items.map(itemHtml).join("")}</div>`;
+  row.querySelector("button").onclick = () => setOpen(row, !row.classList.contains("open"));
+  row.querySelectorAll(".item").forEach((el) => el.onclick = () => el.classList.toggle("open"));
+  msEl.appendChild(row);
+});
+function setOpen(row, on) {
+  row.classList.toggle("open", on);
+  row.querySelector("button").setAttribute("aria-expanded", on);
+  msState.open = [...msEl.querySelectorAll(".ms.open")].map((r) => r.dataset.ms);
+  const all = msState.open.length === MILESTONES.length;
+  msAll.setAttribute("aria-checked", all);
+  msState.all = all; saveMs();
+}
+msAll.setAttribute("aria-checked", (msState.open ?? []).length === MILESTONES.length && MILESTONES.length > 0);
+msAll.onclick = () => {
+  const on = msAll.getAttribute("aria-checked") !== "true";
+  msEl.querySelectorAll(".ms").forEach((row) => setOpen(row, on));
+};
 requestAnimationFrame(() => document.querySelectorAll(".bar span").forEach((s) => s.style.width = s.dataset.w + "%"));
 
 function render() {
@@ -248,6 +326,11 @@ function render() {
   document.querySelectorAll(".item").forEach((el) => el.classList.toggle("hidden", !matches(byId[el.dataset.id])));
   document.querySelectorAll(".module").forEach((card) =>
     card.classList.toggle("hidden", !card.querySelector(".item:not(.hidden)")));
+  document.querySelectorAll(".ms").forEach((row) => {   // a filter shows the milestones it finds, open
+    const found = !!row.querySelector(".item:not(.hidden)");
+    row.classList.toggle("hidden", !found);
+    row.classList.toggle("open", active || query ? found : (msState.open ?? []).includes(row.dataset.ms));
+  });
 }
 render();
 
@@ -354,7 +437,8 @@ graph.querySelectorAll(".node").forEach((n) => {
   n.onclick = () => {
     const el = document.querySelector(`.item[data-id="${n.dataset.id}"]`);
     if (!el) return;
-    el.closest(".module").classList.remove("collapsed");
+    el.closest(".module")?.classList.remove("collapsed");
+    el.closest(".ms")?.classList.add("open");
     el.classList.add("open"); el.scrollIntoView({ behavior: "smooth", block: "center" });
   };
 });

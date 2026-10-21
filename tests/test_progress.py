@@ -90,3 +90,21 @@ class LiveTests(unittest.TestCase):
         self.assertIn("head", data["record"])
         with self.assertRaises(Exception):
             urllib.request.urlopen(f"http://127.0.0.1:{port}/../../etc/passwd")
+
+
+class MilestoneTests(unittest.TestCase):
+    """Owner 2026-10-21: one progress bar per milestone, each opened on its own, a switch to open them all."""
+
+    def test_every_mvp_item_belongs_to_exactly_one_milestone(self):
+        data = json.loads((ROOT / "docs/progress.json").read_text())
+        mvp = next(m for m in data["modules"] if m["scope"] == "mvp")
+        ids = [ms["id"] for ms in mvp["milestones"]]
+        self.assertEqual(ids, ["m1", "m2", "m3", "m4", "m5"])
+        for item in mvp["items"]:
+            owners = [ms for ms in ids if item["id"] == ms or item["id"].startswith(ms + "-")]
+            self.assertEqual(len(owners), 1, item["id"])
+
+    def test_the_dashboard_draws_the_milestones_with_a_switch(self):
+        html = (ROOT / "docs/progress-dashboard.html").read_text()
+        for part in ('id="milestones"', 'role="switch"', 'aria-checked="false"', "localStorage", "prefers-reduced-motion"):
+            self.assertTrue(part in html, part)

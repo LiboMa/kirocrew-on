@@ -219,6 +219,28 @@
           "status": "todo",
           "ref": "CONNECTORS.md"
         }
+      ],
+      "milestones": [
+        {
+          "id": "m1",
+          "title": "M1 运行底座"
+        },
+        {
+          "id": "m2",
+          "title": "M2 核心闭环"
+        },
+        {
+          "id": "m3",
+          "title": "M3 客户端直连与控制台"
+        },
+        {
+          "id": "m4",
+          "title": "M4 共享与组织"
+        },
+        {
+          "id": "m5",
+          "title": "M5 仓库闭环（GitHub Connector）"
+        }
       ]
     },
     {
