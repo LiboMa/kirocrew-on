@@ -1,10 +1,10 @@
 # 进度与完成记录
 
-> 由 `tools/progress.py` 生成（2026-10-21 09:39 CST）：任务状态取自 `docs/progress.json`，提交记录取自 git。看板：`docs/progress-dashboard.html`。
+> 由 `tools/progress.py` 生成（2026-10-21 10:32 CST）：任务状态取自 `docs/progress.json`，提交记录取自 git。看板：`docs/progress-dashboard.html`。
 
-- **本轮完成度**：86%　**MVP 完成度**：53%
-- **分支**：HEAD `a5eb554`；自 `origin/main` 起 334 个提交——已推送 243、已部署 EC2 90、仅本机 1；EC2 运行 `8db5430`
-- **回归**：1385 后端 + 92 + 202 控制台；EC2 运行 8db5430（次要问题第 1–7 批），根卷 500 GiB
+- **本轮完成度**：87%　**MVP 完成度**：53%
+- **分支**：HEAD `c5c4615`；自 `origin/main` 起 338 个提交——已推送 335、已部署 EC2 1、仅本机 2；EC2 运行 `d02325d`
+- **回归**：1390 后端 + 92 + 202 控制台；EC2 运行 d02325d，owner 边界原生入口 https://d3e7uvg4nktu35.cloudfront.net（外部 / 与 /chat 均 200）
 
 ## 模块
 
@@ -12,7 +12,7 @@
 |---|---|---|---|---|---|---|---|
 | MVP 里程碑（M1–M5） | 53% | 4 | 1 | 0 | 0 | 0 | 4 |
 | D46 Agent 角色与提示体系 | 88% | 8 | 1 | 0 | 0 | 1 | 0 |
-| D49 每人一个执行边界 | 72% | 2 | 2 | 0 | 0 | 0 | 1 |
+| D49 每人一个执行边界 | 80% | 2 | 2 | 0 | 1 | 0 | 0 |
 | D50 编码技能包 | 100% | 2 | 0 | 0 | 0 | 0 | 0 |
 | D51 模型列表与自动发现 | 100% | 3 | 0 | 0 | 0 | 0 | 0 |
 | D53 管理与使用分开 | 80% | 0 | 1 | 0 | 0 | 0 | 0 |
@@ -22,11 +22,10 @@
 ## 下一步
 
 1. 【需要负责人】D52 EC2 验收：指定一个可写入的测试仓库与写凭证（会在其上开 octopus/knowledge-… 分支与 Draft PR）
-2. 【需要负责人】确认推送：自上次推送以来的提交到 feat/m1-runtime-foundation（--no-verify，快进），并更新 PR #4 说明
-3. 【需要负责人】可选：建一个测试成员账号（我不经 MCP 建用户），以便在 EC2 实测 D49 第 2 期的成员回退与 R10
-4. 【需要负责人】审查独立性的「作者」口径：test 任务算不算作者（规划 / 续作的检查与自动纠错换工具的检查目前不一致）
-5. 【需要负责人】规划质量：默认 admission 改为 confirm（计划先给人看），和 / 或在规划后加一个不同工具的计划审查
-6. 【需要负责人】下一个大项的先后：M2 剩余、M3 剩余、M4 剩余、M5 仓库闭环、D49 第 3 期、返工自动附技能（skills-next）
+2. 【需要负责人】可选：建一个测试成员账号（我不经 MCP 建用户），以便在 EC2 实测 D49 第 2 期的成员回退与 R10
+3. 【需要负责人】规划质量：默认 admission 改为 confirm（计划先给人看），和 / 或在规划后加一个不同工具的计划审查
+4. 【需要负责人】下一个大项的先后：M2 剩余、M3 剩余、M4 剩余、M5 仓库闭环、D49 第 3 期、返工自动附技能（skills-next）
+5. 【需要负责人】run-25c7aaa7 卡在 artifacts_locked：协调者让 task-3-2 修复其他任务的 8 个文件却无权扩大其 paths——选路径 A（扩充 paths 后重跑）或 B（拆回各任务）；以及是否让协调者的返工决定可附带 paths
 
 ## 本轮修复的缺陷
 
@@ -40,13 +39,19 @@
 - `3ad6379` kiro-login 填错边界名时空等设备码（--boundary kirocrew-on）：现先核对主机上有这个边界，并列出现有边界。
 - `e3123aa` 续接时「自动」仍被 KiroCrew 解析为全局默认（p5 验收：claude default → Opus）：改为沿用对话首次运行的模型。已部署，p5 重跑核实。
 - `c2ca670` EC2 根卷被 73 个旧发布（77 GB）占满：SSM 命令失败、c2ca670 安装中止。负责人批准后清理 70 个旧发布、根卷原地扩到 500 GiB；安装脚本此后自动清理旧发布（OPERATIONS §10）。
+- `ff7e42a` 自 10-20 会话落在本人的 owner 边界后，「在 KiroCrew 中打开」远程不可用（owner 的 crew_url 只是本机隧道）：新增 deploy.sh boundary native 并为 owner 开通；首次执行因 nginx 按文件名读 conf.d、日志格式未定义而被 nginx -t 拒绝（已回退），改名后通过。
 
 ## 完成记录（按决策，最近的在前）
 
-### D46 P3 · Agent 角色与提示体系（8 个提交：已推送 6、已部署 EC2 2）
+### D49 第 3 期 · 每人一个执行边界（2 个提交：已部署 EC2 1、仅本机 1）
 
-- `6fed40b` 2026-10-21 〔已部署 EC2〕 docs: 进度——次要问题第 1–5 批与 D46 P3 返工按钮已部署 EC2（f5c41b7），根卷扩到 500 GiB
-- `90ca3f2` 2026-10-20 〔已部署 EC2〕 feat(console): 验收横幅「不通过，返工…」——续作指向 Evaluator 之前改代码的任务，未通过的验收项预填进任务说明；会话提示与 Skill 同步（D46 P3）
+- `c5c4615` 2026-10-21 〔仅本机〕 docs: 进度——owner 边界的公开原生入口已开通（D49 第 3 期）；run-25c7aaa7 的 artifacts_locked 待负责人决定
+- `d02325d` 2026-10-21 〔已部署 EC2〕 feat(deploy): 平台主机上边界的公开原生入口（D49 第 3 期）——deploy.sh boundary native <名称> 建只含 CloudFront 分发的栈、nginx 中转到该边界的 Gateway、写入 crew_url 并排空重启；控制台在入口未开通时按 D53 说明（会话照常执行，请平台管理员开通）；自动纠错换工具时 test 任务不算作者（负责人 2026-10-21）
+
+### D46 P3 · Agent 角色与提示体系（8 个提交：已推送 8）
+
+- `6fed40b` 2026-10-21 〔已推送〕 docs: 进度——次要问题第 1–5 批与 D46 P3 返工按钮已部署 EC2（f5c41b7），根卷扩到 500 GiB
+- `90ca3f2` 2026-10-20 〔已推送〕 feat(console): 验收横幅「不通过，返工…」——续作指向 Evaluator 之前改代码的任务，未通过的验收项预填进任务说明；会话提示与 Skill 同步（D46 P3）
 - `b6f72df` 2026-10-18 〔已推送〕 docs: MVP-RELEASE 记录 D46 P3 Evaluator 门禁与 EC2 验收（7540427、649d30a）
 - `7540427` 2026-10-18 〔已推送〕 fix(evaluation): D46 P3 终审修复——只有创建者、Team owner、管理员可确认验收；Evaluator 的通用说明改为 pass / fail / pending 且须附证据；没有验收项的 Evaluator 与平台追加的 Evaluator 在运行前按当前验收项判定；按文字对上的项保留自己的证据，其余按顺序补；Evaluator 报告的任何 fail 即不通过；确认后 MCP 显示确认者而非待确认；等待人判断时可启动预览（控制台与服务端状态集合由测试保持一致）；OpenAPI 登记 /accept；BACKLOG 记延后项
 - `a19e3e8` 2026-10-18 〔已推送〕 feat(console): 「验收待确认」提示与「确认通过」、MCP octopus_accept 与精简状态的待判定项、报告「验收（以 Evaluator 为准）」；Skill 与 OPERATIONS（D46 P3）
@@ -54,116 +59,116 @@
 - `1614598` 2026-10-18 〔已推送〕 feat(evaluation): Evaluator 门禁（D46 P3）——改代码的新会话（契约 4、Worker 支持角色卡片）以 Evaluator 对每条验收项的 pass / fail / pending 与证据为准：缺项或缺证据交给协调者，fail 返工，pending 停在「验收待确认」，经确认（记确认者，不计预算）后继续
 - `c1fb892` 2026-10-18 〔已推送〕 docs(spec,plan): D46 P3 Evaluator 门禁——改代码的会话以 Evaluator 的逐项判定为准（负责人 2026-10-18：都要经过 Evaluator；pending 停在「验收待确认」）；缺少时平台追加；适用于契约 4 且 Worker 支持角色卡片
 
-### D53 · 管理与使用分开（3 个提交：已部署 EC2 3）
+### D53 · 管理与使用分开（3 个提交：已推送 3）
 
-- `c36ebad` 2026-10-20 〔已部署 EC2〕 docs: 进度——D53 管理与使用分开本机完成（10405c9），待部署 EC2 与推送
-- `10405c9` 2026-10-20 〔已部署 EC2〕 feat(usage): 管理与使用分开（D53）——使用者的提示只写原因与「请平台管理员……」，不给运维命令；会话页的本机预览命令只对管理员显示；OPERATIONS 列出每条提示对应的管理员处理
-- `2557963` 2026-10-20 〔已部署 EC2〕 docs: 原则 8 管理与使用分开设计（D53，负责人 2026-10-20）——管理操作与使用流程在控制台、MCP / Skill、提示与文档中分开；使用者的提示写明原因与「请管理员……」，不交给运维命令；两类人配合的步骤写明各自做什么
+- `c36ebad` 2026-10-20 〔已推送〕 docs: 进度——D53 管理与使用分开本机完成（10405c9），待部署 EC2 与推送
+- `10405c9` 2026-10-20 〔已推送〕 feat(usage): 管理与使用分开（D53）——使用者的提示只写原因与「请平台管理员……」，不给运维命令；会话页的本机预览命令只对管理员显示；OPERATIONS 列出每条提示对应的管理员处理
+- `2557963` 2026-10-20 〔已推送〕 docs: 原则 8 管理与使用分开设计（D53，负责人 2026-10-20）——管理操作与使用流程在控制台、MCP / Skill、提示与文档中分开；使用者的提示写明原因与「请管理员……」，不交给运维命令；两类人配合的步骤写明各自做什么
 
-### D52 · 团队层知识（9 个提交：已部署 EC2 9）
+### D52 · 团队层知识（9 个提交：已推送 9）
 
-- `2fd800c` 2026-10-20 〔已部署 EC2〕 docs: 进度——D52 团队层知识终审修复并部署 EC2（3ece2e6，迁移 8 生效，route 冒烟 5/5）；EC2 验收待负责人指定测试仓库与写凭证
-- `3ece2e6` 2026-10-20 〔已部署 EC2〕 fix(knowledge): 终审修复（D52）——没有打开的知识 PR 时从默认分支开新分支（不沿用已合并 / 被拒的提议分支），去重对照默认分支；条目都已在打开的 PR 中时给出其编号；任务说明只在源码来自仓库、且知识文件与克隆基线逐字节一致时指向它，措辞为参考；GitHub 不返回 1 MB 以上内容时不提出；PR 说明里的规则以代码格式列出；时间线补「提出仓库知识」
-- `386df5d` 2026-10-20 〔已部署 EC2〕 feat(knowledge): 会话页、报告与 MCP 写明本会话的仓库知识 PR 或未提出的原因；OPERATIONS「团队层知识（D52）」
-- `6b5c329` 2026-10-20 〔已部署 EC2〕 feat(knowledge): 任务说明指向仓库中经人审核合并的 .octopus/knowledge.md（D52）
-- `69d5ba7` 2026-10-20 〔已部署 EC2〕 feat(knowledge): 会话发布时把 Knowledge 条目提到仓库 .octopus/knowledge.md 的 Draft PR——固定分支 octopus/knowledge、与已有条目去重、只写这一个文件；提议失败不影响代码 PR，记录、审计与时间线（D52）
-- `932ad53` 2026-10-20 〔已部署 EC2〕 feat(knowledge): 共享执行环境也追加 Knowledge 任务，只用于仓库层——条目记为 kept，不写、不注入 lessons；迁移 8 让 knowledge.result 接受 kept（D52）
-- `7390837` 2026-10-20 〔已部署 EC2〕 docs(plan): D52 团队层知识——共享环境仅仓库层、发布时的知识 PR、派发时指向知识文件、可见与终审
-- `e6803a9` 2026-10-20 〔已部署 EC2〕 docs: 进度——D52 团队层知识 spec 待审阅
-- `1d5a409` 2026-10-20 〔已部署 EC2〕 docs(spec): D52 团队层知识——会话发布时把 Knowledge 条目提到仓库 .octopus/knowledge.md 的 Draft PR（固定分支 octopus/knowledge，人审核合并）；任务派发时指向经评审的知识文件（负责人 2026-10-19：P4 验收后排入）
+- `2fd800c` 2026-10-20 〔已推送〕 docs: 进度——D52 团队层知识终审修复并部署 EC2（3ece2e6，迁移 8 生效，route 冒烟 5/5）；EC2 验收待负责人指定测试仓库与写凭证
+- `3ece2e6` 2026-10-20 〔已推送〕 fix(knowledge): 终审修复（D52）——没有打开的知识 PR 时从默认分支开新分支（不沿用已合并 / 被拒的提议分支），去重对照默认分支；条目都已在打开的 PR 中时给出其编号；任务说明只在源码来自仓库、且知识文件与克隆基线逐字节一致时指向它，措辞为参考；GitHub 不返回 1 MB 以上内容时不提出；PR 说明里的规则以代码格式列出；时间线补「提出仓库知识」
+- `386df5d` 2026-10-20 〔已推送〕 feat(knowledge): 会话页、报告与 MCP 写明本会话的仓库知识 PR 或未提出的原因；OPERATIONS「团队层知识（D52）」
+- `6b5c329` 2026-10-20 〔已推送〕 feat(knowledge): 任务说明指向仓库中经人审核合并的 .octopus/knowledge.md（D52）
+- `69d5ba7` 2026-10-20 〔已推送〕 feat(knowledge): 会话发布时把 Knowledge 条目提到仓库 .octopus/knowledge.md 的 Draft PR——固定分支 octopus/knowledge、与已有条目去重、只写这一个文件；提议失败不影响代码 PR，记录、审计与时间线（D52）
+- `932ad53` 2026-10-20 〔已推送〕 feat(knowledge): 共享执行环境也追加 Knowledge 任务，只用于仓库层——条目记为 kept，不写、不注入 lessons；迁移 8 让 knowledge.result 接受 kept（D52）
+- `7390837` 2026-10-20 〔已推送〕 docs(plan): D52 团队层知识——共享环境仅仓库层、发布时的知识 PR、派发时指向知识文件、可见与终审
+- `e6803a9` 2026-10-20 〔已推送〕 docs: 进度——D52 团队层知识 spec 待审阅
+- `1d5a409` 2026-10-20 〔已推送〕 docs(spec): D52 团队层知识——会话发布时把 Knowledge 条目提到仓库 .octopus/knowledge.md 的 Draft PR（固定分支 octopus/knowledge，人审核合并）；任务派发时指向经评审的知识文件（负责人 2026-10-19：P4 验收后排入）
 
-### D51 · 模型列表与自动发现（4 个提交：已部署 EC2 4）
+### D51 · 模型列表与自动发现（4 个提交：已推送 4）
 
-- `af47e9b` 2026-10-20 〔已部署 EC2〕 docs: 进度更新——D51 在 EC2 完整验收（claude 探测、kiro 目录各一次）；续接沿用首次模型实测通过；owner 已登录 kiro，P4 验收开始
-- `0eca0b9` 2026-10-20 〔已部署 EC2〕 fix(models): D51 专项审查修复——kiro 的模型改由 KiroCrew 目录 /api/models 取得（0.10.0 中会话不为 kiro 记录模型，原探测每 2 小时白花一轮）；每个工具至多 3 次后放弃并在 health.model_discovery 报告；非 YOLO 且非自动批准的边界不开探测会话；部署排空时跳过；每轮至多一个探测会话；控制台 default 不标未公布、codex 始终写明不公布列表
-- `71d9467` 2026-10-20 〔已部署 EC2〕 feat(models): 模型自动发现（D51）——Worker 在后台对尚无模型的可用工具各做一轮固定探测，KiroCrew 记下公布的模型，平台 10 分钟内带上；codex 报告配置的默认模型，控制台写成「自动（…）」（负责人 2026-10-20：自动刷新、无须人为干预）
-- `d5ff390` 2026-10-20 〔已部署 EC2〕 docs(spec): D51 模型自动发现——Worker 后台对冷且可用的工具做一轮固定探测，KiroCrew 记下公布的模型；codex 报告配置的默认模型（负责人 2026-10-20：自动刷新、无须人为干预）
+- `af47e9b` 2026-10-20 〔已推送〕 docs: 进度更新——D51 在 EC2 完整验收（claude 探测、kiro 目录各一次）；续接沿用首次模型实测通过；owner 已登录 kiro，P4 验收开始
+- `0eca0b9` 2026-10-20 〔已推送〕 fix(models): D51 专项审查修复——kiro 的模型改由 KiroCrew 目录 /api/models 取得（0.10.0 中会话不为 kiro 记录模型，原探测每 2 小时白花一轮）；每个工具至多 3 次后放弃并在 health.model_discovery 报告；非 YOLO 且非自动批准的边界不开探测会话；部署排空时跳过；每轮至多一个探测会话；控制台 default 不标未公布、codex 始终写明不公布列表
+- `71d9467` 2026-10-20 〔已推送〕 feat(models): 模型自动发现（D51）——Worker 在后台对尚无模型的可用工具各做一轮固定探测，KiroCrew 记下公布的模型，平台 10 分钟内带上；codex 报告配置的默认模型，控制台写成「自动（…）」（负责人 2026-10-20：自动刷新、无须人为干预）
+- `d5ff390` 2026-10-20 〔已推送〕 docs(spec): D51 模型自动发现——Worker 后台对冷且可用的工具做一轮固定探测，KiroCrew 记下公布的模型；codex 报告配置的默认模型（负责人 2026-10-20：自动刷新、无须人为干预）
 
-### D50 · 编码技能包（7 个提交：已部署 EC2 7）
+### D50 · 编码技能包（7 个提交：已推送 7）
 
-- `78639f0` 2026-10-20 〔已部署 EC2〕 docs: 进度更新——p5、steer、d50 验收通过（P5a、P5b、P6a、D50 验收）；续接沿用首次模型的修复待部署
-- `317f8b9` 2026-10-20 〔已部署 EC2〕 docs: MVP-RELEASE 记 30a377f（P5b、D50、续接修复）与 d9f57c3（D49 第 2 期含 R10、无头浏览器依赖）已部署 EC2
-- `73cc198` 2026-10-19 〔已部署 EC2〕 fix(skills): 终审修复——规划者给出格式不对的 skills 不再拒掉整份计划；修订历史记录「方法」的变化；只发 Worker 技能包里有的技能（D50）
-- `35de84c` 2026-10-19 〔已部署 EC2〕 feat(skills): 任务卡片、报告与 MCP 显示所用的方法；OPERATIONS「编码技能包（D50）」与 Skill 说明
-- `407b012` 2026-10-19 〔已部署 EC2〕 feat(skills): 任务契约 skills——规划者按任务推荐，Worker 随 Attempt 交付并记录（D50）
-- `b9127eb` 2026-10-19 〔已部署 EC2〕 feat(skills): 平台维护的编码技能包——测试先行、系统化调试、完成前验证、按评审返工、前端设计（改编自 superpowers 与 Anthropic frontend-design，附许可证；tools/build_skill_pack.py 可重建）（D50）
-- `5ef5804` 2026-10-19 〔已部署 EC2〕 docs(spec,plan): D50 编码技能包——方法类技能（测试先行、系统化调试、完成前验证、按评审返工、前端设计）随任务交给三个后端，规划者按任务推荐；流程类由平台承担（负责人 2026-10-19 问）
+- `78639f0` 2026-10-20 〔已推送〕 docs: 进度更新——p5、steer、d50 验收通过（P5a、P5b、P6a、D50 验收）；续接沿用首次模型的修复待部署
+- `317f8b9` 2026-10-20 〔已推送〕 docs: MVP-RELEASE 记 30a377f（P5b、D50、续接修复）与 d9f57c3（D49 第 2 期含 R10、无头浏览器依赖）已部署 EC2
+- `73cc198` 2026-10-19 〔已推送〕 fix(skills): 终审修复——规划者给出格式不对的 skills 不再拒掉整份计划；修订历史记录「方法」的变化；只发 Worker 技能包里有的技能（D50）
+- `35de84c` 2026-10-19 〔已推送〕 feat(skills): 任务卡片、报告与 MCP 显示所用的方法；OPERATIONS「编码技能包（D50）」与 Skill 说明
+- `407b012` 2026-10-19 〔已推送〕 feat(skills): 任务契约 skills——规划者按任务推荐，Worker 随 Attempt 交付并记录（D50）
+- `b9127eb` 2026-10-19 〔已推送〕 feat(skills): 平台维护的编码技能包——测试先行、系统化调试、完成前验证、按评审返工、前端设计（改编自 superpowers 与 Anthropic frontend-design，附许可证；tools/build_skill_pack.py 可重建）（D50）
+- `5ef5804` 2026-10-19 〔已推送〕 docs(spec,plan): D50 编码技能包——方法类技能（测试先行、系统化调试、完成前验证、按评审返工、前端设计）随任务交给三个后端，规划者按任务推荐；流程类由平台承担（负责人 2026-10-19 问）
 
-### D49 第 2 期 · 每人一个执行边界（12 个提交：已部署 EC2 12）
+### D49 第 2 期 · 每人一个执行边界（12 个提交：已推送 12）
 
-- `0baf87c` 2026-10-20 〔已部署 EC2〕 docs: 进度更新——P4 Knowledge 验收（6/6 + forget）、D49 第 2 期 Team 会话落在本人边界（8/8）；本轮待推送
-- `e882e10` 2026-10-20 〔已部署 EC2〕 fix(placement): 本人的执行边界停用时提示写明「已停用，请重新启用」而非「还没有边界」（以免再建第二个而使会话等待选择）；分配执行环境后记下新的执行位置（D49 第 2 期终审延后项）
-- `d9f57c3` 2026-10-20 〔已部署 EC2〕 fix(placement): R10 专项审查修复——去掉「改派停下的会话」（状态卡住、已完成任务的改动留在原边界）；把会话放到某人的边界上只接受此人（等待执行环境时其他成员可借分配绕过 R10）（D49 第 2 期）
-- `b50359e` 2026-10-20 〔已部署 EC2〕 feat(placement): 只有边界主人在自己的边界上下达指令（R10）——续作、诊断、确认计划、补充说明与批准只接受创建者；Team owner / 管理员可把停下的会话改派到 Team 的环境（D49 第 2 期，终审 Important 2，按推荐的 A）
-- `7e03c72` 2026-10-20 〔已部署 EC2〕 docs: BACKLOG 记录 D49 第 2 期终审延后项与待裁定的 R3
-- `9a8d145` 2026-10-20 〔已部署 EC2〕 fix(placement): 终审修复——Team 没有环境而成员有自己的边界时，发起向导不再拦住提交（按平台的 placement 判断）；Skill 的分配步骤按 run_id 列出可分配环境（D49 第 2 期）
-- `6c2bc7c` 2026-10-20 〔已部署 EC2〕 fix(console): 发起向导切换执行空间时不再引用已删除的 spaceWorkers（运行时 ReferenceError，构建的 tsc -b 发现），改为交回平台选择（D49 第 2 期）
-- `89135d1` 2026-10-19 〔已部署 EC2〕 feat(console): 发起向导默认交给平台选择执行位置并显示；会话页的位置提示；分配对话框按创建者列出可选环境（D49 第 2 期）
-- `d5c563d` 2026-10-19 〔已部署 EC2〕 feat(placement): GET /v1/placement——默认位置与可选环境；MCP octopus_environments 标出默认、可按会话列出可分配的环境；Skill 说明（D49 第 2 期）
-- `e1b7f08` 2026-10-19 〔已部署 EC2〕 feat(placement): Team 会话在提交者自己的边界执行，没有时回退到 Team 的环境并提示；会话记执行位置（D49 第 2 期）
-- `8cd2d01` 2026-10-19 〔已部署 EC2〕 docs(plan): D49 第 2 期会话的执行位置——位置规则、/v1/placement 与 MCP、控制台、文档与 EC2 四个任务
-- `1c8f2aa` 2026-10-19 〔已部署 EC2〕 docs(spec): D49 第 2 期——会话的执行位置：Team 会话在提交者自己的边界执行，无边界时回退到 Team 的环境并提示（负责人 2026-10-19 选 A）；服务端统一回答默认位置，客户端不再各自选择
+- `0baf87c` 2026-10-20 〔已推送〕 docs: 进度更新——P4 Knowledge 验收（6/6 + forget）、D49 第 2 期 Team 会话落在本人边界（8/8）；本轮待推送
+- `e882e10` 2026-10-20 〔已推送〕 fix(placement): 本人的执行边界停用时提示写明「已停用，请重新启用」而非「还没有边界」（以免再建第二个而使会话等待选择）；分配执行环境后记下新的执行位置（D49 第 2 期终审延后项）
+- `d9f57c3` 2026-10-20 〔已推送〕 fix(placement): R10 专项审查修复——去掉「改派停下的会话」（状态卡住、已完成任务的改动留在原边界）；把会话放到某人的边界上只接受此人（等待执行环境时其他成员可借分配绕过 R10）（D49 第 2 期）
+- `b50359e` 2026-10-20 〔已推送〕 feat(placement): 只有边界主人在自己的边界上下达指令（R10）——续作、诊断、确认计划、补充说明与批准只接受创建者；Team owner / 管理员可把停下的会话改派到 Team 的环境（D49 第 2 期，终审 Important 2，按推荐的 A）
+- `7e03c72` 2026-10-20 〔已推送〕 docs: BACKLOG 记录 D49 第 2 期终审延后项与待裁定的 R3
+- `9a8d145` 2026-10-20 〔已推送〕 fix(placement): 终审修复——Team 没有环境而成员有自己的边界时，发起向导不再拦住提交（按平台的 placement 判断）；Skill 的分配步骤按 run_id 列出可分配环境（D49 第 2 期）
+- `6c2bc7c` 2026-10-20 〔已推送〕 fix(console): 发起向导切换执行空间时不再引用已删除的 spaceWorkers（运行时 ReferenceError，构建的 tsc -b 发现），改为交回平台选择（D49 第 2 期）
+- `89135d1` 2026-10-19 〔已推送〕 feat(console): 发起向导默认交给平台选择执行位置并显示；会话页的位置提示；分配对话框按创建者列出可选环境（D49 第 2 期）
+- `d5c563d` 2026-10-19 〔已推送〕 feat(placement): GET /v1/placement——默认位置与可选环境；MCP octopus_environments 标出默认、可按会话列出可分配的环境；Skill 说明（D49 第 2 期）
+- `e1b7f08` 2026-10-19 〔已推送〕 feat(placement): Team 会话在提交者自己的边界执行，没有时回退到 Team 的环境并提示；会话记执行位置（D49 第 2 期）
+- `8cd2d01` 2026-10-19 〔已推送〕 docs(plan): D49 第 2 期会话的执行位置——位置规则、/v1/placement 与 MCP、控制台、文档与 EC2 四个任务
+- `1c8f2aa` 2026-10-19 〔已推送〕 docs(spec): D49 第 2 期——会话的执行位置：Team 会话在提交者自己的边界执行，无边界时回退到 Team 的环境并提示（负责人 2026-10-19 选 A）；服务端统一回答默认位置，客户端不再各自选择
 
-### D49 第 1 期 · 每人一个执行边界（3 个提交：已部署 EC2 3）
+### D49 第 1 期 · 每人一个执行边界（3 个提交：已推送 3）
 
-- `2ee8d15` 2026-10-20 〔已部署 EC2〕 docs: 进度更新——e0d8791 已部署；route 验收通过、D49 第 1 期验收；模型自动发现在 owner 上实测写入 claude 的 14 个模型
-- `607aba0` 2026-10-19 〔已部署 EC2〕 docs: BACKLOG 记录 D49 第 1 期终审延后项
-- `9716878` 2026-10-19 〔已部署 EC2〕 docs: OPERATIONS「每人一个边界（D49 第 1 期）」；WORKERS 的边界层与同主机边界差距更新
+- `2ee8d15` 2026-10-20 〔已推送〕 docs: 进度更新——e0d8791 已部署；route 验收通过、D49 第 1 期验收；模型自动发现在 owner 上实测写入 claude 的 14 个模型
+- `607aba0` 2026-10-19 〔已推送〕 docs: BACKLOG 记录 D49 第 1 期终审延后项
+- `9716878` 2026-10-19 〔已推送〕 docs: OPERATIONS「每人一个边界（D49 第 1 期）」；WORKERS 的边界层与同主机边界差距更新
 
-### D46 P5a · Agent 角色与提示体系（9 个提交：已部署 EC2 9）
+### D46 P5a · Agent 角色与提示体系（9 个提交：已推送 9）
 
-- `e3123aa` 2026-10-20 〔已部署 EC2〕 fix(continue): 「自动」的续接返工沿用对话首次运行实际用的模型——带上 auto 时 KiroCrew 续接仍解析为全局默认（p5 验收：claude 的 default 续接成 Opus）；首次模型不是可直接派发的 ID 时（如 codex 的 …[low]、kiro 的空值）仍发 auto（D46 P5a，EC2 run-e333a1eb… 2026-10-20）
-- `c9a3469` 2026-10-20 〔已部署 EC2〕 fix(continue): 续接的返工总是带上任务的模型（含 auto）——不带时 KiroCrew 改用其全局默认模型续接：claude 的 default 变成 Opus、codex 被要求用 Claude 模型、kiro 的 auto 变成 claude-opus-5.5（D46 P5a，EC2 run-9507ea17… 核对 2026-10-20）
-- `8a7c3f6` 2026-10-19 〔已部署 EC2〕 fix(continue): 续接的返工按所属对话核实实际 ACP 后端——此前每次续接都以「实际 ACP 后端未核实」被 identity_match 拦下（D46 P5a，EC2 2026-10-19）
-- `89efe0c` 2026-10-19 〔已部署 EC2〕 docs: BACKLOG 记录 D46 P5a 终审延后项与 P5b
-- `1e16ac5` 2026-10-19 〔已部署 EC2〕 fix(continue): 终审修复——approval_mode auto 而 YOLO 关闭时、显式 Effort 时不续接（/continue 不继承它们）；对话不属于本会话时全新派发而不卡住；对账恢复续接标记，对话链不断；返工说明按任务类别（复验不修改代码）（D46 P5a）
-- `564bcd7` 2026-10-19 〔已部署 EC2〕 docs: OPERATIONS「保留上下文的返工（D46 P5a）」
-- `66d48ba` 2026-10-19 〔已部署 EC2〕 feat(continue): 平台安排的返工续接上一轮的原生对话（同工具、模型与 Effort，未经用户续作），任务卡片、MCP 与报告显示（D46 P5a）
-- `b68158b` 2026-10-19 〔已部署 EC2〕 feat(continue): Worker 在原生对话上续接返工，被拒时全新派发并记录；契约加 /api/spawn/{id}/continue（D46 P5a）
-- `f8a0ec5` 2026-10-19 〔已部署 EC2〕 docs(spec,plan): D46 P5a 保留上下文的返工——平台安排的返工在上一轮的原生对话上续接（KiroCrew /api/spawn/{id}/continue），不能续接时全新派发；steer 与 release 为 P5b
+- `e3123aa` 2026-10-20 〔已推送〕 fix(continue): 「自动」的续接返工沿用对话首次运行实际用的模型——带上 auto 时 KiroCrew 续接仍解析为全局默认（p5 验收：claude 的 default 续接成 Opus）；首次模型不是可直接派发的 ID 时（如 codex 的 …[low]、kiro 的空值）仍发 auto（D46 P5a，EC2 run-e333a1eb… 2026-10-20）
+- `c9a3469` 2026-10-20 〔已推送〕 fix(continue): 续接的返工总是带上任务的模型（含 auto）——不带时 KiroCrew 改用其全局默认模型续接：claude 的 default 变成 Opus、codex 被要求用 Claude 模型、kiro 的 auto 变成 claude-opus-5.5（D46 P5a，EC2 run-9507ea17… 核对 2026-10-20）
+- `8a7c3f6` 2026-10-19 〔已推送〕 fix(continue): 续接的返工按所属对话核实实际 ACP 后端——此前每次续接都以「实际 ACP 后端未核实」被 identity_match 拦下（D46 P5a，EC2 2026-10-19）
+- `89efe0c` 2026-10-19 〔已推送〕 docs: BACKLOG 记录 D46 P5a 终审延后项与 P5b
+- `1e16ac5` 2026-10-19 〔已推送〕 fix(continue): 终审修复——approval_mode auto 而 YOLO 关闭时、显式 Effort 时不续接（/continue 不继承它们）；对话不属于本会话时全新派发而不卡住；对账恢复续接标记，对话链不断；返工说明按任务类别（复验不修改代码）（D46 P5a）
+- `564bcd7` 2026-10-19 〔已推送〕 docs: OPERATIONS「保留上下文的返工（D46 P5a）」
+- `66d48ba` 2026-10-19 〔已推送〕 feat(continue): 平台安排的返工续接上一轮的原生对话（同工具、模型与 Effort，未经用户续作），任务卡片、MCP 与报告显示（D46 P5a）
+- `b68158b` 2026-10-19 〔已推送〕 feat(continue): Worker 在原生对话上续接返工，被拒时全新派发并记录；契约加 /api/spawn/{id}/continue（D46 P5a）
+- `f8a0ec5` 2026-10-19 〔已推送〕 docs(spec,plan): D46 P5a 保留上下文的返工——平台安排的返工在上一轮的原生对话上续接（KiroCrew /api/spawn/{id}/continue），不能续接时全新派发；steer 与 release 为 P5b
 
-### D46 · Agent 角色与提示体系（4 个提交：已推送 3、已部署 EC2 1）
+### D46 · Agent 角色与提示体系（4 个提交：已推送 4）
 
-- `75b59e8` 2026-10-20 〔已部署 EC2〕 docs: 进度看板 docs/progress-dashboard.html——本轮（D46–D51、验收与发布）与 MVP 完成度、模块进度、依赖关系图与下一步（负责人 2026-10-20）
+- `75b59e8` 2026-10-20 〔已推送〕 docs: 进度看板 docs/progress-dashboard.html——本轮（D46–D51、验收与发布）与 MVP 完成度、模块进度、依赖关系图与下一步（负责人 2026-10-20）
 - `dc4b428` 2026-10-16 〔已推送〕 docs(spec): D46 以 KiroCrew 为基准修订——能力基准表（记忆、lessons、skills、工作账本、spawn continue、用量、GitHub/GitLab）；Knowledge 改为 KiroCrew 成员记忆与 lessons；新增 P0（记忆默认值无效、availableAgents 位置等）与 P5、P6
 - `1cd8e31` 2026-10-16 〔已推送〕 docs(spec): D46 负责人决定——新增 role 字段、以 Evaluator 为准、知识存于 .octopus/knowledge.md、先做 P1
 - `d40e279` 2026-10-16 〔已推送〕 docs(spec): D46 草案——KiroCrew 通用 Agent Prompt 与角色体系的现状盘点、问题与分期计划（待负责人确认）
 
-### D49 · 每人一个执行边界（5 个提交：已部署 EC2 5）
+### D49 · 每人一个执行边界（5 个提交：已推送 5）
 
-- `d3493ba` 2026-10-19 〔已部署 EC2〕 fix(boundaries): 终审修复——其余边界在平台 API 与 personal 之后逐个升级、失败不阻塞其余并最后报告，排空中断不留维护标记；资源上限 OOMPolicy=continue、Worker 4G；开通前先核对用户；同主机预览核对监听者属于本边界；Worker 主机不会接管同名的个人边界（D49）
-- `3cb8480` 2026-10-19 〔已部署 EC2〕 feat(workers): 边界可登记为某个用户的专属 Worker（bootstrap-worker --owner）；个人会话优先选择唯一的专属 Worker（D49）
-- `8ffe8ca` 2026-10-19 〔已部署 EC2〕 feat(deploy): deploy.sh boundary add 在平台主机开通专属于一个人的边界（独立端口、资源上限、登记为其专属 Worker）；boundaries、按边界的 kiro-login / space / tunnel（D49）
-- `8149c54` 2026-10-19 〔已部署 EC2〕 feat(deploy): 每个边界的安装步骤抽为 boundary-lib.sh；升级对主机上全部边界做原生契约检查后才切换，再逐个排空重启（D49）
-- `11e78a2` 2026-10-19 〔已部署 EC2〕 docs(spec,plan): D49 每人一个执行边界第 1 期——平台主机上开通专属于一个人的 KiroCrew 边界（独立端口、资源上限、登记为其专属 Worker），升级覆盖全部边界，个人会话优先选择自己的边界（负责人 2026-10-19）
+- `d3493ba` 2026-10-19 〔已推送〕 fix(boundaries): 终审修复——其余边界在平台 API 与 personal 之后逐个升级、失败不阻塞其余并最后报告，排空中断不留维护标记；资源上限 OOMPolicy=continue、Worker 4G；开通前先核对用户；同主机预览核对监听者属于本边界；Worker 主机不会接管同名的个人边界（D49）
+- `3cb8480` 2026-10-19 〔已推送〕 feat(workers): 边界可登记为某个用户的专属 Worker（bootstrap-worker --owner）；个人会话优先选择唯一的专属 Worker（D49）
+- `8ffe8ca` 2026-10-19 〔已推送〕 feat(deploy): deploy.sh boundary add 在平台主机开通专属于一个人的边界（独立端口、资源上限、登记为其专属 Worker）；boundaries、按边界的 kiro-login / space / tunnel（D49）
+- `8149c54` 2026-10-19 〔已推送〕 feat(deploy): 每个边界的安装步骤抽为 boundary-lib.sh；升级对主机上全部边界做原生契约检查后才切换，再逐个排空重启（D49）
+- `11e78a2` 2026-10-19 〔已推送〕 docs(spec,plan): D49 每人一个执行边界第 1 期——平台主机上开通专属于一个人的 KiroCrew 边界（独立端口、资源上限、登记为其专属 Worker），升级覆盖全部边界，个人会话优先选择自己的边界（负责人 2026-10-19）
 
-### D46 P4 · Agent 角色与提示体系（6 个提交：已部署 EC2 6）
+### D46 P4 · Agent 角色与提示体系（6 个提交：已推送 6）
 
-- `30a377f` 2026-10-19 〔已部署 EC2〕 docs: MVP-RELEASE 刷新到 2026-10-19——里程碑表与 M2 状态按 §14 的 EC2 验收记录更新，新增 §14.33–14.38（D46 P4 / P5a / P5b / P6a、D49、D50，均待 EC2 验收）；BACKLOG 记 D50 终审延后项
-- `c9a765d` 2026-10-19 〔已部署 EC2〕 fix(knowledge): 终审修复——平台追加的 Knowledge 任务从不阻止会话完成（结论无效、派发被拒、登录过期、看门狗停止都记为沉淀未完成）；只读核对，改了的已跟踪文件还原到候选；写入超时覆盖 Worker 逐条写入；续作重跑时重新整理（D46 P4）
-- `155e360` 2026-10-19 〔已部署 EC2〕 feat(console): 会话页「本次沉淀的知识」与删除、共享环境提示、MCP 与文档（D46 P4）
-- `0b3b86b` 2026-10-19 〔已部署 EC2〕 feat(knowledge): 平台侧——专属环境中来自仓库、改了代码的会话完成前追加 Knowledge 任务，核对条目后写成限定仓库的 KiroCrew lessons 并记台账；派发时按环境注入；共享环境不沉淀不注入（D46 P4）
-- `e0e6212` 2026-10-19 〔已部署 EC2〕 feat(knowledge): Worker 侧——仓库标记、按需注入 lessons、写入与删除 KiroCrew lessons；协调者不能自行写 lessons；契约加 /api/lessons（D46 P4）
-- `2460869` 2026-10-19 〔已部署 EC2〕 docs(spec,plan): D46 P4 Knowledge——专属执行环境中来自仓库、改了代码的会话完成时追加 Knowledge 任务，平台核对后写成按仓库标记限定的 KiroCrew lessons，后续同仓库任务注入；共享环境不沉淀不注入（负责人 2026-10-18）
+- `30a377f` 2026-10-19 〔已推送〕 docs: MVP-RELEASE 刷新到 2026-10-19——里程碑表与 M2 状态按 §14 的 EC2 验收记录更新，新增 §14.33–14.38（D46 P4 / P5a / P5b / P6a、D49、D50，均待 EC2 验收）；BACKLOG 记 D50 终审延后项
+- `c9a765d` 2026-10-19 〔已推送〕 fix(knowledge): 终审修复——平台追加的 Knowledge 任务从不阻止会话完成（结论无效、派发被拒、登录过期、看门狗停止都记为沉淀未完成）；只读核对，改了的已跟踪文件还原到候选；写入超时覆盖 Worker 逐条写入；续作重跑时重新整理（D46 P4）
+- `155e360` 2026-10-19 〔已推送〕 feat(console): 会话页「本次沉淀的知识」与删除、共享环境提示、MCP 与文档（D46 P4）
+- `0b3b86b` 2026-10-19 〔已推送〕 feat(knowledge): 平台侧——专属环境中来自仓库、改了代码的会话完成前追加 Knowledge 任务，核对条目后写成限定仓库的 KiroCrew lessons 并记台账；派发时按环境注入；共享环境不沉淀不注入（D46 P4）
+- `e0e6212` 2026-10-19 〔已推送〕 feat(knowledge): Worker 侧——仓库标记、按需注入 lessons、写入与删除 KiroCrew lessons；协调者不能自行写 lessons；契约加 /api/lessons（D46 P4）
+- `2460869` 2026-10-19 〔已推送〕 docs(spec,plan): D46 P4 Knowledge——专属执行环境中来自仓库、改了代码的会话完成时追加 Knowledge 任务，平台核对后写成按仓库标记限定的 KiroCrew lessons，后续同仓库任务注入；共享环境不沉淀不注入（负责人 2026-10-18）
 
-### D46 P5b · Agent 角色与提示体系（6 个提交：已部署 EC2 6）
+### D46 P5b · Agent 角色与提示体系（6 个提交：已推送 6）
 
-- `40720ea` 2026-10-19 〔已部署 EC2〕 docs: BACKLOG 记录 D46 P5b 完成与终审延后项
-- `e8d1526` 2026-10-19 〔已部署 EC2〕 fix(steer): 终审修复——去掉 follow_up（KiroCrew 以平台不跟踪的续接运行送达）；只支持 Kiro 后端的任务，codex / claude 如实拒绝；上游 steer_unsupported / shutting_down 转为 409 / 503（D46 P5b）
-- `d8a34ab` 2026-10-19 〔已部署 EC2〕 docs: OPERATIONS 运行中补充说明与释放对话（D46 P5b）
-- `6b8bccc` 2026-10-19 〔已部署 EC2〕 feat(steer): 运行中任务的补充说明——控制台、MCP 与 API，写审计与时间线（D46 P5b）
-- `9da80f8` 2026-10-19 〔已部署 EC2〕 feat(steer): Worker 转发运行中任务的补充说明（KiroCrew steer），删除会话时释放其可续接的对话（D46 P5b）
-- `d14c540` 2026-10-19 〔已部署 EC2〕 docs(spec,plan): D46 P5b 运行中补充说明（KiroCrew steer）与删除会话时释放可续接的对话（release）
+- `40720ea` 2026-10-19 〔已推送〕 docs: BACKLOG 记录 D46 P5b 完成与终审延后项
+- `e8d1526` 2026-10-19 〔已推送〕 fix(steer): 终审修复——去掉 follow_up（KiroCrew 以平台不跟踪的续接运行送达）；只支持 Kiro 后端的任务，codex / claude 如实拒绝；上游 steer_unsupported / shutting_down 转为 409 / 503（D46 P5b）
+- `d8a34ab` 2026-10-19 〔已推送〕 docs: OPERATIONS 运行中补充说明与释放对话（D46 P5b）
+- `6b8bccc` 2026-10-19 〔已推送〕 feat(steer): 运行中任务的补充说明——控制台、MCP 与 API，写审计与时间线（D46 P5b）
+- `9da80f8` 2026-10-19 〔已推送〕 feat(steer): Worker 转发运行中任务的补充说明（KiroCrew steer），删除会话时释放其可续接的对话（D46 P5b）
+- `d14c540` 2026-10-19 〔已推送〕 docs(spec,plan): D46 P5b 运行中补充说明（KiroCrew steer）与删除会话时释放可续接的对话（release）
 
-### D46 P6a · Agent 角色与提示体系（7 个提交：已部署 EC2 7）
+### D46 P6a · Agent 角色与提示体系（7 个提交：已推送 7）
 
-- `8b7c0ed` 2026-10-19 〔已部署 EC2〕 docs: BACKLOG 记录 D46 P6a 终审延后项
-- `d99e16f` 2026-10-19 〔已部署 EC2〕 fix(usage): 终审修复——运行刚结束而用量行未到时稍等再查，不把「无 token」永久缓存；超大或异常数值不再让检查失败；续接测试核对对话的 slot 与各轮自己的那一行（D46 P6a）
-- `6a6c65f` 2026-10-19 〔已部署 EC2〕 docs: OPERATIONS「用量（D46 P6a）」；BACKLOG 记录工具时间线、按人汇总与费用预算等后续
-- `4b70245` 2026-10-19 〔已部署 EC2〕 feat(usage): 会话汇总每个 Attempt 的用量，任务卡片、会话页、报告与 MCP 显示（D46 P6a）
-- `de65fbc` 2026-10-19 〔已部署 EC2〕 feat(usage): Worker 在原生任务结束时记下 Credit、token、费用与耗时（D46 P6a）
-- `635319e` 2026-10-19 〔已部署 EC2〕 feat(usage): Worker 在原生任务结束时记下 Credit、token、费用与耗时（D46 P6a）
-- `87e44de` 2026-10-19 〔已部署 EC2〕 docs(spec,plan): D46 P6a 用量——每个 Attempt 的 Credit、token、费用与耗时（KiroCrew /api/spawn/{id} 与 /api/usage/turns），会话汇总并显示；工具时间线待 KiroCrew 提供
+- `8b7c0ed` 2026-10-19 〔已推送〕 docs: BACKLOG 记录 D46 P6a 终审延后项
+- `d99e16f` 2026-10-19 〔已推送〕 fix(usage): 终审修复——运行刚结束而用量行未到时稍等再查，不把「无 token」永久缓存；超大或异常数值不再让检查失败；续接测试核对对话的 slot 与各轮自己的那一行（D46 P6a）
+- `6a6c65f` 2026-10-19 〔已推送〕 docs: OPERATIONS「用量（D46 P6a）」；BACKLOG 记录工具时间线、按人汇总与费用预算等后续
+- `4b70245` 2026-10-19 〔已推送〕 feat(usage): 会话汇总每个 Attempt 的用量，任务卡片、会话页、报告与 MCP 显示（D46 P6a）
+- `de65fbc` 2026-10-19 〔已推送〕 feat(usage): Worker 在原生任务结束时记下 Credit、token、费用与耗时（D46 P6a）
+- `635319e` 2026-10-19 〔已推送〕 feat(usage): Worker 在原生任务结束时记下 Credit、token、费用与耗时（D46 P6a）
+- `87e44de` 2026-10-19 〔已推送〕 docs(spec,plan): D46 P6a 用量——每个 Attempt 的 Credit、token、费用与耗时（KiroCrew /api/spawn/{id} 与 /api/usage/turns），会话汇总并显示；工具时间线待 KiroCrew 提供
 
 ### D48 · 发布到新仓库（11 个提交：已推送 11）
 
@@ -354,10 +359,10 @@
 - `ec02d73` 2026-10-12 〔已推送〕 docs: D32 会话修订历史；EC2 验收记录与能力清单
 - `c3c0f4e` 2026-10-12 〔已推送〕 feat(revisions): 会话修订历史与 Prompt 差异（后端，D32）——每次创建 / 规划 / 续作 / 自动纠错记录完整快照与摘要；旧修订按记录还原；GET /v1/runs/<id>/revisions[/<version>|/diff]；MCP octopus_revisions 只返回变化；OpenAPI 与 Skill
 
-### 未标记 · 功能（64 个提交：已推送 62、已部署 EC2 2）
+### 未标记 · 功能（64 个提交：已推送 64）
 
-- `e0d8791` 2026-10-20 〔已部署 EC2〕 feat(tools): 完成记录机制——tools/progress.py 从 git 列出自 origin/main 起的全部提交，按决策分组并标明已推送 / 已部署 EC2 / 仅本机，连同 docs/progress.json 的任务状态写入看板与 docs/PROGRESS.md（负责人 2026-10-20）
-- `092a19a` 2026-10-20 〔已部署 EC2〕 feat(console): 任务的模型改为下拉选择该执行环境公布的模型——「自动」时也列出全部（原输入框按当前值过滤建议，自动时只剩 auto）；模型取自将要执行的环境（平台的默认位置或所选环境），工作流编辑器不再取空间里的第一个环境
+- `e0d8791` 2026-10-20 〔已推送〕 feat(tools): 完成记录机制——tools/progress.py 从 git 列出自 origin/main 起的全部提交，按决策分组并标明已推送 / 已部署 EC2 / 仅本机，连同 docs/progress.json 的任务状态写入看板与 docs/PROGRESS.md（负责人 2026-10-20）
+- `092a19a` 2026-10-20 〔已推送〕 feat(console): 任务的模型改为下拉选择该执行环境公布的模型——「自动」时也列出全部（原输入框按当前值过滤建议，自动时只剩 auto）；模型取自将要执行的环境（平台的默认位置或所选环境），工作流编辑器不再取空间里的第一个环境
 - `fc75650` 2026-10-18 〔已推送〕 feat(deploy): Gateway 需要重启时先排空——Worker 有 .maintenance 标记时不接受新的准备与派发（503 native_unavailable，平台自动退避重试），安装脚本等 Gateway 中运行的原生任务结束（最多 DRAIN_MINUTES，默认 30 分钟）后重启，Worker 重启后移除标记（复盘 #8，EC2 run-f7670bfb…）
 - `ac3144f` 2026-10-16 〔已推送〕 feat(worker): 停用 OpenCode（K01，负责人 2026-10-16）——Worker 配置 disabled_tools（默认 ["opencode"]）中的工具报告为不可用并写明原因，规划者不选、协调者不换用、派发前停下；disabled_tools = [] 可恢复
 - `b3574d7` 2026-10-15 〔已推送〕 feat(mapping): 每个任务写明工具与模型的来源（提交的 steps、工作流、模板 / 规则匹配、导入的文档、KiroCrew 规划、续作时的用户修改、协调者换用），控制台、MCP 与报告可见（M2 验收 2）
@@ -421,18 +426,19 @@
 - `ff7768c` 2026-10-12 〔已推送〕 feat(migrations): 迁移 4——Team 归档、Worker 退役与空闲主机曾服务的 Team
 - `d5cf9ba` 2026-10-12 〔已推送〕 feat(console): 会话页「修订历史」——按时间列出创建 / 规划 / 续作 / 自动纠错，任选两版对比需求与各任务（字段前后值、Prompt 逐行增删，未变化的任务折叠）
 
-### 未标记 · 修复（47 个提交：已推送 37、已部署 EC2 10）
+### 未标记 · 修复（48 个提交：已推送 47、仅本机 1）
 
-- `8db5430` 2026-10-21 〔已部署 EC2〕 fix: 次要问题第 7 批——Worker 删除知识如实报告 KiroCrew 的拒绝与错误；多个平台 Knowledge 任务各写一次；等待执行环境时每 30 秒重试知识写入；基线测试按条件等待（高负载下的偶发失败）
-- `2cd7a88` 2026-10-21 〔已部署 EC2〕 fix: 次要问题第 6 批——安装脚本不再以命令行参数传管理员密码；重新规划用精简的角色与技能目录（最长约 7350 / 8000）；placement 按创建者回答写入 OPERATIONS
-- `f5c41b7` 2026-10-21 〔已部署 EC2〕 fix: 次要问题第 5 批——预览的本机步骤给 cwd 加引号、拒绝控制字符与符号链接的声明；知识标记与 exclude 文件拒绝符号链接；角色卡片读一次、格式错时说明是哪张
-- `c4e1c7d` 2026-10-20 〔已部署 EC2〕 fix: 次要问题第 4 批——续作可去掉任务的角色；已归档 Team 不给新会话的执行位置；任务卡片显示实际交付的方法；知识提议「已含这些条目」时也审计凭证使用
-- `6db7e47` 2026-10-20 〔已部署 EC2〕 fix: 次要问题第 3 批与磁盘——上一轮对话本身出错时返工全新派发；平台追加的 Evaluator / Knowledge 任务各记一次修订；安装时自动清理旧发布（EC2 根卷曾被 73 个旧发布占满，已扩到 500 GiB，OPERATIONS §10）
-- `c2ca670` 2026-10-20 〔已部署 EC2〕 fix: 终审延后的次要问题第 2 批——调试技能不再写「Ask for help」；boundary.sh 进入 bash 语法检查；Knowledge 任务完成而无条目时如实说明；续接被拒时变更记录写明原因
-- `cb4e636` 2026-10-20 〔已部署 EC2〕 fix: 终审延后的次要问题第 1 批——修订对比显示角色标题；报告容忍坏的 skills 证据；octopus/knowledge… 分支留给知识提议；删除过的知识不再写回；共享环境的时间线计入「发布时提到仓库」
-- `3ad6379` 2026-10-20 〔已部署 EC2〕 fix(deploy): kiro-login 先核对主机上有这个边界——不存在时立即列出现有边界并退出，不再空等设备码（2026-10-20 kiro-login --boundary kirocrew-on）
-- `f5954f1` 2026-10-20 〔已部署 EC2〕 fix(placement): 分配执行环境时在预算重置之后写入执行位置——此前用旧 snapshot 覆盖了 restart_budget 写的 budget_since（全量回归 test_budget 发现）
-- `3f9352d` 2026-10-20 〔已部署 EC2〕 fix(deploy): 主机安装 Agent 的 Playwright Chromium 所需的 16 个系统库——审查与前端验证此前无法打开页面（exit 127，EC2 run-48f02d32…）
+- `ff7e42a` 2026-10-21 〔仅本机〕 fix(deploy): 边界的中转配置名为 kirocrew-relay-boundary-<名称>.conf——nginx 按文件名读 conf.d，须在定义 log_format kirocrew_native 的 kirocrew-native.conf 之后（EC2 2026-10-21：nginx -t 报 unknown log format，已回退、crew_url 未改）
+- `8db5430` 2026-10-21 〔已推送〕 fix: 次要问题第 7 批——Worker 删除知识如实报告 KiroCrew 的拒绝与错误；多个平台 Knowledge 任务各写一次；等待执行环境时每 30 秒重试知识写入；基线测试按条件等待（高负载下的偶发失败）
+- `2cd7a88` 2026-10-21 〔已推送〕 fix: 次要问题第 6 批——安装脚本不再以命令行参数传管理员密码；重新规划用精简的角色与技能目录（最长约 7350 / 8000）；placement 按创建者回答写入 OPERATIONS
+- `f5c41b7` 2026-10-21 〔已推送〕 fix: 次要问题第 5 批——预览的本机步骤给 cwd 加引号、拒绝控制字符与符号链接的声明；知识标记与 exclude 文件拒绝符号链接；角色卡片读一次、格式错时说明是哪张
+- `c4e1c7d` 2026-10-20 〔已推送〕 fix: 次要问题第 4 批——续作可去掉任务的角色；已归档 Team 不给新会话的执行位置；任务卡片显示实际交付的方法；知识提议「已含这些条目」时也审计凭证使用
+- `6db7e47` 2026-10-20 〔已推送〕 fix: 次要问题第 3 批与磁盘——上一轮对话本身出错时返工全新派发；平台追加的 Evaluator / Knowledge 任务各记一次修订；安装时自动清理旧发布（EC2 根卷曾被 73 个旧发布占满，已扩到 500 GiB，OPERATIONS §10）
+- `c2ca670` 2026-10-20 〔已推送〕 fix: 终审延后的次要问题第 2 批——调试技能不再写「Ask for help」；boundary.sh 进入 bash 语法检查；Knowledge 任务完成而无条目时如实说明；续接被拒时变更记录写明原因
+- `cb4e636` 2026-10-20 〔已推送〕 fix: 终审延后的次要问题第 1 批——修订对比显示角色标题；报告容忍坏的 skills 证据；octopus/knowledge… 分支留给知识提议；删除过的知识不再写回；共享环境的时间线计入「发布时提到仓库」
+- `3ad6379` 2026-10-20 〔已推送〕 fix(deploy): kiro-login 先核对主机上有这个边界——不存在时立即列出现有边界并退出，不再空等设备码（2026-10-20 kiro-login --boundary kirocrew-on）
+- `f5954f1` 2026-10-20 〔已推送〕 fix(placement): 分配执行环境时在预算重置之后写入执行位置——此前用旧 snapshot 覆盖了 restart_budget 写的 budget_since（全量回归 test_budget 发现）
+- `3f9352d` 2026-10-20 〔已推送〕 fix(deploy): 主机安装 Agent 的 Playwright Chromium 所需的 16 个系统库——审查与前端验证此前无法打开页面（exit 127，EC2 run-48f02d32…）
 - `9f820ac` 2026-10-18 〔已推送〕 fix(kirocrew): 现有边界的 config.json 去掉平台以前写入、KiroCrew 从未读取的键（memory.enabled、dashboard.host / port、workspaces.default.path），原生测试核对现有边界；协调者另以 KiroCrew 的 managedToolPolicy.exclude 屏蔽 monitor 工具（与 kiro-cli 的 excludedTools 并用）
 - `87332a1` 2026-10-18 〔已推送〕 fix: 延后项第二批——新仓库的凭证下拉按会话空间过滤并显示范围（与启动向导共用规则）；Evaluator 缺项或缺证据记为 contract、判定不通过记为 implementation；追加的 Evaluator 不复用历史 id；报告的 Evaluator 一节只在门禁生效的会话出现
 - `6e853db` 2026-10-18 〔已推送〕 fix: 延后项第一批——会话页开启自动发布时按创建者核对凭证；新建源码启动时要求自动发布须给出仓库；已记录的发布仓库不区分大小写；已有空仓库记为「发布到已有的空仓库」，run.published 带新仓库地址；停止后仍等待验收的会话不送诊断
@@ -471,13 +477,14 @@
 - `23396a9` 2026-10-12 〔已推送〕 fix(access): 审查修复——自动诊断同样核对执行环境；退役 Worker 上的会话在本地关闭 / 删除、不能重新打开，重新打开中的会话计入退役检查；归档 Team 可调整已有成员角色；可移除已停用的成员；归档 Team 的会话停用续作 / 诊断 / 重新打开 / 分配并说明原因；退出唯一的 Team 后回到个人空间
 - `436233b` 2026-10-12 〔已推送〕 fix(console): 修订差异只在改动处保留 2 行上下文、其余折叠；修订列表不重复类型（EC2 实测长 Prompt）
 
-### 未标记 · 文档（27 个提交：已推送 22、已部署 EC2 4、仅本机 1）
+### 未标记 · 文档（28 个提交：已推送 28）
 
-- `a5eb554` 2026-10-21 〔仅本机〕 docs(skill): 写明 latest.continued 是自动纠错接上了上一轮对话，与 octopus_continue 无关；进度记下待负责人决定的三项
-- `b06b843` 2026-10-20 〔已部署 EC2〕 docs: 进度——推送前安全扫描通过（c36ebad，git-defender scan / scan-history 均无发现）
-- `3ef5761` 2026-10-20 〔已部署 EC2〕 docs: OPERATIONS 写明 R10（只有边界主人下达指令、改派到 Team 的环境）与主机的无头浏览器依赖；BACKLOG 标记 R3 已裁定
-- `89d3d54` 2026-10-19 〔已部署 EC2〕 docs: OPERATIONS「每人一个边界」第 2 期规则（Team 会话在提交者的边界、回退与提示、固定与改派、/v1/placement、原生入口）；MVP-RELEASE §14.37
-- `edc6102` 2026-10-19 〔已部署 EC2〕 docs: BACKLOG 记录执行环境方向（每人一个边界、Team 会话在提交者边界执行，负责人 2026-10-19）、团队层知识排在 P4 验收后，以及 P4 终审延后项
+- `f27c24d` 2026-10-21 〔已推送〕 docs: 进度——次要问题第 1–7 批已部署 EC2（8db5430）
+- `a5eb554` 2026-10-21 〔已推送〕 docs(skill): 写明 latest.continued 是自动纠错接上了上一轮对话，与 octopus_continue 无关；进度记下待负责人决定的三项
+- `b06b843` 2026-10-20 〔已推送〕 docs: 进度——推送前安全扫描通过（c36ebad，git-defender scan / scan-history 均无发现）
+- `3ef5761` 2026-10-20 〔已推送〕 docs: OPERATIONS 写明 R10（只有边界主人下达指令、改派到 Team 的环境）与主机的无头浏览器依赖；BACKLOG 标记 R3 已裁定
+- `89d3d54` 2026-10-19 〔已推送〕 docs: OPERATIONS「每人一个边界」第 2 期规则（Team 会话在提交者的边界、回退与提示、固定与改派、/v1/placement、原生入口）；MVP-RELEASE §14.37
+- `edc6102` 2026-10-19 〔已推送〕 docs: BACKLOG 记录执行环境方向（每人一个边界、Team 会话在提交者边界执行，负责人 2026-10-19）、团队层知识排在 P4 验收后，以及 P4 终审延后项
 - `4724b9a` 2026-10-18 〔已推送〕 docs: MVP-RELEASE 记录部署排空的端到端验收与 KiroCrew 契约后续（9f820ac）
 - `b4c820f` 2026-10-18 〔已推送〕 docs: MVP-RELEASE 记录延后项第二批与 EC2 核对（87332a1）
 - `8f2e49e` 2026-10-18 〔已推送〕 docs: MVP-RELEASE 记录 BACKLOG 防线项（部署维护期、HTTP 字段契约、延后项第一批）与 EC2 验收
