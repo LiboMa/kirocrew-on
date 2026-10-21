@@ -114,9 +114,9 @@
         {
           "id": "m3-connect",
           "name": "M3-1 connect：Codex、Kiro IDE 与写前备份核对",
-          "status": "local",
-          "ref": "2026-10-21",
-          "more": "octopus connect codex（合并 ~/.codex/config.toml）与 connect kiro-ide（合并 <项目>/.kiro/settings/mcp.json），备份、0600、合并失败吊销 Token；Claude Code、Kiro CLI 早已上线。待：在真实 Codex 与 Kiro IDE 中各验证一次工具可见。"
+          "status": "deployed",
+          "ref": "EC2 9879cc4",
+          "more": "octopus connect codex（合并 ~/.codex/config.toml）与 connect kiro-ide（合并 <项目>/.kiro/settings/mcp.json），备份、0600、合并失败吊销 Token；Claude Code、Kiro CLI 早已上线。2026-10-21 EC2 实测：临时 HOME 下 connect codex 后，真实 codex mcp list 读出 kirocrew-on（stdio、enabled，Token 显示为 *****），配置文件 0600。待：负责人在 Kiro IDE 中确认工具可见。"
         },
         {
           "id": "m3-cli",
