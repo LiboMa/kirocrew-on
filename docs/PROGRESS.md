@@ -1,17 +1,17 @@
 # 进度与完成记录
 
-> 由 `tools/progress.py` 生成（2026-10-21 10:32 CST）：任务状态取自 `docs/progress.json`，提交记录取自 git。看板：`docs/progress-dashboard.html`。
+> 由 `tools/progress.py` 生成（2026-10-21 14:11 CST）：任务状态取自 `docs/progress.json`，提交记录取自 git。看板：`docs/progress-dashboard.html`。
 
 - **本轮完成度**：87%　**MVP 完成度**：53%
-- **分支**：HEAD `c5c4615`；自 `origin/main` 起 338 个提交——已推送 335、已部署 EC2 1、仅本机 2；EC2 运行 `d02325d`
-- **回归**：1390 后端 + 92 + 202 控制台；EC2 运行 d02325d，owner 边界原生入口 https://d3e7uvg4nktu35.cloudfront.net（外部 / 与 /chat 均 200）
+- **分支**：HEAD `8540e96`；自 `origin/main` 起 346 个提交——已推送 335、已部署 EC2 9、仅本机 2；EC2 运行 `17687ec`
+- **回归**：1396 后端 + 92 + 204 控制台；EC2 运行 17687ec（重新规划复核保留检查、凭证编辑范围、边界运维、owner 原生入口）
 
 ## 模块
 
 | 模块 | 完成度 | 已验收 | 已部署 · 待验收 | 本机完成 · 待部署 | 进行中 | 卡点 · 等外部 | 未开始 |
 |---|---|---|---|---|---|---|---|
 | MVP 里程碑（M1–M5） | 53% | 4 | 1 | 0 | 0 | 0 | 4 |
-| D46 Agent 角色与提示体系 | 88% | 8 | 1 | 0 | 0 | 1 | 0 |
+| D46 Agent 角色与提示体系 | 87% | 8 | 2 | 0 | 0 | 1 | 0 |
 | D49 每人一个执行边界 | 80% | 2 | 2 | 0 | 1 | 0 | 0 |
 | D50 编码技能包 | 100% | 2 | 0 | 0 | 0 | 0 | 0 |
 | D51 模型列表与自动发现 | 100% | 3 | 0 | 0 | 0 | 0 | 0 |
@@ -25,7 +25,7 @@
 2. 【需要负责人】可选：建一个测试成员账号（我不经 MCP 建用户），以便在 EC2 实测 D49 第 2 期的成员回退与 R10
 3. 【需要负责人】规划质量：默认 admission 改为 confirm（计划先给人看），和 / 或在规划后加一个不同工具的计划审查
 4. 【需要负责人】下一个大项的先后：M2 剩余、M3 剩余、M4 剩余、M5 仓库闭环、D49 第 3 期、返工自动附技能（skills-next）
-5. 【需要负责人】run-25c7aaa7 卡在 artifacts_locked：协调者让 task-3-2 修复其他任务的 8 个文件却无权扩大其 paths——选路径 A（扩充 paths 后重跑）或 B（拆回各任务）；以及是否让协调者的返工决定可附带 paths
+5. 【需要负责人】D54 主体（协调者的返工可附带扩大 paths，docs/superpowers/specs/2026-10-21-coordinator-paths-design.md）待确认后实现
 
 ## 本轮修复的缺陷
 
@@ -40,12 +40,20 @@
 - `e3123aa` 续接时「自动」仍被 KiroCrew 解析为全局默认（p5 验收：claude default → Opus）：改为沿用对话首次运行的模型。已部署，p5 重跑核实。
 - `c2ca670` EC2 根卷被 73 个旧发布（77 GB）占满：SSM 命令失败、c2ca670 安装中止。负责人批准后清理 70 个旧发布、根卷原地扩到 500 GiB；安装脚本此后自动清理旧发布（OPERATIONS §10）。
 - `ff7e42a` 自 10-20 会话落在本人的 owner 边界后，「在 KiroCrew 中打开」远程不可用（owner 的 crew_url 只是本机隧道）：新增 deploy.sh boundary native 并为 owner 开通；首次执行因 nginx 按文件名读 conf.d、日志格式未定义而被 nginx -t 拒绝（已回退），改名后通过。
+- `17687ec` EC2 run-25c7aaa7（M0 脚手架）两次停在契约层：协调者让 task-3-2 修复其他任务的文件却不能扩大 paths（路径 A 续作解开），保留任务的检查扫到后来的 backend/.venv（修正 verify 续作解开）；之后 Evaluator 的 3 项高危发现经返工修复，会话 2026-10-21 14:07 完成。两类问题分别由 D54（待确认）与重新规划复核保留检查（已做）处理。
 
 ## 完成记录（按决策，最近的在前）
 
-### D49 第 3 期 · 每人一个执行边界（2 个提交：已部署 EC2 1、仅本机 1）
+### D54（4 个提交：已部署 EC2 3、仅本机 1）
 
-- `c5c4615` 2026-10-21 〔仅本机〕 docs: 进度——owner 边界的公开原生入口已开通（D49 第 3 期）；run-25c7aaa7 的 artifacts_locked 待负责人决定
+- `ef47d6d` 2026-10-21 〔仅本机〕 docs: 进度——run-25c7aaa7 完成；D54 主体待负责人确认
+- `17687ec` 2026-10-21 〔已部署 EC2〕 feat(replan): 重新规划复核保留任务的检查命令（负责人 2026-10-21，D54 §9 a）——提示列出保留的已验收任务的 verify；计划可带 verify_fixes，平台只接受指向保留任务且不清空 implement / test 检查的修正，写入该任务（不重跑）并记在这次重新规划的修订里，时间线 task.verify_revised；重新规划提示的各节限长下调以容下（最坏约 7720 / 8000）
+- `82fadb4` 2026-10-21 〔已部署 EC2〕 docs(spec): D54 记下同类问题——保留任务的过时检查命令（run-25c7aaa7 第 15 轮后 checks_pass 因 backend/.venv 失败），不交给协调者，列出可选做法待负责人决定
+- `3325522` 2026-10-21 〔已部署 EC2〕 docs(spec): D54 协调者的返工可扩大可改动路径——只限门禁锁住的、此前已验收任务的文件，记修订与时间线（EC2 run-25c7aaa7 卡在 artifacts_locked 13 轮）
+
+### D49 第 3 期 · 每人一个执行边界（2 个提交：已部署 EC2 2）
+
+- `c5c4615` 2026-10-21 〔已部署 EC2〕 docs: 进度——owner 边界的公开原生入口已开通（D49 第 3 期）；run-25c7aaa7 的 artifacts_locked 待负责人决定
 - `d02325d` 2026-10-21 〔已部署 EC2〕 feat(deploy): 平台主机上边界的公开原生入口（D49 第 3 期）——deploy.sh boundary native <名称> 建只含 CloudFront 分发的栈、nginx 中转到该边界的 Gateway、写入 crew_url 并排空重启；控制台在入口未开通时按 D53 说明（会话照常执行，请平台管理员开通）；自动纠错换工具时 test 任务不算作者（负责人 2026-10-21）
 
 ### D46 P3 · Agent 角色与提示体系（8 个提交：已推送 8）
@@ -359,8 +367,9 @@
 - `ec02d73` 2026-10-12 〔已推送〕 docs: D32 会话修订历史；EC2 验收记录与能力清单
 - `c3c0f4e` 2026-10-12 〔已推送〕 feat(revisions): 会话修订历史与 Prompt 差异（后端，D32）——每次创建 / 规划 / 续作 / 自动纠错记录完整快照与摘要；旧修订按记录还原；GET /v1/runs/<id>/revisions[/<version>|/diff]；MCP octopus_revisions 只返回变化；OpenAPI 与 Skill
 
-### 未标记 · 功能（64 个提交：已推送 64）
+### 未标记 · 功能（65 个提交：已推送 64、已部署 EC2 1）
 
+- `b733fc6` 2026-10-21 〔已部署 EC2〕 feat(console): 凭证卡片「编辑范围」——已有凭证可改仓库范围（PATCH repos）
 - `e0d8791` 2026-10-20 〔已推送〕 feat(tools): 完成记录机制——tools/progress.py 从 git 列出自 origin/main 起的全部提交，按决策分组并标明已推送 / 已部署 EC2 / 仅本机，连同 docs/progress.json 的任务状态写入看板与 docs/PROGRESS.md（负责人 2026-10-20）
 - `092a19a` 2026-10-20 〔已推送〕 feat(console): 任务的模型改为下拉选择该执行环境公布的模型——「自动」时也列出全部（原输入框按当前值过滤建议，自动时只剩 auto）；模型取自将要执行的环境（平台的默认位置或所选环境），工作流编辑器不再取空间里的第一个环境
 - `fc75650` 2026-10-18 〔已推送〕 feat(deploy): Gateway 需要重启时先排空——Worker 有 .maintenance 标记时不接受新的准备与派发（503 native_unavailable，平台自动退避重试），安装脚本等 Gateway 中运行的原生任务结束（最多 DRAIN_MINUTES，默认 30 分钟）后重启，Worker 重启后移除标记（复盘 #8，EC2 run-f7670bfb…）
@@ -426,9 +435,10 @@
 - `ff7768c` 2026-10-12 〔已推送〕 feat(migrations): 迁移 4——Team 归档、Worker 退役与空闲主机曾服务的 Team
 - `d5cf9ba` 2026-10-12 〔已推送〕 feat(console): 会话页「修订历史」——按时间列出创建 / 规划 / 续作 / 自动纠错，任选两版对比需求与各任务（字段前后值、Prompt 逐行增删，未变化的任务折叠）
 
-### 未标记 · 修复（48 个提交：已推送 47、仅本机 1）
+### 未标记 · 修复（49 个提交：已推送 47、已部署 EC2 2）
 
-- `ff7e42a` 2026-10-21 〔仅本机〕 fix(deploy): 边界的中转配置名为 kirocrew-relay-boundary-<名称>.conf——nginx 按文件名读 conf.d，须在定义 log_format kirocrew_native 的 kirocrew-native.conf 之后（EC2 2026-10-21：nginx -t 报 unknown log format，已回退、crew_url 未改）
+- `39458e2` 2026-10-21 〔已部署 EC2〕 fix(deploy): 边界运维——重复 boundary add 不给 --memory / --cpu 时保留现有资源上限（不再重置并排空重启 Gateway）；--owner 按小写匹配平台用户；boundary add 传 AWS_REGION；systemctl disable 的边界部署时不检查、不重启
+- `ff7e42a` 2026-10-21 〔已部署 EC2〕 fix(deploy): 边界的中转配置名为 kirocrew-relay-boundary-<名称>.conf——nginx 按文件名读 conf.d，须在定义 log_format kirocrew_native 的 kirocrew-native.conf 之后（EC2 2026-10-21：nginx -t 报 unknown log format，已回退、crew_url 未改）
 - `8db5430` 2026-10-21 〔已推送〕 fix: 次要问题第 7 批——Worker 删除知识如实报告 KiroCrew 的拒绝与错误；多个平台 Knowledge 任务各写一次；等待执行环境时每 30 秒重试知识写入；基线测试按条件等待（高负载下的偶发失败）
 - `2cd7a88` 2026-10-21 〔已推送〕 fix: 次要问题第 6 批——安装脚本不再以命令行参数传管理员密码；重新规划用精简的角色与技能目录（最长约 7350 / 8000）；placement 按创建者回答写入 OPERATIONS
 - `f5c41b7` 2026-10-21 〔已推送〕 fix: 次要问题第 5 批——预览的本机步骤给 cwd 加引号、拒绝控制字符与符号链接的声明；知识标记与 exclude 文件拒绝符号链接；角色卡片读一次、格式错时说明是哪张
@@ -477,8 +487,10 @@
 - `23396a9` 2026-10-12 〔已推送〕 fix(access): 审查修复——自动诊断同样核对执行环境；退役 Worker 上的会话在本地关闭 / 删除、不能重新打开，重新打开中的会话计入退役检查；归档 Team 可调整已有成员角色；可移除已停用的成员；归档 Team 的会话停用续作 / 诊断 / 重新打开 / 分配并说明原因；退出唯一的 Team 后回到个人空间
 - `436233b` 2026-10-12 〔已推送〕 fix(console): 修订差异只在改动处保留 2 行上下文、其余折叠；修订列表不重复类型（EC2 实测长 Prompt）
 
-### 未标记 · 文档（28 个提交：已推送 28）
+### 未标记 · 文档（30 个提交：已推送 28、已部署 EC2 1、仅本机 1）
 
+- `8540e96` 2026-10-21 〔仅本机〕 docs: 进度——重新规划复核保留检查已部署 EC2（17687ec）
+- `68a6b12` 2026-10-21 〔已部署 EC2〕 docs: 进度看板刷新（EC2 d02325d）
 - `f27c24d` 2026-10-21 〔已推送〕 docs: 进度——次要问题第 1–7 批已部署 EC2（8db5430）
 - `a5eb554` 2026-10-21 〔已推送〕 docs(skill): 写明 latest.continued 是自动纠错接上了上一轮对话，与 octopus_continue 无关；进度记下待负责人决定的三项
 - `b06b843` 2026-10-20 〔已推送〕 docs: 进度——推送前安全扫描通过（c36ebad，git-defender scan / scan-history 均无发现）
