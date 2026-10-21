@@ -200,9 +200,12 @@ def is_review(spec):
     return spec.get("kind") == "review" or (not spec.get("kind") and spec.get("id") == "review")
 
 
+NOT_AUTHORS = ("design", "test")   # owner 2026-10-21: a test task does not write the change a review looks at (roles.py)
+
+
 def reviewed_backend(db, run_id, ordinal):
     """The backend that wrote the code a review at ``ordinal`` reviews: the newest accepted Attempt of an earlier task
-    that is not itself a review, a design or a planning task (D38 §3.3, D41)."""
+    that is not itself a review, a design, a test or a planning task (D38 §3.3, D41)."""
     from .planning import planning_task as planner
     snapshot = json.loads((db.execute("SELECT snapshot FROM runs WHERE id=?", (run_id,)).fetchone() or ["{}"])[0])
     planning_task = lambda task_id: planner(task_id, snapshot)
@@ -210,7 +213,7 @@ def reviewed_backend(db, run_id, ordinal):
                           "WHERE a.run_id=? AND t.ordinal<? AND a.status='accepted' ORDER BY a.updated DESC, a.created DESC",
                           (run_id, ordinal)):
         spec = json.loads(row["spec"])
-        if is_review(spec) or spec.get("kind") == "design" or planning_task(spec.get("id")):
+        if is_review(spec) or spec.get("kind") in NOT_AUTHORS or planning_task(spec.get("id")):
             continue
         return json.loads(row["evidence"] or "{}").get("actual_backend") or spec["tool"]
     return None
@@ -243,7 +246,7 @@ def switch(db, run, failed, decision, context):
     if is_review(spec):
         reviewed = reviewed_backend(db, run["id"], failed["ordinal"])
         require(tool != reviewed, f"审查须使用与被审查代码（{reviewed}）不同的工具")
-    else:   # the reviews that follow must stay independent of the code this task will now write
+    elif spec.get("kind") not in NOT_AUTHORS:   # the reviews that follow stay independent of the code this task will write
         for row in db.execute("SELECT spec FROM tasks WHERE run_id=? AND ordinal>? ORDER BY ordinal", (run["id"], failed["ordinal"])):
             later = json.loads(row["spec"])
             require(not (is_review(later) and later["tool"] == tool),

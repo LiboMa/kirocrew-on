@@ -275,6 +275,30 @@ class ReviewAndVisibilityTests(SwitchCase):
         self.assertEqual(run["status"], "blocked")
         self.assertIn("其后的审查「审查」使用 claude", run["error"])
 
+    # Owner 2026-10-21: a test task is not the author of the change a review looks at (as roles.unindependent has it)
+    def team(self, test_tool):
+        code = {"id": "code", "name": "实现", "tool": "claude", "prompt": "实现", "kind": "implement",
+                "acceptance": ["可运行"], "verify": ["true"]}
+        tests = {"id": "tests", "name": "测试", "tool": test_tool, "prompt": "补测试", "kind": "test",
+                 "acceptance": ["测试覆盖"], "verify": ["true"]}
+        return [code, tests, {"id": "review", "name": "审查", "tool": "codex", "prompt": "审查", "kind": "review",
+                              "acceptance": ["可运行"]}]
+
+    def test_a_review_may_take_the_tool_that_wrote_only_the_tests(self):
+        self.mismatch_rounds = {("review", 1)}
+        self.decisions = [self.switch("kiro", target="review")]
+        run = self.tick(self.start(self.team("kiro"))["id"], 40)
+        self.assertNotIn("审查须使用与被审查代码", run.get("error") or "")
+        self.assertEqual(run["status"], "completed", run.get("error"))
+
+    def test_a_switched_test_task_may_take_its_reviewers_tool(self):
+        self.mismatch_rounds = {("tests", 1)}
+        self.decisions = [self.switch("codex", target="tests")]
+        run = self.tick(self.start(self.team("claude"))["id"], 40)   # its claude run reports kiro: a tool failure
+        self.assertEqual(len(self.coordination()), 1)
+        self.assertNotIn("其后的审查", run.get("error") or "")
+        self.assertEqual(run["status"], "completed", run.get("error"))
+
     def test_a_template_review_without_kind_is_still_a_review(self):
         code = {"id": "code", "name": "实现", "tool": "claude", "prompt": "实现并自测"}
         review = {"id": "review", "name": "独立测试与审查", "tool": "opencode", "prompt": "独立审查"}

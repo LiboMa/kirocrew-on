@@ -540,6 +540,25 @@ class ScriptTests(unittest.TestCase):
                 for text in texts:
                     self.assertTrue(allowed.fullmatch(text), (name, logical, text))
 
+    def test_a_boundary_native_entry_is_its_own_distribution_relayed_to_its_gateway(self):   # D49 phase 3, 2026-10-21
+        native = yaml.load((ROOT / "deploy/aws/kirocrew-on-native.yaml").read_text(), Loader=CfnLoader)
+        origin = native["Resources"]["NativeDistribution"]["Properties"]["DistributionConfig"]["Origins"][0]
+        self.assertEqual(origin["DomainName"], {"Ref": "PlatformOriginDomain"})
+        self.assertEqual(origin["CustomOriginConfig"]["HTTPPort"], {"Ref": "RelayPort"})
+        self.assertEqual(origin["OriginCustomHeaders"], [{"HeaderName": "X-Origin-Verify", "HeaderValue": {"Ref": "OriginSecret"}}])
+        self.assertTrue(native["Parameters"]["OriginSecret"]["NoEcho"])
+        self.assertEqual(set(native["Resources"]), {"NativeDistribution"})   # nothing else: no host, no security group
+        self.assertIn("NativeDomain", native["Outputs"])
+        relay = (ROOT / "deploy/nginx/kirocrew-boundary.conf").read_text()
+        for part in ('if ($http_x_origin_verify != "__ORIGIN_SECRET__")', "listen __RELAY_PORT__;",
+                     "proxy_pass http://127.0.0.1:__GATEWAY_PORT__;", "proxy_set_header Upgrade $http_upgrade;",
+                     'proxy_set_header X-Origin-Verify "";',
+                     "access_log /var/log/nginx/kirocrew-relay/boundary-__BOUNDARY__.access.log kirocrew_native;"):
+            self.assertIn(part, relay)
+        directives = "\n".join(line for line in relay.splitlines() if not line.lstrip().startswith("#"))
+        for absent in ("default_server", "map ", "log_format"):   # those of kirocrew-native.conf are shared, never redefined
+            self.assertNotIn(absent, directives)
+
     def test_worker_host_native_entry_is_relayed_through_the_platform(self):
         worker = yaml.load((ROOT / "deploy/aws/kirocrew-on-worker.yaml").read_text(), Loader=CfnLoader)
         resources, parameters = worker["Resources"], worker["Parameters"]
@@ -752,6 +771,42 @@ class ScriptTests(unittest.TestCase):
         self.assertEqual(result.returncode, 2, result.stderr)
         self.assertIn("主机上没有边界 kirocrew-on；现有边界：owner personal", result.stderr)
         self.assertTrue(all("kiro-cli login" not in line for line in log if line.startswith("COMMAND ")))
+
+    def test_boundary_native_opens_one_boundarys_entry_through_the_platform(self):
+        secret = "s" * 48
+        env = {**os.environ, "DEPLOY_DRY_RUN": "1", "ORIGIN_SECRET": secret}
+        deploy = lambda *args: subprocess.run(["bash", str(ROOT / "deploy/aws/deploy.sh"), *args], cwd=ROOT, env=env,
+                                              capture_output=True, text=True)
+        native = deploy("boundary", "native", "owner")
+        self.assertEqual(native.returncode, 0, native.stderr)
+        for part in ("kirocrew-on-native.yaml", "kirocrew-on-m1-native-owner", "create-change-set", "RelayPort",
+                     "PlatformOriginDomain", "kirocrew-boundary.conf", "/etc/nginx/conf.d/kirocrew-boundary-owner.conf",
+                     "/etc/kirocrew-on/origin-secret", "nginx -t", "crew_url", "boundary_restart"):
+            self.assertIn(part, native.stdout)
+        self.assertNotIn(secret, native.stdout + native.stderr)
+        for name in ("personal", "Bad", "x"):   # personal has the platform's own distribution
+            with self.subTest(name):
+                self.assertEqual(deploy("boundary", "native", name).returncode, 2)
+        text = (ROOT / "deploy/aws/deploy.sh").read_text()   # one relay port per distribution, Worker hosts' and boundaries'
+        self.assertIn("starts_with(StackName, '$STACK_NAME-worker-') || starts_with(StackName, '$STACK_NAME-native-')", text)
+
+    def test_the_boundary_relay_refuses_a_taken_port_and_a_boundary_the_host_lacks(self):
+        env = {**os.environ, "DEPLOY_DRY_RUN": "1"}
+        printed = subprocess.run(["bash", str(ROOT / "deploy/aws/deploy.sh"), "boundary", "native", "owner"], cwd=ROOT,
+                                 env=env, capture_output=True, text=True).stdout
+        tmp = Path(tempfile.mkdtemp())
+        self.addCleanup(shutil.rmtree, tmp, True)
+        script = printed[printed.index("set -euo pipefail"):].replace("/etc/nginx/conf.d", str(tmp)).replace("/etc/kirocrew-on", str(tmp))
+        head = f"NAME=owner PORT=8921 NATIVE=d1234abcd.cloudfront.net CONF={tmp}/kirocrew-boundary-owner.conf\n"
+        run = lambda: subprocess.run(["bash", "-c", head + script], capture_output=True, text=True)
+        missing = run()
+        self.assertEqual(missing.returncode, 3)
+        self.assertIn("主机上没有边界 owner", missing.stderr)
+        (tmp / "boundary-owner.toml").write_text('gateway_port = 5481\ncrew_url = "http://localhost:15481"\n')
+        (tmp / "kirocrew-relay-w1.conf").write_text("server {\n    listen 8921;\n}\n")
+        taken = run()
+        self.assertEqual(taken.returncode, 3)
+        self.assertIn("kirocrew-relay-w1.conf", taken.stderr)
 
     def test_the_relay_refuses_a_port_another_worker_host_already_listens_on(self):
         env = {**os.environ, "DEPLOY_DRY_RUN": "1"}

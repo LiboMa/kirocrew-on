@@ -19,6 +19,7 @@ cd "$(dirname "$0")/../.."
 source deploy/aws/stack.env
 TEMPLATE=deploy/aws/kirocrew-on-ec2.yaml
 WORKER_TEMPLATE=deploy/aws/kirocrew-on-worker.yaml
+NATIVE_TEMPLATE=deploy/aws/kirocrew-on-native.yaml
 WORKER_TLS_PORT="${WORKER_TLS_PORT:-8943}"
 WORKER_GATEWAY_TLS_PORT="${WORKER_GATEWAY_TLS_PORT:-8944}"
 NATIVE_RELAY_END="${NATIVE_RELAY_END:-$((NATIVE_PORT + 10))}"
@@ -395,8 +396,9 @@ worker_host() {  # worker-host <add|up|push|tls|native|register|status> <name>: 
   "worker_$action" "$name" "$STACK_NAME-worker-$name"
 }
 
-relay_port() {  # relay_port STACK: the Worker host's relay port on the platform host. A host keeps its port unless another
-  # host has it too (both created at once); otherwise it takes the lowest free one in the platform's deployed range.
+relay_port() {  # relay_port STACK: the relay port on the platform host of a Worker host's or a boundary's native distribution
+  # (D28, D49). One keeps its port unless another has it too (both created at once); otherwise it takes the lowest free one
+  # in the platform's deployed range.
   # Runs in a command substitution, where set -e does not apply: every lookup failure exits explicitly.
   local own end used port preview
   own="$(stack_parameter "$1" RelayPort)" || exit 2
@@ -406,8 +408,8 @@ relay_port() {  # relay_port STACK: the Worker host's relay port on the platform
     [[ "$end" =~ ^[0-9]+$ ]] || { echo "平台栈还没有中转端口范围（NativeRelayEnd）：先执行 deploy.sh up" >&2; exit 2; }
   fi
   used=" $(query "" cloudformation describe-stacks --output text --query \
-    "Stacks[?starts_with(StackName, '$STACK_NAME-worker-') && StackName != '$1'].Parameters[] | [?ParameterKey=='RelayPort'].ParameterValue") " ||
-    { echo "无法读取其他 Worker 主机的中转端口，稍后重试" >&2; exit 2; }
+    "Stacks[?(starts_with(StackName, '$STACK_NAME-worker-') || starts_with(StackName, '$STACK_NAME-native-')) && StackName != '$1'].Parameters[] | [?ParameterKey=='RelayPort'].ParameterValue") " ||
+    { echo "无法读取其他原生分发的中转端口，稍后重试" >&2; exit 2; }
   if [[ "$own" =~ ^[0-9]+$ ]] && [ "$own" != "$preview" ] && [[ "$used" != *[[:space:]]$own[[:space:]]* ]]; then
     echo "$own"; return
   fi
@@ -665,8 +667,10 @@ PY
   [[ "$whoami" == "Logged in"* ]] || { echo "kiro-cli login 未完成（${finished:-超时}），日志：$log" >&2; exit 1; }
 }
 
-boundary() {  # boundary add <name> --owner <username> [--memory <GiB>] [--cpu <percent>]: one person's boundary (D49)
-  local usage="用法：deploy.sh boundary add <名称> --owner <平台用户名> [--memory <GiB>] [--cpu <百分比>]"
+boundary() {  # boundary add <name> --owner <username> [--memory <GiB>] [--cpu <percent>]: one person's boundary (D49);
+  # boundary native <name>: its public native entry (D49 phase 3)
+  local usage="用法：deploy.sh boundary add <名称> --owner <平台用户名> [--memory <GiB>] [--cpu <百分比>] | boundary native <名称>"
+  if [ "${1:-}" = native ]; then boundary_native "${2:-}"; return; fi
   [ "${1:-}" = add ] || { echo "$usage" >&2; exit 2; }
   local name="${2:-}" owner="" memory=8 cpu=300
   shift 2 || true
@@ -683,6 +687,102 @@ boundary() {  # boundary add <name> --owner <username> [--memory <GiB>] [--cpu <
     [[ "$memory" =~ ^[1-9][0-9]?$ ]] && [[ "$cpu" =~ ^[1-9][0-9]{1,3}$ ]] || { echo "$usage" >&2; exit 2; }
   local script="test -x /opt/kirocrew-on/current/deploy/install/boundary.sh || { echo '当前发布没有 boundary.sh：先 deploy.sh push' >&2; exit 3; }; "
   script="${script}bash /opt/kirocrew-on/current/deploy/install/boundary.sh $name --owner $owner --memory $memory --cpu $cpu"
+  if [ -n "$DRY" ]; then printf '%s\n' "$script"; return; fi
+  remote "$(output InstanceId)" "$script"
+}
+
+# Runs as root on the platform host: relays one boundary's native distribution to its loopback Gateway (D49 phase 3),
+# rendered from files only (the origin secret never appears on a command line), then makes that distribution the
+# boundary's crew_url and restarts its Gateway (after draining its tasks) and Worker, which trust and hand it out.
+read -r -d '' BOUNDARY_NATIVE_INSTALL <<'NATIVE_SH' || true
+set -euo pipefail
+TOML=/etc/kirocrew-on/boundary-$NAME.toml
+[ -f "$TOML" ] || { echo "主机上没有边界 ${NAME}：先执行 deploy.sh boundary add ${NAME} --owner <平台用户名>" >&2; exit 3; }
+[[ "$NATIVE" =~ ^[a-z0-9]+\.cloudfront\.net$ ]] || { echo "原生分发的域名无效：${NATIVE}" >&2; exit 3; }
+# Two relays on one port: nginx only warns, and the later distribution would reach the earlier one's Gateway.
+for other in /etc/nginx/conf.d/kirocrew-relay-*.conf /etc/nginx/conf.d/kirocrew-boundary-*.conf; do
+  if [ -e "$other" ] && [ "$other" != "$CONF" ] && grep -qE "^[[:space:]]*listen $PORT;" "$other"; then
+    echo "中转端口 ${PORT} 已被 ${other} 使用：重新执行 deploy.sh boundary native ${NAME} 换端口；对方已删除时删除此文件" >&2
+    exit 3
+  fi
+done
+[ -s /etc/nginx/conf.d/kirocrew-native.conf ] && [ -f /opt/kirocrew-on/current/deploy/nginx/kirocrew-boundary.conf ] || {
+  echo "平台主机尚未启用原生入口或发布中没有 kirocrew-boundary.conf：先执行 deploy.sh push" >&2; exit 3; }
+GATEWAY="$(grep -E '^gateway_port' "$TOML" | grep -oE '[0-9]+' | head -1)"
+[[ "$GATEWAY" =~ ^[0-9]+$ ]] || { echo "${TOML} 没有 gateway_port" >&2; exit 3; }
+umask 027
+/opt/kirocrew-on/venv/bin/python -I - /opt/kirocrew-on/current/deploy/nginx/kirocrew-boundary.conf /etc/kirocrew-on/origin-secret \
+  "$NAME" "$PORT" "$GATEWAY" > "$CONF.new" <<'RENDER_PY'
+import re, sys
+template, secret_file, name, port, gateway = sys.argv[1:]
+secret = open(secret_file).read().strip()
+if not re.fullmatch(r"[A-Za-z0-9_-]{32,}", secret):
+    sys.exit("源站密钥缺失或格式不符")
+text = open(template).read()
+for key, value in {"__ORIGIN_SECRET__": secret, "__BOUNDARY__": name, "__RELAY_PORT__": port, "__GATEWAY_PORT__": gateway}.items():
+    text = text.replace(key, value)
+print(text, end="")
+RENDER_PY
+umask 022
+install -d -m 0700 /var/log/nginx/kirocrew-relay
+chown root:nginx "$CONF.new"
+chmod 0640 "$CONF.new"
+mv -f "$CONF.new" "$CONF"
+if command -v getenforce >/dev/null 2>&1 && [ "$(getenforce)" = Enforcing ]; then
+  semanage port -a -t http_port_t -p tcp "$PORT" 2>/dev/null || semanage port -m -t http_port_t -p tcp "$PORT"
+fi
+nginx -t -q || { rm -f "$CONF"; exit 1; }
+systemctl reload nginx
+for _ in $(seq 1 20); do ss -Hltn "sport = :$PORT" | grep -q . && break; sleep 0.5; done   # reload returns first
+# The Gateway trusts its crew_url as an origin and the Worker hands it out: both restart, the Gateway once its tasks end.
+sed -i "s#^crew_url = .*#crew_url = \"https://$NATIVE\"#" "$TOML"
+grep -qx "crew_url = \"https://$NATIVE\"" "$TOML" || { echo "未能写入 ${TOML} 的 crew_url" >&2; exit 1; }
+chown "root:crew-$NAME" "$TOML"
+chmod 0640 "$TOML"
+log() { printf '[%s] %s\n' "$(date -u +%H:%M:%S)" "$*"; }
+NODE_ROOT=/opt/kirocrew-node
+trap '[ -z "${BOUNDARY_DRAINING:-}" ] || rm -f "$BOUNDARY_DRAINING"; rm -f "${H:-}"' EXIT   # never a stale drain mark
+# shellcheck source=../install/boundary-lib.sh
+. /opt/kirocrew-on/current/deploy/install/boundary-lib.sh
+boundary_restart "$NAME" "$(readlink -f /opt/kirocrew/current)"
+H="$(mktemp)"
+printf 'X-Origin-Verify: %s\n' "$(tr -d '[:space:]' < /etc/kirocrew-on/origin-secret)" > "$H"
+code="$(curl -s -o /dev/null -w '%{http_code}' -H @"$H" "http://127.0.0.1:$PORT/" || true)"
+echo "中转 :${PORT} → 边界 ${NAME} 的 Gateway 127.0.0.1:${GATEWAY}：HTTP ${code}（000 或 502 表示 Gateway 未就绪）"
+echo "原生入口：https://${NATIVE}/（控制台「在 KiroCrew 中打开」经此打开）"
+NATIVE_SH
+
+boundary_native() {  # boundary native <name>: a boundary on the platform host gets its own public native entry (D49 phase 3)
+  local name="$1" stack status type relay domain origin native script
+  [[ "$name" =~ ^[a-z][a-z0-9-]{1,19}$ ]] && [ "$name" != personal ] || {
+    echo "用法：deploy.sh boundary native <名称>（平台主机上 boundary add 建的边界；personal 用平台自己的原生分发）" >&2; exit 2; }
+  stack="$STACK_NAME-native-$name"
+  run cloudformation validate-template --template-body "file://$NATIVE_TEMPLATE" >/dev/null
+  status="$(query "" cloudformation describe-stacks --stack-name "$stack" --query 'Stacks[0].StackStatus' \
+    --output text 2>/dev/null || true)"
+  type=UPDATE
+  [ -n "$status" ] || type=CREATE
+  relay="$(relay_port "$stack")"
+  domain="$(output HostOriginDomain)"
+  [ -n "$DRY" ] || [[ "$domain" == ec2-* ]] || { echo "平台栈没有输出 HostOriginDomain：先执行 deploy.sh up" >&2; exit 2; }
+  # The distribution injects the platform's origin secret; like up, it only travels in a 0600 file.
+  origin="$(secret origin-secret)"
+  [[ "$origin" =~ ^[A-Za-z0-9_-]{32,}$ ]] || {
+    echo "源站密钥格式不符：平台主机的中转只接受 32 位以上的字母、数字、- 或 _（与 kirocrew-native.conf 相同）" >&2; exit 2; }
+  (umask 077; ORIGIN_VALUE="$origin" python3 - "$relay" "$domain" > "$WORK/native-parameters.json" <<'PARAMS_PY'
+import json, os, sys
+values = dict(zip(["RelayPort", "PlatformOriginDomain"], sys.argv[1:]), OriginSecret=os.environ["ORIGIN_VALUE"])
+print(json.dumps([{"ParameterKey": k, "ParameterValue": v} for k, v in values.items()]))
+PARAMS_PY
+  )
+  [ -z "$DRY" ] || python3 -c 'import json, sys
+print(json.dumps([dict(p, ParameterValue="****") if p["ParameterKey"] == "OriginSecret" else p for p in json.load(open(sys.argv[1]))]))' \
+    "$WORK/native-parameters.json"
+  change_stack "$stack" "$NATIVE_TEMPLATE" "$WORK/native-parameters.json" "$type"
+  native="$(output NativeDomain "$stack")"
+  [ -n "$DRY" ] || [[ "$native" =~ ^[a-z0-9]+\.cloudfront\.net$ ]] || { echo "原生分发尚未就绪：${native}" >&2; exit 1; }
+  script="NAME=$name PORT=$relay NATIVE=$native CONF=/etc/nginx/conf.d/kirocrew-boundary-$name.conf"
+  script="$script"$'\n'"$BOUNDARY_NATIVE_INSTALL"
   if [ -n "$DRY" ]; then printf '%s\n' "$script"; return; fi
   remote "$(output InstanceId)" "$script"
 }

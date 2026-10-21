@@ -121,6 +121,7 @@ deploy/aws/deploy.sh boundary add alice --owner alice [--memory 8] [--cpu 300]  
 deploy/aws/deploy.sh kiro-login --boundary alice   # alice 用自己的 IdC 账号设备码登录（Kiro Credit 按人计）
 deploy/aws/deploy.sh boundaries                    # 各边界的端口与服务状态
 deploy/aws/deploy.sh tunnel --boundary alice       # 该边界的原生 KiroCrew：localhost:<10000+gateway_port>
+deploy/aws/deploy.sh boundary native alice         # 对外开通它的原生入口（D49 第 3 期）：控制台「在 KiroCrew 中打开」可远程使用
 ```
 
 - `boundary add` 在**当前发布**上开通：OS 用户 `crew-alice`、目录、工具环境、`/etc/kirocrew-on/boundary-alice.toml`（Gateway 5481–5580、
@@ -129,6 +130,9 @@ deploy/aws/deploy.sh tunnel --boundary alice       # 该边界的原生 KiroCrew
   它也运行会话预览；两者 `OOMPolicy=continue`：超限时只结束那个进程，不停掉整个服务）、原生契约检查、启动两个服务，最后
   `bootstrap-worker --owner alice` 登记为 alice 的专属 Worker。**开通前先核对用户**（存在、尚无自己的执行环境；`--check-only`），不符时主机上什么也不留下。
   不重启平台 API；重复执行只补缺（端口与配置不变）。主机须已 `push` 过含 `boundary.sh` 的发布。登记后此人的会话即落到新边界：先完成 `kiro-login --boundary`。
+- `boundary native <名称>`（D49 第 3 期，2026-10-21）：建栈 `<平台栈>-native-<名称>`（`kirocrew-on-native.yaml`，只有一个 CloudFront 分发，带源站密钥），中转端口与 Worker 主机共用 `NativePort + 1`–`NativeRelayEnd`（安全组只放行 CloudFront）；在平台主机渲染
+  `/etc/nginx/conf.d/kirocrew-boundary-<名称>.conf`（只转发带源站密钥的请求到该边界的回环 Gateway），把边界的 `crew_url` 改为该分发，排空后重启它的 Gateway 与 Worker（Gateway 只信任 `crew_url` 这个来源）。
+  之后的 `push` 保留它（只改主边界的 `crew_url`）；重复执行沿用端口。未开通时使用者点「在 KiroCrew 中打开」看到「入口还没有对外开通」，会话照常执行。
 - 之后每次 `deploy.sh push`：`al2023.sh` 对主机上**全部** `boundary-*.toml` 做原生契约检查，全部通过才切换 `current`；重启顺序为 personal →
   平台 API → 其余边界逐个排空、重启（一个边界未能重启时其余照常，命令最后以非零退出并列出）。SSM 时限 3 小时（每个边界排空至多 `DRAIN_MINUTES`）。
 - 同一主机的会话预览共用回环端口 47000–47999：就绪检查核对监听者是本边界的用户（`/proc/net/tcp`），否则判失败、重新启动即换端口。
@@ -214,6 +218,7 @@ SSM 隧道（`localhost:15476`）方式仍可用：`crew_url` 指向本地端口
 | 你还没有自己的执行边界 / 你的执行边界目前已停用（会话在 Team 的环境执行） | `placement.hint` | `deploy.sh boundary add <名称> --owner <用户名>`；已停用的在控制台重新启用（不要再建第二个） |
 | 等待 Kiro 登录恢复 / Worker 上 kiro-cli 登录已过期 | `tool_auth_expired` | `deploy.sh kiro-login --boundary <边界>`（Worker 主机用 `--host <名称>`）；边界主人用自己的 IdC 账号在浏览器授权设备码（15 分钟内有效） |
 | 该执行环境尚未开通原生 KiroCrew 入口 | `crew_origin_required` | `deploy.sh worker-host add <名称>`（或依次 `push`、`native`；见「Worker 主机」） |
+| 这个执行环境的原生 KiroCrew 入口还没有对外开通（控制台） | 浏览器端判断：`crew_url` 为本机回环 | 平台主机上的边界：`deploy.sh boundary native <名称>`；临时用 `deploy.sh tunnel --boundary <名称>` 在本机打开 |
 | 此执行环境的 Worker 版本尚不支持原生会话入口 / 工作流建议 | `worker_upgrade_required` | 更新该 Worker：`deploy.sh push`（平台主机）或 `deploy.sh worker-host push <名称>` |
 | 此 Worker 主机尚未配置预览端口 | `app_unreachable` | `deploy.sh worker-host push <名称>` |
 | 未找到可预览的 index.html | `no_preview` | 无需处理；管理员要在本机运行开发服务器时用 `deploy.sh space <run-id>`（会话页只对管理员显示这条命令） |

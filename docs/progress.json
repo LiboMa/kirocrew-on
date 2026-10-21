@@ -1,6 +1,6 @@
 {
   "_comment": "进度看板与 docs/PROGRESS.md 的唯一数据源：任务状态在这里维护；提交记录由 tools/progress.py 从 git 生成（负责人 2026-10-20）。",
-  "checks": "1385 后端 + 92 + 202 控制台；EC2 运行 8db5430（次要问题第 1–7 批），根卷 500 GiB",
+  "checks": "1390 后端 + 92 + 202 控制台（边界原生入口 本机）；EC2 运行 8db5430",
   "status": {
     "accepted": {
       "label": "已验收",
@@ -216,7 +216,9 @@
         {
           "id": "d49-3",
           "name": "第 3 期 公开原生入口、跨主机放置、空闲停机、退役 personal",
-          "status": "todo"
+          "status": "doing",
+          "ref": "2026-10-21",
+          "more": "公开原生入口先做（负责人 2026-10-21：会话自 10-20 落在本人边界后，「在 KiroCrew 中打开」远程不可用）：deploy.sh boundary native <名称> 为平台主机上的边界建 CloudFront 分发与 nginx 中转，写入 crew_url。跨主机放置、空闲停机、退役 personal 未做。"
         }
       ]
     },
@@ -511,15 +513,7 @@
     },
     {
       "who": "owner",
-      "text": "确认推送：自上次推送以来的提交到 feat/m1-runtime-foundation（--no-verify，快进），并更新 PR #4 说明"
-    },
-    {
-      "who": "owner",
       "text": "可选：建一个测试成员账号（我不经 MCP 建用户），以便在 EC2 实测 D49 第 2 期的成员回退与 R10"
-    },
-    {
-      "who": "owner",
-      "text": "审查独立性的「作者」口径：test 任务算不算作者（规划 / 续作的检查与自动纠错换工具的检查目前不一致）"
     },
     {
       "who": "owner",

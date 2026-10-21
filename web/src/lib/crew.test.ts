@@ -23,7 +23,8 @@ describe("native entry validation", () => {
 
   test("a loopback link is only followed from a loopback page", () => {
     const local = entry("http://localhost:15476/chat?sid=octopus-run-1&token=t");
-    expect(() => validateCrewEntry(local, "octopus-run-1", "d1.cloudfront.net")).toThrow("指向本机");
+    expect(() => validateCrewEntry(local, "octopus-run-1", "d1.cloudfront.net")).toThrow("请平台管理员为它开通");   // D53
+    expect(() => validateCrewEntry(local, "octopus-run-1", "d1.cloudfront.net")).toThrow("会话照常执行");
     expect(validateCrewEntry(local, "octopus-run-1", "127.0.0.1").port).toBe("15476");
   });
 });
