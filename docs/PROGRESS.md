@@ -1,16 +1,16 @@
 # 进度与完成记录
 
-> 由 `tools/progress.py` 生成（2026-10-21 21:44 CST）：任务状态取自 `docs/progress.json`，提交记录取自 git。看板：`docs/progress-dashboard.html`；实时看板：`python3 tools/progress.py --serve --ec2`（http://127.0.0.1:8765/）。
+> 由 `tools/progress.py` 生成（2026-10-21 22:54 CST）：任务状态取自 `docs/progress.json`，提交记录取自 git。看板：`docs/progress-dashboard.html`；实时看板：`python3 tools/progress.py --serve --ec2`（http://127.0.0.1:8765/）。
 
-- **本轮完成度**：87%　**MVP 完成度**：38%
-- **分支**：HEAD `80bc0c4`；自 `origin/main` 起 362 个提交——已推送 335、已部署 EC2 27、仅本机 0；EC2 运行 `80bc0c4`
+- **本轮完成度**：87%　**MVP 完成度**：39%
+- **分支**：HEAD `bea5a71`；自 `origin/main` 起 363 个提交——已推送 335、已部署 EC2 27、仅本机 1；EC2 运行 `80bc0c4`
 - **回归**：1412 后端 + 92 + 205 控制台（connect codex / kiro-ide 本机）；EC2 运行 95e5aa9
 
 ## 模块
 
 | 模块 | 完成度 | 已验收 | 已部署 · 待验收 | 本机完成 · 待部署 | 进行中 | 卡点 · 等外部 | 未开始 |
 |---|---|---|---|---|---|---|---|
-| MVP 里程碑（M1–M5） | 38% | 5 | 5 | 0 | 3 | 0 | 14 |
+| MVP 里程碑（M1–M5） | 39% | 7 | 3 | 0 | 3 | 0 | 14 |
 | D46 Agent 角色与提示体系 | 87% | 8 | 3 | 0 | 0 | 1 | 0 |
 | D49 每人一个执行边界 | 80% | 2 | 2 | 0 | 1 | 0 | 0 |
 | D50 编码技能包 | 100% | 2 | 0 | 0 | 0 | 0 | 0 |
@@ -43,8 +43,9 @@
 
 ## 完成记录（按决策，最近的在前）
 
-### D55（9 个提交：已部署 EC2 9）
+### D55（10 个提交：已部署 EC2 9、仅本机 1）
 
+- `bea5a71` 2026-10-21 〔仅本机〕 docs(progress): D55 已部署 EC2 80bc0c4——迁移 9 生效；§6 验收 1 第 1 步通过（不带 admission 停在计划待确认、回执带 request_id、octopus_requests 可见）；准入规则在 EC2 命中两种仓库写法；owner 边界内存不足致子 Agent 排队，观察中
 - `80bc0c4` 2026-10-21 〔已部署 EC2〕 fix(policies): 终审修正（D55）——最具体的准入规则按字面字符多少取胜（较早的 github.com/o/* 不再被较新的 * 盖过）；MCP 精简状态带 admission、admission_basis 与 request，Coding Agent 能说明会话为何等待；报告抬头写明准入依据；管理员能在列表中看到并删除他为非所在 Team 建的规则；管理员读他人的 Request 写审计（与会话一致）；BACKLOG 记延后的次要项
 - `e36ac62` 2026-10-21 〔已部署 EC2〕 docs: D55 Request、准入规则与映射偏好——OPERATIONS 新节（默认已改为 confirm）、MVP-RELEASE §14.2 第 1、4、5 行、进度、BACKLOG 延后项
 - `02e581d` 2026-10-21 〔已部署 EC2〕 feat(console): 会话页写明来自哪个请求与准入依据；设置「准入与映射偏好」（D55）——头部一行「来自请求 request-xxxxxx · Codex；按准入规则「github.com/o/*」自动开始 / 按平台默认等待确认」（提交时自己指定的不重复）；新对话框分「准入规则」「映射偏好」两组，显示作用域与内容，可删除自己能维护的，新增时选作用域（个人、本人是 owner 的 Team）、仓库模式与准入方式，或按类别 / 角色的工具与模型，服务端的拒绝原样显示在表单下；会话搜索也匹配来源客户端（输入「Codex」）

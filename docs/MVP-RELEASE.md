@@ -161,7 +161,7 @@ M4（共享与组织）、M5（仓库闭环）在 MVP 之后分别立项，各�
 
 ### 验收条件
 
-- [ ] 在 Claude Code 中用自然语言提交需求，后端登记 Request 并返回自动生成的 Pipeline、映射与门禁。
+- [x] 在 Claude Code 中用自然语言提交需求，后端登记 Request 并返回自动生成的 Pipeline、映射与门禁。（D55，EC2 80bc0c4，2026-10-21：经 MCP 不带 `admission` 提交 run-2a681323…，回执带 `request_id`，停在「计划待确认」并列出任务、工具、映射来源与检查，依据「平台默认」；`octopus_requests` 列出该 Request。个人准入规则命中后 run-0cf3db03… 未经确认直接执行至完成，依据「按准入规则」，client 为 `claude`。验收会话已关闭，规则与临时 Token 已删除）
 - [x] Prompt 中指定的映射被采用并标注来源；不可用的指定给出原因，不静默替换。（D45，§14.23）
 - [x] 确认后在 EC2 上对一个获授权的已有小型仓库完成：clone → Feature 分支 → 编码 → 候选 commit → 门禁 → 独立审查 → 返工 → 复审。（§14.24）
 - [ ] 故障注入（测试失败、工具空结果、Gateway 重启、派发回执丢失、Attempt 卡住）在预算内自动恢复并完成；预算耗尽时给出原因与操作。（除「工具空结果」外均有 EC2 证据，§14.21）
@@ -280,11 +280,11 @@ M4（共享与组织）、M5（仓库闭环）在 MVP 之后分别立项，各�
 
 | # | 交付 | 状态 | 已有 / 剩余 |
 |---|---|---|---|
-| 1 | Request | ◐ 本机 | D55（2026-10-21，见 OPERATIONS「Request、准入规则与映射偏好」）：每次提交登记 Request（来源客户端、需求、源码、显式选择、策略快照），会话带 `request`；`GET /v1/requests[/<id>]`、MCP `octopus_requests`、`octopus_start` 回执带 `request_id`、会话页「来自请求…」。先一对一，「重新发起」以后做 |
+| 1 | Request | ✅ EC2 | D55（2026-10-21，见 OPERATIONS「Request、准入规则与映射偏好」）：每次提交登记 Request（来源客户端、需求、源码、显式选择、策略快照），会话带 `request`；`GET /v1/requests[/<id>]`、MCP `octopus_requests`、`octopus_start` 回执带 `request_id`、会话页「来自请求…」。先一对一，「重新发起」以后做 |
 | 2 | Pipeline 生成 | ◐ EC2 | 已有：Kiro Agent 规划（D26：意图、补全、1–7 个任务与 Agent 映射，追加到同一 Session）、`plan=match` 规则匹配、工作流文档（JSON / YAML / Markdown）解析与规范化。剩余：schema 2、规划阶段的只读源码检查 |
 | 3 | 门禁目录 | ◐ EC2 | D37 第 1 期（分支 `feat/m11-gates`，✅ EC2 2026-10-14，见 §14.13）：命名门禁 `native_completed`、`identity_match`、`handoff_present`、`outcome_valid`、`outcome_pass`、`diff_present`、`no_secrets`、`checks_pass`（平台运行 `verify`）、`review_bound`，逐条入库并在控制台与 MCP 展示；发布只推送已验证候选（`candidate_unchanged`）。第 3 期（✅ EC2 2026-10-15，见 §14.13）：`artifacts_locked`、`tests_fail_on_baseline` |
 | 4 | 映射策略 | ◐ | 已有：Prompt / 工作流显式指定；D38 第 1 期（分支 `feat/m11-gates`，见 §14.14）：工具层失败由 KiroCrew 协调者推荐换用的工具与模型（`switch_tool`），平台按执行环境核对并记录，规划时 Kiro 看到各工具是否可用；不内置回退链（原 OpenCode→Claude 的代码改派已去掉）。映射来源（本机完成）：每个任务写明工具与模型来自提交的 steps、工作流（名称与版本）、模板 / 规则匹配的模板、导入的文档、KiroCrew 规划、续作时的用户修改或协调者换用，控制台、MCP 与报告可见。需求中指定（D45，✅ EC2 2026-10-16，见 §14.23）：规划者标注、平台照用、不可用时如实拒绝不替换。个人 / Team 偏好（D55，本机）：按类别或角色对应工具 / 模型，进入规划提示供规划者参考，采纳时映射来源写「按个人 / Team 偏好」；不做平台默认链。剩余：模板 / 工作流的 `tool: auto`（现有契约没有 auto 工具） |
-| 5 | 准入 | ◐ 本机 | 计划确认：D44（✅ EC2 2026-10-16，见 §14.22：`admission: confirm` 停在「计划待确认」，确认或续作后执行）。D55（本机）：平台默认改为确认；个人 / Team 按仓库范围的规则（`auto` / `confirm`），判定依据写进会话与 Request 的策略快照，会话页可见；控制台维护、MCP 只读 |
+| 5 | 准入 | ✅ EC2 | 计划确认：D44（✅ EC2 2026-10-16，见 §14.22：`admission: confirm` 停在「计划待确认」，确认或续作后执行）。D55（本机）：平台默认改为确认；个人 / Team 按仓库范围的规则（`auto` / `confirm`），判定依据写进会话与 Request 的策略快照，会话页可见；控制台维护、MCP 只读 |
 | 6 | 恢复阶梯 | ◐ EC2 | 已有：Worker / Gateway 不可用退避（M1）、协调者诊断（重试、退回上游返工、复审、换工具（D38））与轮数上限。D39（本机完成，见 §14.15）：看门狗停止没有进展或运行超时的原生任务、自动重试一次、再交给诊断。重规划：D41（✅ EC2 2026-10-16，见 §14.18）。预算：D42（✅ EC2 2026-10-16，见 §14.19：轮数、自动重试次数与时长，从续作起重新计算）。等待与自动恢复：D43（✅ EC2 2026-10-16，见 §14.20）。剩余：预算按个人 / Team 配置（设计 §8.1，随 `policies` 表） |
 | 7 | 批准代理 | ◐ | D38 第 2 期（本机完成，见 §14.14）：会话父 slot 的原生工具请求与状态级批准在控制台「待批准」卡片与 MCP（`octopus_approvals`、`octopus_approve`，答复前须用户同意）中可见并可答复；创建者、Team owner、管理员可答复，写审计。剩余：EC2 验收、CLI |
 | 8 | 候选与分支 | ◐ EC2 | D37 第 1 期（✅ EC2，§14.13）：每个改代码的任务在 `octopus/<run>` 上留下候选提交（检出秘密时分支不动），审查绑定候选；D35 的发布推送已验证候选并创建 Draft PR / MR |
