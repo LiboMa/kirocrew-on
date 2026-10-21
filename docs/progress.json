@@ -1,6 +1,6 @@
 {
   "_comment": "进度看板与 docs/PROGRESS.md 的唯一数据源：任务状态在这里维护；提交记录由 tools/progress.py 从 git 生成（负责人 2026-10-20）。",
-  "checks": "1390 后端 + 92 + 202 控制台（边界原生入口 本机）；EC2 运行 8db5430",
+  "checks": "1390 后端 + 92 + 202 控制台；EC2 运行 d02325d，owner 边界原生入口 https://d3e7uvg4nktu35.cloudfront.net（外部 / 与 /chat 均 200）",
   "status": {
     "accepted": {
       "label": "已验收",
@@ -218,7 +218,7 @@
           "name": "第 3 期 公开原生入口、跨主机放置、空闲停机、退役 personal",
           "status": "doing",
           "ref": "2026-10-21",
-          "more": "公开原生入口先做（负责人 2026-10-21：会话自 10-20 落在本人边界后，「在 KiroCrew 中打开」远程不可用）：deploy.sh boundary native <名称> 为平台主机上的边界建 CloudFront 分发与 nginx 中转，写入 crew_url。跨主机放置、空闲停机、退役 personal 未做。"
+          "more": "公开原生入口（负责人 2026-10-21）：deploy.sh boundary native <名称>——只含 CloudFront 分发的栈、nginx 中转（kirocrew-relay-boundary-<名称>.conf，须排在 kirocrew-native.conf 之后）、crew_url 与排空重启。2026-10-21 已为 owner 开通（中转 8921 → Gateway 5481，HTTP 200）；待负责人在控制台「在 KiroCrew 中打开」实测。跨主机放置、空闲停机、退役 personal 未做。"
         }
       ]
     },
@@ -504,6 +504,10 @@
     [
       "c2ca670",
       "EC2 根卷被 73 个旧发布（77 GB）占满：SSM 命令失败、c2ca670 安装中止。负责人批准后清理 70 个旧发布、根卷原地扩到 500 GiB；安装脚本此后自动清理旧发布（OPERATIONS §10）。"
+    ],
+    [
+      "ff7e42a",
+      "自 10-20 会话落在本人的 owner 边界后，「在 KiroCrew 中打开」远程不可用（owner 的 crew_url 只是本机隧道）：新增 deploy.sh boundary native 并为 owner 开通；首次执行因 nginx 按文件名读 conf.d、日志格式未定义而被 nginx -t 拒绝（已回退），改名后通过。"
     ]
   ],
   "next": [
@@ -522,6 +526,10 @@
     {
       "who": "owner",
       "text": "下一个大项的先后：M2 剩余、M3 剩余、M4 剩余、M5 仓库闭环、D49 第 3 期、返工自动附技能（skills-next）"
+    },
+    {
+      "who": "owner",
+      "text": "run-25c7aaa7 卡在 artifacts_locked：协调者让 task-3-2 修复其他任务的 8 个文件却无权扩大其 paths——选路径 A（扩充 paths 后重跑）或 B（拆回各任务）；以及是否让协调者的返工决定可附带 paths"
     }
   ]
 }
