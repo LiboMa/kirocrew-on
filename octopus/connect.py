@@ -4,17 +4,24 @@ Both clients get the same Skill, rendered from skills/kirocrew-on/SKILL.md (conn
 Claude Code: MCP server at user scope (`claude mcp add-json`) and the Skill in ~/.claude/skills/kirocrew-on/.
 Kiro CLI: MCP server at workspace scope by default (`kiro-cli mcp add --scope workspace`, run in the project directory) and
 the Skill in <project>/.kiro/skills/kirocrew-on/. Workspace scope keeps KiroCrew's own kiro agents (which share ~/.kiro
-on this machine) from loading the server. Other clients are configured by hand (docs/CONNECT.md); `install_skill` writes
-the Skill into any skills directory. Existing files are backed up before they are replaced.
+on this machine) from loading the server. Codex: the server merged into ~/.codex/config.toml and the Skill in
+~/.codex/skills/kirocrew-on/. Kiro IDE: the server merged into <project>/.kiro/settings/mcp.json (no kiro-cli needed) and
+the Skill in <project>/.kiro/skills/kirocrew-on/ (M3-1, 2026-10-21). Other clients are configured by hand
+(docs/CONNECT.md); `install_skill` writes the Skill into any skills directory. Existing files are backed up before they are
+replaced; what they hold besides this server is kept.
 """
 import json
+import os
 from pathlib import Path
+import re
 import shutil
 import subprocess
 import sys
 import time
+import tomllib
 
 NAME = "kirocrew-on"
+CLIENTS = ("claude", "kiro", "codex", "kiro-ide")
 ROOT = Path(__file__).resolve().parent.parent
 
 SKILL = ROOT / "skills" / NAME / "SKILL.md"
@@ -59,7 +66,8 @@ def server(url, token):
             "env": {"OCTOPUS_API_TOKEN": token, "PYTHONPATH": str(ROOT)}}
 
 
-def write(path, content, actions, dry_run):
+def write(path, content, actions, dry_run, private=False):
+    """``private``: the file holds the token — readable by its owner only."""
     path = Path(path)
     if path.exists() and path.read_text() != content:
         backup = path.with_name(path.name + time.strftime(".bak-%Y%m%d%H%M%S"))
@@ -70,6 +78,33 @@ def write(path, content, actions, dry_run):
     if not dry_run:
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_text(content)
+        if private:
+            os.chmod(path, 0o600)
+
+
+TABLE = re.compile(r"^\s*\[\s*mcp_servers\s*\.\s*(?:kirocrew-on|\"kirocrew-on\")\s*(?:\.[^\]]*)?\]\s*$")
+
+
+def codex_config(text, config):
+    """Codex's config.toml with this server's tables, every other line as it was; checked by parsing it back."""
+    kept, inside = [], False
+    for line in text.splitlines():
+        if line.lstrip().startswith("["):
+            inside = bool(TABLE.match(line))
+        if not inside:
+            kept.append(line)
+    body = "\n".join(kept).rstrip()
+    string = lambda value: json.dumps(value, ensure_ascii=False)
+    table = [f"[mcp_servers.{NAME}]", f"command = {string(config['command'])}", f"args = {string(config['args'])}", "",
+             f"[mcp_servers.{NAME}.env]"] + [f"{key} = {string(value)}" for key, value in config["env"].items()]
+    merged = (body + "\n\n" if body else "") + "\n".join(table) + "\n"
+    try:
+        written = tomllib.loads(merged)["mcp_servers"][NAME]
+    except (tomllib.TOMLDecodeError, KeyError):
+        written = None
+    if written != config:
+        raise ValueError("无法把 MCP 服务器合并进 ~/.codex/config.toml：请按 docs/CONNECT.md「其他客户端」手动配置")
+    return merged
 
 
 def install_skill(url, dest, dry_run=False):
@@ -80,7 +115,7 @@ def install_skill(url, dest, dry_run=False):
 
 
 def connect(client, url, token, *, home=None, project=None, scope=None, dry_run=False, run=subprocess.run):
-    """Configure ``client`` ("claude" or "kiro"); returns the actions taken (or that would be taken)."""
+    """Configure ``client`` (one of CLIENTS); returns the actions taken (or that would be taken)."""
     home = Path(home or Path.home())
     config = server(url, token)
     masked = json.dumps({**config, "env": {**config["env"], "OCTOPUS_API_TOKEN": "****"}}, ensure_ascii=False)
@@ -106,6 +141,22 @@ def connect(client, url, token, *, home=None, project=None, scope=None, dry_run=
         write((project if scope == "workspace" else home) / ".kiro/skills" / NAME / "SKILL.md", skill(url), actions, dry_run)
         if scope == "workspace":
             actions.append(f"提示：{project / '.kiro/settings/mcp.json'} 含 Token，请加入项目的 .gitignore，不要提交")
+    elif client == "codex":
+        path = home / ".codex/config.toml"
+        actions.append(f"合并 MCP 服务器 {NAME} 到 {path}：{masked}")
+        write(path, codex_config(path.read_text() if path.exists() else "", config), actions, dry_run, private=True)
+        write(home / ".codex/skills" / NAME / "SKILL.md", skill(url), actions, dry_run)
+    elif client == "kiro-ide":
+        project = Path(project or Path.cwd())
+        path = project / ".kiro/settings/mcp.json"
+        current = json.loads(path.read_text()) if path.exists() else {}
+        if not isinstance(current, dict) or not isinstance(current.get("mcpServers", {}), dict):
+            raise ValueError(f"{path} 不是 Kiro 的 MCP 配置（mcpServers）：请检查后重试")
+        current = {**current, "mcpServers": {**current.get("mcpServers", {}), NAME: config}}
+        actions.append(f"合并 MCP 服务器 {NAME} 到 {path}：{masked}")
+        write(path, json.dumps(current, ensure_ascii=False, indent=2) + "\n", actions, dry_run, private=True)
+        write(project / ".kiro/skills" / NAME / "SKILL.md", skill(url), actions, dry_run)
+        actions.append(f"提示：{path} 含 Token，请加入项目的 .gitignore，不要提交")
     else:
-        raise ValueError("支持的客户端：claude、kiro")
+        raise ValueError("支持的客户端：" + "、".join(CLIENTS))
     return actions

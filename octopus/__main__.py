@@ -53,8 +53,8 @@ def build_parser(settings, environ=None):
     worker.add_argument("--routing-log", default=str(settings.routing_log))
     worker.add_argument("--isolation", choices=["dedicated", "trusted-local"], default=settings.worker_isolation)
     worker.add_argument("--approval-mode", choices=["", "auto", "interactive"], default=settings.approval_mode)
-    link = sub.add_parser("connect", help="让 Claude Code / Kiro CLI 经 MCP 连接 KiroCrew ON（写入 MCP 配置与使用说明）")
-    link.add_argument("client", choices=["claude", "kiro"])
+    link = sub.add_parser("connect", help="让 Claude Code / Kiro CLI / Codex / Kiro IDE 经 MCP 连接 KiroCrew ON（写入 MCP 配置与使用说明）")
+    link.add_argument("client", choices=["claude", "kiro", "codex", "kiro-ide"])
     link.add_argument("--url", required=True, help="平台地址，如 https://<分发>.cloudfront.net 或 http://127.0.0.1:8918")
     link.add_argument("--token", help="已有 API Token（也可用环境变量 OCTOPUS_API_TOKEN）；都没有时用 --username 登录并创建一枚 30 天 Token")
     link.add_argument("--username", help="你的平台用户名（未指定时交互询问）")
@@ -62,7 +62,7 @@ def build_parser(settings, environ=None):
                       help="管理员：Token 额外含 admin scope（可调用管理员工具），7 天有效；只在本人设备上使用")
     link.add_argument("--password-env", default="OCTOPUS_PASSWORD", help="读取密码的环境变量；未设置时交互输入")
     link.add_argument("--scope", help="claude: user/project/local（默认 user）；kiro: workspace/global（默认 workspace）")
-    link.add_argument("--project", help="kiro workspace 范围的项目目录（默认当前目录）")
+    link.add_argument("--project", help="kiro workspace 范围与 kiro-ide 的项目目录（默认当前目录）")
     link.add_argument("--dry-run", action="store_true")
     skill_cmd = sub.add_parser("skill", help="渲染 kirocrew-on Skill：写入指定 skills 目录，或省略 --dest 时输出到标准输出")
     skill_cmd.add_argument("--url", required=True, help="平台地址（写入 Skill）")
@@ -247,8 +247,8 @@ def main(argv=None):
         try:
             actions = connect(args.client, args.url, token or "dry-run-token", scope=args.scope, project=args.project,
                               dry_run=args.dry_run)
-        except (subprocess.CalledProcessError, OSError) as exc:
-            # Never echo the command: its arguments carry the token.
+        except (subprocess.CalledProcessError, OSError, ValueError) as exc:
+            # Never echo the command: its arguments carry the token. A ValueError is a client file it cannot merge: said as is.
             code = getattr(exc, "returncode", None)
             note = ""
             if issued:
@@ -257,7 +257,8 @@ def main(argv=None):
                     note = "；刚签发的 Token 已吊销"
                 except (RuntimeError, OSError):
                     note = "；刚签发的 Token 未能吊销，请在控制台撤销"
-            raise SystemExit(f"错误：写入 {args.client} 配置失败（{'退出码 ' + str(code) if code is not None else type(exc).__name__}）{note}") from None
+            reason = str(exc) if isinstance(exc, ValueError) else ("退出码 " + str(code) if code is not None else type(exc).__name__)
+            raise SystemExit(f"错误：写入 {args.client} 配置失败（{reason}）{note}") from None
         for action in actions:
             print(action)
         issued = not (args.token or os.environ.get("OCTOPUS_API_TOKEN"))

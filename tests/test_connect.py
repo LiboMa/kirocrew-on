@@ -1,3 +1,4 @@
+import json
 import os
 import subprocess
 import sys
@@ -39,6 +40,63 @@ class ConnectTest(unittest.TestCase):
             self.assertIn("https://on.example/?run=", target.read_text())
             self.assertEqual([p.read_text() for p in target.parent.glob("SKILL.md.bak-*")], ["old"])
 
+
+
+class MoreClientsTests(unittest.TestCase):
+    """M3-1 (2026-10-21): Codex and Kiro IDE are configured by the command too, keeping what their files already hold."""
+    token = "secret-token-" + "y" * 30
+
+    def test_codex_gets_its_server_in_config_toml_beside_what_is_there(self):
+        import tomllib
+        with tempfile.TemporaryDirectory() as home:
+            config = Path(home, ".codex/config.toml")
+            config.parent.mkdir()
+            config.write_text('model = "o4"\n\n[mcp_servers.kirocrew-on]\ncommand = "old"\n\n[mcp_servers.kirocrew-on.env]\n'
+                              'OCTOPUS_API_TOKEN = "old"\n\n[mcp_servers.other]\ncommand = "other"\n')
+            dry = connect.connect("codex", "https://on.example/", self.token, home=home, dry_run=True)
+            self.assertIn('command = "old"', config.read_text())   # a dry run writes nothing
+            actions = connect.connect("codex", "https://on.example/", self.token, home=home)
+            value = tomllib.loads(config.read_text())
+            self.assertEqual(value["model"], "o4")
+            self.assertEqual(value["mcp_servers"]["other"], {"command": "other"})
+            server = value["mcp_servers"]["kirocrew-on"]
+            self.assertEqual(server["args"], ["-m", "octopus", "mcp", "--url", "https://on.example/"])
+            self.assertEqual(server["env"]["OCTOPUS_API_TOKEN"], self.token)
+            self.assertEqual(len(list(config.parent.glob("config.toml.bak-*"))), 1)
+            self.assertTrue(Path(home, ".codex/skills/kirocrew-on/SKILL.md").is_file())
+            self.assertNotIn(self.token, "\n".join(dry + actions))
+
+    def test_kiro_ide_gets_its_server_in_the_workspace_mcp_json(self):
+        with tempfile.TemporaryDirectory() as home, tempfile.TemporaryDirectory() as project:
+            settings = Path(project, ".kiro/settings/mcp.json")
+            settings.parent.mkdir(parents=True)
+            settings.write_text(json.dumps({"mcpServers": {"other": {"command": "x"}}}))
+            actions = connect.connect("kiro-ide", "https://on.example/", self.token, home=home, project=project,
+                                      run=lambda *a, **k: self.fail("Kiro IDE needs no kiro-cli"))
+            value = json.loads(settings.read_text())
+            self.assertEqual(set(value["mcpServers"]), {"other", "kirocrew-on"})
+            self.assertEqual(value["mcpServers"]["kirocrew-on"]["env"]["OCTOPUS_API_TOKEN"], self.token)
+            self.assertTrue(Path(project, ".kiro/skills/kirocrew-on/SKILL.md").is_file())
+            self.assertIn(".gitignore", "\n".join(actions))
+            self.assertNotIn(self.token, "\n".join(actions))
+
+    def test_a_config_it_cannot_merge_is_said_plainly(self):
+        with tempfile.TemporaryDirectory() as home:
+            Path(home, ".codex").mkdir()
+            Path(home, ".codex/config.toml").write_text("[[broken\n")
+            done = subprocess.run([sys.executable, "-m", "octopus", "connect", "codex", "--url", "https://on.example",
+                                   "--token", self.token, "--dry-run"], capture_output=True, text=True,
+                                  cwd=Path(__file__).resolve().parents[1], env={**os.environ, "HOME": home})
+            self.assertNotEqual(done.returncode, 0)
+            self.assertIn("无法把 MCP 服务器合并进 ~/.codex/config.toml", done.stderr)
+            self.assertNotIn("Traceback", done.stderr)
+            self.assertNotIn(self.token, done.stdout + done.stderr)
+
+    def test_the_command_line_offers_the_four_clients(self):
+        done = subprocess.run([sys.executable, "-m", "octopus", "connect", "--help"], capture_output=True, text=True,
+                              cwd=Path(__file__).resolve().parents[1])
+        for client in ("claude", "kiro", "codex", "kiro-ide"):
+            self.assertIn(client, done.stdout)
 
 class IssueTokenTests(unittest.TestCase):
     def factory(self, admin=False, fail=False, logout_fails=False):

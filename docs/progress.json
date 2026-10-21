@@ -1,6 +1,6 @@
 {
   "_comment": "进度看板与 docs/PROGRESS.md 的唯一数据源：任务状态在这里维护；提交记录由 tools/progress.py 从 git 生成（负责人 2026-10-20）。",
-  "checks": "1408 后端 + 92 + 205 控制台（会话列表 view=list 本机）；EC2 运行 889fa00",
+  "checks": "1412 后端 + 92 + 205 控制台（connect codex / kiro-ide 本机）；EC2 运行 95e5aa9",
   "status": {
     "accepted": {
       "label": "已验收",
@@ -114,9 +114,9 @@
         {
           "id": "m3-connect",
           "name": "M3-1 connect：Codex、Kiro IDE 与写前备份核对",
-          "status": "todo",
-          "ref": "§7 #1",
-          "more": "Claude Code、Kiro CLI 已上线；Codex / Kiro IDE 现为 docs/CONNECT.md 的手动说明。"
+          "status": "local",
+          "ref": "2026-10-21",
+          "more": "octopus connect codex（合并 ~/.codex/config.toml）与 connect kiro-ide（合并 <项目>/.kiro/settings/mcp.json），备份、0600、合并失败吊销 Token；Claude Code、Kiro CLI 早已上线。待：在真实 Codex 与 Kiro IDE 中各验证一次工具可见。"
         },
         {
           "id": "m3-cli",

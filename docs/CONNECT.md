@@ -27,21 +27,25 @@ Claude Code 与 Kiro CLI 用 `octopus connect` 自动配置（§2），其他客
   .venv/bin/python -m octopus skill --url <平台地址>                        # 输出到标准输出
   ```
 
-## 2．Claude Code 与 Kiro CLI（自动）
+## 2．Claude Code、Kiro CLI、Codex 与 Kiro IDE（自动）
 
 ```bash
 # Claude Code：MCP 服务器写入 user 范围，Skill 写入 ~/.claude/skills/kirocrew-on/
 .venv/bin/python -m octopus connect claude --url <平台地址> --username <你的用户名>
 # Kiro CLI：默认 workspace 范围，MCP 写入 <项目>/.kiro/settings/mcp.json，Skill 写入 <项目>/.kiro/skills/kirocrew-on/
 .venv/bin/python -m octopus connect kiro --url <平台地址> --username <你的用户名> --project <项目目录>
+# Codex：MCP 服务器合并进 ~/.codex/config.toml（只替换 [mcp_servers.kirocrew-on]，其余原样保留），Skill 写入 ~/.codex/skills/kirocrew-on/
+.venv/bin/python -m octopus connect codex --url <平台地址> --username <你的用户名>
+# Kiro IDE：MCP 服务器合并进 <项目>/.kiro/settings/mcp.json（不需要 kiro-cli），Skill 写入 <项目>/.kiro/skills/kirocrew-on/
+.venv/bin/python -m octopus connect kiro-ide --url <平台地址> --username <你的用户名> --project <项目目录>
 ```
 
 Kiro 默认用 workspace 范围：本机上 KiroCrew 自己的 kiro Agent 共用 `~/.kiro`，全局配置会让它们也加载这个服务器。
-`--dry-run` 只显示将执行的操作；Token 在输出中显示为 `****`。
+`--dry-run` 只显示将执行的操作；Token 在输出中显示为 `****`。被替换的文件先备份为 `<文件>.bak-<时间>`；写入的 Codex 与 Kiro IDE 配置含 Token，权限为 0600。合并不了（如 config.toml 本身有语法错误）时命令报错并吊销刚签发的 Token，改按 §3 手动配置。
 
 ## 3．其他客户端（手动）
 
-以下格式按各客户端文档整理；配置后以客户端能列出 `octopus_status`、`octopus_start` 等工具为准。
+Codex 与 Kiro IDE 的手动格式留作参考（§2 的命令写的就是它们）。以下格式按各客户端文档整理；配置后以客户端能列出 `octopus_status`、`octopus_start` 等工具为准。
 
 **Codex CLI**：`~/.codex/config.toml`；Skill 用 `--dest ~/.codex/skills`。
 

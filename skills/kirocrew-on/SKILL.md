@@ -28,6 +28,10 @@ KiroCrew ON 在远端执行开发任务：KiroCrew 的 Kiro Agent 先识别意�
    .venv/bin/python -m octopus connect claude --url {{OCTOPUS_URL}} --username <用户名>
    # Kiro CLI（workspace 范围，只在该项目目录生效）
    .venv/bin/python -m octopus connect kiro --url {{OCTOPUS_URL}} --username <用户名> --project <项目目录>
+   # Codex（合并进 ~/.codex/config.toml）
+   .venv/bin/python -m octopus connect codex --url {{OCTOPUS_URL}} --username <用户名>
+   # Kiro IDE（合并进 <项目>/.kiro/settings/mcp.json，不需要 kiro-cli）
+   .venv/bin/python -m octopus connect kiro-ide --url {{OCTOPUS_URL}} --username <用户名> --project <项目目录>
    ```
 
    - 命令会提示输入密码。不便交互时，用户可先在控制台右上角菜单「API 与 Coding Agent 接入」创建 Token，
