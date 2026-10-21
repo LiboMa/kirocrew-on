@@ -17,6 +17,7 @@ def object_schema(properties=None, required=()):
 
 
 STRING = {"type": "string"}
+RUN_FILTERS = ("space", "repo", "branch", "stage", "tool", "client", "submitter", "since", "until")   # D56, as GET /v1/runs
 OBSERVE_TEXT = 4000  # per message in octopus_observe: keeps a page well inside an agent's tool output limit
 REPOSITORY = object_schema({"owner": STRING, "name": STRING, "private": {"type": "boolean"}}, ["owner", "name"])   # D48
 RECOVERY = object_schema({"enabled": {"type": "boolean"},
@@ -44,9 +45,13 @@ TOOLS = [
      "inputSchema": object_schema({"id": STRING}, ["id"]), "annotations": {"readOnlyHint": True}},
     {"name": "octopus_runs",
      "description": "列出当前用户有权读取的开发 Sessions（最新的在前，精简：状态、进度、需要处理的事与错误首行）。默认最近 20 个；"
-                    "可按 status 过滤、按 q（会话 ID、名称或需求中的片段）搜索；more 为 true 表示还有更多，缩小条件或加大 limit。"
+                    "可组合过滤：status（一个或逗号分隔多个）、space（personal 或 Team ID）、repo（主机/所有者/仓库的片段，https / ssh 写法均可）、"
+                    "branch、stage（plan / implement / review / test / deliver / design / done，即当前进行到的任务类别）、tool、"
+                    "client（console / claude / kiro / codex / kiro-ide / api）、submitter（用户名）、since / until（YYYY-MM-DD 或 Unix 秒）；"
+                    "q 为全文搜索（需求、规划、任务说明、最近的结论与错误，多个词须全部命中）。more 为 true 表示还有更多，缩小条件或加大 limit。"
                     "详情用 octopus_status。",
-     "inputSchema": object_schema({"status": STRING, "q": STRING, "limit": {"type": "integer", "minimum": 1, "maximum": 50}})},
+     "inputSchema": object_schema({"status": STRING, "q": STRING, "limit": {"type": "integer", "minimum": 1, "maximum": 50},
+                                   **{key: STRING for key in RUN_FILTERS}})},
     {"name": "octopus_requests",
      "description": "列出你提交过的需求（Request，最新的在前，精简：来源客户端、需求前 200 字、准入方式与依据、对应的会话）。"
                     "每次 octopus_start 登记一个 Request，回执中的 request_id 即它；状态取其最近一个会话的。默认最近 20 个；"
@@ -482,7 +487,7 @@ def runs(client, args):
     limit = args.get("limit", 20)
     if type(limit) is not int or not 1 <= limit <= 50:
         raise ValueError("limit 须为 1–50 的整数")
-    query = {key: args[key] for key in ("status", "q") if args.get(key)}
+    query = {key: args[key] for key in ("status", "q", *RUN_FILTERS) if args.get(key)}
     views = client.request("GET", "/v1/runs?" + urlencode({**query, "limit": limit + 1, "view": "list"}))   # one more: is there more?
     return {"items": [compact_run(v) for v in views[:limit]], "more": len(views) > limit}
 

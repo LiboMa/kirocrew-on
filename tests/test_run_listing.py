@@ -74,7 +74,15 @@ class McpListingTests(unittest.TestCase):
         self.assertEqual(client.paths, ["/v1/runs?limit=21&view=list"])
         self.assertFalse(result["more"])
         schema = next(t for t in mcp.TOOLS if t["name"] == "octopus_runs")["inputSchema"]["properties"]
-        self.assertEqual(set(schema), {"status", "q", "limit"})
+        self.assertEqual(set(schema), {"status", "q", "limit", "space", "repo", "branch", "stage", "tool", "client", "submitter",
+                                       "since", "until"})
+
+    def test_the_filters_are_passed_to_the_server(self):   # D56
+        client = Client([{**VIEW, "id": "run-a"}])
+        mcp.call(client, "octopus_runs", {"repo": "github.com/o/r", "client": "codex", "submitter": "bob", "since": "2026-10-20",
+                                          "stage": "review", "tool": "codex", "space": "personal", "q": "登录 缓存"})
+        self.assertEqual(client.paths, ["/v1/runs?q=%E7%99%BB%E5%BD%95+%E7%BC%93%E5%AD%98&space=personal&repo=github.com%2Fo%2Fr"
+                                        "&stage=review&tool=codex&client=codex&submitter=bob&since=2026-10-20&limit=21&view=list"])
 
 
 if __name__ == "__main__":
