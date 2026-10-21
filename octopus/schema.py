@@ -90,6 +90,9 @@ def openapi():
                                        "repository": repository, "credential": text}),
                        "credentials": obj({"source": text})}, ["request_id", "input", "source"]),
         "Rebind": obj({"source": {"type": ["string", "null"]}}, ["source"]),
+        # D55: {"repos": "github.com/o/*", "mode": "auto|confirm"} (admission) or a mapping preference
+        "Policy": obj({"kind": {"enum": ["admission", "mapping"]}, "scope": {"enum": ["personal", "team"]}, "team_id": text,
+                       "rule": {"type": "object"}}, ["kind", "scope", "rule"]),
         "KnowledgeForget": obj({"id": text}, ["id"]),   # D46 P4: one item of the Session's knowledge.items
         "Steer": obj({"task_id": text, "message": text, "mode": {"enum": ["interrupt"]}},
                      ["task_id", "message"]),   # D46 P5b: into the running turn only
@@ -147,6 +150,7 @@ def openapi():
         "/v1/credentials/{id}/grants": {"post": "CredentialGrant", "delete": "CredentialGrant"},
         "/v1/runs": {"get": None, "post": "Start"}, "/v1/runs/{id}": {"get": None},
         "/v1/requests": {"get": None}, "/v1/requests/{id}": {"get": None},
+        "/v1/policies": {"get": None, "post": "Policy"}, "/v1/policies/{id}": {"delete": "Empty"},
         "/v1/runs/{id}/events": {"get": None}, "/v1/runs/{id}/export": {"get": None},
         "/v1/runs/{id}/crew-entry": {"post": "Empty"}, "/v1/runs/{id}/preview": {"post": "Empty"},
         "/v1/runs/{id}/observe": {"get": None},
@@ -265,6 +269,13 @@ def openapi():
                                      "description": "At most this many, newest first."},
                                     {"in": "query", "name": "view", "schema": {"enum": ["list"]},
                                      "description": "What a list needs: tasks by name and state, the plan without its summary."}]
+            if path.startswith("/v1/policies"):
+                op["description"] = {
+                    ("/v1/policies", "get"): "Read scope. The caller's own rules and those of their Teams (team_id: one Team's): admission rules by repository (repos host/owner/repo with *, mode auto|confirm) and mapping preferences; deletable says whether the caller may remove it.",
+                    ("/v1/policies", "post"): "Manage scope. A rule for the caller's own Sessions (scope personal) or a Team's (scope team, Team owner or administrator; not an archived Team). Admission: a submission's admission, else the most specific personal rule, else the Team's, else the platform default (confirm). Audited.",
+                    ("/v1/policies/{id}", "delete"): "Manage scope. Remove one of the caller's rules, or a Team's as its owner or an administrator. Audited."}[(path, method)]
+                if path == "/v1/policies":
+                    op["parameters"] = [{"in": "query", "name": "team_id", "schema": text}] if method == "get" else op.get("parameters", [])
             if path.startswith("/v1/requests"):
                 op["description"] = {
                     "/v1/requests": "Read scope. Every submission with a Session the caller can read, newest first: client (console / claude / kiro / codex / kiro-ide / api), requirement, source, explicit choices, the policy it started under (admission mode and basis) and its Sessions; status is its latest Session's.",

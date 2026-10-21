@@ -1,0 +1,73 @@
+"""A person's or a Team's policies (D55): admission rules by repository and mapping preferences. The platform keeps no
+default chain of its own (no-hardcoded-chains): a rule is what someone wrote down for their own Sessions."""
+from fnmatch import fnmatchcase
+import json
+import re
+from urllib.parse import urlsplit
+
+from .security import require
+
+KINDS = ("admission", "mapping")
+MODES = ("auto", "confirm")
+PATTERN = re.compile(r"[a-z0-9._*/-]{1,300}")
+
+
+def repo_of(source):
+    """``host/owner/repo`` of a Session's source, lower case and without ``.git``: the HTTPS, ssh:// and scp-like
+    (git@host:path) forms of one repository give one answer. None for a new project."""
+    if not isinstance(source, dict) or source.get("type") != "git" or not isinstance(source.get("url"), str):
+        return None
+    url = source["url"].strip()
+    if "://" in url:
+        parts = urlsplit(url)
+        host, path = parts.hostname or "", parts.path
+    else:
+        found = re.fullmatch(r"(?:[^@/]+@)?([^:/]+):(.+)", url)
+        if not found:
+            return None
+        host, path = found.groups()
+    path = path.strip("/").removesuffix(".git").strip("/")
+    return f"{host}/{path}".lower() if host and path else None
+
+
+def admission_rule(rule):
+    require(isinstance(rule, dict) and set(rule) == {"repos", "mode"}, "准入规则须为 {\"repos\": \"<主机/所有者/仓库>\", \"mode\": \"auto|confirm\"}")
+    repos = rule["repos"].strip().lower().removesuffix(".git") if isinstance(rule["repos"], str) else ""
+    require(PATTERN.fullmatch(repos) is not None, "repos 须为 主机/所有者/仓库，可用 * 通配，例如 github.com/o/*")
+    require(rule["mode"] in MODES, "mode 须为 auto（直接开始）或 confirm（等待确认）")
+    return {"repos": repos, "mode": rule["mode"]}
+
+
+def rule(kind, value):
+    require(kind in KINDS, "kind 须为 admission 或 mapping")
+    return admission_rule(value)
+
+
+def _best(rows, repo):
+    """The most specific rule that matches: fewest wildcards, then the newest."""
+    matched = [r for r in rows if fnmatchcase(repo, json.loads(r["rule"])["repos"])]
+    return min(matched, key=lambda r: (json.loads(r["rule"])["repos"].count("*"), -r["created"]), default=None)
+
+
+def admission(db, actor_id, team, source, submitted, default):
+    """How a new Session is admitted and why: what the submitter said, else their own rule for the repository, else the
+    Team's (for a Team Session), else the platform default."""
+    if submitted:
+        return {"mode": submitted, "basis": "submitted"}
+    repo = repo_of(source)
+    if repo is not None:
+        layers = [("personal", "owner_id", actor_id)] + ([("team", "team_id", team)] if team else [])
+        for scope, column, holder in layers:
+            rows = db.execute(f"SELECT * FROM policies WHERE kind='admission' AND {column}=?", (holder,)).fetchall()
+            best = _best(rows, repo)
+            if best is not None:
+                value = json.loads(best["rule"])
+                return {"mode": value["mode"], "basis": "rule", "policy_id": best["id"], "pattern": value["repos"],
+                        "scope": scope}
+    return {"mode": default, "basis": "default"}
+
+
+def view(row, team_name=None, deletable=False):
+    return {"id": row["id"], "kind": row["kind"], "scope": "team" if row["team_id"] else "personal",
+            "team_id": row["team_id"], "team_name": team_name, "rule": json.loads(row["rule"]),
+            "created_by": row["created_by"], "created": row["created"], "deletable": deletable}

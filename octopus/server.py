@@ -753,6 +753,14 @@ def server(database, port=8918, host="127.0.0.1", allowed_hosts=(), origin_secre
                     require(limit is None or limit.isdigit(), "limit 须为 1–200 的整数")
                     return self.respond(service.runs(actor, all=query.get("all") == ["1"], status=one("status"), q=one("q"),
                                                      limit=int(limit) if limit else None, view=one("view")))
+                if segments[:2] == ["v1", "policies"] and len(segments) in {2, 3}:   # D55: admission rules, mapping preferences
+                    if len(segments) == 3:
+                        require(method == "DELETE", "Method not allowed", 405)
+                        return self.respond(service.delete_policy(actor, segments[2]))
+                    require(method in {"GET", "POST"}, "Method not allowed", 405)
+                    if method == "POST":
+                        return self.respond(service.create_policy(actor, body), 201)
+                    return self.respond(service.policies(actor, (query.get("team_id") or [None])[-1] or None))
                 if segments[:2] == ["v1", "requests"] and len(segments) in {2, 3}:   # D55: submissions as made
                     require(method == "GET", "Method not allowed", 405)
                     if len(segments) == 3:

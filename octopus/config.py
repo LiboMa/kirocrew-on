@@ -66,7 +66,7 @@ class Settings:
     crew_url: str = ""
     # KiroCrew native tool/spawn approval for this boundary; "" keeps the legacy seed default.
     approval_mode: str = ""
-    default_admission: str = "auto"   # D44: a Session without `admission` runs at once; "confirm" waits for its plan's confirmation
+    default_admission: str = "confirm"   # D44 / D55: a Session without `admission` or a matching rule waits for its plan's confirmation
     # KiroCrew's standing YOLO on this boundary (agent.dangerously_skip_permissions, re-applied at every Gateway start):
     # on by the owner's direction (2026-10-15); false returns to approving each tool request (D38 phase 2 then has work).
     crew_yolo: bool = True

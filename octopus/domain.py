@@ -12,7 +12,7 @@ import threading
 import time
 import unicodedata
 
-from . import journal, remote_preview, requests as submissions
+from . import journal, policies, remote_preview, requests as submissions
 from .db import dumps, uid
 from .security import Error, check_password, elevated, password_hash, require
 
@@ -999,8 +999,9 @@ class Service:
                             "match_mode": resolved["mode"], "match_reason": resolved["reason"]}
                 snapshot.update(recovery=policy(body.get("recovery")) if design is None else policy({"enabled": False}),
                                 execution_contract=4 if design is None else 1)   # D46 P3: the Evaluator gate
-                if design is None:   # D44: confirm = wait before the first working task
-                    snapshot["admission"] = body.get("admission") or self.default_admission
+                if design is None:   # D44: confirm = wait before the first working task; D55: by the repository's rules
+                    decided = policies.admission(db, actor["id"], team, source, body.get("admission"), self.default_admission)
+                    snapshot.update(admission=decided["mode"], admission_basis=decided)
                 if "publish" in body:   # D47: the user's own word on publishing comes first
                     snapshot["publish_policy"] = {**publish_policy(body["publish"]), "source": "user"}
                 if bound:
@@ -1015,9 +1016,8 @@ class Service:
                 request = None
                 if design is None:   # D55: the submission as made; a workflow design Session is not one
                     explicit = {**chosen_explicitly, **({"workflow_version": version} if wid else {})}
-                    admission = {"mode": snapshot["admission"], "basis": "submitted" if body.get("admission") else "default"}
                     request = submissions.register(db, actor, body["request_id"], team, goal, source, explicit,
-                                                   {"admission": admission, "recovery": snapshot["recovery"],
+                                                   {"admission": snapshot["admission_basis"], "recovery": snapshot["recovery"],
                                                     "publish": snapshot.get("publish_policy")}, now)
                 db.execute("INSERT INTO runs(id,owner_id,team_id,worker_id,workflow_id,snapshot,input,source,status,created,updated,"
                            "request_id) VALUES(?,?,?,?,?,?,?,?,?,?,?,?)",
@@ -1822,6 +1822,65 @@ class Service:
             require(any(self._readable(db, actor, r["id"]) for r in runs), "Request 不存在或无权限", 404, "not_found")
             return submissions.view(db, row, runs)
 
+    def policies(self, actor, team_id=None):
+        """The actor's own rules and those of their Teams (D55), or one Team's; a non-member learns nothing of a Team."""
+        with self.db.read() as db:
+            if team_id:
+                roles = {team_id: self._team_role(db, actor, team_id)}
+                rows = db.execute("SELECT * FROM policies WHERE team_id=? ORDER BY kind, created", (team_id,)).fetchall()
+            else:
+                roles = {r["team_id"]: r["role"] for r in db.execute("SELECT team_id,role FROM members WHERE user_id=?", (actor["id"],))}
+                rows = db.execute("SELECT * FROM policies WHERE owner_id=? ORDER BY kind, created", (actor["id"],)).fetchall()
+                rows += [r for r in db.execute("SELECT * FROM policies WHERE team_id IS NOT NULL ORDER BY kind, created")
+                         if r["team_id"] in roles]
+            names = {r["id"]: r["name"] for r in db.execute("SELECT id,name FROM teams")}
+            return [policies.view(r, names.get(r["team_id"]),
+                                  not r["team_id"] or elevated(actor) or roles.get(r["team_id"]) == "owner") for r in rows]
+
+    def create_policy(self, actor, body):
+        """A rule for one's own Sessions, or — for a Team's owner or an administrator — a Team's (D55); audited."""
+        require(isinstance(body, dict) and set(body) <= {"kind", "scope", "team_id", "rule"}, "规则须为 {kind, scope, team_id?, rule}")
+        value = policies.rule(body.get("kind"), body.get("rule"))
+        require(body.get("scope") in ("personal", "team"), "scope 须为 personal 或 team")
+        team = body.get("team_id") if body["scope"] == "team" else None
+        require(body["scope"] == "personal" and "team_id" not in body or isinstance(team, str) and team,
+                "Team 的规则需要 team_id；个人规则不带 team_id")
+        with self.db.transaction() as db:
+            if team:
+                require(self._team_role(db, actor, team) == "owner" or elevated(actor), "只有 Team owner 或平台管理员可以维护 Team 的规则",
+                        403, "forbidden")
+                active_team(db, team)
+            pid, now = uid("policy"), time.time()
+            db.execute("INSERT INTO policies(id,kind,owner_id,team_id,rule,created_by,created) VALUES(?,?,?,?,?,?,?)",
+                       (pid, body["kind"], None if team else actor["id"], team, dumps(value), actor["id"], now))
+            audit(db, actor, "policy.create", "policy", pid, {"kind": body["kind"], "scope": body["scope"], "team_id": team,
+                                                               "rule": value})
+            row = db.execute("SELECT * FROM policies WHERE id=?", (pid,)).fetchone()
+            name = db.execute("SELECT name FROM teams WHERE id=?", (team,)).fetchone() if team else None
+            return policies.view(row, name["name"] if name else None, True)
+
+    def delete_policy(self, actor, policy_id):
+        with self.db.transaction() as db:
+            row = db.execute("SELECT * FROM policies WHERE id=?", (policy_id,)).fetchone()
+            require(row is not None and (row["team_id"] or row["owner_id"] == actor["id"]), "规则不存在或无权限", 404, "not_found")
+            if row["team_id"]:
+                require(self._team_role(db, actor, row["team_id"]) == "owner" or elevated(actor),
+                        "只有 Team owner 或平台管理员可以维护 Team 的规则", 403, "forbidden")
+            db.execute("DELETE FROM policies WHERE id=?", (policy_id,))
+            audit(db, actor, "policy.delete", "policy", policy_id, {"kind": row["kind"], "team_id": row["team_id"],
+                                                                     "rule": json.loads(row["rule"])})
+            return {"id": policy_id, "deleted": True}
+
+    @staticmethod
+    def _team_role(db, actor, team):
+        """The actor's role in the Team; an administrator who is not a member is treated as one with no role."""
+        if elevated(actor):
+            found = db.execute("SELECT role FROM members WHERE user_id=? AND team_id=?", (actor["id"], team)).fetchone()
+            require(found is not None or db.execute("SELECT 1 FROM teams WHERE id=?", (team,)).fetchone() is not None,
+                    "Team 不存在或无权限", 404, "not_found")
+            return found["role"] if found else None
+        return member(db, actor["id"], team)
+
     @staticmethod
     def _readable(db, actor, rid, admin=True):
         try:
@@ -1874,7 +1933,7 @@ class Service:
         snapshot = json.loads(run["snapshot"])
         value.update({key: snapshot.get(key) for key in ("name", "workflow_name", "workflow_version",
                                                        "selection", "match_mode", "match_reason", "purpose", "planning", "replan",
-                                                       "admission", "confirmed", "publish_policy", "publish_auto",
+                                                       "admission", "admission_basis", "confirmed", "publish_policy", "publish_auto",
                                                        "publish_target", "publish_suggestion", "placement")})
         value["source"] = json.loads(value["source"])
         value["session_id"] = run["id"]
