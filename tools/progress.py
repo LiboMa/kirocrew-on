@@ -4,6 +4,7 @@ docs/progress.json. Writes the data into docs/progress-dashboard.html and the su
 
 Run from the repository root:
   python3 tools/progress.py --deployed <the commit EC2 runs> [--pushed origin/feat/m1-runtime-foundation] [--base origin/main]
+  python3 tools/progress.py --serve [PORT] [--ec2]   # live: http://127.0.0.1:PORT/, rebuilt on every request (owner 2026-10-21)
 """
 import argparse
 import datetime
@@ -11,6 +12,8 @@ import json
 from pathlib import Path
 import re
 import subprocess
+import threading
+import time
 
 ROOT = Path(__file__).resolve().parents[1]
 DATA, DASHBOARD, SUMMARY = ROOT / "docs/progress.json", ROOT / "docs/progress-dashboard.html", ROOT / "docs/PROGRESS.md"
@@ -24,6 +27,7 @@ TITLES = {31: "访问管理", 32: "会话修订历史", 33: "Team 与 Worker 管
           50: "编码技能包", 51: "模型列表与自动发现", 52: "团队层知识", 53: "管理与使用分开"}
 WHERE = {"pushed": "已推送", "deployed": "已部署 EC2", "local": "仅本机"}
 BEGIN, END = "/* DATA:BEGIN (tools/progress.py) */", "/* DATA:END */"
+REFRESH, EC2_EVERY = 15, 300   # seconds between the live page's reloads, and between its reads of what EC2 runs
 
 
 def git(*args):
@@ -89,7 +93,7 @@ def markdown(data, rec, generated):
     scoped = lambda scope: [i for m in data["modules"] if m["scope"] == scope for i in m["items"]]
     lines += ["# 进度与完成记录", "",
               f"> 由 `tools/progress.py` 生成（{generated}）：任务状态取自 `docs/progress.json`，提交记录取自 git。"
-              f"看板：`docs/progress-dashboard.html`。", "",
+              f"看板：`docs/progress-dashboard.html`；实时看板：`python3 tools/progress.py --serve --ec2`（http://127.0.0.1:8765/）。", "",
               f"- **本轮完成度**：{completion(scoped('round'), status):.0%}　**MVP 完成度**：{completion(scoped('mvp'), status):.0%}",
               f"- **分支**：HEAD `{rec['head']}`；自 `{rec['base']}` 起 {len(rec['commits'])} 个提交——"
               + "、".join(f"{WHERE[k]} {rec['counts'][k]}" for k in WHERE)
@@ -118,12 +122,104 @@ def embed(html, payload):
     return html[:start + len(BEGIN)] + "\nconst DATA = " + json.dumps(payload, ensure_ascii=False) + ";\n" + html[end:]
 
 
+def known(sha):
+    """A commit this repository has (EC2 may run one not fetched here: the record then shows no deployed marks)."""
+    return bool(sha) and subprocess.run(["git", "cat-file", "-e", f"{sha}^{{commit}}"], cwd=ROOT, capture_output=True).returncode == 0
+
+
+def payload(base, pushed, deployed):
+    data = json.loads(DATA.read_text())
+    rec = record(base, pushed, deployed if known(deployed) else None)
+    return {**data, "generated": datetime.datetime.now().astimezone().strftime("%Y-%m-%d %H:%M:%S %Z"), "record": rec}
+
+
+def live_page(deployed=None, base="origin/main", pushed="origin/feat/m1-runtime-foundation"):
+    """The dashboard as it stands now, reloading itself every REFRESH seconds; nothing is written to disk."""
+    value = payload(base, pushed, deployed)
+    html = embed(DASHBOARD.read_text(), {**value, "generated": value["generated"] + " · 实时（每 15 秒刷新）"})
+    return html.replace("<head>", f'<head>\n<meta http-equiv="refresh" content="{REFRESH}">', 1)
+
+
+def ec2_release():
+    """The commit EC2 runs — readlink of /opt/kirocrew-on/current through SSM, read-only — or None."""
+    env = dict(line.split("=", 1) for line in (ROOT / "deploy/aws/stack.env").read_text().splitlines()
+               if "=" in line and not line.startswith("#"))
+    aws = lambda *a: subprocess.run(["aws", "--region", env["REGION"], *a], capture_output=True, text=True, check=True,
+                                    timeout=60).stdout.strip()
+    try:
+        instance = aws("cloudformation", "describe-stacks", "--stack-name", env["STACK_NAME"], "--query",
+                       "Stacks[0].Outputs[?OutputKey=='InstanceId'].OutputValue", "--output", "text")
+        command = aws("ssm", "send-command", "--instance-ids", instance, "--document-name", "AWS-RunShellScript",
+                      "--comment", "kirocrew-on progress dashboard (read-only)", "--parameters",
+                      json.dumps({"commands": ["readlink -f /opt/kirocrew-on/current"]}), "--query", "Command.CommandId",
+                      "--output", "text")
+        for _ in range(20):
+            time.sleep(3)
+            status, text = json.loads(aws("ssm", "get-command-invocation", "--command-id", command, "--instance-id", instance,
+                                          "--query", "[Status,StandardOutputContent]", "--output", "json"))
+            if status not in {"Pending", "InProgress", "Delayed"}:
+                break
+        found = re.search(r"releases/([0-9a-f]{40})", text or "")
+        return found.group(1) if found else None
+    except (subprocess.SubprocessError, OSError, ValueError, KeyError):
+        return None
+
+
+def watch_ec2(every=EC2_EVERY):
+    """What EC2 runs, read in the background every ``every`` seconds; returns the reader of the latest answer."""
+    latest = {"sha": None}
+
+    def loop():
+        while True:
+            latest["sha"] = ec2_release() or latest["sha"]
+            time.sleep(every)
+    threading.Thread(target=loop, daemon=True).start()
+    return lambda: latest["sha"]
+
+
+def serve(port, deployed, base="origin/main", pushed="origin/feat/m1-runtime-foundation"):
+    """The live dashboard on 127.0.0.1:``port`` (0: any free port): / is the page, /data.json its data; nothing else."""
+    from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+
+    class Handler(BaseHTTPRequestHandler):
+        def do_GET(self):
+            if self.path in {"/", "/index.html"}:
+                body, kind = live_page(deployed(), base, pushed).encode(), "text/html; charset=utf-8"
+            elif self.path == "/data.json":
+                body, kind = json.dumps(payload(base, pushed, deployed()), ensure_ascii=False).encode(), "application/json"
+            else:
+                self.send_error(404)
+                return
+            self.send_response(200)
+            self.send_header("Content-Type", kind)
+            self.send_header("Cache-Control", "no-store")
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+
+        def log_message(self, *args):
+            pass
+    return ThreadingHTTPServer(("127.0.0.1", port), Handler)
+
+
 def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
     parser.add_argument("--deployed", help="the commit EC2 runs (readlink /opt/kirocrew-on/current)")
     parser.add_argument("--pushed", default="origin/feat/m1-runtime-foundation")
     parser.add_argument("--base", default="origin/main")
+    parser.add_argument("--serve", nargs="?", type=int, const=8765, metavar="PORT",
+                        help="serve the live dashboard on 127.0.0.1 (default port 8765) instead of writing the files")
+    parser.add_argument("--ec2", action="store_true", help="with --serve: read what EC2 runs every 5 minutes (SSM, read-only)")
     args = parser.parse_args(argv)
+    if args.serve is not None:
+        deployed = watch_ec2() if args.ec2 else (lambda: args.deployed)
+        server = serve(args.serve, deployed, args.base, args.pushed)
+        print(f"实时看板：http://127.0.0.1:{server.server_address[1]}/（每 {REFRESH} 秒刷新；Ctrl-C 结束）", flush=True)
+        try:
+            server.serve_forever()
+        except KeyboardInterrupt:
+            pass
+        return
     data = json.loads(DATA.read_text())
     rec = record(args.base, args.pushed, args.deployed)
     generated = datetime.datetime.now().astimezone().strftime("%Y-%m-%d %H:%M %Z")

@@ -62,3 +62,31 @@ class RecordTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class LiveTests(unittest.TestCase):
+    """The live dashboard (owner 2026-10-21): built afresh on every request, refreshing itself, on loopback only."""
+
+    def test_the_live_page_is_the_current_state_and_writes_nothing(self):
+        before = (progress.DASHBOARD.read_text(), progress.SUMMARY.read_text())
+        page = progress.live_page(deployed=None)
+        self.assertIn('http-equiv="refresh"', page)
+        head = progress.git("rev-parse", "--short", "HEAD").strip()
+        self.assertIn(f'"head": "{head}"', page)
+        self.assertEqual((progress.DASHBOARD.read_text(), progress.SUMMARY.read_text()), before)
+
+    def test_the_server_answers_on_loopback(self):
+        import threading
+        import urllib.request
+        server = progress.serve(0, deployed=lambda: None)   # port 0: any free port
+        self.addCleanup(server.server_close)
+        threading.Thread(target=server.serve_forever, daemon=True).start()
+        self.addCleanup(server.shutdown)
+        host, port = server.server_address[:2]
+        self.assertEqual(host, "127.0.0.1")
+        page = urllib.request.urlopen(f"http://127.0.0.1:{port}/").read().decode()
+        self.assertIn("KiroCrew ON · 进度看板", page)
+        data = json.loads(urllib.request.urlopen(f"http://127.0.0.1:{port}/data.json").read())
+        self.assertIn("head", data["record"])
+        with self.assertRaises(Exception):
+            urllib.request.urlopen(f"http://127.0.0.1:{port}/../../etc/passwd")
