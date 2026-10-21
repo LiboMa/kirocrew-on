@@ -1,7 +1,6 @@
 // Session rules shared by the list and the detail view; they mirror the classic console so both behave alike.
 import type { Run } from "@/api/types";
-import { ACTIVE_STATES, ATTENTION_STATES, STATES } from "@/lib/labels";
-import { clientLabel } from "@/lib/policies";
+import { ACTIVE_STATES, STATES } from "@/lib/labels";
 
 const open = (run: Run) => run.lifecycle === "open";
 const design = (run: Run) => run.purpose === "workflow_design";
@@ -105,21 +104,3 @@ export const RUN_FILTERS: [RunFilter, string][] = [
   ["all", "全部"], ["active", "进行中"], ["attention", "需处理"], ["done", "已完成"], ["closed", "已关闭"],
 ];
 
-function matches(run: Run, filter: RunFilter): boolean {
-  if (filter === "all") return true;
-  if (filter === "closed") return run.lifecycle === "closed";
-  if (run.lifecycle !== "open") return false;
-  if (filter === "active") return ACTIVE_STATES.has(run.status);
-  if (filter === "attention") return ATTENTION_STATES.has(run.status);
-  return run.status === "completed";
-}
-
-/** space null: every space (an administrator's all-Sessions view). */
-export function filterRuns(runs: Run[], { space, query, filter }: { space: string | null; query: string; filter: RunFilter }): Run[] {
-  const terms = query.trim().toLowerCase().split(/\s+/).filter(Boolean);
-  return runs.filter((run) => {
-    if ((space !== null && (run.team_id ?? "") !== space) || run.lifecycle === "deleted" || !matches(run, filter)) return false;
-    const text = [run.name, run.input, run.id, run.workflow_name, clientLabel(run.request?.client)].filter(Boolean).join(" ").toLowerCase();
-    return terms.every((term) => text.includes(term));
-  });
-}

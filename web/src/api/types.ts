@@ -264,6 +264,13 @@ export interface KnowledgeItem {
 /** D49: where a new Session would run, or where a Session may move (GET /v1/placement). */
 export type PlacementKind = "own" | "team" | "only" | "requested";
 
+/** D56: one page of GET /v1/runs?page=1 — the matching Sessions after the cursor, the next cursor and how many match. */
+export interface RunPage {
+  items: Run[];
+  next: string | null;
+  total: number;
+}
+
 /** D55: the client a Request was submitted from (the token's label; octopus/requests.py). */
 export type RequestClient = "console" | "claude" | "kiro" | "codex" | "kiro-ide" | "api";
 

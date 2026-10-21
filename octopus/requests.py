@@ -6,6 +6,7 @@ import json
 from .db import dumps, uid
 
 CLIENTS = ("console", "claude", "kiro", "codex", "kiro-ide", "api")
+NAMES = {"console": "控制台", "claude": "Claude Code", "kiro": "Kiro CLI", "codex": "Codex", "kiro-ide": "Kiro IDE", "api": "API"}
 
 
 def client_of(label):

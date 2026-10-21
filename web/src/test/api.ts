@@ -57,6 +57,22 @@ function placementOf(workers: Worker[], runs: Run[], url: URL): Placement {
       isolation: w.capabilities?.isolation ?? null, models: w.capabilities?.models ?? {} })) };
 }
 
+/** What GET /v1/runs?page=1 would answer (octopus/listing.py, D56) for the filters the console sends: space, status,
+ * lifecycle and q (in id, name, requirement); newest first; one page. Without page=1, the list as before. */
+export function runPage(runs: Run[], url: URL): unknown {
+  const params = url.searchParams;
+  if (params.get("page") !== "1") return runs;
+  const space = params.get("space");
+  const status = params.get("status")?.split(",");
+  const words = (params.get("q") ?? "").toLowerCase().split(/\s+/).filter(Boolean);
+  const items = runs.filter((run) => (!space || (space === "personal" ? !run.team_id : run.team_id === space))
+    && (!status || status.includes(run.status)) && (!params.get("lifecycle") || run.lifecycle === params.get("lifecycle"))
+    && words.every((w) => [run.id, run.name, run.input].join(" ").toLowerCase().includes(w)))
+    .sort((a, b) => b.created - a.created || (a.id < b.id ? 1 : -1));
+  const limit = Number(params.get("limit") ?? 50);
+  return { items: items.slice(0, limit), next: null, total: items.length };
+}
+
 export function workspaceRoutes(runs: Run[], extra: Record<string, unknown> = {}) {
   const workers = () => (extra["GET /workers"] ?? []) as Worker[];
   return {
@@ -64,7 +80,7 @@ export function workspaceRoutes(runs: Run[], extra: Record<string, unknown> = {}
     "GET /me": ME,
     "GET /teams": [{ id: "team-1", name: "平台组", role: "owner", created: 1, members: [] }],
     "GET /workflows": [],
-    "GET /runs": runs,
+    "GET /runs": (_body: unknown, url: URL) => runPage(runs, url),
     "GET /workers": [],
     "GET /users": [{ id: "u1", username: "fixture-owner" }],
     "GET /workflow-templates": [],

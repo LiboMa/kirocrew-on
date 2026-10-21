@@ -1,8 +1,8 @@
 import { useEffect, useState } from "react";
-import { useQuery, useQueryClient } from "@tanstack/react-query";
+import { useInfiniteQuery, useQuery, useQueryClient } from "@tanstack/react-query";
 import { api } from "@/api/client";
 import { followRunEvents, type StreamState } from "@/api/events";
-import type { ApprovalList, AppPreview, ChangeEntry, Credential, Environment, Me, Observation, Placement, Policy, RevisionDiff, RevisionEntry, Run, RunEvent, Team, Template, User, Worker, Workflow } from "@/api/types";
+import type { ApprovalList, AppPreview, ChangeEntry, Credential, Environment, Me, Observation, Placement, Policy, RevisionDiff, RevisionEntry, Run, RunEvent, RunPage, Team, Template, User, Worker, Workflow } from "@/api/types";
 
 export const keys = {
   me: ["me"] as const,
@@ -28,28 +28,39 @@ export function useMe() {
   return useQuery({ queryKey: keys.me, queryFn: () => api<Me>("/me"), staleTime: 60_000 });
 }
 
-export function useWorkspace(allSessions = false) {
+export function useWorkspace() {
   const teams = useQuery({ queryKey: keys.teams, queryFn: () => api<Team[]>("/teams"), ...every(30_000) });
   const workflows = useQuery({ queryKey: keys.workflows, queryFn: () => api<Workflow[]>("/workflows"), ...every(30_000) });
-  // Switching to all Sessions keeps showing the previous list until the new one arrives (no loading screen).
-  const runs = useQuery({ queryKey: [...keys.runs, allSessions], placeholderData: (previous) => previous,
-    // the list view (M3-5): tasks by name and state only — the session page fetches the whole Session
-    queryFn: () => api<Run[]>(allSessions ? "/runs?all=1&view=list" : "/runs?view=list"), ...every(10_000) });
   const workers = useQuery({ queryKey: keys.workers, queryFn: () => api<Worker[]>("/workers"), ...every(30_000) });
   const users = useQuery({ queryKey: keys.users, queryFn: () => api<User[]>("/users"), staleTime: 60_000 });
   const templates = useQuery({ queryKey: keys.templates, queryFn: () => api<Template[]>("/workflow-templates"), staleTime: Infinity });
   return {
     teams: teams.data ?? [],
     workflows: workflows.data ?? [],
-    runs: runs.data ?? [],
     workers: workers.data ?? [],
     users: users.data ?? [],
     templates: templates.data ?? [],
-    loading: runs.isPending || teams.isPending,
-    /** The list shown is the previous one while another is loading. */
-    refreshing: runs.isPlaceholderData,
-    error: runs.error ?? teams.error ?? null,
+    loading: teams.isPending,
+    error: teams.error ?? null,
   };
+}
+
+/** D56: the session list, filtered and paged on the server (``params`` from lib/runList listParams); the loaded pages
+ * refresh every 10 s and keep showing while another query loads (no loading screen). */
+export function useRunPages(params: string, allSessions: boolean) {
+  const base = "/runs?" + params + (allSessions ? "&all=1" : "");
+  return useInfiniteQuery({
+    queryKey: [...keys.runs, "pages", base], initialPageParam: null as string | null,
+    queryFn: ({ pageParam }) => api<RunPage>(base + (pageParam ? "&cursor=" + encodeURIComponent(pageParam) : "")),
+    getNextPageParam: (last) => last.next ?? undefined, placeholderData: (previous) => previous, ...every(10_000),
+  });
+}
+
+/** How many Sessions (and the first few) a query matches, for counts: refreshed every 30 s. */
+export function useRunCount(params: string, allSessions: boolean) {
+  const path = "/runs?" + params + (allSessions ? "&all=1" : "");
+  return useQuery({ queryKey: [...keys.runs, "count", path], queryFn: () => api<RunPage>(path),
+    placeholderData: (previous) => previous, ...every(30_000) });
 }
 
 /** Administrators only. Live health makes it slower than /workers; platforms without the endpoint leave it undefined. */
@@ -145,7 +156,7 @@ export function useRunEvents(id: string | null) {
       refresh = setTimeout(() => {
         refresh = undefined;
         void client.invalidateQueries({ queryKey: keys.run(id) });
-        void client.invalidateQueries({ queryKey: keys.runs });
+        void client.invalidateQueries({ queryKey: [...keys.runs, "pages"] });   // D56: the list; counts follow every 30 s
       }, 300);
     };
     void followRunEvents(id, {

@@ -3,7 +3,7 @@ import { render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { App } from "@/App";
 import { setToken } from "@/api/client";
-import { makeRun, mockApi, workspaceRoutes } from "@/test/api";
+import { makeRun, mockApi, runPage, workspaceRoutes } from "@/test/api";
 
 afterEach(() => {
   vi.unstubAllGlobals();
@@ -20,7 +20,7 @@ describe("console shell", () => {
   test("the session list asks for the list view, not every task's prompt (M3-5)", async () => {
     const searches: string[] = [];
     setToken("oct_fixture");
-    mockApi({ ...workspaceRoutes(runs), "GET /runs": (_body: unknown, url: URL) => { searches.push(url.search); return runs; } });
+    mockApi({ ...workspaceRoutes(runs), "GET /runs": (_body: unknown, url: URL) => { searches.push(url.search); return runPage(runs, url); } });
     render(<App />);
     expect(await screen.findByRole("navigation", { name: "会话列表" })).toBeInTheDocument();
     await waitFor(() => expect(searches.length).toBeGreaterThan(0));
@@ -56,10 +56,10 @@ describe("console shell", () => {
     expect(within(list).getAllByRole("button")[0]).toHaveTextContent("退款接口幂等");
     expect(within(list).getByText("规划任务已停止")).toBeInTheDocument();
     await userEvent.type(screen.getByLabelText("搜索会话"), "订单");
-    expect(within(list).getAllByRole("button")).toHaveLength(1);
+    await waitFor(() => expect(within(list).getAllByRole("button")).toHaveLength(1));
     await userEvent.clear(screen.getByLabelText("搜索会话"));
     await userEvent.click(screen.getByRole("button", { name: "需处理" }));
-    expect(within(list).getAllByRole("button").map((b) => b.dataset.run)).toEqual(["run-a"]);
+    await waitFor(() => expect(within(list).getAllByRole("button").map((b) => b.dataset.run)).toEqual(["run-a"]));
   });
 
   test("an administrator can list every Session, labelled with its owner; others cannot", async () => {
@@ -67,7 +67,7 @@ describe("console shell", () => {
     const searches: string[] = [];
     setToken("oct_fixture");
     mockApi({ ...workspaceRoutes([]), "GET /users": [{ id: "u1", username: "fixture-owner" }, { id: "u2", username: "dev1" }],
-      "GET /runs": (_body: unknown, url: URL) => { searches.push(url.search); return new URLSearchParams(url.search).get("all") === "1" ? [theirs] : []; } });
+      "GET /runs": (_body: unknown, url: URL) => { searches.push(url.search); return runPage(url.searchParams.get("all") === "1" ? [theirs] : [], url); } });
     render(<App />);
     const toggle = await screen.findByRole("button", { name: "全部会话" });
     expect(toggle).toHaveAttribute("aria-pressed", "false");
@@ -75,7 +75,7 @@ describe("console shell", () => {
     const list = await screen.findByRole("navigation", { name: "会话列表" });
     expect(await within(list).findByText("别人的个人会话")).toBeInTheDocument();
     expect(list).toHaveTextContent("dev1");
-    expect(searches).toContain("?all=1&view=list");
+    expect(searches.some((search) => { const p = new URLSearchParams(search); return p.get("all") === "1" && p.get("view") === "list"; })).toBe(true);
   });
 
   test("an administrator signed in before the admin scope existed is asked to sign in again", async () => {
@@ -89,8 +89,8 @@ describe("console shell", () => {
     let release: (value: unknown) => void = () => {};
     setToken("oct_fixture");
     mockApi({ ...workspaceRoutes([]), "GET /runs": (_b: unknown, url: URL) => new URLSearchParams(url.search).get("all") === "1"
-      ? new Promise((resolve) => { release = resolve; }).then(() => new Response("[]", { headers: { "Content-Type": "application/json" } }))
-      : [] });
+      ? new Promise((resolve) => { release = resolve; }).then(() => new Response(JSON.stringify(runPage([], url)), { headers: { "Content-Type": "application/json" } }))
+      : runPage([], url) });
     render(<App />);
     await userEvent.click(await screen.findByRole("button", { name: "全部会话" }));
     expect(screen.queryByText("正在加载开发空间…")).toBeNull();
@@ -103,7 +103,7 @@ describe("console shell", () => {
     setToken("oct_fixture");
     window.history.replaceState(null, "", "/?run=run-z");
     mockApi({ ...workspaceRoutes([]), "GET /runs/run-z": theirs, "GET /runs/run-z/events": [],
-      "GET /runs": (_b: unknown, url: URL) => (new URLSearchParams(url.search).get("all") === "1" ? [theirs] : []) });
+      "GET /runs": (_b: unknown, url: URL) => runPage(url.searchParams.get("all") === "1" ? [theirs] : [], url) });
     render(<App />);
     expect(await screen.findByRole("heading", { name: "别人的会话" })).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "全部会话" })).toHaveAttribute("aria-pressed", "true");
@@ -120,7 +120,8 @@ describe("console shell", () => {
   test("selecting a session is reflected in the URL and an unreadable one is dropped", async () => {
     setToken("oct_fixture");
     window.history.replaceState(null, "", "/?run=run-gone");
-    mockApi(workspaceRoutes(runs));
+    mockApi(workspaceRoutes(runs, { "GET /runs/run-gone": () =>
+      new Response(JSON.stringify({ error: "Session 不存在或无权限", code: "not_found" }), { status: 404 }) }));
     render(<App />);
     const list = await screen.findByRole("navigation", { name: "会话列表" });
     await waitFor(() => expect(window.location.search).toBe(""));

@@ -72,7 +72,7 @@ def criteria(status=None, lifecycle=None, space=None, repo=None, branch=None, st
 
 def sql(found):
     """The query for what the runs table holds, newest first (ties by id, so a page's cursor is exact)."""
-    where, params = [], []
+    where, params = ["lifecycle!='deleted'"], []   # a deleted Session is gone to its users
 
     def add(clause, *values):
         where.append(clause)
@@ -129,9 +129,11 @@ def matches(db, run, found):
     if found["tool"] and not any(t["spec"].get("tool") == found["tool"] for t in tasks):
         return False
     if found["words"]:
+        from .requests import NAMES
         planned = snapshot.get("planning") or {}
+        client = db.execute("SELECT client FROM requests WHERE id=?", (run["request_id"],)).fetchone() if run.get("request_id") else None
         parts = [run["id"], snapshot.get("name"), run["input"], run["error"], planned.get("intent"), planned.get("summary"),
-                 (snapshot.get("replan") or {}).get("reason")]
+                 (snapshot.get("replan") or {}).get("reason"), client and NAMES.get(client["client"])]   # D55: 「Codex」
         for t in tasks:
             parts += [t["spec"].get("name"), t["spec"].get("prompt")]
             if t["current_attempt"]:

@@ -67,6 +67,14 @@ class FilterTests(SearchCase):
         self.assertEqual(self.ids(self.b, lifecycle="closed"), [b])
         self.assertEqual(self.ids(self.b, lifecycle="open"), [a])
 
+    def test_a_deleted_session_is_never_listed(self):   # the console used to drop them itself
+        gone = self.make(self.b)
+        kept = self.make(self.b)
+        with self.db.transaction() as db:
+            db.execute("UPDATE runs SET lifecycle='deleted' WHERE id=?", (gone,))
+        self.assertEqual(self.ids(self.b), [kept])
+        self.assertEqual([r["id"] for r in self.service.runs(self.b, page=True)["items"]], [kept])
+
     def test_the_planning_stage(self):
         rid = self.service.start(self.b, {"request_id": "search-plan-0001", "input": "规划一个功能", "source": {"type": "new"},
                                           "plan": "agent"})["id"]
@@ -116,6 +124,14 @@ class FullTextTests(SearchCase):
         self.assertEqual(sorted(self.ids(self.b, q="优化")), sorted([a, b]))
         self.assertEqual(self.ids(self.b, q="优化 不存在的词"), [])
         self.assertEqual(self.ids(self.e, q="优化"), [])   # access is checked as before
+
+    def test_the_client_it_came_from_is_searchable_by_its_name(self):   # D55's console search, now on the server
+        with self.db.transaction() as db:
+            codex = authenticate(db, issue_token(db, self.b["id"], label="codex MCP")["token"])
+        a = self.make(codex)
+        self.make(self.b)
+        self.assertEqual(self.ids(self.b, q="Codex"), [a])
+        self.assertEqual(self.ids(self.b, q="Kiro IDE"), [])
 
 
 class PageTests(SearchCase):

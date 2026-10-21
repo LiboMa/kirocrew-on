@@ -1,5 +1,6 @@
 import { describe, expect, test } from "vitest";
 import type { Run, RunTask } from "@/api/types";
+import { EMPTY_FILTERS, filtersFromUrl, listParams, type RunListFilters } from "@/lib/runList";
 import {
   canContinue,
   canDelete,
@@ -8,7 +9,6 @@ import {
   canStop,
   closeAction,
   crewEntryReason,
-  filterRuns,
   rerunPlan,
   statusText,
 } from "@/lib/session";
@@ -78,35 +78,34 @@ describe("session actions follow the classic console rules", () => {
   });
 });
 
-describe("session list search and filters", () => {
-  const runs = [
-    run({ id: "run-a", name: "修复登录", status: "blocked" }),
-    run({ id: "run-b", name: "退款幂等", input: "订单退款", status: "running", workflow_name: "完整研发链" }),
-    run({ id: "run-c", name: "团队看板", status: "completed", team_id: "team-1" }),
-    run({ id: "run-d", name: "已删除", lifecycle: "deleted" }),
-    run({ id: "run-e", name: "已关闭的会话", lifecycle: "closed", status: "stopped" }),
-  ];
+describe("session list query (D56)", () => {
+  const params = (filters: Partial<RunListFilters>, space: string | null = "") =>
+    Object.fromEntries(new URLSearchParams(listParams({ ...EMPTY_FILTERS, ...filters }, space)));
 
-  test("only the current space and never deleted sessions", () => {
-    expect(filterRuns(runs, { space: "", query: "", filter: "all" }).map((r) => r.id)).toEqual(["run-a", "run-b", "run-e"]);
-    expect(filterRuns(runs, { space: "team-1", query: "", filter: "all" }).map((r) => r.id)).toEqual(["run-c"]);
+  test("the space, the page and the list view", () => {
+    expect(params({})).toEqual({ page: "1", view: "list", limit: "50", space: "personal" });
+    expect(params({}, "team-1").space).toBe("team-1");
+    expect(params({}, null).space).toBeUndefined();
   });
 
-  test("search matches name, requirement, workflow and id", () => {
-    expect(filterRuns(runs, { space: "", query: "订单", filter: "all" }).map((r) => r.id)).toEqual(["run-b"]);
-    expect(filterRuns(runs, { space: "", query: "研发链", filter: "all" }).map((r) => r.id)).toEqual(["run-b"]);
-    expect(filterRuns(runs, { space: "", query: "RUN-A", filter: "all" }).map((r) => r.id)).toEqual(["run-a"]);
+  test("a state group is statuses and the lifecycle", () => {
+    expect(params({ group: "attention" }).status?.split(",")).toContain("blocked");
+    expect(params({ group: "attention" }).lifecycle).toBe("open");
+    expect(params({ group: "done" })).toMatchObject({ status: "completed", lifecycle: "open" });
+    expect(params({ group: "closed" })).toMatchObject({ lifecycle: "closed" });
+    expect(params({ group: "closed" }).status).toBeUndefined();
   });
 
-  test("the search also finds a Session by the client it was submitted from (D55)", () => {
-    const runs = [run({ id: "run-c", request: { id: "request-1", client: "codex" } }), run({ id: "run-k", request: null })];
-    expect(filterRuns(runs, { space: null, query: "Codex", filter: "all" }).map((r) => r.id)).toEqual(["run-c"]);
+  test("the search and the filters, trimmed; empty ones are left out", () => {
+    expect(params({ q: " 订单 缓存 ", tool: "codex", repo: "github.com/o/r", since: "2026-10-20" }))
+      .toMatchObject({ q: "订单 缓存", tool: "codex", repo: "github.com/o/r", since: "2026-10-20" });
+    expect(params({ tool: "" }).tool).toBeUndefined();
   });
 
-  test("status filters group the lifecycle", () => {
-    expect(filterRuns(runs, { space: "", query: "", filter: "active" }).map((r) => r.id)).toEqual(["run-b"]);
-    expect(filterRuns(runs, { space: "", query: "", filter: "attention" }).map((r) => r.id)).toEqual(["run-a"]);
-    expect(filterRuns(runs, { space: "", query: "", filter: "closed" }).map((r) => r.id)).toEqual(["run-e"]);
+  test("the filters come back from the address bar", () => {
+    expect(filtersFromUrl("?run=run-a&q=%E8%AE%A2%E5%8D%95&group=attention&tool=codex&group2=x"))
+      .toEqual({ ...EMPTY_FILTERS, q: "订单", group: "attention", tool: "codex" });
+    expect(filtersFromUrl("?group=nope").group).toBe("all");
   });
 });
 

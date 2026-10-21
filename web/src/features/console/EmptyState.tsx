@@ -1,18 +1,22 @@
 import { ArrowRight, Sparkles } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
+import { useRunCount } from "@/api/hooks";
 import { useConsole } from "@/features/console/context";
-import { ACTIVE_STATES, ATTENTION_STATES, TOOLS } from "@/lib/labels";
-import { filterRuns } from "@/lib/session";
+import { TOOLS } from "@/lib/labels";
+import { EMPTY_FILTERS, listParams } from "@/lib/runList";
 
 export function EmptyState() {
-  const { runs, space, templates, open, select } = useConsole();
-  const inSpace = filterRuns(runs, { space, query: "", filter: "all" });
-  const attention = inSpace.filter((r) => r.lifecycle === "open" && ATTENTION_STATES.has(r.status));
+  const { space, templates, open, select } = useConsole();
+  // D56: the space's counts from the server; the first few Sessions that need a person come with theirs.
+  const active = useRunCount(listParams({ ...EMPTY_FILTERS, group: "active" }, space, 1), false);
+  const needs = useRunCount(listParams({ ...EMPTY_FILTERS, group: "attention" }, space, 5), false);
+  const done = useRunCount(listParams({ ...EMPTY_FILTERS, group: "done" }, space, 1), false);
+  const attention = needs.data?.items ?? [];
   const counts = [
-    ["进行中", inSpace.filter((r) => r.lifecycle === "open" && ACTIVE_STATES.has(r.status)).length],
-    ["需处理", attention.length],
-    ["已完成", inSpace.filter((r) => r.status === "completed").length],
+    ["进行中", active.data?.total ?? 0],
+    ["需处理", needs.data?.total ?? 0],
+    ["已完成", done.data?.total ?? 0],
   ] as const;
   const quick = ["chain", "proof"].map((id) => templates.find((t) => t.id === id)).filter((t) => !!t);
 

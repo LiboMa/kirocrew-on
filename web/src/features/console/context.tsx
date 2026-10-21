@@ -1,5 +1,6 @@
 import { createContext, useContext } from "react";
 import type { Me, Run, Step, Team, Template, User, Worker, Workflow } from "@/api/types";
+import type { RunListFilters } from "@/lib/runList";
 
 export interface LaunchSeed {
   mode?: "workflow";
@@ -38,7 +39,16 @@ export interface ConsoleState {
   workers: Worker[];
   workflows: Workflow[];
   templates: Template[];
+  /** D56: the loaded pages of the list as filtered on the server, newest first. */
   runs: Run[];
+  /** How many Sessions match the filters, and how many the space (or every space) holds. */
+  runTotal: number;
+  spaceTotal: number;
+  hasMore: boolean;
+  loadMore: () => void;
+  loadingMore: boolean;
+  filters: RunListFilters;
+  setFilters: (filters: RunListFilters) => void;
   space: string;
   setSpace: (space: string) => void;
   /** An administrator's view of every Session, in every space (B5). */

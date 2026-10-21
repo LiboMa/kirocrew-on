@@ -4,7 +4,7 @@ import userEvent from "@testing-library/user-event";
 import { App } from "@/App";
 import { setToken } from "@/api/client";
 import type { Resolution, Step } from "@/api/types";
-import { makeRun, mockApi, workspaceRoutes } from "@/test/api";
+import { makeRun, mockApi, runPage, workspaceRoutes } from "@/test/api";
 
 const bugfix: Step[] = [
   { id: "reproduce", name: "复现与定位", tool: "kiro", model: "auto", effort: "", prompt: "复现问题" },
@@ -32,7 +32,7 @@ function start(extra: Record<string, unknown> = {}) {
   const calls = mockApi(workspaceRoutes([], {
     "GET /workflow-templates": templates,
     "POST /workflows/resolve": (body: unknown) => resolve(body as { input: string }),
-    "GET /runs": () => (submitted ? [created] : []),
+    "GET /runs": (_body: unknown, url: URL) => runPage(submitted ? [created] : [], url),
     "POST /runs": () => { submitted = true; return created; },
     [`GET /runs/${created.id}`]: created,
     ...extra,
