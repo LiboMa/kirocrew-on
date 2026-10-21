@@ -1,17 +1,17 @@
 # 进度与完成记录
 
-> 由 `tools/progress.py` 生成（2026-10-21 14:11 CST）：任务状态取自 `docs/progress.json`，提交记录取自 git。看板：`docs/progress-dashboard.html`。
+> 由 `tools/progress.py` 生成（2026-10-21 21:44 CST）：任务状态取自 `docs/progress.json`，提交记录取自 git。看板：`docs/progress-dashboard.html`；实时看板：`python3 tools/progress.py --serve --ec2`（http://127.0.0.1:8765/）。
 
-- **本轮完成度**：87%　**MVP 完成度**：53%
-- **分支**：HEAD `8540e96`；自 `origin/main` 起 346 个提交——已推送 335、已部署 EC2 9、仅本机 2；EC2 运行 `17687ec`
-- **回归**：1396 后端 + 92 + 204 控制台；EC2 运行 17687ec（重新规划复核保留检查、凭证编辑范围、边界运维、owner 原生入口）
+- **本轮完成度**：87%　**MVP 完成度**：38%
+- **分支**：HEAD `80bc0c4`；自 `origin/main` 起 362 个提交——已推送 335、已部署 EC2 27、仅本机 0；EC2 运行 `80bc0c4`
+- **回归**：1412 后端 + 92 + 205 控制台（connect codex / kiro-ide 本机）；EC2 运行 95e5aa9
 
 ## 模块
 
 | 模块 | 完成度 | 已验收 | 已部署 · 待验收 | 本机完成 · 待部署 | 进行中 | 卡点 · 等外部 | 未开始 |
 |---|---|---|---|---|---|---|---|
-| MVP 里程碑（M1–M5） | 53% | 4 | 1 | 0 | 0 | 0 | 4 |
-| D46 Agent 角色与提示体系 | 87% | 8 | 2 | 0 | 0 | 1 | 0 |
+| MVP 里程碑（M1–M5） | 38% | 5 | 5 | 0 | 3 | 0 | 14 |
+| D46 Agent 角色与提示体系 | 87% | 8 | 3 | 0 | 0 | 1 | 0 |
 | D49 每人一个执行边界 | 80% | 2 | 2 | 0 | 1 | 0 | 0 |
 | D50 编码技能包 | 100% | 2 | 0 | 0 | 0 | 0 | 0 |
 | D51 模型列表与自动发现 | 100% | 3 | 0 | 0 | 0 | 0 | 0 |
@@ -25,7 +25,6 @@
 2. 【需要负责人】可选：建一个测试成员账号（我不经 MCP 建用户），以便在 EC2 实测 D49 第 2 期的成员回退与 R10
 3. 【需要负责人】规划质量：默认 admission 改为 confirm（计划先给人看），和 / 或在规划后加一个不同工具的计划审查
 4. 【需要负责人】下一个大项的先后：M2 剩余、M3 剩余、M4 剩余、M5 仓库闭环、D49 第 3 期、返工自动附技能（skills-next）
-5. 【需要负责人】D54 主体（协调者的返工可附带扩大 paths，docs/superpowers/specs/2026-10-21-coordinator-paths-design.md）待确认后实现
 
 ## 本轮修复的缺陷
 
@@ -44,9 +43,22 @@
 
 ## 完成记录（按决策，最近的在前）
 
-### D54（4 个提交：已部署 EC2 3、仅本机 1）
+### D55（9 个提交：已部署 EC2 9）
 
-- `ef47d6d` 2026-10-21 〔仅本机〕 docs: 进度——run-25c7aaa7 完成；D54 主体待负责人确认
+- `80bc0c4` 2026-10-21 〔已部署 EC2〕 fix(policies): 终审修正（D55）——最具体的准入规则按字面字符多少取胜（较早的 github.com/o/* 不再被较新的 * 盖过）；MCP 精简状态带 admission、admission_basis 与 request，Coding Agent 能说明会话为何等待；报告抬头写明准入依据；管理员能在列表中看到并删除他为非所在 Team 建的规则；管理员读他人的 Request 写审计（与会话一致）；BACKLOG 记延后的次要项
+- `e36ac62` 2026-10-21 〔已部署 EC2〕 docs: D55 Request、准入规则与映射偏好——OPERATIONS 新节（默认已改为 confirm）、MVP-RELEASE §14.2 第 1、4、5 行、进度、BACKLOG 延后项
+- `02e581d` 2026-10-21 〔已部署 EC2〕 feat(console): 会话页写明来自哪个请求与准入依据；设置「准入与映射偏好」（D55）——头部一行「来自请求 request-xxxxxx · Codex；按准入规则「github.com/o/*」自动开始 / 按平台默认等待确认」（提交时自己指定的不重复）；新对话框分「准入规则」「映射偏好」两组，显示作用域与内容，可删除自己能维护的，新增时选作用域（个人、本人是 owner 的 Team）、仓库模式与准入方式，或按类别 / 角色的工具与模型，服务端的拒绝原样显示在表单下；会话搜索也匹配来源客户端（输入「Codex」）
+- `4e37c28` 2026-10-21 〔已部署 EC2〕 feat(mcp): octopus_requests 与只读的 octopus_policies；octopus_start 回执带 request_id；Skill 写明默认先确认、准入依据与按偏好的映射来源（D55）
+- `4703429` 2026-10-21 〔已部署 EC2〕 feat(policies): 个人 / Team 映射偏好进入规划提示与映射来源（D55 M2-4）——偏好按类别或角色对应工具 / 模型，同一类别或角色上个人覆盖 Team；提交时写入会话快照，首次规划（600）与重新规划（200）的提示多一节「用户的映射偏好」，每条一行：优先采纳、不采纳写明理由，需求中指定的优先，不可用的工具不选；规划者的任务与偏好一致时映射来源写「按个人偏好 / 按 Team 偏好」；重新规划的最坏情况仍 ≤ 7800（保留任务检查 800→600、检查命令 300→250）；设计 §6 记 tool: auto 本期不做
+- `37197fb` 2026-10-21 〔已部署 EC2〕 feat(policies): 按仓库范围的准入规则，平台默认改为先确认（D55 M2-5）——个人 / Team 规则 {repos: 主机/所有者/仓库（可 *）, mode: auto|confirm}；判定顺序为提交时指定 → 个人规则 → Team 规则 → 平台默认，同层取最具体（通配最少、再按最新）；https、ssh、git@host:path 三种写法同一结果，新建项目不命中；会话快照与视图带 admission_basis，Request 的策略快照记命中的规则；Team 规则只有 owner 或管理员能增删、归档的 Team 不能新增，增删写审计；GET/POST /v1/policies、DELETE /v1/policies/<id>；default_admission 默认 confirm
+- `8cff53b` 2026-10-21 〔已部署 EC2〕 feat(requests): 每次提交登记 Request（D55 M2-1）——迁移 9 建 requests 与 policies 表、runs.request_id；来源客户端取自 Token 标签（控制台 / claude / kiro / codex / kiro-ide / api）；记需求原文、源码、显式选择（只记个数与格式）与准入 / 自动纠错 / 发布策略快照；会话视图带 request，旧会话为 null；GET /v1/requests（status、q、client、limit）与 /v1/requests/<id>，看不到其会话的人得 404
+- `c39be8b` 2026-10-21 〔已部署 EC2〕 docs(plan): D55 M2 剩余的实施计划（6 个任务：Request、准入规则与默认先确认、映射偏好进入规划、MCP 与 Skill、控制台、文档与 EC2 验收）；进度：connect codex 在 EC2 以真实 Codex 核对
+- `9879cc4` 2026-10-21 〔已部署 EC2〕 feat(connect): octopus connect codex（合并 ~/.codex/config.toml，只替换 [mcp_servers.kirocrew-on]）与 connect kiro-ide（合并 <项目>/.kiro/settings/mcp.json，不需要 kiro-cli）——备份、0600、合并后解析核对；合并失败时只说原因并吊销刚签发的 Token（M3-1）；docs(spec): D55 M2 剩余（Request、按仓库准入、映射偏好）及负责人的三项决定
+
+### D54（5 个提交：已部署 EC2 5）
+
+- `245d2ea` 2026-10-21 〔已部署 EC2〕 feat(recovery): 协调者的返工可扩大可改动路径（D54）——artifacts_locked 的失败记录带被拒文件，协调者在 context.locked_files 中看到；重试 / 返工失败的任务时可加 paths_add（只取 locked_files 中的文件，至多 10 个，合并后至多 20 项），平台核对后扩大该任务的 paths，记在这次自动纠错的修订与时间线 task.paths_added；不符时整份决定被拒并写明原因；OPERATIONS、Skill 与设计同步
+- `ef47d6d` 2026-10-21 〔已部署 EC2〕 docs: 进度——run-25c7aaa7 完成；D54 主体待负责人确认
 - `17687ec` 2026-10-21 〔已部署 EC2〕 feat(replan): 重新规划复核保留任务的检查命令（负责人 2026-10-21，D54 §9 a）——提示列出保留的已验收任务的 verify；计划可带 verify_fixes，平台只接受指向保留任务且不清空 implement / test 检查的修正，写入该任务（不重跑）并记在这次重新规划的修订里，时间线 task.verify_revised；重新规划提示的各节限长下调以容下（最坏约 7720 / 8000）
 - `82fadb4` 2026-10-21 〔已部署 EC2〕 docs(spec): D54 记下同类问题——保留任务的过时检查命令（run-25c7aaa7 第 15 轮后 checks_pass 因 backend/.venv 失败），不交给协调者，列出可选做法待负责人决定
 - `3325522` 2026-10-21 〔已部署 EC2〕 docs(spec): D54 协调者的返工可扩大可改动路径——只限门禁锁住的、此前已验收任务的文件，记修订与时间线（EC2 run-25c7aaa7 卡在 artifacts_locked 13 轮）
@@ -66,6 +78,14 @@
 - `8c0bfbe` 2026-10-18 〔已推送〕 feat(evaluation): 改代码的会话缺少 Evaluator 时平台在完成前追加（验收项取此前任务、工具按环境事实与审查独立性，没有作者以外的工具时记「审查不独立」），映射来源与时间线可见；规划提示要求安排 Evaluator；Evaluator 卡片要求 pending 与对挑战的逐条回应（D46 P3）
 - `1614598` 2026-10-18 〔已推送〕 feat(evaluation): Evaluator 门禁（D46 P3）——改代码的新会话（契约 4、Worker 支持角色卡片）以 Evaluator 对每条验收项的 pass / fail / pending 与证据为准：缺项或缺证据交给协调者，fail 返工，pending 停在「验收待确认」，经确认（记确认者，不计预算）后继续
 - `c1fb892` 2026-10-18 〔已推送〕 docs(spec,plan): D46 P3 Evaluator 门禁——改代码的会话以 Evaluator 的逐项判定为准（负责人 2026-10-18：都要经过 Evaluator；pending 停在「验收待确认」）；缺少时平台追加；适用于契约 4 且 Worker 支持角色卡片
+
+### D37 · 候选提交、门禁与报告（5 个提交：已推送 4、已部署 EC2 1）
+
+- `889fa00` 2026-10-21 〔已部署 EC2〕 feat(runs): 会话列表在服务端过滤（M3-5 第一步）——GET /v1/runs 支持 status / q / limit，最新的在前，不带参数时不变；MCP octopus_runs 改为精简列表 {items, more}（默认 20、至多 50，只含状态、进度、需要处理的事与错误首行），EC2 上完整列表约 55 万字符超出 MCP 结果上限（M3-3）；OpenAPI、Skill、OPERATIONS 同步；进度：M2-3 已由 D37 / D46 P3 覆盖
+- `fccf081` 2026-10-15 〔已推送〕 feat(gates): artifacts_locked（已验收任务的交付物只能由 paths 覆盖它们的任务修改）与 tests_fail_on_baseline（测试任务的测试须在会话基线上失败）（D37 §11.1、§11.2）
+- `d9b0a0d` 2026-10-15 〔已推送〕 feat(worker): 基线检查模式（标记、切换、必然恢复）；遗留的基线在下一次操作前恢复，运行中的基线不被其他请求打断（D37 §11.1）
+- `b9cf48d` 2026-10-15 〔已推送〕 feat(sources,checks): 候选记录改动的文件名；在项目目录原地切到会话基线并叠加测试文件、必然恢复（D37 §11.1）
+- `132dd3a` 2026-10-14 〔已推送〕 docs(spec): D37 候选提交、命名门禁与 Feature 报告（M2）——平台运行检查命令、审查绑定候选、只发布已验证候选；分三期
 
 ### D53 · 管理与使用分开（3 个提交：已推送 3）
 
@@ -286,13 +306,6 @@
 - `05625c3` 2026-10-15 〔已推送〕 feat(prompts),docs: Agent 的任务说明与规划提示写明 artifacts_locked 与 tests_fail_on_baseline；D37 第 3 期运维与进度
 - `47b7775` 2026-10-15 〔已推送〕 docs(plan): D37 第 3 期门禁（tests_fail_on_baseline、artifacts_locked）的设计细化与实施计划
 
-### D37 · 候选提交、门禁与报告（4 个提交：已推送 4）
-
-- `fccf081` 2026-10-15 〔已推送〕 feat(gates): artifacts_locked（已验收任务的交付物只能由 paths 覆盖它们的任务修改）与 tests_fail_on_baseline（测试任务的测试须在会话基线上失败）（D37 §11.1、§11.2）
-- `d9b0a0d` 2026-10-15 〔已推送〕 feat(worker): 基线检查模式（标记、切换、必然恢复）；遗留的基线在下一次操作前恢复，运行中的基线不被其他请求打断（D37 §11.1）
-- `b9cf48d` 2026-10-15 〔已推送〕 feat(sources,checks): 候选记录改动的文件名；在项目目录原地切到会话基线并叠加测试文件、必然恢复（D37 §11.1）
-- `132dd3a` 2026-10-14 〔已推送〕 docs(spec): D37 候选提交、命名门禁与 Feature 报告（M2）——平台运行检查命令、审查绑定候选、只发布已验证候选；分三期
-
 ### D38 · 换工具与批准代理（11 个提交：已推送 11）
 
 - `6ac9d51` 2026-10-14 〔已推送〕 feat(console): 会话页「待批准」卡片（工具、命令与用途，确认后批准或拒绝；不能答复的人只看到内容）；会话视图的 permissions.publish（D38 §4.3）
@@ -367,8 +380,10 @@
 - `ec02d73` 2026-10-12 〔已推送〕 docs: D32 会话修订历史；EC2 验收记录与能力清单
 - `c3c0f4e` 2026-10-12 〔已推送〕 feat(revisions): 会话修订历史与 Prompt 差异（后端，D32）——每次创建 / 规划 / 续作 / 自动纠错记录完整快照与摘要；旧修订按记录还原；GET /v1/runs/<id>/revisions[/<version>|/diff]；MCP octopus_revisions 只返回变化；OpenAPI 与 Skill
 
-### 未标记 · 功能（65 个提交：已推送 64、已部署 EC2 1）
+### 未标记 · 功能（67 个提交：已推送 64、已部署 EC2 3）
 
+- `ccd91e0` 2026-10-21 〔已部署 EC2〕 feat(dashboard): MVP 里程碑面板——M1–M5 各一条按状态分段的进度条（未开始显示为空轨）、完成度与已验收数；点一行展开其条目，「展开全部」开关（role=switch）；展开状态存 localStorage，实时页刷新后保留；实时页不重播动画；筛选与搜索同样作用于里程碑（负责人 2026-10-21）
+- `e069a5f` 2026-10-21 〔已部署 EC2〕 feat(tools): 实时进度看板——tools/progress.py --serve [PORT] [--ec2]：只在 127.0.0.1，每次请求现读 docs/progress.json 与 git，页面每 15 秒刷新、不写文件；--ec2 每 5 分钟经 SSM 只读读取 EC2 运行的提交（负责人 2026-10-21）
 - `b733fc6` 2026-10-21 〔已部署 EC2〕 feat(console): 凭证卡片「编辑范围」——已有凭证可改仓库范围（PATCH repos）
 - `e0d8791` 2026-10-20 〔已推送〕 feat(tools): 完成记录机制——tools/progress.py 从 git 列出自 origin/main 起的全部提交，按决策分组并标明已推送 / 已部署 EC2 / 仅本机，连同 docs/progress.json 的任务状态写入看板与 docs/PROGRESS.md（负责人 2026-10-20）
 - `092a19a` 2026-10-20 〔已推送〕 feat(console): 任务的模型改为下拉选择该执行环境公布的模型——「自动」时也列出全部（原输入框按当前值过滤建议，自动时只剩 auto）；模型取自将要执行的环境（平台的默认位置或所选环境），工作流编辑器不再取空间里的第一个环境
@@ -487,9 +502,11 @@
 - `23396a9` 2026-10-12 〔已推送〕 fix(access): 审查修复——自动诊断同样核对执行环境；退役 Worker 上的会话在本地关闭 / 删除、不能重新打开，重新打开中的会话计入退役检查；归档 Team 可调整已有成员角色；可移除已停用的成员；归档 Team 的会话停用续作 / 诊断 / 重新打开 / 分配并说明原因；退出唯一的 Team 后回到个人空间
 - `436233b` 2026-10-12 〔已推送〕 fix(console): 修订差异只在改动处保留 2 行上下文、其余折叠；修订列表不重复类型（EC2 实测长 Prompt）
 
-### 未标记 · 文档（30 个提交：已推送 28、已部署 EC2 1、仅本机 1）
+### 未标记 · 文档（32 个提交：已推送 28、已部署 EC2 4）
 
-- `8540e96` 2026-10-21 〔仅本机〕 docs: 进度——重新规划复核保留检查已部署 EC2（17687ec）
+- `904618b` 2026-10-21 〔已部署 EC2〕 docs: 进度——M2 / M3 / M4 / M5 按 MVP-RELEASE §6 / §7 与 BACKLOG 拆成 21 个条目（各写现状与是否需设计），看板可见（负责人 2026-10-21 问）
+- `b4f74ee` 2026-10-21 〔已部署 EC2〕 docs: 进度看板刷新（EC2 17687ec）
+- `8540e96` 2026-10-21 〔已部署 EC2〕 docs: 进度——重新规划复核保留检查已部署 EC2（17687ec）
 - `68a6b12` 2026-10-21 〔已部署 EC2〕 docs: 进度看板刷新（EC2 d02325d）
 - `f27c24d` 2026-10-21 〔已推送〕 docs: 进度——次要问题第 1–7 批已部署 EC2（8db5430）
 - `a5eb554` 2026-10-21 〔已推送〕 docs(skill): 写明 latest.continued 是自动纠错接上了上一轮对话，与 octopus_continue 无关；进度记下待负责人决定的三项
@@ -527,3 +544,7 @@
 - `d138dec` 2026-10-17 〔已推送〕 test(kirocrew): 配置契约——平台写入 config.json 的键列在 tests/kirocrew_contract.json（版本与 versions.env 一致）；本机回归核对 seed() 只写清单内的键，部署时原生测试在主机上核对清单中的键都是已安装 KiroCrew 的配置字段，并用 KiroCrew 自己的加载器读回新配置、不得有被忽略的键。seed() 去掉 KiroCrew 不读的 dashboard.host / port 与 workspaces.default.path（EC2 上加载器如实报出，连同旧的 memory.enabled），去掉随之无用的 port 参数；HTTP 字段契约等后续记入 BACKLOG
 - `bd552c4` 2026-10-16 〔已推送〕 test(credentials): 测试中固定 github.com / gitlab.example.com 的解析结果——本机代理的 fake-IP（198.18.0.0/15）不再使凭据测试被 refused_address 拒绝
 - `fd9f1f4` 2026-10-12 〔已推送〕 test(access): 权限矩阵覆盖 Team 与 Worker 管理；OpenAPI 记录第 2 期接口与 admin scope
+
+### 未标记 · 其他（1 个提交：已部署 EC2 1）
+
+- `95e5aa9` 2026-10-21 〔已部署 EC2〕 perf(runs): 会话列表的 view=list——任务只带 ID、状态、名称、工具、类别与角色，规划不带补全的需求；React 控制台（每 10 秒）与 MCP 的列表改用它，会话页照旧取完整会话（EC2 上任务说明占完整列表的三分之二）；旧版 /classic/ 不变（M3-5）
