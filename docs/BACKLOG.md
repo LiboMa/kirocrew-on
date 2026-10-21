@@ -81,7 +81,7 @@
 ## D46 P2 角色卡片的终审延后项（2026-10-18）
 - 审查独立性的「作者」口径与恢复换工具的 `reviewed_backend` 不同：没写 kind 的任务不算作者；`reviewed_backend` 取最新已验收的非审查任务的
   实际后端，并把 test 任务算作作者。P3 的 Evaluator 门禁前统一。
-- 卡片文件格式错时在派发时才报 ValueError / AttributeError，且每次调用重读文件（可加缓存与明确报错；仓库内文件由 CardTests 覆盖）。
+- ~~卡片文件格式错时在派发时才报 ValueError / AttributeError，且每次调用重读文件~~（2026-10-20 修复：读一次、报出是哪张卡片）。
 - ~~续作不能去掉任务的角色（`null` / `""` 被拒）~~（2026-10-20 修复：去掉角色，类别不变）；改类别时须同时换成相容的角色。
 - ~~控制台修订对比中角色的取值显示为 id（security_test → evaluator），未用中文标题~~（2026-10-20 修复：显示角色标题）。
 
@@ -133,7 +133,7 @@
 - Worker 删除时忽略 KiroCrew 的 `{"ok": false}`，`GatewayError` 未转译；写入时 KiroCrew 5xx / 401 记为最终的 refused，不重试。
 - 等待执行环境恢复期间没有退避（每个 tick 重发，最多 600 秒）。
 - 仓库标识可能碰撞（`github.com/o/r_x` 与 `github.com/o_r/x`）：可对 host/path 一并散列。
-- `_mark` 不拒绝符号链接的标记文件（仓库提交了 `.octopus-kb/<key>` 符号链接时 `touch` 会跟随）。
+- ~~`_mark` 不拒绝符号链接的标记文件（仓库提交了 `.octopus-kb/<key>` 符号链接时 `touch` 会跟随）~~（2026-10-20 修复：标记文件与 `.git/info/exclude` 也拒绝符号链接）。
 - 测试缺口：共享 → 专属（改派后重新准备写标记、`lessons: true`）、第二个 Knowledge 任务的写入。
 - OPERATIONS「专属环境内属于同一空间」没有考虑先共享、后改为专属的 Worker（带着当时的 KiroCrew 自动 lessons）。
 - 控制台：~~任务已完成而没有可沉淀的条目时仍写「Knowledge 任务完成后…」~~（2026-10-20 修复）；`steps()` 接受用户提交的 `role: knowledge`（不沉淀）；
@@ -188,8 +188,8 @@
   可从公网访问（可选：nginx 以 444 占住未分配端口）；Worker `/health` 的 version 恒为 1.0.0，管理员列表看不出旧版本主机；
   「执行环境」对话框移出空间无确认；Worker 不可达时不显示进行中会话数；`worker-host native` 的实测以 `Host: 127.0.0.1` 发出，
   链路正常时读到 Gateway 的 4xx；环境列表并发测试的时间余量偏小。
-- 开发成果下载（D36 第 1 期审查延后项）：`preview_spec` 的 `cwd` 未拒绝 shell 元字符且在 `cd` 步骤中未加引号、`install` 中非对象项被静默丢弃、
-  符号链接的 `.octopus/preview.json` 被跟随、允许两个 `$PORT` 进程、`next dev` 的本机端口提示为 5173（实为 3000）；`filename*` 未转义 `/`；
+- 开发成果下载（D36 第 1 期审查延后项）：~~`preview_spec` 的 `cwd` 未拒绝 shell 元字符且在 `cd` 步骤中未加引号~~（2026-10-20 修复：本机步骤加引号、拒绝控制字符）、`install` 中非对象项被静默丢弃、
+  ~~符号链接的 `.octopus/preview.json` 被跟随~~（2026-10-20 修复）、允许两个 `$PORT` 进程、`next dev` 的本机端口提示为 5173（实为 3000）；`filename*` 未转义 `/`；
   `.envrc`、`.npmrc`（可能含 `_authToken`）与名为 `.env/` 的虚拟环境目录会被打包，已提交到 Git 的 `.env` 仍在 `.git` 对象中；
   同一链接 10 分钟内可反复下载、每次重新打包并写记录；`run.downloaded` 未记 commit；`OCTOPUS-ARCHIVE.txt` 在解压的仓库中显示为未跟踪；
   不支持 HEAD 与 Range；`test_errors_before_streaming_stay_json_and_auth_is_required` 的第一条断言恒成立；此前已准备的新建项目没有 `.git`。

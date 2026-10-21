@@ -2,6 +2,7 @@
 BLOCKED — chosen by the task's ``role``, while ``kind`` keeps deciding the gates. Each card is a KiroCrew-style SKILL.md
 under octopus/roles/<role>/, inlined at the top of the task's instructions (owner 2026-10-18: a KiroCrew skill is fixed
 per agent spec and cannot be chosen per spawn, so the card travels with the task)."""
+from functools import cache
 from pathlib import Path
 import re
 
@@ -14,9 +15,13 @@ REVIEWERS = frozenset({"security_test", "challenge", "evaluator"})   # never the
 PLATFORM = frozenset({"knowledge"})   # added by the platform when a Session completes (D46 P4), never planned
 
 
+@cache   # the cards ship with the release: read each once
 def _read(role):
     match = re.match(r"---\n(.*?)\n---\n(.*)", (ROOT / role / "SKILL.md").read_text(), re.S)
-    return dict(line.split(": ", 1) for line in match.group(1).splitlines()), match.group(2).strip()
+    lines = match.group(1).splitlines() if match else []
+    if not match or not all(": " in line for line in lines):
+        raise ValueError(f"角色卡片 {role} 格式错误：须以 --- 包起的 key: value 头开始")
+    return dict(line.split(": ", 1) for line in lines), match.group(2).strip()
 
 
 def card(role):

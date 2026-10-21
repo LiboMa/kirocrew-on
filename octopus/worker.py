@@ -988,10 +988,10 @@ class Worker:
     def _mark(self, project, key):
         """The repository mark KiroCrew scopes this repository's lessons to: a file only on this host, never committed."""
         mark = project / self._knowledge_scope(key)
-        require(not any(p.is_symlink() for p in (mark.parent, project / ".git/info")), "知识标记路径不可为符号链接")
+        exclude = project / ".git/info/exclude"
+        require(not any(p.is_symlink() for p in (mark.parent, mark, exclude.parent, exclude)), "知识标记路径不可为符号链接")
         mark.parent.mkdir(exist_ok=True)
         mark.touch()
-        exclude = project / ".git/info/exclude"
         exclude.parent.mkdir(exist_ok=True)
         lines = exclude.read_text().splitlines() if exclude.is_file() else []
         if "/.octopus-kb/" not in lines:

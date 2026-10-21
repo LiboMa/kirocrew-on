@@ -3,6 +3,7 @@ one, what the project's own files say. Used for the local start steps in a downl
 import json
 from pathlib import Path
 import re
+import shlex
 
 DECLARATION = ".octopus/preview.json"
 READY = {"path": "/", "timeout": 120}
@@ -16,7 +17,7 @@ def _text(value, field, limit):
 
 def _cwd(value, project):
     cwd = value if value is not None else "."
-    if not isinstance(cwd, str) or not cwd or Path(cwd).is_absolute():
+    if not isinstance(cwd, str) or not cwd or Path(cwd).is_absolute() or re.search(r"[\x00-\x1f\x7f]", cwd):
         raise ValueError("cwd 须为项目内的相对路径")
     root = Path(project).resolve()
     if not (root / cwd).resolve().is_relative_to(root):
@@ -35,6 +36,8 @@ def _port(value):
 def load(project):
     """The validated declaration, None without one; ValueError says which part is wrong."""
     path = Path(project) / DECLARATION
+    if path.is_symlink() or path.parent.is_symlink():   # the project's own file, never one it points to
+        raise ValueError(f"{DECLARATION} 不可为符号链接")
     if not path.is_file():
         return None
     try:
@@ -124,7 +127,7 @@ def local_steps(spec):
     """The steps to run the project on one's own machine, as shell lines and a closing「打开 …」."""
     if spec.get("static"):
         return ["python3 -m http.server 8000", "打开 http://localhost:8000" + spec["ready"]["path"]]
-    line = lambda cwd, command: command if cwd == "." else f"cd {cwd} && {command}"
+    line = lambda cwd, command: command if cwd == "." else f"cd {shlex.quote(cwd)} && {command}"
     steps = [line(step["cwd"], step["command"]) for step in spec["install"]]
     steps += [line(p["cwd"], p["command"].replace("$PORT", str(_local_port(p)))) for p in spec["processes"]]
     return steps + [f"打开 http://localhost:{_local_port(entry(spec))}{spec['ready']['path']}"]

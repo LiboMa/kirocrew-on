@@ -103,5 +103,24 @@ class PreviewSpecTests(unittest.TestCase):
         self.assertEqual(static, ["python3 -m http.server 8000", "打开 http://localhost:8000/"])
 
 
+    def test_a_cwd_is_quoted_in_the_local_steps_and_control_characters_are_refused(self):
+        self.declare({"processes": [{"cwd": "my app", "command": "npm run dev", "port": "$PORT"}],
+                      "install": [{"cwd": "$(touch pwned)", "command": "npm ci"}]})
+        steps = preview_spec.local_steps(preview_spec.load(self.project))
+        self.assertEqual(steps[:2], ["cd '$(touch pwned)' && npm ci", "cd 'my app' && npm run dev"])
+        self.declare({"processes": [{"cwd": "app\nrm -rf ~", "command": "npm run dev", "port": "$PORT"}]})
+        with self.assertRaises(ValueError):
+            preview_spec.load(self.project)
+
+    def test_a_symlinked_declaration_is_not_followed(self):
+        outside = tempfile.TemporaryDirectory()
+        self.addCleanup(outside.cleanup)
+        target = Path(outside.name) / "elsewhere.json"
+        target.write_text(json.dumps(FULL))
+        (self.project / ".octopus").mkdir()
+        (self.project / ".octopus/preview.json").symlink_to(target)
+        with self.assertRaises(ValueError):
+            preview_spec.load(self.project)
+
 if __name__ == "__main__":
     unittest.main()

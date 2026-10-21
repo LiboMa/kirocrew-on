@@ -39,6 +39,22 @@ class CardTests(unittest.TestCase):
             self.assertIn(f"{role}（{roles.LABELS[role]}，kind {'/'.join(kinds)}）", text)
 
 
+class CardFormatTests(unittest.TestCase):
+    def test_a_malformed_card_says_which_one(self):
+        import tempfile
+        from unittest.mock import patch
+        with tempfile.TemporaryDirectory() as tmp:
+            (Path(tmp) / "sde").mkdir()
+            for text in ("no head at all", "---\nname sde\n---\nbody"):
+                (Path(tmp) / "sde/SKILL.md").write_text(text)
+                roles._read.cache_clear()
+                with self.subTest(text), patch.object(roles, "ROOT", Path(tmp)), self.assertRaises(ValueError) as caught:
+                    roles.card("sde")
+                self.assertIn("sde", str(caught.exception))
+        roles._read.cache_clear()
+        self.assertTrue(roles.card("sde"))   # the packaged card, read once
+
+
 class RoleFieldTests(unittest.TestCase):
     def test_a_role_is_kept_and_infers_its_kind(self):
         self.assertEqual(steps([step(role="security_test", tool="codex")])[0]["kind"], "review")

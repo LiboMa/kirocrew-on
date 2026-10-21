@@ -48,6 +48,21 @@ class KnowledgeWorkerTests(unittest.TestCase):
         self.prepare(knowledge_scope="h_o_r")   # a second prepare adds no second line
         self.assertEqual((project / ".git/info/exclude").read_text().splitlines().count("/.octopus-kb/"), 1)
 
+    def test_a_symlinked_mark_or_exclude_file_is_not_followed(self):
+        project = self.prepare(knowledge_scope="h_o_r")
+        outside = Path(self.tmp.name) / "outside.txt"
+        for name in (".octopus-kb/h_o_r", ".git/info/exclude"):
+            with self.subTest(name):
+                outside.write_text("keep\n")
+                original = (project / name).read_bytes()
+                (project / name).unlink()
+                (project / name).symlink_to(outside)
+                with self.assertRaises(Exception):
+                    self.prepare(knowledge_scope="h_o_r")
+                self.assertEqual(outside.read_text(), "keep\n")
+                (project / name).unlink()
+                (project / name).write_bytes(original)
+
     def test_no_mark_without_a_scope_and_a_bad_scope_is_refused(self):
         project = self.prepare()
         self.assertFalse((project / ".octopus-kb").exists())
