@@ -552,6 +552,8 @@ export interface DesignJob {
   error?: string | null;
   /** What KiroCrew answered, as it answered (D66: shown when it is not a valid workflow, to import and fix). */
   raw_result?: string;
+  /** D66: the last recommendation was not a valid workflow and KiroCrew is fixing it (once). */
+  repairing?: boolean;
 }
 
 /** One write to a Session (D34): who made it (a user and their client, or a part of the system) and what changed. */

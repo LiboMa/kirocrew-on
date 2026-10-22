@@ -136,8 +136,9 @@ export function validateStep(step: number, draft: Draft,
   }
   if (draft.method === "agent" && (step === 1 || step === 2)) return workflowMode ? "保存工作流需要任务列表，请选择其他编排方式。" : "";
   if (step === 1) {
-    if (draft.method === "recommend" && !draft.generation?.applied)
-      return "请先让 KiroCrew 推荐并采用方案；也可以改用参考模板或导入已生成的工作流。";
+    if (draft.method === "recommend" && !draft.generation?.applied)   // D66: say why when there is nothing to adopt
+      return draft.generation?.status === "invalid" && draft.generation.error ? draft.generation.error
+        : "请先让 KiroCrew 推荐并采用方案；也可以改用参考模板或导入已生成的工作流。";
     if (draft.method === "import" && !draft.imported) return "请先解析并采用导入的工作流。";
     if (!draft.tasks.length || (draft.choice !== "custom" && draft.resolution?.input !== input))
       return "请等待当前需求匹配完成，或选择一个模板 / 工作流。";

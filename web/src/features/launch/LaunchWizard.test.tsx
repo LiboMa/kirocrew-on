@@ -268,8 +268,27 @@ describe("launch wizard", () => {
     await waitFor(() => expect(calls.some((c) => c.path === "/v1/workflows/resolve")).toBe(true));
     await userEvent.click(within(dialog).getByRole("button", { name: "让 KiroCrew 推荐" }));
     expect(await within(dialog).findByText(/流程须包含 1–12 个顺序任务/)).toBeInTheDocument();
+    expect(within(dialog).queryByText(/返回内容格式无效/)).toBeNull();   // the reason, not a vague label before it
+    await next(dialog);   // the step's own message names the reason too
+    expect(within(dialog).getAllByText(/流程须包含 1–12 个顺序任务/).length).toBeGreaterThan(0);
     await userEvent.click(within(dialog).getByRole("button", { name: "导入并修改" }));
     expect(await within(dialog).findByLabelText(/工作流内容/)).toHaveValue(raw);
+  });
+
+  test("while KiroCrew fixes its recommendation the wizard says so (D66)", async () => {
+    const calls = start({
+      "GET /workers": [worker],
+      "POST /designs": { id: "run-design", version: 1, status: "preparing" },
+      "GET /designs/run-design": { id: "run-design", version: 1, status: "running", repairing: true },
+    });
+    const dialog = await openWizard();
+    await fillNeed(dialog);
+    await next(dialog);
+    await userEvent.click(within(dialog).getByRole("radio", { name: /KiroCrew 推荐/ }));
+    await waitFor(() => expect(within(dialog).getByRole("button", { name: "让 KiroCrew 推荐" })).toBeEnabled());
+    await waitFor(() => expect(calls.some((c) => c.path === "/v1/workflows/resolve")).toBe(true));
+    await userEvent.click(within(dialog).getByRole("button", { name: "让 KiroCrew 推荐" }));
+    expect(await within(dialog).findByText(/上一版未通过平台校验，KiroCrew 正在按原因修正/)).toBeInTheDocument();
   });
 
   test("KiroCrew recommendation: the Agent's tasks replace the draft only when adopted", async () => {

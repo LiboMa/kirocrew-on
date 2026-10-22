@@ -256,7 +256,7 @@ const GENERATION_LABELS: Record<string, string> = {
   submitting: "正在提交生成任务", preparing: "正在准备设计工作区", ready: "建议已生成并通过格式校验，采用后可继续编辑。",
   submitted: "KiroCrew 已收到生成任务", running: "后台 Kiro Agent 正在设计任务与提示词", ready_to_dispatch: "等待派发",
   waiting_approval: "等待原生工具权限批准", dispatch_unknown: "原生派发待核实，不重复发送", blocked: "生成任务需要处理",
-  invalid: "返回内容格式无效", stopping: "正在停止生成任务", stopped: "生成任务已停止", uncertain: "提交回执不明确；可安全核实同一请求",
+  invalid: "推荐未通过平台校验", stopping: "正在停止生成任务", stopped: "生成任务已停止", uncertain: "提交回执不明确；可安全核实同一请求",
   failed: "生成失败",
 };
 
@@ -277,9 +277,12 @@ function RecommendPanel({ draft, update, recommendWorker, setRecommendWorker, re
       setBusy(false);
     }
   };
+  // D66: an invalid recommendation is told by its reason alone (it already says what was wrong and what to do)
+  const label = job?.status === "invalid" && job.error ? job.error
+    : job?.repairing && active ? "上一版未通过平台校验，KiroCrew 正在按原因修正（自动一次）。"
+    : job ? (GENERATION_LABELS[job.status] ?? STATES[job.status] ?? job.status) + (job.error ? " " + job.error : "") : "";
   const status = !job ? "后台生成会实际调用 Kiro Agent；生成结果先供你审阅。" : job.applied ? "已采用建议，可继续修改各 Task 和提示词。"
-    : (GENERATION_LABELS[job.status] ?? STATES[job.status] ?? job.status) + (stale ? " 当前需求或任务已变化，旧建议不会覆盖当前草稿。" : "")
-      + (job.error ? " " + job.error : "") + (job.poll_error ? " " + job.poll_error : "");
+    : label + (stale ? " 当前需求或任务已变化，旧建议不会覆盖当前草稿。" : "") + (job.poll_error ? " " + job.poll_error : "");
   return (
     <section className="space-y-4 rounded-xl border bg-card p-5">
       <div className="flex items-baseline justify-between gap-3">

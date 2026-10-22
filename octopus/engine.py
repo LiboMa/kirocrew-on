@@ -1151,7 +1151,10 @@ class Engine:
                 **({"continue": resume} if resume else {}),   # D46 P5a: the rework resumes its conversation
                 **({"candidate": {"sha": latest["sha"], "parent": latest["parent"]}}
                    if gated and spec.get("kind") == "review" and latest else {}),
-                **({"design": snapshot["design"]} if snapshot.get("purpose") == "workflow_design" else {}),
+                # D66: a repair carries why the last recommendation was not a workflow
+                **({"design": {**snapshot["design"], **({"repair": fix} if (fix := json.loads(attempt["evidence"] or "{}")
+                                                                              .get("design_repair")) else {})}}
+                   if snapshot.get("purpose") == "workflow_design" else {}),
                 # D46 P4: the repository's lessons, only on a dedicated environment (the one it runs on now)
                 **({"lessons": True} if knowledge.applies(snapshot, json.loads(run["source"]), run.get("worker_scope"), config)
                    else {})})
@@ -1196,7 +1199,7 @@ class Engine:
         # An automatic retry and a Coordinator's switch keep their marks through every evidence update (D34 §5.1, D38 §3.3).
         retry_of = prior.get("transient_retry_of")
         for key in ("transient_retry_of", "switched_from", "watchdog", "approval_seen", "continued",
-                    "continue_refused", "queued", "never_started"):   # marks kept across updates
+                    "continue_refused", "queued", "never_started", "design_repair"):   # marks kept across updates
             if prior.get(key):
                 evidence[key] = prior[key]
         if native.get("done") and not native.get("stopped") and (evidence.get("watchdog") or {}).get("stopping"):
@@ -1289,6 +1292,15 @@ class Engine:
                     except (Error, ValueError, TypeError) as exc:
                         state, error = "blocked", "KiroCrew 规划结果未通过校验：" + str(exc)
                         evidence["failure_type"] = "contract"
+            design_fix = None
+            if state == "accepted" and snapshot.get("purpose") == "workflow_design" and active \
+                    and current["current_attempt"] == attempt["id"] and not prior.get("design_repair"):
+                from .designs import explain, parse_recommendation
+                try:
+                    parse_recommendation(native.get("result") or "")
+                except (Error, ValueError, TypeError, KeyError) as exc:   # D66: KiroCrew fixes its own answer, once
+                    design_fix = explain(native.get("result") or "", exc)
+                    state, error = "blocked", "推荐未通过平台校验：" + design_fix + "（已自动请 KiroCrew 修正一次）"
             starts = prior.get("never_started", 0)   # how many Attempts before this one in a row did not start
             if not (retry and current["current_attempt"] == attempt["id"] and active):
                 retry = None   # not ours to retry
@@ -1330,11 +1342,23 @@ class Engine:
                 journal.change(db, "tasks", (rid, task["id"]), journal.ENGINE, "attempt.retry", f"{why}，{again}",
                                event={"attempt": attempt["id"], "retry": aid, "transient": retry},
                                status="dispatching", current_attempt=aid)
+            elif design_fix:   # the reason travels with the new Attempt (dispatch → design.repair)
+                aid, now = uid("attempt"), time.time()
+                db.execute("INSERT INTO attempts(id,run_id,task_id,number,spec,status,evidence,created,updated) "
+                           "VALUES(?,?,?,?,?,'dispatching',?,?,?)",
+                           (aid, rid, task["id"], attempt["number"] + 1, current["spec"],
+                            dumps({"design_repair": {"of": attempt["id"], "error": design_fix}}), now, now))
+                journal.change(db, "tasks", (rid, task["id"]), journal.ENGINE, "attempt.retry",
+                               f"推荐未通过平台校验（{design_fix}），自动请 KiroCrew 修正一次",
+                               event={"attempt": attempt["id"], "retry": aid, "transient": "design_invalid"},
+                               status="dispatching", current_attempt=aid)
             elif current["current_attempt"] == attempt["id"] and active:
                 journal.change(db, "tasks", (rid, task["id"]), journal.WORKER, "task.state", status=state)
                 if state == "awaiting_acceptance":
                     journal.record(db, rid, "run.awaiting_acceptance", journal.ENGINE, "验收待确认",
                                    pending=len(evidence["evaluation"]["pending"]))
+        if design_fix:
+            return self.update(rid, "ready", None, reason="推荐未通过平台校验，自动请 KiroCrew 修正一次")
         if retry:
             return self.update(rid, "ready", None, reason="未能开始，自动重新派发" if retry == "never_started" else
                                "瞬时失败，自动重试一次")
