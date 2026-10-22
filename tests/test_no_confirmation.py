@@ -1,6 +1,6 @@
 """D68 (owner 2026-10-22: 「从任何工作流决定开始后，不需要人工再确认」): once a workflow is decided and started, the platform
-asks no one again — the plan starts without 「计划待确认」 and what the Evaluator leaves to a person is noted as a warning,
-not 「验收待确认」. A person's explicit confirm (on submit or as a rule) still waits, and a platform can opt back in."""
+asks no one again — the plan starts without 「计划待确认」 (D70: never, whatever is submitted) and what the Evaluator leaves
+to a person is noted as a warning, not 「验收待确认」, unless a platform opts back in (default_acceptance = "confirm")."""
 import unittest
 
 from octopus.config import Settings
@@ -9,16 +9,16 @@ from tests.test_evaluator import EvaluatorCase
 
 class DefaultsTests(unittest.TestCase):
     def test_the_platform_asks_no_one_by_default(self):
-        self.assertEqual((Settings.default_admission, Settings.default_acceptance), ("auto", "auto"))
+        self.assertEqual(Settings.default_acceptance, "auto")
 
     def test_the_api_server_takes_the_platform_setting(self):   # octopus serve passes it (b3d5353 did not reach server())
         import tempfile
         from octopus.db import Database
         from octopus.server import server
         with tempfile.TemporaryDirectory() as root:
-            httpd = server(Database(root), 0, default_admission="confirm", default_acceptance="confirm")
+            httpd = server(Database(root), 0, default_acceptance="confirm")
             try:
-                self.assertEqual((httpd.service.default_admission, httpd.service.default_acceptance), ("confirm", "confirm"))
+                self.assertEqual(httpd.service.default_acceptance, "confirm")
             finally:
                 httpd.server_close()
 
@@ -44,10 +44,10 @@ class AcceptanceTests(EvaluatorCase):
         rid, run = self.run_()
         self.assertEqual(run["status"], "awaiting_acceptance")
 
-    def test_an_explicit_confirm_still_waits_for_the_plan(self):
+    def test_an_explicit_confirm_no_longer_waits_for_the_plan(self):   # D70: plans are never confirmed
         rid = self.start(steps=[{"id": "code", "name": "实现", "tool": "claude", "prompt": "实现", "kind": "implement",
                                  "acceptance": ["可用"]}], admission="confirm", recovery={"enabled": False, "max_cycles": 2})
-        self.assertEqual(self.tick(rid)["status"], "awaiting_confirmation")
+        self.assertNotEqual(self.tick(rid)["status"], "awaiting_confirmation")
 
 
 if __name__ == "__main__":

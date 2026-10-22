@@ -1,5 +1,6 @@
-"""D44: a Session may run only once its plan is confirmed — planning finishes as before, then it waits before its first
-working task; a confirm or a continue starts it. Without `admission` the platform default (auto) applies."""
+"""D70 (owner 2026-10-22: 「计划完成后，不要找我确认……把这个垃圾的过程删掉！直接开始！」): no Session waits for its plan
+to be confirmed any more — not for a submitted admission: confirm, a personal or Team rule, or a platform setting. A
+Session left waiting by an earlier version is started by the Engine. (D44's confirmation is gone; the fixture stays.)"""
 import copy
 import json
 import tempfile
@@ -71,125 +72,49 @@ class ConfirmationCase(unittest.TestCase):
     def dispatched(self, task=None):
         return [b["spec"]["id"] for b in self.bodies.values() if not b.get("coordination") and (task is None or b["spec"]["id"] == task)]
 
-    def confirm(self, rid, actor=None, request="confirm-0000001"):
-        run = self.service.run(self.actor, rid)
-        return self.service.operate(actor or self.actor, rid, "confirm", {"request_id": request, "expected_version": run["version"]})
-
     def snapshot(self, rid):
         with self.db.read() as db:
             return json.loads(db.execute("SELECT snapshot FROM runs WHERE id=?", (rid,)).fetchone()["snapshot"])
 
 
-class ConfirmationTests(ConfirmationCase):
-    def test_a_confirmed_plan_runs_to_completion(self):
+class NoConfirmationTests(ConfirmationCase):
+    def test_a_submitted_confirm_no_longer_waits(self):   # an older client or Skill may still send it
         rid = self.start(admission="confirm")
         run = self.tick(rid)
-        self.assertEqual(run["status"], "awaiting_confirmation")
-        self.assertEqual(self.dispatched(), [])
-        self.assertEqual(run["attention"]["title"], "计划待确认")
-        self.confirm(rid)
-        run = self.tick(rid)
         self.assertEqual(run["status"], "completed")
-        self.assertEqual(self.snapshot(rid)["confirmed"]["via"], "confirm")
-        self.assertEqual(self.snapshot(rid)["confirmed"]["by"], "owner")
+        self.assertEqual(self.dispatched(), ["code", "review"])
+        self.assertEqual(run["admission"], "auto")
 
-    def test_an_agent_planned_session_plans_then_waits(self):
+    def test_an_agent_planned_session_runs_its_plan_at_once(self):
         rid = self.start(steps=None, admission="confirm", plan="agent")
         run = self.tick(rid)
-        self.assertEqual(run["status"], "awaiting_confirmation")
-        self.assertEqual(self.dispatched(), ["plan"])   # planning ran; its tasks wait
-        self.assertEqual([t["id"] for t in run["tasks"]], ["plan", "code"])
-        self.confirm(rid)
-        self.assertEqual(self.tick(rid)["status"], "completed")
-
-    def test_a_rework_after_confirmation_does_not_wait_again(self):
-        self.failing = {("review", 1)}
-        self.decisions = [{"action": "rework", "target_task_id": "code", "reason": "实现有缺陷", "instructions": "修复"}]
-        rid = self.start(admission="confirm", recovery={"enabled": True, "max_cycles": 2})
-        self.tick(rid)
-        self.confirm(rid)
-        run = self.tick(rid, 60)
         self.assertEqual(run["status"], "completed")
-        self.assertEqual(self.dispatched("code"), ["code", "code"])
+        self.assertEqual(self.dispatched(), ["plan", "code"])
 
-    def test_without_admission_the_platform_default_applies(self):
-        rid = self.start()
-        self.assertEqual(self.tick(rid)["status"], "completed")
-        self.service.default_admission = "confirm"
-        rid = self.start()
-        self.assertEqual(self.tick(rid)["status"], "awaiting_confirmation")
+    def test_a_repository_rule_no_longer_holds_a_session(self):
+        with self.db.transaction() as db:
+            db.execute("INSERT INTO policies(id,kind,owner_id,team_id,rule,created_by,created) VALUES('p1','admission',?,NULL,?,?,1)",
+                       (self.actor["id"], dumps({"repos": "*", "mode": "confirm"}), self.actor["id"]))
+        rid = self.start(source={"type": "git", "url": "https://github.com/o/r.git", "ref": "main"})
+        self.assertEqual(self.snapshot(rid)["admission"], "auto")
 
-    def test_continuing_a_waiting_plan_confirms_it(self):
-        rid = self.start(admission="confirm")
-        run = self.tick(rid)
-        self.service.operate(self.actor, rid, "continue", {"request_id": "confirm-continue-1", "expected_version": run["version"],
-                                                           "task_id": "code", "execution": {"prompt": "实现（补充说明）"}})
+    def test_a_session_left_waiting_starts_by_itself(self):   # an earlier version's 「计划待确认」
+        rid = self.start()
+        with self.db.transaction() as db:
+            snapshot = self.snapshot(rid)
+            db.execute("UPDATE runs SET status='awaiting_confirmation', snapshot=? WHERE id=?",
+                       (dumps({**snapshot, "admission": "confirm"}), rid))
         run = self.tick(rid)
         self.assertEqual(run["status"], "completed")
-        self.assertEqual(self.snapshot(rid)["confirmed"]["via"], "continue")
-        self.assertEqual(self.bodies[next(iter(self.bodies))]["spec"]["prompt"], "实现（补充说明）")   # the changed plan ran
+        self.assertEqual(self.snapshot(rid)["confirmed"]["via"], "platform")
         self.assertIn("run.confirmed", [e["kind"] for e in self.service.events(self.actor, rid)])
 
-    def test_a_task_named_plan_in_a_given_plan_waits_too(self):
-        steps = [{"id": "plan", "name": "改代码", "tool": "claude", "prompt": "改代码", "kind": "deliver", "acceptance": ["完成"]}] + STEPS
-        rid = self.start(steps, admission="confirm")
-        run = self.tick(rid)
-        self.assertEqual(run["status"], "awaiting_confirmation")
-        self.assertEqual(self.dispatched(), [])   # only KiroCrew's own planning runs before the confirmation
-
-    def test_an_archived_teams_session_is_not_confirmed(self):
-        from octopus.security import create_user
-        with self.db.transaction() as db:
-            db.execute("INSERT INTO teams(id,name,created) VALUES('team-a','组',1)")
-            db.execute("INSERT INTO members(team_id,user_id,role) VALUES('team-a',?,'owner')", (self.actor["id"],))
-            db.execute("UPDATE workers SET owner_id=NULL, team_id='team-a'")
-        rid = self.start(admission="confirm", team_id="team-a")
-        self.tick(rid)
-        with self.db.transaction() as db:
-            db.execute("UPDATE teams SET archived=1 WHERE id='team-a'")
-        with self.assertRaises(Error) as caught:
-            self.confirm(rid)
-        self.assertEqual(caught.exception.code, "team_archived")
-
-    def test_waiting_for_confirmation_does_not_use_up_the_time_budget(self):
-        rid = self.start(admission="confirm")
-        self.tick(rid)
-        with self.db.transaction() as db:   # it has waited thirteen hours for the user
-            db.execute("UPDATE runs SET created=created-?, updated=updated-? WHERE id=?", (13 * 3600, 13 * 3600, rid))
-        self.assertLess(self.service.run(self.actor, rid)["recovery"]["budget"]["minutes"]["used"], 5)   # not counting while it waits
-        self.confirm(rid)
-        self.assertEqual(self.service.run(self.actor, rid)["recovery"]["budget"]["minutes"]["used"], 0)
-
-    def test_the_view_and_the_report_say_who_confirmed(self):
-        from octopus import report
-        rid = self.start(admission="confirm")
-        self.assertEqual(self.tick(rid)["admission"], "confirm")
-        self.confirm(rid)
-        run = self.tick(rid)
-        self.assertEqual(run["confirmed"]["by"], "owner")
-        self.assertIn("计划确认：owner", report.markdown(run))
-
-    def test_a_given_plan_is_not_said_to_be_planned(self):
-        rid = self.start(admission="confirm")
-        attention = self.tick(rid)["attention"]
-        self.assertNotIn("规划已完成", attention["detail"])
-        self.assertEqual(attention["task_id"], "code")
-
-    def test_confirm_outside_the_wait_is_refused(self):
-        rid = self.start(admission="confirm")
-        with self.assertRaises(Error) as caught:
-            self.confirm(rid)   # not yet waiting: still preparing
-        self.assertEqual(caught.exception.status, 409)
-
-    def test_only_those_who_may_execute_confirm(self):
-        self.assertEqual(required_scope("POST", "/v1/runs/run-x/confirm"), "execute")
-        rid = self.start(admission="confirm")
-        self.tick(rid)
+    def test_confirm_is_gone(self):
+        rid = self.start()
         with self.assertRaises(Error):
-            self.confirm(rid, actor=self.other)
-        self.assertEqual(self.service.run(self.actor, rid)["status"], "awaiting_confirmation")
+            self.service.operate(self.actor, rid, "confirm", {"request_id": "confirm-0000001", "expected_version": 1})
 
-    def test_admission_is_checked(self):
+    def test_admission_is_still_checked(self):   # a typo is still the caller's to fix
         with self.assertRaises(Error) as caught:
             self.start(admission="later")
         self.assertIn("admission 须为 confirm 或 auto", str(caught.exception))

@@ -92,13 +92,14 @@ def openapi():
                       "template_id": text, "document": ref("WorkflowDocument"), "plan": {"enum": ["agent", "match"]},
                       "workflow_version": integer, "steps": step_list, "team_id": text, "worker_id": text,
                        "source": ref("Source"), "recovery": ref("RecoveryPolicy"),
-                       "admission": {"enum": ["confirm", "auto"]},
+                       # D70: accepted from older clients and not used — no plan waits for confirmation
+                       "admission": {"enum": ["confirm", "auto"], "deprecated": True},
                        "publish": obj({"auto": {"type": "boolean", "default": False}, "branch": text, "title": text,
                                        "repository": repository, "credential": text}),
                        "credentials": obj({"source": text})}, ["request_id", "input", "source"]),
         "Rebind": obj({"source": {"type": ["string", "null"]}}, ["source"]),
-        # D55: {"repos": "github.com/o/*", "mode": "auto|confirm"} (admission) or a mapping preference
-        "Policy": obj({"kind": {"enum": ["admission", "mapping"]}, "scope": {"enum": ["personal", "team"]}, "team_id": text,
+        # D55: a mapping preference (admission rules are gone, D70)
+        "Policy": obj({"kind": {"enum": ["mapping"]}, "scope": {"enum": ["personal", "team"]}, "team_id": text,
                        "rule": {"type": "object"}}, ["kind", "scope", "rule"]),
         "Share": obj({"kind": {"enum": ["user", "team", "everyone"]}, "username": text, "id": text,
                       "role": {"enum": ["viewer", "collaborator"]}}, ["kind", "role"]),   # D64
@@ -184,7 +185,7 @@ def openapi():
         "/v1/runs/{id}/credentials": {"post": "Rebind"},
         "/v1/runs/{id}/app": {"get": None, "post": "AppAction"}, "/v1/runs/{id}/app/open": {"post": "Empty"},
         "/v1/runs/{id}/recover": {"post": "Recover"},
-        "/v1/runs/{id}/confirm": {"post": "Control"}, "/v1/runs/{id}/accept": {"post": "Control"},
+        "/v1/runs/{id}/accept": {"post": "Control"},
         "/v1/runs/{id}/publish": {"post": "Publish"},
         "/v1/runs/{id}/publish-policy": {"post": "PublishPolicy"},
         "/v1/runs/{id}/knowledge/forget": {"post": "KnowledgeForget"},
@@ -347,8 +348,8 @@ def openapi():
                     op["parameters"].append({"in": "path", "name": "share", "required": True, "schema": text})
             if path.startswith("/v1/policies"):
                 op["description"] = {
-                    ("/v1/policies", "get"): "Read scope. The caller's own rules and those of their Teams (team_id: one Team's): admission rules by repository (repos host/owner/repo with *, mode auto|confirm) and mapping preferences; deletable says whether the caller may remove it.",
-                    ("/v1/policies", "post"): "Manage scope. A rule for the caller's own Sessions (scope personal) or a Team's (scope team, Team owner or administrator; not an archived Team). Admission: a submission's admission, else the most specific personal rule, else the Team's, else the platform default (confirm). Audited.",
+                    ("/v1/policies", "get"): "Read scope. The caller's own rules and those of their Teams (team_id: one Team's): mapping preferences, and admission rules written before D70 (no effect; listed so they can be deleted); deletable says whether the caller may remove it.",
+                    ("/v1/policies", "post"): "Manage scope. A rule for the caller's own Sessions (scope personal) or a Team's (scope team, Team owner or administrator; not an archived Team). Only mapping preferences: admission rules are refused (400 admission_removed, D70 — every Session starts once planned). Audited.",
                     ("/v1/policies/{id}", "delete"): "Manage scope. Remove one of the caller's rules, or a Team's as its owner or an administrator. Audited."}[(path, method)]
                 if path == "/v1/policies":
                     op["parameters"] = [{"in": "query", "name": "team_id", "schema": text}] if method == "get" else op.get("parameters", [])

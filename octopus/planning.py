@@ -152,9 +152,9 @@ def expand(db, rid, text, models=None, replan=False, tools=None):
         wanted = step.get("requested") or {}   # D45: the requirement's own choice is kept, never quietly replaced
         listed = published.get(step["tool"])
         state = (tools or {}).get(step["tool"])
-        if wanted and isinstance(state, dict) and state.get("available") is False:   # said before a confirmation (D44)
+        if wanted and isinstance(state, dict) and state.get("available") is False:   # said in the plan (D45)
             notes.append(f"任务「{step['name']}」：需求指定的 {step['tool']} 在此执行环境不可用（{state.get('reason') or '原因未报告'}），"
-                         "确认后会停下等待处理")
+                         "执行到这个任务时会停下等待处理")
         if wanted.get("model"):
             if wanted["model"] not in {"auto", "default"} and listed is not None and wanted["model"] not in listed:
                 notes.append(f"任务「{step['name']}」：需求指定的模型 {wanted['model']} 未由执行环境公布")

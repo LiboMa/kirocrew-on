@@ -11,7 +11,7 @@ from .db import dumps, uid
 from .transport import worker_request
 from . import crew_entry, evaluation, gates, journal, knowledge, planning, quotas, recovery, waiting
 from .security import Error
-from .domain import (CONTRACT, GENERAL_KINDS, awaits_confirmation, required_checks, runs_checks, unserved,
+from .domain import (CONTRACT, GENERAL_KINDS, release_confirmations, required_checks, runs_checks, unserved,
                      worker_source)
 from .gates import BLOCKED
 
@@ -216,6 +216,7 @@ class Engine:
         recovery.reconcile(self.db, skip=busy)
         with self.db.transaction() as db:   # waits that are over continue (D43)
             waiting.resume(db, skip=busy)
+            release_confirmations(db, skip=busy)   # D70: an earlier version's 「计划待确认」 starts
         with self.db.read() as db:
             ids = [r["id"] for r in db.execute(
                 "SELECT r.id FROM runs r "
@@ -1100,10 +1101,6 @@ class Engine:
                     journal.change(db, "tasks", (rid, task["id"]), journal.ENGINE, "task.state", "重新规划已应用，不再运行",
                                    status="accepted", current_attempt=done["id"])
                     return
-            if attempt is None and awaits_confirmation(json.loads(fresh["snapshot"]), task["id"]):
-                journal.change(db, "runs", rid, journal.ENGINE, "run.awaiting_confirmation", "计划待确认",
-                               event={"status": "awaiting_confirmation"}, status="awaiting_confirmation", updated=time.time())
-                return
             if attempt is None and self._quota_wait(db, fresh):
                 return   # D61: the person's or the Team's running tasks are at their limit
             if attempt is None:

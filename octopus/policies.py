@@ -1,6 +1,6 @@
-"""A person's or a Team's policies (D55): admission rules by repository and mapping preferences. The platform keeps no
-default chain of its own (no-hardcoded-chains): a rule is what someone wrote down for their own Sessions."""
-from fnmatch import fnmatchcase
+"""A person's or a Team's policies (D55): mapping preferences. The platform keeps no default chain of its own
+(no-hardcoded-chains): a rule is what someone wrote down for their own Sessions. Admission rules by repository are gone
+(D70): every Session starts once planned; old ones stay listed, without effect, so they can be deleted."""
 import json
 import re
 from urllib.parse import urlsplit
@@ -8,8 +8,6 @@ from urllib.parse import urlsplit
 from .security import require
 
 KINDS = ("admission", "mapping")
-MODES = ("auto", "confirm")
-PATTERN = re.compile(r"[a-z0-9._*/-]{1,300}")
 
 
 def repo_of(source):
@@ -30,14 +28,6 @@ def repo_of(source):
     return f"{host}/{path}".lower() if host and path else None
 
 
-def admission_rule(rule):
-    require(isinstance(rule, dict) and set(rule) == {"repos", "mode"}, "准入规则须为 {\"repos\": \"<主机/所有者/仓库>\", \"mode\": \"auto|confirm\"}")
-    repos = rule["repos"].strip().lower().removesuffix(".git") if isinstance(rule["repos"], str) else ""
-    require(PATTERN.fullmatch(repos) is not None, "repos 须为 主机/所有者/仓库，可用 * 通配，例如 github.com/o/*")
-    require(rule["mode"] in MODES, "mode 须为 auto（直接开始）或 confirm（等待确认）")
-    return {"repos": repos, "mode": rule["mode"]}
-
-
 def mapping_rule(rule):
     """A preference: a task kind or a role, the tool for it and optionally a model — for the planner to weigh (D55 §6.2)."""
     from . import roles
@@ -54,8 +44,11 @@ def mapping_rule(rule):
 
 
 def rule(kind, value):
-    require(kind in KINDS, "kind 须为 admission 或 mapping")
-    return admission_rule(value) if kind == "admission" else mapping_rule(value)
+    require(kind in KINDS, "kind 须为 mapping")
+    # D70 (owner 2026-10-22): no plan waits for confirmation, so there is nothing for an admission rule to decide. Ones
+    # written before stay listed so they can be deleted; they have no effect.
+    require(kind != "admission", "准入规则已取消：规划完成后会话总是直接开始，不再等待确认", 400, "admission_removed")
+    return mapping_rule(value)
 
 
 def preferences(db, actor_id, team):
@@ -73,39 +66,12 @@ def preferences(db, actor_id, team):
     return result
 
 
-def _best(rows, repo):
-    """The most specific rule that matches: the most literal characters (github.com/o/* over github.com/* over *), then
-    the fewest wildcards, then the newest."""
-    patterns = {r["id"]: json.loads(r["rule"])["repos"] for r in rows}
-    matched = [r for r in rows if fnmatchcase(repo, patterns[r["id"]])]
-    return min(matched, key=lambda r: (-len(patterns[r["id"]].replace("*", "")), patterns[r["id"]].count("*"), -r["created"]),
-               default=None)
-
-
 def basis_text(basis):
     """Why a Session started at once or waits for its plan's confirmation; "" when the submission said so itself."""
     if not basis or basis.get("basis") == "submitted":
         return ""
     mode = "自动开始" if basis.get("mode") == "auto" else "等待确认"
     return f"按准入规则「{basis.get('pattern') or ''}」{mode}" if basis.get("basis") == "rule" else f"按平台默认{mode}"
-
-
-def admission(db, actor_id, team, source, submitted, default):
-    """How a new Session is admitted and why: what the submitter said, else their own rule for the repository, else the
-    Team's (for a Team Session), else the platform default."""
-    if submitted:
-        return {"mode": submitted, "basis": "submitted"}
-    repo = repo_of(source)
-    if repo is not None:
-        layers = [("personal", "owner_id", actor_id)] + ([("team", "team_id", team)] if team else [])
-        for scope, column, holder in layers:
-            rows = db.execute(f"SELECT * FROM policies WHERE kind='admission' AND {column}=?", (holder,)).fetchall()
-            best = _best(rows, repo)
-            if best is not None:
-                value = json.loads(best["rule"])
-                return {"mode": value["mode"], "basis": "rule", "policy_id": best["id"], "pattern": value["repos"],
-                        "scope": scope}
-    return {"mode": default, "basis": "default"}
 
 
 def view(row, team_name=None, deletable=False):

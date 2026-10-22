@@ -13,9 +13,8 @@ from unittest import mock
 from octopus import cli, local
 from tests.test_local import RID, LocalCase, commit, git
 
-VIEW = {"id": RID, "name": "登录", "status": "awaiting_confirmation", "version": 4, "input": "做登录",
-        "attention": {"title": "计划待确认", "detail": "确认后执行"},
-        "admission_basis": {"mode": "confirm", "basis": "default"},
+VIEW = {"id": RID, "name": "登录", "status": "running", "version": 4, "input": "做登录",
+        "attention": {"title": "正在执行", "detail": "实现中"},
         "tasks": [{"id": "code", "status": "pending", "spec": {"name": "实现", "tool": "claude", "model": "auto", "kind": "deliver",
                                                              "acceptance": ["完成"], "verify": ["npm test"]},
                    "mapping": {"label": "KiroCrew 规划"}, "attempts": []}]}
@@ -41,8 +40,6 @@ class Api:
             return self.view
         if path == f"/v1/runs/{RID}/events":
             return []
-        if path == f"/v1/runs/{RID}/confirm":
-            return {"id": RID, "version": 5, "status": "ready"}
         raise AssertionError((method, path))
 
     def text(self, method, path, timeout=40):
@@ -107,10 +104,10 @@ class CommandTests(LocalCase):
             run(["submit", "做登录"], api, self.repo)
         self.assertIn("--push-base", str(caught.exception))
         self.assertFalse([c for c in api.calls if c[1] == "/v1/runs"])
-        text = run(["submit", "做登录", "--allow-unpushed", "--admission", "auto"], api, self.repo)
+        text = run(["submit", "做登录", "--allow-unpushed"], api, self.repo)
         body = next(c[2] for c in api.calls if c[1] == "/v1/runs")
         self.assertEqual(body["source"], {"type": "git", "url": "https://github.com/o/app.git", "ref": "main"})
-        self.assertEqual(body["admission"], "auto")
+        self.assertNotIn("admission", body)   # D70: no plan waits for confirmation
         self.assertIn(RID, text)
         self.assertEqual(local.linked(self.repo)["run_id"], RID)
         with mock.patch.object(local, "push_base") as pushed:
@@ -129,20 +126,18 @@ class CommandTests(LocalCase):
             run(["submit", "新分支", "--allow-unpushed"], api, self.repo)
         self.assertIn("--push-base", str(caught.exception))
 
-    def test_status_plan_and_confirm_use_the_linked_session(self):
+    def test_status_and_plan_use_the_linked_session(self):
         local.link(self.repo, {"run_id": RID})
         api = Api()
         status = run(["status"], api, self.repo)
-        self.assertIn("计划待确认", status)
-        self.assertIn("按平台默认等待确认", status)
+        self.assertIn("正在执行", status)
         plan = run(["plan"], api, self.repo)
         self.assertIn("实现", plan)
         self.assertIn("claude", plan)
         self.assertIn("npm test", plan)
-        run(["confirm"], api, self.repo)
-        confirm = next(c for c in api.calls if c[1].endswith("/confirm"))
-        self.assertEqual(confirm[2]["expected_version"], 4)
-        self.assertEqual(json.loads(run(["status", "--json"], api, self.repo))["session"]["status"], "awaiting_confirmation")
+        self.assertEqual(json.loads(run(["status", "--json"], api, self.repo))["session"]["status"], "running")
+        with self.assertRaises(SystemExit):   # D70: there is no plan to confirm
+            run(["confirm"], api, self.repo)
 
     def test_search_passes_the_filters(self):
         api = Api()

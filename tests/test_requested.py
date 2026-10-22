@@ -174,13 +174,13 @@ class RequestedTests(RequestedCase):
         self.assertEqual(self.tasks(run)["code"]["spec"]["effort"], "")   # OpenCode takes no Effort
         steps([self.tasks(run)["code"]["spec"]])                          # a plain continue would accept it
 
-    def test_a_plan_to_be_confirmed_says_a_requested_tool_is_unavailable(self):
+    def test_the_plan_says_a_requested_tool_is_unavailable(self):
         self.plan = plan(task("code", "opencode", requested={"tool": "opencode", "quote": "用 opencode 实现"}))
         rid = self.service.start(self.actor, {"request_id": "requested-confirm-1", "input": "用 opencode 实现", "source": {"type": "new"},
-                                              "worker_id": "worker", "admission": "confirm"})["id"]
+                                              "worker_id": "worker"})["id"]
         run = self.tick(rid)
-        self.assertEqual(run["status"], "awaiting_confirmation")
-        self.assertIn("任务「code」：需求指定的 opencode 在此执行环境不可用（opencode 命令不存在），确认后会停下等待处理", run["planning"]["notes"])
+        self.assertIn("任务「code」：需求指定的 opencode 在此执行环境不可用（opencode 命令不存在），执行到这个任务时会停下等待处理",
+                      run["planning"]["notes"])
 
     def test_a_model_only_request_on_an_unavailable_tool_names_what_was_asked(self):
         self.plan = plan(task("code", "opencode", model="auto", requested={"model": "auto", "quote": "用 auto 模型"}))

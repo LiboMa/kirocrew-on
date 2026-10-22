@@ -53,7 +53,7 @@ TOOLS = [
      "inputSchema": object_schema({"status": STRING, "q": STRING, "limit": {"type": "integer", "minimum": 1, "maximum": 50},
                                    "shared": {"type": "boolean"}, **{key: STRING for key in RUN_FILTERS}})},
     {"name": "octopus_requests",
-     "description": "列出你提交过的需求（Request，最新的在前，精简：来源客户端、需求前 200 字、准入方式与依据、对应的会话）。"
+     "description": "列出你提交过的需求（Request，最新的在前，精简：来源客户端、需求前 200 字、对应的会话）。"
                     "每次 octopus_start 登记一个 Request，回执中的 request_id 即它；状态取其最近一个会话的。默认最近 20 个；"
                     "可按 status、client（console / claude / kiro / codex / kiro-ide / api）过滤，按 q（Request ID 或需求片段）搜索。",
      "inputSchema": object_schema({"status": STRING, "q": STRING, "client": STRING,
@@ -118,7 +118,6 @@ TOOLS = [
          "source": {"type": "object"},
          "credentials": object_schema({"source": STRING}),
          "team_id": STRING, "worker_id": STRING, "recovery": RECOVERY,
-         "admission": {"type": "string", "enum": ["confirm", "auto"]},
          "dir": STRING, "push_base": {"type": "boolean"}, "allow_unpushed": {"type": "boolean"},
          "publish": object_schema({"auto": {"type": "boolean"}, "branch": STRING, "title": STRING, "repository": REPOSITORY,
                                    "credential": STRING})},
@@ -131,12 +130,6 @@ TOOLS = [
     {"name": "octopus_accept",
      "description": "确认一个「验收待确认」（awaiting_acceptance）的 Session：Evaluator 判为需要人判断的验收项（见精简状态中 Evaluator "
                     "任务 latest.pending）。调用前必须把这些项与证据展示给用户并得到明确同意；不同意时用 octopus_continue 返工。",
-     "inputSchema": object_schema({"run_id": STRING, "request_id": STRING, "expected_version": {"type": "integer"}},
-                                 ["run_id", "request_id", "expected_version"]),
-     "annotations": {"destructiveHint": True}},
-    {"name": "octopus_confirm",
-     "description": "确认一个「计划待确认」（awaiting_confirmation）的 Session 的计划并开始执行。调用前必须把任务、各自的工具与模型（及来源）、"
-                    "验收项与检查命令展示给用户，并得到用户明确同意；要修改时改用 octopus_continue（修改后续作即视为确认）。",
      "inputSchema": object_schema({"run_id": STRING, "request_id": STRING, "expected_version": {"type": "integer"}},
                                  ["run_id", "request_id", "expected_version"]),
      "annotations": {"destructiveHint": True}},
@@ -201,9 +194,8 @@ TOOLS += [
                     "凭证只能由用户在控制台「设置 → 代码仓库凭证」创建：不要向用户索要 Token。",
      "inputSchema": object_schema({"host": STRING}), "annotations": READ},
     {"name": "octopus_policies",
-     "description": "只读：你的个人规则与你所在 Team 的规则（team_id：只看该 Team）。准入规则按仓库（repos，如 github.com/o/*）决定新会话"
-                    "直接开始（auto）还是先停在「计划待确认」（confirm）；映射偏好按任务类别或角色对应工具 / 模型，供 KiroCrew 规划者参考。"
-                    "规则只能由用户在控制台「准入与映射偏好」中维护：不要替用户改准入。",
+     "description": "只读：你的个人映射偏好与你所在 Team 的（team_id：只看该 Team）：按任务类别或角色对应工具 / 模型，供 KiroCrew "
+                    "规划者参考。偏好只能由用户在控制台维护。（准入规则已取消：规划完成后会话总是直接开始，D70。）",
      "inputSchema": object_schema({"team_id": STRING}), "annotations": READ},
     {"name": "octopus_quotas",
      "description": "只读：同时运行的任务数上限与当前占用——你自己的（mine）与你所在 Team 的（teams）。到了上限，会话的下一个任务按等待"
@@ -419,7 +411,7 @@ def admin_environments(client, args):
 
 SESSION_FIELDS = ("id", "name", "status", "desired", "lifecycle", "version", "error", "attention", "progress", "input",
                   "planning", "team_id", "worker_id", "workflow_name", "match_mode", "created", "updated", "kept", "verified",
-                  "admission", "admission_basis", "request",   # D55: why it waits or started, and the submission it came from
+                  "request",   # D55: the submission it came from (admission is gone, D70)
                   "access")   # D64: the user's own, their Team's, a share (viewer / collaborator) or an admin's oversight
 
 
@@ -494,9 +486,7 @@ def compact_status(session, events):
                       **({"skills": task["spec"]["skills"]} if task["spec"].get("skills") else {}),   # D50
                       **({"mapping": task["mapping"]["label"]} if (task.get("mapping") or {}).get("label") else {}),
                       "attempts": len(task.get("attempts") or []), "latest": latest(task.get("attempts")),
-                      # what the user is to confirm (D44): each task's acceptance and checks, only while the plan waits
-                      **({key: task["spec"].get(key) or [] for key in ("acceptance", "verify")}
-                         if session.get("status") == "awaiting_confirmation" else {})}
+}
                      for task in session.get("tasks", [])]
     # D57 §4: what the tasks' latest Attempts noted without blocking
     view["warnings"] = sum(len(((task["latest"] or {}).get("gates") or {}).get("warned", [])) for task in view["tasks"])
@@ -537,7 +527,7 @@ def requests(client, args):
     items = client.request("GET", "/v1/requests?" + urlencode({**query, "limit": limit + 1}))
     shown = lambda text: text if len(text) <= 200 else text[:200] + "…"
     return {"items": [{"id": r["id"], "client": r["client"], "input": shown(r.get("input") or ""), "status": r.get("status"),
-                       "created": r.get("created"), "admission": (r.get("policy") or {}).get("admission"),
+                       "created": r.get("created"),
                        "sessions": [{k: s.get(k) for k in ("id", "name", "status")} for s in r.get("sessions") or []]}
                       for r in items[:limit]], "more": len(items) > limit}
 
@@ -683,13 +673,13 @@ def call(client, name, args):
     if name == "octopus_publish_policy":   # D47
         return client.request("POST", "/v1/runs/" + quote(args["run_id"], safe="") + "/publish-policy",
                               {k: args[k] for k in ("auto", "repository", "credential") if k in args})
-    if name in {"octopus_continue", "octopus_recover", "octopus_control", "octopus_confirm", "octopus_accept"}:
+    if name in {"octopus_continue", "octopus_recover", "octopus_control", "octopus_accept"}:
         rid = args.pop("run_id")
         if name == "octopus_continue" and "credentials" in args:
             # A Session stopped on its credential: change (or remove) it first, then continue (D35 §4).
             client.request("POST", "/v1/runs/" + quote(rid, safe="") + "/credentials", {"source": args.pop("credentials").get("source")})
         action = args.pop("action") if name == "octopus_control" else name.removeprefix("octopus_")
-        if action not in {"continue", "recover", "stop", "close", "reopen", "delete", "confirm", "accept"}:
+        if action not in {"continue", "recover", "stop", "close", "reopen", "delete", "accept"}:
             raise ValueError("Invalid action")
         return client.request("POST", "/v1/runs/" + rid + "/" + action, args)
     if name in ADMIN:

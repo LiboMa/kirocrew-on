@@ -348,13 +348,17 @@ def confirm_plan(db, rid, who, actor, via):
     journal.record(db, rid, "run.confirmed", who, "已确认计划", via=via, by=actor["username"])
 
 
-def awaits_confirmation(snapshot, task_id):
-    """Whether the Session must wait for its plan to be confirmed before this task (D44). Only KiroCrew's own planning runs
-    first — its plan task and a replan task; a given plan's task that happens to be named ``plan`` waits like any other."""
-    if snapshot.get("admission") != "confirm" or snapshot.get("confirmed"):
-        return False
-    from .planning import planner_task
-    return not planner_task(task_id, snapshot)
+def release_confirmations(db, skip=()):
+    """D70 (owner 2026-10-22): no plan waits for confirmation any more. A Session an earlier version left in 「计划待确认」
+    starts as if confirmed — by the platform — once, here."""
+    rows = db.execute("SELECT id FROM runs WHERE status='awaiting_confirmation' AND lifecycle='open'").fetchall()
+    for row in rows:
+        if row["id"] in skip:
+            continue
+        confirm_plan(db, row["id"], journal.ENGINE, {"username": "platform"}, "platform")
+        restart_budget(db, row["id"], journal.ENGINE)
+        journal.change(db, "runs", row["id"], journal.ENGINE, "run.state", "计划确认已取消，直接开始（D70）",
+                       desired="active", status="ready", error=None, updated=time.time())
 
 
 def restart_budget(db, rid, who):
@@ -582,9 +586,8 @@ def _probe(config):
 
 
 class Service:
-    def __init__(self, database, default_admission="auto", default_acceptance="auto"):
+    def __init__(self, database, default_acceptance="auto"):
         self.db = database
-        self.default_admission = default_admission   # D44: a Session without `admission` runs at once unless set to confirm
         self.default_acceptance = default_acceptance   # D68: the Evaluator's pending items are warnings unless confirm
         self._opened, self._opened_lock = {}, threading.Lock()   # remote preview opening links already followed
         from .credentials import CredentialStore
@@ -1009,6 +1012,7 @@ class Service:
         selected = any(body.get(key) is not None for key in ("workflow_id", "template_id", "steps", "document"))
         require(body.get("plan") in (None, "agent", "match"), "plan 只能是 agent 或 match")
         require(not (selected and body.get("plan") == "agent"), "plan=agent 时不要同时指定工作流、模板、steps 或 document")
+        # D70: no Session waits for its plan's confirmation; an older client's admission is checked, then not used
         require(body.get("admission") in (None, "confirm", "auto"), "admission 须为 confirm 或 auto")
         if "publish" in body:
             publish_policy(body["publish"])
@@ -1106,10 +1110,9 @@ class Service:
                             "match_mode": resolved["mode"], "match_reason": resolved["reason"]}
                 snapshot.update(recovery=policy(body.get("recovery")) if design is None else policy({"enabled": False}),
                                 execution_contract=4 if design is None else 1)   # D46 P3: the Evaluator gate
-                if design is None:   # D44: confirm = wait before the first working task; D55: by the repository's rules
-                    decided = policies.admission(db, actor["id"], team, source, body.get("admission"), self.default_admission)
-                    snapshot.update(admission=decided["mode"], admission_basis=decided,
-                                    acceptance=self.default_acceptance)   # D68: as the platform was set when it started
+                if design is None:   # D70: every Session starts once planned; D68: acceptance as the platform was set
+                    snapshot.update(admission="auto", admission_basis={"mode": "auto", "basis": "default"},
+                                    acceptance=self.default_acceptance)
                 if "publish" in body:   # D47: the user's own word on publishing comes first
                     snapshot["publish_policy"] = {**publish_policy(body["publish"]), "source": "user"}
                 if bound:
@@ -2153,8 +2156,6 @@ class Service:
                 journal.change_rows(db, "tasks", f"run_id=? AND id IN ({','.join('?' * len(later))})", (rid, *later), who,
                                     "task.reset", status="pending", current_attempt=None)
             restart_budget(db, rid, who)
-            if run["status"] == "awaiting_confirmation":
-                confirm_plan(db, rid, who, actor, "sync")
             reason = unserved(db, run)
             journal.change(db, "runs", rid, who, "run.synced", event={"version": version, "head": head, "commits": candidate.get("commits"),
                                                                        "task_id": writer["id"], "attempt_id": aid},
@@ -2385,11 +2386,8 @@ class Service:
                     "action": "核对后在会话页点「确认通过」；不通过就点「不通过，返工…」，把这些验收项交回被审查的任务重做。"
                               "Coding Agent 经用户同意后用 octopus_accept，返工用 octopus_continue。",
                     "task_id": task["id"] if task else None}
-        if run["status"] == "awaiting_confirmation":
-            planned = (run.get("planning") or {}).get("applied")
-            first = next((t for t in run["tasks"] if t["status"] == "pending"), None)
-            return {"title": "计划待确认", "detail": "规划已完成，任务尚未开始。" if planned else "任务尚未开始。",
-                    "action": "核对任务、工具与检查命令后确认开始；也可修改后续作或关闭。", "task_id": first["id"] if first else None}
+        if run["status"] == "awaiting_confirmation":   # D70: an earlier version's wait, until the Engine starts it
+            return {"title": "即将开始", "detail": "计划确认已取消，平台正在直接开始。", "action": "无需操作。", "task_id": None}
         if run["status"] == "diagnosing":
             return {"title": "协调者正在诊断与安排修复", "detail": run["error"] or "正在读取失败证据，等待原生诊断结果。",
                     "action": "等待诊断结果；也可停止本 Session", "task_id": task["id"] if task else None}
@@ -2459,7 +2457,7 @@ class Service:
                 "task_name": task["spec"]["name"] if task else None}
 
     def operate(self, actor, rid, action, body):
-        require(action in {"continue", "recover", "stop", "close", "reopen", "delete", "assign-worker", "confirm", "accept"},
+        require(action in {"continue", "recover", "stop", "close", "reopen", "delete", "assign-worker", "accept"},
                 "不支持的操作")
         with self.db.transaction() as db:
             # D64: a collaborator does what an ordinary Team member does, except move the Session to another environment
@@ -2469,9 +2467,9 @@ class Service:
                 oversight = False
             except Error:
                 oversight = True   # allowed only as an elevated admin (A2): audited
-            if run["team_id"] and action in {"continue", "recover", "reopen", "assign-worker", "confirm", "accept"}:
+            if run["team_id"] and action in {"continue", "recover", "reopen", "assign-worker", "accept"}:
                 active_team(db, run["team_id"])   # an archived Team's Sessions stay readable and stoppable (P3)
-            if action in {"continue", "recover", "confirm"}:
+            if action in {"continue", "recover"}:
                 instruct = directs(db, actor, run)
                 require(instruct is None, instruct, 403, "boundary_owner_only")
             require(action not in {"continue", "recover"} or json.loads(run["snapshot"]).get("purpose") != "workflow_design",
@@ -2549,8 +2547,6 @@ class Service:
                         if (fresh.get("planning") or {}).get("applied"):
                             fresh["planning"]["outdated"] = True
                             journal.change(db, "runs", rid, who, "run.planning", quiet=("snapshot",), snapshot=dumps(fresh))
-                    if run["status"] == "awaiting_confirmation":   # changing the plan and continuing confirms it (D44)
-                        confirm_plan(db, rid, who, actor, "continue")
                     fields.update(input=goal, desired="active", status="ready" if run["worker_id"] and not reason else "waiting_worker",
                                   error=reason)
                     commit()   # before the revision: its snapshot reads the new requirement
@@ -2601,12 +2597,6 @@ class Service:
                         fields.update(worker_id=body["worker_id"], native_parent=None, workspace=None, status="preparing", error=None)
                     else:
                         fields.update(worker_id=body["worker_id"], status="ready" if run["native_parent"] else "preparing", error=None)
-                elif action == "confirm":
-                    require(run["status"] == "awaiting_confirmation" and run["lifecycle"] == "open",
-                            "此 Session 不在等待确认", 409, "invalid_state")
-                    confirm_plan(db, rid, who, actor, "confirm")
-                    restart_budget(db, rid, who)   # the user's word allows the automatic work from here (D42)
-                    fields.update(desired="active", status="ready", error=None)
                 elif action == "accept":   # D46 P3: the person's word on what the Evaluator left pending
                     require(may_publish(db, actor, run), "只有会话创建者、Team owner 或管理员可以确认验收", 403, "forbidden")
                     require(run["status"] == "awaiting_acceptance" and run["lifecycle"] == "open",
@@ -2637,7 +2627,7 @@ class Service:
                     audit(db, actor, "run." + action, "run", rid, {"version": version})
                 return {"id": rid, "session_id": rid, "version": version, "command": action, "status": "accepted"}
             result = self._command(db, actor, action, rid, body, execute)
-        if action in {"continue", "recover", "close", "delete", "confirm"}:
+        if action in {"continue", "recover", "close", "delete"}:
             # The agents work in the same project again, or the Session ends: its remote preview stops (D36 §5.1).
             self._stop_app(rid, "session")
         return result

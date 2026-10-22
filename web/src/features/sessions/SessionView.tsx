@@ -31,7 +31,7 @@ import { TaskList } from "@/features/sessions/TaskList";
 import { useSessionActions } from "@/features/sessions/useSessionActions";
 import { bindingLabel } from "@/lib/credentials";
 import { usageLine } from "@/lib/usage";
-import { basisText, clientLabel } from "@/lib/policies";
+import { clientLabel } from "@/lib/policies";
 import {
   canContinue, canDelete, canRecover, canStop, closeAction, crewEntryReason, deleteReason, directReason, resumeReason, rework,
   shareAccess, statusText,
@@ -88,11 +88,9 @@ export function SessionView({ id }: { id: string }) {
               <p id="run-goal" className="line-clamp-3 text-sm leading-6 whitespace-pre-wrap text-muted-foreground">{run.input}</p>
             )}
             <p id="run-id" className="font-mono text-[11px] text-muted-foreground">{run.id} · revision {run.version}</p>
-            {(run.request || basisText(run.admission_basis)) && (
+            {run.request && (
               <p id="run-request" className="text-xs text-muted-foreground">
-                {run.request && <>来自请求 {run.request.id.slice(0, 14)} · {clientLabel(run.request.client)}</>}
-                {run.request && basisText(run.admission_basis) && "；"}
-                {basisText(run.admission_basis)}
+                来自请求 {run.request.id.slice(0, 14)} · {clientLabel(run.request.client)}
               </p>
             )}
             {run.created_by && (
@@ -190,18 +188,6 @@ export function SessionView({ id }: { id: string }) {
         )}
       </header>
 
-      {run.status === "awaiting_confirmation" && (
-        <Alert id="confirm-notice" className="border-warning/30 bg-warning/5">
-          <AlertTitle id="confirm-notice-title">{run.attention?.title ?? "计划待确认"}</AlertTitle>
-          <AlertDescription className="flex flex-wrap items-center gap-3">
-            <span>{[run.attention?.detail, run.attention?.action].filter(Boolean).join(" ")}</span>
-            <Button size="sm" onClick={actions.confirm} id="run-confirm"
-              disabled={!!actions.busy || run.permissions?.operate === false || !!resumeReason(run) || !!directReason(run)}>
-              <Play /> 确认并开始
-            </Button>
-          </AlertDescription>
-        </Alert>
-      )}
       {run.status === "awaiting_acceptance" && (
         <Alert id="accept-notice" className="border-warning/30 bg-warning/5">
           <AlertTitle id="accept-notice-title">{run.attention?.title ?? "验收待确认"}</AlertTitle>

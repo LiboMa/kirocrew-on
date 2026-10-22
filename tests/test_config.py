@@ -92,13 +92,13 @@ class ConfigTests(unittest.TestCase):
         with self.assertRaises(ConfigError):
             load(self.write('disabled_tools = ["gemini"]\n'), environ=self.env, cwd=self.cwd)
 
-    def test_default_admission_and_acceptance_are_auto_and_validated(self):
+    def test_default_acceptance_is_auto_and_validated(self):
         # D68 (owner 2026-10-22): once a workflow is decided no one is asked again; a platform may still opt back in (D55)
-        settings = load(environ=self.env, cwd=self.cwd)
-        self.assertEqual((settings.default_admission, settings.default_acceptance), ("auto", "auto"))
-        chosen = load(self.write('default_admission = "confirm"\ndefault_acceptance = "confirm"\n'), environ=self.env, cwd=self.cwd)
-        self.assertEqual((chosen.default_admission, chosen.default_acceptance), ("confirm", "confirm"))
-        for bad in ('default_admission = "later"\n', 'default_acceptance = "later"\n'):
+        self.assertEqual(load(environ=self.env, cwd=self.cwd).default_acceptance, "auto")
+        self.assertEqual(load(self.write('default_acceptance = "confirm"\n'), environ=self.env, cwd=self.cwd).default_acceptance,
+                         "confirm")
+        # D70: plans are never confirmed, so there is no default_admission to set
+        for bad in ('default_acceptance = "later"\n', 'default_admission = "confirm"\n'):
             with self.assertRaises(ConfigError):
                 load(self.write(bad), environ=self.env, cwd=self.cwd)
 

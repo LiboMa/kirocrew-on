@@ -422,19 +422,26 @@ CloudFront 只使用 us-east-1 的证书）：分发加上别名与证书（SNI�
 - 平台照指定执行：规划者改了工具会被改回，指定的模型未公布时不改为 `auto`（规划说明中写明）。
 - 指定的工具不可用或模型未公布：派发前拒绝，会话停下并写明「需求指定的 …」，不交给协调者、也不换用其他工具。
   修复执行环境（安装、登录该工具或公布该模型）后续作，或在「配置并续作」中改用可用的工具或模型——用户的新选择取代需求中的指定。
-- Worker 因平台记录过期而拒绝指定的模型时同样如实停下；协调者不能换用指定的工具或模型。确认模式下，指定的工具不可用会在规划说明中预先写明。
+- Worker 因平台记录过期而拒绝指定的模型时同样如实停下；协调者不能换用指定的工具或模型。指定的工具不可用时，规划说明中会预先写明。
 - 只有 KiroCrew 规划的任务带 `requested`：显式提交的 steps、模板、导入的文档与保存的工作流中的 `requested` 一律去掉，
   其工具不可用时仍按 D38 由协调者推荐换用。规划者写法不完整的 `requested`（空值、缺工具与模型）被忽略并记说明，不使计划失败。
 
-### 计划确认（D44，准入第 1 期）
+### 规划完成后直接开始（D70，负责人 2026-10-22，取代 D44 的计划确认与 D55 的准入规则）
 
-- 会话的 `admission`：`confirm`（确认后执行）或 `auto`（立即执行）；未写时先看提交者与 Team 的准入规则（D55，见下节），
-  都不命中时取平台配置 `default_admission`（`platform.toml`；D55 起默认 `confirm`，写 `default_admission = "auto"` 恢复立即执行）。
-- `confirm` 的会话：规划（`plan`、`replan-*`）照常完成，第一个执行任务派发前停在「计划待确认」（`awaiting_confirmation`）；
-  控制台会话页「确认并开始」、API `POST /v1/runs/<id>/confirm` 或 MCP `octopus_confirm` 确认后执行；修改任务后续作也视为确认；也可停止或关闭。
-- 只确认一次：之后的返工、重试、换工具与重新规划不再停下。确认者与时间记在会话的 `confirmed`、时间线「已确认计划」与报告抬头。
-- 只有 KiroCrew 规划会话的规划任务（`plan`）与重新规划任务在确认前运行；提交或模板中名为 `plan` 的任务同样等待确认。
-- 等待确认的时间不计入会话预算；确认与续作一样重新计算预算，并停止正在运行的远程预览。已归档 Team 的会话不能确认。
+负责人原话：「计划完成后，不要找我确认……把这个垃圾的过程删掉！直接开始！」
+
+- 会话规划完成后直接执行，没有「计划待确认」。
+- 以下设置都不再让会话停下：
+  - 提交时的 `admission`：旧客户端仍可以传，取值照旧校验，但不再使用；
+  - 个人 / Team 的准入规则：已写的仍列在设置里，标为「已取消，不再生效」，可以删除；新建时返回 400 `admission_removed`；
+  - 平台配置 `default_admission`：已删除，写了会使配置校验失败。
+- 已删除的入口：
+  - `POST /v1/runs/<id>/confirm`；
+  - MCP `octopus_confirm`，以及 `octopus_start` 的 `admission` 参数；
+  - CLI `octopus confirm` 与 `submit --admission`；
+  - 控制台的「确认并开始」与准入规则表单。
+- 升级前已停在「计划待确认」的会话：引擎的下一轮把它记为由平台确认（快照 `confirmed.via = "platform"`，时间线「已确认计划」），并直接开始。
+- 验收：Evaluator 判为「待人确认」的项照 D68 记为提示；平台写 `default_acceptance = "confirm"` 时才停在「验收待确认」。
 
 ### 本地与远端联动、使用者命令行（D58）
 
@@ -452,33 +459,23 @@ CloudFront 只使用 us-east-1 的证书）：分发加上别名与证书（SNI�
 - **未推送提交**：在仓库内提交且源码是这个仓库的 origin 时，本地有 origin 没有的提交会先停下；`--push-base`（MCP `push_base`，须用户同意）
   先 `git push -u origin HEAD`，`--allow-unpushed` 按 origin 已有的提交提交。SSH 形式的 origin 按 HTTPS 提交（执行环境只用 HTTPS 克隆）。
 - **使用者命令行**：`octopus login --url <平台地址>`（Token 保存在 `~/.config/kirocrew-on/cli.json`，0600，标签「octopus CLI」，默认 30 天，`--expires 7d|30d|365d|never` 另选；
-  Request 的 client 记为 `cli`），之后 `octopus submit / plan / confirm / status / watch / report / pull / sync / continue / approvals / search`，
+  Request 的 client 记为 `cli`），之后 `octopus submit / plan / status / watch / report / pull / sync / continue / approvals / search`，
   `--json` 输出 JSON，`--run` 指定会话。运维命令（serve、worker、connect、backup 等）不变。
 
-### Request、准入规则与映射偏好（D55）
+### Request 与映射偏好（D55；准入规则已于 D70 取消）
 
-- **默认先确认**（负责人 2026-10-21）：`default_admission` 的默认值改为 `confirm`。升级后，没有带 `admission`、也没有命中规则的新会话
-  都先停在「计划待确认」；已有会话不受影响。平台想维持立即执行时在 `platform.toml` 写 `default_admission = "auto"`。
 - **Request**：每次提交（控制台、API、MCP `octopus_start`）登记一条 Request（迁移 9 的 `requests` 表），记提交者、Team、来源客户端
   （取自 Token 标签：控制台登录为 `console`，`octopus connect` 签发的为 `claude` / `kiro` / `codex` / `kiro-ide`，其余为 `api`）、需求原文、源码、
-  显式选择（工作流 / 模板 ID、steps 个数、文档格式、规划方式，不复制正文）与策略快照（准入及其依据、自动纠错、发布）。会话的 `request`
+  显式选择（工作流 / 模板 ID、steps 个数、文档格式、规划方式，不复制正文）与策略快照（自动纠错、发布；D70 之前的还有准入）。会话的 `request`
   指向它；状态取其最近一个会话的。同一 `request_id` 重复提交返回原有的 Request 与会话。工作流设计会话与升级前的会话没有 Request。
   `GET /v1/requests`（`status`、`q`、`client`、`limit`）、`GET /v1/requests/<id>`；看不到其会话的人得 404。MCP `octopus_requests`。
-- **准入规则**：个人或 Team 的 `{"repos": "github.com/o/*", "mode": "auto" | "confirm"}`（`policies` 表 kind `admission`）。仓库按
-  `主机/所有者/仓库` 小写比较，`https://…/.git`、`ssh://`、`git@host:path` 同一结果；`*` 匹配全部（新建项目不命中任何规则）。
-  判定顺序：提交时的 `admission` → 提交者的个人规则 → 会话所在 Team 的规则 → 平台默认；同层多条命中时通配最少的、再最新的胜。
-  会话视图的 `admission_basis` 写明依据（`submitted` / `rule` 及 `pattern`、`policy_id` / `default`），会话页显示「按准入规则…自动开始」
-  或「按平台默认…」。**平台默认（D68，负责人 2026-10-22）为直接开始（`default_admission = "auto"`）**：工作流决定后不再请人确认；
-  提交时 `admission: "confirm"` 或个人 / Team 的 confirm 规则仍会先停在「计划待确认」。平台想恢复默认先确认时在平台配置写
-  `default_admission = "confirm"`。
 - **映射偏好**：`{"kind": "review"}` 或 `{"role": "evaluator"}`（二选一）加 `"tool"`、可选 `"model"`（kind `mapping`）。提交时把提交者与
   Team 的偏好写进会话快照（同一类别或角色上个人覆盖 Team），首次规划与重新规划的提示多一节「用户的映射偏好」：规划者优先采纳、
   不采纳写明理由；需求中指定的（D45）优先；不可用的工具不选。平台不按偏好改写任务，也不把偏好当失败时的回退链。规划者的任务与偏好
   一致时映射来源写「KiroCrew 规划（按个人偏好 / 按 Team 偏好）」。
-- **维护**：控制台「设置 → 准入与映射偏好」；个人规则只有本人能增删，Team 的规则只有 Team owner 与平台管理员能增删，已归档的 Team 不能新增；
+- **维护**：控制台「设置 → 映射偏好」；个人偏好只有本人能增删，Team 的规则只有 Team owner 与平台管理员能增删，已归档的 Team 不能新增；
   每次增删写审计 `policy.create` / `policy.delete`。API：`GET /v1/policies`（`team_id`）、`POST /v1/policies`、`DELETE /v1/policies/<id>`。
-  MCP 只读（`octopus_policies`），Coding Agent 不能改准入。
-- MCP 精简状态在等待确认时带出各任务的 `acceptance` 与 `verify`，供客户端展示给用户。
+  MCP 只读（`octopus_policies`）。
 
 ### 等待与自动恢复（D43）
 

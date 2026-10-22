@@ -19,30 +19,31 @@ async function openPolicies(extra: Record<string, unknown> = {}) {
   const calls = mockApi(workspaceRoutes([], { "GET /policies": [policy(), preference], ...extra }));
   render(<App />);
   await userEvent.click(await screen.findByRole("button", { name: "设置" }));
-  await userEvent.click(await screen.findByRole("menuitem", { name: "准入与映射偏好" }));
+  await userEvent.click(await screen.findByRole("menuitem", { name: "映射偏好" }));
   return { calls, dialog: await screen.findByRole("dialog") };
 }
 
-describe("admission rules and mapping preferences (D55)", () => {
-  test("lists the two groups with their scope and content", async () => {
+describe("mapping preferences (D55); admission rules are gone (D70)", () => {
+  test("lists the preferences with their scope; an old admission rule is shown as without effect, to delete", async () => {
     const { dialog } = await openPolicies();
-    const admission = within(dialog).getByRole("region", { name: "准入规则" });
-    expect(within(admission).getByText(/github\.com\/o\/\*/)).toBeInTheDocument();
-    expect(within(admission).getByText(/自动开始/)).toBeInTheDocument();
-    expect(within(admission).getByText("个人")).toBeInTheDocument();
     const mapping = within(dialog).getByRole("region", { name: "映射偏好" });
     expect(within(mapping).getByText("Team「平台组」")).toBeInTheDocument();
     expect(within(mapping).getByText(/Evaluator → codex（模型 gpt-5）/)).toBeInTheDocument();
     expect(within(mapping).queryByRole("button", { name: "删除" })).not.toBeInTheDocument();
+    const old = within(dialog).getByRole("region", { name: "已取消的准入规则" });
+    expect(within(old).getByText(/github\.com\/o\/\*（已取消，不再生效，可删除）/)).toBeInTheDocument();
+    expect(within(dialog).queryByLabelText("类型")).not.toBeInTheDocument();
+    expect(within(dialog).queryByLabelText("仓库")).not.toBeInTheDocument();
+    expect(dialog).toHaveTextContent("规划完成后直接开始");
   });
 
-  test("adds an admission rule and deletes one", async () => {
-    const { calls, dialog } = await openPolicies({ "POST /policies": policy({ id: "policy-3" }), "DELETE /policies/policy-1": { id: "policy-1", deleted: true } });
-    await userEvent.type(within(dialog).getByLabelText("仓库"), "github.com/o/*");
-    await userEvent.click(within(dialog).getByRole("button", { name: "添加" }));
-    await waitFor(() => expect(calls.some((c) => c.method === "POST" && c.path === "/v1/policies")).toBe(true));
-    expect(calls.find((c) => c.method === "POST" && c.path === "/v1/policies")?.body).toEqual({
-      kind: "admission", scope: "personal", rule: { repos: "github.com/o/*", mode: "auto" } });
+  test("without old admission rules there is no such group", async () => {
+    const { dialog } = await openPolicies({ "GET /policies": [preference] });
+    expect(within(dialog).queryByRole("region", { name: "已取消的准入规则" })).not.toBeInTheDocument();
+  });
+
+  test("deletes an old admission rule", async () => {
+    const { calls, dialog } = await openPolicies({ "DELETE /policies/policy-1": { id: "policy-1", deleted: true } });
     const row = within(dialog).getByText(/github\.com\/o\/\*/).closest("[data-policy]") as HTMLElement;
     await userEvent.click(within(row).getByRole("button", { name: "删除" }));
     await waitFor(() => expect(calls.some((c) => c.method === "DELETE" && c.path === "/v1/policies/policy-1")).toBe(true));
@@ -50,7 +51,6 @@ describe("admission rules and mapping preferences (D55)", () => {
 
   test("adds a mapping preference by role", async () => {
     const { calls, dialog } = await openPolicies({ "POST /policies": preference });
-    await userEvent.selectOptions(within(dialog).getByLabelText("类型"), "mapping");
     await userEvent.selectOptions(within(dialog).getByLabelText("对应"), "role");
     await userEvent.selectOptions(within(dialog).getByLabelText("角色"), "evaluator");
     await userEvent.selectOptions(within(dialog).getByLabelText("工具"), "codex");
@@ -63,7 +63,6 @@ describe("admission rules and mapping preferences (D55)", () => {
   test("shows the server's reason under the form", async () => {
     const { dialog } = await openPolicies({
       "POST /policies": () => new Response(JSON.stringify({ error: "只有 Team owner 或平台管理员可以维护 Team 的规则", code: "forbidden" }), { status: 403 }) });
-    await userEvent.type(within(dialog).getByLabelText("仓库"), "github.com/o/*");
     await userEvent.click(within(dialog).getByRole("button", { name: "添加" }));
     expect(await within(dialog).findByRole("alert")).toHaveTextContent("只有 Team owner 或平台管理员可以维护 Team 的规则");
   });

@@ -287,10 +287,10 @@ class DirectionTests(PlacementCase):
         return self.service.operate(self.admin if person == "admin" else self.people[person], rid, action,
                                     {"request_id": f"direct-fixture-{self.requests}", "expected_version": self.row(rid)["version"], **body})
 
-    def test_only_the_boundary_owner_continues_diagnoses_or_confirms_there(self):
+    def test_only_the_boundary_owner_continues_or_diagnoses_there(self):   # D70: there is no plan to confirm
         rid = self.blocked()
         for person in ("bob", "dave", "admin"):
-            for action, body in (("continue", {"task_id": "code"}), ("recover", {}), ("confirm", {})):
+            for action, body in (("continue", {"task_id": "code"}), ("recover", {})):
                 with self.subTest(person=person, action=action), self.assertRaises(Error) as caught:
                     self.operate(person, rid, action, **body)
                 self.assertEqual(caught.exception.code, "boundary_owner_only")

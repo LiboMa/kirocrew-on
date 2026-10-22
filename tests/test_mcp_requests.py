@@ -28,9 +28,8 @@ class McpRequestTests(unittest.TestCase):
         self.assertEqual(client.paths, [("GET", "/v1/requests?q=%E7%99%BB%E5%BD%95&client=claude&limit=3")])
         self.assertEqual([i["id"] for i in result["items"]], ["request-0", "request-1"])
         self.assertTrue(result["more"])
-        self.assertEqual(set(result["items"][0]), {"id", "client", "input", "status", "created", "admission", "sessions"})
+        self.assertEqual(set(result["items"][0]), {"id", "client", "input", "status", "created", "sessions"})   # D70: no admission
         self.assertEqual(len(result["items"][0]["input"]), 201)
-        self.assertEqual(result["items"][0]["admission"], {"mode": "confirm", "basis": "default"})
         self.assertEqual(result["items"][0]["sessions"], [{"id": "run-1", "name": "会话", "status": "awaiting_confirmation"}])
         client = Client([])
         self.assertEqual(mcp.call(client, "octopus_requests", {}), {"items": [], "more": False})
@@ -51,12 +50,11 @@ class McpRequestTests(unittest.TestCase):
 
 
 class StatusTests(unittest.TestCase):
-    def test_the_compact_status_says_why_it_waits_and_where_it_came_from(self):   # final review
-        session = {"id": "run-1", "status": "awaiting_confirmation", "tasks": [], "admission": "confirm",
-                   "admission_basis": {"mode": "confirm", "basis": "default"}, "request": {"id": "request-1", "client": "claude"}}
+    def test_the_compact_status_says_where_it_came_from(self):   # final review; D70: there is no admission to explain
+        session = {"id": "run-1", "status": "running", "tasks": [], "admission": "auto",
+                   "admission_basis": {"mode": "auto", "basis": "default"}, "request": {"id": "request-1", "client": "claude"}}
         view = mcp.compact_status(session, [])["session"]
-        self.assertEqual(view["admission_basis"], {"mode": "confirm", "basis": "default"})
-        self.assertEqual(view["admission"], "confirm")
+        self.assertNotIn("admission", view)
         self.assertEqual(view["request"], {"id": "request-1", "client": "claude"})
 
 

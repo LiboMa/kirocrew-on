@@ -58,14 +58,13 @@ KiroCrew ON 在远端执行开发任务：KiroCrew 的 Kiro Agent 先识别意�
   `receiving-code-review`、`frontend-design`）：Agent 开始前读取并按其方法工作，如界面任务带 `frontend-design`、实现任务带
   `test-driven-development`。由 KiroCrew 规划时规划者自己推荐，不必替它写。
 - `worker_id` 通常省略：平台先用你自己的执行边界（Team 会话也一样），没有时用 Team 的环境或空间内唯一的环境；返回的 `placement.hint`（如「你还没有自己的执行边界…」）原样告诉用户。想先知道会在哪执行，用 `octopus_environments`（`default: true` 的那个）。
-- 403 `boundary_owner_only`：会话在他人的执行边界上运行（Agent 以此人的身份执行），只有边界主人能续作、诊断、确认计划、补充说明或批准；原样告诉用户，请会话创建者操作，不要换别的工具或参数重试。
+- 403 `boundary_owner_only`：会话在他人的执行边界上运行（Agent 以此人的身份执行），只有边界主人能续作、诊断、补充说明或批准；原样告诉用户，请会话创建者操作，不要换别的工具或参数重试。
 - 提交到 Team 返回 409 `team_without_worker`（该 Team 尚未分配执行环境）或 `environment_disabled`（执行环境已停用）时，
   原样告诉用户需要平台管理员在控制台分配或启用执行环境；也可以建议改在个人空间提交。不要换一个 Team 重试。
 - 返回 409 `team_archived` 时该 Team 已归档：不能提交新会话或续作，已有会话仍可查看与停止；告诉用户需要平台管理员恢复，或改在其他空间提交。
-- 准入：平台默认直接开始（D68）——工作流决定后不再请人确认，规划完成后直接执行；Evaluator 判为「待人确认」的验收项记为提示，
-  会话照常完成。用户明确要先看计划时传 `admission: "confirm"`（会话停在 `awaiting_confirmation`，见第 3 节）；用户或 Team 写了 confirm
-  规则时同样先停。会话的 `admission_basis` 写明依据（`submitted` / `rule` 及其 `pattern` / `default`），原样告诉用户。
-- 回执带 `request_id`（`request-…`）：每次提交登记一个 Request（来源客户端、需求、显式选择与准入依据），`octopus_requests` 可查。
+- 规划完成后直接开始（D70，负责人 2026-10-22）：没有「计划待确认」，不要问用户是否开始，也不要等。用户想先看计划时，
+  提交后用 `octopus_status` 把任务列给他看；要修改就用 `octopus_continue`。Evaluator 判为「待人确认」的验收项记为提示，会话照常完成（D68）。
+- 回执带 `request_id`（`request-…`）：每次提交登记一个 Request（来源客户端、需求与显式选择），`octopus_requests` 可查。
 - 用户明确要求完成后提交 PR / MR 时传 `publish: {"auto": true}`：会话完成并通过审查后平台自动推送 `octopus/<run>` 分支并创建 Draft PR / MR
   （需要绑定有写权限的凭证）。没有要求时不传，完成后先问用户，同意后再用 `octopus_publish`。不要安排 Agent 自己推送或建 PR 的任务——Agent 没有仓库写凭证。
   会话中途可用 `octopus_publish_policy {run_id, auto}` 开关（用户同意后）。
@@ -82,8 +81,8 @@ KiroCrew ON 在远端执行开发任务：KiroCrew 的 Kiro Agent 先识别意�
 - 需要某次尝试的原始输出或完整证据时才传 `detail: true`；完整记录可能有十几万字符，超出客户端的输出上限。
 - 任务通常需要几分钟到几十分钟；每 30–60 秒查询一次，向用户汇报真实状态。状态不是 `completed` 时不要宣称完成。
 - `octopus_runs` 列出用户可见的会话（最新的在前，每个只有状态、进度、需要处理的事与错误首行；默认 20 个，`status` 过滤；还可按 `space`、`repo`（如 `github.com/o/r`）、`branch`、`stage`（当前进行到的任务类别，`done` 为全部验收）、`tool`、`client`、`submitter`、`since` / `until`（`YYYY-MM-DD`）组合过滤；`q` 为全文搜索（需求、规划、任务说明、最近的结论与错误，多个词须全部命中）；`more: true` 时缩小条件或加大 `limit`）；详情用 `octopus_status`；`octopus_me` 返回当前身份、是否管理员、Token scope 与所在 Team。
-- `octopus_requests` 列出用户提交过的需求（Request：来源客户端 `client`、需求前 200 字、准入方式与依据、对应会话；`status`、`client`、`q`
-  过滤，`more` 同上）。`octopus_policies`（可传 `team_id`）只读地列出用户的准入规则与映射偏好；规则只能由用户在控制台维护，不要替用户改准入。
+- `octopus_requests` 列出用户提交过的需求（Request：来源客户端 `client`、需求前 200 字、对应会话；`status`、`client`、`q`
+  过滤，`more` 同上）。`octopus_policies`（可传 `team_id`）只读地列出用户的映射偏好；偏好只能由用户在控制台维护。
 - 别人共享给用户的会话（D64）：`octopus_runs` 加 `shared: true` 列出；`octopus_status` 的 `access` 说明用户以什么身份访问（`via: share` 时 `role` 为 `viewer` 只能查看、`collaborator` 可续作与停止）。查看者不要尝试续作、停止或批准；共享只能由会话创建者、Team owner 或平台管理员在控制台设置，不要替用户共享。
 - `octopus_quotas` 只读：用户与其 Team 同时运行的任务数上限与占用。「需要处理」写「排队：已达到并发上限」时无需重新提交：有任务结束后按排队先后自动开始；上限由平台管理员或 Team owner 在控制台设置，不要替用户改。
 - `octopus_changes`（传 `run_id`）列出会话的变更记录：谁（用户与客户端，或 Engine / Worker / KiroCrew / 协调者）在什么时候改了什么、
@@ -109,7 +108,6 @@ KiroCrew ON 在远端执行开发任务：KiroCrew 的 Kiro Agent 先识别意�
 | `blocked` / `failed` | 读 `attention.title` / `attention.action` 告诉用户；可用 `octopus_recover` 诊断修复，或用 `octopus_continue` 修改后重跑。`attention.title` 为「需要换用工具或模型」时，向用户说明原因（`attention.detail`）并建议换用一个可用的工具；经用户同意后用 `octopus_continue` 的 `execution.tool` / `execution.model` 续作，不要自行决定 |
 | `waiting_approval` | 原生任务在等待批准一次工具调用：用 `octopus_approvals` 列出，把工具、完整的命令或文件与用途告诉用户；用户同意后用 `octopus_approve` 答复（approve），不同意则 reject。不要替用户决定 |
 | `awaiting_acceptance` | 验收待确认：改代码的会话由 Evaluator 逐项验收，它把需要人判断的项（Evaluator 任务的 `latest.pending`：验收项与证据）留给用户；把这些项列给用户，同意后用 `octopus_accept {run_id, request_id, expected_version}`，不同意时用 `octopus_continue` 返工：`task_id` 用 Evaluator 之前那个改代码的任务（kind 为 implement / deliver），把没通过的项写进它的 `prompt`；不要替用户确认 |
-| `awaiting_confirmation` | 计划待确认：把各任务（名称、工具与模型及 `mapping` 来源——如「KiroCrew 规划（按个人偏好）」表示规划者采纳了用户的映射偏好——、验收项、检查命令）列给用户；用户同意后用 `octopus_confirm {run_id, request_id, expected_version}` 开始执行，要修改时用 `octopus_continue`（修改后续作即视为确认），不要替用户确认 |
 | `completed` | 完成；用 `octopus_preview` 给出预览。`session.knowledge` 列出本次沉淀的项目知识（见下） |
 
 ## 4．迭代：`octopus_continue` / `octopus_recover`
@@ -200,7 +198,7 @@ KiroCrew ON 在远端执行开发任务：KiroCrew 的 Kiro Agent 先识别意�
   （或 merge）后再 `octopus_sync`；返回 `ahead` 表示只有本地领先，可直接同步。`octopus_start` 返回 `missing_branch` 时当前分支不在 origin 上。
 - 拒绝时原样告诉用户：`sync_not_fast_forward`（远端又有了新提交：先 `octopus_pull` 再改）、`sync_secret_found` / `bundle_secret_found`
   （提交里有疑似凭证或 `.env`：用户自己移除后再提交）、`sync_dirty`（会话的工作区还有未纳入候选的改动：等会话结束或续作）、`busy`。
-- 用户也可以用命令行：`octopus login`，之后 `octopus submit / status / plan / confirm / pull / sync / watch / search …`。
+- 用户也可以用命令行：`octopus login`，之后 `octopus submit / status / plan / pull / sync / watch / search …`。
 
 ## 6．原则
 
