@@ -35,6 +35,25 @@ def worker_stream(config, path, body, timeout=60):
         raise Error(503, "worker_unavailable", "Worker 未返回可核实回执") from exc
 
 
+def worker_upload(config, path, data, headers, timeout=120):
+    """Bytes sent to the Worker as they are (D58 sync's bundle); the answer and errors as worker_request's."""
+    request = urllib.request.Request(config["url"].rstrip("/") + path, data=data, method="POST",
+                                     headers={"Authorization": "Bearer " + config["token"],
+                                              "Content-Type": "application/octet-stream", **headers})
+    try:
+        with urllib.request.urlopen(request, timeout=timeout, context=_context) as response:
+            return json.load(response)
+    except urllib.error.HTTPError as exc:
+        with exc:
+            try:
+                data = json.load(exc)
+            except ValueError:
+                data = {}
+        raise Error(exc.code, data.get("code", "worker_error"), data.get("error", "Worker 请求失败")) from None
+    except (OSError, ValueError) as exc:
+        raise Error(503, "worker_unavailable", "Worker 未返回可核实回执") from exc
+
+
 def worker_request(config, path, body=None, timeout=35):
     url = config["url"].rstrip("/") + path
     request = urllib.request.Request(url, data=dumps(body).encode() if body is not None else None,

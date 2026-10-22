@@ -5,8 +5,10 @@ import json
 
 from .db import dumps, uid
 
-CLIENTS = ("console", "claude", "kiro", "codex", "kiro-ide", "api")
-NAMES = {"console": "控制台", "claude": "Claude Code", "kiro": "Kiro CLI", "codex": "Codex", "kiro-ide": "Kiro IDE", "api": "API"}
+CLIENTS = ("console", "cli", "claude", "kiro", "codex", "kiro-ide", "api")
+NAMES = {"console": "控制台", "cli": "CLI", "claude": "Claude Code", "kiro": "Kiro CLI", "codex": "Codex", "kiro-ide": "Kiro IDE",
+         "api": "API"}
+CLI_LABEL = "octopus CLI"   # the label of the token `octopus login` keeps (D58)
 
 
 def client_of(label):
@@ -14,8 +16,10 @@ def client_of(label):
     octopus/connect.py), or anything else that calls the API."""
     if label == "Web login":
         return "console"
+    if label == CLI_LABEL:
+        return "cli"
     first, _, rest = (label or "").partition(" ")
-    return first if first in CLIENTS[1:-1] and rest.split(" ")[0] == "MCP" else "api"
+    return first if first in CLIENTS[2:-1] and rest.split(" ")[0] == "MCP" else "api"
 
 
 def explicit(body):

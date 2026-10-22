@@ -1909,6 +1909,100 @@ class Service:
             return found["role"] if found else None
         return member(db, actor["id"], team)
 
+    def sync(self, actor, rid, data, head, request_id, expected_version, note=None, old=None):
+        """A local fast-forward as the Session's new candidate (D58 §6): checked and applied by the Worker, then the last
+        task that writes code gets a 「本地同步」 Attempt — its checks run as any Attempt's — the tasks after it run again
+        (a review binds the new candidate) and a revision says so. Who may sync is who may continue."""
+        from . import evaluation, sync as remote
+        from .sources import SHA
+        require(isinstance(head, str) and SHA.fullmatch(head) and isinstance(old, str) and SHA.fullmatch(old),
+                "head 与 old 须为完整的提交 ID")
+        require(note is None or isinstance(note, str) and len(note) <= 2000, "说明最多 2000 个字符")
+        body = {"request_id": request_id, "head": head, "old": old, "note": note,
+                "bundle": hashlib.sha256(data).hexdigest()}   # the command's digest covers the bytes, not the bytes
+        with self.db.read() as db:
+            run = run_access(db, actor, rid)
+            done = db.execute("SELECT hash, response FROM commands WHERE actor=? AND key=?", (actor["id"], request_id)).fetchone() \
+                if isinstance(request_id, str) else None
+            if done is None:
+                require(type(expected_version) is int and expected_version == run["version"], "Session 版本已更新", 409,
+                        "version_conflict")
+                if run["team_id"]:
+                    active_team(db, run["team_id"])
+                instruct = directs(db, actor, run)
+                require(instruct is None, instruct, 403, "boundary_owner_only")
+                require(json.loads(run["snapshot"]).get("purpose") != "workflow_design", "工作流建议会话不能同步", 409, "invalid_state")
+                require(run["lifecycle"] == "open" and run["status"] in SETTLED, "请先等待结束或停止", 409, "busy")
+                require(run["worker_id"] and run["workspace"], "会话尚未准备源码，不能同步", 409, "no_workspace")
+                worker = db.execute("SELECT config, retired FROM workers WHERE id=?", (run["worker_id"],)).fetchone()
+                require(worker is not None and not worker["retired"], "执行环境已退役，不能同步", 409, "retired")
+                config = {k: v for k, v in json.loads(worker["config"]).items() if k in ("url", "token")}
+                tasks = [{**dict(t), "spec": json.loads(t["spec"])} for t in
+                         db.execute("SELECT * FROM tasks WHERE run_id=? ORDER BY ordinal", (rid,))]
+                require(tasks, "会话没有任务", 409, "invalid_state")
+        if done is not None:   # the same request again: its answer, the Worker untouched (as _command, before it)
+            require(done["hash"] == hashlib.sha256(dumps(["sync", rid, body]).encode()).hexdigest(), "request_id 对应不同请求",
+                    409, "idempotency_conflict")
+            return json.loads(done["response"])
+        writer = next((t for t in reversed(tasks) if t["spec"].get("kind") in evaluation.WRITERS), tasks[-1])
+        candidate = remote.apply(config, rid, data, old, head)
+        aid = uid("attempt")
+        commands = writer["spec"].get("verify") or []
+        job = remote.start_checks(config, rid, aid, commands) if commands else None
+
+        def execute():
+            fresh = db.execute("SELECT version, status FROM runs WHERE id=?", (rid,)).fetchone()
+            require(fresh["version"] == run["version"], "同步期间会话被改动：分支已到新提交，请刷新后续作", 409, "version_conflict")
+            now, who, version = time.time(), journal.person(actor), run["version"] + 1
+            number = db.execute("SELECT count(*) FROM attempts WHERE run_id=? AND task_id=?", (rid, writer["id"])).fetchone()[0] + 1
+            from . import gates
+            evidence = {"synced": {"by": {"id": actor["id"], "username": actor.get("username")}, "client": actor.get("client", "api"),
+                                   "commits": candidate.get("commits"), "note": note, "from": old, "head": head},
+                        "candidate": {**{k: candidate.get(k) for k in ("sha", "parent", "changed", "files", "insertions", "deletions",
+                                                                       "names")}, "moved": True, "synced": True},
+                        "gates": [gates.record("native_completed", "skip", "本地提交（同步）"),
+                                  gates.record("diff_present", "pass", f"{candidate.get('files')} 个文件"),
+                                  gates.record("no_secrets", "pass")]}
+            checking = bool(commands and job)
+            if commands and not job:
+                evidence["gates"].append(gates.record("checks_pass", "skip", gates.OLD_WORKER))
+            elif not commands:
+                evidence["gates"].append(gates.record("checks_pass", "skip", "任务没有检查命令"))
+            if checking:
+                evidence["checks"] = {"job": job, "started": now, "commands": len(commands)}
+            status = "running" if checking else "accepted"
+            db.execute("INSERT INTO attempts(id,run_id,task_id,number,spec,status,evidence,created,updated) VALUES(?,?,?,?,?,?,?,?,?)",
+                       (aid, rid, writer["id"], number, dumps(writer["spec"]), status, dumps(evidence), now, now))
+            journal.change(db, "tasks", (rid, writer["id"]), who, "attempt.created", "本地同步",
+                           event={"id": aid, "task_id": writer["id"], "number": number}, current_attempt=aid, status=status)
+            later = [t["id"] for t in tasks if t["ordinal"] > writer["ordinal"]]
+            if later:
+                journal.change_rows(db, "tasks", f"run_id=? AND id IN ({','.join('?' * len(later))})", (rid, *later), who,
+                                    "task.reset", status="pending", current_attempt=None)
+            restart_budget(db, rid, who)
+            if run["status"] == "awaiting_confirmation":
+                confirm_plan(db, rid, who, actor, "sync")
+            reason = unserved(db, run)
+            journal.change(db, "runs", rid, who, "run.synced", event={"version": version, "head": head, "commits": candidate.get("commits"),
+                                                                       "task_id": writer["id"], "attempt_id": aid},
+                           version=version, updated=now, desired="active", error=reason,
+                           status="running" if checking else "ready" if not reason else "waiting_worker")
+            from .revisions import record
+            record(db, rid, version, "synced", f"本地同步：{candidate.get('commits')} 个本地提交，到 {head[:7]}"
+                   + (f"（{note[:60]}）" if note else ""), actor["id"], now)
+            return {"id": rid, "session_id": rid, "version": version, "attempt_id": aid, "task_id": writer["id"], "head": head,
+                    "commits": candidate.get("commits"), "status": "running" if checking else "ready"}
+        with self.db.transaction() as db:
+            return self._command(db, actor, "sync", rid, body, execute)
+
+    def bundle_entry(self, actor, rid):
+        """Whether the actor may pull the Session's branch (D58 §5): read access and a prepared workspace."""
+        with self.db.read() as db:
+            run = run_access(db, actor, rid)
+            require(run["worker_id"] and run["workspace"], "此会话尚未准备源码，没有可拉回的分支", 409, "no_workspace")
+        self.audit_read(actor, rid, "pull")
+        return run
+
     def attempt_diff(self, actor, rid, attempt_id):
         """What an Attempt's candidate changed (D56): files and the clipped diff, through the Session's Worker; read with the
         Session's own access check (and its admin audit). A candidate the secret check kept off the branch is never shown."""

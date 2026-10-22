@@ -71,9 +71,9 @@ class AccessCase(unittest.TestCase):
         thread.start()
         base = f"http://127.0.0.1:{app.server_address[1]}"
 
-        def call(method, path, token=None, body=None, headers=None):
-            request = urllib.request.Request(
-                base + path, method=method, data=dumps(body).encode() if body is not None else None,
+        def call(method, path, token=None, body=None, headers=None, raw=None):
+            request = urllib.request.Request(   # raw: a body sent as it is (D58 sync's bundle)
+                base + path, method=method, data=raw if raw is not None else dumps(body).encode() if body is not None else None,
                 headers={**({"Authorization": "Bearer " + token} if token else {}),
                          **({"Content-Type": "application/json"} if body is not None else {}), **(headers or {})})
             try:

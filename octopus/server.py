@@ -8,6 +8,7 @@ import hmac
 import html
 import os
 import re
+import shutil
 from pathlib import Path
 import socket
 import threading
@@ -52,6 +53,7 @@ TYPES = {".html": "text/html; charset=utf-8", ".js": "text/javascript; charset=u
 # Preview links carry their own short-lived capability: an iframe or new tab cannot send the console's bearer token.
 # The signing key is kept in the platform data directory, so links stay valid across API restarts and deploys.
 PREVIEW_TTL = 600  # B6: ten minutes; every file it serves re-checks its holder's access
+SYNC_LIMIT = 20 * 1024 * 1024   # D58: the local commits one sync brings in (as the Worker's)
 PREVIEW_POLICY = ("sandbox allow-scripts allow-forms allow-popups allow-modals allow-downloads; "
                   "default-src * data: blob: 'unsafe-inline' 'unsafe-eval'; frame-ancestors 'self'")
 
@@ -95,6 +97,21 @@ def archive_ticket(rid, user, client, key, now=None):
     the link was asked from (for the change journal)."""
     payload = f"{rid}.{user}.{client}.{int((now or time.time()) + PREVIEW_TTL)}"
     return f"{payload}.{preview_signature(key, 'archive.' + payload)}"
+
+
+def bundle_ticket(rid, user, client, key, now=None):
+    """A pull link (D58 §5): an archive ticket signed for the bundle purpose only."""
+    payload = f"{rid}.{user}.{client}.{int((now or time.time()) + PREVIEW_TTL)}"
+    return f"{payload}.{preview_signature(key, 'bundle.' + payload)}"
+
+
+def bundle_run(ticket, key, now=None):
+    parts = ticket.split(".")
+    require(len(parts) == 5 and parts[3].isdigit() and hmac.compare_digest(
+        parts[4].encode(), preview_signature(key, "bundle." + ".".join(parts[:4])).encode()),
+        "拉回链接无效，请重新拉回", 403, "bundle_invalid")
+    require(int(parts[3]) >= (now or time.time()), "拉回链接已过期（10 分钟有效），请重新拉回", 403, "bundle_expired")
+    return parts[0], parts[1], parts[2]
 
 
 def archive_run(ticket, key, now=None):
@@ -316,6 +333,24 @@ def server(database, port=8918, host="127.0.0.1", allowed_hosts=(), origin_secre
             self.end_headers()
             self.wfile.write(data)
 
+        def stream_bundle(self, rid, config, full):
+            """Relay the Worker's pull bundle (D58 §5) with what it is: the head, the base and whether it is whole."""
+            from .transport import worker_stream
+            response = worker_stream(config, "/pull/bundle", {"run_id": rid, "full": full}, timeout=120)
+            with response:
+                self.send_response(200)
+                self.send_header("Content-Type", "application/x-git-bundle")
+                self.send_header("Content-Disposition", f'attachment; filename="{rid}.bundle"')
+                for name in ("X-Pull-Head", "X-Pull-Base", "X-Pull-Branch", "X-Pull-Full", "Content-Length"):
+                    if response.headers.get(name):
+                        self.send_header(name, response.headers[name])
+                self.send_header("Cache-Control", "no-store")
+                self.end_headers()
+                try:
+                    shutil.copyfileobj(response, self.wfile, 1 << 20)
+                except (OSError, HTTPException):
+                    self.close_connection = True
+
         def stream_archive(self, rid, config, meta, reader, client):
             """Relay the Worker's zip as it arrives (chunked, nothing on disk). Only a stream that reached the end of the
             archive is completed and recorded; otherwise the connection is cut so no partial file looks finished."""
@@ -393,8 +428,14 @@ def server(database, port=8918, host="127.0.0.1", allowed_hosts=(), origin_secre
                     origin = self.headers.get("Origin")
                     require(not origin or urlsplit(origin).netloc == self.headers.get("Host"), "跨站写入被拒绝", 403, "origin")
                     size = int(self.headers.get("Content-Length", "0"))
+                    raw = None
+                    if method == "POST" and re.fullmatch(r"/v1/runs/[^/]+/sync", path):   # D58: a git bundle, as it is
+                        require(self.headers.get("Content-Type", "").split(";")[0] == "application/octet-stream",
+                                "需要 application/octet-stream")
+                        require(0 < size <= SYNC_LIMIT, f"同步的内容须为 1 字节到 {SYNC_LIMIT // 1048576} MB", 413, "sync_too_large")
+                        raw = self.rfile.read(size)
                     # A cross-site DELETE always needs a CORS preflight, so it may come without a JSON body.
-                    if not (method == "DELETE" and size == 0):
+                    elif not (method == "DELETE" and size == 0):
                         require(self.headers.get("Content-Type", "").split(";")[0] == "application/json", "需要 application/json")
                         require(0 < size <= 1_000_000, "请求体过大或为空")
                         body = json.loads(self.rfile.read(size))
@@ -423,6 +464,12 @@ def server(database, port=8918, host="127.0.0.1", allowed_hosts=(), origin_secre
                         not origin_secret or hmac.compare_digest(gate, remote_preview.gate_value(origin_secret))),
                         "Not found", 404, "not_found")
                     return self.preview_gate(path)
+                if method == "GET" and path.startswith("/bundle/"):   # D58: the pull bundle, for the link's holder
+                    ticket, _, filename = path[len("/bundle/"):].partition("/")
+                    rid, holder, _ = bundle_run(ticket, signing_key)
+                    require(filename == rid + ".bundle", "下载链接无效", 404, "not_found")
+                    config, _, _ = service.archive_source(rid, holder)
+                    return self.stream_bundle(rid, config, query.get("full") == ["1"])
                 if method == "GET" and path.startswith("/archive/"):
                     ticket, _, filename = path[len("/archive/"):].partition("/")   # not "name": that is the validator
                     rid, holder, client = archive_run(ticket, signing_key)
@@ -570,6 +617,18 @@ def server(database, port=8918, host="127.0.0.1", allowed_hosts=(), origin_secre
                     origin = remote_preview.session_url(preview_domain, rid) if preview_domain else preview_url.rstrip("/")
                     return self.respond({"url": origin + "/_kirocrew/open/" + ticket,
                                          "expires_in": remote_preview.TICKET_TTL})
+                if len(segments) == 4 and segments[:2] == ["v1", "runs"] and segments[3] == "sync":
+                    require(method == "POST" and raw is not None, "Method not allowed", 405)
+                    one = lambda key: (query.get(key) or [None])[-1]
+                    version = one("expected_version")
+                    require(version is not None and version.isdigit(), "需要 expected_version")
+                    return self.respond(service.sync(actor, segments[2], raw, one("head"), one("request_id"), int(version),
+                                                     one("note"), old=one("old")))
+                if len(segments) == 4 and segments[:2] == ["v1", "runs"] and segments[3] == "bundle":   # D58: a local pull
+                    require(method == "POST", "Method not allowed", 405)
+                    service.bundle_entry(actor, segments[2])
+                    ticket = bundle_ticket(segments[2], actor["id"], actor.get("client", "api"), signing_key)
+                    return self.respond({"url": f"/bundle/{ticket}/{segments[2]}.bundle", "expires_in": PREVIEW_TTL})
                 if len(segments) == 4 and segments[:2] == ["v1", "runs"] and segments[3] == "archive":
                     require(method == "POST", "Method not allowed", 405)
                     estimate = service.archive_entry(actor, segments[2])

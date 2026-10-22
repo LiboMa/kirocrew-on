@@ -156,6 +156,7 @@ def openapi():
         "/v1/runs/{id}/observe": {"get": None},
         "/v1/runs/{id}/revisions": {"get": None}, "/v1/runs/{id}/revisions/diff": {"get": None},
         "/v1/runs/{id}/report": {"get": None}, "/v1/runs/{id}/attempts/{attempt}/diff": {"get": None},
+        "/v1/runs/{id}/bundle": {"post": "Empty"}, "/v1/runs/{id}/sync": {"post": None},
         "/v1/runs/{id}/approvals": {"get": None}, "/v1/runs/{id}/approvals/answer": {"post": "ApprovalAnswer"},
         "/v1/runs/{id}/revisions/{version}": {"get": None},
         "/v1/runs/{id}/changes": {"get": None},
@@ -279,7 +280,7 @@ def openapi():
                                      "description": "The kind of the first task not yet accepted; done when all are."},
                                     {"in": "query", "name": "tool", "schema": {"enum": ["kiro", "claude", "codex", "opencode"]},
                                      "description": "Any task's tool."},
-                                    {"in": "query", "name": "client", "schema": {"enum": ["console", "claude", "kiro", "codex", "kiro-ide", "api"]},
+                                    {"in": "query", "name": "client", "schema": {"enum": ["console", "cli", "claude", "kiro", "codex", "kiro-ide", "api"]},
                                      "description": "The Request's client (D55); Sessions from before have none."},
                                     {"in": "query", "name": "submitter", "schema": {"type": "string"}, "description": "Username or user id."},
                                     {"in": "query", "name": "since", "schema": {"type": "string"},
@@ -293,6 +294,20 @@ def openapi():
                                      "description": "At most this many, newest first."},
                                     {"in": "query", "name": "view", "schema": {"enum": ["list"]},
                                      "description": "What a list needs: tasks by name and state, the plan without its summary."}]
+            if path == "/v1/runs/{id}/bundle":
+                op["description"] = ("Read scope. A 10-minute link to the Session's branch as a git bundle (D58 pull): GET it, "
+                                     "add ?full=1 for the whole history; headers X-Pull-Head / -Base / -Branch / -Full. 409 "
+                                     "bundle_secret_found when a commit on the branch looks like a credential or adds a .env file.")
+            if path == "/v1/runs/{id}/sync":
+                op["description"] = ("Execute scope. Body: a git bundle (application/octet-stream, up to 20 MB) of local commits on top "
+                                     "of the Session's head. Query: request_id, expected_version, old (the Session head the commits "
+                                     "build on), head, note. The Worker moves the branch only for a fast-forward with nothing that "
+                                     "looks like a credential; the last task that writes code gets a synced Attempt whose checks run, "
+                                     "and the tasks after it run again. 409 sync_not_fast_forward, sync_secret_found, sync_dirty, busy, "
+                                     "worker_outdated.")
+                op["requestBody"] = {"required": True, "content": {"application/octet-stream": {"schema": {"type": "string", "format": "binary"}}}}
+                op["parameters"] += [{"in": "query", "name": key, "required": key != "note", "schema": text}
+                                     for key in ("request_id", "expected_version", "old", "head", "note")]
             if path == "/v1/runs/{id}/attempts/{attempt}/diff":
                 op["description"] = ("Read scope. What the Attempt's candidate changed against the one before it (or the Session's "
                                      "baseline): files with line counts, and the unified diff clipped at 200 KB / 4000 lines "
@@ -315,7 +330,7 @@ def openapi():
                     op["parameters"] = [{"in": "query", "name": "status", "schema": {"type": "string"}, "description": "Its latest Session's status."},
                                         {"in": "query", "name": "q", "schema": {"type": "string", "minLength": 1, "maxLength": 200},
                                          "description": "Part of the Request id or requirement."},
-                                        {"in": "query", "name": "client", "schema": {"enum": ["console", "claude", "kiro", "codex", "kiro-ide", "api"]}},
+                                        {"in": "query", "name": "client", "schema": {"enum": ["console", "cli", "claude", "kiro", "codex", "kiro-ide", "api"]}},
                                         {"in": "query", "name": "limit", "schema": {"type": "integer", "minimum": 1, "maximum": 200}}]
             if path.endswith("/dedicate"):
                 op["description"] = "Administrator only. A shared Worker host serving exactly one Team becomes that Team's dedicated environment; every member then opens its native KiroCrew entry."
