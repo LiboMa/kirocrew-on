@@ -221,7 +221,7 @@ M4（共享与组织）、M5（仓库闭环）在 MVP 之后分别立项，各�
 | K07 | 原生 continue 不读取 `reasoning_effort`；原生 spawn 没有 HTTP 幂等键 | M1 |
 | K08 | Coordinator “不派生任务”的限制来自提示词，不是工具级隔离；其诊断可能有误 | M2 |
 | K09 | Engine 单线程串行推进，慢 Run 会阻塞其他 Run | M1 |
-| K10 | SQLite 没有 schema 迁移机制（M1）；Worker Token 以明文存放在数据库 `workers.config` 中（M4 移出数据库） | M1 / M4 |
+| K10 | ~~SQLite 没有 schema 迁移机制（M1）~~（已有迁移）；~~Worker Token 以明文存放在数据库 `workers.config` 中~~（D59：以 D35 主密钥密封为 `token_sealed`，只在调用时解开，启动时密封旧数据） | M1 / M4 |
 | K11 | 组合逻辑只存在于单个进程内；任何 re-exec 都会丢失 `PocProviderRegistry` | M1 |
 | K12 | Linux 沙箱依赖非特权 user namespace；不经官方 launcher 启动时需单独核实（AL2023 已实测：`unshare -Ur true` 成功） | M1 |
 | K13 | 现有启动器与路径依赖 macOS：`/Applications/...`、App 内置 Python、zsh、Electron、`lsof`、Homebrew 路径 | M1 |

@@ -169,8 +169,9 @@
         {
           "id": "m4-k10",
           "name": "M4-2 Worker Token 移出数据库（K10）",
-          "status": "todo",
-          "ref": "继承问题 K10"
+          "status": "local",
+          "ref": "D59",
+          "more": "Worker Token 以 D35 主密钥密封为 token_sealed，只在 transport 调用时解开；注册与更新连接即密封；启动时把旧明文密封（可重复执行）。待：部署与 EC2 核对。"
         },
         {
           "id": "m4-k03",

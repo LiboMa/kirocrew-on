@@ -304,6 +304,7 @@ CloudFront 只使用 us-east-1 的证书）：分发加上别名与证书（SNI�
   - 平台：管理员管理，并授权给 Team 或用户（`POST|DELETE /v1/credentials/<id>/grants`）。
   - 看不到为 404，不能管理为 403。
 - **秘密只写**：创建或轮换时提交，之后只返回元数据与末 4 位，审计 `credential.*` 不含秘密。MCP 不创建凭证。
+- **Worker Token（D59，K10）**：各执行环境的访问 Token 也用这把主密钥密封（`workers.config.token_sealed`），数据库里不再有明文；平台只在调用 Worker 时解开。升级到 D59 的那次启动会把已有的明文一次性密封（可重复执行）。主密钥丢失或被换时 Worker 调用返回 503 `worker_secret`：放回原密钥，或在控制台「执行环境」中重新连接（更新连接）各环境。
 - **主密钥**：`/etc/kirocrew-on/credentials.key`（root:octopus 0640，安装脚本首次生成，不在 SSM、不进备份）。数据库备份只含密文：
   恢复到另一台主机时，须把同一个主密钥文件放到同一路径（`platform.toml` 的 `credentials_key_file`），否则现有凭证无法解密，
   需要逐个轮换。主密钥丢失后，现有凭证无法恢复，只能逐个轮换（重新录入 Token）。
