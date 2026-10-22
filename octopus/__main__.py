@@ -109,6 +109,10 @@ def build_parser(settings, environ=None):
 
 
 def main(argv=None):
+    from . import cli
+    words = sys.argv[1:] if argv is None else argv
+    if words and words[0] in cli.COMMANDS:   # D58: the user's commands (login, submit, status …), not the operations ones
+        return cli.main(list(words))
     settings, _ = settings_from_argv(argv)
     args = build_parser(settings).parse_args(argv)
     if args.command == "init":
