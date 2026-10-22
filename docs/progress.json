@@ -189,9 +189,9 @@
         {
           "id": "m4-token-expiry",
           "name": "API Token 有效期可选（7 / 30 / 365 天 / 永不过期）",
-          "status": "local",
+          "status": "accepted",
           "ref": "D62",
-          "more": "负责人 2026-10-22。控制台「有效期」（默认 30 天）、POST /v1/tokens 的 expires_in、octopus connect / login --expires；永不过期显示「永不过期」（expires null）；带 admin 的最长 30 天。待：部署与 EC2 核对。"
+          "more": "负责人 2026-10-22。控制台「有效期」（默认 30 天）、POST /v1/tokens 的 expires_in、octopus connect / login --expires；永不过期显示「永不过期」（expires null）；带 admin 的最长 30 天；长期 Token 不另加限制（负责人决定）。EC2 ab29b40：7 天 Token 7.0 天到期、永不过期的 Token 列表为 null 且能认证、forever 被拒 400，测试 Token 已撤销。"
         },
         {
           "id": "m5-conn01",

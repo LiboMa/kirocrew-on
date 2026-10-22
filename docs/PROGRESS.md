@@ -1,16 +1,16 @@
 # 进度与完成记录
 
-> 由 `tools/progress.py` 生成（2026-10-22 13:44 CST）：任务状态取自 `docs/progress.json`，提交记录取自 git。看板：`docs/progress-dashboard.html`；实时看板：`python3 tools/progress.py --serve --ec2`（http://127.0.0.1:8765/）。
+> 由 `tools/progress.py` 生成（2026-10-22 14:06 CST）：任务状态取自 `docs/progress.json`，提交记录取自 git。看板：`docs/progress-dashboard.html`；实时看板：`python3 tools/progress.py --serve --ec2`（http://127.0.0.1:8765/）。
 
-- **本轮完成度**：87%　**MVP 完成度**：56%
-- **分支**：HEAD `d75e34f`；自 `origin/main` 起 419 个提交——已推送 335、已部署 EC2 83、仅本机 1；EC2 运行 `d4ae66f`
+- **本轮完成度**：87%　**MVP 完成度**：58%
+- **分支**：HEAD `ab29b40`；自 `origin/main` 起 421 个提交——已推送 335、已部署 EC2 86、仅本机 0；EC2 运行 `ab29b40`
 - **回归**：1412 后端 + 92 + 205 控制台（connect codex / kiro-ide 本机）；EC2 运行 95e5aa9
 
 ## 模块
 
 | 模块 | 完成度 | 已验收 | 已部署 · 待验收 | 本机完成 · 待部署 | 进行中 | 卡点 · 等外部 | 未开始 |
 |---|---|---|---|---|---|---|---|
-| MVP 里程碑（M1–M5） | 56% | 10 | 6 | 1 | 1 | 0 | 10 |
+| MVP 里程碑（M1–M5） | 58% | 11 | 6 | 0 | 1 | 0 | 10 |
 | D46 Agent 角色与提示体系 | 87% | 8 | 3 | 0 | 0 | 1 | 0 |
 | D49 每人一个执行边界 | 80% | 2 | 2 | 0 | 1 | 0 | 0 |
 | D50 编码技能包 | 100% | 2 | 0 | 0 | 0 | 0 | 0 |
@@ -43,12 +43,14 @@
 
 ## 完成记录（按决策，最近的在前）
 
-### D62（1 个提交：仅本机 1）
+### D62（2 个提交：已部署 EC2 2）
 
-- `d75e34f` 2026-10-22 〔仅本机〕 feat(tokens): API Token 有效期可选 7 / 30 / 365 天或永不过期（D62，负责人 2026-10-22）——POST /v1/tokens 的 expires_in；永不过期以远期日期保存、API 返回 expires null、列表显示「永不过期」；带 admin 的最长 30 天；控制台「有效期」（默认 30 天，修正写死的「7 天后到期」）；octopus connect / login --expires（同时发 ttl，旧平台照旧 30 天）；OpenAPI 与运维说明
+- `ab29b40` 2026-10-22 〔已部署 EC2〕 fix(tokens): 终审修正（D62）——octopus connect 完成时按平台实际给的有效期提示（永不过期 / 有效期至某日），不再写死 30 天；旧版控制台的 Token 列表显示「永不过期」而不是 1970 年
+- `d75e34f` 2026-10-22 〔已部署 EC2〕 feat(tokens): API Token 有效期可选 7 / 30 / 365 天或永不过期（D62，负责人 2026-10-22）——POST /v1/tokens 的 expires_in；永不过期以远期日期保存、API 返回 expires null、列表显示「永不过期」；带 admin 的最长 30 天；控制台「有效期」（默认 30 天，修正写死的「7 天后到期」）；octopus connect / login --expires（同时发 ttl，旧平台照旧 30 天）；OpenAPI 与运维说明
 
-### D61（7 个提交：已部署 EC2 7）
+### D61（8 个提交：已部署 EC2 8）
 
+- `ff33ad5` 2026-10-22 〔已部署 EC2〕 docs: D61 已在 EC2 验收（d4ae66f）——Team 上限 1 时第二个会话排队、第一个结束后自动开始；BACKLOG 记 KiroCrew 回收未认领父会话时杀掉子 Agent
 - `d4ae66f` 2026-10-22 〔已部署 EC2〕 fix(quotas): 终审修正（D61）——只数任务当前的 Attempt（续作留下的仍显示运行中的记录不再让会话等自己）；排队期间又等执行环境恢复的，等待时间只计一次，run.quota_go 照常记下
 - `aa2a40c` 2026-10-22 〔已部署 EC2〕 docs: D61 并发上限——运维说明（限什么、谁设、到了上限、不等待）；MVP-RELEASE、BACKLOG（第 3 期用量上限）与进度
 - `9193bc1` 2026-10-22 〔已部署 EC2〕 feat(console): 设置 →「并发上限」（D61 Task 3）——看自己的与所在 Team 的上限与占用；平台管理员设每人默认与单独上限，Team owner 设本 Team 的；成员只读
