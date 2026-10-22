@@ -26,8 +26,7 @@ EXITED = re.compile(r"ACP process exited|AcpProcessDied|Runtime process died", r
 CLEANUP = re.compile(r"process group \d+ still has members", re.I)
 # KiroCrew ended a run its admission gate never let start (D60, EC2 2026-10-21 "never started: waiting for memory").
 NEVER_STARTED = re.compile(r"^\s*never started", re.I)
-# What a person reads about a queue (D60): the kind of wait, never the host's numbers (those stay in the event).
-QUEUE_REASONS = {"low_memory": "执行环境内存不足", "posture_critical": "执行环境负载过高", "adaptive_cap_zero": "执行环境暂停接收新任务"}
+QUEUE_POLL = 20   # seconds between looks at a queued native run (D60): not every tick on a Gateway short of memory
 
 
 def transient(native, error, missing, blocked_line):
@@ -438,11 +437,14 @@ class Engine:
     def _queue(self, run, task, attempt, prior, queued):
         """A native run KiroCrew deferred (D60): shown on the Session as a queue — the kind of wait, not the host's numbers —
         and not judged while it waits; when it starts, the end of the queue is recorded (the watchdog counts from it)."""
-        mark = prior.get("queued") or {}
+        mark, text = prior.get("queued") or {}, waiting.queue_title(queued.get("reason"))
+        if self.poll_backoff:
+            self.due[run["id"]] = (self.clock() + QUEUE_POLL, run["version"])
         if mark.get("since") and not mark.get("until"):
+            if run["error"] != text:   # another error took its place meanwhile (a failed look): it still waits
+                self.update(run["id"], "running", text, actor=journal.WORKER)
             return
         mark = {"since": self.wall(), "reason": queued.get("reason"), "resuming": bool(queued.get("resuming"))}
-        text = "排队：等待执行环境资源（" + QUEUE_REASONS.get(queued.get("reason"), "执行环境资源不足") + "）"
         with self.db.transaction() as db:
             journal.change(db, "attempts", attempt["id"], journal.WORKER, "attempt.queued", text,
                            event={"id": attempt["id"], "task_id": task["id"], "cause": queued.get("reason"),

@@ -66,6 +66,16 @@ class WorkerQueueTests(unittest.TestCase):
             self.inspect()
         self.assertEqual(caught.exception.code, "native_unavailable")
 
+    def test_a_run_that_began_and_waits_again_is_queued(self):   # final review I1: its state file exists, the list omits it
+        _, parent = self.node.binding(RID)
+        folder = self.node.home / "subagents" / "aabb1234"
+        folder.mkdir(parents=True)
+        (folder / "state.json").write_text(json.dumps({"id": "aabb1234", "parent_session": parent["parent"]}))
+        self.status = self.queued_row(resuming=True, task="编码（重启后）")   # the state file proves it is ours
+        result = self.inspect()
+        self.assertEqual(result["native"], {"done": False, "queued": True})
+        self.assertTrue(result["queued"]["resuming"])
+
     def test_neither_listed_nor_queued_is_still_unknown(self):
         with self.assertRaises(Error) as caught:
             self.inspect()
@@ -84,6 +94,7 @@ class EngineQueueTests(WatchdogCase):
         coordination = any(b.get("coordination") for p, b in self.calls if p == "/dispatch"
                            and b["attempt_id"] == (body or {}).get("attempt_id"))
         if path == "/inspect" and self.queued and not coordination:
+            self.calls.append((path, body))
             return {"native": {"done": False, "queued": True}, "queued": self.queued, "evidence": {}, "handoff": ""}
         if path == "/inspect" and self.never and not coordination:
             self.never -= 1
@@ -125,6 +136,33 @@ class EngineQueueTests(WatchdogCase):
         self.assertNotIn("2.47", run["error"])
         self.assertEqual(self.evidence(rid)["queued"]["reason"], "low_memory")
         self.assertIn("attempt.queued", self.events(rid))
+
+    def test_the_queue_is_what_the_session_needs_not_an_error(self):   # spec §3.2: 「需要处理」, not a red error line
+        rid = self.start()
+        self.queued = self.QUEUED
+        run = self.tick(rid, 3)
+        self.assertEqual(run["attention"]["title"], "排队：等待执行环境资源（执行环境内存不足）")
+        self.assertIn("无需操作", run["attention"]["action"])
+        self.assertNotIn("2.47", json.dumps(run["attention"], ensure_ascii=False))
+        self.queued = None
+        self.assertIsNone(self.tick(rid)["attention"])
+
+    def test_the_queue_comes_back_after_another_error(self):   # final review I2: a failed look meanwhile
+        rid = self.start()
+        self.queued = self.QUEUED
+        self.tick(rid, 3)
+        self.engine.update(rid, "running", "Worker 暂时不可用")
+        self.assertEqual(self.tick(rid)["error"], "排队：等待执行环境资源（执行环境内存不足）")
+        self.assertEqual(self.events(rid).count("attempt.queued"), 1)
+
+    def test_a_queue_is_looked_at_less_often(self):   # final review I3: not every second on a Gateway short of memory
+        self.engine.poll_backoff = True
+        rid = self.start()
+        self.queued = self.QUEUED
+        self.tick(rid, 3)
+        looks = [p for p, _ in self.calls].count("/inspect")
+        self.tick(rid, 5)
+        self.assertEqual([p for p, _ in self.calls].count("/inspect"), looks)
 
     def test_the_clock_starts_when_the_queue_ends(self):
         rid = self.start()

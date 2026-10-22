@@ -2214,7 +2214,8 @@ class Service:
             return {"title": "协调者正在诊断与安排修复", "detail": run["error"] or "正在读取失败证据，等待原生诊断结果。",
                     "action": "等待诊断结果；也可停止本 Session", "task_id": task["id"] if task else None}
         if run["status"] != "blocked":
-            return None
+            from .waiting import queue_attention
+            return queue_attention(run, task)
         attempt = (task.get("attempts") or [{}])[-1] if task else {}
         failure = attempt.get("evidence", {}).get("failure_type")
         from .waiting import handed_over, kiro_login_failure

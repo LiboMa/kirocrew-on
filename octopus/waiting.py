@@ -18,6 +18,24 @@ DISABLED = "Worker 已停用"   # the Engine's reason when a Session's Worker is
 # Every refusal of a credential that its manager or the Session's owner can lift ends so (credentials.material).
 CREDENTIAL_REFUSED = "更换凭证后续作"
 RESUMABLE = {"preparing", "ready", "running", "waiting_approval", "dispatch_unknown"}
+# What a person reads about a KiroCrew queue (D60): the kind of wait, never the host's numbers (those stay in the event).
+QUEUE_REASONS = {"low_memory": "执行环境内存不足", "posture_critical": "执行环境负载过高", "adaptive_cap_zero": "执行环境暂停接收新任务"}
+
+
+def queue_title(reason):
+    return "排队：等待执行环境资源（" + QUEUE_REASONS.get(reason, "执行环境资源不足") + "）"
+
+
+def queue_attention(run, task):
+    """「需要处理」 of a Session whose running task KiroCrew deferred (D60): nothing to do, it starts on its own."""
+    mark = ((((task or {}).get("attempts") or [{}])[-1].get("evidence") or {}).get("queued") or {}) \
+        if run["status"] == "running" else {}
+    if not mark.get("since") or mark.get("until"):
+        return None
+    return {"title": queue_title(mark.get("reason")),
+            "detail": "执行环境暂时没有资源启动此任务；排队期间不计无进展与时长预算。",
+            "action": "无需操作：资源可用后自动开始。长时间排队时请执行环境的管理员结束空闲的进程或扩容。",
+            "task_id": task["id"]}
 
 
 def kiro_login_failure(evidence, error, tool):
