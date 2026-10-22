@@ -344,6 +344,124 @@ class EngineGateTests(TeamsWorkersCase):
                 self.assertIn(words, attempt["error"])
                 self.assertNotIn("reviewed", evidence)
 
+    def test_a_rejecting_review_still_has_its_edits_put_back(self):
+        """D57 §4: whatever the verdict. A rejection's edits left in the workspace would be swept into the rework's
+        candidate; they are put back, recorded beside the rejection, which stays the Attempt's for recovery."""
+        rejection = {"decision": "changes_requested", "summary": "缺少空输入的边界处理", "failure_type": "implementation",
+                     "reviewed_commit": C1}
+        edited = {"head": C1, "clean": False, "changed_files": ["src/a.js"]}
+
+        def refused(body):
+            raise Error(409, "candidate_failed", "Git 操作失败（exit 1）：index.lock")
+
+        def old(body):
+            raise Error(400, "invalid_request", "mode 只能是 commit、check、restore 或 diff")
+        put_back = lambda body: {"head": C1, "clean": True, "changed_files": [], "reverted": ["src/a.js"], "rewound": 0}
+        cases = (("warn", edited, put_back, "审查改动的文件已由平台撤回：src/a.js"),
+                 ("skip", None, None, "审查没有改动文件"),
+                 ("fail", edited, refused, "平台未能撤回审查改动的 src/a.js：Git 操作失败（exit 1）：index.lock"),
+                 ("skip", edited, old, "未能撤回审查改动的 src/a.js：Worker 版本不支持"))   # a Worker from before D57
+        for index, (status, check, rewind, words) in enumerate(cases):
+            with self.subTest(status=status, words=words):
+                worker = FakeWorker()
+                rid = self.session([{**IMPLEMENT, "verify": []}, REVIEW], recovery=True, request=f"start-000000007{index}")
+                worker.outcomes["review"] = rejection
+                if check:
+                    worker.check = lambda body, check=check: check
+                if rewind:
+                    worker.rewind = rewind
+                self.run_engine(worker, ticks=8)
+                attempt, evidence = self.attempt(rid, "review")
+                self.assertEqual((attempt["status"], attempt["error"], evidence["failure_type"]),
+                                 ("blocked", "缺少空输入的边界处理", "implementation"))   # what recovery sees, unchanged
+                self.assertNotIn("gate", evidence)
+                self.assertEqual(self.gates(evidence)["outcome_pass"], "fail")
+                gate = self.review_bound(evidence)
+                self.assertEqual(gate["status"], status)
+                self.assertIn(words, gate["detail"])
+                self.assertNotIn("reviewed", evidence)
+                modes = [b["mode"] for p, b in worker.calls if p == "/candidate" and b["attempt_id"] == attempt["id"]]
+                self.assertEqual(modes, ["check", "rewind"] if check else ["check"])
+                if status == "warn":
+                    self.assertEqual(gate["files"], ["src/a.js"])
+                with self.db.read() as db:
+                    self.assertTrue(db.execute("SELECT 1 FROM recoveries WHERE run_id=?", (rid,)).fetchone())
+
+    def test_a_review_the_watchdog_stopped_has_its_edits_put_back(self):
+        worker = FakeWorker()
+        rid = self.session([{**IMPLEMENT, "verify": []}, REVIEW])
+        worker.check = lambda body: {"head": C1, "clean": False, "changed_files": ["docs/review.md"]}
+        worker.rewind = lambda body: {"head": C1, "clean": True, "changed_files": [], "reverted": ["docs/review.md"],
+                                      "rewound": 0}
+
+        def stalled(config, path, body=None, **kwargs):
+            if path == "/inspect" and worker.dispatched[body["attempt_id"]]["spec"]["id"] == "review":
+                worker.calls.append((path, body))
+                return {"status": "running", "native": {"done": False}, "evidence": {"actual_backend": "claude"},
+                        "progress": {"idle_seconds": 10 ** 6}}
+            if path == "/attempt/stop":
+                return {"stopped": True}
+            return worker(config, path, body, **kwargs)
+        engine = Engine(self.db, request=stalled)
+        engine.wall = lambda: __import__("time").time() + 4 * 3600   # long past the watchdog's limits
+        for _ in range(10):
+            engine.tick()
+        attempt, evidence = self.attempt(rid, "review")
+        self.assertEqual((attempt["status"], evidence["failure_type"]), ("blocked", "native_error"))
+        self.assertIn("看门狗已停止", attempt["error"])
+        gate = self.review_bound(evidence)
+        self.assertEqual((gate["status"], gate["files"]), ("warn", ["docs/review.md"]))
+
+    def test_the_rework_after_a_rejecting_review_does_not_take_its_edits(self):
+        """End to end on a real workspace: the review edits the implementation and rejects; recovery reworks the code task;
+        the rework's candidate holds the implementer's files only."""
+        from octopus import sources
+        from tests.test_archive import RID, make_worker
+        root = Path(tempfile.mkdtemp())
+        self.addCleanup(__import__("shutil").rmtree, root, True)
+        node, project = make_worker(root)
+        rounds, decision = {"code": 0, "review": 0}, {"action": "rework", "target_task_id": "code", "reason": "审查发现边界错误",
+                                                       "instructions": "补上空输入的边界处理"}
+
+        class Real(FakeWorker):
+            def __call__(self, config, path, body=None, **kwargs):
+                if path == "/candidate":
+                    self.calls.append((path, body))
+                    return node.candidate({**body, "run_id": RID})
+                if path == "/dispatch" and not body.get("coordination") and body["attempt_id"] not in self.dispatched:
+                    task = body["spec"]["id"]
+                    rounds[task] += 1
+                    files = {("code", 1): {"src/a.js": "export const a = 1;\n"},
+                             ("code", 2): {"src/b.js": "export const b = (x) => x ?? 0;\n"},
+                             ("review", 1): {"src/a.js": "审查者顺手改了实现\n"}}.get((task, rounds[task]), {})
+                    for name, text in files.items():
+                        (project / name).parent.mkdir(parents=True, exist_ok=True)
+                        (project / name).write_text(text)
+                    self.outcomes["review"] = ({"decision": "changes_requested", "summary": "缺少空输入的边界处理",
+                                                "failure_type": "implementation"} if rounds["review"] == 1
+                                               else {"decision": "pass", "summary": "无阻断问题"})
+                if path == "/inspect" and self.dispatched[body["attempt_id"]].get("coordination"):
+                    self.calls.append((path, body))
+                    return {"native": {"done": True, "result": "诊断完成"},
+                            "evidence": {"actual_backend": self.dispatched[body["attempt_id"]]["spec"]["tool"]},
+                            "handoff": "诊断", "decision": dumps(decision)}
+                if path == "/inspect" and self.dispatched[body["attempt_id"]]["spec"]["id"] == "review":
+                    sha = (self.dispatched[body["attempt_id"]].get("candidate") or {}).get("sha", "")
+                    self.outcomes["review"] = {**self.outcomes["review"], "reviewed_commit": sha}
+                return super().__call__(config, path, body, **kwargs)
+        worker = Real()
+        rid = self.session([{**IMPLEMENT, "verify": []}, REVIEW], recovery=True)
+        self.run_engine(worker, ticks=40)
+        self.assertEqual(rounds, {"code": 2, "review": 2})
+        with self.db.read() as db:
+            codes = [json.loads(r["evidence"]) for r in db.execute(
+                "SELECT evidence FROM attempts WHERE run_id=? AND task_id='code' ORDER BY number", (rid,))]
+        rework = codes[-1]["candidate"]
+        git = lambda *args: sources._git(project, *args)
+        self.assertEqual(git("show", rework["sha"] + ":src/a.js"), "export const a = 1;")   # not the reviewer's edit
+        self.assertEqual(rework["names"], ["src/b.js"])
+        self.assertEqual(self.service.run(self.c, rid)["status"], "completed")
+
     def test_stopping_during_checks_ends_them_and_ignores_late_results(self):
         worker, rid = FakeWorker(), self.session([IMPLEMENT])
         worker.verify = [{"state": "running", "passed": None, "failed": None, "results": []}]

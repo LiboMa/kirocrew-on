@@ -537,7 +537,7 @@ class Engine:
         if answer.get("finished"):   # it ended on its own meanwhile: its result is judged as usual on the next look
             self._mark_watchdog(attempt, prior, None)
             return True
-        return self._stalled(run, task, attempt, {**prior, **(result.get("evidence") or {})}, info, settings)
+        return self._stalled(run, task, attempt, {**prior, **(result.get("evidence") or {})}, info, settings, config)
 
     def _mark_watchdog(self, attempt, prior, value):
         evidence = {key: item for key, item in prior.items() if key != "watchdog"}
@@ -547,7 +547,7 @@ class Engine:
             journal.change(db, "attempts", attempt["id"], journal.ENGINE, "attempt.watchdog", quiet=("evidence",),
                            evidence=dumps(evidence), updated=time.time())
 
-    def _stalled(self, run, task, attempt, evidence, info, settings):
+    def _stalled(self, run, task, attempt, evidence, info, settings, config=None):
         """The Attempt the watchdog stopped: blocked as a native error, retried once, then diagnosed (D39 §3.2)."""
         rid, reason = run["id"], info["reason"]
         prior = json.loads(attempt["evidence"] or "{}")
@@ -560,6 +560,8 @@ class Engine:
         evidence = {**evidence, "failure_type": "native_error", "watchdog": {**info, "stopped_at": self.wall()},
                     **({"transient": "stalled"} if retry else {}),
                     **({"budget_refused": over} if over else {})}
+        if config is not None:   # D57 §4: what a stopped review changed is put back, as for any review that did not pass
+            self._put_back_review(run, config, attempt, evidence)
         if not retry and knowledge.platform(json.loads(run["snapshot"]), task["id"]):   # D46 P4: skipped, not diagnosed
             self._skip_knowledge(run, attempt["id"], evidence, reason, journal.ENGINE)
             return True
@@ -653,6 +655,62 @@ class Engine:
             done = "未能还原：" + str(exc)[:160]
         return fail("read_only", f"Knowledge 任务修改了 {files}（{done}），未沉淀")
 
+    @staticmethod
+    def _reverted(rewound, sha):
+        """What a Worker's rewind put back (D57 §4), as the notes a review_bound record shows, and the files."""
+        reverted, notes = [str(name) for name in rewound.get("reverted") or []], []
+        if reverted:
+            notes.append("审查改动的文件已由平台撤回：" + "、".join(reverted[:10])
+                         + (f" 等 {len(reverted)} 个" if len(reverted) > 10 else ""))
+        if rewound.get("rewound"):
+            notes.append(f"审查期间的 {rewound['rewound']} 个提交已撤回，会话分支回到候选 {sha[:7]}")
+        if not notes:   # e.g. only what a candidate leaves out changed: still say what the platform did
+            notes.append(f"会话分支已由平台恢复到候选 {sha[:7]}")
+        return notes, reverted
+
+    def _put_back_review(self, run, config, attempt, evidence):
+        """A review that ended without passing — a rejection, an error, the watchdog's stop — leaves the workspace as the
+        reviewer left it, and the rework's candidate would take its edits in: they are put back all the same (D57 §4).
+        Recorded as review_bound beside the failure, which stays the Attempt's: its error, failure_type and gate are what
+        recovery sees. warn: put back; skip: nothing to put back (or a Worker that cannot); fail: putting back failed. A
+        review its gates judged (review_bound already recorded) was put back there."""
+        spec, snapshot = json.loads(attempt["spec"]), json.loads(run["snapshot"])
+        if spec.get("kind") != "review" or snapshot.get("execution_contract", 1) < 3 \
+                or planning.planning_task(attempt["task_id"], snapshot) \
+                or any(g.get("name") == "review_bound" for g in evidence.get("gates") or []):
+            return
+        with self.db.read() as db:
+            latest = self._head_candidate(db, run["id"])
+        if latest is None:
+            return
+        sha = latest["sha"]
+        body = {"run_id": run["id"], "attempt_id": attempt["id"], "expected": sha}
+        record = lambda status, detail, **extra: evidence.setdefault("gates", []).append(
+            {**gates.record("review_bound", status, detail), **extra})
+        try:
+            check = self.request(config, "/candidate", {**body, "mode": "check"})
+        except Error as exc:
+            if not 400 <= exc.status < 500:
+                raise
+            return record("skip", gates.OLD_WORKER) if exc.status == 404 else \
+                record("fail", f"无法核对审查的工作区，未能撤回审查的改动：{exc}")
+        if not check["changed_files"] and check["head"] == sha:
+            return record("skip", "审查没有改动文件")
+        what = "审查改动的 " + "、".join(check["changed_files"][:10]) if check["changed_files"] else \
+            f"审查期间被改动的会话分支（HEAD 不是候选 {sha[:7]}）"
+        try:
+            rewound = self.request(config, "/candidate", {**body, "mode": "rewind"}, timeout=180)
+        except Error as exc:
+            if not 400 <= exc.status < 500:
+                raise
+            return record("fail", f"平台未能撤回{what}：{exc}") if exc.status == 409 else \
+                record("skip", f"未能撤回{what}：{gates.OLD_WORKER}")
+        if rewound.get("head") != sha or not rewound.get("clean"):
+            return record("fail", f"平台撤回{what}后，工作区仍不是候选 {sha[:7]}："
+                          + "、".join((rewound.get("changed_files") or [])[:10]))
+        notes, reverted = self._reverted(rewound, sha)
+        record("warn", "；".join(notes), **({"files": reverted[:30]} if reverted else {}))
+
     def _more_gates(self, run, config, task, attempt, spec, evidence, report, latest, start=None):
         """diff_present, no_secrets and the start of checks_pass for a code task; review_bound for a review (D37 §4).
         (error, failure_type, checking): ``checking`` when the verify commands were started."""
@@ -699,14 +757,7 @@ class Engine:
                 if rewound.get("head") != sha or not rewound.get("clean"):
                     return fail("review_bound", f"平台撤回审查的改动后，工作区仍不是候选 {sha[:7]}："
                                 + "、".join((rewound.get("changed_files") or [])[:10]))
-                reverted = [str(name) for name in rewound.get("reverted") or []]
-                if reverted:
-                    notes.append("审查改动的文件已由平台撤回：" + "、".join(reverted[:10])
-                                 + (f" 等 {len(reverted)} 个" if len(reverted) > 10 else ""))
-                if rewound.get("rewound"):
-                    notes.append(f"审查期间的 {rewound['rewound']} 个提交已撤回，会话分支回到候选 {sha[:7]}")
-                if not notes:   # e.g. only what a candidate leaves out changed: still say what the platform did
-                    notes.append(f"会话分支已由平台恢复到候选 {sha[:7]}")
+                notes, reverted = self._reverted(rewound, sha)
             if not (len(reviewed) >= 7 and sha.startswith(reviewed)):
                 notes.append(f"审查报告写的版本（{reviewed[:12] or '缺失'}）与候选 {sha[:7]} 不符")
             if notes:   # D57 §13.4: the verdict counts, bound to the candidate
@@ -1128,7 +1179,7 @@ class Engine:
             # the watchdog's stop, finished after the platform stopped waiting for it (or across a restart)
             mark = prior["watchdog"]
             return self._stalled(run, task, attempt, evidence, {k: v for k, v in mark.items()},
-                                 recovery.policy(snapshot.get("recovery"), legacy=True))
+                                 recovery.policy(snapshot.get("recovery"), legacy=True), config)
         retry = None
         if native.get("done"):
             text = str(native.get("result", "")).strip()
@@ -1176,6 +1227,8 @@ class Engine:
                     evidence["gate"] = "evaluated"
                 elif pending:
                     evidence["evaluation"] = {"pending": pending}
+            if error:   # D57 §4: a review that did not pass is put back too; its failure stays what recovery sees
+                self._put_back_review(run, config, attempt, evidence)
             if lost and not error:
                 evidence["result_missing"] = True
             if error:
