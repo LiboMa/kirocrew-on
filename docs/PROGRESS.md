@@ -1,16 +1,16 @@
 # 进度与完成记录
 
-> 由 `tools/progress.py` 生成（2026-10-22 14:39 CST）：任务状态取自 `docs/progress.json`，提交记录取自 git。看板：`docs/progress-dashboard.html`；实时看板：`python3 tools/progress.py --serve --ec2`（http://127.0.0.1:8765/）。
+> 由 `tools/progress.py` 生成（2026-10-22 15:02 CST）：任务状态取自 `docs/progress.json`，提交记录取自 git。看板：`docs/progress-dashboard.html`；实时看板：`python3 tools/progress.py --serve --ec2`（http://127.0.0.1:8765/）。
 
-- **本轮完成度**：87%　**MVP 完成度**：59%
-- **分支**：HEAD `c887aac`；自 `origin/main` 起 423 个提交——已推送 335、已部署 EC2 88、仅本机 0；EC2 运行 `c887aac`
+- **本轮完成度**：87%　**MVP 完成度**：60%
+- **分支**：HEAD `b4a7cba`；自 `origin/main` 起 424 个提交——已推送 335、已部署 EC2 88、仅本机 1；EC2 运行 `c887aac`
 - **回归**：1412 后端 + 92 + 205 控制台（connect codex / kiro-ide 本机）；EC2 运行 95e5aa9
 
 ## 模块
 
 | 模块 | 完成度 | 已验收 | 已部署 · 待验收 | 本机完成 · 待部署 | 进行中 | 卡点 · 等外部 | 未开始 |
 |---|---|---|---|---|---|---|---|
-| MVP 里程碑（M1–M5） | 59% | 12 | 6 | 0 | 1 | 0 | 10 |
+| MVP 里程碑（M1–M5） | 60% | 13 | 5 | 0 | 1 | 0 | 10 |
 | D46 Agent 角色与提示体系 | 87% | 8 | 3 | 0 | 0 | 1 | 0 |
 | D49 每人一个执行边界 | 80% | 2 | 2 | 0 | 1 | 0 | 0 |
 | D50 编码技能包 | 100% | 2 | 0 | 0 | 0 | 0 | 0 |
@@ -43,8 +43,9 @@
 
 ## 完成记录（按决策，最近的在前）
 
-### D63（1 个提交：已部署 EC2 1）
+### D63（2 个提交：已部署 EC2 1、仅本机 1）
 
+- `b4a7cba` 2026-10-22 〔仅本机〕 docs: D63 已在 EC2 验收（c887aac）——空闲 ACP 进程 9 → 3、已用内存 5391 → 2921 MB，新会话不再预先起会话；BACKLOG 记子 Agent 结束时父会话仍跑一轮 coordinator
 - `c887aac` 2026-10-22 〔已部署 EC2〕 fix(composition): 边界的 KiroCrew 配置关掉 session.eager_spawn（D63）——KiroCrew 0.10 默认为每个 chat slot 预先起会话；平台的 slot 从不认领，白占进程，内存吃紧时被回收还连带 SIGKILL 正在运行的子 Agent（EC2 run-16848466…，parent-end teardown）；新配置与已有配置都写 false，明确开启的保留
 
 ### D62（3 个提交：已部署 EC2 3）
