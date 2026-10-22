@@ -54,6 +54,18 @@ export const EVENT_LABELS: Record<string, string> = {
 };
 
 /** D46 P2: the roles a task's Agent works in (octopus/roles.py LABELS; kept equal by tests/test_roles.py). */
+/** D69: the phases (octopus/phases.py). */
+export const PHASE_LABELS: Record<string, string> = { diverge: "发散", design: "设计", converge: "收敛" };
+
+/** A task's phase as people read it: what it names, or what its kind implies (a review's follows what it reviews, so
+ * only a written one is shown); nothing for plain converge work, the default. */
+export function phaseText(spec: { phase?: string; kind?: string }): string {
+  if (spec.phase) return "阶段：" + (PHASE_LABELS[spec.phase] ?? spec.phase);
+  if (spec.kind === "research") return "阶段：发散（按类别）";
+  if (spec.kind === "design") return "阶段：设计（按类别）";
+  return "";
+}
+
 export const ROLE_LABELS: Record<string, string> = {
   spec: "Spec 分析", sde: "SDE 开发", integration_test: "集成测试", security_test: "安全测试", challenge: "Challenge", evaluator: "Evaluator",
   knowledge: "Knowledge",

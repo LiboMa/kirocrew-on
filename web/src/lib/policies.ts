@@ -8,7 +8,7 @@ export const CLIENT_LABELS: Record<RequestClient, string> = {
 
 /** Task kinds a mapping preference may name (octopus/domain.py KINDS). */
 export const TASK_KIND_LABELS: Record<string, string> = {
-  implement: "实现", review: "审查", test: "测试", deliver: "交付", design: "设计",
+  implement: "实现", review: "审查", test: "测试", deliver: "交付", design: "设计", research: "调研", write: "撰写",
 };
 
 export const TOOLS = ["kiro", "claude", "codex", "opencode"] as const;

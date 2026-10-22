@@ -11,7 +11,9 @@ export interface Step {
   effort: Effort | string;
   prompt: string;
   /** Optional task contract (D34): what the task delivers and how it is checked. */
-  kind?: "implement" | "review" | "test" | "deliver" | "design";
+  kind?: "implement" | "review" | "test" | "deliver" | "design" | "research" | "write";
+  /** D69: which failures stop the Session; omitted, inferred from kind (octopus/phases.py). */
+  phase?: "diverge" | "design" | "converge";
   /** D46 P2: the role the task's Agent works in (its card); kind decides the gates. */
   role?: "spec" | "sde" | "integration_test" | "security_test" | "challenge" | "evaluator" | "knowledge";
   deliverables?: string[];

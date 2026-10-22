@@ -346,6 +346,14 @@ describe("session detail", () => {
     expect(screen.queryByRole("button", { name: /确认并开始/ })).not.toBeInTheDocument();
   });
 
+  test("a task says its phase when it is not plain converge work (D69)", async () => {
+    const research = { ...blocked.tasks[0], spec: { ...blocked.tasks[0].spec, kind: "research" as const } };
+    const design = { ...blocked.tasks[1], spec: { ...blocked.tasks[1].spec, kind: "implement" as const, phase: "design" as const } };
+    open({ ...blocked, tasks: [research, design] } as Run);
+    expect(await screen.findByText("阶段：发散（按类别）")).toBeInTheDocument();
+    expect(screen.getByText("阶段：设计")).toBeInTheDocument();
+  });
+
   test("nothing is left for a person to accept (D71)", async () => {   // an earlier version's wait, until the Engine accepts it
     open({ ...blocked, status: "awaiting_acceptance", error: null,
       attention: { title: "即将继续", detail: "验收确认已取消，待人判断的项记为提示。", action: "无需操作。" } } as Run);
