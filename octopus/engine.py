@@ -24,6 +24,10 @@ CANCELLED = re.compile(r"stop_reason=cancelled|turn cancelled by the runtime", r
 EXITED = re.compile(r"ACP process exited|AcpProcessDied|Runtime process died", re.I)
 # The Agent ended, then KiroCrew could not clean up a process its tree left behind (process_identity.py, EC2 run-6d7c132b…).
 CLEANUP = re.compile(r"process group \d+ still has members", re.I)
+# KiroCrew ended a run its admission gate never let start (D60, EC2 2026-10-21 "never started: waiting for memory").
+NEVER_STARTED = re.compile(r"^\s*never started", re.I)
+# What a person reads about a queue (D60): the kind of wait, never the host's numbers (those stay in the event).
+QUEUE_REASONS = {"low_memory": "执行环境内存不足", "posture_critical": "执行环境负载过高", "adaptive_cap_zero": "执行环境暂停接收新任务"}
 
 
 def transient(native, error, missing, blocked_line):
@@ -37,6 +41,8 @@ def transient(native, error, missing, blocked_line):
         return "runtime_exited"
     if CLEANUP.search(native.get("error") or ""):
         return "runtime_cleanup"
+    if NEVER_STARTED.search(native.get("error") or ""):
+        return "never_started"
     if error == BLOCKED and missing and not blocked_line:
         return "result_missing"
     return None
@@ -429,6 +435,39 @@ class Engine:
         else:
             self.update(run["id"], "blocked", message)
 
+    def _queue(self, run, task, attempt, prior, queued):
+        """A native run KiroCrew deferred (D60): shown on the Session as a queue — the kind of wait, not the host's numbers —
+        and not judged while it waits; when it starts, the end of the queue is recorded (the watchdog counts from it)."""
+        mark = prior.get("queued") or {}
+        if mark.get("since") and not mark.get("until"):
+            return
+        mark = {"since": self.wall(), "reason": queued.get("reason"), "resuming": bool(queued.get("resuming"))}
+        text = "排队：等待执行环境资源（" + QUEUE_REASONS.get(queued.get("reason"), "执行环境资源不足") + "）"
+        with self.db.transaction() as db:
+            journal.change(db, "attempts", attempt["id"], journal.WORKER, "attempt.queued", text,
+                           event={"id": attempt["id"], "task_id": task["id"], "cause": queued.get("reason"),
+                                  "detail": queued.get("detail")}, evidence=dumps({**prior, "queued": mark}), updated=time.time())
+        self.update(run["id"], "running", text, actor=journal.WORKER)
+
+    def _dequeued(self, run, task, attempt, prior, native):
+        """The end of a queue (D60): recorded on the Attempt, and the time it waited is not counted in the Session's time
+        budget (like a wait for a person, D43). Returns the Attempt's marks with the end."""
+        rid, now = run["id"], self.wall()
+        mark = {**prior["queued"], "until": now}
+        with self.db.transaction() as db:
+            journal.change(db, "attempts", attempt["id"], journal.WORKER, "attempt.dequeued",
+                           "排队结束：原生任务没有开始" if native.get("done") else "排队结束，开始执行",
+                           event={"id": attempt["id"], "task_id": task["id"], "waited": round(now - mark["since"])},
+                           evidence=dumps({**prior, "queued": mark}), updated=time.time())
+            row = db.execute("SELECT snapshot, created FROM runs WHERE id=?", (rid,)).fetchone()
+            snapshot = json.loads(row["snapshot"])
+            since = snapshot.get("budget_since") or row["created"]
+            snapshot["budget_waited"] = (snapshot.get("budget_waited") or 0) + max(0.0, now - max(mark["since"], since))
+            journal.change(db, "runs", rid, journal.ENGINE, "run.budget", quiet=("snapshot",), snapshot=dumps(snapshot))
+        if not native.get("done"):
+            self.update(rid, "running", None, actor=journal.WORKER)
+        return {**prior, "queued": mark}
+
     def _watchdog(self, run, config, task, attempt, result, snapshot):
         """A native task with no progress for too long, or running too long (D39 §3.2): stopped, the Attempt judged here (a
         stop seen later reads as someone's stop, never retried), retried once without a recovery cycle, then diagnosed.
@@ -443,7 +482,8 @@ class Engine:
         progress, now = result.get("progress") or {}, self.wall()
         # Measured from when it last could make progress: its dispatch, or the end of a wait for approval (state.json is
         # not written while it waits).
-        began = max(attempt["created"], float(prior.get("approval_seen") or 0))
+        began = max(attempt["created"], float(prior.get("approval_seen") or 0),
+                    float((prior.get("queued") or {}).get("until") or 0))   # D60: a queue is not a stall
         quiet = None   # no progress signal (no state.json): only the total limit applies
         if isinstance(progress.get("idle_seconds"), (int, float)):
             quiet = min(progress["idle_seconds"], now - began)   # the Worker's own clock
@@ -1007,6 +1047,12 @@ class Engine:
             self.update(rid, "dispatch_unknown", result.get("error"))
             return
         native = result.get("native")
+        if native and result.get("queued"):
+            return self._queue(run, task, attempt, prior, result["queued"])
+        if native and (prior.get("queued") or {}).get("since") and not prior["queued"].get("until"):
+            prior = self._dequeued(run, task, attempt, prior, native)
+            if not native.get("done"):
+                return   # the watchdog counts from the end of the queue, from the next look on
         if not native:
             resumed = {k: result[k] for k in ("continued", "continue_refused") if result.get(k)}   # a reconciled dispatch
             with self.db.transaction() as db:
@@ -1019,7 +1065,7 @@ class Engine:
         # An automatic retry and a Coordinator's switch keep their marks through every evidence update (D34 §5.1, D38 §3.3).
         retry_of = prior.get("transient_retry_of")
         for key in ("transient_retry_of", "switched_from", "watchdog", "approval_seen", "continued",
-                    "continue_refused"):   # marks kept across updates
+                    "continue_refused", "queued", "never_started"):   # marks kept across updates
             if prior.get(key):
                 evidence[key] = prior[key]
         if native.get("done") and not native.get("stopped") and (evidence.get("watchdog") or {}).get("stopping"):
@@ -1083,6 +1129,8 @@ class Engine:
             if error:
                 evidence["failure_type"] = failure_type
                 retry = transient(native, error, missing, blocked_line)
+                if retry == "never_started" and (evidence.get("queued") or {}).get("resuming"):
+                    retry = None   # it had begun before its queue: not a lack of resources (D60 §3.4)
             state = "blocked" if error else "accepted"
             if state == "accepted" and (evidence.get("evaluation") or {}).get("pending"):
                 state = "awaiting_acceptance"   # D46 P3: what the Evaluator left to a person
@@ -1102,8 +1150,13 @@ class Engine:
                     except (Error, ValueError, TypeError) as exc:
                         state, error = "blocked", "KiroCrew 规划结果未通过校验：" + str(exc)
                         evidence["failure_type"] = "contract"
-            if not (retry and current["current_attempt"] == attempt["id"] and active) or retry_of:
-                retry = None   # not ours to retry, or this Attempt already was the automatic retry: recovery decides
+            starts = prior.get("never_started", 0)   # how many Attempts before this one in a row did not start
+            if not (retry and current["current_attempt"] == attempt["id"] and active):
+                retry = None   # not ours to retry
+            elif retry == "never_started":   # D60 §3.4: not the automatic retry and not the budget; the third in a row
+                retry = retry if starts < 2 else None   # goes to recovery
+            elif retry_of:
+                retry = None   # this Attempt already was the automatic retry: recovery decides
             elif over := recovery.refused(db, run, "retry"):
                 retry, evidence["budget_refused"] = None, over   # past the budget (D42): recovery decides, and says why
             if retry:
@@ -1119,17 +1172,22 @@ class Engine:
                            status=state, evidence=dumps(evidence), result=native.get("result"), error=error, updated=time.time())
             if retry:
                 why = {"runtime_cancelled": "运行时取消了原生任务", "runtime_exited": "原生运行时进程退出",
-                       "runtime_cleanup": "原生运行时未能清理残留进程", "result_missing": "原生任务没有返回结果"}[retry]
+                       "runtime_cleanup": "原生运行时未能清理残留进程", "result_missing": "原生任务没有返回结果",
+                       "never_started": "原生任务未能开始（执行环境资源不足）"}[retry]
                 # The retry is created here and marked, so it is never retried again; a stop or continue before it is
                 # dispatched cancels or replaces it like any other Attempt.
                 aid, now = uid("attempt"), time.time()
+                # A run that never started is dispatched again as it was: the one automatic retry stays for later.
+                mark = ({"never_started": starts + 1, **({"transient_retry_of": retry_of} if retry_of else {})}
+                        if retry == "never_started" else {"transient_retry_of": attempt["id"]})
                 db.execute("INSERT INTO attempts(id,run_id,task_id,number,spec,status,evidence,created,updated) "
                            "VALUES(?,?,?,?,?,'dispatching',?,?,?)",
                            (aid, rid, task["id"], attempt["number"] + 1, current["spec"],
-                            dumps({"transient_retry_of": attempt["id"],
+                            dumps({**mark,
                                    **({"switched_from": evidence["switched_from"]} if evidence.get("switched_from") else {})}),
                             now, now))
-                journal.change(db, "tasks", (rid, task["id"]), journal.ENGINE, "attempt.retry", f"{why}，自动重试一次",
+                again = "自动重新派发" if retry == "never_started" else "自动重试一次"
+                journal.change(db, "tasks", (rid, task["id"]), journal.ENGINE, "attempt.retry", f"{why}，{again}",
                                event={"attempt": attempt["id"], "retry": aid, "transient": retry},
                                status="dispatching", current_attempt=aid)
             elif current["current_attempt"] == attempt["id"] and active:
@@ -1138,7 +1196,8 @@ class Engine:
                     journal.record(db, rid, "run.awaiting_acceptance", journal.ENGINE, "验收待确认",
                                    pending=len(evidence["evaluation"]["pending"]))
         if retry:
-            return self.update(rid, "ready", None, reason="瞬时失败，自动重试一次")
+            return self.update(rid, "ready", None, reason="未能开始，自动重新派发" if retry == "never_started" else
+                               "瞬时失败，自动重试一次")
         self.update(rid, "ready" if state == "accepted" else state, error, actor=journal.WORKER)
         if state == "blocked":
             recovery.automatic(self.db, rid, attempt["id"])

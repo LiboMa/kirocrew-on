@@ -315,7 +315,8 @@ def budget(db, run, now=None):
     cycles = sum(1 for row in db.execute("SELECT context FROM recoveries WHERE run_id=? AND created>=?", (run["id"], since))
                  if not json.loads(row["context"]).get("manual"))
     retries = sum(1 for row in db.execute("SELECT evidence FROM attempts WHERE run_id=? AND created>=?", (run["id"], since))
-                  if json.loads(row["evidence"] or "{}").get("transient_retry_of"))
+                  if (marks := json.loads(row["evidence"] or "{}")).get("transient_retry_of")
+                  and not marks.get("never_started"))   # D60: a run that did not start is dispatched again for free
     value = {"since": since, "reset": bool(snapshot.get("budget_since")),
              "cycles": {"used": cycles, "limit": settings["max_cycles"]},
              "retries": {"used": retries, "limit": settings.get("max_retries", BUDGET["max_retries"][0])},

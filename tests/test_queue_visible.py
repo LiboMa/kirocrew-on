@@ -5,9 +5,10 @@ from pathlib import Path
 import tempfile
 import unittest
 
-from octopus import gateway_client
+from octopus import gateway_client, recovery
 from octopus.security import Error
 from octopus.worker import Worker
+from tests.test_watchdog import MINUTE, WatchdogCase
 
 RID = "run-" + "1" * 32
 SPEC = {"id": "code", "name": "编码", "tool": "claude", "model": "auto", "effort": "", "prompt": "实现并测试"}
@@ -69,6 +70,138 @@ class WorkerQueueTests(unittest.TestCase):
         with self.assertRaises(Error) as caught:
             self.inspect()
         self.assertEqual(caught.exception.code, "native_unavailable")
+
+
+
+class EngineQueueTests(WatchdogCase):
+    QUEUED = {"reason": "low_memory", "detail": "only 2.47 GB available, need 2.50 GB", "elapsed": 12000, "resuming": False}
+
+    def setUp(self):
+        super().setUp()
+        self.queued, self.never, self.then = None, 0, None
+
+    def request(self, config, path, body, **kwargs):
+        coordination = any(b.get("coordination") for p, b in self.calls if p == "/dispatch"
+                           and b["attempt_id"] == (body or {}).get("attempt_id"))
+        if path == "/inspect" and self.queued and not coordination:
+            return {"native": {"done": False, "queued": True}, "queued": self.queued, "evidence": {}, "handoff": ""}
+        if path == "/inspect" and self.never and not coordination:
+            self.never -= 1
+            self.calls.append((path, body))
+            return {"native": {"done": True, "error": "never started: waiting for memory", "result": ""}, "evidence": {},
+                    "handoff": ""}
+        if path == "/inspect" and self.then and not coordination:
+            answer, self.then = self.then, None
+            self.calls.append((path, body))
+            return answer
+        return super().request(config, path, body, **kwargs)
+
+    def attempts(self, rid):
+        with self.db.read() as db:
+            return [json.loads(r["evidence"] or "{}") for r in
+                    db.execute("SELECT evidence FROM attempts WHERE run_id=? AND task_id='code' ORDER BY number", (rid,))]
+
+    def budget(self, rid):
+        with self.db.read() as db:
+            return recovery.budget(db, db.execute("SELECT * FROM runs WHERE id=?", (rid,)).fetchone())
+
+    def events(self, rid):
+        with self.db.read() as db:
+            return [r[0] for r in db.execute("SELECT kind FROM events WHERE run_id=? ORDER BY id", (rid,))]
+
+    def evidence(self, rid):
+        with self.db.read() as db:
+            row = db.execute("SELECT evidence FROM attempts WHERE run_id=? ORDER BY created DESC LIMIT 1", (rid,)).fetchone()
+        return json.loads(row[0])
+
+    def test_a_queue_is_shown_and_never_stopped_by_the_watchdog(self):
+        rid = self.start()
+        self.queued = self.QUEUED
+        self.tick(rid, 2)
+        self.age(rid, 200 * MINUTE)
+        run = self.tick(rid, 3)
+        self.assertEqual(self.stops(), [])
+        self.assertEqual(run["error"], "排队：等待执行环境资源（执行环境内存不足）")
+        self.assertNotIn("2.47", run["error"])
+        self.assertEqual(self.evidence(rid)["queued"]["reason"], "low_memory")
+        self.assertIn("attempt.queued", self.events(rid))
+
+    def test_the_clock_starts_when_the_queue_ends(self):
+        rid = self.start()
+        self.queued = self.QUEUED
+        self.tick(rid, 2)
+        self.age(rid, 200 * MINUTE)
+        self.tick(rid)
+        self.queued = None   # it started: the native task now reports 31 minutes without progress
+        run = self.tick(rid, 2)
+        self.assertEqual(self.stops(), [])   # measured from the end of the queue, not from the dispatch
+        self.assertIsNone(run["error"])
+        self.assertTrue(self.evidence(rid)["queued"]["until"])
+        self.assertIn("attempt.dequeued", self.events(rid))
+
+    def test_never_started_is_dispatched_again_once(self):
+        rid = self.start()
+        self.tick(rid, 2)
+        self.never = 1
+        self.tick(rid, 2)
+        with self.db.read() as db:
+            rows = db.execute("SELECT number, status, evidence FROM attempts WHERE run_id=? ORDER BY number", (rid,)).fetchall()
+        self.assertGreaterEqual(len(rows), 2)
+        self.assertEqual(json.loads(rows[0]["evidence"]).get("transient"), "never_started")
+        self.assertIn("attempt.retry", self.events(rid))
+
+    def test_never_started_does_not_use_the_retry_budget(self):   # D60 §3.4: retries off, still dispatched again
+        rid = self.start({"enabled": True, "max_cycles": 1, "max_retries": 0})
+        self.tick(rid, 2)
+        self.never = 1
+        self.tick(rid, 2)
+        self.assertEqual([a.get("transient") for a in self.attempts(rid)], ["never_started", None])
+        self.assertEqual(self.budget(rid)["retries"]["used"], 0)
+
+    def test_the_third_never_started_in_a_row_goes_to_the_coordinator(self):
+        rid = self.start({"enabled": True, "max_cycles": 1})
+        self.tick(rid, 2)
+        self.never = 3
+        self.tick(rid, 8)
+        attempts = self.attempts(rid)
+        self.assertEqual([a.get("transient") for a in attempts], ["never_started", "never_started", None])
+        self.assertEqual(attempts[2].get("never_started"), 2)
+        with self.db.read() as db:
+            self.assertTrue(db.execute("SELECT 1 FROM recoveries WHERE run_id=?", (rid,)).fetchone())
+
+    def test_after_a_never_started_the_one_automatic_retry_is_still_there(self):
+        rid = self.start()
+        self.tick(rid, 2)
+        self.never = 1
+        self.tick(rid, 2)   # dispatched again; now it starts and its ACP process dies
+        self.then = {"native": {"done": True, "error": "ACP process exited", "result": ""}, "evidence": {}, "handoff": ""}
+        self.tick(rid, 2)
+        self.assertEqual([a.get("transient") for a in self.attempts(rid)][:2], ["never_started", "runtime_exited"])
+
+    def test_a_resumed_run_that_never_started_goes_to_the_coordinator(self):   # it had begun: not a lack of resources
+        rid = self.start({"enabled": True, "max_cycles": 1})
+        self.queued = {**self.QUEUED, "resuming": True}
+        self.tick(rid, 3)
+        self.queued, self.never = None, 1
+        self.tick(rid, 2)
+        first = self.attempts(rid)[0]
+        self.assertIsNone(first.get("transient"))
+        self.assertTrue(first["queued"]["until"])
+        self.assertNotIn("attempt.retry", self.events(rid))
+
+    def test_the_queue_is_not_counted_in_the_time_budget(self):
+        rid = self.start()
+        self.queued = self.QUEUED
+        self.tick(rid, 3)
+        with self.db.transaction() as db:   # it waited 100 minutes
+            row = db.execute("SELECT id, evidence FROM attempts WHERE run_id=? AND status='running'", (rid,)).fetchone()
+            evidence = json.loads(row["evidence"])
+            evidence["queued"]["since"] -= 100 * MINUTE
+            db.execute("UPDATE attempts SET evidence=? WHERE id=?", (json.dumps(evidence), row["id"]))
+            db.execute("UPDATE runs SET created=created-? WHERE id=?", (100 * MINUTE, rid))
+        self.queued = None
+        self.tick(rid)
+        self.assertLess(self.budget(rid)["minutes"]["used"], 5)
 
 
 if __name__ == "__main__":
