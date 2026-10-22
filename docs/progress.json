@@ -1,6 +1,6 @@
 {
   "_comment": "进度看板与 docs/PROGRESS.md 的唯一数据源：任务状态在这里维护；提交记录由 tools/progress.py 从 git 生成（负责人 2026-10-20）。",
-  "checks": "1736 后端 + 92 + 267 控制台 + 7 个浏览器测试（132 项检查）；EC2 运行 7c04dce",
+  "checks": "1759 后端 + 92 + 270 控制台 + 7 个浏览器测试（135 项检查）；EC2 运行 828caee",
   "status": {
     "accepted": {
       "label": "已验收",
@@ -263,14 +263,15 @@
         {
           "id": "m2-d71-no-waits",
           "name": "D71 关卡检讨的移除项：验收不再等人、协调者只在缺凭证 / 需求信息时停、模型未核实只提示、Agent 只在不可逆操作前问",
-          "status": "local",
-          "ref": "8b9dc71 · 13ead9d · docs/postmortems/2026-10-22-gates-retrospective.md"
+          "status": "deployed",
+          "ref": "8b9dc71 · 13ead9d · docs/postmortems/2026-10-22-gates-retrospective.md · EC2 828caee",
+          "more": "EC2 828caee：遗留的「验收待确认」run-f2539d3a 被引擎按提示接受并完成；线上没有等人确认的会话。"
         },
         {
           "id": "m2-d69-phases",
           "name": "D69 按阶段把关（发散不阻断、设计阶段末把关、收敛照旧）",
-          "status": "local",
-          "ref": "64278a1..9ab159d · spec 2026-10-22-phase-gating"
+          "status": "deployed",
+          "ref": "64278a1..9ab159d · spec 2026-10-22-phase-gating · EC2 828caee"
         },
         {
           "id": "m3-preview-pages",
@@ -281,14 +282,14 @@
         {
           "id": "m4-admin-portal",
           "name": "管理页面：执行环境实时状态、用户一人一行就地操作、我的设置",
-          "status": "local",
-          "ref": "feat/admin-portal 319503c..59ee263 · 合并 41b3959"
+          "status": "deployed",
+          "ref": "feat/admin-portal 319503c..59ee263 · 合并 41b3959 · EC2 828caee"
         },
         {
           "id": "m3-session-marks",
           "name": "历史会话：收藏、置顶、删除、分享",
-          "status": "local",
-          "ref": "迁移 13 run_marks · 会话列表「⋯」"
+          "status": "deployed",
+          "ref": "迁移 13 run_marks · 会话列表「⋯」 · EC2 828caee"
         }
       ],
       "milestones": [
