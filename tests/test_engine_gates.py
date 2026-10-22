@@ -169,6 +169,56 @@ class EngineGateTests(TeamsWorkersCase):
         self.assertEqual(first, "（平台生成：执行者没有写交接文件）")
         self.assertIn("完成", "\n".join(rest))   # the native result's conclusion
         self.assertEqual([w["name"] for w in evidence["warnings"]], ["handoff_present"])
+        self.assertEqual(evidence["handoff_text"], seen[0]["handoff"])   # stored: the platform serves it
+
+    @staticmethod
+    def without_handoff(worker, task):
+        def call(config, path, body=None, **kwargs):
+            result = worker(config, path, body, **kwargs)
+            if path == "/inspect" and worker.dispatched[body["attempt_id"]]["spec"]["id"] == task:
+                result["handoff"] = ""
+            return result
+        return call
+
+    def test_the_next_task_is_given_the_generated_handoff(self):   # D57 §4: as it is given a real one
+        worker, second = FakeWorker(), {**IMPLEMENT, "id": "code2", "name": "实现二"}
+        rid = self.session([IMPLEMENT, second])
+        self.run_engine(self.without_handoff(worker, "code"), ticks=20)
+        _, evidence = self.attempt(rid, "code")
+        self.assertTrue(evidence["handoff_text"].startswith("（平台生成：执行者没有写交接文件）\n"))
+        body = next(b for p, b in worker.calls if p == "/dispatch" and b["spec"]["id"] == "code2")
+        upstream = next(u for u in body["upstream"] if u["id"] == "code")
+        self.assertEqual(upstream["handoff_text"], evidence["handoff_text"])
+        self.assertNotIn("handoff", upstream)   # no file on the Worker to point at
+
+    def test_the_recovery_context_carries_the_generated_handoff(self):
+        worker, rid = FakeWorker(), self.session([IMPLEMENT], recovery=True)
+        worker.verify = [{"state": "done", "passed": False, "failed": 0,
+                          "results": [{"command": "npm test", "exit": 1, "seconds": 2.0, "tail": "1 failing"}]}]
+        self.run_engine(self.without_handoff(worker, "code"), ticks=5)
+        with self.db.read() as db:
+            context = json.loads(db.execute("SELECT context FROM recoveries WHERE run_id=?", (rid,)).fetchone()["context"])
+        self.assertTrue(context["evidence"]["handoff_text"].startswith("（平台生成：执行者没有写交接文件）\n"))
+
+    def test_an_invalid_outcome_is_judged_by_what_it_states(self):   # D57 §4: a malformed file never turns a rejection into a pass
+        for index, (outcome, status) in enumerate((({"decision": "changes_requested"}, "blocked"),
+                                                   ({"decision": "maybe"}, "accepted"))):
+            with self.subTest(outcome=outcome):
+                worker, rid = FakeWorker(), self.session([IMPLEMENT], recovery=True, request=f"start-00000005{index}")
+                worker.outcomes["code"] = outcome
+                self.run_engine(worker, ticks=5 if status == "blocked" else 12)
+                attempt, evidence = self.attempt(rid, "code")
+                self.assertEqual((attempt["status"], self.gates(evidence)["outcome_valid"]), (status, "warn"))
+                with self.db.read() as db:
+                    recovered = db.execute("SELECT COUNT(*) FROM recoveries WHERE run_id=?", (rid,)).fetchone()[0]
+                if status == "blocked":
+                    self.assertEqual((self.gates(evidence)["outcome_pass"], evidence["failure_type"]), ("fail", "implementation"))
+                    self.assertIn("changes_requested", attempt["error"])
+                    self.assertEqual(recovered, 1)   # an ordinary failure: diagnosed
+                    self.assertNotIn("/candidate", worker.paths())
+                else:
+                    self.assertEqual((self.gates(evidence)["outcome_pass"], recovered), ("skip", 0))
+                    self.assertEqual([w["name"] for w in evidence["warnings"]], ["outcome_valid"])
 
     def test_a_secret_fails_no_secrets(self):
         worker, rid = FakeWorker(), self.session([IMPLEMENT])

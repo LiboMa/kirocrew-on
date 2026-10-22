@@ -179,6 +179,8 @@ class GateInstructionTests(unittest.TestCase):
         self.assertIn("基线", text)
         self.assertIn("不修改实现文件", text)       # the test task's change is laid on the baseline three-way
         self.assertIn("不安装依赖", text)
+        self.assertIn("平台会记一条提示", text)   # D57 §4: a warning, not a refusal
+        self.assertNotIn("不被接受", text)
         self.assertNotIn("基线", quality_instructions(P("/f"), {"kind": "implement", "acceptance": ["a"]}))
 
     def test_a_task_with_paths_is_told_earlier_deliverables_are_locked(self):
@@ -187,3 +189,5 @@ class GateInstructionTests(unittest.TestCase):
         text = quality_instructions(P("/f"), {"kind": "deliver", "acceptance": ["a"], "paths": ["docs/"]})
         self.assertIn("paths", text)
         self.assertIn("此前任务", text)
+        self.assertIn("平台会记一条提示", text)   # D57 §4: a warning for the review, not a refusal
+        self.assertNotIn("使用 blocked，不要直接修改", text)

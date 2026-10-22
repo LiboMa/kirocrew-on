@@ -107,6 +107,17 @@ class CompactStatusTests(unittest.TestCase):
         self.assertEqual(view["warnings"], 1)
         self.assertEqual(mcp.compact_status(SESSION, [])["session"]["warnings"], 0)
 
+    def test_a_generated_handoff_is_flagged_not_inlined(self):   # D57 §4: compact, as a real one's path is
+        session = json.loads(json.dumps(SESSION))
+        evidence = session["tasks"][0]["attempts"][-1]["evidence"]
+        del evidence["handoff_path"]
+        evidence.update(handoff_generated=True, handoff_text="（平台生成：执行者没有写交接文件）\n" + RAW)
+        view = mcp.compact_status(session, [])
+        latest = view["session"]["tasks"][0]["latest"]
+        self.assertEqual((latest["handoff"], latest["handoff_generated"]), (None, True))
+        self.assertNotIn("原始输出", json.dumps(view, ensure_ascii=False))
+        self.assertNotIn("handoff_generated", mcp.compact_status(SESSION, [])["session"]["tasks"][0]["latest"])
+
     def test_a_switched_attempt_says_what_it_was_switched_from(self):
         session = json.loads(json.dumps(SESSION))
         switched = {"tool": "opencode", "model": "auto", "effort": "", "reason": "opencode 不可用", "by": "coordinator", "recovery": 1}

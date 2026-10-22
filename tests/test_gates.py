@@ -9,8 +9,10 @@ SPEC = {"tool": "claude", "model": "auto", "effort": ""}
 DONE = {"done": True, "result": "完成", "error": ""}
 
 
-def judge(native=DONE, handoff="交接", evidence=None, report=None, invalid=None, lost=False, missing=False, blocked=False):
-    return gates.basic(native, {"handoff": handoff}, SPEC, {"actual_backend": "claude", **(evidence or {})}, report,
+def judge(native=DONE, handoff="交接", evidence=None, report=None, invalid=None, lost=False, missing=False, blocked=False,
+          outcome=None):
+    result = {"handoff": handoff, **({"outcome": outcome} if outcome is not None else {})}
+    return gates.basic(native, result, SPEC, {"actual_backend": "claude", **(evidence or {})}, report,
                        invalid, lost, missing, blocked)
 
 
@@ -77,6 +79,42 @@ class BasicGateTests(unittest.TestCase):
         error, failure, records = judge(invalid="outcome.json 无效", blocked=True)
         self.assertEqual((error, records[-1]["status"]), (BLOCKED, "fail"))
         self.assertNotIn("pass", [r["status"] for r in records if r["name"].startswith("outcome")])
+
+    def test_an_invalid_outcome_that_states_a_rejection_is_that_rejection(self):   # D57 §4: never a way to pass
+        invalid = "outcome.json 无效"
+        cases = (
+            ('{"decision": "changes_requested"}', "完成",
+             ("结果写明了 changes_requested，但结果文件不合法：outcome.json 无效", "implementation")),
+            ('{"decision": "Changes_Requested", "summary": "缺测试", "failure_type": "tests", "findings": "x"}', "完成",
+             ("缺测试", "tests")),
+            ('{"decision": "blocked", "summary": "缺少数据库地址", "failure_type": "nonsense"}', "完成",
+             ("缺少数据库地址", "implementation")),   # an unreadable failure_type: implementation
+            ('{"verdict": "changes_requested", "summary": "缺测试", "failure_type": "tests"}', "完成",
+             ("缺测试", "tests")),   # the wrong key, still a stated verdict
+            ("{decision: blocked, summary: 缺少数据库地址}", "完成",
+             ("结果写明了 blocked，但结果文件不合法：outcome.json 无效", "implementation")),
+            ("", "审查完成，发现两个问题。\n\n**changes_requested**",
+             ("结果写明了 changes_requested，但结果文件不合法：outcome.json 无效", "implementation")),
+            ("", "结论：changes_requested，见交接",
+             ("结果写明了 changes_requested，但结果文件不合法：outcome.json 无效", "implementation")),
+            ('{"decision": "pass", "summary": ""}', '{"decision": "changes_requested"}',
+             ("结果写明了 changes_requested，但结果文件不合法：outcome.json 无效", "implementation")),
+        )
+        for outcome, text, (message, failure) in cases:
+            with self.subTest(outcome=outcome, text=text):
+                error, kind, records = judge(native={**DONE, "result": text}, invalid=invalid, outcome=outcome)
+                self.assertEqual((error, kind), (message, failure))
+                self.assertEqual(self.names(records)[-2:], [("outcome_valid", "warn"), ("outcome_pass", "fail")])
+                self.assertEqual(records[-1]["detail"], message)
+
+    def test_an_invalid_outcome_without_a_stated_decision_passes_with_a_warning(self):
+        for outcome, text in (('{"decision": "maybe"}', "完成"), ('{"decision": "pass", "summary": ""}', "完成"),
+                              ("不是 JSON", "已按审查的 changes_requested 意见修复，测试通过"),   # mentioned, not stated
+                              ('{"decision": "pass", "summary": "不再 blocked", "failure_type": "x"}', "完成")):
+            with self.subTest(outcome=outcome, text=text):
+                error, _, records = judge(native={**DONE, "result": text}, invalid="outcome.json 无效", outcome=outcome)
+                self.assertIsNone(error)
+                self.assertEqual(self.names(records)[-2:], [("outcome_valid", "warn"), ("outcome_pass", "skip")])
 
     def test_a_blocked_reply_with_a_failing_outcome_reports_the_outcome(self):
         report = {"decision": "blocked", "summary": "缺少数据库地址", "failure_type": "input"}

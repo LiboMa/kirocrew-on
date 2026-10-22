@@ -105,8 +105,10 @@ class EnvelopeTests(unittest.TestCase):
         self.assertIn("只诊断，不修改源码", self.envelope(stage="coordination"))
 
     def test_each_kind_is_told_what_it_delivers(self):
-        self.assertIn("本任务须在源码目录中产生改动", self.envelope("implement"))
-        self.assertIn("本任务须在源码目录中产生改动", self.envelope("deliver"))
+        for kind in ("implement", "deliver"):   # D57 §4: no change is a warning; a patch or report alone is fine
+            self.assertIn("改动应留在源码目录中", self.envelope(kind))
+            self.assertIn("只产出不提交的补丁或报告也可以", self.envelope(kind))
+            self.assertNotIn("须在源码目录中产生改动", self.envelope(kind))
         self.assertIn("只读审查，不修改代码", self.envelope("review"))
         self.assertIn("只写测试与测试报告，不修改实现", self.envelope("test"))
 

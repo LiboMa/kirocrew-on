@@ -85,8 +85,10 @@ TAILS = {
     "design": "只做分析，不修改业务代码；在交接中给出结论、依据与后续任务所需的输入。",
     "review": "只读审查，不修改代码；结论绑定审查对象，缺陷用 changes_requested。",
     "test": "只写测试与测试报告，不修改实现；按项目既有依赖与规范工作。",
-    "implement": "依据需求修改源码并真实验证，按项目既有依赖与规范工作；本任务须在源码目录中产生改动（平台检查 diff_present）。",
-    "deliver": "依据需求完成交付并真实验证，按项目既有依赖与规范工作；本任务须在源码目录中产生改动（平台检查 diff_present）。",
+    "implement": "依据需求修改源码并真实验证，按项目既有依赖与规范工作；需求要改代码时，改动应留在源码目录中；"
+                 "只产出不提交的补丁或报告也可以。",
+    "deliver": "依据需求完成交付并真实验证，按项目既有依赖与规范工作；交付涉及代码时，改动应留在源码目录中；"
+               "只产出不提交的补丁或报告也可以。",
 }
 DEFAULT_TAIL = "依据需求进行开发和真实验证，按项目既有依赖与规范工作。"
 COMMON_TAIL = ("记录具体修改、测试命令、结果和限制。若不能完成，最终回答单独一行写 BLOCKED 并说明恢复条件"
@@ -121,7 +123,8 @@ def envelope(task_input, requirement, contract, prompt, upstream, project, hando
     role = (contract or {}).get("role")   # D46 P2: the role card comes first
     card = f"# 你的角色：{roles.LABELS[role]}\n{roles.card(role)}\n\n" if role in roles.KINDS else ""
     return (card + "# 本次研发任务\n\n" + task_input + briefing(requirement, contract) + "\n\n## 任务\n" + prompt +
-            "\n\n## 前序交接\n前序任务的结论、发现、候选与检查；handoff 是其完整交接文件的路径，需要细节时读取。\n" +
+            "\n\n## 前序交接\n前序任务的结论、发现、候选与检查；handoff 是其完整交接文件的路径，需要细节时读取；"
+            "执行者没有写交接时，handoff_text 是平台根据其结果生成的交接。\n" +
             dumps(upstream) + f"\n\n源码目录：{project}\n交接文件：{handoff}\n" + tail + common + HANDOFF + extra)
 
 

@@ -64,6 +64,8 @@ def handoff(row):
         item["suggestions"] = [clip(s, 200) for s in outcome["suggestions"][:5]]
     if evidence.get("handoff_path"):
         item["handoff"] = evidence["handoff_path"]
+    elif evidence.get("handoff_text"):   # D57 §4: the platform wrote it (no file on the Worker): given whole
+        item["handoff_text"] = evidence["handoff_text"]
     candidate = evidence.get("candidate") or {}
     if candidate.get("sha"):
         item["candidate"] = {"sha": str(candidate["sha"])[:12], "files": (candidate.get("names") or [])[:30]}
@@ -77,7 +79,8 @@ GENERATED = "（平台生成：执行者没有写交接文件）"
 
 def generated_handoff(task, attempt, evidence, native):
     """D57 §4: the handoff the platform writes when the executor wrote none — what ``handoff`` tells a later task of it,
-    from the native result, under a first line that says who wrote it."""
+    from the native result, under a first line that says who wrote it. Kept in the evidence as ``handoff_text``: a
+    later task, the recovery context and the Coordinator read it there, as they read a real one at ``handoff_path``."""
     item = handoff({"id": task["id"], "spec": attempt["spec"], "evidence": dumps(evidence), "result": native.get("result")})
     return GENERATED + "\n" + json.dumps(item, ensure_ascii=False, indent=2)
 
@@ -1122,7 +1125,7 @@ class Engine:
                                                                  missing, blocked_line)
             if any(g["name"] == "handoff_present" and g["status"] == "warn" for g in evidence["gates"]):
                 evidence["handoff_generated"] = True   # D57 §4: the executor wrote none; the platform did
-                result["handoff"] = generated_handoff(task, attempt, evidence, native)
+                result["handoff"] = evidence["handoff_text"] = generated_handoff(task, attempt, evidence, native)
             if not error and gated:
                 error, failure_type, checking = self._more_gates(run, config, task, attempt, spec, evidence, report, latest,
                                                                  start)

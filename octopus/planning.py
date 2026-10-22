@@ -46,8 +46,8 @@ def rules(count, depends, compact=False):
    至少 1 条可检查的 acceptance（审查与测试任务的验收项取自 summary 的验收标准，不另加要求）；
    implement 与 test 任务必须给出至少 1 条 verify（实际可执行的验证命令）；{depends}
    paths 写本任务可改动的路径，便于续作时判断哪些任务受影响。
-   平台的门禁：test 任务新增的测试须在会话基线（实现之前的源码）上失败；后续任务若要修改此前任务交付的文件，
-   须在自己的 paths 中列出这些文件。test 任务只写测试、不改实现，其 verify 不安装依赖（不写 npm install / pip install 等）；
+   平台会检查并记提示（不会因此退回）：test 任务新增的测试应在会话基线（实现之前的源码）上失败；后续任务若要修改此前任务
+   交付的文件，应在自己的 paths 中列出这些文件。test 任务只写测试、不改实现，其 verify 不安装依赖（不写 npm install / pip install 等）；
    检查与测试生成的文件（覆盖率、报告、构建产物）应写入 .gitignore。审查与测试的结论：缺陷用 changes_requested，
    blocked 只用于缺输入、认证或权限。推送与 PR / MR 由平台在审查通过后发布，任务中不安排推送。
    不要在审查之后另设「按审查修复」的任务：审查要求修改时，平台会自动安排上游任务返工并复审。

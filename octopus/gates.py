@@ -1,6 +1,7 @@
 """Named gates (D37 §4): each Attempt's acceptance as a list of recorded verdicts. The first five are the checks the
 Engine always made; their messages and failure types are unchanged, except that a missing handoff and an invalid outcome
 are warnings (D57 §4)."""
+import json
 import re
 import time
 
@@ -17,6 +18,12 @@ INSTALLS = re.compile(r"\b(?:npm|pnpm|yarn|bun)\s+(?:i|install|ci|add)\b|\bpip3?
 
 # A warn (D57 §4) is recorded and shown like any verdict but passes: it neither blocks the task nor starts recovery.
 STATUSES = ("pass", "warn", "fail", "skip")
+# D57 §4: what an invalid outcome (or the reply) still says of the verdict — `"decision": "changes_requested"`, a
+# `结论：blocked`, or the word alone on a line. A malformed file never turns a rejection into a pass; a mention in prose
+# ("按 changes_requested 的意见修复") is not a verdict.
+REJECTIONS = ("changes_requested", "blocked")
+STATED = re.compile(r"""(?i)(?:\bdecision\b|\bverdict\b|结论|决定)["']?\s*[:：=]\s*["']?(changes_requested|blocked)\b""")
+ALONE = re.compile(r"""(?im)^[\s>#*_`"'-]*(changes_requested|blocked)[\s*_`"'.。!！]*$""")
 
 
 def record(name, status, detail=None):
@@ -28,6 +35,33 @@ def record(name, status, detail=None):
 def warnings(records):
     """The records an accepted Attempt carries as its warnings (D57 §4)."""
     return [r for r in records or [] if r.get("status") == "warn"]
+
+
+def stated(outcome, text):
+    """(decision, summary, failure_type) of a rejection an invalid outcome still states — in the file, then in the reply
+    — or None when neither states one. The summary and failure_type are the file's when the file states it and they can
+    be read; otherwise none and implementation."""
+    from .recovery import FAILURES
+    outcome = outcome if isinstance(outcome, str) else ""
+    try:
+        value = json.loads(outcome) if outcome.strip() else None
+    except ValueError:
+        value = None
+    value = value if isinstance(value, dict) else {}
+    named = value["decision"].strip().lower() if isinstance(value.get("decision"), str) else ""
+    for index, source in enumerate((outcome, text or "")):
+        found = named if index == 0 and named in REJECTIONS else None
+        if not found:
+            match = STATED.search(source) or ALONE.search(source)
+            found = match and match.group(1).lower()
+        if not found:
+            continue
+        if index:   # only the reply says so: nothing of the file is taken
+            return found, None, "implementation"
+        summary = value.get("summary").strip()[:8000] if isinstance(value.get("summary"), str) else ""
+        failure = value.get("failure_type") if value.get("failure_type") in FAILURES - {"none"} else "implementation"
+        return found, summary or None, failure
+    return None
 
 
 def basic(native, result, spec, evidence, report, invalid, lost, missing, blocked_line):
@@ -62,8 +96,15 @@ def basic(native, result, spec, evidence, report, invalid, lost, missing, blocke
     if report is None and invalid is None:
         records += [record("outcome_valid", "skip"), record("outcome_pass", "skip")]
         return None, None, records
-    if invalid:   # D57 §4: judged by the result text; a standalone BLOCKED line already failed native_completed above
-        records += [record("outcome_valid", "warn", f"{invalid}；已按结果文字判断：没有单独一行 BLOCKED，按通过"),
+    if invalid:   # D57 §4: judged by what the file and the reply state (a standalone BLOCKED line failed above)
+        rejection = stated(result.get("outcome"), str(native.get("result") or ""))
+        if rejection:   # as outcome_pass judges a readable one: the agent's rejection stands
+            decision, summary, failure = rejection
+            message = summary or f"结果写明了 {decision}，但结果文件不合法：{invalid}"
+            records += [record("outcome_valid", "warn", f"{invalid}；结果写明了 {decision}，按该结论判断"),
+                        record("outcome_pass", "fail", message)]
+            return message, failure, records
+        records += [record("outcome_valid", "warn", f"{invalid}；已按结果文字判断：没有写明 changes_requested 或 blocked，按通过"),
                     record("outcome_pass", "skip", "结果文件不合法，没有可读的结论")]
         return None, None, records
     records.append(record("outcome_valid", "pass"))
