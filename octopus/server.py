@@ -14,6 +14,7 @@ import socket
 import threading
 import time
 import base64
+import gzip
 import secrets
 import sqlite3
 import struct
@@ -31,6 +32,26 @@ LOOPBACK = {"127.0.0.1", "::1"}
 # D67: a login's session cookie. __Host-: only this host may set it (not a preview subdomain), Secure and Path=/ forced.
 SESSION_COOKIE = "__Host-octopus_session"
 REMEMBER = 30 * 86400   # 「保持登录」: the cookie and its token; otherwise both end with the day (and the cookie with the browser)
+
+
+# Text answers of a GET go gzipped to a client that accepts it (EC2 2026-10-23: the Session list was 199 KB for 50 rows,
+# the console's script 731 KB, and CloudFront caches, so compresses, nothing). Never a POST's: a login's or a new token's
+# answer carries a secret, and a response's length is what BREACH-style attacks read.
+COMPRESSIBLE = re.compile(r"(application/(json|javascript)|text/|image/svg\+xml)")
+COMPRESS_MIN = 1024
+
+
+def accepts_gzip(header):
+    """Whether an Accept-Encoding header takes gzip (or any encoding) with a weight above zero."""
+    for part in (header or "").split(","):
+        coding, _, params = part.partition(";")
+        if coding.strip().lower() in {"gzip", "*"}:
+            weight = re.search(r"q\s*=\s*([0-9.]+)", params)
+            try:
+                return not weight or float(weight.group(1)) > 0
+            except ValueError:
+                return False
+    return False
 
 
 def session_cookie(token, max_age=None):
@@ -249,9 +270,15 @@ def server(database, port=8918, host="127.0.0.1", allowed_hosts=(), origin_secre
 
         def respond(self, value, status=200, kind="application/json; charset=utf-8", headers=(), cache="no-store"):
             data = value if isinstance(value, bytes) else dumps(value).encode()
+            textual = self.command == "GET" and COMPRESSIBLE.match(kind)
+            if textual and len(data) >= COMPRESS_MIN and accepts_gzip(self.headers.get("Accept-Encoding")):
+                data = gzip.compress(data, compresslevel=5, mtime=0)
+                headers = (*headers, ("Content-Encoding", "gzip"))
             self.send_response(status)
             for key, header in headers:
                 self.send_header(key, header)
+            if textual:
+                self.send_header("Vary", "Accept-Encoding")
             self.send_header("Content-Type", kind)
             self.send_header("Content-Length", str(len(data)))
             self.send_header("Cache-Control", cache)

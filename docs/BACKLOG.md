@@ -295,12 +295,14 @@
 - 向导：导入 / 推荐后切换到模板时来源提示未更新；切换空间未重置推荐 Worker；推荐轮询遇 403 / 404 不停止；提交瞬间在途轮询可能回写草稿。
 - 原生入口弹窗缺少账户切换保护；`crew_url` 公网来源未规范化 `:443` 写法。
 - 导入说明未列出 ID 改写、Effort 大小写、失败任务序号；document 的 `name` 未用于 Session 名称。
-- 经典版步骤条跳转跳过隐藏任务字段校验。（构建产物的 no-store 已改：带哈希的 /assets/ 长期缓存，见 test_static_cache）
+- 经典版步骤条跳转跳过隐藏任务字段校验。（构建产物的 no-store 已改：带哈希的 /assets/ 长期缓存，见 test_static_cache；2026-10-23 起 GET 的文本响应 ≥ 1 KB 时按 Accept-Encoding 以 gzip 发送，POST 不压缩，见 test_compression）
 - `default_url` 由 `0.0.0.0` 拼接（应使用 `probe_host`）；systemd 单元可恢复 `NoNewPrivileges` 等加固项；
   `bootstrap-worker` 不比对已有 Worker 的 URL / Token；记录接受的 KiroCrew commit 而不只是版本号。
 - OpenCode 执行未通过（K01）：EC2 上 shell 写文件被 KiroCrew 工具门禁拒绝，需查明命中的门禁层；替代配置 deliver→claude 可用。
 
 ## 稳定性（2026-10-22 发现）
+
+- **会话列表每行过重**（EC2 2026-10-23）：`GET /v1/runs?page=1&view=list` 50 行 199 KB，大头是需求全文（58 KB）、tasks（21 KB）、replan（17 KB）、credentials、knowledge、permissions、usage；侧栏用不到。gzip 之后传输量已降，精简列表视图的字段要先核对 MCP `octopus_runs` 与 CLI `search` 用到哪些。
 
 - **Gateway 事件循环卡住后被看门狗结束**：EC2 2026-10-22 13:25–13:30，owner 边界的 Gateway 事件循环多次卡住（最长 18 秒），KiroCrew 的 loop_watchdog 以 SIGALRM 结束进程，两个子 Agent 中途断开（「Orphaned: gateway_restart」），由自动纠错救回。
   - 已处理（21495ea）：Worker 检查运行中的尝试改读自己的那一行，不再每次读完整列表（310 KB / 150 ms → 7 KB / 16 ms）。
