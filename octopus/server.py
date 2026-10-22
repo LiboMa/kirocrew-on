@@ -341,9 +341,9 @@ def server(database, port=8918, host="127.0.0.1", allowed_hosts=(), origin_secre
                 self.send_response(200)
                 self.send_header("Content-Type", "application/x-git-bundle")
                 self.send_header("Content-Disposition", f'attachment; filename="{rid}.bundle"')
-                for name in ("X-Pull-Head", "X-Pull-Base", "X-Pull-Branch", "X-Pull-Full", "Content-Length"):
-                    if response.headers.get(name):
-                        self.send_header(name, response.headers[name])
+                for header in ("X-Pull-Head", "X-Pull-Base", "X-Pull-Branch", "X-Pull-Full", "Content-Length"):
+                    if response.headers.get(header):   # not "name": that is the validator
+                        self.send_header(header, response.headers[header])
                 self.send_header("Cache-Control", "no-store")
                 self.end_headers()
                 try:
