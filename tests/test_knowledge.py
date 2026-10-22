@@ -296,7 +296,7 @@ class NeverHoldsTests(KnowledgeCase):
     def start_(self):
         return self.start(steps=TEAM, source=SOURCE, recovery={"enabled": True, "max_cycles": 2})
 
-    def assert_completed_without_knowledge(self, run, why):
+    def assert_completed_without_knowledge(self, run, why, warned=()):
         self.assertEqual(run["status"], "completed")
         self.assertEqual(self.writes, [])
         self.assertEqual(self.decisions, [])   # no Coordinator was asked
@@ -305,7 +305,8 @@ class NeverHoldsTests(KnowledgeCase):
         self.assertIn(why, run["knowledge"]["note"])
         task = next(t for t in run["tasks"] if t["id"] == "knowledge")
         self.assertEqual(task["status"], "accepted")
-        self.assertEqual(task["attempts"][-1]["evidence"]["warnings"], [])   # D57: every accepted Attempt carries them
+        # D57: every accepted Attempt carries them
+        self.assertEqual([w["name"] for w in task["attempts"][-1]["evidence"]["warnings"]], list(warned))
 
     def test_a_blocked_knowledge_outcome_completes_the_session(self):
         self.knowledge_outcome = {"decision": "blocked", "failure_type": "input", "summary": "没有可读的交接"}
@@ -315,7 +316,9 @@ class NeverHoldsTests(KnowledgeCase):
     def test_a_knowledge_task_without_an_outcome_completes_the_session(self):
         self.knowledge_outcome = {"decision": "maybe"}
         run = self.tick(self.start_())
-        self.assert_completed_without_knowledge(run, "未完成")
+        # D57 §4: an invalid outcome is a warning, and the note still says why nothing was written
+        self.assert_completed_without_knowledge(run, "未完成", warned=["outcome_valid"])
+        self.assertIn("decision", run["knowledge"]["note"])
 
     def test_an_expired_kiro_login_completes_the_session(self):
         self.knowledge_dispatch_error = Error(503, "tool_auth_expired", "Worker 上 kiro-cli 登录已过期")

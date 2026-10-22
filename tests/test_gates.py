@@ -1,4 +1,5 @@
-"""D37 §4: the first five gates are today's checks, named and recorded; their verdicts do not change."""
+"""D37 §4: the first five gates are today's checks, named and recorded. D57 §4: a missing handoff and an invalid outcome
+are warnings; the other verdicts do not change."""
 import unittest
 
 from octopus import gates
@@ -39,9 +40,7 @@ class BasicGateTests(unittest.TestCase):
             (dict(native={**DONE, "error": "boom"}), ("boom", "native_error", "native_completed")),
             (dict(native={**DONE, "stopped": True}), ("原生任务已停止", "native_stopped", "native_completed")),
             (dict(missing=True), (BLOCKED, "native_error", "native_completed")),
-            (dict(handoff=""), ("缺少本次交接文件", "contract", "handoff_present")),
             (dict(evidence={"actual_backend": "codex"}), ("实际 ACP 后端未核实或与配置不匹配", "tool", "identity_match")),
-            (dict(invalid="outcome.json 无效"), ("outcome.json 无效", "contract", "outcome_valid")),
             (dict(report={"decision": "changes_requested", "summary": "缺测试", "failure_type": "tests"}),
              ("缺测试", "tests", "outcome_pass")),
         ]
@@ -51,6 +50,33 @@ class BasicGateTests(unittest.TestCase):
                 self.assertEqual((error, kind), (message, failure))
                 self.assertEqual(records[-1]["name"], gate)
                 self.assertEqual(records[-1]["status"], "fail")
+
+    def test_a_missing_handoff_is_a_warning_and_the_next_gates_still_judge(self):   # D57 §4
+        passing = {"decision": "pass", "summary": "ok", "failure_type": "none"}
+        error, failure, records = judge(handoff="", report=passing)
+        self.assertEqual((error, failure), (None, None))
+        self.assertEqual(self.names(records), [("native_completed", "pass"), ("identity_match", "pass"),
+                                               ("handoff_present", "warn"), ("outcome_valid", "pass"), ("outcome_pass", "pass")])
+        self.assertEqual(records[2]["detail"], "执行者没有写交接文件，平台已用原生结果生成一份")
+        later = ((dict(evidence={"actual_backend": "codex"}), ("实际 ACP 后端未核实或与配置不匹配", "identity_match")),
+                 (dict(report={"decision": "changes_requested", "summary": "缺测试", "failure_type": "tests"}),
+                  ("缺测试", "outcome_pass")))
+        for kwargs, (message, gate) in later:   # the gates after it still fail as before
+            with self.subTest(gate=gate):
+                error, _, records = judge(handoff="", **kwargs)
+                self.assertEqual((error, records[-1]["name"], records[-1]["status"]), (message, gate, "fail"))
+                self.assertIn(("handoff_present", "warn"), self.names(records))
+
+    def test_an_invalid_outcome_is_a_warning_judged_by_the_result_text(self):   # D57 §4
+        error, failure, records = judge(invalid="outcome.json 无效")
+        self.assertEqual((error, failure), (None, None))
+        self.assertEqual(self.names(records)[-2:], [("outcome_valid", "warn"), ("outcome_pass", "skip")])
+        self.assertIn("outcome.json 无效", records[-2]["detail"])
+        self.assertIn("按结果文字判断", records[-2]["detail"])
+        # a standalone BLOCKED line in the result still fails as BLOCKED
+        error, failure, records = judge(invalid="outcome.json 无效", blocked=True)
+        self.assertEqual((error, records[-1]["status"]), (BLOCKED, "fail"))
+        self.assertNotIn("pass", [r["status"] for r in records if r["name"].startswith("outcome")])
 
     def test_a_blocked_reply_with_a_failing_outcome_reports_the_outcome(self):
         report = {"decision": "blocked", "summary": "缺少数据库地址", "failure_type": "input"}

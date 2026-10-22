@@ -72,6 +72,16 @@ def handoff(row):
     return item
 
 
+GENERATED = "（平台生成：执行者没有写交接文件）"
+
+
+def generated_handoff(task, attempt, evidence, native):
+    """D57 §4: the handoff the platform writes when the executor wrote none — what ``handoff`` tells a later task of it,
+    from the native result, under a first line that says who wrote it."""
+    item = handoff({"id": task["id"], "spec": attempt["spec"], "evidence": dumps(evidence), "result": native.get("result")})
+    return GENERATED + "\n" + json.dumps(item, ensure_ascii=False, indent=2)
+
+
 BROKEN = frozenset({"native_error", "native_stopped", "auth", "tool", "model"})   # the conversation itself failed
 
 
@@ -690,9 +700,11 @@ class Engine:
                                  "moved": not candidate["secrets"], "start": start,
                                  **{key: candidate[key] for key in ("names", "names_truncated") if key in candidate}}
         if not candidate["changed"]:
-            if kind in ("implement", "deliver"):
-                return fail("diff_present", "任务没有改动任何文件")
-            records.append(gates.record("diff_present", "skip", "没有改动（此类任务不要求）"))
+            if kind in ("implement", "deliver"):   # D57 §4: a warning, not a failure
+                records.append(gates.record("diff_present", "warn",
+                                            "本任务没有改动入库文件。如果它本来就只产出补丁或报告，可以忽略。"))
+            else:
+                records.append(gates.record("diff_present", "skip", "没有改动（此类任务不要求）"))
         else:
             records.append(gates.record("diff_present", "pass", f"{candidate['files']} 个文件"))
         if candidate["secrets"]:
@@ -701,11 +713,9 @@ class Engine:
         locked = self._locked(run, task, spec, candidate)
         if locked:
             status, detail, *files = locked
-            if status == "fail":
-                result = fail("artifacts_locked", detail)
-                records[-1]["files"] = files[0]   # D54: what the Coordinator may give this task (context.locked_files)
-                return result
             records.append(gates.record("artifacts_locked", status, detail))
+            if files:   # D57 §4: the accepted tasks' files it changed, named for the review that follows
+                records[-1]["files"] = files[0]
         commands = spec.get("verify") or []
         if not commands:
             records.append(gates.record("checks_pass", "skip", "任务没有检查命令"))
@@ -724,7 +734,8 @@ class Engine:
         return None, None, True
 
     def _locked(self, run, task, spec, candidate):
-        """artifacts_locked (D37 §11.2): (status, detail), or None when the candidate changed nothing."""
+        """artifacts_locked (D37 §11.2): (status, detail), with the files it names for a warning, or None when the candidate
+        changed nothing."""
         if not candidate.get("changed"):
             return None
         if "names" not in candidate:
@@ -753,7 +764,8 @@ class Engine:
         if not broken:
             return "pass", None
         listed = "；".join(f"改动了已验收任务「{owner}」的交付物：{'、'.join(files[:10])}" for owner, files in broken.items())
-        return "fail", listed + "；如需修改，请在本任务的 paths 中列出", sorted(n for files in broken.values() for n in files)
+        # D57 §4: a warning — the change stays, for the review that follows to look at
+        return "warn", listed + "（本任务的 paths 未列出，请审查时确认）", sorted(n for files in broken.values() for n in files)
 
     def _start_baseline(self, run, config, attempt, evidence):
         """tests_fail_on_baseline (D37 §11.1): the second run of the verify commands, on the Session's baseline."""
@@ -790,7 +802,6 @@ class Engine:
             return
         evidence["baseline_results"] = status.get("results") or []
         evidence["baseline_artifacts"] = status.get("artifacts") or []
-        base = str(evidence["baseline"].get("base") or "")[:7]
         last = evidence["baseline_results"][-1] if evidence["baseline_results"] else {}
         unjudged = (status.get("error") or ("基线检查中断（Worker 重启）" if status.get("lost") else None)
                     or ("基线检查已停止" if last.get("stopped") or (not status.get("passed") and status.get("failed") is None) else None)
@@ -799,11 +810,9 @@ class Engine:
         if unjudged:   # nothing about the tests: never a pass or a fail
             evidence["gates"].append(gates.record("tests_fail_on_baseline", "skip", unjudged))
             return self._settle(run, task, attempt, evidence, None)
-        if status.get("passed"):
-            error = f"新增的测试在改动之前（基线 {base}）也通过，不能证明新行为"
-            evidence["gates"].append(gates.record("tests_fail_on_baseline", "fail", error))
-            evidence.update(failure_type="gate", gate="tests_fail_on_baseline")
-            return self._settle(run, task, attempt, evidence, error)
+        if status.get("passed"):   # D57 §4: a warning, not a failure
+            evidence["gates"].append(gates.record("tests_fail_on_baseline", "warn", "测试在改动前也能通过，可能没测到改动"))
+            return self._settle(run, task, attempt, evidence, None)
         failed = evidence["baseline_results"][status["failed"]] if status.get("failed") is not None else {}
         evidence["gates"].append(gates.record("tests_fail_on_baseline", "pass",
                                               f"基线上失败：{failed.get('command', '')}（退出码 {failed.get('exit')}）"))
@@ -1111,6 +1120,9 @@ class Engine:
             # The five checks every Attempt passes, named and recorded (D37 §4).
             error, failure_type, evidence["gates"] = gates.basic(native, result, spec, evidence, report, invalid, lost,
                                                                  missing, blocked_line)
+            if any(g["name"] == "handoff_present" and g["status"] == "warn" for g in evidence["gates"]):
+                evidence["handoff_generated"] = True   # D57 §4: the executor wrote none; the platform did
+                result["handoff"] = generated_handoff(task, attempt, evidence, native)
             if not error and gated:
                 error, failure_type, checking = self._more_gates(run, config, task, attempt, spec, evidence, report, latest,
                                                                  start)
@@ -1137,6 +1149,8 @@ class Engine:
                 if retry == "never_started" and (evidence.get("queued") or {}).get("resuming"):
                     retry = None   # it had begun before its queue: not a lack of resources (D60 §3.4)
             state = "blocked" if error else "accepted"
+            if state == "accepted" and invalid and knowledge.platform(snapshot, task["id"]):
+                evidence["knowledge_skipped"] = invalid   # D57 §4: accepted with the warning, but its list cannot be read
             if state == "accepted" and (evidence.get("evaluation") or {}).get("pending"):
                 state = "awaiting_acceptance"   # D46 P3: what the Evaluator left to a person
         with self.db.transaction() as db:

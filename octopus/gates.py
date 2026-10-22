@@ -1,5 +1,6 @@
 """Named gates (D37 §4): each Attempt's acceptance as a list of recorded verdicts. The first five are the checks the
-Engine always made; their messages and failure types are unchanged."""
+Engine always made; their messages and failure types are unchanged, except that a missing handoff and an invalid outcome
+are warnings (D57 §4)."""
 import re
 import time
 
@@ -42,10 +43,9 @@ def basic(native, result, spec, evidence, report, invalid, lost, missing, blocke
     records.append(record("native_completed", "fail" if error else "pass", error))
     if error:
         return error, failure, records
-    if not result.get("handoff", "").strip():
-        records.append(record("identity_match", "skip"))   # checked in today's order: handoff first
-        records.append(record("handoff_present", "fail", "缺少本次交接文件"))
-        return "缺少本次交接文件", "contract", records
+    # D57 §4: a missing handoff is the platform's to write (the Engine does, from the native result); judging goes on
+    handoff = record("handoff_present", "pass") if result.get("handoff", "").strip() else \
+        record("handoff_present", "warn", "执行者没有写交接文件，平台已用原生结果生成一份")
     actual = EFFORT.sub("", evidence.get("actual_model") or "")
     # A backend, model or effort that is not the one requested is the tool's failure: recovery may switch (D38 §3.2).
     # One the evidence does not show (no routing record) is not: switching cannot fix it, it waits for the user as before.
@@ -56,15 +56,16 @@ def basic(native, result, spec, evidence, report, invalid, lost, missing, blocke
                                  (bool(spec["effort"] and evidence.get("actual_effort") and evidence["actual_effort"] != spec["effort"]),
                                   True, "实际 Effort 与本次配置不匹配")):
         if wrong:
-            records += [record("handoff_present", "pass"), record("identity_match", "fail", message)]
+            records += [handoff, record("identity_match", "fail", message)]
             return message, "tool" if seen else "model", records
-    records += [record("identity_match", "pass"), record("handoff_present", "pass")]
+    records += [record("identity_match", "pass"), handoff]
     if report is None and invalid is None:
         records += [record("outcome_valid", "skip"), record("outcome_pass", "skip")]
         return None, None, records
-    if invalid:
-        records.append(record("outcome_valid", "fail", invalid))
-        return invalid, "contract", records
+    if invalid:   # D57 §4: judged by the result text; a standalone BLOCKED line already failed native_completed above
+        records += [record("outcome_valid", "warn", f"{invalid}；已按结果文字判断：没有单独一行 BLOCKED，按通过"),
+                    record("outcome_pass", "skip", "结果文件不合法，没有可读的结论")]
+        return None, None, records
     records.append(record("outcome_valid", "pass"))
     if report["decision"] != "pass":
         records.append(record("outcome_pass", "fail", report["summary"]))

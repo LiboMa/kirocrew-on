@@ -6,7 +6,7 @@ import tempfile
 import unittest
 from unittest.mock import patch
 
-from octopus import gates, gateway_client
+from octopus import gates, gateway_client, recovery
 from octopus.db import dumps
 from octopus.engine import Engine
 from octopus.security import Error
@@ -132,17 +132,43 @@ class EngineGateTests(TeamsWorkersCase):
             context = json.loads(db.execute("SELECT context FROM recoveries WHERE run_id=?", (rid,)).fetchone()["context"])
         self.assertEqual(context["evidence"]["check_results"][0]["tail"], "1 failing")
 
-    def test_an_empty_diff_fails_implement_but_not_test_or_untyped_tasks(self):
-        cases = ((IMPLEMENT, "fail"), ({**IMPLEMENT, "kind": "test"}, "skip"),
+    def test_an_empty_diff_is_a_warning_for_every_kind(self):   # D57 §4: never a failure
+        # implement / deliver warn; test and untyped tasks were never asked to change files and skip as before
+        cases = ((IMPLEMENT, "warn"), ({**IMPLEMENT, "kind": "deliver"}, "warn"), ({**IMPLEMENT, "kind": "test"}, "skip"),
                  ({k: v for k, v in IMPLEMENT.items() if k != "kind"}, "skip"))
         for index, (step, expected) in enumerate(cases):
             with self.subTest(kind=step.get("kind")):
-                worker, rid = FakeWorker(), self.session([step], request=f"start-000000001{index}")
+                worker, rid = FakeWorker(), self.session([step], recovery=True, request=f"start-000000001{index}")
                 worker.candidate = lambda body: {"sha": BASE, "parent": BASE, "changed": False, "files": 0, "insertions": 0,
                                                  "deletions": 0, "rewritten": False, "secrets": []}
                 self.run_engine(worker)
-                _, evidence = self.attempt(rid, "code")
-                self.assertEqual(self.gates(evidence)["diff_present"], expected)
+                attempt, evidence = self.attempt(rid, "code")
+                self.assertEqual((attempt["status"], self.gates(evidence)["diff_present"]), ("accepted", expected))
+                self.assertEqual(self.gates(evidence)["checks_pass"], "pass")   # judging went on
+                if expected == "warn":
+                    gate = [g for g in evidence["gates"] if g["name"] == "diff_present"][0]
+                    self.assertEqual(gate["detail"], "本任务没有改动入库文件。如果它本来就只产出补丁或报告，可以忽略。")
+                    self.assertEqual([w["name"] for w in evidence["warnings"]], ["diff_present"])
+                    self.assertNotIn("gate", evidence)
+
+    def test_a_missing_handoff_is_written_by_the_platform(self):   # D57 §4: from the native result, with a warning
+        worker, seen = FakeWorker(), []
+
+        def call(config, path, body=None, **kwargs):
+            result = worker(config, path, body, **kwargs)
+            if path == "/inspect":
+                result["handoff"] = ""
+                seen.append(result)
+            return result
+        rid = self.session([IMPLEMENT], recovery=True)
+        self.run_engine(call)
+        attempt, evidence = self.attempt(rid, "code")
+        self.assertEqual((attempt["status"], self.gates(evidence)["handoff_present"]), ("accepted", "warn"))
+        self.assertIs(evidence["handoff_generated"], True)
+        first, *rest = seen[0]["handoff"].splitlines()
+        self.assertEqual(first, "（平台生成：执行者没有写交接文件）")
+        self.assertIn("完成", "\n".join(rest))   # the native result's conclusion
+        self.assertEqual([w["name"] for w in evidence["warnings"]], ["handoff_present"])
 
     def test_a_secret_fails_no_secrets(self):
         worker, rid = FakeWorker(), self.session([IMPLEMENT])
@@ -298,7 +324,7 @@ class EngineGateTests(TeamsWorkersCase):
                                                         "task_id": "code", "recovery": {"enabled": True, "max_cycles": 2}})
         self.assertEqual(self.snapshot(rid)["execution_contract"], 4)   # D46 P3
 
-    def test_a_later_task_may_not_change_an_accepted_tasks_files_unless_its_paths_say_so(self):
+    def test_changing_an_accepted_tasks_files_is_a_warning_naming_them(self):   # D57 §4: left to the review that follows
         worker = FakeWorker()
         names = {"code": ["src/a.py"], "docs": ["src/a.py", "README.md"]}
         shas = {"code": C1, "docs": "d" * 40}
@@ -308,16 +334,20 @@ class EngineGateTests(TeamsWorkersCase):
                     "insertions": 1, "deletions": 0, "rewritten": False, "secrets": [], "names": names[task]}
         worker.candidate = candidate
         docs = {"id": "docs", "name": "文档", "tool": "claude", "prompt": "写文档", "kind": "deliver",
-                "acceptance": ["有文档"], "paths": ["README.md"]}
+                "acceptance": ["有文档"], "paths": ["README.md"], "verify": ["npm test"]}
         rid = self.session([IMPLEMENT, docs])
         self.run_engine(worker, ticks=20)
-        _, evidence = self.attempt(rid, "docs")
-        self.assertEqual(self.gates(evidence).get("artifacts_locked"), "fail")
-        failed = [g for g in evidence["gates"] if g["name"] == "artifacts_locked"][0]
-        self.assertIn("「实现」的交付物：src/a.py", failed["detail"])
+        attempt, evidence = self.attempt(rid, "docs")
+        self.assertEqual((attempt["status"], self.gates(evidence).get("artifacts_locked")), ("accepted", "warn"))
+        warned = [g for g in evidence["gates"] if g["name"] == "artifacts_locked"][0]
+        self.assertIn("「实现」的交付物：src/a.py", warned["detail"])
+        self.assertEqual(warned["files"], ["src/a.py"])
+        self.assertEqual(self.gates(evidence)["checks_pass"], "pass")   # the gates after it still judged
+        self.assertEqual([w["name"] for w in evidence["warnings"]], ["artifacts_locked"])
 
-    def locked_session(self, decision):
-        """docs changes the implementation's src/a.py without listing it: artifacts_locked, then the Coordinator decides."""
+    def test_a_locked_file_warning_starts_no_diagnosis(self):
+        """docs changes the implementation's src/a.py without listing it: a warning, and no Coordinator is asked (D57 §4;
+        D54's paths_add is kept for Attempts blocked before it, and checked below)."""
         worker, seen = FakeWorker(), []
         names = {"code": ["src/a.py"], "docs": ["src/a.py", "README.md"]}
         shas = {"code": C1, "docs": "d" * 40}
@@ -325,45 +355,41 @@ class EngineGateTests(TeamsWorkersCase):
                                          "parent": body.get("parent", BASE), "changed": True, "files": 2, "insertions": 1,
                                          "deletions": 0, "rewritten": False, "secrets": [],
                                          "names": names[worker.dispatched[body["attempt_id"]]["spec"]["id"]]}
-        decisions = [decision, {"action": "wait_for_user", "reason": "等待", "instructions": "检查"}]
 
         def call(config, path, body=None, **kwargs):
-            if path == "/inspect" and worker.dispatched[body["attempt_id"]].get("coordination"):
-                seen.append(worker.dispatched[body["attempt_id"]]["coordination"])
-                return {"status": "running", "native": {"done": True, "result": "完成", "error": ""},
-                        "evidence": {"actual_backend": "kiro"}, "handoff": "交接", "decision": dumps(decisions.pop(0))}
+            if path == "/dispatch" and body.get("coordination"):
+                seen.append(body["coordination"])
             return worker(config, path, body, **kwargs)
         docs = {"id": "docs", "name": "文档", "tool": "claude", "prompt": "写文档", "kind": "deliver",
                 "acceptance": ["有文档"], "paths": ["README.md"]}
         rid = self.session([IMPLEMENT, docs], recovery=True)
         self.run_engine(call, ticks=40)
-        return rid, seen
+        attempt, evidence = self.attempt(rid, "docs")
+        warned = [g for g in evidence["gates"] if g["name"] == "artifacts_locked"][0]
+        self.assertEqual((attempt["status"], warned["status"], warned["files"]), ("accepted", "warn", ["src/a.py"]))
+        with self.db.read() as db:
+            status = db.execute("SELECT status FROM runs WHERE id=?", (rid,)).fetchone()["status"]
+            recoveries = db.execute("SELECT COUNT(*) FROM recoveries WHERE run_id=?", (rid,)).fetchone()[0]
+        self.assertEqual((status, recoveries, seen), ("completed", 0, []))
 
-    # D54 (owner 2026-10-21): the Coordinator may give the failed task the files the gate locked
-    def test_the_coordinator_may_give_the_failed_task_the_files_the_gate_locked(self):
-        rid, seen = self.locked_session({"action": "retry", "target_task_id": "docs", "reason": "文档须同步修改 src/a.py 的注释",
-                                         "instructions": "保留改动并重跑", "paths_add": ["src/a.py"]})
-        self.assertEqual(seen[0]["locked_files"], ["src/a.py"])
-        run = self.service.run(self.c, rid)
-        docs = next(t for t in run["tasks"] if t["id"] == "docs")
-        self.assertEqual((docs["status"], docs["spec"]["paths"]), ("accepted", ["README.md", "src/a.py"]))
-        recovered = [r for r in self.service.revisions(self.c, rid) if r["kind"] == "recovered"]
-        self.assertIn("扩大「文档」的可改动路径：src/a.py", recovered[-1]["summary"])
-        self.assertIn("task.paths_added", [e["kind"] for e in self.service.events(self.c, rid)])
-
-    def test_a_path_the_gate_did_not_lock_is_refused(self):
+    # D54 (owner 2026-10-21), kept for compatibility (D57 §4): what the Coordinator may give a task blocked by the old gate
+    def test_paths_add_gives_only_the_locked_files_to_the_failed_task(self):
+        failed = {"id": "docs", "spec": dumps({"id": "docs", "paths": ["README.md"]})}
+        context = {"locked_files": ["src/a.py"]}
+        retry = {"action": "retry", "target_task_id": "docs", "reason": "文档须同步修改 src/a.py 的注释",
+                 "instructions": "保留改动并重跑", "paths_add": ["src/a.py"]}
+        self.assertEqual(recovery.widen(retry, context, failed, failed), ["README.md", "src/a.py"])
         for extra in ("src/other.py", "src/*", "../etc/passwd"):
             with self.subTest(extra):
-                rid, _ = self.locked_session({"action": "retry", "target_task_id": "docs", "reason": "r", "instructions": "i",
-                                              "paths_add": ["src/a.py", extra]})
-                run = self.service.run(self.c, rid)
-                self.assertIn("不是门禁锁住的文件", run["error"])
-                self.assertEqual(next(t for t in run["tasks"] if t["id"] == "docs")["spec"]["paths"], ["README.md"])
-
-    def test_the_paths_go_only_to_the_failed_task(self):
-        rid, _ = self.locked_session({"action": "rework", "target_task_id": "code", "reason": "r", "instructions": "i",
-                                      "paths_add": ["src/a.py"]})
-        self.assertIn("只用于重试或返工失败的任务", self.service.run(self.c, rid)["error"])
+                with self.assertRaises(Error) as refused:
+                    recovery.widen({**retry, "paths_add": ["src/a.py", extra]}, context, failed, failed)
+                self.assertIn("不是门禁锁住的文件", str(refused.exception))
+        with self.assertRaises(Error) as refused:
+            recovery.widen({**retry, "action": "rework", "target_task_id": "code"}, context, failed, {"id": "code"})
+        self.assertIn("只用于重试或返工失败的任务", str(refused.exception))
+        with self.assertRaises(Error) as refused:   # an artifacts_locked warning gives the Coordinator no locked_files
+            recovery.widen(retry, {}, failed, failed)
+        self.assertIn("失败的不是 artifacts_locked 门禁", str(refused.exception))
 
     def test_a_task_without_paths_is_not_locked(self):
         worker = FakeWorker()
@@ -411,15 +437,22 @@ class EngineGateTests(TeamsWorkersCase):
         return {"state": "done", "passed": passed, "failed": None if passed else 0, "error": None, "artifacts": [],
                 "results": [{"command": "npm test", "exit": 0 if passed else 1, "seconds": 1.0, "tail": "", **last}]}
 
-    def test_a_test_tasks_tests_must_fail_on_the_baseline(self):
-        for passed, verdict in ((True, "fail"), (False, "pass")):
+    def test_tests_that_pass_on_the_baseline_are_a_warning(self):   # D57 §4
+        for passed, verdict in ((True, "warn"), (False, "pass")):
             with self.subTest(baseline_passed=passed):
                 call = self.gate_worker(baseline=self.baseline_answer(passed))
-                rid = self.session([IMPLEMENT, self.TEST], request="start-%016d" % (2 + passed))
+                rid = self.session([IMPLEMENT, self.TEST], recovery=True, request="start-%016d" % (2 + passed))
                 self.run_engine(call, ticks=24)
                 attempt, evidence = self.attempt(rid, "test")
                 self.assertEqual(self.gates(evidence).get("tests_fail_on_baseline"), verdict)
-                self.assertEqual(attempt["status"], "blocked" if verdict == "fail" else "accepted")
+                self.assertEqual(attempt["status"], "accepted")
+                if verdict == "warn":
+                    gate = [g for g in evidence["gates"] if g["name"] == "tests_fail_on_baseline"][0]
+                    self.assertEqual(gate["detail"], "测试在改动前也能通过，可能没测到改动")
+                    self.assertEqual([w["name"] for w in evidence["warnings"]], ["tests_fail_on_baseline"])
+                    self.assertNotIn("gate", evidence)
+                    with self.db.read() as db:
+                        self.assertFalse(db.execute("SELECT 1 FROM recoveries WHERE run_id=?", (rid,)).fetchone())
                 started = [b for p, b in call.worker.calls if p == "/verify/start" and b.get("baseline")]
                 # measured from where the test task started: the implementation's candidate
                 self.assertEqual(started[0]["baseline"], {"candidate": call.shas["test"], "start": call.shas["code"]})
