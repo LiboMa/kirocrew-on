@@ -275,6 +275,18 @@ def candidate_diff(project, sha, parent):
             "truncated": len(raw) > DIFF_BYTES or len(lines) > DIFF_LINES}
 
 
+def change_stats(project, old, new):
+    """What ``old..new`` changed, as a candidate records it (D37): files, inserted and deleted lines, the paths."""
+    names, insertions, deletions = [], 0, 0
+    for record in _git_bytes(project, "diff", "--numstat", "-z", "--no-renames", old, new, "--").split(b"\0"):
+        parts = record.decode(errors="replace").split("\t", 2)
+        if len(parts) == 3 and parts[2]:
+            names.append(parts[2])
+            insertions += int(parts[0]) if parts[0].isdigit() else 0
+            deletions += int(parts[1]) if parts[1].isdigit() else 0
+    return {"files": len(names), "insertions": insertions, "deletions": deletions, "names": names}
+
+
 def clean_against(project, expected):
     """Whether the workspace is still ``expected`` (D37 §6, a review must not change code): HEAD, and uncommitted changes
     to tracked files outside what a download and a publish leave out."""

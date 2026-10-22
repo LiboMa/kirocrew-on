@@ -73,6 +73,7 @@ ARCHIVE_SKIP = workspace.SKIP_DIRS
 KNOWLEDGE_FILE = ".octopus/knowledge.md"   # the repository's knowledge (D52)
 ENV_KEPT = workspace.ENV_KEPT
 PUBLISH_LIMIT = 100 * 1024 * 1024   # D35 §5.2: one bundle (as publish.LIMIT on the platform)
+SYNC_LIMIT = 20 * 1024 * 1024   # D58: the local commits one sync brings in
 
 
 # What each kind of work is told at the end of its instructions (D46): planning, design and diagnosis are not development.
@@ -687,6 +688,86 @@ class Worker:
         except ValueError as exc:
             raise Error(409, "publish_failed", workspace.scrub(exc)) from None
         return {"project": project, "base": base, "head": head, "branch": branch, "run": run}
+
+    def _session_project(self, rid):
+        run = self.path(rid)
+        self._undo_baseline(run)
+        try:   # a Session whose workspace is gone says so, not a 500
+            project, record = workspace.project_dir(run), workspace.read_record(run) or {}
+        except ValueError as exc:
+            raise Error(409, "workspace_missing", workspace.scrub(exc)) from None
+        return run, project, record.get("commit"), record.get("branch")
+
+    def pull_plan(self, body):
+        """What a local pull brings back (D58 §5): the Session's branch at its head, checked like a publish — nothing that
+        looks like a credential or a .env file leaves the execution environment. Read only."""
+        run, project, base, branch = self._session_project(body["run_id"])
+        require(base and branch, "此会话的项目没有 Git 基线，无法拉回", 409, "nothing_to_pull")
+        try:
+            head = workspace._git(project, "rev-parse", "--verify", f"refs/heads/{branch}^{{commit}}")
+            found = workspace.unpublishable(project, base, head)
+        except ValueError as exc:
+            raise Error(409, "pull_failed", workspace.scrub(exc)) from None
+        require(not found, "这个会话的分支中有疑似凭证或 .env 文件，不能拉回：" + "、".join(found[:20]), 409, "bundle_secret_found")
+        return {"project": project, "base": base, "head": head, "branch": branch, "run": run,
+                "full": bool(body.get("full")) or head == base}
+
+    def pull_bundle(self, plan):
+        """The bundle file of a pull: the branch since the baseline (a local clone of the repository has it), or its
+        whole history (``full``: a new project, or a clone without the baseline). The caller streams and removes it."""
+        bundle = plan["run"] / ".pull.bundle"
+        bundle.unlink(missing_ok=True)
+        ref = "refs/heads/" + plan["branch"]
+        try:
+            workspace._git(plan["project"], "bundle", "create", "-q", str(bundle), ref, *([] if plan["full"] else ["^" + plan["base"]]))
+            require(workspace._git(plan["project"], "bundle", "list-heads", str(bundle)).split() == [plan["head"], ref],
+                    "拉回期间会话分支被改动，请重试", 409, "pull_failed")
+            require(bundle.stat().st_size <= PUBLISH_LIMIT, f"要拉回的内容超过 {PUBLISH_LIMIT // 1048576} MB", 413, "pull_too_large")
+        except ValueError as exc:
+            bundle.unlink(missing_ok=True)
+            raise Error(409, "pull_failed", workspace.scrub(exc)) from None
+        except Error:
+            bundle.unlink(missing_ok=True)
+            raise
+        return bundle
+
+    def sync(self, body, data):
+        """A local fast-forward of the Session's branch, brought in from a bundle (D58 §6): the branch and the workspace
+        move to ``head`` only when the branch is still at ``old``, the workspace holds nothing a reset would lose, ``head``
+        descends from ``old`` and nothing new looks like a credential or a .env file. Answers what a candidate records."""
+        require(len(data) <= SYNC_LIMIT, f"同步的内容超过 {SYNC_LIMIT // 1048576} MB", 413, "sync_too_large")
+        for key in ("old", "head"):
+            require(isinstance(body.get(key), str) and workspace.SHA.fullmatch(body[key]), f"{key} 须为完整的提交 ID")
+        run, project, base, branch = self._session_project(body["run_id"])
+        require(base and branch, "此会话的项目没有 Git 基线，无法同步", 409, "sync_unsupported")
+        old, new = body["old"], body["head"]
+        bundle = run / ".sync.bundle"
+        try:
+            tip = workspace._git(project, "rev-parse", "--verify", f"refs/heads/{branch}^{{commit}}")
+            require(tip == old and workspace._git(project, "rev-parse", "--abbrev-ref", "HEAD") == branch,
+                    "会话分支已有新的提交（另一次同步或续作）：请先拉回（pull），在其上修改后再同步", 409, "sync_not_fast_forward")
+            state = workspace.clean_against(project, old)
+            require(state["clean"], "会话的工作区有尚未纳入候选的改动：" + "、".join(state["changed_files"][:20])
+                    + "。请等会话结束、或续作纳入这些改动后再同步", 409, "sync_dirty")
+            bundle.write_bytes(data)
+            heads = dict(reversed(line.split(" ", 1)) for line in
+                         workspace._git(project, "bundle", "list-heads", str(bundle)).splitlines() if " " in line)
+            ref = next((name for name, sha in heads.items() if sha == new), None)
+            require(ref is not None, "上传的内容中没有声明的提交", 409, "sync_invalid")
+            workspace._git(project, "fetch", "-q", "--no-tags", str(bundle), ref)
+            ancestor = subprocess.run(["git", "-C", str(project), "merge-base", "--is-ancestor", old, new], capture_output=True)
+            require(ancestor.returncode == 0, "本地提交不是基于会话分支的当前提交：请先拉回（pull），在其上修改后再同步", 409,
+                    "sync_not_fast_forward")
+            found = workspace.unpublishable(project, old, new)
+            require(not found, "同步被拒绝：本地提交中有疑似凭证或 .env 文件：" + "、".join(found[:20]), 409, "sync_secret_found")
+            commits = int(workspace._git(project, "rev-list", "--count", f"{old}..{new}"))
+            workspace._git(project, "reset", "-q", "--hard", new)   # HEAD is the branch (checked above): both move
+            return {"sha": new, "parent": old, "changed": True, "commits": commits, "secrets": [],
+                    **workspace.change_stats(project, old, new)}
+        except ValueError as exc:
+            raise Error(409, "sync_failed", workspace.scrub(exc)) from None
+        finally:
+            bundle.unlink(missing_ok=True)
 
     def publish_bundle(self, plan):
         """The bundle file of ``plan``: the branch with its whole history — the platform holds no copy of the repository
@@ -1653,7 +1734,36 @@ def serve(worker, port=8928, host="127.0.0.1"):
                     finally:
                         bundle.unlink(missing_ok=True)
                     return
-                if self.command == "GET" and self.path == "/health":
+                if self.command == "POST" and self.path == "/pull/bundle":   # D58: a local pull
+                    size = int(self.headers.get("Content-Length", "0"))
+                    require(0 < size <= 100_000, "请求体无效")
+                    plan = worker.pull_plan(json.loads(self.rfile.read(size)))   # refusals answer as JSON errors
+                    bundle = worker.pull_bundle(plan)
+                    try:
+                        self.send_response(200)
+                        self.send_header("Content-Type", "application/x-git-bundle")
+                        self.send_header("Content-Length", str(bundle.stat().st_size))
+                        for name in ("head", "base", "branch"):
+                            self.send_header("X-Pull-" + name.title(), plan[name])
+                        self.send_header("X-Pull-Full", "1" if plan["full"] else "0")
+                        self.send_header("Cache-Control", "no-store")
+                        self.send_header("Connection", "close")
+                        self.end_headers()
+                        self.close_connection = True
+                        with open(bundle, "rb") as source:
+                            shutil.copyfileobj(source, self.wfile, 1 << 20)
+                    except Exception:   # after the 200 header only the connection can end: the platform sees a short bundle
+                        pass
+                    finally:
+                        bundle.unlink(missing_ok=True)
+                    return
+                if self.command == "POST" and self.path == "/sync":   # D58: local commits, as a git bundle
+                    size = int(self.headers.get("Content-Length", "0"))
+                    require(0 < size <= SYNC_LIMIT, f"同步的内容须为 1 字节到 {SYNC_LIMIT // 1048576} MB", 413, "sync_too_large")
+                    body = {"run_id": self.headers.get("X-Octopus-Run"), "old": self.headers.get("X-Octopus-Old"),
+                            "head": self.headers.get("X-Octopus-Head")}
+                    result = worker.sync(body, self.rfile.read(size))
+                elif self.command == "GET" and self.path == "/health":
                     result = worker.health()
                 else:
                     size = int(self.headers.get("Content-Length", "0"))
