@@ -2,7 +2,7 @@ import { useEffect, useState } from "react";
 import { useInfiniteQuery, useQuery, useQueryClient } from "@tanstack/react-query";
 import { api } from "@/api/client";
 import { followRunEvents, type StreamState } from "@/api/events";
-import type { ApprovalList, AppPreview, AttemptDiff, ChangeEntry, Credential, Environment, Me, Observation, Placement, Policy, RevisionDiff, RevisionEntry, Run, RunEvent, RunPage, Team, Template, User, Worker, Workflow } from "@/api/types";
+import type { ApprovalList, AppPreview, AttemptDiff, ChangeEntry, Credential, Environment, Me, Observation, Placement, Policy, RevisionDiff, RevisionEntry, Run, RunEvent, RunPage, Team, Template, User, Worker, Workflow, Quotas } from "@/api/types";
 
 export const keys = {
   me: ["me"] as const,
@@ -19,6 +19,7 @@ export const keys = {
   app: (id: string) => ["app", id] as const,
   credentials: ["credentials"] as const,
   policies: ["policies"] as const,
+  quotas: ["quotas"] as const,
   placement: (space: string, run?: string) => ["placement", space, run ?? ""] as const,
   diff: (run: string, attempt: string) => ["diff", run, attempt] as const,
 };
@@ -94,6 +95,11 @@ export function useAttemptDiff(run: string, attempt: string, enabled: boolean) {
 /** D55: the user's own admission rules and mapping preferences, and those of their Teams. */
 export function usePolicies() {
   return useQuery({ queryKey: keys.policies, queryFn: () => api<Policy[]>("/policies"), retry: false });
+}
+
+/** D61: limits on running tasks and how many run now. */
+export function useQuotas() {
+  return useQuery({ queryKey: keys.quotas, queryFn: () => api<Quotas>("/quotas"), retry: false });
 }
 
 /** The run's remote preview: every 3 s while it installs or starts, every 15 s while it runs. */

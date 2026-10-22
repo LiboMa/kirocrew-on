@@ -492,6 +492,14 @@ export interface UserToken {
   last_used: number | null;
 }
 
+/** D61: limits on running tasks — one's own, one's Teams'; an administrator also sees the default and each person's. */
+export interface Quotas {
+  mine: { limit: number | null; used: number };
+  teams: { id: string; name: string; limit: number | null; used: number; manage: boolean }[];
+  default?: number | null;
+  users?: { id: string; name: string; limit: number }[];
+}
+
 export interface IssuedToken {
   id: string;
   token: string;

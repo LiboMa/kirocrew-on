@@ -3,6 +3,7 @@ import { LaunchWizard } from "@/features/launch/LaunchWizard";
 import { AssignWorkerDialog, ContinueDialog, ControlDialog } from "@/features/sessions/dialogs";
 import { CredentialsDialog } from "@/features/settings/CredentialsDialog";
 import { PoliciesDialog } from "@/features/settings/PoliciesDialog";
+import { QuotasDialog } from "@/features/settings/QuotasDialog";
 import { TeamDialog } from "@/features/settings/TeamDialog";
 import { PasswordDialog } from "@/features/settings/PasswordDialog";
 import { TokensDialog } from "@/features/settings/TokensDialog";
@@ -29,6 +30,8 @@ export function DialogHost({ dialog }: { dialog: Dialog | null }) {
       return <CredentialsDialog />;
     case "policies":
       return <PoliciesDialog />;
+    case "quotas":
+      return <QuotasDialog />;
     case "workers":
       return <WorkersDialog />;
     case "users":

@@ -20,6 +20,7 @@ export type Dialog =
   | { kind: "tokens" }
   | { kind: "credentials" }
   | { kind: "policies" }
+  | { kind: "quotas" }
   | { kind: "workers" }
   | { kind: "users" }
   | { kind: "password" }
