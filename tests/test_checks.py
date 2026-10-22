@@ -16,6 +16,7 @@ from octopus import checks as checks_module
 from octopus.checks import Checks
 from octopus.security import Error
 from tests.test_archive import RID, make_worker
+from tests.test_secret_rules import private_key
 
 
 def finished(checks, job, limit=30):
@@ -317,6 +318,63 @@ class CheckTests(unittest.TestCase):
         self.assertEqual([checks_module.unrunnable(r) for r in value["results"]], expected, tails)
         # the Worker records its answer, made with the project at hand, in each failed result
         self.assertEqual([r.get("unrunnable", "absent") for r in value["results"]], [*expected[:9], "absent"], tails)
+
+    def run_outputs(self, outputs, limit=120):
+        """The results of commands that print each of ``outputs`` (text, exit code). With an empty HOME, so that no login
+        profile slows the shells down."""
+        commands = []
+        for n, (text, code) in enumerate(outputs):
+            (self.project / f"out-{n}.txt").write_text(text)
+            commands.append(f"cat out-{n}.txt; exit {code}")
+        with tempfile.TemporaryDirectory() as home, patch.dict(os.environ, {"HOME": home}):
+            checks = Checks()
+            return finished(checks, checks.start("run-a", "attempt-1", self.project, commands)["job"], limit)["results"]
+
+    def test_masking_never_changes_what_unrunnable_answers(self):
+        # D57 §3.3, §5: the Worker judges a failure on the output as the command printed it, before masking, so a key
+        # header, a key or an END line near the error never turns an environment warning into a check failure; what it
+        # stores is masked, the reason too
+        key, body = private_key("RSA", 640)
+        header, end = "-----BEGIN RSA PRIVATE" + " KEY-----", "-----END RSA PRIVATE" + " KEY-----"
+        messages = [("python3: No module named pytest", 1), ("python3.11: No module named pytest", 1),
+                    ("/usr/bin/python3: No module named pytest", 1),
+                    ("/usr/bin/env: 'node': No such file or directory", 127),
+                    ("/usr/bin/env: ‘node’: No such file or directory", 127),
+                    ("/bin/sh: 1: pytest: not found", 127), ("/bin/bash: line 1: pytest: command not found", 127),
+                    ("ModuleNotFoundError: No module named 'requests'", 1)]
+        contexts = ["{}\n", header + "\n{}\n", key + "\n{}\n", "{}\nhint: expected " + end + "\n",
+                    "key.pem:" + end + "\n{}\n", "x" * 5000 + "\n{}\nhint: expected " + end + "\n",
+                    "x" * 9000 + "\n{}\n" + end + "\n"]   # the last: its head dropped, so masked from the cut to the END
+        outputs = [(context.format(message), code) for message, code in messages for context in contexts]
+        token = "ghp_" + "Z9y8X7w6" * 5
+        outputs += [(f"Error: Cannot find module '{token}'\n", 1),
+                    ("Error: Cannot find module 'https://u:pw@registry.example.com/x'\n", 1)]
+        results = self.run_outputs(outputs)
+        self.assertEqual(len(results), len(outputs))
+        for n, (message, code) in enumerate(messages):
+            judged = results[n * len(contexts):(n + 1) * len(contexts)]
+            reason = checks_module.unrunnable({"command": "c", "exit": code, "seconds": 0.1, "tail": message + "\n"})
+            self.assertIsNotNone(reason, message)
+            with self.subTest(message):
+                self.assertEqual([r["unrunnable"] for r in judged], [reason] * len(contexts),
+                                 [r["tail"][-200:] for r in judged])
+                self.assertTrue(all(line not in r["tail"] for r in judged for line in body.splitlines()))
+                self.assertEqual([r["tail"] for r in judged[1:3]], ["----…--\n" + message + "\n"] * 2)   # masked
+                self.assertNotIn(message, judged[-1]["tail"])   # hidden in what is shown, still judged
+                self.assertEqual([checks_module.unrunnable(r) for r in judged], [reason] * len(contexts))
+        self.assertEqual(results[-2]["unrunnable"], "缺少 Node 模块：ghp_…w6")
+        self.assertEqual(results[-1]["unrunnable"], "缺少 Node 模块：https://registry.example.com/x")
+        self.assertNotIn(token[4:-2], json.dumps(results, ensure_ascii=False))
+        self.assertNotIn("u:pw", json.dumps(results, ensure_ascii=False))
+
+    def test_an_end_line_is_masked_as_a_cut_off_keys_only_once_output_was_dropped(self):
+        # the reader knows whether it dropped the head of the output: 8 KB exactly is all of it, one byte more is not
+        end = "-----END RSA PRIVATE" + " KEY-----\n"
+        size = 2 * checks_module.TAIL
+        results = self.run_outputs([("x" * (size - len(end)) + end, 1), ("x" * (size + 1 - len(end)) + end, 1)])
+        self.assertNotIn("findings", results[0])
+        self.assertTrue(results[0]["tail"].endswith(end))
+        self.assertEqual([f["kind"] for f in results[1]["findings"]], ["private_key"])
 
     def test_cancel_ends_a_running_job(self):
         checks = Checks()

@@ -227,6 +227,58 @@ class SecretRuleTests(unittest.TestCase):
         armoured, body = pgp_key("Comment:\n", end=False)   # an empty header line, and no END
         self.assert_masked(armoured, *body.splitlines(), kinds=["private_key"])
 
+    def test_windows_paths_in_armour_headers_keep_the_key_masked(self):
+        # a header value runs to its own line break: a path's \n or \r (C:\Users\nick, \rob, D:\keys\new) is not one at
+        # any escape depth, and a value that ends in a backslash still ends at the real line break
+        paths = ["C:\\Users\\nick\\key.asc", "C:\\Users\\rob\\keys\\key.asc", "D:\\keys\\new\\key.asc",
+                 "D:\\keys\\new\\nick.asc", "C:\\n\\rob\\x.asc", "\\\\nas\\new\\key.asc", "C:\\Users\\nick", "C:\\keys\\",
+                 "C:\\keys\\n", "C:\\keys\\\\", "C:\\Users\\rob\\"]
+        for path in paths:
+            for end in (True, False):
+                armoured, body = pgp_key(f"Version: GnuPG v2\nComment: {path}\nComment: second\n", end=end)
+                lines = body.splitlines()
+                once, crlf = json.dumps(armoured), armoured.replace("\n", "\r\n")
+                forms = {"raw": armoured, "crlf": crlf, "json": once, "json crlf": json.dumps(crlf),
+                         "json twice": json.dumps(once), "json three times": json.dumps(json.dumps(once))}
+                for form, text in forms.items():
+                    text += ' then "shown"'   # what follows the key, on its line too, is not part of it
+                    with self.subTest(path=path, end=end, form=form):
+                        self.assert_masked(text, *lines, kinds=["private_key"])
+                        self.assertTrue(sources.mask_text(text)[0].endswith(' then "shown"'))
+                        raw = "y" * 1000 + "\n" + text + "\n" + "z" * (checks.TAIL - len(text) // 2)   # across the cut
+                        self.assertLess(raw.index(text), len(raw) - checks.TAIL)
+                        self.assertLess(len(raw) - checks.TAIL, raw.index(text) + len(text))
+                        self.assert_masked(raw, *lines, tail=True)
+
+    def test_a_header_value_ending_in_a_backslash_ends_at_its_line_break(self):
+        # a real line break ends a header value even right after a backslash: the next line's error is still shown
+        header = "-----BEGIN PGP PRIVATE" + " KEY BLOCK-----\nComment: C:\\keys\\\n"
+        message = "ModuleNotFoundError: No module named 'requests'"
+        for text in (header + message + "\n", (header + message + "\n").replace("\n", "\r\n")):
+            with self.subTest(crlf="\r" in text):
+                tail, found = checks.masked_tail(text.encode())
+                self.assertIn(message, tail)
+                self.assertEqual([f["kind"] for f in found], ["private_key"])
+                self.assertEqual(checks.unrunnable({"command": "c", "exit": 1, "seconds": 0.1, "tail": tail}),
+                                 "缺少 Python 模块：requests")
+
+    def test_a_key_cut_short_still_has_its_body_masked(self):
+        # no END in view: the lines after the header are masked — lines of letters only, a short last line, CRLF, YAML
+        # indentation, JSON once and twice, a line cut short at the end of the text
+        key, body = private_key("RSA", 640)
+        lines = body.splitlines()
+        header, cut_short = key.splitlines()[0], key[:key.index("-----END")]
+        letters = "".join(c for c in chars("letters-only", 400, "std") if c.isalpha())[:64]
+        texts = {"plain": cut_short, "crlf": cut_short.replace("\n", "\r\n"),
+                 "letters and a short last line": "\n".join([header, *lines[:3], letters, lines[3], "AB=="]) + "\n",
+                 "yaml": "private_key: |\n" + "".join("  " + line + "\n" for line in cut_short.splitlines()),
+                 "json": json.dumps({"private_key": cut_short}), "json twice": json.dumps(json.dumps(cut_short)),
+                 "cut mid-line": cut_short + lines[0][:30]}
+        for name, text in texts.items():
+            with self.subTest(name):
+                self.assert_masked(text, *lines, letters, kinds=["private_key"])
+                self.assert_masked(text, *lines, letters, tail=True)
+
     def test_a_key_whose_begin_was_cut_off_is_masked_up_to_its_end(self):
         # the check's output keeps only its last 8 KB: a key longer than that tail lost its BEGIN with the head
         output = "".join(f"test {n} ok\n" for n in range(200))   # about 2 KB after the key
@@ -252,16 +304,54 @@ class SecretRuleTests(unittest.TestCase):
                 self.assertTrue(tail.endswith(after[-100:]) if after else True)
 
     def test_errors_after_a_key_header_are_not_hidden_from_unrunnable(self):
-        # masking must not swallow what tells an environment failure from the check's own (D57 §5)
+        # masking must not swallow what tells an environment failure from the check's own (D57 §5): base64 has no ":"
+        # or ".", so a first word followed by one is no key line
         header = "-----BEGIN RSA PRIVATE" + " KEY-----\n"
-        for message, reason in [("ModuleNotFoundError: No module named 'requests'", "缺少 Python 模块：requests"),
-                                ("env: 'node': No such file or directory", "命令不存在：node"),
-                                ("Error: Cannot find module 'express'", "缺少 Node 模块：express")]:
+        for message, code, reason in [
+                ("ModuleNotFoundError: No module named 'requests'", 1, "缺少 Python 模块：requests"),
+                ("env: 'node': No such file or directory", 1, "命令不存在：node"),
+                ("Error: Cannot find module 'express'", 1, "缺少 Node 模块：express"),
+                ("python3: No module named pytest", 1, "缺少 Python 模块：pytest"),
+                ("python3.11: No module named pytest", 1, "缺少 Python 模块：pytest"),
+                ("/usr/bin/python3: No module named pytest", 1, "缺少 Python 模块：pytest"),
+                ("/usr/bin/env: 'node': No such file or directory", 127, "命令不存在：node"),
+                ("/usr/bin/env: ‘node’: No such file or directory", 127, "命令不存在：node"),
+                ("/bin/sh: 1: pytest: not found", 127, "命令不存在：pytest"),
+                ("/bin/bash: line 1: pytest: command not found", 127, "命令不存在：pytest")]:
             with self.subTest(message):
                 tail, found = checks.masked_tail((header + message + "\n").encode())
                 self.assertIn(message, tail)
                 self.assertEqual([f["kind"] for f in found], ["private_key"])
-                self.assertEqual(checks.unrunnable({"command": "c", "exit": 1, "seconds": 0.1, "tail": tail}), reason)
+                self.assertEqual(checks.unrunnable({"command": "c", "exit": code, "seconds": 0.1, "tail": tail}), reason)
+
+    def test_an_end_line_is_taken_for_a_cut_off_key_only_when_its_begin_can_be_gone(self):
+        # an END with no BEGIN before it is a key's whose BEGIN was dropped only when the output's head was dropped, or
+        # when a BEGIN before the cut is still open; else it is just a line (a hint, grep output) and nothing is masked
+        end = "-----END RSA PRIVATE" + " KEY-----"
+        texts = ["hint: expected " + end + "\nModuleNotFoundError: No module named 'x'\n", "key.pem:" + end + "\n"]
+        for size in (0, 1000, 4000, 5000, 7000):   # nothing cut (up to 4 KB), or all of the output kept (4-8 KB)
+            for text in texts:
+                raw = ("x" * size + "\n" + text).encode()
+                with self.subTest(size=size, text=text[:12]):
+                    self.assertLess(len(raw), 2 * checks.TAIL)
+                    tail, found = checks.masked_tail(raw)
+                    self.assertEqual((found, tail.encode()), ([], raw[-checks.TAIL:]))
+        for text in texts:   # the head dropped (the last 8 KB kept): the END's BEGIN may have gone with it
+            raw = ("x" * 9000 + "\n" + text).encode()[-2 * checks.TAIL:]
+            with self.subTest(dropped=text[:12]):
+                self.assertEqual([f["kind"] for f in checks.masked_tail(raw)[1]], ["private_key"])
+                self.assertEqual(checks.masked_tail(raw, dropped=False)[1], [])   # the reader knows best
+                self.assertEqual([f["kind"] for f in checks.masked_tail(raw[-5000:], dropped=True)[1]], ["private_key"])
+        # all of it kept (4-8 KB), its BEGIN before the cut, each line prefixed as docker compose prints it (the block
+        # rule then takes only the header line): masked from the cut through the END
+        key, body = private_key("RSA", 4800)
+        raw = ("".join("web-1  | " + line + "\n" for line in key.splitlines()) + "web-1  | done\n").encode()
+        cut = len(raw) - checks.TAIL
+        self.assertTrue(len(raw) < 2 * checks.TAIL and raw.index(b"-----BEGIN") < cut < raw.index(b"-----END"))
+        tail, found = checks.masked_tail(raw)
+        self.assertEqual([f["kind"] for f in found], ["private_key"])
+        self.assertTrue(all(line[i:i + 10] not in tail for line in body.splitlines() for i in range(55)), tail[:200])
+        self.assertTrue(tail.endswith("web-1  | done\n"))
 
     def test_what_blocks_is_unchanged(self):
         # The owner's rule: no gate blocks more than before without the owner's approval. SUSPICIOUS (what the candidate,
