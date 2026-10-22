@@ -31,7 +31,7 @@ class LimitTests(unittest.TestCase):
 
     def test_the_prompts_and_the_api_say_twelve(self):
         self.assertIn("1–12 个顺序任务", design_instructions("需求", {"steps": []}, "/w", {}))
-        self.assertIn("不超过 12 个", design_instructions("需求", {"steps": []}, "/w", {}))
+        self.assertIn("超过 12 个时合并相邻的步骤", design_instructions("需求", {"steps": []}, "/w", {}))
         document = schema.openapi()
         self.assertEqual(document["components"]["schemas"]["Workflow"]["properties"]["steps"]["maxItems"], 12)
 

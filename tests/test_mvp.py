@@ -144,9 +144,11 @@ class MVPTests(unittest.TestCase):
             created=designs.create(self.service,self.a,body)
         self.dispatched=[]
         engine=Engine(self.db,lambda config,path,body,**kw:self.fake_worker(path,body))
-        for _ in range(4):engine.tick()
+        for _ in range(8):engine.tick()   # D66: KiroCrew is asked to fix it once before it is shown invalid
         invalid=designs.status(self.service,self.a,created["id"])
         self.assertEqual(invalid["status"],"invalid")
+        self.assertEqual(len(self.dispatched),2)
+        self.assertIn("没有可解析的工作流 JSON",invalid["error"])
         self.assertNotIn("config",invalid)
         self.assertEqual(invalid["raw_result"],"Implemented and verified")
         with self.assertRaises(Error):
