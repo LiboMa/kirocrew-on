@@ -36,9 +36,9 @@ export function Panel({ title, description, actions, children, submitLabel = "ä¿
   return (
     <section aria-labelledby={heading} data-panel className="space-y-5">
       <header className="flex flex-wrap items-start justify-between gap-3 border-b pb-4">
-        <div className="min-w-0 max-w-3xl space-y-1">
+        <div className="min-w-0 flex-1 basis-80 space-y-1">
           <h2 id={heading} className="text-xl font-semibold tracking-tight">{title}</h2>
-          {description && <p className="text-sm leading-6 text-muted-foreground">{description}</p>}
+          {description && <p className="max-w-3xl text-sm leading-6 text-muted-foreground">{description}</p>}
         </div>
         {actions && <div className="flex shrink-0 flex-wrap items-center gap-2">{actions}</div>}
       </header>

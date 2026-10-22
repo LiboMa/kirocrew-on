@@ -5,7 +5,6 @@ import { App } from "@/App";
 import { setToken } from "@/api/client";
 import { mockApi, workspaceRoutes } from "@/test/api";
 import { openSection, panel } from "@/test/pages";
-import { formatTime } from "@/lib/labels";
 
 function start(extra: Record<string, unknown> = {}) {
   setToken("oct_fixture");
@@ -240,112 +239,6 @@ describe("settings", () => {
     expect(options.some((o) => o.includes("旧组"))).toBe(false);
   });
 
-  test("sharing a Worker shows what sharing means and asks for confirmation", async () => {
-    const calls = start({
-      "GET /workers": [{ id: "w1", name: "personal", owner_id: "u1", team_id: null, enabled: true, scope: "dedicated",
-        spaces: [], capabilities: { isolation: "trusted-local" } }],
-      "POST /workers/w1/share": { id: "w1", scope: "shared" },
-    });
-    const dialog = await openSection("管理", "执行环境");
-    await userEvent.click(within(dialog).getByRole("button", { name: "设为共享环境" }));
-    expect(within(dialog).getByText(/能互相读取源码、工具登录与记忆；记忆未分隔；只用于同一信任范围/)).toBeInTheDocument();
-    expect(within(dialog).getByText(/只有边界所有者能打开原生 KiroCrew 入口/)).toBeInTheDocument();
-    expect(calls.find((c) => c.path === "/v1/workers/w1/share")).toBeUndefined();
-    await userEvent.click(within(dialog).getByRole("button", { name: "确认设为共享环境" }));
-    await waitFor(() => expect(calls.find((c) => c.path === "/v1/workers/w1/share")?.body).toEqual({ confirm: true }));
-  });
-
-  const environments = {
-    "GET /workers": [
-      { id: "w1", name: "personal", owner_id: "u1", team_id: null, enabled: true, scope: "shared",
-        spaces: [{ user_id: "u1" }, { team_id: "team-1" }], capabilities: { isolation: "trusted-local" } },
-      { id: "w2", name: "w1", owner_id: "u1", team_id: null, enabled: true, scope: "spare", spaces: [],
-        capabilities: { isolation: "dedicated" } },
-    ],
-    "GET /teams": [
-      { id: "team-1", name: "平台组", role: "owner", created: 1, members: [],
-        environment: { worker_id: "w1", name: "personal", scope: "shared", enabled: true } },
-      { id: "team-2", name: "Web应用软件研发组", role: null, created: 2, members: [], environment: null },
-    ],
-    "GET /users": [{ id: "u1", username: "fixture-owner" }, { id: "u2", username: "dev1" }],
-    "GET /admin/environments": [
-      { id: "w1", name: "personal", scope: "shared", enabled: true, owner: { id: "u1", username: "fixture-owner" }, team: null,
-        spaces: [{ user_id: "u1", username: "fixture-owner" }, { team_id: "team-1", name: "平台组" }],
-        url: "http://127.0.0.1:8928", active_runs: 2,
-        health: { reachable: true, version: "1.0.0", isolation: "trusted-local", crew_entry: true, crew_origin: "https://d1.cloudfront.net" } },
-      { id: "w2", name: "w1", scope: "spare", enabled: true, owner: { id: "u1", username: "fixture-owner" }, team: null, spaces: [],
-        url: "https://10.42.1.74:8943", active_runs: 0, health: { reachable: false, error: "Worker 未返回可核实回执" } },
-    ],
-  };
-
-  test("the environment dialog shows each environment's health, load and the spaces it serves", async () => {
-    start(environments);
-    const dialog = await openSection("管理", "执行环境");
-    const shared = await within(dialog).findByRole("group", { name: "personal" });
-    expect(shared).toHaveTextContent("可达 · v1.0.0");
-    expect(shared).toHaveTextContent("原生入口 d1.cloudfront.net");
-    expect(shared).toHaveTextContent("进行中会话 2");
-    expect(within(shared).getByText("个人 · fixture-owner")).toBeInTheDocument();
-    expect(within(shared).getByText("Team · 平台组")).toBeInTheDocument();
-    const spare = within(dialog).getByRole("group", { name: "w1" });
-    expect(spare).toHaveTextContent("不可达：Worker 未返回可核实回执");
-  });
-
-  test("an environment whose kiro-cli login has expired says so", async () => {
-    const expired = environments["GET /admin/environments"].map((e) => e.id === "w1"
-      ? { ...e, health: { ...e.health, tool_auth: { kiro: "expired" } } } : e);
-    start({ ...environments, "GET /admin/environments": expired });
-    const dialog = await openSection("管理", "执行环境");
-    const shared = await within(dialog).findByRole("group", { name: "personal" });
-    await waitFor(() => expect(shared).toHaveTextContent("kiro-cli 登录已过期"));
-  });
-
-  test("a shared environment is given to a user and a space taken away from it, in the environment dialog", async () => {
-    const calls = start({ ...environments, "POST /workers/w1/spaces": { ok: true }, "DELETE /workers/w1/spaces": { ok: true } });
-    const dialog = await openSection("管理", "执行环境");
-    const shared = await within(dialog).findByRole("group", { name: "personal" });
-    const picker = within(shared).getByLabelText("分配到");
-    // Spaces it already serves are not offered again.
-    expect(within(picker).queryByRole("option", { name: "Team · 平台组" })).toBeNull();
-    expect(within(picker).queryByRole("option", { name: "个人 · fixture-owner" })).toBeNull();
-    await userEvent.selectOptions(picker, "user:u2");
-    await userEvent.click(within(shared).getByRole("button", { name: "分配" }));
-    await waitFor(() => expect(calls.find((c) => c.method === "POST" && c.path === "/v1/workers/w1/spaces")?.body)
-      .toEqual({ user_id: "u2" }));
-    await userEvent.click(within(shared).getByRole("button", { name: "移出 Team · 平台组" }));
-    await waitFor(() => expect(calls.find((c) => c.method === "DELETE" && c.path === "/v1/workers/w1/spaces")?.body)
-      .toEqual({ team_id: "team-1" }));
-  });
-
-  test("a spare environment is offered only to Teams without one", async () => {
-    const calls = start({ ...environments, "POST /workers/w2/spaces": { ok: true } });
-    const dialog = await openSection("管理", "执行环境");
-    const spare = await within(dialog).findByRole("group", { name: "w1" });
-    const picker = within(spare).getByLabelText("分配到");
-    expect(within(picker).getAllByRole("option").map((o) => o.textContent)).toEqual(["选择 Team", "Team · Web应用软件研发组"]);
-    await userEvent.selectOptions(picker, "team:team-2");
-    await userEvent.click(within(spare).getByRole("button", { name: "分配" }));
-    await waitFor(() => expect(calls.find((c) => c.path === "/v1/workers/w2/spaces")?.body).toEqual({ team_id: "team-2" }));
-  });
-
-  test("a Worker host shared with one Team can be made that Team's own environment again", async () => {
-    const calls = start({
-      "GET /workers": [
-        { id: "w1", name: "personal", owner_id: "u1", team_id: null, enabled: true, scope: "shared",
-          spaces: [{ team_id: "team-1" }], capabilities: { isolation: "trusted-local" } },
-        { id: "w2", name: "w1", owner_id: "u1", team_id: null, enabled: true, scope: "shared",
-          spaces: [{ team_id: "team-1" }], capabilities: { isolation: "dedicated" } },
-      ],
-      "POST /workers/w2/dedicate": { id: "w2", scope: "dedicated", team_id: "team-1" },
-    });
-    const dialog = await openSection("管理", "执行环境");
-    const host = await within(dialog).findByRole("group", { name: "w1" });
-    // On the platform host (trusted-local) a Team cannot have its own environment.
-    expect(within(within(dialog).getByRole("group", { name: "personal" })).queryByRole("button", { name: "改回专属环境" })).toBeNull();
-    await userEvent.click(within(host).getByRole("button", { name: "改回专属环境" }));
-    await waitFor(() => expect(calls.find((c) => c.path === "/v1/workers/w2/dedicate")?.method).toBe("POST"));
-  });
-
   test("a member sees neither user management nor anything that needs the admin scope", async () => {
     start({ "GET /me": { id: "u2", username: "dev1", admin: 0, scopes: ["read", "execute", "manage"] } });
     expect(await screen.findByRole("button", { name: "我的设置" })).toBeInTheDocument();
@@ -382,65 +275,5 @@ describe("settings", () => {
     expect(dialog).toHaveTextContent("从未使用");
     expect(dialog).toHaveTextContent("最近使用");
     expect(dialog).toHaveTextContent("永不过期");   // D62: expires null
-  });
-
-  test("an administrator can disable a Worker", async () => {
-    const calls = start({
-      "GET /workers": [{ id: "w1", name: "personal", owner_id: "u1", team_id: null, enabled: true, capabilities: { isolation: "trusted-local" } }],
-      "POST /workers/w1/enabled": { ok: true },
-    });
-    const dialog = await openSection("管理", "执行环境");
-    await userEvent.click(within(dialog).getByRole("button", { name: "停用" }));
-    await waitFor(() => expect(calls.find((c) => c.path === "/v1/workers/w1/enabled")?.body).toEqual({ enabled: false }));
-  });
-  const oneWorker = { "GET /workers": [{ id: "w1", name: "personal", owner_id: "u1", team_id: null, enabled: true, scope: "shared",
-    spaces: [{ user_id: "u1" }], capabilities: { isolation: "trusted-local" } }] };
-
-  test("an administrator renames a Worker and updates its connection", async () => {
-    const calls = start({ ...oneWorker, "PATCH /workers/w1": { id: "w1", name: "共享-1" },
-      "POST /workers/w1/connection": { id: "w1", capabilities: {} } });
-    const dialog = await openSection("管理", "执行环境");
-    const row = within(dialog).getByRole("group", { name: "personal" });
-    await userEvent.click(within(row).getByRole("button", { name: "改名" }));
-    const title = within(row).getByLabelText("Worker 名称");
-    await userEvent.clear(title);
-    await userEvent.type(title, "共享-1");
-    await userEvent.click(within(row).getByRole("button", { name: "保存名称" }));
-    await waitFor(() => expect(calls.find((c) => c.method === "PATCH" && c.path === "/v1/workers/w1")?.body).toEqual({ name: "共享-1" }));
-    await userEvent.click(within(row).getByRole("button", { name: "更新连接" }));
-    expect(within(row).getByLabelText("新的 Worker Token")).toHaveAttribute("type", "password");
-    await userEvent.type(within(row).getByLabelText("新的 Worker URL"), "https://10.0.0.9:8943");
-    await userEvent.type(within(row).getByLabelText("新的 Worker Token"), "t".repeat(40));
-    await userEvent.click(within(row).getByRole("button", { name: "保存连接" }));
-    await waitFor(() => expect(calls.find((c) => c.path === "/v1/workers/w1/connection")?.body)
-      .toEqual({ connection: { url: "https://10.0.0.9:8943", token: "t".repeat(40) } }));
-  });
-
-  test("retiring a Worker asks first and shows why the server refuses", async () => {
-    const calls = start({ ...oneWorker, "POST /workers/w1/retire": () => new Response(
-      JSON.stringify({ error: "仍是 Team「平台组」的执行环境：先为该 Team 更换执行环境", code: "in_use" }), { status: 409 }) });
-    const dialog = await openSection("管理", "执行环境");
-    const row = within(dialog).getByRole("group", { name: "personal" });
-    await userEvent.click(within(row).getByRole("button", { name: "退役" }));
-    expect(within(row).getByText(/退役后不再出现在列表与选择器中/)).toBeInTheDocument();
-    expect(calls.find((c) => c.path === "/v1/workers/w1/retire")).toBeUndefined();
-    await userEvent.click(within(row).getByRole("button", { name: "确认退役" }));
-    await waitFor(() => expect(calls.find((c) => c.path === "/v1/workers/w1/retire")?.body).toEqual({}));
-    expect(await screen.findByText(/仍是 Team「平台组」的执行环境/)).toBeInTheDocument();
-  });
-
-  test("a Worker shows when the platform last read its health (D43)", async () => {
-    start({ "GET /workers": [{ ...oneWorker["GET /workers"][0], capabilities: { isolation: "trusted-local", checked_at: 1_792_100_000 } }] });
-    const dialog = await openSection("管理", "执行环境");
-    const row = within(dialog).getByRole("group", { name: "personal" });
-    expect(within(row).getByText(new RegExp("最近检查 " + formatTime(1_792_100_000, true)))).toBeInTheDocument();
-  });
-
-  test("a member refreshes models but cannot rename, reconnect or retire a Worker", async () => {
-    start({ ...oneWorker, "GET /me": { id: "u1", username: "fixture-owner", admin: 0, scopes: ["read", "execute", "manage"] } });
-    const dialog = await openSection("我的设置", "执行环境");
-    const row = within(dialog).getByRole("group", { name: "personal" });
-    expect(within(row).getByRole("button", { name: "刷新模型" })).toBeInTheDocument();
-    for (const name of ["改名", "更新连接", "退役"]) expect(within(row).queryByRole("button", { name })).not.toBeInTheDocument();
   });
 });

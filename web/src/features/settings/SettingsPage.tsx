@@ -1,5 +1,5 @@
 import { FolderGit2, Gauge, KeyRound, Lock, Server, Shuffle, UsersRound } from "lucide-react";
-import { EnvironmentsPanel } from "@/features/admin/EnvironmentsPanel";
+import { MyEnvironmentsPanel } from "@/features/admin/EnvironmentsPanel";
 import { useConsole } from "@/features/console/context";
 import { PageShell, type PageSection } from "@/features/console/PageShell";
 import { CredentialsPanel } from "@/features/settings/CredentialsPanel";
@@ -32,7 +32,7 @@ export function SettingsPage() {
       {current === "credentials" && <CredentialsPanel />}
       {current === "policies" && <PoliciesPanel />}
       {current === "team" && <TeamPanel />}
-      {current === "environments" && <EnvironmentsPanel />}
+      {current === "environments" && <MyEnvironmentsPanel />}
       {current === "quotas" && <QuotasPanel />}
       {current === "password" && <PasswordPanel />}
     </PageShell>

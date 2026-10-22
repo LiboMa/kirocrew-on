@@ -1,5 +1,6 @@
-import { Gauge, KeyRound, Server, Users, UsersRound } from "lucide-react";
+import { Gauge, KeyRound, LayoutDashboard, Server, Users, UsersRound } from "lucide-react";
 import { EnvironmentsPanel } from "@/features/admin/EnvironmentsPanel";
+import { OverviewPanel } from "@/features/admin/OverviewPanel";
 import { UsersPanel } from "@/features/admin/UsersPanel";
 import { useConsole } from "@/features/console/context";
 import { PageShell, type PageSection } from "@/features/console/PageShell";
@@ -9,6 +10,7 @@ import { TeamPanel } from "@/features/settings/TeamPanel";
 import { TokensPanel } from "@/features/settings/TokensPanel";
 
 export const ADMIN_SECTIONS: PageSection[] = [
+  { id: "overview", label: "概览", icon: LayoutDashboard },
   { id: "environments", label: "执行环境", icon: Server },
   { id: "users", label: "用户", icon: Users },
   { id: "teams", label: "Team", icon: UsersRound },
@@ -23,6 +25,7 @@ export function AdminPage() {
   return (
     <PageShell title="管理" kicker="ADMIN" sections={ADMIN_SECTIONS} current={current}
       href={(id) => `?view=admin&section=${id}`} onSelect={(id) => go("admin", id)}>
+      {current === "overview" && <OverviewPanel />}
       {current === "environments" && <EnvironmentsPanel />}
       {current === "users" && <UsersPanel />}
       {current === "teams" && <TeamPanel />}

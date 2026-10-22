@@ -26,7 +26,7 @@ export function PageShell({ title, kicker, sections, current, href, onSelect, ch
   };
   return (
     <div className="flex min-h-0 flex-1 flex-col md:flex-row">
-      <nav aria-label={title} className="shrink-0 border-b bg-sidebar md:w-60 md:border-r md:border-b-0">
+      <nav aria-label={title} className="shrink-0 border-b bg-sidebar md:w-64 md:border-r md:border-b-0">
         <div className="sr-only md:not-sr-only md:block md:px-5 md:pt-5 md:pb-3">
           <p className="text-[11px] font-semibold tracking-[0.18em] text-muted-foreground">{kicker}</p>
           <h1 className="text-base font-semibold">{title}</h1>

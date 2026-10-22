@@ -44,7 +44,7 @@ function useRefresh() {
 /** 管理 › 用户: one row per person with their role, Teams, execution environment, last login and Sessions in progress;
  * every change is one step from the row's menu; only deactivating and removing an administrator ask once. */
 export function UsersPanel() {
-  const { data: users = [], error } = useQuery({ queryKey: ADMIN_USERS, queryFn: () => api<AdminUser[]>("/admin/users") });
+  const { data: users = [], error, isPending } = useQuery({ queryKey: ADMIN_USERS, queryFn: () => api<AdminUser[]>("/admin/users") });
   const [query, setQuery] = useState("");
   const [creating, setCreating] = useState(false);
   const words = query.trim().toLowerCase();
@@ -65,9 +65,9 @@ export function UsersPanel() {
           <Input type="search" value={query} onChange={(e) => setQuery(e.target.value)} placeholder="按用户名或 Team 搜索"
             aria-label="搜索用户" className="h-9 bg-card pl-8" />
         </div>
-        <span className="text-xs text-muted-foreground">
-          {users.filter((u) => u.active).length} 位有效 · 共 {users.length} 位
-        </span>
+        {!isPending && (
+          <span className="text-xs text-muted-foreground">{users.filter((u) => u.active).length} 位有效 · 共 {users.length} 位</span>
+        )}
       </div>
       {error && <p className="text-sm text-destructive">{(error as Error).message}</p>}
       <div className="rounded-lg border bg-card">
@@ -88,7 +88,7 @@ export function UsersPanel() {
             {!shown.length && (
               <TableRow className="hover:bg-transparent">
                 <TableCell colSpan={COLUMNS} className="py-6 text-center text-muted-foreground">
-                  {users.length ? "没有匹配的用户。" : "还没有用户。"}
+                  {isPending ? "读取中…" : error ? "读取失败" : users.length ? "没有匹配的用户。" : "还没有用户。"}
                 </TableCell>
               </TableRow>
             )}
