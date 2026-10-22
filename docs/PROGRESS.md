@@ -1,16 +1,16 @@
 # 进度与完成记录
 
-> 由 `tools/progress.py` 生成（2026-10-22 15:02 CST）：任务状态取自 `docs/progress.json`，提交记录取自 git。看板：`docs/progress-dashboard.html`；实时看板：`python3 tools/progress.py --serve --ec2`（http://127.0.0.1:8765/）。
+> 由 `tools/progress.py` 生成（2026-10-22 16:30 CST）：任务状态取自 `docs/progress.json`，提交记录取自 git。看板：`docs/progress-dashboard.html`；实时看板：`python3 tools/progress.py --serve --ec2`（http://127.0.0.1:8765/）。
 
-- **本轮完成度**：87%　**MVP 完成度**：60%
-- **分支**：HEAD `b4a7cba`；自 `origin/main` 起 424 个提交——已推送 335、已部署 EC2 88、仅本机 1；EC2 运行 `c887aac`
+- **本轮完成度**：87%　**MVP 完成度**：63%
+- **分支**：HEAD `5ec0681`；自 `origin/main` 起 433 个提交——已推送 335、已部署 EC2 98、仅本机 0；EC2 运行 `5ec0681`
 - **回归**：1412 后端 + 92 + 205 控制台（connect codex / kiro-ide 本机）；EC2 运行 95e5aa9
 
 ## 模块
 
 | 模块 | 完成度 | 已验收 | 已部署 · 待验收 | 本机完成 · 待部署 | 进行中 | 卡点 · 等外部 | 未开始 |
 |---|---|---|---|---|---|---|---|
-| MVP 里程碑（M1–M5） | 60% | 13 | 5 | 0 | 1 | 0 | 10 |
+| MVP 里程碑（M1–M5） | 63% | 13 | 6 | 0 | 1 | 0 | 9 |
 | D46 Agent 角色与提示体系 | 87% | 8 | 3 | 0 | 0 | 1 | 0 |
 | D49 每人一个执行边界 | 80% | 2 | 2 | 0 | 1 | 0 | 0 |
 | D50 编码技能包 | 100% | 2 | 0 | 0 | 0 | 0 | 0 |
@@ -43,9 +43,20 @@
 
 ## 完成记录（按决策，最近的在前）
 
-### D63（2 个提交：已部署 EC2 1、仅本机 1）
+### D64（8 个提交：已部署 EC2 8）
 
-- `b4a7cba` 2026-10-22 〔仅本机〕 docs: D63 已在 EC2 验收（c887aac）——空闲 ACP 进程 9 → 3、已用内存 5391 → 2921 MB，新会话不再预先起会话；BACKLOG 记子 Agent 结束时父会话仍跑一轮 coordinator
+- `5ec0681` 2026-10-22 〔已部署 EC2〕 test: octopus_runs 的参数集合含 shared（D64）
+- `d28dfbe` 2026-10-22 〔已部署 EC2〕 fix(sharing): 终审修正（D64）——协作者的 sync 不再记成管理员监管（_oversight 按写判定，持有查看共享的管理员写入仍算监管）；placement（改派用的执行环境清单）不对共享开放；「共享给我」列表标出角色与共享人；入口矩阵补齐（导出、预览、pull、观察、设计状态、发布、补充说明、审批、验收、凭证、知识、发布策略、预览启停）
+- `c91c991` 2026-10-22 〔已部署 EC2〕 docs: D64 会话共享——运维说明（共享给谁、角色、不对共享开放的、谁能共享、看到哪里、取消与收不回的）；MVP-RELEASE 与看板 M4-1
+- `41dadc5` 2026-10-22 〔已部署 EC2〕 feat(console): 会话页「共享」（个人按用户名、所在 Team、全公司仅查看；列出与取消）、访问身份提示（你以 查看 / 协作 身份访问，由谁共享）、侧栏「共享给我」；查看者的续作 / 诊断 / 停止 / 关闭按钮按 permissions.operate 禁用，改派按 permissions.assign（D64 Task 3）
+- `5a672af` 2026-10-22 〔已部署 EC2〕 feat(mcp): octopus_runs 的 shared 列出共享给用户的会话，octopus_status 带 access；Skill 说明（D64 Task 3 的一部分）
+- `d9cef1e` 2026-10-22 〔已部署 EC2〕 feat(sharing): 每个入口按读写放行（D64 Task 2）——读入口（会话、事件流、修订、变更、代码改动、待批准列表、导出、预览、pull、KiroCrew 会话观察、placement 等）标 read=True；改派执行环境、原生入口、D55 Request 排除共享；collaborator 与普通 Team 成员相同；permissions 按实际判定（operate、share、assign），会话视图带 access；GET /v1/runs?shared=1「共享给我」，默认列表不含共享来的
+- `b491ae9` 2026-10-22 〔已部署 EC2〕 feat(sharing): 会话共享的存储、访问判定与接口（D64 Task 1）——迁移 12 shares（个人 / Team / 全公司，viewer / collaborator，全公司只能查看）；run_access 增加 read（读接受任何共享）与 shares（False 排除共享），默认按写；access_of；GET / POST /v1/runs/<id>/shares、DELETE …/<share>（创建者、Team owner、管理员；审计）；迁移器改为执行缺失的编号（两个分支各加迁移不再互相跳过）
+- `b19416b` 2026-10-22 〔已部署 EC2〕 docs(spec,plan): D64 M4-1 会话共享给个人 / Team / 全公司（viewer / collaborator，collaborator 等同普通 Team 成员；全公司只能查看；迁移器补跑缺失编号）——设计稿与 4 个任务的实施计划
+
+### D63（2 个提交：已部署 EC2 2）
+
+- `b4a7cba` 2026-10-22 〔已部署 EC2〕 docs: D63 已在 EC2 验收（c887aac）——空闲 ACP 进程 9 → 3、已用内存 5391 → 2921 MB，新会话不再预先起会话；BACKLOG 记子 Agent 结束时父会话仍跑一轮 coordinator
 - `c887aac` 2026-10-22 〔已部署 EC2〕 fix(composition): 边界的 KiroCrew 配置关掉 session.eager_spawn（D63）——KiroCrew 0.10 默认为每个 chat slot 预先起会话；平台的 slot 从不认领，白占进程，内存吃紧时被回收还连带 SIGKILL 正在运行的子 Agent（EC2 run-16848466…，parent-end teardown）；新配置与已有配置都写 false，明确开启的保留
 
 ### D62（3 个提交：已部署 EC2 3）
@@ -65,8 +76,9 @@
 - `c76ca8d` 2026-10-22 〔已部署 EC2〕 feat(quotas): 并发上限的存储与接口（D61 Task 1）——迁移 10 quotas（每人默认 / 某人 / 某 Team，1–50）；占用按仍在推进的会话中运行的 Attempt 与协调者诊断计（执行环境停用留下的不计）；GET / POST /v1/quotas（管理员设默认与个人、Team owner 设本 Team），写审计 quota.set；OpenAPI
 - `02198d3` 2026-10-22 〔已部署 EC2〕 docs(spec,plan): D61 M4-4 第 2 期——每人 / 每 Team 的并发上限（设计稿与 4 个任务的实施计划；默认不设、到了上限按等待先后排队）
 
-### D60（7 个提交：已部署 EC2 7）
+### D60（8 个提交：已部署 EC2 8）
 
+- `bb268bd` 2026-10-22 〔已部署 EC2〕 docs: D60 真实排队已在 EC2 验收——临时调高 owner 边界内存门槛，会话显示「排队：等待执行环境资源（执行环境内存不足）」，恢复后 63 秒出队并完成，配置原样恢复
 - `e223182` 2026-10-22 〔已部署 EC2〕 docs: D60 已部署 EC2（290718f）——部署后会话照常完成；看板 M4-4 第 1 期已部署、第 2 期（D61）进行中
 - `290718f` 2026-10-22 〔已部署 EC2〕 fix(queue): 终审修正（D60）——已开始过又排队的任务（有 state.json、resuming）也认作排队；排队文字被别的错误盖住后恢复；排队中每 20 秒才看一次；会话的「需要处理」显示排队（无需操作），不再是红色错误
 - `117e2fb` 2026-10-22 〔已部署 EC2〕 docs: D60 排队可见——运维说明（排队、不计、没有开始、处理）；MVP-RELEASE 与进度看板 M4-4 第 1 期

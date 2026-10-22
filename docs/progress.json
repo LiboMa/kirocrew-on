@@ -162,9 +162,9 @@
         {
           "id": "m4-org",
           "name": "M4-1 会话共享给个人 / Team / 全公司",
-          "status": "local",
+          "status": "deployed",
           "ref": "D64",
-          "more": "「公司」为平台全部用户（负责人 2026-10-22）。viewer 只读；collaborator 与普通 Team 成员相同（仍受 D49 R10）；全公司只能查看；删除、发布、改派、原生入口与 Request 不对共享开放；会话页「共享」、侧栏「共享给我」、MCP octopus_runs shared / access；迁移 12 shares，迁移器补跑缺失编号。待：终审、部署与 EC2。"
+          "more": "「公司」为平台全部用户（负责人 2026-10-22）。viewer 只读；collaborator 与普通 Team 成员相同（仍受 D49 R10）；全公司只能查看；删除、发布、改派、原生入口与 Request 不对共享开放；会话页「共享」、侧栏「共享给我」、MCP octopus_runs shared / access；迁移 12 shares，迁移器补跑缺失编号。EC2 5ec0681（2026-10-22）：迁移 12 已执行（库为 8、9、10、12，11 留给 D57）；以负责人账号共享给全公司（查看）与「Web应用开发组」（协作），列表、access、MCP 与「全公司只能查看」（400）核对通过，取消后为空，审计 share.create / share.delete 各 2。待负责人：用另一个账号在控制台核对查看与协作。"
         },
         {
           "id": "m4-k10",

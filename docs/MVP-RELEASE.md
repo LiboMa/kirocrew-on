@@ -23,7 +23,7 @@ M4（共享与组织）、M5（仓库闭环）在 MVP 之后分别立项，各�
 | M1 运行底座 | 已验收（负责人 2026-10-14 确认）：本地（macOS）与 EC2 验收条件全部完成；OpenCode 核实结论为未通过（K01），替换配置可用。证据见 `docs/handover/M1-LOCAL-EVIDENCE.md`、`docs/handover/M1-EC2-EVIDENCE.md` |
 | M2 核心闭环 | 实现中，主体已在 EC2 验收：KiroCrew 规划、工作流文档规范化、命名门禁（含 `tests_fail_on_baseline`、`artifacts_locked`）、候选提交、Feature 报告、发布 Draft PR / MR（含新建仓库与自动发布）、换工具、恢复阶梯（L0 重试、看门狗、重新规划、预算、等待与自动恢复）、计划确认、映射来源与需求中指定、故障注入、已有仓库的完整闭环。剩余：Request 表、Pipeline schema 2、按仓库自动准入、个人 / Team 映射偏好、批准代理的真实批准验收与 CLI。明细见 §14.2 |
 | M3 客户端直连与控制台 | 实现中：Claude Code / Kiro CLI 的 connect + Skill + MCP（35 个工具）与 React 控制台（含门禁、报告、修订对比、待批准、发布、用量）已上线；Codex / Kiro IDE、用户 CLI、pull / sync、服务端分页与全文搜索未开始。明细见 §14.3 |
-| M4 共享与组织 | 部分提前（D28–D30、D49）：Team 执行环境与 Team 会话共享已在 EC2 验收；每人一个边界第 1 期（D49）本机完成并已建 owner 边界、待 EC2 验收，第 2 期（调度）待讨论；Worker Token 移出数据库（D59）已在 EC2 核对，排队可见（M4-4 第 1 期，D60）已部署 EC2 290718f；并发上限（M4-4 第 2 期，D61）已在 EC2 d4ae66f 验收；会话共享给个人 / Team / 全公司（M4-1，D64）本机完成；单 Session 票据（K03）未开始。明细见 §14.4、§14.37 |
+| M4 共享与组织 | 部分提前（D28–D30、D49）：Team 执行环境与 Team 会话共享已在 EC2 验收；每人一个边界第 1 期（D49）本机完成并已建 owner 边界、待 EC2 验收，第 2 期（调度）待讨论；Worker Token 移出数据库（D59）已在 EC2 核对，排队可见（M4-4 第 1 期，D60）已部署 EC2 290718f；并发上限（M4-4 第 2 期，D61）已在 EC2 d4ae66f 验收；会话共享给个人 / Team / 全公司（M4-1，D64）已部署 EC2 5ec0681；单 Session 票据（K03）未开始。明细见 §14.4、§14.37 |
 | Agent 体系（D46、D50，MVP 之后的质量提升） | P0–P3 已在 EC2 验收（§14.25、14.26、14.30、14.31）；P4 Knowledge、P5a 保留上下文的返工、P5b 运行中补充说明、P6a 用量、D50 编码技能包本机完成，待 EC2 验收（§14.33–14.36、14.38）；P6b 工具时间线等待 KiroCrew 为子任务记录工具调用 |
 | M5 仓库闭环 | 未开始：GitHub Connector 设计草案（`docs/superpowers/specs/2026-10-11-github-connector-design.md`） |
 
@@ -314,7 +314,7 @@ M4（共享与组织）、M5（仓库闭环）在 MVP 之后分别立项，各�
 | B 独立 Worker 主机（私有 CA TLS、空闲登记、控制台分配） | ✅ EC2 | `w1`（m7i.xlarge）分配给「Web应用软件研发组」；`run-e0dff5b1…` 经 MCP 自动选择 w1 完成；隔离检查通过（外部访问 w1:8943 不通、w1 访问平台 API 不通、w1 上无 CA 私钥 / 管理员密码 / 源站密钥）；`run-b74e9f0d…` 在 w1 上 8 个任务全部通过 |
 | C 原生入口经平台主机中转、`worker-host add`、管理员 API 与统一入口（D30） | ✅ EC2 | 2026-10-12：平台 `up`（规则 8918–8929，原地更新）与 `push`；`worker-host add w1` 全部步骤（对已有主机重复执行无副作用，已登录时跳过设备码）；`run-e0dff5b1…` 的原生入口经 w1 分发 → 平台中转 → 私网 TLS → w1 Gateway 打开，API 200、WebSocket `/api/ws` 101 保持 136 s，两跳访问日志不含 `token=`；`GET /v1/admin/environments` 实时列出两个环境与健康。验收中修复：安全组规则描述字符集、共享环境上 Team 会话的原生入口（边界所有者被误拒）、已设为共享的 Worker 主机重新登记、中转实测等待端口监听 |
 
-剩余：`w2`、`w3` 扩容（负责人确认后）；同主机新 OS 用户边界（设计 §4.1–4.3，按需）；共享环境的记忆分隔（T7，等待 KiroCrew 提供成员创建与继承接口）；单 Session 原生票据（K03）。D64 会话共享（viewer / collaborator，全公司只能查看）本机完成，待 EC2。D61 每人 / 每 Team 的并发上限已在 EC2 d4ae66f 验收（Team 上限 1：第二个会话排队 5 秒、第一个结束后自动开始）。D62 API Token 有效期可选（7 / 30 / 365 天 / 永不过期，带 admin 的最长 30 天）已在 EC2 ab29b40 验收。D59 Worker Token 密封已在 EC2 核对；D60 排队可见已在 EC2 验收（真实排队：临时调高 owner 边界的内存门槛，会话显示排队、恢复后 63 秒出队并完成）。
+剩余：`w2`、`w3` 扩容（负责人确认后）；同主机新 OS 用户边界（设计 §4.1–4.3，按需）；共享环境的记忆分隔（T7，等待 KiroCrew 提供成员创建与继承接口）；单 Session 原生票据（K03）。D64 会话共享（viewer / collaborator，全公司只能查看）已部署 EC2 5ec0681 并以负责人账号核对，另一个账号的核对待负责人。D61 每人 / 每 Team 的并发上限已在 EC2 d4ae66f 验收（Team 上限 1：第二个会话排队 5 秒、第一个结束后自动开始）。D62 API Token 有效期可选（7 / 30 / 365 天 / 永不过期，带 admin 的最长 30 天）已在 EC2 ab29b40 验收。D59 Worker Token 密封已在 EC2 核对；D60 排队可见已在 EC2 验收（真实排队：临时调高 owner 边界的内存门槛，会话显示排队、恢复后 63 秒出队并完成）。
 
 ### 14.6 会话修订历史与 Prompt 差异（D32）
 
