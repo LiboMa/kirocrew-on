@@ -200,6 +200,11 @@ TOOLS += [
                     "直接开始（auto）还是先停在「计划待确认」（confirm）；映射偏好按任务类别或角色对应工具 / 模型，供 KiroCrew 规划者参考。"
                     "规则只能由用户在控制台「准入与映射偏好」中维护：不要替用户改准入。",
      "inputSchema": object_schema({"team_id": STRING}), "annotations": READ},
+    {"name": "octopus_quotas",
+     "description": "只读：同时运行的任务数上限与当前占用——你自己的（mine）与你所在 Team 的（teams）。到了上限，会话的下一个任务按等待"
+                    "先后排队（「需要处理」写「排队：已达到并发上限」），有任务结束后自动开始，不必重新提交。上限由平台管理员或 Team owner "
+                    "在控制台设置：不要替用户改。",
+     "inputSchema": object_schema({}), "annotations": READ},
     {"name": "octopus_link",
      "description": "把本机的 Git 仓库（dir，默认当前目录）关联到一个会话：写 .octopus/session.json（加入 .git/info/exclude，不会提交）。"
                     "之后 octopus_status、octopus_pull、octopus_sync 可省略 run_id。octopus_start 在本仓库提交时会自动关联。",
@@ -582,7 +587,7 @@ def call(client, name, args):
         return requests(client, args)
     if name == "octopus_policies":
         return client.request("GET", "/v1/policies" + ("?" + urlencode({"team_id": args["team_id"]}) if args.get("team_id") else ""))
-    if name in {"octopus_workflows", "octopus_teams"}:
+    if name in {"octopus_workflows", "octopus_teams", "octopus_quotas"}:
         return client.request("GET", "/v1/" + name.removeprefix("octopus_"))
     if name == "octopus_match_workflow":
         return client.request("POST", "/v1/workflows/resolve", args)

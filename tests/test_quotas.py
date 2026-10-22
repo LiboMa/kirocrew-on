@@ -324,5 +324,20 @@ class EngineQuotaTests(WatchdogCase):
         self.assertFalse(any(k.startswith("run.quota") for rid in runs for k in self.kinds(rid)))
 
 
+
+class McpQuotaTests(unittest.TestCase):
+    def test_a_coding_agent_reads_the_limits_and_cannot_change_them(self):
+        from octopus import mcp
+        from tests.test_mcp_requests import Client
+        answer = {"mine": {"limit": 2, "used": 1}, "teams": []}
+        client = Client(answer)
+        self.assertEqual(mcp.call(client, "octopus_quotas", {}), answer)
+        self.assertEqual(client.paths, [("GET", "/v1/quotas")])
+        tools = [t for t in mcp.TOOLS if "quota" in t["name"]]
+        self.assertEqual([t["name"] for t in tools], ["octopus_quotas"])
+        self.assertTrue(tools[0]["annotations"]["readOnlyHint"])
+        self.assertEqual(tools[0]["inputSchema"]["properties"], {})
+
+
 if __name__ == "__main__":
     unittest.main()
