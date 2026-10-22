@@ -1526,14 +1526,28 @@ class Worker:
         dispatch = json.loads((folder / "dispatch.json").read_text())
         if not dispatch.get("native_id"):
             return self.reconcile(run, parent, attempt, dispatch)
-        rows = self.native("/api/spawn").get("agents", [])
-        native = next((t for t in rows if t.get("id") == dispatch["native_id"] and t.get("parent") == parent["parent"]), None)
         statefile = self.home / "subagents" / dispatch["native_id"] / "state.json"
         state = {}
         if statefile.is_file() and not statefile.is_symlink():
             saved = json.loads(statefile.read_text())
             if saved.get("id") == dispatch["native_id"] and saved.get("parent_session") == parent["parent"]:
                 state = saved
+        native = None
+        if state:
+            # A running run whose state.json proves it is ours: its own row (EC2 2026-10-22: 7 KB / 16 ms, where the whole
+            # listing was 310 KB / 150 ms of the Gateway's one loop thread on every poll, and the loop's watchdog ended it).
+            # Ended, queued, or not provably ours: the listing, which alone says whether a person stopped it.
+            try:
+                own = self.native("/api/spawn/" + dispatch["native_id"])
+            except crew_api.GatewayError:
+                own = None
+            if isinstance(own, dict) and own.get("id") == dispatch["native_id"] and own.get("done") is False \
+                    and not own.get("queued") and own.get("status") != "queued":
+                native = {**own, "parent": parent["parent"]}
+        if native is None:
+            rows = self.native("/api/spawn").get("agents", [])
+            native = next((t for t in rows if t.get("id") == dispatch["native_id"] and t.get("parent") == parent["parent"]),
+                          None)
         if native is None:   # D60: a run KiroCrew deferred, or one that began and waits again (resuming), is not listed
             queued = self._queued(dispatch["native_id"], attempt, owned=bool(state))
             if queued is not None:
