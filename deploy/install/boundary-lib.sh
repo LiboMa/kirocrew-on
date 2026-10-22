@@ -62,12 +62,18 @@ EOF
 }
 
 boundary_codex() {  # boundary_codex NAME: Codex through Amazon Bedrock for the boundary's OS user (written once, kept after)
-  local crew="crew-$1" home="$DATA/$1/home"
-  if [ ! -f "$home/.codex/config.toml" ]; then
+  local crew="crew-$1" home="$DATA/$1/home" config="$DATA/$1/home/.codex/config.toml"
+  if [ ! -f "$config" ]; then
     install -d -m 0700 -o "$crew" -g "$crew" "$home/.codex"
-    printf 'model_provider = "amazon-bedrock"\nmodel = "openai.gpt-6-astra"\n' > "$home/.codex/config.toml"
-    chown "$crew:$crew" "$home/.codex/config.toml"
+    printf 'model_provider = "amazon-bedrock"\nmodel = "openai.gpt-6-astra"\n' > "$config"
   fi
+  # The boundary's Bedrock identity may not search the web: a Codex turn that searched failed ("Access denied: web search
+  # is not authorized for this identity", EC2 2026-10-22) and cost a recovery cycle. First, so it is a top-level key; a
+  # web_search someone wrote is kept.
+  if ! grep -q '^web_search[[:space:]]*=' "$config"; then
+    { printf 'web_search = "disabled"\n'; cat "$config"; } > "$config.new" && mv "$config.new" "$config" || return 1
+  fi
+  chown "$crew:$crew" "$config"
 }
 
 boundary_limits() {  # boundary_limits NAME MEMORY_GIB CPU_PERCENT: drop-ins capping the boundary's Gateway and Worker
