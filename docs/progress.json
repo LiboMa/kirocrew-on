@@ -270,8 +270,9 @@
         {
           "id": "m2-d69-phases",
           "name": "D69 按阶段把关（发散不阻断、设计阶段末把关、收敛照旧）",
-          "status": "deployed",
-          "ref": "64278a1..9ab159d · spec 2026-10-22-phase-gating · EC2 828caee"
+          "status": "accepted",
+          "ref": "64278a1..9ab159d · spec 2026-10-22-phase-gating · EC2 828caee",
+          "more": "EC2 828caee 验收 run-3852f436（无仓库，调研 → 撰写 → 审查）：调研任务按要求写 changes_requested，记为「发散阶段不阻断」提示、一次接受、没有诊断；收敛阶段的审查照旧把关，发现报告的真实错误后退回撰写返工，复审通过，会话完成。"
         },
         {
           "id": "m3-preview-pages",
