@@ -11,6 +11,17 @@ class DefaultsTests(unittest.TestCase):
     def test_the_platform_asks_no_one_by_default(self):
         self.assertEqual((Settings.default_admission, Settings.default_acceptance), ("auto", "auto"))
 
+    def test_the_api_server_takes_the_platform_setting(self):   # octopus serve passes it (b3d5353 did not reach server())
+        import tempfile
+        from octopus.db import Database
+        from octopus.server import server
+        with tempfile.TemporaryDirectory() as root:
+            httpd = server(Database(root), 0, default_admission="confirm", default_acceptance="confirm")
+            try:
+                self.assertEqual((httpd.service.default_admission, httpd.service.default_acceptance), ("confirm", "confirm"))
+            finally:
+                httpd.server_close()
+
 
 class AcceptanceTests(EvaluatorCase):
     def setUp(self):
