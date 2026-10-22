@@ -1,6 +1,6 @@
 {
   "_comment": "进度看板与 docs/PROGRESS.md 的唯一数据源：任务状态在这里维护；提交记录由 tools/progress.py 从 git 生成（负责人 2026-10-20）。",
-  "checks": "1412 后端 + 92 + 205 控制台（connect codex / kiro-ide 本机）；EC2 运行 95e5aa9",
+  "checks": "1736 后端 + 92 + 267 控制台 + 7 个浏览器测试（132 项检查）；EC2 运行 7c04dce",
   "status": {
     "accepted": {
       "label": "已验收",
@@ -81,7 +81,7 @@
           "name": "M2-5 按仓库范围的自动准入与策略快照",
           "status": "accepted",
           "ref": "EC2 80bc0c4",
-          "more": "D55 ✅ EC2 2026-10-21：默认 confirm（不带 admission 停在计划待确认，依据 default）；个人规则命中 git@ 与 https://GitHub.com/ 两种写法，run-0cf3db03… 未经确认直接执行至完成（依据 rule）。验收用的规则、Token 与会话已清理。"
+          "more": "D55 ✅ EC2 2026-10-21：默认 confirm（不带 admission 停在计划待确认，依据 default）；个人规则命中 git@ 与 https://GitHub.com/ 两种写法，run-0cf3db03… 未经确认直接执行至完成（依据 rule）。验收用的规则、Token 与会话已清理。 D70（负责人 2026-10-22）取消准入规则与计划确认：规划完成后一律直接开始。"
         },
         {
           "id": "m2-fault",
@@ -233,6 +233,62 @@
           "name": "M5 CONN-05 双平台闭环：GitHub 与 GitLab 测试仓库实测",
           "status": "todo",
           "ref": "CONNECTORS.md"
+        },
+        {
+          "id": "m2-d65-general",
+          "name": "D65 一般任务：任务类型不与 Git 绑定（research / write、不需要代码仓库）",
+          "status": "doing",
+          "ref": "spec 2026-10-22-general-tasks · 第 1 部分 EC2 fd5f821",
+          "more": "已上线：来源 none、research / write 类别、发布 409。剩余：Worker 一般任务措辞与能力降级、向导「不需要代码仓库」、CLI --no-repo、Skill。"
+        },
+        {
+          "id": "m3-d66-limit",
+          "name": "D66 推荐上限 12 个任务、提示写明输入与输出约束、无效推荐自动修正一次",
+          "status": "deployed",
+          "ref": "EC2 fd5f821 · run-931d06ff"
+        },
+        {
+          "id": "m3-d67-cookie",
+          "name": "D67 Cookie 登录与登录会话持久化（保持登录 30 天）",
+          "status": "deployed",
+          "ref": "EC2 dff5d2a",
+          "more": "__Host-octopus_session（HttpOnly / Secure / SameSite=Strict）；Authorization 头优先；仅凭 Cookie 的写入须带本站 Origin；浏览器测试核对新标签页保持登录。"
+        },
+        {
+          "id": "m2-d70-no-plan-confirm",
+          "name": "D70 规划完成后直接开始，删除计划确认与准入规则",
+          "status": "deployed",
+          "ref": "EC2 dff5d2a · run-95da3ebb 自动放行"
+        },
+        {
+          "id": "m2-d71-no-waits",
+          "name": "D71 关卡检讨的移除项：验收不再等人、协调者只在缺凭证 / 需求信息时停、模型未核实只提示、Agent 只在不可逆操作前问",
+          "status": "local",
+          "ref": "8b9dc71 · 13ead9d · docs/postmortems/2026-10-22-gates-retrospective.md"
+        },
+        {
+          "id": "m2-d69-phases",
+          "name": "D69 按阶段把关（发散不阻断、设计阶段末把关、收敛照旧）",
+          "status": "local",
+          "ref": "64278a1..9ab159d · spec 2026-10-22-phase-gating"
+        },
+        {
+          "id": "m3-preview-pages",
+          "name": "预览找得到会话产出的全部 HTML 页面（report/、artifacts/<名称>/），可选择页面",
+          "status": "deployed",
+          "ref": "EC2 7c04dce"
+        },
+        {
+          "id": "m4-admin-portal",
+          "name": "管理页面：执行环境实时状态、用户一人一行就地操作、我的设置",
+          "status": "local",
+          "ref": "feat/admin-portal 319503c..59ee263 · 合并 41b3959"
+        },
+        {
+          "id": "m3-session-marks",
+          "name": "历史会话：收藏、置顶、删除、分享",
+          "status": "todo",
+          "ref": "负责人 2026-10-22"
         }
       ],
       "milestones": [
