@@ -462,15 +462,16 @@ class Engine:
         mark = quotas.waiting(snapshot, run)
         full = quotas.full(db, run)
         if full is None and not quotas.ahead(db, run, mark.get("since", now), now):
-            if mark:
-                since = snapshot.get("budget_since") or run["created"]
+            if mark:   # what another wait already credited (D43 _resumed) is not credited again (final review I2)
+                since = max(snapshot.get("budget_since") or run["created"], mark.get("credited") or 0)
                 snapshot["budget_waited"] = (snapshot.get("budget_waited") or 0) + max(0.0, now - max(mark["since"], since))
             if "quota_wait" in snapshot:
                 del snapshot["quota_wait"]
-                if mark:
-                    journal.change(db, "runs", run["id"], journal.ENGINE, "run.quota_go", "有空位，开始下一个任务",
-                                   event={"waited": round(now - mark["since"])}, quiet=("snapshot",), snapshot=dumps(snapshot),
-                                   error=None, updated=now)
+                if mark:   # recorded whatever the error already reads: a wait for its Worker may have cleared it
+                    journal.change(db, "runs", run["id"], journal.ENGINE, "run.quota_wait", quiet=("snapshot", "error"),
+                                   snapshot=dumps(snapshot), error=None, updated=now)
+                    journal.record(db, run["id"], "run.quota_go", journal.ENGINE, reason="有空位，开始下一个任务",
+                                   waited=round(now - mark["since"]))
                 else:   # a wait from before a stop or a continue: it is not this turn's
                     journal.change(db, "runs", run["id"], journal.ENGINE, "run.quota_wait", quiet=("snapshot",),
                                    snapshot=dumps(snapshot))

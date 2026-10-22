@@ -113,6 +113,8 @@ def _resumed(db, run_id, status, reason, condition):
     snapshot, now = json.loads(row["snapshot"]), time.time()
     since = snapshot.get("budget_since") or row["created"]
     snapshot["budget_waited"] = (snapshot.get("budget_waited") or 0) + max(0.0, now - max(row["updated"], since))
+    if snapshot.get("quota_wait"):   # D61: a wait for a place that went on through this one is not credited twice
+        snapshot["quota_wait"]["credited"] = now
     journal.change(db, "runs", run_id, journal.ENGINE, "run.budget", quiet=("snapshot",), snapshot=dumps(snapshot))
     journal.change(db, "runs", run_id, journal.ENGINE, "run.resumed", reason, event={"status": status, "condition": condition},
                    status=status, error=None, updated=now)

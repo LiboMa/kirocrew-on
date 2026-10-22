@@ -34,8 +34,11 @@ def usage(db, *, owner_id=None, team_id=None):
     where = (f"{column}=? AND r.desired='active' AND r.lifecycle='open' AND r.status NOT IN ({','.join('?' * len(SETTLED))})"
              f" AND x.status IN ({','.join('?' * len(RUNNING))})")
     params = (value, *SETTLED, *RUNNING)
-    return sum(db.execute(f"SELECT count(*) FROM {table} x JOIN runs r ON r.id=x.run_id WHERE {where}", params).fetchone()[0]
-               for table in ("attempts", "recoveries"))
+    # An Attempt counts while it is its task's current one: a continue resets the task and leaves a row that may still read
+    # running (a disabled Worker never answered for it) — counting it, a Session would wait for itself (final review C1).
+    current = " AND EXISTS (SELECT 1 FROM tasks t WHERE t.run_id=x.run_id AND t.current_attempt=x.id)"
+    return sum(db.execute(f"SELECT count(*) FROM {table} x JOIN runs r ON r.id=x.run_id WHERE {where}{extra}",
+                          params).fetchone()[0] for table, extra in (("attempts", current), ("recoveries", "")))
 
 
 def full(db, run):

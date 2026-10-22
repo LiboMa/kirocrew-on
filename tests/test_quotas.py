@@ -21,11 +21,15 @@ class QuotaCase(AccessCase):
                                                         now, now))
         return rid
 
-    def attempt(self, rid, status="running", number=1, task="code"):
+    def attempt(self, rid, status="running", number=1, task="code", current=True):
         aid = f"attempt-{rid}-{task}-{number}"
         with self.db.transaction() as db:
             db.execute("INSERT INTO attempts(id,run_id,task_id,number,spec,status,evidence,created,updated) "
                        "VALUES(?,?,?,?,'{}',?,'{}',?,?)", (aid, rid, task, number, status, time.time(), time.time()))
+            ordinal = db.execute("SELECT count(*) FROM tasks WHERE run_id=?", (rid,)).fetchone()[0]
+            db.execute("INSERT INTO tasks(run_id,id,ordinal,spec,status,current_attempt) VALUES(?,?,?,'{}',?,?) "
+                       "ON CONFLICT(run_id,id) DO UPDATE SET current_attempt=excluded.current_attempt",
+                       (rid, task, ordinal, status, aid if current else None))
         return aid
 
     def diagnosis(self, rid, failed, status="running"):
@@ -67,6 +71,12 @@ class StoreTests(QuotaCase):
         for status, desired, lifecycle in (("blocked", "active", "open"), ("running", "stopped", "open"),
                                            ("completed", "active", "closed")):
             self.attempt(self.run_row(self.b, status=status, desired=desired, lifecycle=lifecycle))
+        with self.db.read() as db:
+            self.assertEqual(quotas.usage(db, owner_id=self.b["id"]), 0)
+
+    def test_a_row_no_task_points_to_does_not_count(self):   # final review C1: what a continue left behind
+        rid = self.run_row(self.b, status="ready")
+        self.attempt(rid, current=False)
         with self.db.read() as db:
             self.assertEqual(quotas.usage(db, owner_id=self.b["id"]), 0)
 
@@ -280,6 +290,37 @@ class EngineQuotaTests(WatchdogCase):
         self.done.add(first)
         self.ticks(4)
         self.assertTrue(self.attempts(third))
+
+    def test_a_leftover_running_row_does_not_make_a_session_wait_for_itself(self):   # final review C1
+        self.limit("user", self.actor["id"], 1)
+        rid = self.start()
+        self.ticks()
+        with self.db.transaction() as db:   # a disabled Worker, then a continue: the task reset, the native row left running
+            db.execute("UPDATE tasks SET status='pending', current_attempt=NULL WHERE run_id=?", (rid,))
+            db.execute("UPDATE runs SET status='ready' WHERE id=?", (rid,))
+        self.ticks()
+        self.assertEqual([a["status"] for a in self.attempts(rid)], ["running", "running"])
+        self.assertIsNone(self.service.run(self.actor, rid)["attention"])
+
+    def test_a_wait_through_a_worker_pause_is_counted_once(self):   # final review I2
+        from octopus import waiting
+        self.limit("user", self.actor["id"], 1)
+        first = self.start()
+        self.ticks()
+        second = self.start(request="quota-fixture-2")
+        self.ticks()
+        with self.db.transaction() as db:   # it waited 100 minutes, the last 50 for its Worker to serve its space again
+            snapshot = json.loads(db.execute("SELECT snapshot FROM runs WHERE id=?", (second,)).fetchone()[0])
+            snapshot["quota_wait"]["since"] -= 6000
+            db.execute("UPDATE runs SET snapshot=?, status='waiting_worker', error=NULL, created=created-6000, updated=? "
+                       "WHERE id=?", (dumps(snapshot), time.time() - 3000, second))
+            waiting._resumed(db, second, "ready", "执行环境已重新服务此空间，自动继续", "place")
+        self.done.add(first)
+        self.ticks(4)
+        self.assertIn("run.quota_go", self.kinds(second))
+        with self.db.read() as db:
+            snapshot = json.loads(db.execute("SELECT snapshot FROM runs WHERE id=?", (second,)).fetchone()[0])
+        self.assertLess(snapshot["budget_waited"], 3100)   # 50 minutes, not 50 + 100
 
     def test_a_teams_limit_names_the_team(self):
         with self.db.transaction() as db:
