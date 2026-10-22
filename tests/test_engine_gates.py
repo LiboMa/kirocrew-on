@@ -4,8 +4,9 @@ import json
 from pathlib import Path
 import tempfile
 import unittest
+from unittest.mock import patch
 
-from octopus import gateway_client
+from octopus import gates, gateway_client
 from octopus.db import dumps
 from octopus.engine import Engine
 from octopus.security import Error
@@ -98,8 +99,26 @@ class EngineGateTests(TeamsWorkersCase):
                                                 "checks_pass": "pass"})
         self.assertEqual(evidence["candidate"]["sha"], C1)
         self.assertEqual(evidence["check_results"][0]["command"], "npm test")
+        self.assertEqual(evidence["warnings"], [])   # D57: accepted once its checks pass, with nothing to note
         message = [b for p, b in worker.calls if p == "/candidate"][0]["message"]
         self.assertIn("实现", message)
+
+    def test_a_warn_gate_does_not_block(self):   # D57 §4: recorded and listed, neither blocking nor recovered
+        def more(engine, run, config, task, attempt, spec, evidence, *rest):
+            evidence["gates"].append(gates.record("diff_present", "warn", "本任务没有改动入库文件"))
+            return None, None, False
+        worker, rid = FakeWorker(), self.session([IMPLEMENT], recovery=True)
+        with patch.object(Engine, "_more_gates", more):
+            self.run_engine(worker)
+        attempt, evidence = self.attempt(rid, "code")
+        self.assertEqual(attempt["status"], "accepted")
+        self.assertEqual(len(evidence["warnings"]), 1)
+        self.assertEqual((evidence["warnings"][0]["name"], evidence["warnings"][0]["status"]), ("diff_present", "warn"))
+        with self.db.read() as db:
+            status = db.execute("SELECT status FROM runs WHERE id=?", (rid,)).fetchone()["status"]
+            recoveries = db.execute("SELECT COUNT(*) FROM recoveries WHERE run_id=?", (rid,)).fetchone()[0]
+        self.assertNotEqual(status, "diagnosing")
+        self.assertEqual((status, recoveries), ("completed", 0))
 
     def test_failing_checks_send_the_task_back_through_recovery(self):
         worker, rid = FakeWorker(), self.session([IMPLEMENT], recovery=True)

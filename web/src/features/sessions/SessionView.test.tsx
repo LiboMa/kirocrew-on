@@ -184,6 +184,30 @@ describe("session detail", () => {
     expect(screen.getByText("abc1234 · 2 个文件 +12 −3")).toBeInTheDocument();
   });
 
+  test("a warned gate is marked ⚠ and a completed Session counts its latest attempts' warnings (D57)", async () => {
+    const task = blocked.tasks[0];
+    const warned = { ...task.attempts![0], id: "att-2", number: 2, status: "accepted", error: null,
+      evidence: { ...task.attempts![0].evidence, gates: [{ name: "native_completed", status: "pass" },
+        { name: "diff_present", status: "warn", detail: "本任务没有改动入库文件" }] } };
+    const earlier = { ...task.attempts![0], evidence: { gates: [{ name: "outcome_valid", status: "warn" }] } };   // not counted
+    open(makeRun({ id: "run-a", status: "completed", progress: { accepted: 1, total: 1 },
+      tasks: [{ ...task, status: "accepted", current_attempt: "att-2", attempts: [earlier, warned] }] } as Partial<Run>));
+    const header = (await screen.findByRole("heading", { level: 1 })).closest("header")!;
+    expect(within(header).getByText("完成 · 1 项提示")).toBeInTheDocument();   // beside the title
+    await userEvent.click(screen.getByText("执行证据与历史 Attempt"));
+    const [latest] = screen.getAllByRole("list", { name: "门禁" });
+    expect(within(latest).getAllByRole("listitem").map((item) => item.textContent)).toEqual(
+      ["✓ native_completed", "⚠ diff_present · 本任务没有改动入库文件"]);
+    expect(within(latest).getAllByRole("listitem")[1]).toHaveClass("text-amber-600");
+  });
+
+  test("a completed Session without warnings says only that it completed (D57)", async () => {
+    open(makeRun({ id: "run-a", status: "completed", progress: { accepted: 1, total: 1 } }));
+    const header = (await screen.findByRole("heading", { level: 1 })).closest("header")!;
+    expect(within(header).getByText("已完成")).toBeInTheDocument();
+    expect(screen.queryByText(/项提示/)).toBeNull();
+  });
+
   test("an attempt the Coordinator switched says from which tool and why (D38)", async () => {
     const task = blocked.tasks[0];
     const evidence = { ...task.attempts![0].evidence,

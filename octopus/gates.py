@@ -14,8 +14,19 @@ INSTALLS = re.compile(r"\b(?:npm|pnpm|yarn|bun)\s+(?:i|install|ci|add)\b|\bpip3?
                       r"|\bcargo\s+fetch\b|\bmvn\b.*\binstall\b")
 
 
+# A warn (D57 §4) is recorded and shown like any verdict but passes: it neither blocks the task nor starts recovery.
+STATUSES = ("pass", "warn", "fail", "skip")
+
+
 def record(name, status, detail=None):
+    if status not in STATUSES:
+        raise ValueError(f"未知的门禁状态：{status}")
     return {"name": name, "status": status, **({"detail": detail} if detail else {}), "at": time.time()}
+
+
+def warnings(records):
+    """The records an accepted Attempt carries as its warnings (D57 §4)."""
+    return [r for r in records or [] if r.get("status") == "warn"]
 
 
 def basic(native, result, spec, evidence, report, invalid, lost, missing, blocked_line):

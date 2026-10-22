@@ -858,6 +858,8 @@ class Engine:
     def _settle(self, run, task, attempt, evidence, error):
         """Accept or block an Attempt whose checks ended, like advance does for any other; recovery follows a block."""
         rid, state = run["id"], "blocked" if error else "accepted"
+        if state == "accepted":
+            evidence["warnings"] = gates.warnings(evidence.get("gates"))   # D57 §4: listed, not blocking
         with self.db.transaction() as db:
             current = db.execute("SELECT * FROM tasks WHERE run_id=? AND id=?", (rid, task["id"])).fetchone()
             active = db.execute("SELECT desired FROM runs WHERE id=?", (rid,)).fetchone()[0] == "active"
@@ -1167,6 +1169,8 @@ class Engine:
                     and knowledge.platform(snapshot, task["id"]):   # D46 P4: the platform's side task never holds a Session
                 evidence["knowledge_skipped"] = error
                 state, error = "accepted", None
+            if state in {"accepted", "awaiting_acceptance"}:   # D57 §4: listed, not blocking; kept when a person accepts
+                evidence["warnings"] = gates.warnings(evidence.get("gates"))
             journal.change(db, "attempts", attempt["id"], journal.WORKER, "attempt.state",
                            event={"id": attempt["id"], "task_id": task["id"], "status": state, "error": error,
                                   "evidence": evidence},

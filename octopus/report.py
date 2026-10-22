@@ -8,7 +8,7 @@ import time
 
 from . import policies, roles
 
-MARK = {"pass": "✓", "fail": "✗", "skip": "–"}
+MARK = {"pass": "✓", "warn": "⚠", "fail": "✗", "skip": "–"}   # a warn (D57 §4) passed, with something to note
 SUMMARY, DETAIL, INPUT, PLAN = 2000, 300, 12000, 8000   # the request and the plan keep their own limits (domain, planning)
 SPECIAL = str.maketrans({c: "\\" + c for c in "\\`*_[]<>!#|~"})
 STYLE = """
@@ -16,7 +16,7 @@ body{font:14px/1.6 system-ui,-apple-system,"Segoe UI",sans-serif;color:#1f2328;m
 h1{font-size:1.6rem;margin-bottom:.25rem}h2{margin-top:2rem;border-bottom:1px solid #d0d7de;padding-bottom:.3rem}
 h3{margin-top:1.5rem}table{border-collapse:collapse;width:100%;margin:.5rem 0}
 th,td{border:1px solid #d0d7de;padding:.3rem .5rem;text-align:left;vertical-align:top}th{background:#f6f8fa}
-.meta{color:#59636e}.fail{color:#cf222e}.skip{color:#59636e}code{background:#f6f8fa;padding:0 .25rem;border-radius:4px}
+.meta{color:#59636e}.fail{color:#cf222e}.warn{color:#9a6700}.skip{color:#59636e}code{background:#f6f8fa;padding:0 .25rem;border-radius:4px}
 pre{white-space:pre-wrap;background:#f6f8fa;padding:.75rem;border-radius:6px}
 """
 

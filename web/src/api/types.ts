@@ -149,7 +149,8 @@ export interface AttemptEvidence {
 
 export interface Gate {
   name: string;
-  status: "pass" | "fail" | "skip";
+  /** D57 §4: a warn passed with something to note — shown, never blocking. */
+  status: "pass" | "warn" | "fail" | "skip";
   detail?: string;
 }
 

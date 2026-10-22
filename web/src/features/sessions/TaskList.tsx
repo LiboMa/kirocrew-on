@@ -114,8 +114,9 @@ export function TaskList({ run, onContinue }: { run: Run; onContinue: (taskId: s
                         {!!attempt.evidence.gates?.length && (
                           <ul aria-label="门禁" className="mt-2 space-y-0.5">
                             {attempt.evidence.gates.map((gate, index) => (
-                              <li key={index} className={gate.status === "fail" ? "text-destructive" : gate.status === "skip" ? "text-muted-foreground" : undefined}>
-                                {{ pass: "✓", fail: "✗", skip: "–" }[gate.status]} {gate.name}{gate.detail ? " · " + gate.detail : ""}
+                              <li key={index} className={gate.status === "fail" ? "text-destructive" : gate.status === "warn" ? "text-amber-600"
+                                : gate.status === "skip" ? "text-muted-foreground" : undefined}>
+                                {{ pass: "✓", warn: "⚠", fail: "✗", skip: "–" }[gate.status]} {gate.name}{gate.detail ? " · " + gate.detail : ""}
                               </li>
                             ))}
                           </ul>

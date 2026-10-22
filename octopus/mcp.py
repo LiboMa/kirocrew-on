@@ -428,12 +428,14 @@ def compact_status(session, events):
                  **({"accepted_by": evidence["evaluation"]["accepted_by"].get("username")}
                     if (evidence.get("evaluation") or {}).get("accepted_by")
                     else {"pending": evidence["evaluation"]["pending"]} if (evidence.get("evaluation") or {}).get("pending") else {})}
-        if evidence.get("gates"):   # D37: passed as a count, failures with their first line, skipped by name
+        if evidence.get("gates"):   # D37: passed as a count, failures and warnings (D57) with their first line, skipped by name
             records = evidence["gates"]
-            value["gates"] = {"passed": sum(g.get("status") == "pass" for g in records),
-                              "failed": [{"name": g["name"], "detail": str(g.get("detail") or "").split("\n")[0][:300]}
-                                         for g in records if g.get("status") == "fail"],
-                              "skipped": [g["name"] for g in records if g.get("status") == "skip"]}
+
+            def listed(status):
+                return [{"name": g["name"], "detail": str(g.get("detail") or "").split("\n")[0][:300]}
+                        for g in records if g.get("status") == status]
+            value["gates"] = {"passed": sum(g.get("status") == "pass" for g in records), "failed": listed("fail"),
+                              "warned": listed("warn"), "skipped": [g["name"] for g in records if g.get("status") == "skip"]}
         if (evidence.get("watchdog") or {}).get("reason"):   # D39: stopped for making no progress
             value["watchdog"] = evidence["watchdog"]["reason"]
         if evidence.get("switched_from"):   # D38: the Coordinator recommended this tool instead
@@ -483,6 +485,8 @@ def compact_status(session, events):
                       **({key: task["spec"].get(key) or [] for key in ("acceptance", "verify")}
                          if session.get("status") == "awaiting_confirmation" else {})}
                      for task in session.get("tasks", [])]
+    # D57 §4: what the tasks' latest Attempts noted without blocking
+    view["warnings"] = sum(len(((task["latest"] or {}).get("gates") or {}).get("warned", [])) for task in view["tasks"])
     recent = [{**event, "payload": {k: v for k, v in event["payload"].items() if k not in ("evidence", "context")}}
               for event in events[-10:]]
     return {"session": view, "events": recent}

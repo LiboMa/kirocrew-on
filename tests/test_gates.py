@@ -68,6 +68,15 @@ class BasicGateTests(unittest.TestCase):
         self.assertEqual(self.names(records)[-2:], [("outcome_valid", "skip"), ("outcome_pass", "skip")])
 
 
+class GateRecordTests(unittest.TestCase):
+    def test_warn_is_a_recorded_status(self):   # D57 §4: recorded and shown, never blocking
+        warned = gates.record("x", "warn", "d")
+        self.assertEqual((warned["status"], warned["detail"]), ("warn", "d"))
+        self.assertEqual(gates.warnings([gates.record("a", "pass"), warned, gates.record("b", "fail", "e")]), [warned])
+        with self.assertRaises(ValueError):
+            gates.record("x", "maybe")
+
+
 class CoveredTests(unittest.TestCase):
     def test_paths_match_directories_globs_and_exact_files(self):
         for path, globs, expected in (("src/a/b.py", ["src/"], True), ("src/a/b.py", ["src/**"], True),

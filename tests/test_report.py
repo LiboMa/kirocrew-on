@@ -198,6 +198,13 @@ class ReportTests(unittest.TestCase):
         self.assertIn("## 任务", report.markdown(damaged))
         report.html(damaged)
 
+    def test_a_warned_gate_is_marked_apart_from_a_pass_and_a_fail(self):   # D57 §4
+        value = view()
+        value["tasks"][0]["attempts"][-1]["evidence"]["gates"][5] = {"name": "diff_present", "status": "warn",
+                                                                     "detail": "本任务没有改动入库文件"}
+        self.assertIn("| diff_present | ⚠ | 本任务没有改动入库文件 |", report.markdown(value))
+        self.assertIn('<tr class="warn"><td>diff_present</td><td>⚠</td>', report.html(value))
+
     def test_an_old_session_reports_without_gates(self):
         old = view(verified=None, publish=None, recovery=None, planning=None)
         for task in old["tasks"]:
