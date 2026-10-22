@@ -266,5 +266,21 @@ class EntryTests(ShareCase):
         self.assertIn("event: access_revoked", seen)
 
 
+
+class McpShareTests(unittest.TestCase):
+    def test_a_coding_agent_lists_what_is_shared_with_the_user_and_sees_how_it_reaches_a_session(self):
+        from octopus import mcp
+        from tests.test_mcp_requests import Client
+        client = Client([])
+        mcp.call(client, "octopus_runs", {"shared": True})
+        self.assertIn("shared=1", client.paths[-1][1])
+        mcp.call(client, "octopus_runs", {})
+        self.assertNotIn("shared", client.paths[-1][1])
+        tool = next(t for t in mcp.TOOLS if t["name"] == "octopus_runs")
+        self.assertEqual(tool["inputSchema"]["properties"]["shared"], {"type": "boolean"})
+        self.assertIn("access", mcp.SESSION_FIELDS)
+        self.assertFalse([t["name"] for t in mcp.TOOLS if "share" in t["name"] and "workflow" not in t["name"]])   # no tool shares a Session
+
+
 if __name__ == "__main__":
     unittest.main()

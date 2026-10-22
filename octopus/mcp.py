@@ -49,9 +49,9 @@ TOOLS = [
                     "branch、stage（plan / implement / review / test / deliver / design / done，即当前进行到的任务类别）、tool、"
                     "client（console / claude / kiro / codex / kiro-ide / api）、submitter（用户名）、since / until（YYYY-MM-DD 或 Unix 秒）；"
                     "q 为全文搜索（需求、规划、任务说明、最近的结论与错误，多个词须全部命中）。more 为 true 表示还有更多，缩小条件或加大 limit。"
-                    "详情用 octopus_status。",
+                    "shared: true 只列别人共享给用户的会话（个人、所在 Team 或全公司；默认列表不含它们）。详情用 octopus_status。",
      "inputSchema": object_schema({"status": STRING, "q": STRING, "limit": {"type": "integer", "minimum": 1, "maximum": 50},
-                                   **{key: STRING for key in RUN_FILTERS}})},
+                                   "shared": {"type": "boolean"}, **{key: STRING for key in RUN_FILTERS}})},
     {"name": "octopus_requests",
      "description": "列出你提交过的需求（Request，最新的在前，精简：来源客户端、需求前 200 字、准入方式与依据、对应的会话）。"
                     "每次 octopus_start 登记一个 Request，回执中的 request_id 即它；状态取其最近一个会话的。默认最近 20 个；"
@@ -414,7 +414,8 @@ def admin_environments(client, args):
 
 SESSION_FIELDS = ("id", "name", "status", "desired", "lifecycle", "version", "error", "attention", "progress", "input",
                   "planning", "team_id", "worker_id", "workflow_name", "match_mode", "created", "updated", "kept", "verified",
-                  "admission", "admission_basis", "request")   # D55: why it waits or started, and the submission it came from
+                  "admission", "admission_basis", "request",   # D55: why it waits or started, and the submission it came from
+                  "access")   # D64: the user's own, their Team's, a share (viewer / collaborator) or an admin's oversight
 
 
 def compact_status(session, events):
@@ -514,6 +515,8 @@ def runs(client, args):
     if type(limit) is not int or not 1 <= limit <= 50:
         raise ValueError("limit 须为 1–50 的整数")
     query = {key: args[key] for key in ("status", "q", *RUN_FILTERS) if args.get(key)}
+    if args.get("shared") is True:   # D64: shared with the user
+        query["shared"] = "1"
     views = client.request("GET", "/v1/runs?" + urlencode({**query, "limit": limit + 1, "view": "list"}))   # one more: is there more?
     return {"items": [compact_run(v) for v in views[:limit]], "more": len(views) > limit}
 
