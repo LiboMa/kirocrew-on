@@ -3,7 +3,7 @@ import { ROLE_LABELS } from "@/lib/labels";
 
 /** D55: the client a Request came from, as people know it. */
 export const CLIENT_LABELS: Record<RequestClient, string> = {
-  console: "控制台", claude: "Claude Code", kiro: "Kiro CLI", codex: "Codex", "kiro-ide": "Kiro IDE", api: "API",
+  console: "控制台", cli: "CLI", claude: "Claude Code", kiro: "Kiro CLI", codex: "Codex", "kiro-ide": "Kiro IDE", api: "API",
 };
 
 /** Task kinds a mapping preference may name (octopus/domain.py KINDS). */

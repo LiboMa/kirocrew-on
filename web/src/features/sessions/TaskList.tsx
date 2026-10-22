@@ -80,6 +80,10 @@ export function TaskList({ run, onContinue }: { run: Run; onContinue: (taskId: s
                         </div>
                         <dl className="grid grid-cols-[7.5rem_1fr] gap-x-3 gap-y-1">
                           <Meta label="请求" value={`${TOOLS[attempt.spec.tool] ?? attempt.spec.tool} / ${attempt.spec.model} / ${attempt.spec.effort || "默认"}`} />
+                          {attempt.evidence.synced && (
+                            <Meta label="本地同步" value={[`${attempt.evidence.synced.commits ?? "?"} 个本地提交`,
+                              attempt.evidence.synced.by?.username, attempt.evidence.synced.note].filter(Boolean).join(" · ")} />
+                          )}
                           {attempt.evidence.switched_from && (
                             <Meta label="换工具" value={`由协调者从 ${attempt.evidence.switched_from.tool} / ${attempt.evidence.switched_from.model} `
                               + `换为 ${attempt.spec.tool} / ${attempt.spec.model}：${attempt.evidence.switched_from.reason ?? "未说明原因"}`} />

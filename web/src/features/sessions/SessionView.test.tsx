@@ -62,6 +62,18 @@ describe("session detail", () => {
     expect(screen.getByText(/按平台默认等待确认/)).toBeInTheDocument();
   });
 
+  test("a synced Attempt says whose local commits it carries, and the CLI is named (D58)", async () => {
+    const synced = makeRun({ id: "run-s", status: "completed", request: { id: "request-cli-000001", client: "cli" },
+      tasks: [{ id: "code", run_id: "run-s", ordinal: 0, status: "accepted", current_attempt: "att-2", spec: spec("code", "实现", "claude"),
+        attempts: [{ id: "att-2", number: 2, status: "accepted", spec: spec("code", "实现", "claude"), native_id: null, context_hash: null,
+          evidence: { synced: { commits: 2, note: "改了样式", by: { id: "u1", username: "fixture-owner" }, client: "cli", head: "b".repeat(40),
+            from: "a".repeat(40) } }, result: null, error: null, created: 1, updated: 2 }] }] });
+    open(synced);
+    expect(await screen.findByText(/来自请求 request-cli-00 · CLI/)).toBeInTheDocument();
+    await userEvent.click(await screen.findByRole("button", { name: /执行证据与历史 Attempt/ }));
+    expect(screen.getByText(/2 个本地提交 · fixture-owner · 改了样式/)).toBeInTheDocument();
+  });
+
   test("shows what the Session wrote to the environment's knowledge (D46 P4)", async () => {
     open(makeRun({ id: "run-k", status: "completed", knowledge: { note: null, items: [{ id: "knowledge-1", task_id: "knowledge",
       rule: "依赖用 pnpm 安装", avoid: null, result: "written", reason: null, created: 1, removed: null, removed_by: null }] } }));

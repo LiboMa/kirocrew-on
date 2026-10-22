@@ -129,6 +129,8 @@ export interface AttemptEvidence {
   gates?: Gate[];
   /** The task's candidate commit on the Session's branch (D37 §3). */
   candidate?: Candidate | null;
+  /** D58: local commits a user synced; this Attempt is theirs, not an Agent's. */
+  synced?: { commits?: number; note?: string | null; by?: { id: string; username?: string | null }; client?: string; head?: string; from?: string } | null;
   /** The watchdog stopped this Attempt's native task for making no progress or running too long (D39). */
   watchdog?: { reason?: string; unsupported?: boolean; [key: string]: unknown } | null;
   /** The Coordinator recommended this Attempt's tool instead of the one that failed (D38 §3.3). */
@@ -283,7 +285,7 @@ export interface RunPage {
 }
 
 /** D55: the client a Request was submitted from (the token's label; octopus/requests.py). */
-export type RequestClient = "console" | "claude" | "kiro" | "codex" | "kiro-ide" | "api";
+export type RequestClient = "console" | "cli" | "claude" | "kiro" | "codex" | "kiro-ide" | "api";
 
 /** D55: how a new Session was admitted and why — the submission's own word, a person's or Team's rule, or the default. */
 export interface AdmissionBasis {
