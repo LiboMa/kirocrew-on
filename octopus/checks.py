@@ -1,8 +1,11 @@
 """A task's verify commands, run by the platform itself (D37 §5, G1): in the Session's project as the Worker's own user
-(the execution user the Agent runs as, so no new privilege), one after another, stopping at the first failure. Each
-command and all of them together are time-limited; a command that overruns has its whole process group ended. What
-remains is the exit code, the time and the output's tail with credentials hidden."""
+(the execution user the Agent runs as, so no new privilege), one after another, every one of them even after a failure
+(D57 §13.3: a failing advisory check must not keep a required one from running). Each command and all of them together
+are time-limited; a command that overruns has its whole process group ended, and what the total limit leaves is skipped.
+What remains is the exit code, the time and the output's tail with credentials hidden; ``unrunnable`` tells a failure
+the environment caused (a missing command or module, no git identity) from one of what the command checks (D57 §5)."""
 import os
+import re
 import shutil
 import signal
 import subprocess
@@ -20,6 +23,42 @@ KEEP = 3600   # a finished job is answered for an hour
 # missing one fails with exit code 127 and no recovery can change the command).
 COMMON = ("python3", "python", "pip3", "pip", "pytest", "uv", "node", "npm", "npx", "pnpm", "yarn", "go", "cargo",
           "java", "mvn", "gradle", "make", "ruby", "bundle", "php", "dotnet", "deno", "bun", "git", "docker")
+# A check that makes a commit (git am, git commit) needs an identity the host may not have (D57 §5): the one the
+# platform's own commits carry, unless the Worker's environment gives one.
+_NAME, _EMAIL = (dict(setting.split("=", 1) for setting in sources.COMMITTER[1::2])[key] for key in ("user.name", "user.email"))
+IDENTITY = {"GIT_AUTHOR_NAME": _NAME, "GIT_AUTHOR_EMAIL": _EMAIL, "GIT_COMMITTER_NAME": _NAME, "GIT_COMMITTER_EMAIL": _EMAIL}
+# (pattern, reason) for a failure the environment caused, tried in order on the output's tail (D57 §5). A shell's own
+# "not found" counts only at a line's start: what a login profile the check's shell sources prints ("~/.bashrc: line 3:
+# setopt: command not found") starts with that file's path, and says nothing about the check.
+UNRUNNABLE = [
+    (re.compile(r"^(?:\S*/)?(?:ba|da|z)?sh: (?:line \d+: |\d+: )?([^\s:]+): (?:command )?not found\s*$", re.M), "命令不存在：{}"),
+    (re.compile(r"^(?:\S*/)?zsh: command not found: ([^\s:]+)\s*$", re.M), "命令不存在：{}"),
+    # a missing #! interpreter, and a command make could not start; a script of the project's own ("./x.sh") is not
+    (re.compile(r"^(?:\S*/)?env: [‘'\"]?([^\s:‘’'\"]+)[’'\"]?: No such file or directory\s*$", re.M), "命令不存在：{}"),
+    (re.compile(r"^make(?:\[\d+\])?: ([^\s:/]+): (?:No such file or directory|Command not found)\s*$", re.M), "命令不存在：{}"),
+    # the interpreter's own ("python3: No module named pytest") or an import that failed; not a skip reason quoting one
+    (re.compile(r"(?:^\S*python[\d.]*: |(?:ModuleNotFoundError|ImportError): )No module named '?([\w.]+)'?", re.M),
+     "缺少 Python 模块：{}"),
+    # a package, not a file of the project ('./routes', '/p/server.js') or a path alias ('@/utils', '~/lib', '#internal')
+    (re.compile(r"Cannot find (?:module|package) '(?!@/|~/|#)([^'./][^']*)'"), "缺少 Node 模块：{}"),
+    (re.compile(r"(?:Committer|Author) identity unknown|empty ident name|unable to auto-detect email address"),
+     "检查环境没有 git 提交者身份"),
+    (re.compile(r"Cannot connect to the Docker daemon"), "Docker 服务不可用"),
+]
+
+
+def unrunnable(result):
+    """Why a check failed because of where it ran rather than what it checks (D57 §5), in words for the user; None when it
+    passed, failed on its own, or never came to an exit code (a timeout, a stop, the total limit, a runner error)."""
+    code = result.get("exit")
+    if code in (0, None):
+        return None
+    tail = str(result.get("tail") or "")
+    for pattern, reason in UNRUNNABLE:
+        found = pattern.search(tail)
+        if found:
+            return reason.format(*found.groups())
+    return "命令不存在（退出码 127）" if code == 127 else None
 
 
 class Checks:
@@ -82,6 +121,11 @@ class Checks:
         # The Worker's own modules (its unit sets PYTHONPATH to the release) are not the project's (as apps.py).
         env = {key: item for key, item in os.environ.items() if key != "PYTHONPATH"}
         env["PATH"] = os.pathsep.join([*self.path_prepend, os.environ.get("PATH", "/usr/bin:/bin")])
+        for key, item in IDENTITY.items():
+            env.setdefault(key, item)
+        # A baseline run asks only whether the commands fail before the change: its first failure answers that, and the
+        # project stays on the baseline (previews, downloads and publishing wait) until the run ends.
+        stop = value["kind"] == "baseline"
         passed, failed = True, None
         prepare, restore = around or (None, None)
         try:
@@ -94,18 +138,23 @@ class Checks:
                     passed, commands = False, []
             for index, command in enumerate(commands):
                 left = self.total - (time.monotonic() - started)
-                if value["cancelled"] or left <= 0:
+                if value["cancelled"]:
                     break
-                try:
-                    result = self._one(value, project, command, env, min(self.per_command, left))
-                except Exception as exc:   # e.g. the project is gone: a failed check, never a job left running
-                    result = {"command": command, "exit": None, "seconds": 0.0,
-                              "tail": f"无法运行检查命令（{type(exc).__name__}）"}
+                if left <= 0:   # never run, and said so; not passed, but not a failure of its own (``failed`` names one that ran)
+                    result = {"command": command, "exit": None, "seconds": 0.0, "tail": "", "skipped": "total_timeout"}
+                else:
+                    try:
+                        result = self._one(value, project, command, env, min(self.per_command, left))
+                    except Exception as exc:   # e.g. the project is gone: a failed check, never a job left running
+                        result = {"command": command, "exit": None, "seconds": 0.0,
+                                  "tail": f"无法运行检查命令（{type(exc).__name__}）"}
                 with self.lock:
                     value["results"].append(result)
-                if result["exit"] != 0:
-                    passed, failed = False, index
-                    break
+                passed = passed and result["exit"] == 0
+                if result["exit"] != 0 and "skipped" not in result:
+                    failed = index if failed is None else failed
+                    if stop:
+                        break
         finally:
             if restore:
                 try:

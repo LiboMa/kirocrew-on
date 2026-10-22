@@ -1,14 +1,17 @@
-"""D37 §5 (G1): the platform runs a task's verify commands itself — in order, stopping at the first failure, each and all
-of them time-limited with their whole process group ended, the output's tail kept with credentials hidden."""
+"""D37 §5 (G1): the platform runs a task's verify commands itself — in order, every one of them even after a failure
+(D57 §13.3), each and all of them time-limited with their whole process group ended, the output's tail kept with
+credentials hidden; a commit a check makes has an identity, and a failure the environment caused is told apart (D57 §5)."""
 import os
 from pathlib import Path
 import subprocess
+import sys
 import tempfile
 import time
 import unittest
 from unittest.mock import patch
 
 from octopus import sources
+from octopus import checks as checks_module
 from octopus.checks import Checks
 from octopus.security import Error
 from tests.test_archive import RID, make_worker
@@ -30,14 +33,54 @@ class CheckTests(unittest.TestCase):
         self.addCleanup(self.tmp.cleanup)
         self.project = Path(self.tmp.name)
 
-    def test_commands_run_in_order_and_stop_at_the_first_failure(self):
+    def test_every_command_runs_even_after_a_failure(self):
+        # D57 §13.3: an advisory check that fails must not keep a required one after it from running
         checks = Checks()
-        job = checks.start("run-a", "attempt-1", self.project, ["true", "echo out; exit 3", "touch never"])["job"]
+        value = finished(checks, checks.start("run-a", "attempt-1", self.project, ["false", "echo ok > ran.txt"])["job"])
+        self.assertEqual([(r["command"], r["exit"]) for r in value["results"]], [("false", 1), ("echo ok > ran.txt", 0)])
+        self.assertTrue((self.project / "ran.txt").exists())
+        self.assertEqual((value["passed"], value["failed"]), (False, 0))   # failed: the first that failed, as before
+
+    def test_commands_run_in_order_and_failed_names_the_first_failure(self):
+        checks = Checks()
+        job = checks.start("run-a", "attempt-1", self.project, ["true", "echo out; exit 3", "exit 4", "echo $((1+1)) > last"])["job"]
         value = finished(checks, job)
-        self.assertEqual([r["exit"] for r in value["results"]], [0, 3])
+        self.assertEqual([r["exit"] for r in value["results"]], [0, 3, 4, 0])
         self.assertEqual((value["passed"], value["failed"]), (False, 1))
         self.assertIn("out", value["results"][1]["tail"])
+        self.assertEqual((self.project / "last").read_text(), "2\n")
+
+    def test_a_baseline_run_still_stops_at_its_first_failure(self):
+        # Its only question is whether the tests fail before the change: the first failure answers it, and the project
+        # stays on the baseline (previews, downloads and publishing wait) until the run ends.
+        checks = Checks()
+        value = finished(checks, checks.start("run-a", "attempt-1", self.project, ["true", "exit 3", "touch never"],
+                                              kind="baseline")["job"])
+        self.assertEqual([r["exit"] for r in value["results"]], [0, 3])
+        self.assertEqual((value["passed"], value["failed"]), (False, 1))
         self.assertFalse((self.project / "never").exists())
+
+    def test_git_commits_work_without_a_configured_identity(self):
+        # On EC2 a verify "git am …" failed: "Committer identity unknown … empty ident name … not allowed"
+        home = self.project / "home"
+        home.mkdir()
+        subprocess.run(["git", "init", "-q", str(self.project / "repo")], check=True)
+        bare = {key: value for key, value in os.environ.items()
+                if not key.startswith(("GIT_AUTHOR_", "GIT_COMMITTER_")) and key != "EMAIL"}
+        bare.update(HOME=str(home), XDG_CONFIG_HOME=str(home / ".config"), GIT_CONFIG_NOSYSTEM="1")
+        with patch.dict(os.environ, bare, clear=True):
+            checks = Checks()
+            value = finished(checks, checks.start("run-a", "attempt-1", self.project / "repo",
+                                                  ["git commit -q --allow-empty -m x", "git log -1 --format='%an <%ae>|%cn <%ce>'"])["job"])
+        self.assertEqual([r["exit"] for r in value["results"]], [0, 0], value["results"][0]["tail"])
+        self.assertIn("KiroCrew ON <kirocrew-on@localhost>|KiroCrew ON <kirocrew-on@localhost>", value["results"][1]["tail"])
+
+    def test_an_identity_the_workers_environment_gives_is_kept(self):
+        with patch.dict(os.environ, {"GIT_AUTHOR_NAME": "Ops", "GIT_AUTHOR_EMAIL": "ops@example.com"}):
+            checks = Checks()
+            value = finished(checks, checks.start("run-a", "attempt-1", self.project,
+                                                  ['echo "$GIT_AUTHOR_NAME|$GIT_AUTHOR_EMAIL|$GIT_COMMITTER_NAME|$GIT_COMMITTER_EMAIL"'])["job"])
+        self.assertIn("Ops|ops@example.com|KiroCrew ON|kirocrew-on@localhost", value["results"][0]["tail"])
 
     def test_all_passing_commands_pass(self):
         checks = Checks()
@@ -90,10 +133,80 @@ class CheckTests(unittest.TestCase):
 
     def test_the_total_limit_ends_the_rest(self):
         checks = Checks(per_command=30, total=1)
-        value = finished(checks, checks.start("run-a", "attempt-1", self.project, ["sleep 3", "touch never"])["job"])
-        self.assertEqual(len(value["results"]), 1)
+        value = finished(checks, checks.start("run-a", "attempt-1", self.project, ["sleep 3", "touch never", "true"])["job"])
+        self.assertEqual(len(value["results"]), 3)
         self.assertTrue(value["results"][0].get("timeout"))
+        self.assertEqual(value["results"][1:], [{"command": "touch never", "exit": None, "seconds": 0.0, "tail": "", "skipped": "total_timeout"},
+                                                {"command": "true", "exit": None, "seconds": 0.0, "tail": "", "skipped": "total_timeout"}])
+        self.assertEqual((value["passed"], value["failed"]), (False, 0))
         self.assertFalse((self.project / "never").exists())
+
+    def test_commands_the_total_limit_leaves_are_skipped_not_passed_and_not_failed(self):
+        for kind in ("verify", "baseline"):
+            with self.subTest(kind=kind):
+                checks = Checks(total=0)
+                value = finished(checks, checks.start("run-a", "attempt-1", self.project, ["touch never", "true"], kind=kind)["job"])
+                self.assertEqual([r.get("skipped") for r in value["results"]], ["total_timeout", "total_timeout"])
+                self.assertEqual((value["passed"], value["failed"]), (False, None))
+                self.assertFalse((self.project / "never").exists())
+
+    def test_unrunnable_recognises_environment_failures(self):
+        environment = [
+            ({"exit": 127, "tail": "bash: line 1: pytest: command not found\n"}, "命令不存在：pytest"),
+            ({"exit": 1, "tail": "bash: pytest: command not found\n"}, "命令不存在：pytest"),
+            ({"exit": 127, "tail": "sh: 1: jest: not found\n"}, "命令不存在：jest"),
+            ({"exit": 127, "tail": "zsh: command not found: go\n"}, "命令不存在：go"),
+            ({"exit": 127, "tail": "/usr/bin/env: ‘node’: No such file or directory\n"}, "命令不存在：node"),
+            ({"exit": 2, "tail": "make: pytest: No such file or directory\nmake: *** [Makefile:2: test] Error 127\n"}, "命令不存在：pytest"),
+            ({"exit": 127, "tail": ""}, "命令不存在（退出码 127）"),
+            ({"exit": 1, "tail": "Traceback (most recent call last):\nModuleNotFoundError: No module named 'yaml'\n"},
+             "缺少 Python 模块：yaml"),
+            ({"exit": 1, "tail": "/usr/bin/python3: No module named pytest\n"}, "缺少 Python 模块：pytest"),
+            ({"exit": 1, "tail": "Error: Cannot find module 'express'\nRequire stack:\n- /p/app.js\n"}, "缺少 Node 模块：express"),
+            ({"exit": 1, "tail": "Error [ERR_MODULE_NOT_FOUND]: Cannot find package 'vitest' imported from /p/a.js\n"},
+             "缺少 Node 模块：vitest"),
+            ({"exit": 128, "tail": "Committer identity unknown\n\n*** Please tell me who you are.\n"
+                                   "fatal: empty ident name (for <crew-owner@ip-10-0-1-2.ec2.internal>) not allowed\n"},
+             "检查环境没有 git 提交者身份"),
+            ({"exit": 128, "tail": "Author identity unknown\nfatal: unable to auto-detect email address (got 'u@h.(none)')\n"},
+             "检查环境没有 git 提交者身份"),
+            ({"exit": 1, "tail": "Cannot connect to the Docker daemon at unix:///var/run/docker.sock. Is the docker daemon running?\n"},
+             "Docker 服务不可用"),
+        ]
+        not_environment = [
+            {"exit": 1, "tail": "AssertionError: 1 != 2\n"},
+            {"exit": 0, "tail": "bash: foo: command not found\n"},   # it passed
+            {"exit": None, "tail": "zsh: command not found: x\n", "timeout": True},
+            {"exit": None, "tail": "", "skipped": "total_timeout"},
+            {"exit": None, "tail": "无法运行检查命令（FileNotFoundError）"},
+            {"exit": 1, "tail": "Error: Cannot find module './routes/users'\n"},   # the project's own file
+            {"exit": 1, "tail": "bash: line 1: ./run_tests.sh: No such file or directory\n"},
+            {"exit": 2, "tail": "make: *** No rule to make target 'test'.  Stop.\n"},
+            {"exit": 1, "tail": 'npm ERR! Missing script: "test"\n'},
+            # what a login profile the check's shell sources prints (this machine's does) says nothing about the check
+            {"exit": 1, "tail": "/Users/u/.config/envman/ENV.env: line 3: setopt: command not found\nAssertionError: 1 != 2\n"},
+            {"exit": 1, "tail": "SKIPPED [1] tests/test_a.py:3: could not import 'yaml': No module named 'yaml'\n"
+                                "FAILED tests/test_b.py::test_total - assert 1 == 2\n"},
+            {"exit": 2, "tail": "src/a.ts(1,19): error TS2307: Cannot find module '@/utils' or its corresponding type declarations.\n"},
+        ]
+        for result, reason in environment:
+            with self.subTest(result=result):
+                self.assertEqual(checks_module.unrunnable({"command": "c", "seconds": 0.1, **result}), reason)
+        for result in not_environment:
+            with self.subTest(result=result):
+                self.assertIsNone(checks_module.unrunnable({"command": "c", "seconds": 0.1, **result}))
+        self.assertTrue(all(isinstance(template, str) for _, template in checks_module.UNRUNNABLE))
+
+    def test_unrunnable_reads_what_the_shell_python_and_git_really_print(self):
+        checks = Checks()
+        value = finished(checks, checks.start("run-a", "attempt-1", self.project, [
+            "d57-no-such-command --version",
+            f"{sys.executable} -c 'import d57_no_such_module'",
+            "git init -q repo && cd repo && GIT_AUTHOR_NAME= GIT_COMMITTER_NAME= git commit -q --allow-empty -m x",
+            f"{sys.executable} -c 'assert 1 == 2'"])["job"])
+        self.assertEqual([checks_module.unrunnable(r) for r in value["results"]],
+                         ["命令不存在：d57-no-such-command", "缺少 Python 模块：d57_no_such_module", "检查环境没有 git 提交者身份", None],
+                         [r["tail"] for r in value["results"]])
 
     def test_cancel_ends_a_running_job(self):
         checks = Checks()
