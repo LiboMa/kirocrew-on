@@ -18,8 +18,32 @@ def configure(ca_file):
     _context = ssl.create_default_context(cafile=str(ca_file)) if ca_file else None
 
 
+_KEY = None   # D59: the D35 key that opens a Worker's sealed token (set by the platform at start)
+
+
+def configure(key_path):
+    global _KEY
+    _KEY = key_path
+
+
+def connection(config):
+    """A Worker's address and token (D59, K10): the stored token is sealed (``token_sealed``) and opened here, for the
+    request only — never written back, logged or answered; a plaintext ``token`` (tests, data from before) as it is."""
+    if config.get("token"):
+        return {"url": config["url"], "token": config["token"]}
+    from . import vault
+    sealed = config.get("token_sealed")
+    try:
+        if not sealed or _KEY is None:
+            raise vault.VaultError("没有可用的访问凭据")
+        return {"url": config["url"], "token": vault.open_(_KEY, sealed)}
+    except vault.VaultError:
+        raise Error(503, "worker_secret", "执行环境的访问凭据无法解开：请平台管理员重新连接该执行环境") from None
+
+
 def worker_stream(config, path, body, timeout=60):
     """A Worker response read as a stream (a download); errors answer like worker_request's."""
+    config = connection(config)
     request = urllib.request.Request(config["url"].rstrip("/") + path, data=dumps(body).encode(),
                                      headers={"Authorization": "Bearer " + config["token"], "Content-Type": "application/json"})
     try:
@@ -37,6 +61,7 @@ def worker_stream(config, path, body, timeout=60):
 
 def worker_upload(config, path, data, headers, timeout=120):
     """Bytes sent to the Worker as they are (D58 sync's bundle); the answer and errors as worker_request's."""
+    config = connection(config)
     request = urllib.request.Request(config["url"].rstrip("/") + path, data=data, method="POST",
                                      headers={"Authorization": "Bearer " + config["token"],
                                               "Content-Type": "application/octet-stream", **headers})
@@ -55,6 +80,7 @@ def worker_upload(config, path, data, headers, timeout=120):
 
 
 def worker_request(config, path, body=None, timeout=35):
+    config = connection(config)
     url = config["url"].rstrip("/") + path
     request = urllib.request.Request(url, data=dumps(body).encode() if body is not None else None,
                                      headers={"Authorization": "Bearer " + config["token"],

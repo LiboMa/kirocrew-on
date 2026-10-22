@@ -1938,7 +1938,7 @@ class Service:
                 reason = unserved(db, run)
                 require(reason is None, reason, 409, "environment_unavailable")
                 worker = db.execute("SELECT config FROM workers WHERE id=?", (run["worker_id"],)).fetchone()
-                config = {k: v for k, v in json.loads(worker["config"]).items() if k in ("url", "token")}
+                config = {k: v for k, v in json.loads(worker["config"]).items() if k in ("url", "token", "token_sealed")}
                 tasks = [{**dict(t), "spec": json.loads(t["spec"])} for t in
                          db.execute("SELECT * FROM tasks WHERE run_id=? ORDER BY ordinal", (rid,))]
                 require(tasks, "会话没有任务", 409, "invalid_state")
@@ -2029,7 +2029,7 @@ class Service:
             require(candidate.get("moved", True), "这个候选中有疑似凭证或 .env 文件，不显示它的改动", 409, "candidate_secret")
             worker = db.execute("SELECT config FROM workers WHERE id=?", (run["worker_id"],)).fetchone() if run["worker_id"] else None
             require(worker is not None, "会话没有执行环境，读不到它的改动", 409, "no_worker")
-            config = {key: value for key, value in json.loads(worker["config"]).items() if key in ("url", "token")}
+            config = {key: value for key, value in json.loads(worker["config"]).items() if key in ("url", "token", "token_sealed")}
         self.audit_read(actor, rid, "diff")
         return {**diffs.read(config, rid, attempt_id, candidate), "sha": candidate["sha"], "parent": candidate.get("parent")}
 
