@@ -11,7 +11,8 @@ from .db import dumps, uid
 from .transport import worker_request
 from . import crew_entry, evaluation, gates, journal, knowledge, planning, quotas, recovery, waiting
 from .security import Error
-from .domain import CONTRACT, awaits_confirmation, required_checks, runs_checks, unserved
+from .domain import (CONTRACT, GENERAL_KINDS, awaits_confirmation, required_checks, runs_checks, unserved,
+                     worker_source)
 from .gates import BLOCKED
 
 LEGACY = ("id", "name", "tool", "model", "effort", "prompt")
@@ -818,7 +819,7 @@ class Engine:
                                  "moved": not candidate["secrets"], "start": start,
                                  **{key: candidate[key] for key in ("names", "names_truncated") if key in candidate}}
         if not candidate["changed"]:
-            if kind in ("implement", "deliver"):   # D57 §4: a warning, not a failure
+            if kind in ("implement", "deliver", *GENERAL_KINDS):   # D57 §4: a warning, not a failure; D65 general work too
                 records.append(gates.record("diff_present", "warn",
                                             "本任务没有改动入库文件。如果它本来就只产出补丁或报告，可以忽略。"))
             else:
@@ -1033,7 +1034,7 @@ class Engine:
         if run["status"] == "diagnosing":
             return recovery.Coordinator(self).advance(run)
         if not run["native_parent"]:
-            body = {"run_id": rid, "source": json.loads(run["source"])}
+            body = {"run_id": rid, "source": worker_source(json.loads(run["source"]))}   # D65: none is a new project there
             auth = self.credentials.material(run)   # 409 credential_unavailable blocks the run with its reason
             if auth:
                 body["git_auth"] = auth

@@ -27,7 +27,7 @@ def openapi():
     schemas = {
         "Step": obj({"id": text, "name": text, **execution, **contract}, ["id", "name", "tool", "prompt"]),
         "Execution": obj({"name": text, **execution, **contract}),   # a continue may change the task contract too
-        "Source": obj({"type": {"enum": ["new", "git"]}, "url": text, "ref": text}, ["type"]),
+        "Source": obj({"type": {"enum": ["new", "git", "none"]}, "url": text, "ref": text}, ["type"]),   # D65: none
         "Login": obj({"username": text, "password": {"type": "string", "format": "password"}}, ["username", "password"]),
         "User": obj({"username": text, "password": {"type": "string", "format": "password"}, "admin": {"type": "boolean"},
                      "worker_id": text}, ["username", "password"]),

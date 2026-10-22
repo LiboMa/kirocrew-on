@@ -53,7 +53,21 @@ def name(value):
 # Optional task structure (D34 §6.1): what a task delivers and how it is checked, kept in its spec only when given.
 # verify_required (D57 §5): those of the checks that must pass, named by their text; the others only report.
 CONTRACT = ("kind", "role", "deliverables", "acceptance", "verify", "verify_required", "depends_on", "paths", "skills")
-KINDS = ("implement", "review", "test", "deliver", "design")
+KINDS = ("implement", "review", "test", "deliver", "design", "research", "write")
+# D65: general work, not bound to Git — research (调研) and write (撰写), judged like a delivery; never an Evaluator's or
+# Knowledge's (they follow code changes and a repository).
+GENERAL_KINDS = ("research", "write")
+NO_REPOSITORY = "此会话没有代码仓库：产出在会话页「下载产出」取得"
+
+
+def general(source):
+    """A Session without a code repository (D65): its files are only its working directory's."""
+    return (source or {}).get("type") == "none"
+
+
+def worker_source(source):
+    """What a Worker prepares: a Session without a repository is an empty project to it (an older Worker knows no none)."""
+    return {"type": "new"} if general(source) else source
 LIMITS = {"deliverables": (20, 500), "acceptance": (20, 500), "verify": (10, 500), "verify_required": (10, 500),
           "paths": (20, 500), "depends_on": (8, 48)}
 
@@ -132,7 +146,7 @@ def steps(value, known=(), planned=False):
         item = {"id": sid, "name": name(step.get("name")), "tool": tool, "model": text(step.get("model", "auto"), "Model", 200),
                 "effort": effort, "prompt": text(step.get("prompt"), "任务说明", 8000)}
         if "kind" in step:
-            require(step["kind"] in KINDS, "任务类别只能是 implement、review、test、deliver 或 design")
+            require(step["kind"] in KINDS, "任务类别只能是 implement、review、test、deliver、design、research（调研）或 write（撰写）")
             item["kind"] = step["kind"]
         if "role" in step:   # D46 P2: how the Agent works; kind keeps deciding the gates
             from . import roles
@@ -1051,7 +1065,8 @@ class Service:
             goal = text(body.get("input"), "开发需求", minimum=3)
             source = body.get("source")
             require(isinstance(source, dict) and set(source) <= {"type", "url", "ref"}
-                    and source.get("type") in {"new", "git"}, "源码配置无效")
+                    and source.get("type") in {"new", "git", "none"},
+                    "来源须为 git（已有仓库）、new（新建项目）或 none（不需要代码仓库，D65）")
             if source["type"] == "git":
                 from .sources import normalize_source
                 try:
@@ -1064,7 +1079,7 @@ class Service:
                     source["ref"] = text(source["ref"], "Git ref", 200)
                     require(not source["ref"].startswith("-"), "Git ref 无效")
             else:
-                require(set(source) == {"type"}, "新建项目不接受 url/ref")
+                require(set(source) == {"type"}, "新建项目与不需要仓库的会话不接受 url/ref")
             worker = body.get("worker_id")
             if worker:
                 self._worker(db, actor["id"], worker, team)
@@ -1074,6 +1089,7 @@ class Service:
             from . import credentials as repo_credentials
             bound = repo_credentials.resolve(db, actor, source, team, named.get("source"), default)
             if "publish" in body:   # D48: a new repository is checked with the credential named for it
+                require(not general(source), NO_REPOSITORY + "，不能设置发布")
                 wanted = publish_policy(body["publish"])
                 self._new_repository_policy(db, actor, team, source, wanted)
                 require(not wanted["auto"] or source.get("type") == "git" or wanted.get("repository"),
@@ -1413,6 +1429,7 @@ class Service:
             run = run_access(db, actor, rid)
             require(may_publish(db, actor, run), "只有会话创建者、Team owner 或管理员可以设置发布", 403, "forbidden")
             snapshot, source = json.loads(run["snapshot"]), json.loads(run["source"])
+            require(not general(source), NO_REPOSITORY, 409, "no_repository")
             self._new_repository_policy(db, actor, run["team_id"], source, policy)
             if policy.get("repository") and run["owner_id"] != actor["id"]:   # the automatic publish runs as its creator
                 try:
@@ -1520,6 +1537,7 @@ class Service:
         with self.db.read() as db:
             run = run_access(db, actor, rid)
             require(may_publish(db, actor, run), "只有会话创建者、Team owner 或管理员可以发布", 403, "forbidden")
+            require(not general(json.loads(run["source"])), NO_REPOSITORY, 409, "no_repository")   # D65
             require(run["lifecycle"] == "open" and run["status"] in SETTLED and run["workspace"],
                     "会话执行结束后才能发布", 409, "publish_busy")
             snapshot, source = json.loads(run["snapshot"]), json.loads(run["source"])
@@ -2387,6 +2405,8 @@ class Service:
             if (run.get("source") or {}).get("type") == "git":
                 action = ("推送与 Draft PR 由平台完成：会话完成后在会话页点「发布到仓库」，或开启「完成后自动发布」；"
                           "可续作去掉要求推送的任务。")
+            elif general(run.get("source")):   # D65
+                action = NO_REPOSITORY + "；可续作去掉要求推送或建仓库的任务。"
             else:   # a new project goes to a new repository the platform makes (EC2 run-f7670bfb…, D48)
                 action = ("此会话的源码不来自远端仓库：推送与建仓库由平台完成——会话完成后在会话页填写新仓库（owner、仓库名）与有写权限的凭证，"
                           "点「新建仓库并发布」；可续作去掉要求建仓库或推送的任务。")
