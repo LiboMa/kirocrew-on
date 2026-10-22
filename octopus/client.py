@@ -61,9 +61,9 @@ class Client:
             raise http_error(exc) from None
 
     def download(self, path, file, timeout=300):
-        """Write a signed download (``/archive/<ticket>/…``) to ``file``; returns the bytes written."""
-        if not path.startswith("/archive/"):
-            raise ValueError("只能下载 /archive/ 链接")
+        """Write a signed download (``/archive/<ticket>/…``, D58's ``/bundle/<ticket>/…``) to ``file``; returns the bytes."""
+        if not path.startswith(("/archive/", "/bundle/")):
+            raise ValueError("只能下载 /archive/ 或 /bundle/ 链接")
         req = urllib.request.Request(self.url + path)
         try:
             with urllib.request.urlopen(req, timeout=timeout) as response:
@@ -72,6 +72,18 @@ class Client:
                     file.write(chunk)
                     total += len(chunk)
                 return total
+        except urllib.error.HTTPError as exc:
+            raise http_error(exc) from None
+
+    def upload(self, path, data, timeout=300):
+        """Bytes sent as they are (D58 sync's bundle) to a /v1/ path; the JSON answer as request's."""
+        if not path.startswith("/v1/") or path.startswith("//"):
+            raise ValueError("Use a /v1/ API path")
+        req = urllib.request.Request(self.url + path, method="POST", data=data,
+                                     headers={"Authorization": "Bearer " + self.token, "Content-Type": "application/octet-stream"})
+        try:
+            with urllib.request.urlopen(req, timeout=timeout) as response:
+                return json.load(response)
         except urllib.error.HTTPError as exc:
             raise http_error(exc) from None
 
