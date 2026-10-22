@@ -32,10 +32,13 @@ def skill(url, repo=ROOT):
     return SKILL.read_text().replace("{{OCTOPUS_URL}}", url.rstrip("/")).replace("{{KIROCREW_ON_REPO}}", str(repo))
 
 
-def issue_token(client_factory, url, client, username, password, admin=False):
+def issue_token(client_factory, url, client, username, password, admin=False, expires=None):
     """Sign in as ``username`` and issue the Coding Agent's own token (spec §7.1): read, execute and manage for 30 days;
-    with ``admin`` (an administrator only) also admin, for 7 days. Returns {"token", "id"} and, when signing out failed,
-    a "warning"; the sign-in token is logged out in every case it can be."""
+    with ``admin`` (an administrator only) also admin, for 7 days. ``expires`` (D62: 7d / 30d / 365d / never; admin at most
+    30d) chooses otherwise; ttl still goes along for a platform from before D62. Returns {"token", "id"} and, when signing
+    out failed, a "warning"; the sign-in token is logged out in every case it can be."""
+    if admin and expires not in (None, "7d", "30d"):
+        raise ValueError("带 admin 权限的 Token 最长 30 天：--expires 用 7d 或 30d")
     login = client_factory(url, "").request("POST", "/v1/login", {"username": username, "password": password})
     session = client_factory(url, login["token"])
     issued = None
@@ -45,7 +48,7 @@ def issue_token(client_factory, url, client, username, password, admin=False):
         issued = session.request("POST", "/v1/tokens", {
             "label": f"{client} MCP" + (" admin" if admin else ""),
             "scopes": ["read", "execute", "manage"] + (["admin"] if admin else []),
-            "ttl": (7 if admin else 30) * 86400})
+            "ttl": (7 if admin else 30) * 86400, **({"expires_in": expires} if expires else {})})
         return {"token": issued["token"], "id": issued.get("id")}
     finally:
         try:

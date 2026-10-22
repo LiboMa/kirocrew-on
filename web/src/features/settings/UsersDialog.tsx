@@ -10,6 +10,7 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { spaceWorkers, useConsole } from "@/features/console/context";
+import { expiresText } from "@/lib/tokens";
 
 const ADMIN_USERS = ["admin", "users"] as const;
 type Pending = { action: "deactivate" | "activate" | "promote" | "demote"; label: string } | null;
@@ -163,7 +164,7 @@ function UserRow({ user }: { user: AdminUser }) {
         <ul className="space-y-1 rounded-md bg-muted/40 px-3 py-2 text-xs" aria-label={user.username + " 的 Token"}>
           {(tokens.data ?? []).map((token) => (
             <li key={token.id} className="flex items-center gap-2">
-              <span className="flex-1">{token.label} · {token.scopes.join(" · ")} · {new Date(token.expires * 1000).toLocaleDateString()} 到期 ·{" "}
+              <span className="flex-1">{token.label} · {token.scopes.join(" · ")} · {expiresText(token.expires)} ·{" "}
                 {token.last_used ? "最近使用 " + new Date(token.last_used * 1000).toLocaleString() : "从未使用"}</span>
               {revoking === token.id ? (
                 <>

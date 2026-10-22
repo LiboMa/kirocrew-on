@@ -62,7 +62,9 @@ def openapi():
         "TeamArchive": obj({"archived": {"type": "boolean"}}, ["archived"]),
         "TeamEnvironment": obj({"worker_id": text}, ["worker_id"]),
         "Token": obj({"label": text, "ttl": integer, "scopes": {"type": "array", "minItems": 1,
-                       "items": {"enum": ["read", "execute", "manage", "admin"]}}}),
+                       "items": {"enum": ["read", "execute", "manage", "admin"]}},
+                      # D62: how long it lasts; never → expires null. With admin at most 30d. ttl (seconds, ≤ 30 days) as before.
+                      "expires_in": {"enum": ["7d", "30d", "365d", "never"]}}),
         "Resolve": obj({"input": text, "name": text, "workflow_id": text, "workflow_version": integer,
                         "template_id": text, "steps": step_list, "team_id": text}, ["input"]),
         "Design": obj({"request_id": command["request_id"], "input": text, "worker_id": text,

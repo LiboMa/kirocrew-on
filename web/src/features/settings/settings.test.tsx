@@ -29,7 +29,18 @@ describe("settings", () => {
     await userEvent.click(within(dialog).getByRole("button", { name: "创建 API Token" }));
     expect(await screen.findByText("oct_secret_value")).toBeInTheDocument();
     expect(screen.getByText("仅显示这一次。将它配置到对应客户端的私有环境变量中。")).toBeInTheDocument();
-    expect(calls.find((c) => c.method === "POST" && c.path === "/v1/tokens")?.body).toEqual({ label: "Claude Code", scopes: ["read", "execute"], ttl: 604800 });
+    expect(calls.find((c) => c.method === "POST" && c.path === "/v1/tokens")?.body).toEqual({ label: "Claude Code", scopes: ["read", "execute"], expires_in: "30d" });
+  });
+
+  test("a token's lifetime is chosen: 7, 30 or 365 days, or never (D62)", async () => {
+    const calls = start({ "GET /tokens": [], "POST /tokens": { id: "t1", token: "oct_secret_value", scopes: ["read", "execute"], expires: null } });
+    const dialog = await openSetting(/API 与 Coding Agent 接入/);
+    const lifetime = within(dialog).getByLabelText("有效期");
+    expect([...(lifetime as HTMLSelectElement).options].map((o) => o.textContent)).toEqual(["7 天", "30 天", "365 天", "永不过期"]);
+    await userEvent.selectOptions(lifetime, "never");
+    await userEvent.click(within(dialog).getByRole("button", { name: "创建 API Token" }));
+    expect(await screen.findByText("永不过期，可随时撤销。")).toBeInTheDocument();
+    expect(calls.find((c) => c.method === "POST" && c.path === "/v1/tokens")?.body).toMatchObject({ expires_in: "never" });
   });
 
   test("an administrator creates a Team with its owner and an execution environment", async () => {
@@ -411,12 +422,13 @@ describe("settings", () => {
   });
 
   test("tokens show when they were last used", async () => {
-    start({ "GET /tokens": [{ id: "t1", label: "claude MCP", scopes: "[\"read\"]", expires: 1_900_000_000, last_used: null },
+    start({ "GET /tokens": [{ id: "t1", label: "claude MCP", scopes: "[\"read\"]", expires: null, last_used: null },
       { id: "t2", label: "Web login", scopes: "[\"read\"]", expires: 1_900_000_000, last_used: 1_790_000_000 }] });
     const dialog = await openSetting(/API 与 Coding Agent 接入/);
     expect(await within(dialog).findByText(/claude MCP/)).toBeInTheDocument();
     expect(dialog).toHaveTextContent("从未使用");
     expect(dialog).toHaveTextContent("最近使用");
+    expect(dialog).toHaveTextContent("永不过期");   // D62: expires null
   });
 
   test("an administrator can disable a Worker", async () => {

@@ -432,7 +432,7 @@ CloudFront 只使用 us-east-1 的证书）：分发加上别名与证书（SNI�
   修订「本地同步」、事件 `run.synced`。权限与续作相同；同一 `request_id` 只同步一次。Worker 早于 D58 时 409 `worker_outdated`。
 - **未推送提交**：在仓库内提交且源码是这个仓库的 origin 时，本地有 origin 没有的提交会先停下；`--push-base`（MCP `push_base`，须用户同意）
   先 `git push -u origin HEAD`，`--allow-unpushed` 按 origin 已有的提交提交。SSH 形式的 origin 按 HTTPS 提交（执行环境只用 HTTPS 克隆）。
-- **使用者命令行**：`octopus login --url <平台地址>`（Token 保存在 `~/.config/kirocrew-on/cli.json`，0600，标签「octopus CLI」，30 天；
+- **使用者命令行**：`octopus login --url <平台地址>`（Token 保存在 `~/.config/kirocrew-on/cli.json`，0600，标签「octopus CLI」，默认 30 天，`--expires 7d|30d|365d|never` 另选；
   Request 的 client 记为 `cli`），之后 `octopus submit / plan / confirm / status / watch / report / pull / sync / continue / approvals / search`，
   `--json` 输出 JSON，`--run` 指定会话。运维命令（serve、worker、connect、backup 等）不变。
 
@@ -827,6 +827,10 @@ Draft PR（GitHub）/ Draft MR（GitLab）。
   API：`POST /v1/me/password`、`POST /v1/users/<id>/password|active|admin`、`GET /v1/admin/users`、`GET|DELETE /v1/admin/users/<id>/tokens[/<tid>]`。
 - **管理员越权**：可查看并操作全部会话（控制台侧栏「全部会话」，`GET /v1/runs?all=1`），原生 KiroCrew 入口不因管理员身份开放；
   越权操作与用户管理写入审计（`GET /v1/admin/audit`）。
+- **Token 有效期（D62）**：签发时选 7 天、30 天、365 天或永不过期——控制台「API 与 Coding Agent 接入」的「有效期」（默认 30 天）、
+  `POST /v1/tokens` 的 `expires_in`（`7d` / `30d` / `365d` / `never`）、`octopus connect … --expires`、`octopus login --expires`。
+  永不过期的 Token 列表中显示「永不过期」（API 的 `expires` 为 `null`），只能撤销或随停用 / 重置密码失效。带 `admin` 的 Token 最长 30 天（403）。
+  旧客户端只发 `ttl`（秒）时照旧，最长 30 天；新的 `connect` / `login` 同时发 `ttl`，连到旧平台时得到 30 天。
 - **错误语义**：看不到返回 404，看得到但不能做返回 403 并说明原因（例如普通成员删除他人创建的 Team 会话）。
 - **预览链接** 10 分钟有效，每次取文件都核对持有人仍能查看该会话。
 

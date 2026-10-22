@@ -15,6 +15,7 @@ from .client import Client
 from .policies import basis_text
 from .requests import CLI_LABEL
 
+EXPIRES = ("7d", "30d", "365d", "never")   # D62: how long the saved token lasts
 COMMANDS = ("login", "submit", "plan", "confirm", "status", "watch", "report", "pull", "sync", "continue", "approvals", "search")
 STATES = {"preparing": "准备中", "ready": "就绪", "running": "运行中", "waiting_approval": "等待批准", "dispatch_unknown": "派发待核实",
           "stopping": "停止中", "reopening": "重新打开中", "diagnosing": "诊断中", "failed": "失败", "blocked": "已阻塞",
@@ -35,7 +36,9 @@ def parser():
         if session:
             p.add_argument("--run", help="会话 ID（默认取本仓库关联的会话）")
         return p
-    command("login", "登录并保存 Token（~/.config/kirocrew-on/cli.json）", session=False).add_argument("--username")
+    login_cmd = command("login", "登录并保存 Token（~/.config/kirocrew-on/cli.json）", session=False)
+    login_cmd.add_argument("--username")
+    login_cmd.add_argument("--expires", choices=EXPIRES, default="30d", help="Token 有效期：7d、30d（默认）、365d 或 never（永不过期）")
     submit = command("submit", "提交需求（在 Git 仓库内时取 origin 与当前分支为源码）", session=False)
     submit.add_argument("input")
     submit.add_argument("--plan", choices=["agent", "match"])
@@ -72,12 +75,13 @@ def config_path(home=None):
     return Path(home or Path.home()) / ".config/kirocrew-on/cli.json"
 
 
-def login(url, username, password, home=None):
-    """Sign in, then keep a token of the CLI's own (label 「octopus CLI」, 30 days) instead of the login's."""
+def login(url, username, password, home=None, expires="30d"):
+    """Sign in, then keep a token of the CLI's own (label 「octopus CLI」, ``expires``: 30 days unless chosen, D62) instead
+    of the login's; ttl still goes along for a platform from before D62."""
     answer = Client(url, "").request("POST", "/v1/login", {"username": username, "password": password})
     signed = Client(url, answer["token"])
     scopes = [s for s in answer.get("scopes", ["read", "execute", "manage"]) if s != "admin"]
-    token = signed.request("POST", "/v1/tokens", {"label": CLI_LABEL, "scopes": scopes, "ttl": 30 * 86400})
+    token = signed.request("POST", "/v1/tokens", {"label": CLI_LABEL, "scopes": scopes, "ttl": 30 * 86400, "expires_in": expires})
     signed.request("DELETE", "/v1/tokens/" + answer["id"])
     path = config_path(home)
     path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
@@ -240,7 +244,7 @@ def main(argv):
             if not url:
                 raise ValueError("需要平台地址：octopus login --url https://<平台地址>")
             username = args.username or input("用户名：")
-            result = login(url.rstrip("/"), username, getpass.getpass("密码："))
+            result = login(url.rstrip("/"), username, getpass.getpass("密码："), expires=args.expires)
             print(f"已登录 {result['url']}（{result['username']}）")
             return
         run(argv, client_from(args.url, os.environ), Path.cwd())

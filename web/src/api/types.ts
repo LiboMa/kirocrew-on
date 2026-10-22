@@ -468,7 +468,7 @@ export interface ApiToken {
   id: string;
   label: string;
   scopes: string;
-  expires: number;
+  expires: number | null;   // D62: null never expires
   last_used?: number | null;
 }
 
@@ -488,7 +488,7 @@ export interface UserToken {
   id: string;
   label: string;
   scopes: string[];
-  expires: number;
+  expires: number | null;   // D62: null never expires
   last_used: number | null;
 }
 
@@ -504,7 +504,7 @@ export interface IssuedToken {
   id: string;
   token: string;
   scopes: string[];
-  expires: number;
+  expires: number | null;   // D62: null never expires
 }
 
 export interface Resolution {

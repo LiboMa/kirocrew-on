@@ -60,6 +60,8 @@ def build_parser(settings, environ=None):
     link.add_argument("--username", help="你的平台用户名（未指定时交互询问）")
     link.add_argument("--admin", action="store_true",
                       help="管理员：Token 额外含 admin scope（可调用管理员工具），7 天有效；只在本人设备上使用")
+    link.add_argument("--expires", choices=["7d", "30d", "365d", "never"],
+                      help="新 Token 的有效期（D62）：默认 30 天（--admin 为 7 天）；never 永不过期；--admin 最长 30d")
     link.add_argument("--password-env", default="OCTOPUS_PASSWORD", help="读取密码的环境变量；未设置时交互输入")
     link.add_argument("--scope", help="claude: user/project/local（默认 user）；kiro: workspace/global（默认 workspace）")
     link.add_argument("--project", help="kiro workspace 范围与 kiro-ide 的项目目录（默认当前目录）")
@@ -242,7 +244,7 @@ def main(argv=None):
                 username = input("平台用户名：").strip()
             password = os.environ.get(args.password_env) or getpass.getpass(f"{username} 的密码：")
             try:
-                issued = issue_token(Client, args.url, args.client, username, password, admin=args.admin)
+                issued = issue_token(Client, args.url, args.client, username, password, admin=args.admin, expires=args.expires)
             except (RuntimeError, ValueError, OSError) as exc:
                 raise SystemExit(f"错误：{exc}") from None
             token = issued["token"]

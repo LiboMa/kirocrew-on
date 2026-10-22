@@ -14,7 +14,7 @@ import unicodedata
 
 from . import journal, policies, quotas, remote_preview, requests as submissions
 from .db import dumps, uid
-from .security import Error, check_password, elevated, password_hash, require
+from .security import Error, check_password, elevated, expiry, password_hash, require
 
 TOOLS = ("kiro", "claude", "codex", "opencode")
 ROLES = {"viewer": 1, "runner": 2, "editor": 3, "owner": 4}
@@ -2588,7 +2588,7 @@ class Service:
     def user_tokens(self, actor, uid):
         with self.db.read() as db:
             self._target(db, actor, uid)
-            return [{**dict(r), "scopes": json.loads(r["scopes"])} for r in db.execute(
+            return [{**dict(r), "scopes": json.loads(r["scopes"]), "expires": expiry(r["expires"])} for r in db.execute(
                 "SELECT id,label,scopes,expires,last_used FROM tokens WHERE user_id=? AND expires>? ORDER BY expires DESC",
                 (uid, time.time()))]
 

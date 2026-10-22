@@ -187,6 +187,13 @@
           "more": "第 1 期（D60，EC2 290718f，2026-10-22）：KiroCrew 推迟的子 Agent 显示为排队（「需要处理」写原因类别、无需操作），看门狗与时长预算不计排队，never started 自动重新派发（不占重试与预算，连续第 3 次交给协调者）；部署后会话照常完成，真实排队待负责人同意后在 owner 边界制造。第 2 期（D61）每人 / 每 Team 的并发上限：本机完成（迁移 10、引擎按等待先后排队、控制台「并发上限」、MCP octopus_quotas），待部署与 EC2。第 3 期：按月的用量上限。"
         },
         {
+          "id": "m4-token-expiry",
+          "name": "API Token 有效期可选（7 / 30 / 365 天 / 永不过期）",
+          "status": "local",
+          "ref": "D62",
+          "more": "负责人 2026-10-22。控制台「有效期」（默认 30 天）、POST /v1/tokens 的 expires_in、octopus connect / login --expires；永不过期显示「永不过期」（expires null）；带 admin 的最长 30 天。待：部署与 EC2 核对。"
+        },
+        {
           "id": "m5-conn01",
           "name": "M5 CONN-01 GitHub App：连接、列仓库、只读克隆",
           "status": "todo",
