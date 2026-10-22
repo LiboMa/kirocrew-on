@@ -244,6 +244,7 @@ def _required_checks(db, rid, current, steps, notes, replan):
     """D57 §5.1, §13: which of the planned tasks' checks must pass. A planner's mark counts with a quote from the requirement
     (the Session's input), or — in a replan — for a required check of a task it replaces, carried over as it is; any other
     is advisory and said so. A replaced task's required check the replan left out is placed by the platform (_carry)."""
+    from .domain import runs_checks
     requirement = db.execute("SELECT input FROM runs WHERE id=?", (rid,)).fetchone()["input"]
     replaced = ((current.get("replan") or {}).get("replaced") or []) if replan else []
     inherited = list(dict.fromkeys(command for task in replaced for command in task.get("required") or []))
@@ -261,6 +262,8 @@ def _required_checks(db, rid, current, steps, notes, replan):
             step["verify_required"] = required
         else:
             step.pop("verify_required", None)
+        if required and not runs_checks(step):   # D69 Task 2b: said, so no one thinks it ran
+            notes.append(f"任务「{step['name']}」的必过检查不会运行（{_unchecked(step)}）：" + "、".join(_clip(c, 80) for c in required[:3]))
         if kept := {command: basis[command] for command in required if command in basis}:
             step["verify_basis"] = kept
     _carry(replaced, steps, notes)
@@ -289,8 +292,19 @@ def _carry(replaced, steps, notes):
                 target["verify"] = [*target.get("verify", []), command]
             target["verify_required"] = [*target.get("verify_required", []), command]
             notes.append(f"平台把原任务「{task.get('name') or task.get('id')}」的必过检查补到了 {target['id']}：{_clip(command, 120)}")
+    if missing and not runnable and any(_unchecked(step) == "发散阶段不运行检查命令" for step in steps):
+        # D69 Task 2b (D57 session): only diverge tasks — exploratory work is not red-lined; said instead
+        notes.append("必须通过的检查没有可运行的任务（发散阶段不运行检查命令）：" + "、".join(f"「{_clip(c, 120)}」" for c in missing[:5]))
+        return
     require(not missing, f"重新规划没有能承接被替换任务必过检查的新任务（审查与设计任务的检查平台不运行，每个任务至多 {room} 条检查）："
             + "、".join(f"「{_clip(command, 200)}」" for command in missing[:5]), 409, "plan_invalid")
+
+
+def _unchecked(step):
+    """Why the platform runs no checks of ``step`` (domain.runs_checks)."""
+    from .phases import own
+    return "发散阶段不运行检查命令" if own(step) == "diverge" and step.get("kind") not in ("review", "design") \
+        else "审查与设计任务的检查平台不运行"
 
 
 def _fix_kept_checks(db, rid, kept, fixes, notes):

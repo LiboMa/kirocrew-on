@@ -90,5 +90,39 @@ class RelaxTests(unittest.TestCase):
         self.assertIsNone(phases.relax(self.evidence("outcome_pass", "tests"), self.PLAN[0], design, "原因", self.PLAN))
 
 
+class RequiredChecksTests(unittest.TestCase):
+    """D69 Task 2b (D57 session's review): a must-pass check that no task can run because the tasks are diverge is said, not
+    a plan made invalid; one that a non-running task carries is said too."""
+    REPLACED = [{"id": "task-2", "name": "实现", "required": ["python3 -m unittest -q"]}]
+
+    def test_a_research_only_replan_keeps_going_and_says_why_the_check_does_not_run(self):
+        from octopus.planning import _carry
+        notes = []
+        _carry(self.REPLACED, [spec("research", "research")], notes)
+        self.assertIn("必须通过的检查没有可运行的任务（发散阶段不运行检查命令）", " ".join(notes))
+
+    def test_a_runnable_task_without_room_is_still_invalid(self):
+        from octopus.planning import _carry
+        full = spec("code", "implement", verify=[f"check-{n}" for n in range(10)])
+        with self.assertRaises(Error) as caught:
+            _carry(self.REPLACED, [full], [])
+        self.assertEqual(caught.exception.code, "plan_invalid")
+
+    def test_a_planned_must_pass_check_that_will_not_run_is_said(self):
+        from octopus.planning import _required_checks
+
+        class Db:
+            def execute(self, sql, params=()):
+                class Row:
+                    def fetchone(inner):
+                        return {"input": "必须通过 python3 -m unittest"}
+                return Row()
+        steps = [spec("research", "research", verify=["python3 -m unittest"], verify_required=["python3 -m unittest"],
+                      verify_basis={"python3 -m unittest": "必须通过 python3 -m unittest"})]
+        notes = []
+        _required_checks(Db(), "run-x", {}, steps, notes, False)
+        self.assertIn("任务「research」的必过检查不会运行（发散阶段不运行检查命令）", " ".join(notes))
+
+
 if __name__ == "__main__":
     unittest.main()
