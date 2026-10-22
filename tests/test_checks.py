@@ -303,7 +303,10 @@ class CheckTests(unittest.TestCase):
         expected = ["命令不存在：d57-no-such-command", "缺少 Python 模块：d57_no_such_module", "检查环境没有 git 提交者身份",
                     None, None, None, None, None, None, None]
         tails = [r["tail"] for r in value["results"]]
-        self.assertEqual([r["exit"] for r in value["results"]][5:], [127, 127, 127, 127, 0], tails)
+        exits = [r["exit"] for r in value["results"]]
+        self.assertEqual(exits[5:8] + exits[9:], [127, 127, 127, 0], tails)
+        # "sh file": 127 where sh is bash (macOS, AL2023), 2 where it is dash ("cannot open", ubuntu); the project's either way
+        self.assertIn(exits[8], (127, 2), tails)
         self.assertEqual([checks_module.unrunnable(r) for r in value["results"]], expected, tails)
         # the Worker records its answer, made with the project at hand, in each failed result
         self.assertEqual([r.get("unrunnable", "absent") for r in value["results"]], [*expected[:9], "absent"], tails)
