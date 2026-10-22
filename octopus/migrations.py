@@ -188,10 +188,17 @@ CREATE TABLE IF NOT EXISTS shares(
 CREATE INDEX IF NOT EXISTS shares_subject ON shares(kind,subject);
 """
 
+# Owner 2026-10-22: a person's own pin and star on a Session they can read (「历史 Session，请增加收藏、置顶」).
+MARKS = """
+CREATE TABLE IF NOT EXISTS run_marks(
+ user_id TEXT NOT NULL REFERENCES users(id), run_id TEXT NOT NULL REFERENCES runs(id),
+ pinned INTEGER NOT NULL DEFAULT 0, starred INTEGER NOT NULL DEFAULT 0, updated REAL NOT NULL, PRIMARY KEY(user_id, run_id));
+"""
+
 MIGRATIONS = [(1, "baseline", BASELINE), (2, "environments", ENVIRONMENTS), (3, "access", ACCESS),
               (4, "teams_workers", TEAMS_WORKERS), (5, "apps", APPS), (6, "credentials", CREDENTIALS),
               (7, "knowledge", KNOWLEDGE), (8, "knowledge_kept", KNOWLEDGE_KEPT),
-              (9, "requests_policies", REQUESTS_POLICIES), (10, "quotas", QUOTAS), (12, "shares", SHARES)]   # 11: D57's (another branch)
+              (9, "requests_policies", REQUESTS_POLICIES), (10, "quotas", QUOTAS), (12, "shares", SHARES), (13, "marks", MARKS)]   # 11: D57's (another branch)
 
 
 def _statements(script):

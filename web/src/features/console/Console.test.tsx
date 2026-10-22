@@ -10,6 +10,9 @@ afterEach(() => {
   window.history.replaceState(null, "", "/");
 });
 
+/** The list's Session buttons (each row also has its 「会话操作」 menu). */
+const sessionButtons = (list: HTMLElement) => within(list).getAllByRole("button").filter((b) => b.dataset.run);
+
 const runs = [
   makeRun({ id: "run-a", name: "修复登录失败", status: "blocked", attention: { title: "规划任务已停止" } }),
   makeRun({ id: "run-b", name: "退款接口幂等", input: "订单退款幂等校验", status: "running", updated: 1_790_000_200 }),
@@ -55,14 +58,14 @@ describe("console shell", () => {
     mockApi(workspaceRoutes(runs));
     render(<App />);
     const list = await screen.findByRole("navigation", { name: "会话列表" });
-    await waitFor(() => expect(within(list).getAllByRole("button")).toHaveLength(2));
-    expect(within(list).getAllByRole("button")[0]).toHaveTextContent("退款接口幂等");
+    await waitFor(() => expect(sessionButtons(list)).toHaveLength(2));
+    expect(sessionButtons(list)[0]).toHaveTextContent("退款接口幂等");
     expect(within(list).getByText("规划任务已停止")).toBeInTheDocument();
     await userEvent.type(screen.getByLabelText("搜索会话"), "订单");
-    await waitFor(() => expect(within(list).getAllByRole("button")).toHaveLength(1));
+    await waitFor(() => expect(sessionButtons(list)).toHaveLength(1));
     await userEvent.clear(screen.getByLabelText("搜索会话"));
     await userEvent.click(screen.getByRole("button", { name: "需处理" }));
-    await waitFor(() => expect(within(list).getAllByRole("button").map((b) => b.dataset.run)).toEqual(["run-a"]));
+    await waitFor(() => expect(sessionButtons(list).map((b) => b.dataset.run)).toEqual(["run-a"]));
   });
 
   test("an administrator can list every Session, labelled with its owner; others cannot", async () => {
@@ -142,7 +145,7 @@ describe("console shell", () => {
     render(<App />);
     const list = await screen.findByRole("navigation", { name: "会话列表" });
     await waitFor(() => expect(window.location.search).toBe(""));
-    await userEvent.click(within(list).getAllByRole("button")[0]);
+    await userEvent.click(sessionButtons(list)[0]);
     expect(window.location.search).toBe("?run=run-b");
   });
 });

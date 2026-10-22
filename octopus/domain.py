@@ -1894,8 +1894,21 @@ class Service:
         result = worker_request(json.loads(worker["config"]), "/files", {"run_id": rid, "path": relative})
         return base64.b64decode(result["content"])
 
+    def mark_run(self, actor, rid, body):
+        """The actor's own pin and star on a Session they can read (owner 2026-10-22): ``{pinned?, starred?}``."""
+        require(isinstance(body, dict) and body and set(body) <= {"pinned", "starred"}
+                and all(isinstance(v, bool) for v in body.values()), "须写 pinned 或 starred，取值为 true 或 false")
+        with self.db.transaction() as db:
+            run_access(db, actor, rid, admin=False, read=True)
+            row = db.execute("SELECT pinned,starred FROM run_marks WHERE user_id=? AND run_id=?", (actor["id"], rid)).fetchone()
+            marks = {"pinned": bool(row["pinned"]) if row else False, "starred": bool(row["starred"]) if row else False, **body}
+            db.execute("INSERT INTO run_marks(user_id,run_id,pinned,starred,updated) VALUES(?,?,?,?,?) "
+                       "ON CONFLICT(user_id,run_id) DO UPDATE SET pinned=excluded.pinned, starred=excluded.starred, "
+                       "updated=excluded.updated", (actor["id"], rid, int(marks["pinned"]), int(marks["starred"]), time.time()))
+        return marks
+
     def runs(self, actor, all=False, status=None, q=None, limit=None, view=None, page=False, cursor=None, shared=False,
-             **filters):
+             pinned=False, starred=False, **filters):
         """The actor's own and Team Sessions, newest first; with all=True an elevated admin gets every Session (B5).
         Filtered on the server (M3-5): ``status`` (one or a list), ``q`` (full text, every word) and ``limit``, and D56's
         ``lifecycle``, ``space``, ``repo``, ``branch``, ``stage``, ``tool``, ``client``, ``submitter``, ``since``, ``until``
@@ -1910,7 +1923,12 @@ class Service:
         sql, params = listing.sql(found)
         with self.db.read() as db:
             items, total, more = [], 0, False
+            marks = {r["run_id"]: {"pinned": bool(r["pinned"]), "starred": bool(r["starred"])}
+                     for r in db.execute("SELECT run_id,pinned,starred FROM run_marks WHERE user_id=?", (actor["id"],))}
             for row in db.execute(sql, params):
+                mine = marks.get(row["id"], {"pinned": False, "starred": False})
+                if pinned and not mine["pinned"] or starred and not mine["starred"]:
+                    continue
                 try:
                     if shared:   # D64 「共享给我」: only what a share brings
                         run = run_access(db, actor, row["id"], admin=False, read=True)
@@ -1930,7 +1948,7 @@ class Service:
                     if not page:
                         break
                     continue
-                value = self._view(db, run, actor, detail=False)
+                value = {**self._view(db, run, actor, detail=False), "marks": mine}
                 items.append(listed(value) if view == "list" else value)
             if not page:
                 return items

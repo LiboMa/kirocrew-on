@@ -397,6 +397,8 @@ export interface Run {
   /** What the server allows the current user on this Session; absent from older platforms. */
   /** resume: false for a Session of an archived Team (readable and stoppable only). */
   /** publish: may publish the Session and answer its approvals (creator, Team owner, admin; D38 A3). */
+  /** One's own pin and star (owner 2026-10-22: 收藏、置顶). */
+  marks?: { pinned: boolean; starred: boolean };
   permissions?: { operate: boolean; delete: boolean; native?: boolean; resume?: boolean; publish?: boolean;
     /** D49 R7: why the native entry stays closed (e.g. another member's boundary). */
     native_reason?: string;

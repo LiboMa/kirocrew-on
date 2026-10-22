@@ -287,8 +287,8 @@
         {
           "id": "m3-session-marks",
           "name": "历史会话：收藏、置顶、删除、分享",
-          "status": "todo",
-          "ref": "负责人 2026-10-22"
+          "status": "local",
+          "ref": "迁移 13 run_marks · 会话列表「⋯」"
         }
       ],
       "milestones": [

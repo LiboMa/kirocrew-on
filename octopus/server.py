@@ -862,7 +862,8 @@ def server(database, port=8918, host="127.0.0.1", allowed_hosts=(), origin_secre
                     return self.respond(service.runs(actor, all=query.get("all") == ["1"], status=status, q=one("q"),
                                                      limit=int(limit) if limit else None, view=one("view"),
                                                      page=one("page") == "1", cursor=one("cursor"),
-                                                     shared=one("shared") == "1", **filters))   # D64
+                                                     shared=one("shared") == "1", pinned=one("pinned") == "1",
+                                                     starred=one("starred") == "1", **filters))   # D64; one's own marks
                 if segments[:2] == ["v1", "policies"] and len(segments) in {2, 3}:   # D55: admission rules, mapping preferences
                     if len(segments) == 3:
                         require(method == "DELETE", "Method not allowed", 405)
@@ -871,6 +872,9 @@ def server(database, port=8918, host="127.0.0.1", allowed_hosts=(), origin_secre
                     if method == "POST":
                         return self.respond(service.create_policy(actor, body), 201)
                     return self.respond(service.policies(actor, (query.get("team_id") or [None])[-1] or None))
+                if len(segments) == 4 and segments[:2] == ["v1", "runs"] and segments[3] == "marks":   # pin and star (one's own)
+                    require(method == "POST", "Method not allowed", 405)
+                    return self.respond(service.mark_run(actor, segments[2], body))
                 if len(segments) == 6 and segments[:2] == ["v1", "runs"] and segments[3] == "attempts" and segments[5] == "diff":
                     require(method == "GET", "Method not allowed", 405)   # D56: what a candidate changed
                     return self.respond(service.attempt_diff(actor, segments[2], segments[4]))

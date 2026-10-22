@@ -104,6 +104,7 @@ def openapi():
         # D55: a mapping preference (admission rules are gone, D70)
         "Policy": obj({"kind": {"enum": ["mapping"]}, "scope": {"enum": ["personal", "team"]}, "team_id": text,
                        "rule": {"type": "object"}}, ["kind", "scope", "rule"]),
+        "Marks": obj({"pinned": {"type": "boolean"}, "starred": {"type": "boolean"}}),   # one's own pin and star
         "Share": obj({"kind": {"enum": ["user", "team", "everyone"]}, "username": text, "id": text,
                       "role": {"enum": ["viewer", "collaborator"]}}, ["kind", "role"]),   # D64
         "Quota": obj({"scope": {"enum": ["default", "user", "team"]}, "id": text,
@@ -170,6 +171,7 @@ def openapi():
         "/v1/requests": {"get": None}, "/v1/requests/{id}": {"get": None},
         "/v1/policies": {"get": None, "post": "Policy"}, "/v1/policies/{id}": {"delete": "Empty"},
         "/v1/quotas": {"get": None, "post": "Quota"},
+        "/v1/runs/{id}/marks": {"post": "Marks"},
         "/v1/runs/{id}/shares": {"get": None, "post": "Share"}, "/v1/runs/{id}/shares/{share}": {"delete": "Empty"},
         "/v1/runs/{id}/events": {"get": None}, "/v1/runs/{id}/export": {"get": None},
         "/v1/runs/{id}/crew-entry": {"post": "Empty"}, "/v1/runs/{id}/preview": {"post": "Empty"},
@@ -283,6 +285,10 @@ def openapi():
             if path == "/v1/runs" and method == "get":
                 op["parameters"] = [{"in": "query", "name": "all", "schema": {"enum": ["1"]},
                                      "description": "Elevated admins only: every Session instead of their own and their Teams'."},
+                                    {"in": "query", "name": "pinned", "schema": {"enum": ["1"]},
+                                     "description": "Only the Sessions the caller pinned (each item's marks say pinned / starred)."},
+                                    {"in": "query", "name": "starred", "schema": {"enum": ["1"]},
+                                     "description": "Only the Sessions the caller starred."},
                                     {"in": "query", "name": "status", "schema": {"type": "string"},
                                      "description": "One Session status, or several separated by commas."},
                                     {"in": "query", "name": "q", "schema": {"type": "string", "minLength": 1, "maxLength": 200},

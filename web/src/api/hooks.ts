@@ -58,6 +58,14 @@ export function useRunPages(params: string, allSessions: boolean) {
   });
 }
 
+/** One's pinned Sessions in the space ("" personal, a Team id, null every space), shown above the paged list. */
+export function usePinnedRuns(space: string | null, allSessions: boolean) {
+  const path = "/runs?view=list&pinned=1" + (space !== null ? "&space=" + encodeURIComponent(space || "personal") : "")
+    + (allSessions ? "&all=1" : "");
+  return useQuery({ queryKey: [...keys.runs, "pinned", path], queryFn: () => api<Run[]>(path),
+    placeholderData: (previous) => previous, ...every(10_000) });
+}
+
 /** How many Sessions (and the first few) a query matches, for counts: refreshed every 30 s. */
 export function useRunCount(params: string, allSessions: boolean) {
   const path = "/runs?" + params + (allSessions ? "&all=1" : "");
