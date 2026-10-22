@@ -26,7 +26,8 @@
 ## 共享与组织（原 M4）
 - 组织层，Session 共享给个人 / Team / 公司；Team 执行隔离。
 - **KiroCrew 回收未认领的父会话时杀掉子 Agent**（EC2 2026-10-22，run-16848466…）：Worker 建的 chat slot 被 KiroCrew 急切起了 coordinator 会话但从未认领；内存吃紧（posture=tight）时预取上限为 0，同一边界上新会话建 slot 就回收最旧的未认领父会话（parent-end teardown），正在运行的子 Agent 被 SIGKILL（「killed by Crew (forced stop)」），平台记 native_stopped、不重试。平台把这种停止视为瞬时失败：D57 Task 13。根因：KiroCrew 0.10 的 `session.eager_spawn` 默认开启（sections.py:2216）——D63 在边界的 KiroCrew 配置里关掉它（新配置与已有配置都写 false，明确开启的保留）。
-- **子 Agent 结束时父会话仍跑一轮 coordinator**（EC2 2026-10-22，D63 之后的核对）：Worker 派发时已带 `silent: true`，但 KiroCrew 0.10 只按它关 Slack / Dashboard 通知（slack/gateway.py:10820 起），结果照样注入父 chat slot（`Subagent … → _run_chat in octopus-run-…`，gateway.py:10457），为平台的 slot 起一个 poc-coordinator（kiro 后端）进程并跑一轮——每个任务结束都多一轮 Kiro 用量，进程留到 TTL。待：查 KiroCrew 有无不回报父会话的派发方式（平台以 parent_session 证明归属，须一起设计），或向上游提需求。
+- ~~**子 Agent 结束时父会话仍跑一轮 coordinator**~~（EC2 2026-10-22，D63 之后的核对）：Worker 派发时已带 `silent: true`，但 KiroCrew 0.10 只按它关 Slack / Dashboard 通知（slack/gateway.py:10820 起），结果照样注入父 chat slot（`Subagent … → _run_chat in octopus-run-…`，gateway.py:10457），为平台的 slot 起一个 poc-coordinator（kiro 后端）进程并跑一轮——每个任务结束都多一轮 Kiro 用量，进程留到 TTL。待：查 KiroCrew 有无不回报父会话的派发方式（平台以 parent_session 证明归属，须一起设计），或向上游提需求。
+  2026-10-23 修复：KiroCrew 0.10 已有 `POST /api/spawn/mark-collected {ids, parent_session}`（它自己的阻塞式 spawn 工具用来表示父会话已拿到结果），Worker 每次派发、续接与模型探测拿到原生 ID 后立即调用，结束时不再注入父会话、不跑这一轮，波次的汇总轮也不再触发；结果照旧从 `GET /api/spawn/{id}` 读取，交付标记与保留时长不变。标记只在 Gateway 内存中：运行中 Gateway 重启后，结束时会照旧跑一轮。
 - 用量上限（M4-4 第 3 期）：每人 / 每 Team 按周期（月）的 Kiro credits、token 或分钟数上限（D46 P6a 已有用量记录）；D61 只限同时运行的任务数。
 - 原生入口改为单 Session 票据（K03）；Worker Token 移出数据库（K10）。
 

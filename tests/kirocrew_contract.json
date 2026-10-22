@@ -134,6 +134,13 @@
         "slot"
       ]
     },
+    "POST /api/spawn/mark-collected": {
+      "module": "dashboard/messaging_api/run_control.py",
+      "reads": [
+        "ids",
+        "parent_session"
+      ]
+    },
     "POST /api/lessons": {
       "module": "dashboard/handlers/cron.py",
       "reads": [

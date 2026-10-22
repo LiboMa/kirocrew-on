@@ -1054,7 +1054,10 @@ class Worker:
                          "include_memory": False, "include_lessons": False, "include_project": False, "silent": True}
                 if self.approval_mode == "auto":
                     spawn["approval_mode"] = "auto"
-                tried(session, result="spawned", native_id=self.native("/api/spawn", spawn).get("id"))
+                native_id = self.native("/api/spawn", spawn).get("id")
+                if native_id:
+                    self._quiet_parent(native_id, spawn["parent_session"])
+                tried(session, result="spawned", native_id=native_id)
             except Exception as exc:   # recorded, not raised: the next round tries again
                 tried(session, result="failed", error=type(exc).__name__)
             done.append(session)
@@ -1384,6 +1387,8 @@ class Worker:
                     result = self.native("/api/spawn", spawn)
                 require(re.fullmatch(r"[a-f0-9]{8,64}", str(result.get("id", ""))), "原生 Task ID 无效")
                 value.update(status="running", native_id=result["id"], receipt=result)
+                if self._quiet_parent(result["id"], parent["parent"]):
+                    value["collected"] = True
             except crew_api.GatewayError as exc:
                 try:
                     failure = json.loads(str(exc).partition(": ")[2])
@@ -1399,6 +1404,16 @@ class Worker:
                 value.update(status="dispatch_unknown", error="原生派发回执未确认")
             write(record, value)
             return value
+
+    def _quiet_parent(self, native_id, parent):
+        """Tell KiroCrew the platform collects this run's result itself (GET /api/spawn/{id}), so its end runs no turn
+        in the parent slot: KiroCrew 0.10's POST /api/spawn/mark-collected, which its own blocking spawn tool uses. Best
+        effort: an older or busy Gateway injects the result as before, and the dispatch stands either way."""
+        try:
+            self.native("/api/spawn/mark-collected", {"ids": [native_id], "parent_session": parent}, timeout=10)
+            return True
+        except Exception:
+            return False
 
     USAGE_ROW = {"input": "input_tokens", "output": "output_tokens", "cache_read": "cache_read_tokens",
                  "cache_create": "cache_write_tokens"}
