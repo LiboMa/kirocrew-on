@@ -684,16 +684,22 @@ class Engine:
 
     @staticmethod
     def _reverted(rewound, sha):
-        """What a Worker's rewind put back (D57 §4), as the notes a review_bound record shows, and the files."""
-        reverted, notes = [str(name) for name in rewound.get("reverted") or []], []
+        """What a Worker's rewind put back (D57 §4), as the notes a review_bound record shows, and the files: the tracked
+        files put back, then the files the review created, moved out (an older Worker names none)."""
+        listed = lambda key: [str(name) for name in rewound.get(key) or []]
+        names = lambda files: "、".join(files[:10]) + (f" 等 {len(files)} 个" if len(files) > 10 else "")
+        reverted, removed, left, notes = listed("reverted"), listed("removed"), listed("created"), []
         if reverted:
-            notes.append("审查改动的已跟踪文件已由平台撤回：" + "、".join(reverted[:10])
-                         + (f" 等 {len(reverted)} 个" if len(reverted) > 10 else ""))
+            notes.append("审查改动的已跟踪文件已由平台撤回：" + names(reverted))
+        if removed:
+            notes += ["审查新建的文件已由平台移出：" + names(removed), "移出的文件保存在该次尝试的 review-removed 目录"]
+        if left:   # e.g. a path that would resolve outside the project: left in place, and said
+            notes.append("审查新建的这些文件未能移出，仍在工作区：" + names(left))
         if rewound.get("rewound"):
             notes.append(f"审查期间的 {rewound['rewound']} 个提交已撤回，会话分支回到候选 {sha[:7]}")
         if not notes:   # e.g. only what a candidate leaves out changed: still say what the platform did
             notes.append(f"会话分支已由平台恢复到候选 {sha[:7]}")
-        return notes, reverted
+        return notes, list(dict.fromkeys(reverted + removed))
 
     def _entered(self, run, attempt):
         """Whether a person may have stopped this Attempt's native task in the native page (crew_entry.entered)."""
@@ -704,9 +710,10 @@ class Engine:
         """A review that ended without passing — a rejection, an error, the watchdog's stop — leaves the workspace as the
         reviewer left it, and the rework's candidate would take its edits in: they are put back all the same (D57 §4).
         Recorded as review_bound beside the failure, which stays the Attempt's: its error, failure_type and gate are what
-        recovery sees. warn: put back; skip: no tracked file changed (or a Worker that cannot); fail: putting back failed.
-        Only tracked files are put back (``sources.rewind``: untracked files the reviewer created stay). A review its gates
-        judged (review_bound already recorded) was put back there."""
+        recovery sees. warn: put back; skip: nothing changed (or a Worker that cannot); fail: putting back tracked files
+        failed. The files the reviewer created are moved out too when its dispatch listed the untracked files it started
+        with (``sources.rewind``; without that list they stay). A review its gates judged (review_bound already recorded)
+        was put back there."""
         spec, snapshot = json.loads(attempt["spec"]), json.loads(run["snapshot"])
         if spec.get("kind") != "review" or snapshot.get("execution_contract", 1) < 3 \
                 or planning.planning_task(attempt["task_id"], snapshot) \
@@ -727,22 +734,27 @@ class Engine:
                 raise
             return record("skip", gates.OLD_WORKER) if exc.status == 404 else \
                 record("fail", f"无法核对审查的工作区，未能撤回审查的改动：{exc}")
-        if not check["changed_files"] and check["head"] == sha:
-            return record("skip", "审查没有改动已跟踪的文件")
-        what = "审查改动的 " + "、".join(check["changed_files"][:10]) if check["changed_files"] else \
-            f"审查期间被改动的会话分支（HEAD 不是候选 {sha[:7]}）"
+        created = [str(name) for name in check.get("created") or []]   # a Worker from before D57 §4 names none
+        tracked = bool(check["changed_files"]) or check["head"] != sha
+        if not tracked and not created:   # tracked_only: no list of what it started with, so only tracked files are told
+            return record("skip", "审查没有改动文件" if check.get("tracked_only") is False else "审查没有改动已跟踪的文件")
+        what = "，".join(part for part in (
+            "审查改动的 " + "、".join(check["changed_files"][:10]) if check["changed_files"] else
+            f"审查期间被改动的会话分支（HEAD 不是候选 {sha[:7]}）" if tracked else "",
+            "审查新建的 " + "、".join(created[:10]) if created else "") if part)
         try:
             rewound = self.request(config, "/candidate", {**body, "mode": "rewind"}, timeout=180)
         except Error as exc:
             if not 400 <= exc.status < 500:
                 raise
-            return record("fail", f"平台未能撤回{what}：{exc}") if exc.status == 409 else \
+            # new files alone that could not be moved out are a warning, as everything else about them
+            return record("fail" if tracked else "warn", f"平台未能撤回{what}：{exc}") if exc.status == 409 else \
                 record("skip", f"未能撤回{what}：{gates.OLD_WORKER}")
         if rewound.get("head") != sha or not rewound.get("clean"):
             return record("fail", f"平台撤回{what}后，工作区仍不是候选 {sha[:7]}："
                           + "、".join((rewound.get("changed_files") or [])[:10]))
-        notes, reverted = self._reverted(rewound, sha)
-        record("warn", "；".join(notes), **({"files": reverted[:30]} if reverted else {}))
+        notes, files = self._reverted(rewound, sha)
+        record("warn", "；".join(notes), **({"files": files[:30]} if files else {}))
 
     def _more_gates(self, run, config, task, attempt, spec, evidence, report, latest, start=None):
         """diff_present, no_secrets and the start of checks_pass for a code task; review_bound for a review (D37 §4).
@@ -773,24 +785,32 @@ class Engine:
                 raise
             sha, reviewed = latest["sha"], str((report or {}).get("reviewed_commit") or "")
             notes, reverted = [], []
-            if check["changed_files"] or check["head"] != sha:
-                # D57 §4: what the review changed is put back by the platform, its branch back on the candidate
+            created = [str(name) for name in check.get("created") or []]   # a Worker from before D57 §4 names none
+            tracked = bool(check["changed_files"]) or check["head"] != sha
+            if tracked or created:
+                # D57 §4: what the review changed is put back by the platform, its branch back on the candidate, and the
+                # files it created moved out
                 try:
                     rewound = self.request(config, "/candidate", {**body, "mode": "rewind"}, timeout=180)
                 except Error as exc:
-                    if exc.status == 409:   # refused (HEAD not on top of the candidate, another branch) or failed: not bound
+                    if not 400 <= exc.status < 500:
+                        raise
+                    if not tracked:   # new files alone left in place: a warning, never a failure (D57 §4)
+                        rewound, notes = None, ["审查新建的 " + "、".join(created[:10]) + f" 未能由平台移出：{exc}"]
+                    elif exc.status == 409:   # refused (HEAD not on top of the candidate, another branch) or failed: not bound
                         what = "审查改动了 " + "、".join(check["changed_files"][:10]) if check["changed_files"] else \
                             f"审查期间会话分支被改动（HEAD 不是候选 {sha[:7]}）"
-                        return fail("review_bound", f"{what}，平台未能撤回：{exc}")
-                    if 400 <= exc.status < 500:   # a Worker from before D57 cannot put it back: judged as before
-                        if check["changed_files"]:
-                            return fail("review_bound", "审查不应修改代码，修改应交给实现任务：" + "、".join(check["changed_files"][:10]))
+                        return fail("review_bound", what + ("，新建了 " + "、".join(created[:10]) if created else "")
+                                    + f"，平台未能撤回：{exc}")
+                    elif check["changed_files"]:   # a Worker from before D57 cannot put it back: judged as before
+                        return fail("review_bound", "审查不应修改代码，修改应交给实现任务：" + "、".join(check["changed_files"][:10]))
+                    else:
                         return fail("review_bound", f"审查期间会话分支被改动（HEAD 不是候选 {sha[:7]}）")
-                    raise
-                if rewound.get("head") != sha or not rewound.get("clean"):
-                    return fail("review_bound", f"平台撤回审查的改动后，工作区仍不是候选 {sha[:7]}："
-                                + "、".join((rewound.get("changed_files") or [])[:10]))
-                notes, reverted = self._reverted(rewound, sha)
+                if rewound is not None:
+                    if rewound.get("head") != sha or not rewound.get("clean"):
+                        return fail("review_bound", f"平台撤回审查的改动后，工作区仍不是候选 {sha[:7]}："
+                                    + "、".join((rewound.get("changed_files") or [])[:10]))
+                    notes, reverted = self._reverted(rewound, sha)
             if not (len(reviewed) >= 7 and sha.startswith(reviewed)):
                 notes.append(f"审查报告写的版本（{reviewed[:12] or '缺失'}）与候选 {sha[:7]} 不符")
             if notes:   # D57 §13.4: the verdict counts, bound to the candidate

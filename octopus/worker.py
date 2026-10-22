@@ -617,12 +617,45 @@ class Worker:
                 workspace.baseline_restore(workspace.project_dir(run), candidate)
             marker.unlink(missing_ok=True)
 
+    @staticmethod
+    def _snapshot_untracked(run, folder):
+        """The untracked files a review starts with (D57 §4), in its Attempt's folder, outside the project: what it creates
+        beside them is moved out when its changes are put back. A listing that fails leaves the review without one."""
+        snapshot = folder / "untracked.json"
+        snapshot.unlink(missing_ok=True)   # from a dispatch that stopped before its native task was spawned
+        try:
+            write(snapshot, {"paths": workspace.untracked(workspace.project_dir(run))})
+        except Exception as exc:   # never holds the review up
+            print(f"KiroCrew ON Worker: 未记录审查开始时的未跟踪文件（{folder.name}：{workspace.scrub(exc)[:200]}）",
+                  file=sys.stderr, flush=True)
+
+    @staticmethod
+    def _review_snapshot(run, attempt):
+        """The untracked files a review Attempt started with, or None: not a review, or dispatched before D57 §4."""
+        if not (isinstance(attempt, str) and re.fullmatch(r"attempt-[a-f0-9]{32}", attempt)):
+            return None
+        path = run / "attempts" / attempt / "untracked.json"
+        try:
+            paths = None if path.is_symlink() or not path.is_file() else json.loads(path.read_text()).get("paths")
+        except (OSError, ValueError, AttributeError):
+            return None
+        return paths if isinstance(paths, list) and all(isinstance(name, str) for name in paths) else None
+
+    @staticmethod
+    def _created(state, project, keep):
+        """A check's or a rewind's state with the untracked files the review created (``created``, D57 §4);
+        ``tracked_only`` when the Attempt has no snapshot, so only its tracked files could be told."""
+        created = sorted(set(workspace.untracked(project)) - set(keep)) if keep is not None else []
+        return {**state, "created": created, "tracked_only": keep is None}
+
     def candidate(self, body):
         """A task's candidate commit (D37 §3, ``mode: commit``), a review's check that the workspace is still the
         candidate it reviewed (§6, ``mode: check``), or putting back what a read-only platform task changed in tracked
-        files after that candidate (D46 P4, ``mode: restore``; never moves the branch), or what a review changed in tracked
-        files — its commits on top of the candidate too, so the branch is back on it (D57 §4, ``mode: rewind``) — or what a
-        candidate changed (D56, ``mode: diff``; read only)."""
+        files after that candidate (D46 P4, ``mode: restore``; never moves the branch), or what a review changed — its
+        commits on top of the candidate too, so the branch is back on it, and the files it created, moved into its
+        Attempt's ``review-removed`` folder (D57 §4, ``mode: rewind``) — or what a candidate changed (D56, ``mode: diff``;
+        read only). check and rewind name the files the review created (``created``) when its dispatch listed the
+        untracked files it started with."""
         run = self.path(body["run_id"])
         self._undo_baseline(run)
         try:   # a Session whose workspace is gone (cleaned up long after it ended) says so, not a 500
@@ -640,9 +673,10 @@ class Worker:
             if mode == "diff":
                 require(body.get("expected"), "diff 需要 expected")
                 return workspace.candidate_diff(project, body["expected"], body.get("parent") or base)
+            keep = self._review_snapshot(run, body.get("attempt_id")) if mode in {"check", "rewind"} else None
             if mode == "check":
                 require(body.get("expected"), "check 需要 expected")
-                return workspace.clean_against(project, body["expected"])
+                return self._created(workspace.clean_against(project, body["expected"]), project, keep)
             if mode == "restore":
                 require(body.get("expected"), "restore 需要 expected")
                 state = workspace.clean_against(project, body["expected"])
@@ -658,7 +692,8 @@ class Worker:
                             f"会话分支不在候选 {body['expected'][:7]} 之上，不能撤回", 409, "conflict")
                     current = workspace._git(project, "rev-parse", "--abbrev-ref", "HEAD")
                     require(current == branch, f"工作区不在会话分支 {branch}（当前 {current}），不能撤回", 409, "conflict")
-                return workspace.rewind(project, body["expected"])
+                into = None if keep is None else run / "attempts" / body["attempt_id"] / "review-removed"
+                return self._created(workspace.rewind(project, body["expected"], keep=keep, into=into), project, keep)
             message = str(body.get("message") or "KiroCrew ON：任务候选")[:300]
             return workspace.task_candidate(project, message, branch, run, body.get("parent"), base, body.get("since"))
         except ValueError as exc:
@@ -1270,6 +1305,8 @@ class Worker:
                 value["skills"] = given
             if resume is not None and unresumable is None:
                 value["continuing"] = resume   # kept for a reconcile: a lost receipt still knows the chain
+            if (contract.get("kind") or spec.get("kind")) == "review":   # D57 §4: before its native task starts
+                self._snapshot_untracked(run, folder)
             write(record, value)  # Persist before the native side effect.
             try:
                 spawn = {

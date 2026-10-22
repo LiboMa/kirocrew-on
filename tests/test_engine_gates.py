@@ -578,6 +578,132 @@ class EngineGateTests(TeamsWorkersCase):
         self.assertEqual(rework["names"], ["src/b.js"])
         self.assertEqual(self.service.run(self.c, rid)["status"], "completed")
 
+    def test_a_review_that_only_creates_a_file_has_it_moved_out_and_still_counts(self):
+        """End to end on a real workspace (D57 §4): the review writes review.md and passes; the file is moved into the
+        Attempt's folder, the verdict counts, and the next implement candidate holds the implementer's files only."""
+        from octopus import sources
+        from tests.test_archive import RID, make_worker
+        root = Path(tempfile.mkdtemp())
+        self.addCleanup(__import__("shutil").rmtree, root, True)
+        node, project = make_worker(root)
+        polish = {**IMPLEMENT, "id": "polish", "name": "完善", "verify": []}
+
+        class Real(FakeWorker):
+            def __call__(self, config, path, body=None, **kwargs):
+                if path == "/candidate":
+                    self.calls.append((path, body))
+                    return node.candidate({**body, "run_id": RID})
+                if path == "/dispatch" and body["attempt_id"] not in self.dispatched:
+                    task = body["spec"]["id"]
+                    if task == "review":   # what the Worker records when it dispatches a review
+                        folder = node.path(RID) / "attempts" / body["attempt_id"]
+                        folder.mkdir(parents=True, exist_ok=True)
+                        (folder / "untracked.json").write_text(json.dumps({"paths": sources.untracked(project)}))
+                    for name, text in {"code": {"src/a.js": "export const a = 1;\n"}, "review": {"review.md": "审查结论\n"},
+                                       "polish": {"src/b.js": "export const b = 2;\n"}}[task].items():
+                        (project / name).parent.mkdir(parents=True, exist_ok=True)
+                        (project / name).write_text(text)
+                if path == "/inspect" and self.dispatched[body["attempt_id"]]["spec"]["id"] == "review":
+                    sha = (self.dispatched[body["attempt_id"]].get("candidate") or {}).get("sha", "")
+                    self.outcomes["review"] = {"decision": "pass", "summary": "无阻断问题", "reviewed_commit": sha}
+                return super().__call__(config, path, body, **kwargs)
+        worker = Real()
+        rid = self.session([{**IMPLEMENT, "verify": []}, REVIEW, polish])
+        self.run_engine(worker, ticks=30)
+        c1 = self.attempt(rid, "code")[1]["candidate"]["sha"]
+        attempt, evidence = self.attempt(rid, "review")
+        gate = self.review_bound(evidence)
+        self.assertEqual((gate["status"], gate["files"]), ("warn", ["review.md"]))
+        self.assertIn("审查新建的文件已由平台移出：review.md", gate["detail"])
+        self.assertIn("移出的文件保存在该次尝试的 review-removed 目录", gate["detail"])
+        self.assertIn("审查结论照常采用", gate["detail"])
+        self.assertNotIn("已跟踪", gate["detail"])
+        self.assertEqual((attempt["status"], evidence["reviewed"]), ("accepted", c1))
+        self.assertEqual((node.path(RID) / "attempts" / attempt["id"] / "review-removed/review.md").read_text(), "审查结论\n")
+        candidate = self.attempt(rid, "polish")[1]["candidate"]
+        self.assertEqual(candidate["names"], ["src/b.js"])
+        self.assertNotIn("review.md", sources._git(project, "ls-tree", "-r", "--name-only", candidate["sha"]).splitlines())
+        self.assertFalse((project / "review.md").exists())
+        self.assertEqual(self.service.run(self.c, rid)["status"], "completed")
+
+    def test_a_rejecting_review_that_creates_a_file_has_it_moved_out(self):   # D57 §4: _put_back_review
+        rejection = {"decision": "changes_requested", "summary": "缺少空输入的边界处理", "failure_type": "implementation",
+                     "reviewed_commit": C1}
+        put_back = lambda reverted, removed: lambda body: {
+            "head": C1, "clean": True, "changed_files": [], "reverted": reverted, "rewound": 0, "removed": removed,
+            "created": [], "tracked_only": False}
+        cases = (("warn", {"changed_files": [], "created": ["review.md"]}, put_back([], ["review.md"]),
+                  "审查新建的文件已由平台移出：review.md；移出的文件保存在该次尝试的 review-removed 目录", ["review.md"]),
+                 ("warn", {"changed_files": ["src/a.js"], "created": ["review.md"]}, put_back(["src/a.js"], ["review.md"]),
+                  "审查改动的已跟踪文件已由平台撤回：src/a.js；审查新建的文件已由平台移出：review.md；"
+                  "移出的文件保存在该次尝试的 review-removed 目录", ["src/a.js", "review.md"]),
+                 ("skip", {"changed_files": [], "created": []}, None, "审查没有改动文件", None))
+        for index, (status, changes, rewind, words, files) in enumerate(cases):
+            with self.subTest(words=words):
+                worker = FakeWorker()
+                rid = self.session([{**IMPLEMENT, "verify": []}, REVIEW], recovery=True, request=f"start-000000008{index}")
+                worker.outcomes["review"] = rejection
+                worker.check = lambda body, changes=changes: {"head": C1, "clean": not changes["changed_files"],
+                                                              "tracked_only": False, **changes}
+                if rewind:
+                    worker.rewind = rewind
+                self.run_engine(worker, ticks=8)
+                attempt, evidence = self.attempt(rid, "review")
+                self.assertEqual((attempt["status"], attempt["error"], evidence["failure_type"]),
+                                 ("blocked", "缺少空输入的边界处理", "implementation"))   # what recovery sees, unchanged
+                self.assertNotIn("gate", evidence)
+                gate = self.review_bound(evidence)
+                self.assertEqual((gate["status"], gate.get("files")), (status, files))
+                self.assertIn(words, gate["detail"])
+                self.assertEqual(gate["detail"].count("review-removed"), 1 if rewind else 0)
+                modes = [b["mode"] for p, b in worker.calls if p == "/candidate" and b["attempt_id"] == attempt["id"]]
+                self.assertEqual(modes, ["check", "rewind"] if rewind else ["check"])
+
+    def test_new_files_that_cannot_be_moved_out_never_fail_a_review(self):   # no new failure: D57 §4 only lowers gates
+        worker = FakeWorker()
+        rid = self.session([{**IMPLEMENT, "verify": []}, REVIEW])
+        worker.outcomes["review"] = {"decision": "pass", "summary": "无阻断问题", "reviewed_commit": C1}
+        worker.check = lambda body: {"head": C1, "clean": True, "changed_files": [], "created": ["review.md"],
+                                     "tracked_only": False}
+
+        def refused(body):
+            raise Error(409, "candidate_failed", "Git 操作失败（exit 128）")
+        worker.rewind = refused
+        self.run_engine(worker, ticks=16)
+        attempt, evidence = self.attempt(rid, "review")
+        gate = self.review_bound(evidence)
+        self.assertEqual((gate["status"], attempt["status"], evidence["reviewed"]), ("warn", "accepted", C1))
+        self.assertIn("审查新建的 review.md 未能由平台移出：Git 操作失败（exit 128）", gate["detail"])
+        self.assertIn("审查结论照常采用", gate["detail"])
+        self.assertNotIn("gate", evidence)
+
+    def test_an_old_worker_without_created_keeps_todays_behaviour(self):   # no created, no tracked_only, no removed
+        rejection = {"decision": "changes_requested", "summary": "缺少空输入的边界处理", "failure_type": "implementation",
+                     "reviewed_commit": C1}
+        for index, (outcome, check, status, words) in enumerate((
+                (rejection, None, "skip", "审查没有改动已跟踪的文件"),
+                ({"decision": "pass", "summary": "无阻断问题", "reviewed_commit": C1}, None, "pass", C1[:12]),
+                (rejection, {"head": C1, "clean": False, "changed_files": ["src/a.js"]}, "warn",
+                 "审查改动的已跟踪文件已由平台撤回：src/a.js"))):
+            with self.subTest(status=status):
+                worker = FakeWorker()
+                rid = self.session([{**IMPLEMENT, "verify": []}, REVIEW], request=f"start-000000009{index}")
+                worker.outcomes["review"] = outcome
+                if check:
+                    worker.check = lambda body, check=check: check
+                    worker.rewind = lambda body: {"head": C1, "clean": True, "changed_files": [], "reverted": ["src/a.js"],
+                                                  "rewound": 0}
+                self.run_engine(worker, ticks=16)
+                attempt, evidence = self.attempt(rid, "review")
+                gate = self.review_bound(evidence)
+                self.assertEqual(gate["status"], status)
+                self.assertIn(words, gate["detail"])
+                self.assertNotIn("移出", gate["detail"])
+                self.assertNotEqual(gate["detail"], "审查没有改动文件")
+                self.assertEqual(gate.get("files"), ["src/a.js"] if check else None)
+                modes = [b["mode"] for p, b in worker.calls if p == "/candidate" and b["attempt_id"] == attempt["id"]]
+                self.assertEqual(modes, ["check", "rewind"] if check else ["check"])
+
     def test_stopping_during_checks_ends_them_and_ignores_late_results(self):
         worker, rid = FakeWorker(), self.session([IMPLEMENT])
         worker.verify = [{"state": "running", "passed": None, "failed": None, "results": []}]

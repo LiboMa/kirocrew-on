@@ -233,6 +233,15 @@ def changed_names(project, since, candidate):
     return [name for name in raw.split("\0") if name]
 
 
+def untracked(project):
+    """The workspace's untracked files, neither ignored nor left out of a candidate, sorted and relative to the project
+    (a nested repository is one entry, ``sub/``): what a review starts with (D57 §4)."""
+    raw = _git_bytes(project, "--literal-pathspecs", "status", "--porcelain=v1", "-z", "--untracked-files=all",
+                     "--no-renames")
+    names = (entry[3:].decode(errors="replace") for entry in raw.split(b"\0") if entry[:3] == b"?? ")
+    return sorted(name for name in names if name and not left_out(name.rstrip("/") + ("/x" if name.endswith("/") else "")))
+
+
 def dirty_paths(project):
     """What the workspace has beyond its HEAD — e.g. the files a check run wrote (.coverage, reports): they are the
     platform's, not the next task's deliverables (D37 §11.2)."""
@@ -310,18 +319,24 @@ def restore(project, paths):
     _git(project, "--literal-pathspecs", "restore", "--source=HEAD", "--staged", "--worktree", "--", *paths)
 
 
-def rewind(project, expected):
+def rewind(project, expected, keep=None, into=None):
     """A review's changes put back (D57 §4): commits made on top of the candidate ``expected`` dropped — the candidate and
     what came before it, the implementer's, are never touched — and what remains changed in tracked files restored: what a
-    check counts (``clean_against``), and nothing else. ``reverted`` lists those tracked files. Its limits:
+    check counts (``clean_against``), and nothing else. ``reverted`` lists those tracked files. Then, given ``keep`` (the
+    untracked files the review started with), the untracked files it created are moved into ``into`` (outside the project),
+    never deleted: ``removed`` lists them (``_move_out``). Its limits:
 
-    - untracked files the reviewer created (and never committed) are kept: the next candidate's ``git add -A`` takes them;
+    - without ``keep`` the untracked files the reviewer created (and never committed) are kept: the next candidate's
+      ``git add -A`` takes them; an untracked file in ``keep`` the reviewer changed stays as it is;
     - an untracked file outside what candidates leave out that a reviewer's ``git add -A`` swept into its commit (a report
       the checks left) is removed along with that commit;
     - a reviewer's changes to tracked files that candidates leave out (``node_modules``, a .env) are not undone; such a
-      file a dropped commit added stays in the workspace, untracked again.
+      file a dropped commit added stays in the workspace, untracked again; ignored files are never touched.
 
-    ``ValueError``, with nothing moved, when HEAD is not ``expected`` or a commit on top of it."""
+    ``ValueError``, with nothing moved, when HEAD is not ``expected`` or a commit on top of it, or ``into`` is in the
+    project."""
+    if keep is not None and Path(into).resolve().is_relative_to(Path(project).resolve()):
+        raise ValueError("移出审查新建文件的目录不能在项目中")
     head = _git(project, "rev-parse", "--verify", "HEAD^{commit}")
     rewound = 0
     if head != expected:
@@ -335,7 +350,36 @@ def rewind(project, expected):
         restore(project, reverted)
     if rewound:   # what is left staged (a left-out file a dropped commit added) back to untracked; files untouched
         _git(project, "-c", "core.hooksPath=" + os.devnull, "reset", "-q", env=SAFE_GIT_ENV)
-    return {**clean_against(project, expected), "reverted": reverted, "rewound": rewound}
+    removed = [] if keep is None else _move_out(project, keep, into)
+    return {**clean_against(project, expected), "reverted": reverted, "rewound": rewound, "removed": removed}
+
+
+def _move_out(project, keep, into):
+    """The untracked files not in ``keep`` moved into ``into`` at the same relative paths, sorted: never deleted, a link
+    moved as a link (never followed). A path that would resolve outside the project, one whose place in ``into`` is taken
+    and one that cannot be moved stay where they are. Folders the moves leave empty are removed, never the project."""
+    root, keep, removed = Path(project).resolve(), set(keep), []
+    for name in untracked(project):
+        parts = name.rstrip("/").split("/")
+        if name in keep or name.startswith("/") or any(part in {"", ".", ".."} for part in parts):
+            continue
+        source, target = root.joinpath(*parts), Path(into).joinpath(*parts)
+        if not source.parent.resolve().is_relative_to(root) or not os.path.lexists(source) or os.path.lexists(target):
+            continue
+        try:
+            target.parent.mkdir(parents=True, exist_ok=True)
+            shutil.move(str(source), str(target))   # a rename; across file systems a copy that keeps links as links
+        except OSError:
+            continue
+        removed.append(name)
+        folder = source.parent
+        while folder != root:
+            try:
+                folder.rmdir()   # only when empty
+            except OSError:
+                break
+            folder = folder.parent
+    return sorted(removed)
 
 
 def advance(project, branch, commit, old):
