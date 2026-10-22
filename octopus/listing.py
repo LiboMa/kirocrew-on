@@ -132,7 +132,8 @@ def matches(db, run, found):
         from .requests import NAMES
         planned = snapshot.get("planning") or {}
         client = db.execute("SELECT client FROM requests WHERE id=?", (run["request_id"],)).fetchone() if run.get("request_id") else None
-        parts = [run["id"], snapshot.get("name"), run["input"], run["error"], planned.get("intent"), planned.get("summary"),
+        parts = [run["id"], snapshot.get("name"), snapshot.get("workflow_name"), run["input"], run["error"],
+                 planned.get("intent"), planned.get("summary"),
                  (snapshot.get("replan") or {}).get("reason"), client and NAMES.get(client["client"])]   # D55: 「Codex」
         for t in tasks:
             parts += [t["spec"].get("name"), t["spec"].get("prompt")]

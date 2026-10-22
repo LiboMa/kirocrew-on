@@ -1,6 +1,7 @@
 import { vi } from "vitest";
 import type { Placement, Run, Worker } from "@/api/types";
 import { spaceWorkers } from "@/features/console/context";
+import { SESSION_STATES } from "@/lib/runList";
 
 type Handler = (body: unknown, url: URL, init: RequestInit) => unknown;
 
@@ -64,6 +65,8 @@ export function runPage(runs: Run[], url: URL): unknown {
   if (params.get("page") !== "1") return runs;
   const space = params.get("space");
   const status = params.get("status")?.split(",");
+  if (status?.some((s) => !SESSION_STATES.has(s)))   // the server refuses a status a Session never has (final review)
+    return new Response(JSON.stringify({ error: "status 不是会话的状态", code: "invalid_request" }), { status: 400 });
   const words = (params.get("q") ?? "").toLowerCase().split(/\s+/).filter(Boolean);
   const items = runs.filter((run) => (!space || (space === "personal" ? !run.team_id : run.team_id === space))
     && (!status || status.includes(run.status)) && (!params.get("lifecycle") || run.lifecycle === params.get("lifecycle"))

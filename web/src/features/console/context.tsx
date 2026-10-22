@@ -45,6 +45,8 @@ export interface ConsoleState {
   runTotal: number;
   spaceTotal: number;
   hasMore: boolean;
+  /** Why the list could not be read (a refused filter, the API down): shown, not mistaken for an empty list. */
+  listError: string | null;
   loadMore: () => void;
   loadingMore: boolean;
   filters: RunListFilters;

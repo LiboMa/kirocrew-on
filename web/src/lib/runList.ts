@@ -66,10 +66,27 @@ export function listParams(filters: RunListFilters, space: string | null, limit 
   const params = new URLSearchParams({ page: "1", view: "list", limit: String(limit) });
   if (space !== null) params.set("space", space || "personal");
   const statuses = { active: [...ACTIVE_STATES], attention: [...ATTENTION_STATES], done: ["completed"] }[filters.group as string];
-  if (statuses) params.set("status", statuses.join(","));
+  if (statuses) params.set("status", statuses.filter((s) => SESSION_STATES.has(s)).join(","));
   if (filters.group === "closed") params.set("lifecycle", "closed");
   else if (filters.group !== "all") params.set("lifecycle", "open");
   if (filters.q.trim()) params.set("q", filters.q.trim());
-  activeFilters(filters).forEach((key) => params.set(key, filters[key].trim()));
+  activeFilters(filters).forEach((key) => params.set(key, key === "since" || key === "until" ? day(filters[key], key) : filters[key].trim()));
   return params.toString();
 }
+
+/** A day the user picked, as Unix seconds of their own day: its start for ``since``, its last second for ``until`` (the
+ * server reads YYYY-MM-DD as a UTC day; the console shows local times). Anything else is passed as it is. */
+function day(value: string, key: "since" | "until"): string {
+  const found = /^(\d{4})-(\d{2})-(\d{2})$/.exec(value.trim());
+  if (!found) return value.trim();
+  const [year, month, date] = found.slice(1).map(Number);
+  const start = new Date(year, month - 1, key === "since" ? date : date + 1).getTime() / 1000;
+  return String(key === "since" ? start : start - 1);
+}
+
+/** The statuses a Session has (octopus/domain.py RUN_STATES, kept equal by tests/test_run_search.py); the state groups
+ * send only these — task states such as "dispatching" are refused by the server. */
+export const SESSION_STATES = new Set([
+  "failed", "blocked", "completed", "stopped", "waiting_worker", "awaiting_confirmation", "awaiting_acceptance",
+  "preparing", "ready", "running", "waiting_approval", "dispatch_unknown", "stopping", "reopening", "diagnosing",
+]);

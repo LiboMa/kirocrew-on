@@ -158,6 +158,8 @@ export interface AttemptDiff {
   files: { path: string; insertions: number; deletions: number; binary: boolean }[];
   diff: string;
   truncated: boolean;
+  /** How many changed files are not shown: what a download leaves out too (.env and the like). */
+  hidden?: number;
 }
 
 export interface Candidate {

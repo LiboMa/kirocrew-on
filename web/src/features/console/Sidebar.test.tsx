@@ -44,6 +44,44 @@ describe("session list on the server (D56)", () => {
       .toBe(true));
   });
 
+  test("「进行中」 asks only for statuses a Session has, and finds the running one (final review)", async () => {
+    const { paged } = start();
+    const list = await screen.findByRole("navigation", { name: "会话列表" });
+    await userEvent.click(screen.getByRole("button", { name: "进行中" }));
+    await waitFor(() => expect(within(list).getAllByRole("button").map((b) => b.dataset.run)).toEqual(["run-b"]));
+    expect(paged().at(-1)?.get("status")?.split(",")).not.toContain("dispatching");
+  });
+
+  test("a list the server refuses says so instead of looking empty", async () => {
+    start((url) => url.searchParams.get("q") === "坏"
+      ? new Response(JSON.stringify({ error: "q 须为 1–200 个字符", code: "invalid_request" }), { status: 400 }) : runPage(runs, url));
+    await screen.findByRole("navigation", { name: "会话列表" });
+    await userEvent.type(screen.getByLabelText("搜索会话"), "坏");
+    expect(await screen.findByRole("alert")).toHaveTextContent("q 须为 1–200 个字符");
+  });
+
+  test("the creation dates are the user's own days", async () => {
+    const { paged } = start();
+    await screen.findByRole("navigation", { name: "会话列表" });
+    await userEvent.click(screen.getByRole("button", { name: "筛选" }));
+    await userEvent.type(screen.getByLabelText("创建于起"), "2026-10-21");
+    await userEvent.type(screen.getByLabelText("创建于止"), "2026-10-21");
+    const since = String(new Date(2026, 9, 21).getTime() / 1000);
+    const until = String(new Date(2026, 9, 22).getTime() / 1000 - 1);
+    await waitFor(() => expect(paged().some((s) => s.get("since") === since && s.get("until") === until)).toBe(true));
+    expect(new URLSearchParams(window.location.search).get("since")).toBe("2026-10-21");
+  });
+
+  test("typing a repository is kept while another filter changes", async () => {
+    const { paged } = start();
+    await screen.findByRole("navigation", { name: "会话列表" });
+    await userEvent.click(screen.getByRole("button", { name: "筛选" }));
+    await userEvent.type(screen.getByLabelText("仓库"), "github.com/o/r");
+    await userEvent.selectOptions(screen.getByLabelText("工具"), "codex");
+    expect(screen.getByLabelText("仓库")).toHaveValue("github.com/o/r");
+    await waitFor(() => expect(paged().some((s) => s.get("repo") === "github.com/o/r" && s.get("tool") === "codex")).toBe(true));
+  });
+
   test("filters are sent, shown as removable labels and kept in the address", async () => {
     const { paged } = start();
     await screen.findByRole("navigation", { name: "会话列表" });

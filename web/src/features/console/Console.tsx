@@ -52,6 +52,11 @@ export function Console() {
   // only one the server refuses (404 / 403) is dropped — not on a passing network error.
   useEffect(() => {
     if (!selected || workspace.loading || pages.isPending) return;
+    if (chosen.error instanceof ApiError && [403, 404].includes(chosen.error.status)) {   // before any copy read earlier
+      select(null);
+      toast.warning("该 Session 已不可访问。");
+      return;
+    }
     const run = runs.find((r) => r.id === selected) ?? chosen.data;
     if (run) {
       const theirs = run.team_id ? !memberTeams.some((t) => t.id === run.team_id) : run.owner_id !== me.data?.id;
@@ -60,11 +65,6 @@ export function Console() {
         return;
       }
       setSpaceState(run.team_id ?? "");
-      return;
-    }
-    if (chosen.error instanceof ApiError && [403, 404].includes(chosen.error.status)) {
-      select(null);
-      toast.warning("该 Session 已不可访问。");
     }
   }, [selected, runs, chosen.data, chosen.error, workspace.loading, pages.isPending, select, me.data, allSessions, memberTeams]);
 
@@ -77,6 +77,7 @@ export function Console() {
     me: me.data, teams: memberTeams, allTeams: workspace.teams, users: workspace.users, workers: workspace.workers,
     workflows: workspace.workflows, templates: workspace.templates, runs,
     runTotal: pages.data?.pages[0]?.total ?? 0, spaceTotal: count.data?.total ?? 0, hasMore: !!pages.hasNextPage,
+    listError: pages.error?.message ?? null,
     loadMore: () => void pages.fetchNextPage(), loadingMore: pages.isFetchingNextPage, filters, setFilters,
     space, setSpace, allSessions, setAllSessions, selected, select, open: setDialog, close: () => setDialog(null),
   } : null, [me.data, workspace, runs, pages, count.data, filters, setFilters, space, setSpace, allSessions, selected, select]);

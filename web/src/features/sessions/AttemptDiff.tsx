@@ -31,6 +31,7 @@ export function AttemptDiff({ runId, attemptId, candidate }: { runId: string; at
         {answer.data && (
           <>
             {answer.data.truncated && <p className="text-muted-foreground">改动较多，只显示了前一部分（200 KB 或 4000 行以内）。</p>}
+            {!!answer.data.hidden && <p className="text-muted-foreground">另有 {answer.data.hidden} 个文件（.env 等，下载时同样不含）不显示。</p>}
             <ul aria-label="改动的文件" className="space-y-0.5">
               {answer.data.files.map((item) => (
                 <li key={item.path}>

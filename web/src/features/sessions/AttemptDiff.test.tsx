@@ -44,10 +44,11 @@ describe("what a candidate changed (D56)", () => {
   });
 
   test("a clipped diff says so, and the server's reason is shown as it is", async () => {
-    open({ sha: candidate.sha, parent: null, truncated: true, diff: DIFF, files: [] });
+    open({ sha: candidate.sha, parent: null, truncated: true, diff: DIFF, files: [], hidden: 1 });
     await userEvent.click(await screen.findByRole("button", { name: /执行证据与历史 Attempt/ }));
     await userEvent.click(screen.getByRole("button", { name: /代码改动/ }));
     expect(await screen.findByText(/改动较多，只显示了前一部分/)).toBeInTheDocument();
+    expect(screen.getByText(/另有 1 个文件（\.env 等/)).toBeInTheDocument();
   });
 
   test("an older environment's reason is shown", async () => {

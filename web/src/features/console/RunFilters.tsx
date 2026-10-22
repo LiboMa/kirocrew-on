@@ -16,7 +16,8 @@ const shown = (key: FilterKey, value: string) =>
 function TextFilter({ id, field, filters, setFilters, placeholder }: { id: string; field: "repo" | "branch";
   filters: RunListFilters; setFilters: (f: RunListFilters) => void; placeholder: string }) {
   const [text, setText] = useState(filters[field]);
-  useEffect(() => setText(filters[field]), [filters, field]);
+  const applied = filters[field];
+  useEffect(() => setText(applied), [applied]);   // only when this filter changes, not when another one does
   useEffect(() => {
     if (text.trim() === filters[field]) return;
     const timer = setTimeout(() => setFilters({ ...filters, [field]: text.trim() }), 400);

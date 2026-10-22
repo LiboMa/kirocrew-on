@@ -15,7 +15,7 @@ import { cn } from "@/lib/utils";
 
 export function Sidebar() {
   const { runs, workflows, selected, select, open, users, me, allTeams, allSessions, setAllSessions, filters, setFilters,
-    spaceTotal, hasMore, loadMore, loadingMore } = useConsole();
+    spaceTotal, hasMore, loadMore, loadingMore, listError } = useConsole();
   // D56: filtered on the server, newest first; the search is sent once typing pauses.
   const [query, setQuery] = useState(filters.q);
   useEffect(() => {
@@ -76,7 +76,8 @@ export function Sidebar() {
                 {allSessions && <span className="mt-1 block text-[11px] text-muted-foreground">{where(run)}</span>}
               </button>
             ))}
-            {!runs.length && (
+            {listError && <p role="alert" className="px-3 py-2 text-xs leading-5 text-destructive">会话列表读取失败：{listError}</p>}
+            {!runs.length && !listError && (
               <p className="px-3 py-6 text-center text-xs leading-6 text-muted-foreground">
                 {spaceTotal || filtered ? "没有符合条件的会话。" : "此空间还没有开发任务。"}
               </p>

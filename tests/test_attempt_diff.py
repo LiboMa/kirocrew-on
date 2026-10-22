@@ -62,6 +62,36 @@ class WorkerDiffTests(unittest.TestCase):
         result = self.diff(expected=self.commit())
         self.assertEqual(result["files"], [{"path": "logo.png", "insertions": 0, "deletions": 0, "binary": True}])
 
+    def test_what_a_download_leaves_out_is_never_shown(self):   # final review: a removed .env would show its secret
+        self.write({".env": "SECRET=1\n", "src/a.js": "a\n"})
+        git(self.project, "add", "-f", ".env")
+        git(self.project, "-c", "user.email=a@a", "-c", "user.name=agent", "commit", "-q", "-m", "env")
+        first = git(self.project, "rev-parse", "HEAD")
+        git(self.project, "rm", "-q", ".env")   # the Agent commits the removal itself; the candidate keeps its commits
+        self.write({"src/a.js": "b\n"})
+        git(self.project, "add", "src/a.js")
+        git(self.project, "-c", "user.email=a@a", "-c", "user.name=agent", "commit", "-q", "-m", "drop env")
+        second = self.commit(parent=first)
+        result = self.diff(expected=second, parent=first)
+        self.assertNotIn("SECRET", result["diff"])
+        self.assertEqual([f["path"] for f in result["files"]], ["src/a.js"])
+
+    def test_the_repository_config_does_not_change_the_diff(self):   # textconv and prefixes from .git/config
+        self.write({"src/a.js": "one\n"})
+        git(self.project, "config", "diff.noprefix", "true")
+        (self.project / ".gitattributes").write_text("*.js diff=shout\n")
+        git(self.project, "config", "diff.shout.textconv", "tr a-z A-Z <")
+        result = self.diff(expected=self.commit())
+        self.assertIn("diff --git a/src/a.js b/src/a.js", result["diff"])
+        self.assertIn("+one", result["diff"])
+
+    def test_a_session_without_its_workspace_says_so(self):
+        import shutil
+        shutil.rmtree(self.node.path(RID))
+        with self.assertRaises(Error) as caught:
+            self.diff(expected="c" * 40)
+        self.assertIn(caught.exception.status, (404, 409))
+
     def test_a_commit_the_session_does_not_have_is_refused(self):
         with self.assertRaises(Error) as caught:
             self.diff(expected="c" * 40)

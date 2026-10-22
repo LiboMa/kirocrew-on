@@ -98,7 +98,7 @@ describe("session list query (D56)", () => {
 
   test("the search and the filters, trimmed; empty ones are left out", () => {
     expect(params({ q: " 订单 缓存 ", tool: "codex", repo: "github.com/o/r", since: "2026-10-20" }))
-      .toMatchObject({ q: "订单 缓存", tool: "codex", repo: "github.com/o/r", since: "2026-10-20" });
+      .toMatchObject({ q: "订单 缓存", tool: "codex", repo: "github.com/o/r", since: String(new Date(2026, 9, 20).getTime() / 1000) });
     expect(params({ tool: "" }).tool).toBeUndefined();
   });
 

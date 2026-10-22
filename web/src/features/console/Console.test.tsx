@@ -117,6 +117,20 @@ describe("console shell", () => {
     expect(screen.queryByRole("button", { name: "全部会话" })).toBeNull();
   });
 
+  test("a Session one can no longer read is dropped even though it was read before (final review)", async () => {
+    let gone = false;
+    const team = makeRun({ id: "run-t", name: "Team 会话", team_id: "team-1" });
+    setToken("oct_fixture");
+    window.history.replaceState(null, "", "/?run=run-t");
+    mockApi(workspaceRoutes([], { "GET /runs/run-t/events": [], "GET /runs/run-t/app": { status: "stopped", log: [], openable: false },
+      "GET /runs/run-t/approvals": { approvals: [], supported: true },
+      "GET /runs/run-t": () => gone ? new Response(JSON.stringify({ error: "Session 不存在或无权限", code: "not_found" }), { status: 404 }) : team,
+      "STREAM /runs/run-t/events": () => { gone = true; return new Response('data: {"id":1,"kind":"run.state","run_id":"run-t","created":1,"payload":{}}\n\n'); } }));
+    render(<App />);
+    expect(await screen.findByRole("heading", { name: "Team 会话" })).toBeInTheDocument();
+    await waitFor(() => expect(window.location.search).not.toContain("run-t"), { timeout: 4000 });
+  });
+
   test("selecting a session is reflected in the URL and an unreadable one is dropped", async () => {
     setToken("oct_fixture");
     window.history.replaceState(null, "", "/?run=run-gone");

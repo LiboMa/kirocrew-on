@@ -618,7 +618,10 @@ class Worker:
         (D56, ``mode: diff``; read only)."""
         run = self.path(body["run_id"])
         self._undo_baseline(run)
-        project, record = workspace.project_dir(run), workspace.read_record(run)
+        try:   # a Session whose workspace is gone (cleaned up long after it ended) says so, not a 500
+            project, record = workspace.project_dir(run), workspace.read_record(run) or {}
+        except ValueError as exc:
+            raise Error(409, "workspace_missing", workspace.scrub(exc)) from None
         base, branch = record.get("commit"), record.get("branch")
         require(base and branch, "此会话的项目没有 Git 基线，无法生成候选", 409, "candidate_unsupported")
         mode = body.get("mode")

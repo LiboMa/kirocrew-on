@@ -108,6 +108,16 @@ class FilterTests(SearchCase):
             self.assertEqual(caught.exception.status, 400, bad)
 
 
+class ConsoleStatesTests(unittest.TestCase):
+    def test_the_console_knows_every_session_status(self):   # final review: a task state broke 「进行中」
+        import re
+        from pathlib import Path
+        from octopus.domain import RUN_STATES
+        source = (Path(__file__).resolve().parents[1] / "web/src/lib/runList.ts").read_text()
+        block = source[source.index("export const SESSION_STATES"):]
+        self.assertEqual(set(re.findall(r'"([a-z_]+)"', block[:block.index("]);")])), set(RUN_STATES))
+
+
 class FullTextTests(SearchCase):
     def test_every_word_must_match_anywhere_in_the_session(self):
         a = self.make(self.b, steps=({**CODE, "prompt": "把 Redis 缓存加到订单查询"},), input="优化订单")
@@ -124,6 +134,14 @@ class FullTextTests(SearchCase):
         self.assertEqual(sorted(self.ids(self.b, q="优化")), sorted([a, b]))
         self.assertEqual(self.ids(self.b, q="优化 不存在的词"), [])
         self.assertEqual(self.ids(self.e, q="优化"), [])   # access is checked as before
+
+    def test_the_workflow_name_is_searchable(self):   # final review: the console's old search matched it
+        rid = self.make(self.b)
+        with self.db.transaction() as db:
+            snapshot = json.loads(db.execute("SELECT snapshot FROM runs WHERE id=?", (rid,)).fetchone()[0])
+            db.execute("UPDATE runs SET snapshot=? WHERE id=?", (dumps({**snapshot, "workflow_name": "完整研发链"}), rid))
+        self.make(self.b)
+        self.assertEqual(self.ids(self.b, q="研发链"), [rid])
 
     def test_the_client_it_came_from_is_searchable_by_its_name(self):   # D55's console search, now on the server
         with self.db.transaction() as db:

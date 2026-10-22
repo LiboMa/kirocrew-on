@@ -251,20 +251,28 @@ DIFF_BYTES, DIFF_LINES = 200_000, 4000   # D56: what the console shows of one ca
 def candidate_diff(project, sha, parent):
     """What a candidate changed against ``parent`` — the candidate before it, or the Session's baseline (D56): each file's
     line counts (all of them), and the unified diff clipped at DIFF_BYTES or DIFF_LINES. Read only; a commit the Session
-    does not have is refused (ValueError)."""
+    does not have is refused (ValueError). What a download and a publish leave out (.env and the like) is never shown —
+    only how many such files changed; the repository's own diff settings (textconv, prefixes) are not used."""
     for commit in (sha, parent):
         _git(project, "cat-file", "-e", commit + "^{commit}")
-    files = []
-    for record in _git_bytes(project, "diff", "--numstat", "-z", "--no-renames", parent, sha, "--").split(b"\0"):
+    plain = ("--no-textconv", "--no-ext-diff", "--no-renames", "--src-prefix=a/", "--dst-prefix=b/")
+    files, hidden = [], []
+    for record in _git_bytes(project, "diff", "--numstat", "-z", *plain, parent, sha, "--").split(b"\0"):
         parts = record.decode(errors="replace").split("\t", 2)   # "<added>\t<deleted>\t<path>", "-" for a binary file
         if len(parts) == 3 and parts[2]:
             added, deleted, path = parts
+            if left_out(path):
+                hidden.append(path)
+                continue
             binary = added == "-"
             files.append({"path": path, "insertions": 0 if binary else int(added), "deletions": 0 if binary else int(deleted),
                           "binary": binary})
-    raw = _git_bytes(project, "-c", "core.quotePath=false", "diff", "--no-color", "--no-ext-diff", "--no-renames", parent, sha, "--")
+    excluded = [":(top,literal,exclude)" + path for path in hidden]
+    raw = _git_bytes(project, "-c", "core.quotePath=false", "diff", "--no-color", *plain, parent, sha, "--", ".", *excluded) \
+        if files else b""
     lines = raw[:DIFF_BYTES].decode(errors="replace").splitlines(keepends=True)
-    return {"files": files, "diff": "".join(lines[:DIFF_LINES]), "truncated": len(raw) > DIFF_BYTES or len(lines) > DIFF_LINES}
+    return {"files": files, "hidden": len(hidden), "diff": "".join(lines[:DIFF_LINES]),
+            "truncated": len(raw) > DIFF_BYTES or len(lines) > DIFF_LINES}
 
 
 def clean_against(project, expected):
