@@ -1,16 +1,16 @@
 # 进度与完成记录
 
-> 由 `tools/progress.py` 生成（2026-10-22 11:30 CST）：任务状态取自 `docs/progress.json`，提交记录取自 git。看板：`docs/progress-dashboard.html`；实时看板：`python3 tools/progress.py --serve --ec2`（http://127.0.0.1:8765/）。
+> 由 `tools/progress.py` 生成（2026-10-22 13:44 CST）：任务状态取自 `docs/progress.json`，提交记录取自 git。看板：`docs/progress-dashboard.html`；实时看板：`python3 tools/progress.py --serve --ec2`（http://127.0.0.1:8765/）。
 
-- **本轮完成度**：87%　**MVP 完成度**：55%
-- **分支**：HEAD `3d2bd37`；自 `origin/main` 起 402 个提交——已推送 335、已部署 EC2 64、仅本机 3；EC2 运行 `290718f`
+- **本轮完成度**：87%　**MVP 完成度**：56%
+- **分支**：HEAD `d75e34f`；自 `origin/main` 起 419 个提交——已推送 335、已部署 EC2 83、仅本机 1；EC2 运行 `d4ae66f`
 - **回归**：1412 后端 + 92 + 205 控制台（connect codex / kiro-ide 本机）；EC2 运行 95e5aa9
 
 ## 模块
 
 | 模块 | 完成度 | 已验收 | 已部署 · 待验收 | 本机完成 · 待部署 | 进行中 | 卡点 · 等外部 | 未开始 |
 |---|---|---|---|---|---|---|---|
-| MVP 里程碑（M1–M5） | 55% | 10 | 5 | 0 | 2 | 0 | 10 |
+| MVP 里程碑（M1–M5） | 56% | 10 | 6 | 1 | 1 | 0 | 10 |
 | D46 Agent 角色与提示体系 | 87% | 8 | 3 | 0 | 0 | 1 | 0 |
 | D49 每人一个执行边界 | 80% | 2 | 2 | 0 | 1 | 0 | 0 |
 | D50 编码技能包 | 100% | 2 | 0 | 0 | 0 | 0 | 0 |
@@ -43,14 +43,23 @@
 
 ## 完成记录（按决策，最近的在前）
 
-### D61（3 个提交：仅本机 3）
+### D62（1 个提交：仅本机 1）
 
-- `3d2bd37` 2026-10-22 〔仅本机〕 feat(engine): 按并发上限排队（D61 Task 2）——会话的下一个任务开始前，在创建 Attempt 的同一写事务里数个人与 Team 的占用；满了就等待（run.quota_wait 只记一次，「需要处理」写明哪个范围、上限与占用，无需操作），有空位按等待先后开始（run.quota_go，等待不计时长预算）；久未被看到的等待不挡别人；自动重试照常不等待
-- `c76ca8d` 2026-10-22 〔仅本机〕 feat(quotas): 并发上限的存储与接口（D61 Task 1）——迁移 10 quotas（每人默认 / 某人 / 某 Team，1–50）；占用按仍在推进的会话中运行的 Attempt 与协调者诊断计（执行环境停用留下的不计）；GET / POST /v1/quotas（管理员设默认与个人、Team owner 设本 Team），写审计 quota.set；OpenAPI
-- `02198d3` 2026-10-22 〔仅本机〕 docs(spec,plan): D61 M4-4 第 2 期——每人 / 每 Team 的并发上限（设计稿与 4 个任务的实施计划；默认不设、到了上限按等待先后排队）
+- `d75e34f` 2026-10-22 〔仅本机〕 feat(tokens): API Token 有效期可选 7 / 30 / 365 天或永不过期（D62，负责人 2026-10-22）——POST /v1/tokens 的 expires_in；永不过期以远期日期保存、API 返回 expires null、列表显示「永不过期」；带 admin 的最长 30 天；控制台「有效期」（默认 30 天，修正写死的「7 天后到期」）；octopus connect / login --expires（同时发 ttl，旧平台照旧 30 天）；OpenAPI 与运维说明
 
-### D60（6 个提交：已部署 EC2 6）
+### D61（7 个提交：已部署 EC2 7）
 
+- `d4ae66f` 2026-10-22 〔已部署 EC2〕 fix(quotas): 终审修正（D61）——只数任务当前的 Attempt（续作留下的仍显示运行中的记录不再让会话等自己）；排队期间又等执行环境恢复的，等待时间只计一次，run.quota_go 照常记下
+- `aa2a40c` 2026-10-22 〔已部署 EC2〕 docs: D61 并发上限——运维说明（限什么、谁设、到了上限、不等待）；MVP-RELEASE、BACKLOG（第 3 期用量上限）与进度
+- `9193bc1` 2026-10-22 〔已部署 EC2〕 feat(console): 设置 →「并发上限」（D61 Task 3）——看自己的与所在 Team 的上限与占用；平台管理员设每人默认与单独上限，Team owner 设本 Team 的；成员只读
+- `adbc2a2` 2026-10-22 〔已部署 EC2〕 feat(mcp): 只读 octopus_quotas 与 Skill 说明（D61 Task 3 的一部分；控制台「并发上限」待做）
+- `3d2bd37` 2026-10-22 〔已部署 EC2〕 feat(engine): 按并发上限排队（D61 Task 2）——会话的下一个任务开始前，在创建 Attempt 的同一写事务里数个人与 Team 的占用；满了就等待（run.quota_wait 只记一次，「需要处理」写明哪个范围、上限与占用，无需操作），有空位按等待先后开始（run.quota_go，等待不计时长预算）；久未被看到的等待不挡别人；自动重试照常不等待
+- `c76ca8d` 2026-10-22 〔已部署 EC2〕 feat(quotas): 并发上限的存储与接口（D61 Task 1）——迁移 10 quotas（每人默认 / 某人 / 某 Team，1–50）；占用按仍在推进的会话中运行的 Attempt 与协调者诊断计（执行环境停用留下的不计）；GET / POST /v1/quotas（管理员设默认与个人、Team owner 设本 Team），写审计 quota.set；OpenAPI
+- `02198d3` 2026-10-22 〔已部署 EC2〕 docs(spec,plan): D61 M4-4 第 2 期——每人 / 每 Team 的并发上限（设计稿与 4 个任务的实施计划；默认不设、到了上限按等待先后排队）
+
+### D60（7 个提交：已部署 EC2 7）
+
+- `e223182` 2026-10-22 〔已部署 EC2〕 docs: D60 已部署 EC2（290718f）——部署后会话照常完成；看板 M4-4 第 1 期已部署、第 2 期（D61）进行中
 - `290718f` 2026-10-22 〔已部署 EC2〕 fix(queue): 终审修正（D60）——已开始过又排队的任务（有 state.json、resuming）也认作排队；排队文字被别的错误盖住后恢复；排队中每 20 秒才看一次；会话的「需要处理」显示排队（无需操作），不再是红色错误
 - `117e2fb` 2026-10-22 〔已部署 EC2〕 docs: D60 排队可见——运维说明（排队、不计、没有开始、处理）；MVP-RELEASE 与进度看板 M4-4 第 1 期
 - `ef0e4b2` 2026-10-22 〔已部署 EC2〕 feat(engine): 排队可见（D60 Task 2）——KiroCrew 推迟的原生任务在会话显示「排队：等待执行环境资源（原因类别）」，事件 attempt.queued / attempt.dequeued；看门狗不计排队，从排队结束起计时；排队时间不计时间预算；never started 自动重新派发（不占自动重试与预算，连续第 3 次交给协调者，排队前已开始过的照旧交给协调者）
@@ -84,6 +93,20 @@
 - `79143dc` 2026-10-22 〔已部署 EC2〕 feat(sync): POST /v1/runs/<id>/sync——本地提交成为新候选，重新检查并让下游任务重新审查；pull 的 bundle 下载（D58）——二进制上传（≤ 20 MB）经 Worker 快进；最后一个写代码的任务记「本地同步」Attempt（候选、synced、门禁），有检查命令时照常运行与判定，其后的任务重新执行；修订「本地同步」、事件 run.synced；同一 request_id 只同步一次；权限与续作相同；POST /v1/runs/<id>/bundle 给出 10 分钟的拉回链接；CLI 的 Token 记为 client cli
 - `4b7c9c7` 2026-10-22 〔已部署 EC2〕 feat(worker): 会话分支的 pull bundle 与 sync（D58）——POST /pull/bundle 按发布同样核查疑似凭证与 .env 后给出分支（自基线或完整历史）；POST /sync 导入本地提交的 bundle，只在会话分支仍在 old、工作区没有未纳入候选的改动、head 是快进且新内容没有疑似凭证时把分支与工作区移到 head，返回与候选相同的字段；上限 20 MB
 - `a522f79` 2026-10-22 〔已部署 EC2〕 docs(spec,plan): D58 M3-2 用户 CLI 与 M3-4 本地 / 远端联动——git bundle 交换提交（不经托管方）、会话关联 .octopus/session.json、pull 拉回分支与上下文、sync 只接受快进并让最后一个写代码的任务重新检查、下游重新审查、未推送提交检测与 --push-base；CLI 与 MCP 共用 octopus/local.py；6 个任务的实施计划
+
+### D57（11 个提交：已部署 EC2 11）
+
+- `316afb8` 2026-10-22 〔已部署 EC2〕 merge: D57 第一批（门禁 warn、五个门禁降为提示、审查改动由平台撤回）合入 feat/m11-gates
+- `66f1976` 2026-10-22 〔已部署 EC2〕 fix(review): 撤回记录写明只撤回已跟踪的文件；rewind 的说明列出撤回不到的情形（D57）
+- `04af334` 2026-10-22 〔已部署 EC2〕 fix(review): 没有通过的审查（拒绝、出错、看门狗停止）改动的文件同样由平台撤回，返工的候选不再收进审查者的改动（D57）
+- `c559ca7` 2026-10-22 〔已部署 EC2〕 feat(review): 审查改动的文件由平台撤回、会话分支回到候选，结论照常采用（D57）
+- `30a6696` 2026-10-22 〔已部署 EC2〕 fix(gates): 结果文件不合法时识别常见的拒绝写法；上游任务的提示随前序交接交给后续审查（D57）
+- `bb71beb` 2026-10-22 〔已部署 EC2〕 fix(gates): 结果文件不合法但写明拒绝时仍按拒绝判定；平台生成的交接存入 evidence 并交给后续任务；提示词与新判定一致（D57）
+- `75a6adf` 2026-10-22 〔已部署 EC2〕 feat(gates): diff_present、artifacts_locked、tests_fail_on_baseline、handoff_present、outcome_valid 降为提示（D57）
+- `7611a6c` 2026-10-22 〔已部署 EC2〕 fix(gates): 报告列出「提示 N 项」，Knowledge 跳过的验收也写入 warnings（D57）
+- `9111f99` 2026-10-22 〔已部署 EC2〕 feat(gates): 门禁新增「提示」状态 warn，不使任务 blocked、不触发纠错（D57）
+- `ee09921` 2026-10-22 〔已部署 EC2〕 docs(plan): D57 门禁减负与安全底线实施计划（20 个任务）
+- `fdf2f90` 2026-10-21 〔已部署 EC2〕 docs(spec): D57 门禁减负与安全底线（负责人已确认；编号原暂定 D56）——补充实现时的 10 条设计者决定
 
 ### D56（8 个提交：已部署 EC2 8）
 
