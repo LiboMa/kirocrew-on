@@ -17,6 +17,7 @@ CAPABILITIES = {"role_cards": True, "tools": {"kiro": {"available": True}, "clau
 class EvaluatorCase(ConfirmationCase):
     def setUp(self):
         super().setUp()
+        self.service.default_acceptance = "confirm"   # D68: these exercise the 「验收待确认」 path a platform can keep
         with self.db.transaction() as db:   # a Worker with role cards: the Evaluator gate applies
             db.execute("UPDATE workers SET config=? WHERE id='worker'",
                        (dumps({"url": "fixture", "token": "fixture", "capabilities": CAPABILITIES}),))

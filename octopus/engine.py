@@ -1254,13 +1254,17 @@ class Engine:
                     return self.update(rid, "running", actor=journal.WORKER)
             if not error and gated and evaluation.applies(snapshot, spec, config):   # D46 P3: the Evaluator's verdicts
                 error, pending = evaluation.verdicts(spec, report)
-                evidence["gates"].append(gates.record("evaluated", "fail" if error else "pass",
-                                                      error or (f"{len(pending)} 项待人确认" if pending else None)))
+                automatic = pending and not error and snapshot.get("acceptance") == "auto"   # D68: no one is asked again
+                evidence["gates"].append(gates.record(
+                    "evaluated", "fail" if error else "warn" if automatic else "pass",
+                    error or ("Evaluator 判为待人确认，按平台设置自动通过（不需要人工确认）：" + "；".join(
+                        f"{p['item']}（{p['evidence']}）" for p in pending[:5]) if automatic else
+                        f"{len(pending)} 项待人确认" if pending else None)))
                 if error:   # a failed verdict is reworked; a missing one or one without evidence is the outcome's form (R3)
                     failure_type = "implementation" if error.startswith(evaluation.FAILED) else "contract"
                     evidence["gate"] = "evaluated"
                 elif pending:
-                    evidence["evaluation"] = {"pending": pending}
+                    evidence["evaluation"] = {"pending": pending, **({"automatic": True} if automatic else {})}
             if error:   # D57 §4: a review that did not pass is put back too; its failure stays what recovery sees
                 self._put_back_review(run, config, attempt, evidence)
             if lost and not error:
@@ -1274,8 +1278,9 @@ class Engine:
             state = "blocked" if error else "accepted"
             if state == "accepted" and invalid and knowledge.platform(snapshot, task["id"]):
                 evidence["knowledge_skipped"] = invalid   # D57 §4: accepted with the warning, but its list cannot be read
-            if state == "accepted" and (evidence.get("evaluation") or {}).get("pending"):
-                state = "awaiting_acceptance"   # D46 P3: what the Evaluator left to a person
+            if state == "accepted" and (evidence.get("evaluation") or {}).get("pending") \
+                    and not evidence["evaluation"].get("automatic"):
+                state = "awaiting_acceptance"   # D46 P3: what the Evaluator left to a person (unless D68's automatic)
         with self.db.transaction() as db:
             current = db.execute("SELECT * FROM tasks WHERE run_id=? AND id=?", (rid, task["id"])).fetchone()
             # Old observations cannot complete a newly retried task.

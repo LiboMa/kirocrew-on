@@ -62,10 +62,9 @@ KiroCrew ON 在远端执行开发任务：KiroCrew 的 Kiro Agent 先识别意�
 - 提交到 Team 返回 409 `team_without_worker`（该 Team 尚未分配执行环境）或 `environment_disabled`（执行环境已停用）时，
   原样告诉用户需要平台管理员在控制台分配或启用执行环境；也可以建议改在个人空间提交。不要换一个 Team 重试。
 - 返回 409 `team_archived` 时该 Team 已归档：不能提交新会话或续作，已有会话仍可查看与停止；告诉用户需要平台管理员恢复，或改在其他空间提交。
-- 准入：平台默认先确认——规划照常完成，第一个执行任务开始前会话停在 `awaiting_confirmation`（见第 3 节）。用户在控制台
-  「准入与映射偏好」中为信任的仓库写了规则（`auto`）时直接开始；会话的 `admission_basis` 写明依据（`submitted` / `rule` 及其
-  `pattern` / `default`），原样告诉用户「按准入规则…自动开始」或「按平台默认等待确认」。用户明确说「直接开始 / 不用确认」时才传
-  `admission: "auto"`，明确要先看计划时传 `admission: "confirm"`；不要为了省一步替用户传 `auto`。
+- 准入：平台默认直接开始（D68）——工作流决定后不再请人确认，规划完成后直接执行；Evaluator 判为「待人确认」的验收项记为提示，
+  会话照常完成。用户明确要先看计划时传 `admission: "confirm"`（会话停在 `awaiting_confirmation`，见第 3 节）；用户或 Team 写了 confirm
+  规则时同样先停。会话的 `admission_basis` 写明依据（`submitted` / `rule` 及其 `pattern` / `default`），原样告诉用户。
 - 回执带 `request_id`（`request-…`）：每次提交登记一个 Request（来源客户端、需求、显式选择与准入依据），`octopus_requests` 可查。
 - 用户明确要求完成后提交 PR / MR 时传 `publish: {"auto": true}`：会话完成并通过审查后平台自动推送 `octopus/<run>` 分支并创建 Draft PR / MR
   （需要绑定有写权限的凭证）。没有要求时不传，完成后先问用户，同意后再用 `octopus_publish`。不要安排 Agent 自己推送或建 PR 的任务——Agent 没有仓库写凭证。

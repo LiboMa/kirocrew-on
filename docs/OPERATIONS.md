@@ -454,7 +454,9 @@ CloudFront 只使用 us-east-1 的证书）：分发加上别名与证书（SNI�
   `主机/所有者/仓库` 小写比较，`https://…/.git`、`ssh://`、`git@host:path` 同一结果；`*` 匹配全部（新建项目不命中任何规则）。
   判定顺序：提交时的 `admission` → 提交者的个人规则 → 会话所在 Team 的规则 → 平台默认；同层多条命中时通配最少的、再最新的胜。
   会话视图的 `admission_basis` 写明依据（`submitted` / `rule` 及 `pattern`、`policy_id` / `default`），会话页显示「按准入规则…自动开始」
-  或「按平台默认等待确认」。
+  或「按平台默认…」。**平台默认（D68，负责人 2026-10-22）为直接开始（`default_admission = "auto"`）**：工作流决定后不再请人确认；
+  提交时 `admission: "confirm"` 或个人 / Team 的 confirm 规则仍会先停在「计划待确认」。平台想恢复默认先确认时在平台配置写
+  `default_admission = "confirm"`。
 - **映射偏好**：`{"kind": "review"}` 或 `{"role": "evaluator"}`（二选一）加 `"tool"`、可选 `"model"`（kind `mapping`）。提交时把提交者与
   Team 的偏好写进会话快照（同一类别或角色上个人覆盖 Team），首次规划与重新规划的提示多一节「用户的映射偏好」：规划者优先采纳、
   不采纳写明理由；需求中指定的（D45）优先；不可用的工具不选。平台不按偏好改写任务，也不把偏好当失败时的回退链。规划者的任务与偏好
@@ -600,8 +602,10 @@ CloudFront 只使用 us-east-1 的证书）：分发加上别名与证书（SNI�
   （计划中审查用过且非作者的工具 → 第一个非作者的可用工具 → 没有时用可用工具并记「审查不独立」），映射来源「平台追加（改代码的会话须经 Evaluator）」。
 - Evaluator 对每条验收项给出 pass / fail / pending 与证据（门禁 `evaluated`）：缺项或缺证据 → 交给协调者；fail → 照审查流程返工上游、复审；
   全部 pass → 通过。实现者自报的 pass 不再是会话通过的依据。
-- pending（需要人判断，如观感、文案）且无 fail → 会话停在「验收待确认」（`awaiting_acceptance`）：会话页「确认通过」或 MCP `octopus_accept`
-  （创建者、Team owner、管理员；已归档 Team 不可），记确认者，不计入预算；也可续作返工。报告「验收（以 Evaluator 为准）」列出判定与确认者。
+- pending（需要人判断，如观感、文案）且无 fail → **默认（D68）按平台设置自动通过**：门禁 `evaluated` 记为提示（warn），写明待人确认的
+  各项与证据，会话照常完成，报告与提示中列出；不再停在「验收待确认」。平台配置 `default_acceptance = "confirm"` 时照旧：会话停在
+  「验收待确认」（`awaiting_acceptance`），会话页「确认通过」或 MCP `octopus_accept`（创建者、Team owner、管理员；已归档 Team 不可），
+  记确认者，不计入预算；也可续作返工。设置在会话开始时记入快照，之前开始的会话照旧等待。
 
 ### 用量（D46 P6a）
 

@@ -582,9 +582,10 @@ def _probe(config):
 
 
 class Service:
-    def __init__(self, database, default_admission="auto"):
+    def __init__(self, database, default_admission="auto", default_acceptance="auto"):
         self.db = database
         self.default_admission = default_admission   # D44: a Session without `admission` runs at once unless set to confirm
+        self.default_acceptance = default_acceptance   # D68: the Evaluator's pending items are warnings unless confirm
         self._opened, self._opened_lock = {}, threading.Lock()   # remote preview opening links already followed
         from .credentials import CredentialStore
         self.credentials = CredentialStore(database)   # D35; the server sets its key file
@@ -1107,7 +1108,8 @@ class Service:
                                 execution_contract=4 if design is None else 1)   # D46 P3: the Evaluator gate
                 if design is None:   # D44: confirm = wait before the first working task; D55: by the repository's rules
                     decided = policies.admission(db, actor["id"], team, source, body.get("admission"), self.default_admission)
-                    snapshot.update(admission=decided["mode"], admission_basis=decided)
+                    snapshot.update(admission=decided["mode"], admission_basis=decided,
+                                    acceptance=self.default_acceptance)   # D68: as the platform was set when it started
                 if "publish" in body:   # D47: the user's own word on publishing comes first
                     snapshot["publish_policy"] = {**publish_policy(body["publish"]), "source": "user"}
                 if bound:

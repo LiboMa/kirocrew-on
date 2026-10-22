@@ -15,7 +15,7 @@ import { ROLE_LABELS } from "@/lib/labels";
 import { TASK_KIND_LABELS, TOOLS, policyText } from "@/lib/policies";
 
 const GROUPS: { kind: Policy["kind"]; title: string; empty: string }[] = [
-  { kind: "admission", title: "准入规则", empty: "还没有准入规则：新会话按平台默认先停在「计划待确认」。" },
+  { kind: "admission", title: "准入规则", empty: "还没有准入规则：新会话按平台默认直接开始，不再请人确认。" },
   { kind: "mapping", title: "映射偏好", empty: "还没有映射偏好：由 KiroCrew 规划者按任务选择工具。" },
 ];
 
@@ -52,7 +52,7 @@ export function PoliciesDialog() {
 
   return (
     <FormDialog title="准入与映射偏好" kicker="POLICIES" wide onClose={close} submitLabel="添加"
-      description="准入规则决定哪些仓库的新会话直接开始，其余先停在「计划待确认」；映射偏好告诉 KiroCrew 规划者你希望某类任务或角色用哪个工具，规划者优先采纳、不采纳时写明理由。需求中明确指定的工具总是优先。Team 的规则由 Team owner 维护。"
+      description="平台默认新会话直接开始；准入规则可以让某些仓库的新会话先停在「计划待确认」（confirm）。映射偏好告诉 KiroCrew 规划者你希望某类任务或角色用哪个工具，规划者优先采纳、不采纳时写明理由。需求中明确指定的工具总是优先。Team 的规则由 Team owner 维护。"
       onSubmit={async () => {
         const rule = kind === "admission" ? { repos: repos.trim(), mode }
           : { [by]: target, tool, ...(model.trim() ? { model: model.trim() } : {}) };
