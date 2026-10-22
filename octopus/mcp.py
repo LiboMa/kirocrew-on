@@ -495,7 +495,9 @@ def compact_status(session, events):
                      for task in session.get("tasks", [])]
     # D57 §4: what the tasks' latest Attempts noted without blocking
     view["warnings"] = sum(len(((task["latest"] or {}).get("gates") or {}).get("warned", [])) for task in view["tasks"])
-    recent = [{**event, "payload": {k: v for k, v in event["payload"].items() if k not in ("evidence", "context")}}
+    # D60: a queue's detail (the host's memory numbers) is for administrators, not a Coding Agent's view
+    recent = [{**event, "payload": {k: v for k, v in event["payload"].items() if k not in ("evidence", "context")
+                                    and not (k == "detail" and event.get("kind") == "attempt.queued")}}
               for event in events[-10:]]
     return {"session": view, "events": recent}
 

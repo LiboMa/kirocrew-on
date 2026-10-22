@@ -241,6 +241,30 @@ class EngineQueueTests(WatchdogCase):
         self.tick(rid)
         self.assertLess(self.budget(rid)["minutes"]["used"], 5)
 
+    def test_the_watchdog_still_acts_after_a_queue(self):   # final review: the reverse of the clock test
+        rid = self.start()
+        self.queued = self.QUEUED
+        self.tick(rid, 3)
+        self.queued = None
+        self.tick(rid)   # the queue ends
+        with self.db.transaction() as db:   # …40 minutes ago, and the task has made no progress since
+            row = db.execute("SELECT id, evidence FROM attempts WHERE run_id=? AND status='running'", (rid,)).fetchone()
+            evidence = json.loads(row["evidence"])
+            evidence["queued"]["until"] -= 40 * MINUTE
+            db.execute("UPDATE attempts SET evidence=?, created=created-? WHERE id=?",
+                       (json.dumps(evidence), 60 * MINUTE, row["id"]))
+        self.tick(rid, 2)
+        self.assertTrue(self.stops())
+
+
+class McpQueueTests(unittest.TestCase):
+    def test_the_hosts_numbers_stay_out_of_a_coding_agents_view(self):   # final review minor: detail only for administrators
+        from octopus import mcp
+        events = [{"id": 1, "kind": "attempt.queued", "created": 1.0,
+                   "payload": {"cause": "low_memory", "detail": "only 2.47 GB available, need 2.50 GB", "reason": "排队：…"}}]
+        recent = mcp.compact_status({"id": "run-1", "status": "running", "tasks": []}, events)["events"]
+        self.assertEqual(recent[0]["payload"], {"cause": "low_memory", "reason": "排队：…"})
+
 
 if __name__ == "__main__":
     unittest.main()
