@@ -113,7 +113,7 @@ async page => {
     await p.waitForTimeout(200);
     check(await p.evaluate(()=>document.documentElement.scrollWidth<=innerWidth+1),"390 px 宽度无横向溢出");
     await p.getByRole("button",{name:"打开会话列表"}).click();
-    check(await p.locator("#session-list [data-run]").first().isVisible(),"窄屏以抽屉展示会话列表");
+    check(await p.locator("#session-list:visible [data-run]").first().isVisible(),"窄屏以抽屉展示会话列表");   // the desktop sidebar stays mounted, hidden
     await p.keyboard.press("Escape");
     await p.setViewportSize({width:1440,height:1000});
 

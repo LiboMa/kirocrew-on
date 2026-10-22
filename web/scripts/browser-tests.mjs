@@ -38,7 +38,7 @@ for (const file of files) {
     console.log(`✓ ${file}  ${count} checks  ${((Date.now() - started) / 1000).toFixed(1)}s`);
   } catch (error) {
     failed++;
-    console.log(`✗ ${file}  ${error.message.split("\n")[0]}`);
+    console.log(`✗ ${file}  ${error.message.split("\n").slice(0, 3).join(" | ")}`);   // the locator it waited for, too
   } finally {
     fixture.kill();
     await new Promise((resolve) => fixture.once("exit", resolve));

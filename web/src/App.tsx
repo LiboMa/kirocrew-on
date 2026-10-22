@@ -33,7 +33,8 @@ export function App({ client: injected }: { client?: QueryClient }) {
     <QueryClientProvider client={client}>
       <TooltipProvider delayDuration={300}>
         {signedIn === null ? null : signedIn ? <Console /> : <LoginPage />}
-        <Toaster position="top-center" richColors closeButton />
+        {/* Below the 56 px top bar: a toast must never cover its buttons (on 390 px it hid 「打开会话列表」 while hovered) */}
+        <Toaster position="top-center" richColors closeButton offset={{ top: 64 }} mobileOffset={{ top: 64 }} />
       </TooltipProvider>
     </QueryClientProvider>
   );
