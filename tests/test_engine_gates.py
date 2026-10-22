@@ -27,6 +27,7 @@ class FakeWorker:
         self.candidate = lambda body: {"sha": C1, "parent": body.get("parent", BASE), "changed": True, "files": 1,
                                        "insertions": 2, "deletions": 0, "rewritten": False, "secrets": []}
         self.check = lambda body: {"head": body["expected"], "clean": True, "changed_files": []}
+        self.rewind = lambda body: {"head": body["expected"], "clean": True, "changed_files": [], "reverted": [], "rewound": 0}
         self.verify = [{"state": "running", "passed": None, "failed": None, "results": []},
                        {"state": "done", "passed": True, "failed": None,
                         "results": [{"command": "npm test", "exit": 0, "seconds": 1.0, "tail": "ok"}]}]
@@ -45,7 +46,7 @@ class FakeWorker:
             return {"status": "running", "native": {"done": True, "result": "完成", "error": ""},
                     "evidence": {"actual_backend": "claude"}, "handoff": "交接", "outcome": dumps(outcome)}
         if path == "/candidate":
-            return self.candidate(body) if body["mode"] == "commit" else self.check(body)
+            return {"commit": self.candidate, "rewind": self.rewind}.get(body["mode"], self.check)(body)
         if path == "/verify/start":
             return {"job": "job-" + body["attempt_id"]}
         if path == "/verify/status":
@@ -230,8 +231,12 @@ class EngineGateTests(TeamsWorkersCase):
         self.assertIn("src/x.js", attempt["error"])
         self.assertNotIn("/verify/start", worker.paths())
 
+    def review_bound(self, evidence):
+        return [g for g in evidence["gates"] if g["name"] == "review_bound"][0]
+
     def test_a_review_is_bound_to_the_latest_candidate(self):
-        for index, (reviewed, expected) in enumerate(((C1, "pass"), (C1[:7], "pass"), (C0, "fail"))):
+        # D57 §4, §13.4: a report naming another version is a warning; the verdict counts, bound to the candidate
+        for index, (reviewed, expected) in enumerate(((C1, "pass"), (C1[:7], "pass"), (C0, "warn"), ("", "warn"))):
             with self.subTest(reviewed=reviewed):
                 worker = FakeWorker()
                 rid = self.session([{**IMPLEMENT, "verify": []}, REVIEW], request=f"start-000000002{index}")
@@ -239,18 +244,105 @@ class EngineGateTests(TeamsWorkersCase):
                 self.run_engine(worker, ticks=16)
                 review = [b for b in worker.dispatched.values() if b["spec"]["id"] == "review"][0]
                 self.assertEqual(review["candidate"]["sha"], C1)
-                _, evidence = self.attempt(rid, "review")
+                attempt, evidence = self.attempt(rid, "review")
                 self.assertEqual(self.gates(evidence)["review_bound"], expected)
+                self.assertEqual((attempt["status"], evidence["reviewed"]), ("accepted", C1))
+                self.assertNotIn("rewind", [b["mode"] for p, b in worker.calls if p == "/candidate"])   # nothing to put back
+                if expected == "warn":
+                    detail = self.review_bound(evidence)["detail"]
+                    self.assertIn(f"审查报告写的版本（{reviewed[:12] or '缺失'}）与候选 {C1[:7]} 不符", detail)
+                    self.assertIn("审查结论照常采用", detail)
+                    self.assertEqual(self.service.run(self.c, rid)["verified"]["sha"], C1)   # counts for a publish
 
-    def test_a_review_that_changes_code_is_not_bound(self):
+    def test_a_review_whose_changes_cannot_be_put_back_is_not_bound(self):
+        # the Worker refuses (HEAD does not descend from the candidate, a branch switched, …): failed as before
+        cases = (({"head": "e" * 40, "clean": False, "changed_files": []}, "审查期间会话分支被改动"),
+                 ({"head": C1, "clean": False, "changed_files": ["src/a.js"]}, "src/a.js"))
+        for index, (check, words) in enumerate(cases):
+            with self.subTest(words=words):
+                worker = FakeWorker()
+                rid = self.session([{**IMPLEMENT, "verify": []}, REVIEW], request=f"start-000000005{index}")
+                worker.outcomes["review"] = {"decision": "pass", "summary": "无阻断问题", "reviewed_commit": C1}
+                worker.check = lambda body, check=check: check
+
+                def refused(body):
+                    raise Error(409, "conflict", "会话分支不在候选之上，不能撤回")
+                worker.rewind = refused
+                self.run_engine(worker, ticks=16)
+                attempt, evidence = self.attempt(rid, "review")
+                self.assertEqual((self.gates(evidence)["review_bound"], attempt["status"]), ("fail", "blocked"))
+                self.assertIn(words, attempt["error"])
+                self.assertIn("会话分支不在候选之上", attempt["error"])
+                self.assertNotIn("reviewed", evidence)
+
+    def test_a_review_that_changes_code_is_reverted_and_still_counts(self):   # D57 §4, §13.4
         worker = FakeWorker()
-        rid = self.session([{**IMPLEMENT, "verify": []}, REVIEW])
+        rid = self.session([{**IMPLEMENT, "verify": []}, REVIEW], recovery=True)
         worker.outcomes["review"] = {"decision": "pass", "summary": "无阻断问题", "reviewed_commit": C1}
-        worker.check = lambda body: {"head": C1, "clean": False, "changed_files": ["src/a.js"]}
+        worker.check = lambda body: {"head": "e" * 40, "clean": False, "changed_files": ["src/a.js"]}
+        worker.rewind = lambda body: {"head": body["expected"], "clean": True, "changed_files": [],
+                                      "reverted": ["docs/review.md", "src/a.js"], "rewound": 1}
         self.run_engine(worker, ticks=16)
+        rewinds = [b for p, b in worker.calls if p == "/candidate" and b["mode"] == "rewind"]
+        self.assertEqual([b["expected"] for b in rewinds], [C1])
         attempt, evidence = self.attempt(rid, "review")
-        self.assertEqual(self.gates(evidence)["review_bound"], "fail")
-        self.assertIn("审查不应修改代码", attempt["error"])
+        gate = self.review_bound(evidence)
+        self.assertEqual((gate["status"], gate["files"]), ("warn", ["docs/review.md", "src/a.js"]))
+        self.assertIn("审查改动的文件已由平台撤回：docs/review.md、src/a.js", gate["detail"])
+        self.assertIn("1 个提交", gate["detail"])
+        self.assertIn("审查结论照常采用", gate["detail"])
+        self.assertNotIn("代码", gate["detail"])   # many repositories hold documents
+        self.assertEqual((attempt["status"], evidence["reviewed"]), ("accepted", C1))
+        self.assertEqual([w["name"] for w in evidence["warnings"]], ["review_bound"])
+        self.assertEqual(self.service.run(self.c, rid)["verified"]["sha"], C1)   # counts as the review a publish needs
+        with self.db.read() as db:
+            status = db.execute("SELECT status FROM runs WHERE id=?", (rid,)).fetchone()["status"]
+            recoveries = db.execute("SELECT COUNT(*) FROM recoveries WHERE run_id=?", (rid,)).fetchone()[0]
+        self.assertEqual((status, recoveries), ("completed", 0))
+
+    def test_a_review_written_into_a_document_is_reverted_and_the_next_task_runs(self):
+        """The live case: an Evaluator wrote its review into a tracked document, passed 5/5, and was blocked six times by
+        「审查不应修改代码」. Now the document is put back, the verdict counts and the Session goes on."""
+        worker, doc = FakeWorker(), "docs/agent-harness-research-review.md"
+        deliver = {"id": "deliver", "name": "交付", "tool": "claude", "prompt": "交付", "kind": "deliver", "acceptance": ["已交付"]}
+        rid = self.session([{**IMPLEMENT, "verify": []}, REVIEW, deliver], recovery=True)
+        worker.outcomes["review"] = {"decision": "pass", "summary": "5/5 通过", "reviewed_commit": C1}
+        state = {"changed": [doc]}
+        worker.check = lambda body: {"head": body["expected"], "clean": not state["changed"], "changed_files": state["changed"]}
+
+        def rewind(body):
+            reverted, state["changed"] = state["changed"], []
+            return {"head": body["expected"], "clean": True, "changed_files": [], "reverted": reverted, "rewound": 0}
+        worker.rewind = rewind
+        self.run_engine(worker, ticks=30)
+        attempt, evidence = self.attempt(rid, "review")
+        self.assertEqual((attempt["status"], self.gates(evidence)["review_bound"], evidence["reviewed"]), ("accepted", "warn", C1))
+        self.assertIn(doc, self.review_bound(evidence)["detail"])
+        self.assertIn("deliver", [b["spec"]["id"] for b in worker.dispatched.values()])
+        after = [b for b in worker.dispatched.values() if b["spec"]["id"] == "deliver"][0]
+        warned, = {u["id"]: u for u in after["upstream"]}["review"]["warnings"]
+        self.assertEqual((warned["name"], warned["files"]), ("review_bound", [doc]))
+        self.assertEqual(self.attempt(rid, "deliver")[0]["status"], "accepted")
+        self.assertEqual(self.service.run(self.c, rid)["status"], "completed")
+
+    def test_an_old_worker_that_cannot_rewind_fails_the_review_as_before(self):   # a mixed deployment never passes it unchecked
+        cases = (({"head": C1, "clean": False, "changed_files": ["src/a.js"]}, "审查不应修改代码，修改应交给实现任务：src/a.js"),
+                 ({"head": "e" * 40, "clean": False, "changed_files": []}, f"审查期间会话分支被改动（HEAD 不是候选 {C1[:7]}）"))
+        for index, (check, words) in enumerate(cases):
+            with self.subTest(words=words):
+                worker = FakeWorker()
+                rid = self.session([{**IMPLEMENT, "verify": []}, REVIEW], request=f"start-000000006{index}")
+                worker.outcomes["review"] = {"decision": "pass", "summary": "无阻断问题", "reviewed_commit": C1}
+                worker.check = lambda body, check=check: check
+
+                def old(body):
+                    raise Error(400, "invalid_request", "mode 只能是 commit、check、restore 或 diff")
+                worker.rewind = old
+                self.run_engine(worker, ticks=16)
+                attempt, evidence = self.attempt(rid, "review")
+                self.assertEqual((self.gates(evidence)["review_bound"], attempt["status"]), ("fail", "blocked"))
+                self.assertIn(words, attempt["error"])
+                self.assertNotIn("reviewed", evidence)
 
     def test_stopping_during_checks_ends_them_and_ignores_late_results(self):
         worker, rid = FakeWorker(), self.session([IMPLEMENT])

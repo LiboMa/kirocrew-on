@@ -670,9 +670,9 @@ class Engine:
             if latest is None:
                 records.append(gates.record("review_bound", "skip", "此前没有候选"))
                 return None, None, False
+            body = {"run_id": run["id"], "attempt_id": attempt["id"], "expected": latest["sha"]}
             try:
-                check = self.request(config, "/candidate", {"run_id": run["id"], "attempt_id": attempt["id"], "mode": "check",
-                                                            "expected": latest["sha"]})
+                check = self.request(config, "/candidate", {**body, "mode": "check"})
             except Error as exc:
                 if exc.status == 404:
                     records.append(gates.record("review_bound", "skip", gates.OLD_WORKER))
@@ -681,13 +681,40 @@ class Engine:
                     return fail("review_bound", f"无法核对审查的工作区：{exc}")
                 raise
             sha, reviewed = latest["sha"], str((report or {}).get("reviewed_commit") or "")
-            if check["changed_files"]:
-                return fail("review_bound", "审查不应修改代码，修改应交给实现任务：" + "、".join(check["changed_files"][:10]))
-            if check["head"] != sha:
-                return fail("review_bound", f"审查期间会话分支被改动（HEAD 不是候选 {sha[:7]}）")
+            notes, reverted = [], []
+            if check["changed_files"] or check["head"] != sha:
+                # D57 §4: what the review changed is put back by the platform, its branch back on the candidate
+                try:
+                    rewound = self.request(config, "/candidate", {**body, "mode": "rewind"}, timeout=180)
+                except Error as exc:
+                    if exc.status == 409:   # refused (HEAD not on top of the candidate, another branch) or failed: not bound
+                        what = "审查改动了 " + "、".join(check["changed_files"][:10]) if check["changed_files"] else \
+                            f"审查期间会话分支被改动（HEAD 不是候选 {sha[:7]}）"
+                        return fail("review_bound", f"{what}，平台未能撤回：{exc}")
+                    if 400 <= exc.status < 500:   # a Worker from before D57 cannot put it back: judged as before
+                        if check["changed_files"]:
+                            return fail("review_bound", "审查不应修改代码，修改应交给实现任务：" + "、".join(check["changed_files"][:10]))
+                        return fail("review_bound", f"审查期间会话分支被改动（HEAD 不是候选 {sha[:7]}）")
+                    raise
+                if rewound.get("head") != sha or not rewound.get("clean"):
+                    return fail("review_bound", f"平台撤回审查的改动后，工作区仍不是候选 {sha[:7]}："
+                                + "、".join((rewound.get("changed_files") or [])[:10]))
+                reverted = [str(name) for name in rewound.get("reverted") or []]
+                if reverted:
+                    notes.append("审查改动的文件已由平台撤回：" + "、".join(reverted[:10])
+                                 + (f" 等 {len(reverted)} 个" if len(reverted) > 10 else ""))
+                if rewound.get("rewound"):
+                    notes.append(f"审查期间的 {rewound['rewound']} 个提交已撤回，会话分支回到候选 {sha[:7]}")
+                if not notes:   # e.g. only what a candidate leaves out changed: still say what the platform did
+                    notes.append(f"会话分支已由平台恢复到候选 {sha[:7]}")
             if not (len(reviewed) >= 7 and sha.startswith(reviewed)):
-                return fail("review_bound", f"审查报告的 reviewed_commit（{reviewed or '缺失'}）与候选 {sha[:7]} 不符")
-            records.append(gates.record("review_bound", "pass", sha[:12]))
+                notes.append(f"审查报告写的版本（{reviewed[:12] or '缺失'}）与候选 {sha[:7]} 不符")
+            if notes:   # D57 §13.4: the verdict counts, bound to the candidate
+                records.append(gates.record("review_bound", "warn", "；".join(notes) + "；审查结论照常采用"))
+                if reverted:
+                    records[-1]["files"] = reverted[:30]
+            else:
+                records.append(gates.record("review_bound", "pass", sha[:12]))
             evidence["reviewed"] = sha
             return None, None, False
         message = f"KiroCrew ON：{spec.get('name') or task['id']}（{run['id']}/{task['id']} 第 {attempt['number']} 次）"

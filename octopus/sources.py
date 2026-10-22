@@ -306,7 +306,30 @@ def clean_against(project, expected):
 
 def restore(project, paths):
     """Tracked files back to HEAD, in the index and the working tree (D46 P4: what a read-only task changed)."""
-    _git(project, "restore", "--source=HEAD", "--staged", "--worktree", "--", *paths)   # one HEAD lacks is removed
+    # one HEAD lacks is removed; names are names, not patterns (a file called "*" restores itself only)
+    _git(project, "--literal-pathspecs", "restore", "--source=HEAD", "--staged", "--worktree", "--", *paths)
+
+
+def rewind(project, expected):
+    """A review's changes put back (D57 §4): commits made on top of the candidate ``expected`` dropped — the candidate and
+    what came before it, the implementer's, are never touched — and what remains changed in tracked files restored. Only
+    what a check would count is put back (``clean_against``): a file a candidate leaves out (a .env, dependencies) stays in
+    the workspace as it is, untracked again if a dropped commit had added it, and so do untracked files. ``ValueError``,
+    with nothing moved, when HEAD is not ``expected`` or a commit on top of it."""
+    head = _git(project, "rev-parse", "--verify", "HEAD^{commit}")
+    rewound = 0
+    if head != expected:
+        if not ancestor(project, expected, head, env=SAFE_GIT_ENV):
+            raise ValueError(f"会话分支不在候选 {expected[:7]} 之上（HEAD {head[:7]}），不能撤回")
+        rewound = int(_git(project, "rev-list", "--count", f"{expected}..{head}", env=SAFE_GIT_ENV))
+        # HEAD only: the dropped commits' changes become staged changes, put back below like any other
+        _git(project, "-c", "core.hooksPath=" + os.devnull, "reset", "-q", "--soft", expected, env=SAFE_GIT_ENV)
+    reverted = clean_against(project, expected)["changed_files"]
+    if reverted:
+        restore(project, reverted)
+    if rewound:   # what is left staged (a left-out file a dropped commit added) back to untracked; files untouched
+        _git(project, "-c", "core.hooksPath=" + os.devnull, "reset", "-q", env=SAFE_GIT_ENV)
+    return {**clean_against(project, expected), "reverted": reverted, "rewound": rewound}
 
 
 def advance(project, branch, commit, old):
