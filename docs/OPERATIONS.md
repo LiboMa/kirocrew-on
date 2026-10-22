@@ -730,6 +730,10 @@ CloudFront 只使用 us-east-1 的证书）：分发加上别名与证书（SNI�
   这里不会出现待批准项。
   - 关闭：边界配置写 `crew_yolo = false`（或环境变量 `OCTOPUS_CREW_YOLO=false`），重启该边界的 Gateway 后恢复逐项批准。
   - 在 Dashboard 中切回 Normal 会立即结束 YOLO（对该 Gateway 上的所有会话生效），到下次 Gateway 启动时按 `crew_yolo` 恢复。
+- **不预先起会话（D63）**：KiroCrew 0.10 默认为每个 chat slot 预先起一个会话（`session.eager_spawn`）。平台的 slot 只作子 Agent 的父会话、
+  从不发消息，这个预备会话白占一个进程；内存吃紧时 KiroCrew 回收它，会连带停掉 slot 下正在运行的子 Agent（日志「parent-end teardown」，
+  报错「killed by Crew (forced stop)」）。每次 Gateway 启动时平台在 `crew/config.json` 写 `session.eager_spawn = false`（已有配置里没有这个键时
+  补上；明确设为 `true` 的保留）。代价：在原生 KiroCrew 页面里新开对话的第一条消息要多等几秒。
 
 ### 发布到仓库（D35 第 2 期）
 

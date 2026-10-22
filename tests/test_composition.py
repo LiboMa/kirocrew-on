@@ -157,6 +157,7 @@ class TemplateTests(unittest.TestCase):
         self.assertEqual(config["agent"]["subagent_cwd_allowed_roots"], [str(self.runs)])
         self.assertFalse(config["agent"]["session_sharing"])
         self.assertEqual(config["session"]["pool_size"], 0)
+        self.assertIs(config["session"]["eager_spawn"], False)   # D63: no idle session per platform slot
         self.assertNotIn("port", config["dashboard"])   # KiroCrew takes it from --port / KIROCREW_PORT only
         names = sorted(p.stem for p in (self.kiro / "agents").glob("*.json"))
         self.assertEqual(names, sorted(registry.BACKENDS))
@@ -170,9 +171,10 @@ class TemplateTests(unittest.TestCase):
         (self.kiro / "agents/poc-claude.json").write_text(json.dumps({"name": "poc-claude", "model": "user-model",
                                                                        "prompt": "old", "resources": ["skill://x"]}))
         self.seed()
-        # only the standing approval switch is written (crew_yolo); everything else the user set stays
+        # only the standing approval switch (crew_yolo) and the eager spawn off (D63) are written; the rest stays
         self.assertEqual(json.loads((self.crew / "config.json").read_text()),
-                         {"user_config": "preserve", "agent": {"dangerously_skip_permissions": True}})
+                         {"user_config": "preserve", "agent": {"dangerously_skip_permissions": True},
+                          "session": {"eager_spawn": False}})
         agent = json.loads((self.kiro / "agents/poc-claude.json").read_text())
         self.assertEqual((agent["model"], agent["resources"]), ("user-model", ["skill://x"]))
         self.assertIn("真实研发工作", agent["prompt"])
@@ -188,6 +190,18 @@ class TemplateTests(unittest.TestCase):
         text = (self.crew / "config.json").read_text()
         self.seed(yolo=False)
         self.assertEqual((self.crew / "config.json").read_text(), text)   # already as set: not rewritten
+
+    def test_eager_spawn_is_turned_off_unless_someone_turned_it_on(self):
+        # D63 (EC2 2026-10-22): KiroCrew 0.10 pre-creates a session for every chat slot (session.eager_spawn defaults on);
+        # the platform's slot is never claimed, so it holds a process, and under memory pressure its eviction tore down
+        # the slot's running sub-agent (parent-end teardown). An operator who set it on explicitly keeps it.
+        self.crew.mkdir(parents=True)
+        (self.crew / "config.json").write_text('{"session": {"pool_size": 0}}\n')
+        self.seed()
+        self.assertEqual(json.loads((self.crew / "config.json").read_text())["session"], {"pool_size": 0, "eager_spawn": False})
+        (self.crew / "config.json").write_text('{"session": {"pool_size": 0, "eager_spawn": true}}\n')
+        self.seed()
+        self.assertIs(json.loads((self.crew / "config.json").read_text())["session"]["eager_spawn"], True)
 
     def test_legacy_pipeline_templates_only_on_request(self):
         self.seed(legacy=True)

@@ -24,7 +24,8 @@
       "dangerously_skip_permissions"
     ],
     "session": [
-      "pool_size"
+      "pool_size",
+      "eager_spawn"
     ],
     "dashboard": [
       "onboarded"

@@ -25,7 +25,7 @@
 
 ## 共享与组织（原 M4）
 - 组织层，Session 共享给个人 / Team / 公司；Team 执行隔离。
-- **KiroCrew 回收未认领的父会话时杀掉子 Agent**（EC2 2026-10-22，run-16848466…）：Worker 建的 chat slot 被 KiroCrew 急切起了 coordinator 会话但从未认领；内存吃紧（posture=tight）时预取上限为 0，同一边界上新会话建 slot 就回收最旧的未认领父会话（parent-end teardown），正在运行的子 Agent 被 SIGKILL（「killed by Crew (forced stop)」），平台记 native_stopped、不重试。待：平台把这种停止视为瞬时失败（D57 Task 13 会话评估中）；根上让 slot 不触发 eager spawn 或被认领（需读 KiroCrew chat_runner）。
+- **KiroCrew 回收未认领的父会话时杀掉子 Agent**（EC2 2026-10-22，run-16848466…）：Worker 建的 chat slot 被 KiroCrew 急切起了 coordinator 会话但从未认领；内存吃紧（posture=tight）时预取上限为 0，同一边界上新会话建 slot 就回收最旧的未认领父会话（parent-end teardown），正在运行的子 Agent 被 SIGKILL（「killed by Crew (forced stop)」），平台记 native_stopped、不重试。平台把这种停止视为瞬时失败：D57 Task 13。根因：KiroCrew 0.10 的 `session.eager_spawn` 默认开启（sections.py:2216）——D63 在边界的 KiroCrew 配置里关掉它（新配置与已有配置都写 false，明确开启的保留）。
 - 用量上限（M4-4 第 3 期）：每人 / 每 Team 按周期（月）的 Kiro credits、token 或分钟数上限（D46 P6a 已有用量记录）；D61 只限同时运行的任务数。
 - 原生入口改为单 Session 票据（K03）；Worker Token 移出数据库（K10）。
 

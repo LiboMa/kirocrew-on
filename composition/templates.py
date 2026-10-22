@@ -69,18 +69,25 @@ def seed(*, crew_home, kiro_home, allowed_roots, legacy_pipeline, yolo=True):
         },
         # Only keys KiroCrew reads (tests/kirocrew_contract.json): its port comes from --port / KIROCREW_PORT, and the
         # default workspace stays its own base directory (a workspace entry names it with `dir`, not `path`).
-        "session": {"pool_size": 0},
+        # D63: KiroCrew pre-creates a session for every chat slot (eager_spawn defaults on); the platform's slot is only a
+        # parent and never claimed, so that session holds a process and, evicted under memory pressure, takes the
+        # slot's running sub-agent down with it (parent-end teardown, EC2 2026-10-22).
+        "session": {"pool_size": 0, "eager_spawn": False},
         "dashboard": {"onboarded": True},
         "default_workspace": "default",
     }
     path = crew_home / "config.json"
     if not path.exists():
         path.write_text(json.dumps(config, ensure_ascii=False, indent=2) + "\n")
-    # The boundary's standing YOLO (crew_yolo): the one key written into an existing config, so it holds across
+    # The boundary's standing YOLO (crew_yolo): written into an existing config (as eager_spawn is, above), so it holds across
     # Gateway restarts (a Dashboard grant ends at shutdown) and the setting can turn it off again. The keys the platform
     # once wrote that KiroCrew never read go at the same time (tests/kirocrew_contract.json).
     current = json.loads(path.read_text())
     changed = _forget_ignored(current)
+    session = current.setdefault("session", {})
+    if isinstance(session, dict) and "eager_spawn" not in session:   # D63, into an existing config; one set on stays on
+        session["eager_spawn"] = False
+        changed = True
     agent = current.setdefault("agent", {})
     if agent.get("dangerously_skip_permissions") is not yolo:
         agent["dangerously_skip_permissions"] = bool(yolo)
