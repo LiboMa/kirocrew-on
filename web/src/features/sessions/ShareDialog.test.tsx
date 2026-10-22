@@ -53,9 +53,10 @@ describe("sharing a Session (D64)", () => {
     await waitFor(() => expect(calls.some((c) => c.method === "DELETE" && c.path === "/v1/runs/run-s/shares/share-1")).toBe(true));
   });
 
-  test("the list shows what is shared with me on request", async () => {
-    const calls = open(makeRun({ id: "run-x" }));
+  test("the list shows what is shared with me on request, with the role and who shared it", async () => {
+    const calls = open(makeRun({ id: "run-x", access: { via: "share", role: "collaborator", by: "bob" } }));
     await userEvent.click(await screen.findByRole("button", { name: "共享给我" }));
     await waitFor(() => expect(calls.some((c) => c.method === "GET" && c.path === "/v1/runs" && c.query.includes("shared=1"))).toBe(true));
+    expect(await screen.findByText(/协作 · 由 bob 共享/)).toBeInTheDocument();   // spec §4 (final review)
   });
 });

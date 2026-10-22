@@ -227,6 +227,53 @@ class EntryTests(ShareCase):
                                                "confirmation": self.rid, "worker_id": "env"})), "denied")
         self.assertEqual(self.stop(self.e), "ok")
 
+    def more_reads(self, actor):
+        from octopus import crew_entry, designs
+        service, rid = self.service, self.rid
+        return {name: self.outcome(call) for name, call in {
+            "revision_diff": lambda: service.revision_diff(actor, rid), "archive_entry": lambda: service.archive_entry(actor, rid),
+            "preview_entry": lambda: service.preview_entry(actor, rid), "bundle_entry": lambda: service.bundle_entry(actor, rid),
+            "observe": lambda: crew_entry.observe(service, actor, rid), "design": lambda: designs.status(service, actor, rid)}.items()}
+
+    def writes(self, actor):
+        service, rid = self.service, self.rid
+        version = service.run(self.b, rid)["version"]
+        return {name: self.outcome(call) for name, call in {
+            "publish": lambda: service.publish(actor, rid, {}),   # bodies the check before access accepts
+            "steer": lambda: service.steer(actor, rid, {"message": "补充"}),
+            "answer_approval": lambda: service.answer_approval(actor, rid, {"origin": "native", "request_id": "r-1",
+                                                                             "request_mid": "m-1", "decision": "approve"}),
+            "accept": lambda: service.operate(actor, rid, "accept", {"request_id": "share-accept-1", "expected_version": version}),
+            "rebind": lambda: service.rebind(actor, rid, {"source": None}),
+            "forget_knowledge": lambda: service.forget_knowledge(actor, rid, {"id": "k-1"}),
+            "set_publish_policy": lambda: service.set_publish_policy(actor, rid, {"auto": True}),
+            "placement": lambda: service.placement(actor, rid=rid)}.items()}
+
+    def test_every_other_reader_and_writer(self):   # final review I2: the whole matrix of D64 Task 2
+        self.share(kind="user", username="eve")
+        self.assertEqual(set(self.more_reads(self.e).values()), {"ok"}, self.more_reads(self.e))
+        self.assertEqual(set(self.writes(self.e).values()), {"denied"}, self.writes(self.e))
+        app = {name: self.outcome(call) for name, call in {"app_start": lambda: self.service.app_start(self.e, self.rid),
+                                                             "app_stop": lambda: self.service.app_stop(self.e, self.rid)}.items()}
+        self.assertEqual(set(app.values()), {"denied"}, app)
+        self.share(kind="user", username="eve", role="collaborator")   # an ordinary member's: none of these either
+        self.assertEqual(set(self.writes(self.e).values()), {"denied"}, self.writes(self.e))
+
+    def test_the_environments_of_its_space_are_not_shared(self):   # final review I3: placement is for moving it
+        self.share(kind="everyone")
+        self.assertEqual(self.outcome(lambda: self.service.placement(self.c, rid=self.rid)), "denied")
+
+    def test_a_collaborator_is_not_an_administrators_oversight(self):   # final review I1: a sync was audited as one
+        self.share(kind="user", username="eve", role="collaborator")
+        with self.db.read() as db:
+            self.assertFalse(self.service._oversight(db, self.e, self.rid))
+            self.assertFalse(self.service._oversight(db, self.b, self.rid))
+            self.assertTrue(self.service._oversight(db, self.a, self.rid))   # alice: an admin, not in it
+        self.share(kind="user", username="alice")   # a viewer share: an admin who writes still oversees
+        with self.db.read() as db:
+            self.assertTrue(self.service._oversight(db, self.a, self.rid))
+            self.assertFalse(self.service._oversight(db, self.a, self.rid, read=True))
+
     def test_the_company_reads(self):
         self.share(kind="everyone")
         self.assertEqual(set(self.reads(self.c).values()), {"ok"})

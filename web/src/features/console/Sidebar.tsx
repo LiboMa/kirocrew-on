@@ -81,7 +81,12 @@ export function Sidebar() {
                   <span>{run.progress.accepted}/{run.progress.total} 交接</span>
                   <span className="ml-auto font-mono">{formatTime(run.updated, true)}</span>
                 </span>
-                {(allSessions || sharedSessions) && <span className="mt-1 block text-[11px] text-muted-foreground">{where(run)}</span>}
+                {(allSessions || sharedSessions) && (
+                  <span className="mt-1 block text-[11px] text-muted-foreground">
+                    {where(run)}{sharedSessions && run.access?.via === "share"
+                      ? ` · ${run.access.role === "collaborator" ? "协作" : "查看"}${run.access.by ? ` · 由 ${run.access.by} 共享` : ""}` : ""}
+                  </span>
+                )}
               </button>
             ))}
             {listError && <p role="alert" className="px-3 py-2 text-xs leading-5 text-destructive">会话列表读取失败：{listError}</p>}

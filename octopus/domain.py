@@ -1085,7 +1085,7 @@ class Service:
         answer the console and Coding Agents show, so neither keeps its own copy of the rule."""
         with self.db.read() as db:
             if rid:
-                run = run_access(db, actor, rid, read=True)
+                run = run_access(db, actor, rid, shares=False)   # D64: for moving it, not for shares
                 user, team = run["owner_id"], run["team_id"]
                 options = space_workers(db, user, team)   # the Session's creator's, not the operator's (R4)
                 placed = json.loads(run["snapshot"]).get("placement") or {}
@@ -2010,7 +2010,7 @@ class Service:
                 "bundle": hashlib.sha256(data).hexdigest()}   # the command's digest covers the bytes, not the bytes
         with self.db.read() as db:
             run = run_access(db, actor, rid)
-            oversight = not self._readable(db, actor, rid, admin=False)   # an elevated admin's: audited (A2)
+            oversight = self._oversight(db, actor, rid)   # an elevated admin's: audited (A2)
             done = db.execute("SELECT hash, response FROM commands WHERE actor=? AND key=?", (actor["id"], request_id)).fetchone()
             if done is None:
                 require(type(expected_version) is int and expected_version == run["version"], "Session 版本已更新", 409,
@@ -2119,6 +2119,17 @@ class Service:
             config = {key: value for key, value in json.loads(worker["config"]).items() if key in ("url", "token", "token_sealed")}
         self.audit_read(actor, rid, "diff")
         return {**diffs.read(config, rid, attempt_id, candidate), "sha": candidate["sha"], "parent": candidate.get("parent")}
+
+    @staticmethod
+    def _oversight(db, actor, rid, read=False):
+        """Whether the actor does this (a write unless ``read``) only as an elevated admin (A2: audited) — not through
+        their own access, a Team or a share that allows it (D64: a collaborator's sync is not an administrator's oversight;
+        an administrator holding a viewer share who writes is)."""
+        try:
+            run_access(db, actor, rid, admin=False, read=read)
+            return False
+        except Error:
+            return True
 
     @staticmethod
     def _readable(db, actor, rid, admin=True):
