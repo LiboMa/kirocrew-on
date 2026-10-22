@@ -43,7 +43,7 @@ export async function followRunEvents(runId: string, { after = 0, signal, onEven
     try {
       const response = await fetch(
         `/v1/runs/${encodeURIComponent(runId)}/events?stream=1&after=${last}`,
-        { headers: { Authorization: "Bearer " + getToken() }, signal },
+        { headers: getToken() ? { Authorization: "Bearer " + getToken() } : {}, signal },   // else the session cookie (D67)
       );
       if (response.status === 401 || response.status === 403 || response.status === 404) {
         onState("revoked");

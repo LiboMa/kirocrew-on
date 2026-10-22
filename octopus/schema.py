@@ -28,7 +28,9 @@ def openapi():
         "Step": obj({"id": text, "name": text, **execution, **contract}, ["id", "name", "tool", "prompt"]),
         "Execution": obj({"name": text, **execution, **contract}),   # a continue may change the task contract too
         "Source": obj({"type": {"enum": ["new", "git", "none"]}, "url": text, "ref": text}, ["type"]),   # D65: none
-        "Login": obj({"username": text, "password": {"type": "string", "format": "password"}}, ["username", "password"]),
+        "Login": obj({"username": text, "password": {"type": "string", "format": "password"},
+                      # D67: true keeps the login (its token and session cookie) 30 days; otherwise 1 day, cookie until the browser closes
+                      "remember": {"type": "boolean", "default": False}}, ["username", "password"]),
         "User": obj({"username": text, "password": {"type": "string", "format": "password"}, "admin": {"type": "boolean"},
                      "worker_id": text}, ["username", "password"]),
         "Team": obj({"name": text, "owner": text, "worker_id": text}, ["name", "owner", "worker_id"]),
@@ -377,5 +379,9 @@ def openapi():
                 op["responses"]["200"]["content"]["text/event-stream"] = {"schema": text}
             paths[path][method] = op
     return {"openapi": "3.1.0", "info": {"title": "Octopus Team API", "version": __version__},
-            "security": [{"bearer": []}], "servers": [{"url": "/"}], "paths": paths,
-            "components": {"securitySchemes": {"bearer": {"type": "http", "scheme": "bearer"}}, "schemas": schemas}}
+            "security": [{"bearer": []}, {"session": []}], "servers": [{"url": "/"}], "paths": paths,
+            "components": {"securitySchemes": {
+                "bearer": {"type": "http", "scheme": "bearer"},
+                "session": {"type": "apiKey", "in": "cookie", "name": "__Host-octopus_session",
+                            "description": "Set by POST /v1/login (D67). Used only without an Authorization header; "
+                                           "a write on it alone needs this console's Origin."}}, "schemas": schemas}}

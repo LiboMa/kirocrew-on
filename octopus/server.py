@@ -28,6 +28,23 @@ from .schema import openapi
 
 UI = Path(__file__).parent / "ui"
 LOOPBACK = {"127.0.0.1", "::1"}
+# D67: a login's session cookie. __Host-: only this host may set it (not a preview subdomain), Secure and Path=/ forced.
+SESSION_COOKIE = "__Host-octopus_session"
+REMEMBER = 30 * 86400   # 「保持登录」: the cookie and its token; otherwise both end with the day (and the cookie with the browser)
+
+
+def session_cookie(token, max_age=None):
+    return (f"{SESSION_COOKIE}={token}; Path=/; Secure; HttpOnly; SameSite=Strict"
+            + ("" if max_age is None else f"; Max-Age={max_age}"))
+
+
+def cookie_token(header):
+    """The session token a Cookie header carries, or ""."""
+    for part in (header or "").split(";"):
+        key, _, value = part.strip().partition("=")
+        if key == SESSION_COOKIE:
+            return value
+    return ""
 
 
 def client_ip(handler, verified):
@@ -229,9 +246,11 @@ def server(database, port=8918, host="127.0.0.1", allowed_hosts=(), origin_secre
         def log_message(self, *_):
             pass  # No tokens, request bodies or query strings in access logs.
 
-        def respond(self, value, status=200, kind="application/json; charset=utf-8"):
+        def respond(self, value, status=200, kind="application/json; charset=utf-8", headers=()):
             data = value if isinstance(value, bytes) else dumps(value).encode()
             self.send_response(status)
+            for key, header in headers:
+                self.send_header(key, header)
             self.send_header("Content-Type", kind)
             self.send_header("Content-Length", str(len(data)))
             self.send_header("Cache-Control", "no-store")
@@ -395,10 +414,17 @@ def server(database, port=8918, host="127.0.0.1", allowed_hosts=(), origin_secre
                 self.close_connection = True
                 logging.error("Download of %s not recorded (%s)", rid, type(exc).__name__)
 
-        def identity(self):
+        def identity(self, method):
+            # The Authorization header comes first (API clients, the CLI, a console without the cookie); else the
+            # session cookie (D67), whose writes must also say they come from this console: a browser sends Origin
+            # on every non-GET fetch, and dispatch has already refused a foreign one.
             header = self.headers.get("Authorization", "")
+            raw = header.removeprefix("Bearer ") if header.startswith("Bearer ") else ""
+            if not header and (raw := cookie_token(self.headers.get("Cookie"))):
+                require(method == "GET" or bool(self.headers.get("Origin")), "跨站写入被拒绝：登录 Cookie 的写入须来自控制台",
+                        403, "origin")
             with database.read() as db:
-                actor = authenticate(db, header.removeprefix("Bearer ") if header.startswith("Bearer ") else "")
+                actor = authenticate(db, raw)
             now = time.time()
             if actor["last_used"] is None or now - actor["last_used"] >= 60:
                 # At most one write a minute per token, in its own short transaction, and best effort: a busy
@@ -493,6 +519,8 @@ def server(database, port=8918, host="127.0.0.1", allowed_hosts=(), origin_secre
                 if method == "GET" and path == "/v1/openapi.json":
                     return self.respond(openapi())
                 if method == "POST" and path == "/v1/login":
+                    remember = body.get("remember", False)   # the console asks by default; octopus login / connect do not
+                    require(isinstance(remember, bool), "remember 须为 true 或 false")
                     address = client_ip(self, self.origin_verified)
                     with limiter_lock:
                         recent = [t for t in failures.get(address, []) if time.time() - t < 60]
@@ -503,18 +531,19 @@ def server(database, port=8918, host="127.0.0.1", allowed_hosts=(), origin_secre
                                           (str(body.get("username", "")).lower(),)).fetchone()
                         require(user is not None and check_password(body.get("password"), user["password"]),
                                 "用户名或密码错误", 401, "unauthorized")
-                        token = issue_token(db, user["id"], label="Web login")
+                        token = issue_token(db, user["id"], label="Web login", ttl=REMEMBER if remember else 86400)
                         db.execute("UPDATE users SET last_login=? WHERE id=?", (time.time(), user["id"]))
                         db.execute("DELETE FROM tokens WHERE expires<?", (time.time(),))
                     with limiter_lock:
                         failures.pop(address, None)
-                    return self.respond(token)
+                    return self.respond(token, headers=[("Set-Cookie", session_cookie(token["token"],
+                                                                                      REMEMBER if remember else None))])
 
-                actor = self.identity()
+                actor = self.identity(method)
                 if path == "/v1/logout" and method == "POST":
                     with database.transaction() as db:
                         db.execute("DELETE FROM tokens WHERE id=? AND user_id=?", (actor["token_id"], actor["id"]))
-                    return self.respond({"ok": True})
+                    return self.respond({"ok": True}, headers=[("Set-Cookie", session_cookie("", 0))])
                 scope(actor, required_scope(method, path))
                 segments = path.strip("/").split("/")
                 if path == "/v1/me":
@@ -859,11 +888,11 @@ def server(database, port=8918, host="127.0.0.1", allowed_hosts=(), origin_secre
                     rid = segments[2]
                     if len(segments) == 5:
                         require(method == "DELETE", "Method not allowed", 405)
-                        scope(self.identity(), "manage")
+                        scope(self.identity(method), "manage")
                         return self.respond(service.unshare_run(actor, rid, segments[4]))
                     require(method in {"GET", "POST"}, "Method not allowed", 405)
                     if method == "POST":
-                        scope(self.identity(), "manage")
+                        scope(self.identity(method), "manage")
                         return self.respond(service.share_run(actor, rid, body), 201)
                     return self.respond(service.run_shares(actor, rid))
                 if len(segments) in {4, 5} and segments[:2] == ["v1", "runs"] and segments[3] == "revisions":
@@ -906,7 +935,7 @@ def server(database, port=8918, host="127.0.0.1", allowed_hosts=(), origin_secre
                             require(not body, "原生入口只接受当前 Run，不接受自定义 Session 或 URL")
                             from .crew_entry import create
                             result = create(service, actor, rid)
-                            scope(self.identity(), "execute")
+                            scope(self.identity(method), "execute")
                             return self.respond(result)
                         if action == "observe" and method == "GET":
                             from .crew_entry import observe
@@ -953,7 +982,7 @@ def server(database, port=8918, host="127.0.0.1", allowed_hosts=(), origin_secre
             self.close_connection = True
             for _ in range(30):
                 try:
-                    actor = self.identity()  # Revocation/membership applies to open streams.
+                    actor = self.identity("GET")  # Revocation/membership applies to open streams.
                     scope(actor, "read")
                     events = service.events(actor, rid, after)
                 except Error:

@@ -106,7 +106,8 @@ async page => {
     check(await p.locator("#modal").evaluate(n=>n.scrollWidth<=n.clientWidth+1),"移动端需求向导无横向溢出");
     await close();
     await p.setViewportSize({width:1480,height:1050});
-    const reader=await context.newPage();await login(reader,"fixture-reader");
+    // Another person, so another browser: a new tab of this one is still the owner's (D67 session cookie).
+    const reader=await (await browser.newContext({viewport:{width:1480,height:1050},reducedMotion:"reduce"})).newPage();await login(reader,"fixture-reader");
     await reader.locator("#new-run").click();
     await reader.locator("#new-input").fill("快速验证一个小函数");
     await reader.waitForFunction(()=>document.querySelector("#match-name").textContent.includes("最小实现"));

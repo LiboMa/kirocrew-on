@@ -1,21 +1,44 @@
-// Thin client for the platform API. The token lives in sessionStorage under the same key as the classic console,
-// so both consoles share one login; a 401 anywhere except /login signs the user out.
+// Thin client for the platform API. A login signs the browser in with an HttpOnly session cookie (D67), so a new tab
+// or a reopened browser is still signed in and the token is never readable here. Only a browser that refuses the
+// cookie (Safari on an http://localhost tunnel) keeps the token in sessionStorage, under the classic console's key, and
+// sends it as the Authorization header. A 401 anywhere except /login signs the user out.
 
 const TOKEN_KEY = "octopus.token";
-type Listener = (token: string) => void;
+type Listener = (signedIn: boolean) => void;
 const listeners = new Set<Listener>();
 
 export function getToken(): string {
   return sessionStorage.getItem(TOKEN_KEY) ?? "";
 }
 
+/** Signed in with this token (kept for this tab), or signed out with "". */
 export function setToken(token: string) {
   if (token) sessionStorage.setItem(TOKEN_KEY, token);
   else sessionStorage.removeItem(TOKEN_KEY);
-  listeners.forEach((listener) => listener(token));
+  listeners.forEach((listener) => listener(!!token));
 }
 
-export function onTokenChange(listener: Listener): () => void {
+/** Signed in by the session cookie alone: nothing to keep. */
+export function setCookieSession() {
+  sessionStorage.removeItem(TOKEN_KEY);
+  listeners.forEach((listener) => listener(true));
+}
+
+/** Whether the session cookie alone signs this browser in: at start (a new tab, a reopened browser) and after login. */
+export async function cookieSession(): Promise<boolean> {
+  try {
+    return (await fetch("/v1/me", { cache: "no-store" })).ok;
+  } catch {
+    return false;
+  }
+}
+
+function authorization(): Record<string, string> {
+  const token = getToken();
+  return token ? { Authorization: "Bearer " + token } : {};
+}
+
+export function onSignInChange(listener: Listener): () => void {
   listeners.add(listener);
   return () => listeners.delete(listener);
 }
@@ -41,7 +64,7 @@ export async function api<T>(path: string, method: Method = "GET", body?: unknow
       method,
       cache: "no-store",
       headers: {
-        Authorization: "Bearer " + getToken(),
+        ...authorization(),
         ...(body !== undefined ? { "Content-Type": "application/json" } : {}),
       },
       body: body !== undefined ? JSON.stringify(body) : undefined,
@@ -65,11 +88,11 @@ export async function api<T>(path: string, method: Method = "GET", body?: unknow
   return result as T;
 }
 
-/** A text answer (a Session's report): the same token and errors as api(). */
+/** A text answer (a Session's report): the same sign-in and errors as api(). */
 export async function apiText(path: string): Promise<string> {
   let response: Response;
   try {
-    response = await fetch("/v1" + path, { cache: "no-store", headers: { Authorization: "Bearer " + getToken() } });
+    response = await fetch("/v1" + path, { cache: "no-store", headers: authorization() });
   } catch {
     throw new ApiError(0, "network", "无法连接平台 API，请检查网络后重试。");
   }

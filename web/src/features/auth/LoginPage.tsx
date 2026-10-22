@@ -1,7 +1,8 @@
 import { useState, type FormEvent } from "react";
 import { ArrowRight } from "lucide-react";
-import { api, setToken } from "@/api/client";
+import { api, cookieSession, setCookieSession, setToken } from "@/api/client";
 import { Button } from "@/components/ui/button";
+import { Checkbox } from "@/components/ui/checkbox";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { TOOLS } from "@/lib/labels";
@@ -9,6 +10,7 @@ import { TOOLS } from "@/lib/labels";
 export function LoginPage() {
   const [error, setError] = useState("");
   const [busy, setBusy] = useState(false);
+  const [remember, setRemember] = useState(true);
 
   async function submit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
@@ -19,8 +21,11 @@ export function LoginPage() {
       const result = await api<{ token: string }>("/login", "POST", {
         username: form.get("username"),
         password: form.get("password"),
+        remember,
       });
-      setToken(result.token);
+      // The session cookie signs this browser in (D67); a browser that refused it keeps the token for this tab.
+      if (await cookieSession()) setCookieSession();
+      else setToken(result.token);
     } catch (reason) {
       setError((reason as Error).message);
     } finally {
@@ -66,6 +71,10 @@ export function LoginPage() {
           <div className="space-y-2">
             <Label htmlFor="login-password">密码</Label>
             <Input id="login-password" name="password" type="password" autoComplete="current-password" required />
+          </div>
+          <div className="flex items-center gap-2.5">
+            <Checkbox id="login-remember" checked={remember} onCheckedChange={(checked) => setRemember(checked === true)} />
+            <Label htmlFor="login-remember" className="font-normal">保持登录（30 天）</Label>
           </div>
           {error && <p role="alert" className="text-sm text-destructive">{error}</p>}
           <Button type="submit" className="w-full justify-between" size="lg" disabled={busy}>

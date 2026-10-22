@@ -55,7 +55,8 @@ async page => {
     await p.waitForSelector("[data-revoke]");
     check((await p.locator("#modal-body").innerText()).includes("fixture-reader"),"Web 添加指定用户授权");
     await close();
-    const reader=await context.newPage();
+    // Another person, so another browser: a new tab of this one is still the owner's (D67 session cookie).
+    const reader=await (await browser.newContext({viewport:{width:1480,height:1050},reducedMotion:"reduce"})).newPage();
     await reader.goto("http://127.0.0.1:8921/classic/");
     await reader.getByLabel("用户名",{exact:true}).fill("fixture-reader");
     await reader.getByLabel("密码",{exact:true}).fill("Fixture-password-123!");
@@ -64,7 +65,7 @@ async page => {
     check(await reader.locator("#session-list [data-run]").count()===0,"工作流共享没有泄露 Owner 的私人运行");
     await reader.locator("#flow-list [data-flow]").click();
     check(await reader.locator("#flow-name").isDisabled()&&await reader.locator("#modal-submit").isHidden(),"Viewer 无编辑权限");
-    await reader.close();
+    await reader.context().close();
     await p.locator("#run-delete").click();
     await p.locator("#confirm-id").fill("wrong-id");
     await p.locator("#modal-submit").click();

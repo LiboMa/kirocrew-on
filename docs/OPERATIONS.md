@@ -31,6 +31,20 @@
 安全组只允许 CloudFront 源站地址访问，平台另外校验 `X-Origin-Verify`；Worker（8928）与 Gateway（5476）只监听回环，
 原生入口经 SSM 端口转发：`deploy/aws/deploy.sh tunnel`（`localhost:15476 → 5476`）。
 
+**登录会话（D67，负责人 2026-10-22）**：
+- **Cookie**：控制台登录时，平台写入会话 Cookie `__Host-octopus_session`，属性为 HttpOnly、Secure、SameSite=Strict、Path=/。因为带 `__Host-` 前缀，预览子域名无法设置或覆盖它。
+- **有效期**：
+  - 勾选「保持登录（30 天）」（默认勾选）：Cookie 与它的 Token 都保持 30 天；
+  - 不勾选：Token 1 天，Cookie 在浏览器关闭时结束。
+  - 新标签页、重开的浏览器凭 Cookie 保持登录，两个控制台共用这次登录。
+- **识别顺序**：
+  - API 先看 `Authorization` 头（CLI、MCP、API Token）；没有这个头时才看 Cookie。
+  - 只凭 Cookie 的写入必须带本站 `Origin`，否则 403 `origin`。
+- **退出**：「退出登录」同时撤销 Token、清除 Cookie。
+- **不接受 Cookie 的浏览器**（例如 Safari 经 `http://localhost` 隧道访问）：退回到只在当前标签页保存 Token。
+- **命令行不变**：`octopus login`、bootstrap、connect 不传 `remember`，仍是 1 天的 Token。
+- **API Token 页**：Web 登录列为「Web login」，可以在这里撤销。
+
 ## 2．首次部署（Shell + CloudFormation，2026-10-11 EC2 实测）
 
 在本机 kirocrew-on 检出中执行（需要 us-east-1 的 AWS 凭据；`deploy/aws/stack.env` 中的规格为候选值）：

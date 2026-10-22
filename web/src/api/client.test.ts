@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, test, vi } from "vitest";
-import { ApiError, api, command, getToken, onTokenChange, setToken } from "@/api/client";
+import { ApiError, api, command, getToken, onSignInChange, setToken } from "@/api/client";
 import { followRunEvents, parseEventBlocks } from "@/api/events";
 
 const json = (status: number, body: unknown) =>
@@ -18,16 +18,23 @@ describe("api client", () => {
     expect(sessionStorage.getItem("octopus.token")).toBe("oct_fixture");
   });
 
+  test("without a kept token it sends none: the session cookie signs the request in (D67)", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(json(200, { id: "u1" }));
+    vi.stubGlobal("fetch", fetchMock);
+    await api("/runs", "POST", {});
+    expect(fetchMock.mock.calls[0][1].headers).toEqual({ "Content-Type": "application/json" });
+  });
+
   test("a 401 signs out everywhere, except on the login call", async () => {
     setToken("oct_fixture");
-    const seen: string[] = [];
-    const stop = onTokenChange((token) => seen.push(token));
+    const seen: boolean[] = [];
+    const stop = onSignInChange((signedIn) => seen.push(signedIn));
     vi.stubGlobal("fetch", vi.fn().mockResolvedValue(json(401, { error: "用户名或密码错误", code: "unauthorized" })));
     await expect(api("/login", "POST", {})).rejects.toMatchObject({ status: 401, message: "用户名或密码错误" });
     expect(getToken()).toBe("oct_fixture");
     await expect(api("/runs")).rejects.toBeInstanceOf(ApiError);
     expect(getToken()).toBe("");
-    expect(seen).toEqual([""]);
+    expect(seen).toEqual([false]);
     stop();
   });
 

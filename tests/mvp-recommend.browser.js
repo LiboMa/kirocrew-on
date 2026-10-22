@@ -47,15 +47,16 @@ async page => {
     await p.locator("#new-workflow").selectOption("template:bugfix");
     await p.waitForFunction(()=>document.querySelector("#launch-0-prompt").value!==""&&document.querySelector("#launch-tasks").textContent.includes("复现"));
     check(await p.locator("#launch-0-prompt").inputValue()!==first,"切换模板立即更新对应 Agent 提示词");
-    await p.waitForFunction(()=>document.querySelector("#launch-0-prompt").value.includes("订单退款"));
-    check((await p.locator("#launch-0-prompt").inputValue()).includes("订单退款"),"预设提示词动态带入本次需求");
+    // D46: a preset's prompt names its step, not the requirement (the requirement travels as input)
+    await p.waitForFunction(()=>document.querySelector("#launch-0-prompt").value.includes("当前步骤：1/"));
+    check(!(await p.locator("#launch-0-prompt").inputValue()).includes("订单退款"),"预设提示词标明当前步骤，不重复本次需求");
     await method("recommend");
     await p.locator("#recommend-start").click();
     await p.waitForFunction(()=>document.querySelector("#recommend-native").textContent.includes("fixture-not-native"));
-    check(requests.length===1 && requests[0].steps[0].prompt.includes("订单退款"),"生成请求携带需求和当前提示词基线");
+    check(requests.length===1 && requests[0].input.includes("订单退款") && requests[0].steps[0].prompt.includes("当前步骤：1/"),"生成请求携带需求和当前提示词基线");
     await step(0);
     await p.locator("#new-input").fill("改为设计会议议程");
-    await p.waitForFunction(()=>document.querySelector("#launch-0-prompt").value.includes("会议议程"));
+    await p.waitForFunction(()=>document.querySelector("#recommend-status").textContent.includes("已变化"));
     await step(1);
     jobs.values().next().value.status="ready";
     await p.waitForSelector("#recommend-apply:not([hidden])");

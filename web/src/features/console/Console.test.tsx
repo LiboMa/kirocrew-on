@@ -3,7 +3,7 @@ import { render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { App } from "@/App";
 import { setToken } from "@/api/client";
-import { makeRun, mockApi, runPage, workspaceRoutes } from "@/test/api";
+import { ME, makeRun, mockApi, runPage, workspaceRoutes } from "@/test/api";
 
 afterEach(() => {
   vi.unstubAllGlobals();
@@ -27,21 +27,24 @@ describe("console shell", () => {
     expect(searches.every((search) => new URLSearchParams(search).get("view") === "list")).toBe(true);
   });
 
-  test("login stores the shared token and opens the workspace", async () => {
-    const calls = mockApi({ ...workspaceRoutes(runs), "POST /login": { token: "oct_new", id: "t1", scopes: [], expires: 0 } });
+  test("login opens the workspace; a browser without the session cookie keeps the shared token (D67)", async () => {
+    const calls = mockApi({ ...workspaceRoutes(runs), "POST /login": { token: "oct_new", id: "t1", scopes: [], expires: 0 },
+      "GET /me": (_body: unknown, _url: URL, init: RequestInit) => (new Headers(init.headers).has("Authorization") ? ME
+        : new Response(JSON.stringify({ error: "需要 API Token", code: "unauthorized" }), { status: 401 })) });
     render(<App />);
-    await userEvent.type(screen.getByLabelText("用户名"), "fixture-owner");
+    await userEvent.type(await screen.findByLabelText("用户名"), "fixture-owner");
     await userEvent.type(screen.getByLabelText("密码"), "Fixture-password-123!");
     await userEvent.click(screen.getByRole("button", { name: /登录工作台/ }));
     expect(await screen.findByRole("navigation", { name: "会话列表" })).toBeInTheDocument();
     expect(sessionStorage.getItem("octopus.token")).toBe("oct_new");
-    expect(calls.find((c) => c.path === "/v1/login")?.body).toEqual({ username: "fixture-owner", password: "Fixture-password-123!" });
+    expect(calls.find((c) => c.path === "/v1/login")?.body).toEqual(
+      { username: "fixture-owner", password: "Fixture-password-123!", remember: true });
   });
 
   test("a failed login shows the server reason", async () => {
     mockApi({ "POST /login": new Response(JSON.stringify({ error: "用户名或密码错误", code: "unauthorized" }), { status: 401 }) });
     render(<App />);
-    await userEvent.type(screen.getByLabelText("用户名"), "x");
+    await userEvent.type(await screen.findByLabelText("用户名"), "x");
     await userEvent.type(screen.getByLabelText("密码"), "y");
     await userEvent.click(screen.getByRole("button", { name: /登录工作台/ }));
     expect(await screen.findByRole("alert")).toHaveTextContent("用户名或密码错误");
