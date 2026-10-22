@@ -193,6 +193,10 @@ class CheckTests(unittest.TestCase):
     def test_unrunnable_recognises_environment_failures(self):
         environment = [
             ({"exit": 127, "tail": "bash: line 1: pytest: command not found\n"}, "命令不存在：pytest"),
+            ({"exit": 127, "tail": "bash: pytest: command not found\n"}, "命令不存在：pytest"),   # bash 3.2
+            # a path a login profile sources that is gone says nothing about the check's own missing command
+            ({"exit": 127, "tail": "/Users/u/.bash_profile: line 5: /opt/x/env.sh: No such file or directory\n"
+                                   "bash: line 1: pytest: command not found\n"}, "命令不存在：pytest"),
             ({"exit": 1, "tail": "bash: pytest: command not found\n"}, "命令不存在：pytest"),
             ({"exit": 127, "tail": "sh: 1: jest: not found\n"}, "命令不存在：jest"),
             ({"exit": 127, "tail": "zsh: command not found: go\n"}, "命令不存在：go"),
@@ -220,7 +224,16 @@ class CheckTests(unittest.TestCase):
             {"exit": None, "tail": "", "skipped": "total_timeout"},
             {"exit": None, "tail": "无法运行检查命令（FileNotFoundError）"},
             {"exit": 1, "tail": "Error: Cannot find module './routes/users'\n"},   # the project's own file
-            {"exit": 1, "tail": "bash: line 1: ./run_tests.sh: No such file or directory\n"},
+            # a script the project does not have (never written): the project's error, though the shell exits 127
+            {"exit": 127, "tail": "bash: line 1: ./run_tests.sh: No such file or directory\n"},
+            {"exit": 127, "tail": "bash: ./run_tests.sh: No such file or directory\n"},
+            {"exit": 127, "tail": "bash: scripts/test.sh: No such file or directory\n"},
+            {"exit": 127, "tail": "/bin/sh: 1: ./scripts/lint.sh: not found\n"},   # dash
+            {"exit": 127, "tail": "sh: 1: scripts/lint.sh: not found\n"},
+            {"exit": 2, "tail": "/bin/sh: 1: ./scripts/lint.sh: not found\nmake: *** [Makefile:2: lint] Error 127\n"},
+            {"exit": 127, "tail": "zsh: no such file or directory: ./x.sh\n"},
+            {"exit": 127, "tail": "scripts/run.sh: line 2: ./helper.sh: No such file or directory\n"},   # its helper
+            {"exit": 127, "tail": "bash: line 1: pip: command not found\nbash: line 1: ./run.sh: No such file or directory\n"},
             {"exit": 2, "tail": "make: *** No rule to make target 'test'.  Stop.\n"},
             {"exit": 1, "tail": 'npm ERR! Missing script: "test"\n'},
             # what a login profile the check's shell sources prints (this machine's does) says nothing about the check
@@ -272,12 +285,16 @@ class CheckTests(unittest.TestCase):
             "git init -q repo && cd repo && GIT_AUTHOR_NAME= GIT_COMMITTER_NAME= git commit -q --allow-empty -m x",
             f"{sys.executable} -c 'assert 1 == 2'",
             f"{sys.executable} -c 'import myapp.models'",
+            "./d57-never-written.sh",
+            "sh -c scripts/d57-never-written.sh",
             "true"])["job"])
-        expected = ["命令不存在：d57-no-such-command", "缺少 Python 模块：d57_no_such_module", "检查环境没有 git 提交者身份", None, None, None]
+        expected = ["命令不存在：d57-no-such-command", "缺少 Python 模块：d57_no_such_module", "检查环境没有 git 提交者身份",
+                    None, None, None, None, None]
         tails = [r["tail"] for r in value["results"]]
+        self.assertEqual([r["exit"] for r in value["results"]][5:], [127, 127, 0], tails)
         self.assertEqual([checks_module.unrunnable(r) for r in value["results"]], expected, tails)
         # the Worker records its answer, made with the project at hand, in each failed result
-        self.assertEqual([r.get("unrunnable", "absent") for r in value["results"]], [*expected[:5], "absent"], tails)
+        self.assertEqual([r.get("unrunnable", "absent") for r in value["results"]], [*expected[:7], "absent"], tails)
 
     def test_cancel_ends_a_running_job(self):
         checks = Checks()

@@ -30,14 +30,20 @@ COMMON = ("python3", "python", "pip3", "pip", "pytest", "uv", "node", "npm", "np
 # platform's own commits carry, as a default (see _git_defaults).
 _NAME, _EMAIL = (dict(setting.split("=", 1) for setting in sources.COMMITTER[1::2])[key] for key in ("user.name", "user.email"))
 PYTHON_MODULE, NODE_MODULE = "缺少 Python 模块：{}", "缺少 Node 模块：{}"
+# A path the check's own shell cannot find ("./run_tests.sh", "scripts/lint.sh": a script never written) is the project's
+# error, never the environment's, whatever else the output says; and a 127 is a missing command only where no line says
+# a path is missing (a script of the project's that calls a helper it lacks: "scripts/run.sh: line 2: ./helper.sh: …").
+MISSING_PATH = re.compile(r"^(?:\S*/)?(?:(?:ba|da)?sh: (?:line \d+: |\d+: )?[^\s:]*/[^\s:]*: (?:No such file or directory|"
+                          r"(?:command )?not found)|zsh: (?:no such file or directory|command not found): \S*/\S*)\s*$", re.M)
+SAYS_MISSING_PATH = re.compile(r"[^\s:]*/[^\s:]*: (?:No such file or directory|(?:command )?not found)\s*$", re.M)
 # (pattern, reason) for a failure the environment caused, tried in order on the output's tail (D57 §5). A shell's own
-# "not found" counts only at a line's start: what a login profile the check's shell sources prints ("~/.bashrc: line 3:
-# setopt: command not found") starts with that file's path, and says nothing about the check.
+# "not found" counts only at a line's start and for a bare command name: what a login profile the check's shell sources
+# prints ("~/.bashrc: line 3: setopt: command not found") starts with that file's path, and says nothing about the check.
 UNRUNNABLE = [
-    (re.compile(r"^(?:\S*/)?(?:ba|da|z)?sh: (?:line \d+: |\d+: )?([^\s:]+): (?:command )?not found\s*$", re.M), "命令不存在：{}"),
-    (re.compile(r"^(?:\S*/)?zsh: command not found: ([^\s:]+)\s*$", re.M), "命令不存在：{}"),
+    (re.compile(r"^(?:\S*/)?(?:ba|da|z)?sh: (?:line \d+: |\d+: )?([^\s:/]+): (?:command )?not found\s*$", re.M), "命令不存在：{}"),
+    (re.compile(r"^(?:\S*/)?zsh: command not found: ([^\s:/]+)\s*$", re.M), "命令不存在：{}"),
     # a missing #! interpreter, and a command make could not start; a script of the project's own ("./x.sh") is not
-    (re.compile(r"^(?:\S*/)?env: [‘'\"]?([^\s:‘’'\"]+)[’'\"]?: No such file or directory\s*$", re.M), "命令不存在：{}"),
+    (re.compile(r"^(?:\S*/)?env: [‘'\"]?([^\s:/‘’'\"]+)[’'\"]?: No such file or directory\s*$", re.M), "命令不存在：{}"),
     (re.compile(r"^make(?:\[\d+\])?: ([^\s:/]+): (?:No such file or directory|Command not found)\s*$", re.M), "命令不存在：{}"),
     # the interpreter's own ("python3: No module named pytest") or an import that failed; not a skip reason quoting one
     (re.compile(r"(?:^\S*python[\d.]*: |(?:ModuleNotFoundError|ImportError): )No module named '?([\w.]+)'?", re.M),
@@ -55,15 +61,18 @@ OWN_MODULES = {PYTHON_MODULE: (".py",), NODE_MODULE: (".js", ".mjs", ".cjs", ".j
 
 def unrunnable(result, project=None):
     """Why a check failed because of where it ran rather than what it checks (D57 §5), in words for the user; None when it
-    passed, failed on its own, or never came to an exit code (a timeout, a stop, the total limit, a runner error). With
-    ``project``, a module the project has itself is its own error; without it, what the Worker recorded with the project
-    at hand is the answer (results of an older Worker are judged from the output alone)."""
+    passed, failed on its own, or never came to an exit code (a timeout, a stop, the total limit, a runner error). A
+    script path that is not there is the project's error; with ``project``, so is a module the project has itself;
+    without it, what the Worker recorded with the project at hand is the answer (results of an older Worker are judged
+    from the output alone)."""
     if "unrunnable" in result:
         return result["unrunnable"]
     code = result.get("exit")
     if code in (0, None):
         return None
     tail = str(result.get("tail") or "")
+    if MISSING_PATH.search(tail):
+        return None
     for pattern, reason in UNRUNNABLE:
         names = [found.groups() for found in pattern.finditer(tail)]
         if not names:
@@ -71,7 +80,7 @@ def unrunnable(result, project=None):
         if project is not None and reason in OWN_MODULES and any(_own(project, reason, name) for name, in names):
             return None
         return reason.format(*names[0])
-    return "命令不存在（退出码 127）" if code == 127 else None
+    return "命令不存在（退出码 127）" if code == 127 and not SAYS_MISSING_PATH.search(tail) else None
 
 
 def _own(project, reason, name):
