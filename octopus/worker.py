@@ -1417,6 +1417,22 @@ class Worker:
             value.update(status="dispatch_unknown", error="尚不能唯一确认原生派发；没有重发")
         return value
 
+    def _queued(self, native_id, attempt):
+        """A deferred run of this Attempt, as KiroCrew's GET /api/spawn/{id} reports it (0.10: status queued, reason,
+        reason_detail, elapsed, resuming); its task text carries the Attempt's mark, which proves it is ours. None else."""
+        try:
+            row = self.native("/api/spawn/" + native_id)
+        except crew_api.GatewayError:
+            return None
+        if not isinstance(row, dict) or not (row.get("queued") or row.get("status") == "queued"):
+            return None
+        if "[OCTOPUS-ATTEMPT:" + attempt + "]" not in str(row.get("task") or ""):
+            return None
+        elapsed = row.get("elapsed")
+        return {"reason": str(row.get("reason") or "")[:40], "detail": str(row.get("reason_detail") or "")[:300],
+                "elapsed": elapsed if isinstance(elapsed, (int, float)) and not isinstance(elapsed, bool) else None,
+                "resuming": bool(row.get("resuming"))}
+
     def inspect(self, body):
         run, parent = self.binding(body["run_id"])
         attempt = body["attempt_id"]
@@ -1434,6 +1450,11 @@ class Worker:
             saved = json.loads(statefile.read_text())
             if saved.get("id") == dispatch["native_id"] and saved.get("parent_session") == parent["parent"]:
                 state = saved
+        if native is None and not state:   # D60: a run KiroCrew deferred is in neither the list nor a state file yet
+            queued = self._queued(dispatch["native_id"], attempt)
+            if queued is not None:
+                return {**dispatch, "native": {"done": False, "queued": True}, "queued": queued, "evidence": {
+                    "native_task_id": dispatch["native_id"], "parent": parent["parent"]}, "handoff": "", "outcome": "", "decision": ""}
         require(native is not None or state, "原生任务归属当前不可核实", 409, "native_unavailable")
         if native is None or native.get("done"):
             # Native GET loads persisted task results after a Gateway restart.
