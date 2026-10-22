@@ -1,15 +1,15 @@
 import { useState } from "react";
 import { useQueryClient } from "@tanstack/react-query";
+import { Plus } from "lucide-react";
 import { toast } from "sonner";
 import { api } from "@/api/client";
 import { keys } from "@/api/hooks";
 import type { Member, Team, Worker } from "@/api/types";
-import { FormDialog } from "@/components/FormDialog";
 import { NativeSelect } from "@/components/NativeSelect";
+import { Panel } from "@/components/Panel";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
-import { Separator } from "@/components/ui/separator";
 import { useConsole } from "@/features/console/context";
 import { elevated } from "@/lib/access";
 
@@ -42,24 +42,33 @@ function Confirm({ text, label, onConfirm, onCancel }: { text: string; label: st
   );
 }
 
-export function TeamDialog() {
-  const { teams, allTeams, space, me, close } = useConsole();
+/** Teams: an administrator creates them and manages every one; everyone else the Teams they belong to (spec §5). */
+export function TeamPanel() {
+  const { teams, allTeams, space, me } = useConsole();
   const admin = elevated(me);
   // An administrator manages every Team (spec §5); everyone else the Teams they belong to.
   const manageable = admin ? allTeams : teams;
   const [picked, setPicked] = useState("");
+  const [creating, setCreating] = useState(false);
   const team = manageable.find((t) => t.id === (picked || space)) ?? manageable[0];
   const [error, setError] = useState("");
 
   return (
-    <FormDialog title="团队与成员" kicker="TEAM ACCESS" onClose={close}>
-      {admin ? <CreateTeam setError={setError} />
-        : <p className="text-sm text-muted-foreground">Team 由平台管理员创建，并在创建时分配执行环境。</p>}
-      <Separator />
+    <Panel title="Team"
+      description={admin ? "创建 Team 时指定 owner 与执行环境；成员、角色、执行环境与归档都在下面管理。"
+        : "Team 由平台管理员创建，并在创建时分配执行环境。"}
+      actions={admin && (
+        <Button type="button" variant={creating ? "outline" : "default"} aria-expanded={creating} onClick={() => setCreating(!creating)}>
+          <Plus /> 新建 Team
+        </Button>
+      )}>
+      {admin && creating && (
+        <CreateTeam setError={setError} onCreated={(id) => { setPicked(id); setCreating(false); }} />
+      )}
       {team ? (
         <>
           {manageable.length > 1 && (
-            <div className="space-y-1.5">
+            <div className="max-w-sm space-y-1.5">
               <Label htmlFor="team-pick">Team</Label>
               <NativeSelect id="team-pick" value={team.id} onChange={(e) => setPicked(e.target.value)}>
                 {manageable.map((t) => <option key={t.id} value={t.id}>{t.name}{t.archived ? " · 已归档" : ""}</option>)}
@@ -70,11 +79,11 @@ export function TeamDialog() {
         </>
       ) : <p className="text-sm text-muted-foreground">你还不在任何 Team 中。</p>}
       {error && <p role="alert" className="text-sm text-destructive">{error}</p>}
-    </FormDialog>
+    </Panel>
   );
 }
 
-function CreateTeam({ setError }: { setError: (message: string) => void }) {
+function CreateTeam({ setError, onCreated }: { setError: (message: string) => void; onCreated: (id: string) => void }) {
   const { users, workers, me, setSpace } = useConsole();
   const act = useAct(setError);
   // A Team is created on an execution environment (D28): a shared one, or a spare one that becomes its own.
@@ -86,10 +95,10 @@ function CreateTeam({ setError }: { setError: (message: string) => void }) {
   const [environment, setEnvironment] = useState("");
   const chosen = environments.some((w) => w.id === environment) ? environment : environments[0]?.id ?? "";
   return (
-    <section className="space-y-3">
+    <section className="space-y-3 rounded-lg border bg-card px-4 py-4" aria-label="新建 Team">
       <div className="grid items-end gap-3 sm:grid-cols-3">
         <div className="space-y-1.5">
-          <Label htmlFor="team-name">创建 Team</Label>
+          <Label htmlFor="team-name">新 Team 名称</Label>
           <Input id="team-name" value={teamName} onChange={(e) => setTeamName(e.target.value)} placeholder="团队名称" maxLength={80} />
         </div>
         <div className="space-y-1.5">
@@ -110,11 +119,12 @@ function CreateTeam({ setError }: { setError: (message: string) => void }) {
         const created = await api<Team>("/teams", "POST", { name: teamName, owner, worker_id: chosen });
         setTeamName("");
         if (created.role) setSpace(created.id);
+        onCreated(created.id);
       }, "Team 已创建。")}>创建 Team</Button>
       <p className="text-xs text-muted-foreground">
         {environments.length
           ? "共享环境内的会话互相可读；空闲专属环境分配后属于这个 Team。"
-          : "先在主机上开通执行环境，或把一个 Worker 设为共享环境（「执行环境 · Worker」），再创建 Team。"}
+          : "先在主机上开通执行环境，或把一个 Worker 设为共享环境（「管理 › 执行环境」），再创建 Team。"}
       </p>
     </section>
   );

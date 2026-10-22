@@ -4,8 +4,8 @@ import { toast } from "sonner";
 import { api } from "@/api/client";
 import { keys, useQuotas } from "@/api/hooks";
 import type { Quotas } from "@/api/types";
-import { FormDialog } from "@/components/FormDialog";
 import { NativeSelect } from "@/components/NativeSelect";
+import { Panel } from "@/components/Panel";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { useConsole } from "@/features/console/context";
@@ -63,9 +63,9 @@ function Row({ quota, label, detail, editor }: { quota: string; label: string; d
   );
 }
 
-/** Settings → 并发上限 (D61): how many tasks one runs at once, one's Teams too; administrators and Team owners set them. */
-export function QuotasDialog() {
-  const { close, users, teams: mine } = useConsole();
+/** 并发上限 (D61): how many tasks one runs at once, one's Teams too; administrators and Team owners set them. */
+export function QuotasPanel() {
+  const { users, teams: mine } = useConsole();
   const { data, error } = useQuotas();
   const save = useSave();
   const [person, setPerson] = useState("");
@@ -81,7 +81,7 @@ export function QuotasDialog() {
   );
 
   return (
-    <FormDialog title="并发上限" kicker="QUOTAS" wide onClose={close}
+    <Panel title="并发上限"
       description="同时运行的任务数上限。到了上限，会话的下一个任务按排队先后等待，有任务结束后自动开始，不必重新提交。没有设的范围不限制。每人默认与个人的上限由平台管理员设置，Team 的上限由 Team owner 或平台管理员设置。">
       {error ? <p className="text-sm text-destructive">读取失败：{error.message}</p> : !data ? <p className="text-sm text-muted-foreground">读取中…</p> : (
         <div className="space-y-4">
@@ -117,6 +117,6 @@ export function QuotasDialog() {
           )}
         </div>
       )}
-    </FormDialog>
+    </Panel>
   );
 }

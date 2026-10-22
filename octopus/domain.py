@@ -2716,6 +2716,10 @@ class Service:
         require(elevated(actor), "需要平台管理员", 403, "forbidden")
         now = time.time()
         with self.db.read() as db:
+            # The Sessions each person has in progress, counted as the environment list counts them (open, not settled).
+            running = dict(db.execute(
+                "SELECT owner_id,COUNT(*) FROM runs WHERE lifecycle='open' AND status NOT IN "
+                f"({','.join('?' * len(SETTLED))}) GROUP BY owner_id", SETTLED).fetchall())
             result = []
             for row in db.execute("SELECT * FROM users ORDER BY username"):
                 result.append({"id": row["id"], "username": row["username"], "admin": bool(row["admin"]),
@@ -2724,7 +2728,8 @@ class Service:
                                    "SELECT t.id,t.name,m.role FROM members m JOIN teams t ON t.id=m.team_id "
                                    "WHERE m.user_id=? ORDER BY t.name", (row["id"],))],
                                "tokens": db.execute("SELECT count(*) FROM tokens WHERE user_id=? AND expires>?",
-                                                    (row["id"], now)).fetchone()[0]})
+                                                    (row["id"], now)).fetchone()[0],
+                               "running": running.get(row["id"], 0)})
             return result
 
     def user_tokens(self, actor, uid):

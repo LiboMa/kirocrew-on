@@ -1,19 +1,11 @@
 import type { Dialog } from "@/features/console/context";
 import { LaunchWizard } from "@/features/launch/LaunchWizard";
 import { AssignWorkerDialog, ContinueDialog, ControlDialog } from "@/features/sessions/dialogs";
-import { CredentialsDialog } from "@/features/settings/CredentialsDialog";
-import { PoliciesDialog } from "@/features/settings/PoliciesDialog";
-import { QuotasDialog } from "@/features/settings/QuotasDialog";
 import { RunShareDialog } from "@/features/sessions/RunShareDialog";
-import { TeamDialog } from "@/features/settings/TeamDialog";
-import { PasswordDialog } from "@/features/settings/PasswordDialog";
-import { TokensDialog } from "@/features/settings/TokensDialog";
-import { UsersDialog } from "@/features/settings/UsersDialog";
-import { WorkersDialog } from "@/features/settings/WorkersDialog";
 import { ShareDialog } from "@/features/workflows/ShareDialog";
 import { WorkflowEditor } from "@/features/workflows/WorkflowEditor";
 
-/** Renders the dialog requested through the console context. */
+/** Renders the dialog requested through the console context. Settings are pages now (管理, 我的设置), not dialogs. */
 export function DialogHost({ dialog }: { dialog: Dialog | null }) {
   if (!dialog) return null;
   switch (dialog.kind) {
@@ -23,24 +15,8 @@ export function DialogHost({ dialog }: { dialog: Dialog | null }) {
       return <WorkflowEditor key={dialog.flow?.id ?? "new"} flow={dialog.flow} template={dialog.template} />;
     case "share":
       return <ShareDialog flowId={dialog.flowId} />;
-    case "team":
-      return <TeamDialog />;
-    case "tokens":
-      return <TokensDialog />;
-    case "credentials":
-      return <CredentialsDialog />;
-    case "policies":
-      return <PoliciesDialog />;
-    case "quotas":
-      return <QuotasDialog />;
     case "run-share":
       return <RunShareDialog run={dialog.run} />;
-    case "workers":
-      return <WorkersDialog />;
-    case "users":
-      return <UsersDialog />;
-    case "password":
-      return <PasswordDialog />;
     case "continue":
       return <ContinueDialog run={dialog.run} taskId={dialog.taskId} note={dialog.note} />;
     case "assign":

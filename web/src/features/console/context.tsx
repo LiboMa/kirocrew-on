@@ -16,20 +16,16 @@ export type Dialog =
   | { kind: "launch"; seed: LaunchSeed }
   | { kind: "workflow"; flow: Workflow | null; template?: string }
   | { kind: "share"; flowId: string }
-  | { kind: "team" }
-  | { kind: "tokens" }
-  | { kind: "credentials" }
-  | { kind: "policies" }
   | { kind: "run-share"; run: Run }
-  | { kind: "quotas" }
-  | { kind: "workers" }
-  | { kind: "users" }
-  | { kind: "password" }
   // Session dialogs carry the Session as it was when they opened: commands then send that expected_version, and a
   // concurrent change is rejected by the server instead of silently retargeting the dialog.
   | { kind: "continue"; run: Run; taskId?: string; note?: string }
   | { kind: "assign"; run: Run }
   | { kind: "control"; run: Run; action: "close" | "reopen" | "delete" };
+
+/** What the console shows: the Sessions, the administrators' 管理 page or 我的设置 (kept in the address bar as
+ * ``?view=admin&section=users``). */
+export type Page = "sessions" | "admin" | "settings";
 
 export interface ConsoleState {
   me: Me;
@@ -65,6 +61,10 @@ export interface ConsoleState {
   select: (id: string | null) => void;
   open: (dialog: Dialog) => void;
   close: () => void;
+  page: Page;
+  /** The section of the 管理 or 我的设置 page; "" for its first one. */
+  section: string;
+  go: (page: Page, section?: string) => void;
 }
 
 export const ConsoleContext = createContext<ConsoleState | null>(null);
