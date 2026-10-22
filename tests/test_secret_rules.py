@@ -32,8 +32,23 @@ def private_key(kind="RSA"):
     return f"-----BEGIN {label}-----\n{lines}\n-----END {label}-----", lines
 
 
+def pgp_key():
+    body = base64.b64encode(hashlib.sha512(b"pgp").digest() * 10).decode()
+    lines = "\n".join(body[i:i + 64] for i in range(0, len(body), 64))
+    label = "PGP " + "PRIVATE" + " KEY BLOCK"
+    armour = "Version: GnuPG v2\nComment: Alice Example <alice@example.com> (work)\n"
+    return f"-----BEGIN {label}-----\n{armour}\n{lines}\n=Ab3d\n-----END {label}-----\n", lines
+
+
 AWS_SECRET = chars("aws-secret", 40, "std").replace("=", "A")
 LABEL = "aws_secret_" + "access_key"
+SESSION = chars("aws-session", 356, "std")
+AKIA = "AKIA" + chars("glue", 16, "upper")
+ANT = "sk-" + "ant-" + "api03-" + chars("ctx", 93) + "AA"
+OPENAI = "sk-" + chars("openai-ctx", 48, "alnum")
+PROJECT = "sk-" + "proj-" + chars("project-ctx", 120)
+BOT = "xox" + "b-" + "1234567890123-" + "1234567890123-" + chars("bot-ctx", 24, "alnum")
+OCT = "oct" + "_" + chars("oct-ctx", 43)
 # (kind, the credential, the text it is found in)
 SAMPLES = [
     ("github", "github_pat_" + "11" + chars("fine", 20, "alnum") + "_" + chars("grained", 59, "alnum"), "token: {}"),
@@ -46,6 +61,13 @@ SAMPLES = [
     ("aws_secret_key", AWS_SECRET, LABEL + " = {}"),
     ("aws_secret_key", AWS_SECRET, "export " + LABEL.upper() + '="{}"'),
     ("aws_secret_key", AWS_SECRET, '{{"' + LABEL + '": "{}"}}'),
+    ("aws_secret_key", AWS_SECRET, '"Secret' + 'AccessKey": "{}"'),   # sts assume-role, iam create-access-key
+    ("aws_secret_key", AWS_SECRET, "aws_secret_" + "key = {}"),
+    ("aws_secret_key", AWS_SECRET, "secret_" + "access_key: {}"),
+    ("aws_secret_key", AWS_SECRET, "aws configure set " + LABEL + " {}"),
+    ("aws_session_token", SESSION, '"Session' + 'Token": "{}"'),
+    ("aws_session_token", SESSION, "aws_session_" + "token = {}"),
+    ("aws_session_token", SESSION, "export AWS_SESSION_" + "TOKEN={}"),
     ("anthropic", "sk-" + "ant-" + "api03-" + chars("anthropic", 93) + "AA", "ANTHROPIC_API_KEY={}"),
     ("anthropic", "sk-" + "ant-" + "a" * 90, "x-api-key: {}"),
     ("openai", "sk-" + chars("openai-legacy", 48, "alnum"), "Authorization: Bearer {}"),
@@ -53,7 +75,10 @@ SAMPLES = [
     ("slack", "xox" + "b-" + "1234567890123-" + "1234567890123-" + chars("slack-bot", 24, "alnum"), "SLACK={}"),
     ("slack", "xox" + "p-" + "1234567890-" + "1234567890-" + "1234567890123-" + chars("slack-user", 32, "alnum"),
      "token {}"),
-    ("octopus_token", "oct" + "_" + secrets.token_urlsafe(32), "OCTOPUS_TOKEN={}"),   # as security.create_token mints it
+    ("slack", "xa" + "pp-" + "1-" + "A0123456789-" + "1234567890123-" + chars("slack-app", 64, "alnum"), "{}"),
+    ("slack", "xox" + "e-" + "1-" + chars("slack-refresh", 140, "alnum"), "refresh={}"),
+    ("slack", "xox" + "e.xoxp-" + "1-" + chars("slack-rotating", 140, "alnum"), "access={}"),
+    ("octopus_token", "oct" + "_" + secrets.token_urlsafe(32), "OCTOPUS_TOKEN={}"),   # as create_token mints it
     ("octopus_token", "oct" + "_" + chars("platform", 43), "Bearer {}"),
     ("private_key", private_key("RSA")[0], "key:\n{}\n"),
     ("private_key", private_key("OPENSSH")[0], "{}"),
@@ -68,8 +93,8 @@ def found(text, extra=()):
 class SecretRuleTests(unittest.TestCase):
     def test_each_kind_is_found_with_its_kind(self):
         kinds = {kind for kind, _ in sources.SECRET_RULES}
-        self.assertEqual(kinds, {"github", "gitlab", "aws_access_key", "aws_secret_key", "anthropic", "openai", "slack",
-                                 "octopus_token", "private_key"})
+        self.assertEqual(kinds, {"github", "gitlab", "aws_access_key", "aws_secret_key", "aws_session_token",
+                                 "anthropic", "openai", "slack", "octopus_token", "private_key"})
         self.assertEqual({kind for kind, _, _ in SAMPLES}, kinds)
         for kind, secret, context in SAMPLES:
             with self.subTest(kind=kind, context=context):
@@ -86,16 +111,97 @@ class SecretRuleTests(unittest.TestCase):
         self.assertEqual([h["kind"] for h in hits], ["anthropic", "openai"])
         self.assertEqual([h["line"] for h in hits], [1, 2])
 
+    def assert_masked(self, text, *secrets_, kinds=None, tail=False):
+        """Every one of ``secrets_`` is found in ``text`` and masked so that no ten characters of it remain."""
+        hits = sources.find_secrets(text.encode())
+        if kinds is not None:
+            self.assertEqual([h["kind"] for h in hits], kinds, text[:120])
+        shown = checks.masked_tail(text.encode())[0] if tail else sources.mask_text(text)[0]
+        for secret in secrets_:
+            left = [secret[i:i + 10] for i in range(len(secret) - 9) if secret[i:i + 10] in shown]
+            self.assertEqual(left, [], shown[:300])
+
+    def test_keys_glued_to_or_encoded_in_their_context_are_found(self):
+        cases = [
+            ("%22" + AKIA + "%22", [AKIA], ["aws_access_key"]),
+            ("X-Amz-Credential%3D" + AKIA + "%2F20261022%2Fus-east-1%2Fs3%2Faws4_request", [AKIA], ["aws_access_key"]),
+            ("%2F" + AKIA, [AKIA], ["aws_access_key"]),
+            ("1" + AKIA, [AKIA], ["aws_access_key"]),
+            (AKIA + "9", [AKIA], ["aws_access_key"]),
+            ("AKIA" + chars("long", 20, "upper"), ["AKIA" + chars("long", 20, "upper")[:16]], ["aws_access_key"]),
+            # the IAM credentials CSV, JSON-escaped; and a key ID glued to its secret: the secret goes with it
+            ('"Access key ID,Secret access key\\n' + AKIA + "," + AWS_SECRET + '\\n"', [AKIA, AWS_SECRET],
+             ["aws_access_key"]),
+            (AKIA + AWS_SECRET, [AKIA, AWS_SECRET], ["aws_access_key"]),
+            ("\\n" + ANT, [ANT], ["anthropic"]), ("Bearer%20" + ANT, [ANT], ["anthropic"]),
+            ("%22" + ANT + "%22", [ANT], ["anthropic"]), ("mask-" + ANT[3:], [ANT[3:]], ["anthropic"]),
+            ("\\n" + OPENAI, [OPENAI], ["openai"]), ("\\t" + OPENAI, [OPENAI], ["openai"]),
+            ("Bearer%20" + OPENAI, [OPENAI], ["openai"]), ("%22" + OPENAI + "%22", [OPENAI], ["openai"]),
+            ("_" + OPENAI, [OPENAI], ["openai"]),
+            ("a" + PROJECT, [PROJECT], ["openai"]), ("Bearer%20" + PROJECT, [PROJECT], ["openai"]),
+            ("%22" + BOT + "%22", [BOT], ["slack"]), ("\\n" + BOT, [BOT], ["slack"]), ("x" + BOT, [BOT], ["slack"]),
+            ("\\n" + OCT, [OCT], ["octopus_token"]), ("Bearer%20" + OCT, [OCT], ["octopus_token"]),
+            ("%22" + OCT + "%22", [OCT], ["octopus_token"]), ("d" + OCT, [OCT], ["octopus_token"]),
+        ]
+        for text, secrets_, kinds in cases:
+            with self.subTest(text=text[:60]):
+                self.assert_masked(text, *secrets_, kinds=kinds)
+                self.assertIsNotNone(sources.SUSPICIOUS.search(text.encode()))
+
+    def test_aws_credentials_as_the_cli_prints_them(self):
+        access = "ASIA" + chars("sts", 16, "upper")
+        printed = json.dumps({"Credentials": {"AccessKeyId": access, "SecretAccessKey": AWS_SECRET,
+                                              "SessionToken": SESSION, "Expiration": "2026-10-22T10:00:00Z"}}, indent=4)
+        kinds = ["aws_access_key", "aws_secret_key", "aws_session_token"]
+        self.assert_masked(printed, access, AWS_SECRET, SESSION, kinds=kinds)
+        self.assert_masked(json.dumps(printed), access, AWS_SECRET, SESSION, kinds=kinds)   # escaped once more
+
+    def test_overlapping_matches_are_masked_as_one(self):
+        # an AWS Secret Key that happens to start like a key ID: one finding, none of it shown
+        value = "AKIA" + chars("overlap", 16, "upper") + chars("overlap-rest", 20, "std")
+        text = LABEL + "=" + value
+        hits = found(text)
+        self.assertEqual([(h["kind"], text[h["start"]:h["end"]]) for h in hits], [("aws_secret_key", value)])
+        self.assertEqual(hits[0]["hash"], hashlib.sha256(value.encode()).hexdigest())
+        self.assert_masked(text, value)
+        # a PEM line cut short and glued to a token: the union is masked, so no part of the token after the key's end
+        token = "ghp" + "_" + chars("glued", 36, "alnum")
+        text = "-----BEGIN RSA PRIVATE" + " KEY-----\n" + chars("pem-line", 64, "std") + token + " end"
+        hits = found(text)
+        self.assertEqual([h["kind"] for h in hits], ["private_key"])
+        self.assertTrue(text[hits[0]["start"]:hits[0]["end"]].endswith(token))
+        self.assert_masked(text, token)
+        self.assertTrue(sources.mask_text(text)[0].endswith("…" + token[-2:] + " end"))
+
+    def test_escaped_and_armoured_private_keys_are_masked_whole(self):
+        pem, body = private_key("")
+        service_account = json.dumps({"type": "service_account", "private_key": pem + "\n", "client_email": "a@b.c"})
+        self.assertIn("\\n", service_account)   # the key is on one line, its line breaks written as \n
+        lines = body.splitlines()
+        self.assert_masked(service_account, *lines, kinds=["private_key"])
+        self.assertIn('"private_key": "----…--\\n"', sources.mask_text(service_account)[0])
+        php = service_account.replace("/", "\\/")   # PHP's json_encode also escapes "/"
+        self.assert_masked(php, *[line.replace("/", "\\/") for line in lines], kinds=["private_key"])
+        cut_short = service_account[:service_account.index("-----END")]   # no END: the base64 after the header
+        self.assert_masked(cut_short, *lines, kinds=["private_key"])
+        # across the cut of a check's output tail
+        raw = "y" * 5000 + service_account + "\n" + "z" * (checks.TAIL - 600)
+        self.assertLess(len(raw) - checks.TAIL, raw.index("-----END"))
+        self.assert_masked(raw, *lines, tail=True)
+        armoured, body = pgp_key()
+        self.assert_masked("key:\n" + armoured, *body.splitlines(), kinds=["private_key"])
+        self.assertEqual(sources.mask_text(armoured)[0], "----…--\n")
+        self.assert_masked(json.dumps(armoured), *body.splitlines(), kinds=["private_key"])
+
     def test_lookalikes_are_not_secrets(self):
         lookalikes = [
             "oct_fixture", "oct" + "_" + chars("short", 42), "oct" + "_" + chars("long", 44),
             "sk-test", "sk-" + "ant-test", "task-" + "implement-the-login-page-and-its-tests-today",
-            "disk-" + chars("disk", 40, "alnum"),
+            "disk-" + chars("disk", 40, "alnum"), "risk-" + chars("risk", 40, "alnum"),
             "ghp_test_secret_value", "github_pat_example",
             chars("bare-url", 43), chars("bare-std", 40, "std"), base64.b64encode(b"just some text here!").decode(),
             "xoxb", "xoxb-", "xox" + "b-your-token-here", "xox" + "b-123-abc",
             "AKIA" + "abcdefghijklmnop", "ASIA" + "_PACIFIC_REGION_SALES", "ASIAPACIFIC",
-            "AKIA" + chars("too-long", 20, "upper"),
             LABEL + " = ${AWS_SECRET}", LABEL + " = <your-secret-access-key>",
             "-----BEGIN " + "PUBLIC KEY-----", "-----BEGIN " + "CERTIFICATE-----",
         ]

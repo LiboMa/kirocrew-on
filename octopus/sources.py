@@ -27,25 +27,38 @@ HIDDEN = "[凭证已隐去]"
 SKIP_DIRS = {"node_modules", ".venv", "venv", "__pycache__", ".pytest_cache", ".mypy_cache", "target", ".gradle",
              ".turbo", ".parcel-cache", ".cache"}
 ENV_KEPT = {".env.example", ".env.sample"}
-# What a credential looks like (D57 §3.2), by kind, in the order a span is named by: at one place the first kind that
-# matches wins (anthropic before openai), and one span is reported once. A rule with a group reports only the group (the
-# AWS Secret Key, not its label). Prefixes that also occur inside words or longer runs (AKIA/ASIA, sk-, xox, oct_) count
-# only at the start of one.
+# What a credential looks like (D57 §3.2), by kind. Catch first: a lookalike costs a person's judgment (and is
+# remembered, D57 §3.4), a missed key costs the key, so the rules take keys glued to their context, URL-encoded or
+# JSON-escaped. At one place the first kind in this order names the span (anthropic before openai; a labelled AWS secret
+# before the key-ID shape it may start with), and overlapping spans are reported, masked and hashed as one. A rule with
+# a group reports only the group (an AWS secret, not its label).
+_AWS_SEPARATOR = rb"(?:[\s\"'\\:=>]|%2[27]|%3[ADad]){1,12}"   # = : => quotes, escaped or URL-encoded, a space
+_LINE_BREAK = rb"(?:\r?\n|\\[rn])"   # in a file, or written as \n in JSON
 SECRET_RULES = [
     ("github", re.compile(rb"github_pat_[A-Za-z0-9_]{20,}|gh[pousr]_[A-Za-z0-9]{30,}")),
     ("gitlab", re.compile(rb"glpat-[A-Za-z0-9_-]{20,}")),
-    ("aws_access_key", re.compile(rb"(?<![A-Za-z0-9])(?:AKIA|ASIA)[0-9A-Z]{16}(?![A-Za-z0-9])")),
-    ("aws_secret_key", re.compile(rb"(?i:aws_secret_access_key)[\"']?\s*[:=]\s*[\"']?([A-Za-z0-9/+]{40})"
-                                  rb"(?![A-Za-z0-9/+=])")),
-    ("anthropic", re.compile(rb"(?<![A-Za-z0-9_-])sk-ant-[A-Za-z0-9_-]{32,}")),
-    ("openai", re.compile(rb"(?<![A-Za-z0-9_-])sk-(?:(?:proj|svcacct|admin)-[A-Za-z0-9_-]{32,}|[A-Za-z0-9]{32,})")),
-    ("slack", re.compile(rb"(?<![A-Za-z0-9_-])xox[abprs]-[0-9]+-[A-Za-z0-9-]{10,}")),
-    # The platform's own API Token, as security.create_token makes it: "oct_" and token_urlsafe(32).
-    ("octopus_token", re.compile(rb"(?<![A-Za-z0-9_-])oct_[A-Za-z0-9_-]{43}(?![A-Za-z0-9_-])")),
-    # The whole block when its end comes before any other "-----", so masking leaves none of the key; else the header
-    # and the base64 lines after it.
-    ("private_key", re.compile(rb"-----BEGIN [A-Z ]*PRIVATE KEY(?: BLOCK)?-----(?:(?:[A-Za-z0-9+/=\s:,.]|-(?!----))*?"
-                               rb"-----END [A-Z ]*PRIVATE KEY(?: BLOCK)?-----|(?:\s+[A-Za-z0-9+/=]{16,})*)")),
+    ("aws_secret_key", re.compile(rb"(?i:aws[_-]secret[_-]key|secret[_-]?access[_-]?key)" + _AWS_SEPARATOR
+                                  + rb"([A-Za-z0-9/+]{40})(?![A-Za-z0-9/+=])")),
+    ("aws_session_token", re.compile(rb"(?i:aws[_-]?session[_-]?token|sessiontoken)" + _AWS_SEPARATOR
+                                     + rb"([A-Za-z0-9/+=]{100,})")),
+    # A key ID anywhere; a secret glued to it (or after one , ; : | or space, as in the IAM CSV) goes with it.
+    ("aws_access_key", re.compile(rb"(?:AKIA|ASIA)[0-9A-Z]{16}(?:[,;:|\s]?[A-Za-z0-9/+]{40}(?![A-Za-z0-9/+=]))?")),
+    ("anthropic", re.compile(rb"sk-ant-[A-Za-z0-9_-]{32,}")),
+    # A legacy key is "sk-" and letters and digits only, so it must not follow a letter or digit (task-, disk-, risk-)
+    # unless that is the end of an escape (\n) or of a URL-encoded byte (%20).
+    ("openai", re.compile(rb"sk-(?:proj|svcacct|admin)-[A-Za-z0-9_-]{32,}"
+                          rb"|(?:(?<![A-Za-z0-9])|(?<=\\[nrt])|(?<=%[0-9A-Fa-f]{2}))sk-[A-Za-z0-9]{32,}")),
+    ("slack", re.compile(rb"(?:xox[abprs]|xapp|xoxe(?:\.xox[bp])?)-[0-9]+-[A-Za-z0-9-]{10,}")),
+    # The platform's own API Token, as security.create_token makes it: "oct_" and token_urlsafe(32), exactly.
+    ("octopus_token", re.compile(rb"oct_[A-Za-z0-9_-]{43}(?![A-Za-z0-9_-])")),
+    # The whole block — armour header lines (Version:, Comment: …), then the body, in a file or JSON-escaped — when its
+    # end comes before any other "-----", so masking leaves none of the key; else the header and the lines after it
+    # that look like base64.
+    ("private_key", re.compile(rb"-----BEGIN [A-Z ]*PRIVATE KEY(?: BLOCK)?-----"
+                               rb"(?:(?:\s|\\[nrt])+[A-Za-z-]+: [^\r\n\\]*)*"
+                               rb"(?:(?:[A-Za-z0-9+/=\s:,.]|\\[nrt/]|-(?!----))*?"
+                               rb"-----END [A-Z ]*PRIVATE KEY(?: BLOCK)?-----"
+                               rb"|(?:(?:[ \t]*" + _LINE_BREAK + rb")+[ \t]*(?:[A-Za-z0-9+/=]|\\/)+)*)")),
 ]
 # Any of them, for the scans that only ask whether something is there (a publish, a candidate, a Knowledge item).
 SUSPICIOUS = re.compile(b"|".join(b"(?:" + pattern.pattern + b")" for _, pattern in SECRET_RULES))
@@ -75,12 +88,16 @@ def find_secrets(data, extra=()):
         for match in pattern.finditer(data):
             start, end = match.span(1) if pattern.groups else match.span()
             spans.append((start, priority, end, kind))
-    found, last, line, counted = [], 0, 1, 0
+    merged = []   # [start, end, kind]: spans that overlap or touch become their union, named by the first
     for start, _, end, kind in sorted(spans):
-        if start < last:
-            continue   # within a span already named
+        if merged and start <= merged[-1][1]:
+            merged[-1][1] = max(merged[-1][1], end)
+        else:
+            merged.append([start, end, kind])
+    found, line, counted = [], 1, 0
+    for start, end, kind in merged:
         line += data.count(b"\n", counted, start)
-        counted, last = start, end
+        counted = start
         found.append({"kind": kind, "start": start, "end": end, "line": line, "masked": _masked(data[start:end]),
                       "hash": hashlib.sha256(data[start:end]).hexdigest()})
     return found
