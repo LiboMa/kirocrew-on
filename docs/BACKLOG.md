@@ -24,7 +24,8 @@
 - 旧版控制台 `/classic/` 在 React 版功能对齐并经负责人确认后移除。
 
 ## 共享与组织（原 M4）
-- 组织层，Session 共享给个人 / Team / 公司；Team 执行隔离；排队与配额。
+- 组织层，Session 共享给个人 / Team / 公司；Team 执行隔离。
+- 用量上限（M4-4 第 3 期）：每人 / 每 Team 按周期（月）的 Kiro credits、token 或分钟数上限（D46 P6a 已有用量记录）；D61 只限同时运行的任务数。
 - 原生入口改为单 Session 票据（K03）；Worker Token 移出数据库（K10）。
 
 ## 会话运行优化后续（D34）
