@@ -206,6 +206,10 @@ def server(database, port=8918, host="127.0.0.1", allowed_hosts=(), origin_secre
     service.credentials.configured = credentials_key_file
     from . import transport
     transport.configure(service.credentials.key)   # D59: Worker tokens are stored sealed with the same key
+    with database.transaction() as db:
+        sealed = workers.seal_stored(db, service.credentials.key)   # plaintext from before D59, once
+    if sealed:
+        logging.info("Sealed %d stored Worker token(s)", sealed)
     service.credentials.private_hosts = frozenset(credentials_private_hosts)
     signing_key = preview_key(database.root)
     hosts, local_hosts = set(), set()

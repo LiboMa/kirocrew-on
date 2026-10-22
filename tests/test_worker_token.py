@@ -127,5 +127,25 @@ class SealedOnWriteTests(AccessCase):
         self.assertEqual((config.get("token"), config["token_sealed"]), (None, sealed))
 
 
+
+class SealedAtStartTests(AccessCase):
+    def test_plaintext_from_before_is_sealed_once(self):
+        from octopus import workers
+        from octopus.server import server
+        with self.db.transaction() as db:
+            db.execute("INSERT INTO workers(id,name,owner_id,config,scope) VALUES('old','old',?,?,'dedicated')",
+                       (self.b["id"], dumps({"url": "https://10.0.0.9:8943", "token": "p" * 40, "capabilities": {}})))
+        app = server(self.db, 0)   # the platform's start
+        app.server_close()
+        key = vault.key_file(None, self.db.root)
+        with self.db.read() as db:
+            config = json.loads(db.execute("SELECT config FROM workers WHERE id='old'").fetchone()[0])
+        self.assertNotIn("token", config)
+        self.assertEqual(vault.open_(key, config["token_sealed"]), "p" * 40)
+        with self.db.transaction() as db:
+            self.assertEqual(workers.seal_stored(db, key), 0)   # again: nothing to do, the seal is not changed
+            self.assertEqual(json.loads(db.execute("SELECT config FROM workers WHERE id='old'").fetchone()[0]), config)
+
+
 if __name__ == "__main__":
     unittest.main()
