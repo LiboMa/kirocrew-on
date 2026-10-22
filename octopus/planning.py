@@ -1,7 +1,7 @@
 """KiroCrew planning inside a Session: a real Kiro Agent recognises the intent, enriches the requirement and maps it to
 tasks; code then validates that plan and appends the tasks to the same Session.
 
-The Agent only proposes. Parsing, the 1–8 task limit, tools, ids and model availability are decided here.
+The Agent only proposes. Parsing, the 1–12 task limit (D66), tools, ids and model availability are decided here.
 """
 import json
 import re

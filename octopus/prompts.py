@@ -126,7 +126,7 @@ def legacy_intent_prompt(example_json, intent, design_workspace):
 保留用户只做分析、只审查、离线、标准库等明确约束。
 最终回复输出一个完整的 json 代码块，使用当前平台支持的格式：
 {example_json}
-1–8 个顺序任务，Task id 唯一，仅小写字母、数字和短横线。先定义任务，再选择工具。
+1–12 个顺序任务，Task id 唯一，仅小写字母、数字和短横线。先定义任务，再选择工具。
 工具可选 kiro、claude、codex、opencode。未指定时可组合 Kiro 分析、Claude 编码、
 Codex 审查、OpenCode 交付；用户指定其他组合时遵从用户。
 没有可靠的本工具模型候选时用 model=auto、effort=""，并在任务说明中保留用户的模型偏好待核实；

@@ -63,7 +63,7 @@ class ImportWorkflowTests(unittest.TestCase):
             ("a: b: c", "YAML 第"),
             ("x: !!python/object:os.system ls", "YAML"),
             (json.dumps([{"name": "x", "tool": "gpt", "prompt": "p"}]), "Coding 工具"),
-            (json.dumps({"steps": [{"name": f"t{i}", "tool": "claude", "prompt": "p"} for i in range(9)]}), "1–8"),
+            (json.dumps({"steps": [{"name": f"t{i}", "tool": "claude", "prompt": "p"} for i in range(13)]}), "1–12"),
             ("```json\n[]\n```\n```json\n[]\n```", "一个完整"),
             (json.dumps({"name": "无任务"}), "steps"),
             (json.dumps([{"name": "x", "tool": "claude"}]), "任务说明"),

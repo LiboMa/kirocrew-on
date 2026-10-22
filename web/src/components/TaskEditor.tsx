@@ -30,7 +30,7 @@ export function TaskEditor({ tasks, onChange, models, defaults, idPrefix, title,
       <div className="flex items-center justify-between">
         <h3 className="text-sm font-semibold">{title} <span className="font-normal text-muted-foreground">· {tasks.length} Tasks</span></h3>
         {!readOnly && (
-          <Button type="button" size="sm" variant="outline" id={idPrefix + "-add"} disabled={tasks.length >= 8}
+          <Button type="button" size="sm" variant="outline" id={idPrefix + "-add"} disabled={tasks.length >= 12}
             onClick={() => onChange([...tasks, newStep()])}><Plus /> 添加任务</Button>
         )}
       </div>

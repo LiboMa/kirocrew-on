@@ -550,6 +550,8 @@ export interface DesignJob {
   evidence?: AttemptEvidence;
   config?: { name: string; steps: Step[] } | null;
   error?: string | null;
+  /** What KiroCrew answered, as it answered (D66: shown when it is not a valid workflow, to import and fix). */
+  raw_result?: string;
 }
 
 /** One write to a Session (D34): who made it (a user and their client, or a part of the system) and what changed. */

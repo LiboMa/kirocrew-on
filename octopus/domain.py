@@ -53,6 +53,7 @@ def name(value):
 # Optional task structure (D34 §6.1): what a task delivers and how it is checked, kept in its spec only when given.
 # verify_required (D57 §5): those of the checks that must pass, named by their text; the others only report.
 CONTRACT = ("kind", "role", "deliverables", "acceptance", "verify", "verify_required", "depends_on", "paths", "skills")
+MAX_TASKS = 12   # D66 (owner 2026-10-22): a workflow or a Session; was 8 — a 9-task recommendation was refused
 KINDS = ("implement", "review", "test", "deliver", "design", "research", "write")
 # D65: general work, not bound to Git — research (调研) and write (撰写), judged like a delivery; never an Evaluator's or
 # Knowledge's (they follow code changes and a repository).
@@ -128,7 +129,7 @@ def steps(value, known=(), planned=False):
     KiroCrew planner's tasks (or a continue of one), the only ones that may carry ``requested`` (D45), ``origin`` and
     ``verify_basis`` (D57) — anywhere else they are dropped, so a saved workflow or a given plan never claims an old
     requirement's choice. A person's checks (not ``planned``) must all pass unless ``verify_required`` names some (D57 §5.3)."""
-    require(isinstance(value, list) and 1 <= len(value) <= 8, "流程须包含 1–8 个顺序任务")
+    require(isinstance(value, list) and 1 <= len(value) <= MAX_TASKS, f"流程须包含 1–{MAX_TASKS} 个顺序任务")
     seen, earlier, result = set(), set(known), []
     for step in value:
         require(isinstance(step, dict) and set(step) <= {"id", "name", "prompt", "tool", "model", "effort", "requested",

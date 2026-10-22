@@ -377,7 +377,7 @@ function launchComposer(seed={}) {
   };
   $("launch-add").onclick=()=>{
     manual();
-    if(draft.length>=8){toast("最多配置 8 个顺序任务。");return;}
+    if(draft.length>=12){toast("最多配置 12 个顺序任务。");return;}
     draft.push({id:"task-"+crypto.randomUUID().slice(0,8),name:"新任务",tool:"claude",model:"auto",effort:"",prompt:""});
     renderTasks();$("launch-tasks").lastElementChild.open=true;persist();
   };

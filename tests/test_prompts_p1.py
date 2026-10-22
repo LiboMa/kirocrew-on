@@ -20,10 +20,10 @@ def again():
 
 class PlannerPromptTests(unittest.TestCase):
     def test_each_prompt_states_its_own_task_count(self):
-        self.assertNotIn("1–8 个顺序任务", prompts.intent_prompt("{}", "需求", "/w"))
+        self.assertNotIn("1–12 个顺序任务", prompts.intent_prompt("{}", "需求", "/w"))
         self.assertIn("1–7 个顺序任务", first())
         self.assertIn("1–6 个顺序任务", again())
-        self.assertIn("1–8 个顺序任务", design_instructions("需求", {"steps": []}, "/w", {}))
+        self.assertIn("1–12 个顺序任务", design_instructions("需求", {"steps": []}, "/w", {}))
 
     def test_the_planner_has_one_name(self):
         for prompt in (first(), again()):

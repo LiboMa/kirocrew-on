@@ -14,7 +14,7 @@ def openapi():
                  "model": {"type": "string", "default": "auto"},
                  "effort": {"enum": ["", "low", "medium", "high", "xhigh", "max"]}, "prompt": text}
     command = {"request_id": {"type": "string", "minLength": 8, "maxLength": 100}, "expected_version": integer}
-    step_list = {"type": "array", "items": ref("Step"), "minItems": 1, "maxItems": 8}
+    step_list = {"type": "array", "items": ref("Step"), "minItems": 1, "maxItems": 12}   # D66
     listed = lambda items: {"type": "array", "items": {"type": "string", "maxLength": 500}, "maxItems": items}
     from . import roles, skills
     contract = {"kind": {"enum": ["implement", "review", "test", "deliver", "design"]}, "role": {"enum": list(roles.KINDS)},
@@ -106,7 +106,7 @@ def openapi():
         "Steer": obj({"task_id": text, "message": text, "mode": {"enum": ["interrupt"]}},
                      ["task_id", "message"]),   # D46 P5b: into the running turn only
         "Continue": obj({**command, "task_id": text, "input": text, "execution": ref("Execution"),
-                         "recovery": ref("RecoveryPolicy"), "rerun": {"type": "array", "items": text, "maxItems": 8}},
+                         "recovery": ref("RecoveryPolicy"), "rerun": {"type": "array", "items": text, "maxItems": 12}},
                         ["request_id", "expected_version", "task_id"]),
         "Control": obj({**command, "confirmation": text}, ["request_id", "expected_version"]),
         # D57 §6.2: after two diagnoses of the same failure waited for the user, only rediagnose starts another

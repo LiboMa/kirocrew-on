@@ -7,7 +7,7 @@ one code block. Normalization is deterministic and reported in ``notes``; ``doma
 import re
 
 from .documents import parse_document
-from .domain import CONTRACT, TOOLS, steps
+from .domain import CONTRACT, TOOLS, steps, MAX_TASKS
 from .security import Error, require
 
 DOCUMENT_KEYS = {"name", "steps", "schema", "id", "revision", "description", "intent", "summary", "publish", "verify_fixes"}
@@ -97,7 +97,7 @@ def required_of(item, label, notes):
 
 def normalize(raw, notes, known=(), planned=False):
     require(isinstance(raw, list), "工作流需要 steps 任务列表")
-    require(1 <= len(raw) <= 8, "流程须包含 1–8 个顺序任务")
+    require(1 <= len(raw) <= MAX_TASKS, f"流程须包含 1–{MAX_TASKS} 个顺序任务")
     seen, result, renamed = set(), [], {}
     for index, item in enumerate(raw, 1):
         require(isinstance(item, dict), f"第 {index} 个任务不是对象")

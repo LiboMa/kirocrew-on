@@ -70,7 +70,7 @@ def instructions(intent, design, directory, models, tools=None):
         {"id": "task-1", "name": "任务名称", "tool": "kiro", "model": "auto", "effort": "",
          "prompt": "本任务的具体目标、输入、实施要求、交付物与验证方法"}]}
     return intent_prompt(dumps(example), intent, directory, role="KiroCrew 规划者（工作流设计）") + """
-设计 1–8 个顺序任务。
+设计 1–12 个顺序任务，不超过 12 个；需要更多步骤时合并相邻的步骤（平台不接受超过 12 个任务的工作流）。
 
 ## 当前模板 / 用户草稿基线
 下面的数据用于设计参考。针对本次业务需求重新编写各 Task 的提示词，

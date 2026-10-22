@@ -260,7 +260,7 @@ const GENERATION_LABELS: Record<string, string> = {
   failed: "生成失败",
 };
 
-function RecommendPanel({ draft, recommendWorker, setRecommendWorker, recommendation, onOpenGeneration, setError }: PlanProps) {
+function RecommendPanel({ draft, update, recommendWorker, setRecommendWorker, recommendation, onOpenGeneration, setError }: PlanProps) {
   const choices = usePlacement(draft.space).data?.options ?? [];
   const job = draft.generation;
   const active = generationActive(job);
@@ -322,6 +322,27 @@ function RecommendPanel({ draft, recommendWorker, setRecommendWorker, recommenda
             </pre>
           </CollapsibleContent>
         </Collapsible>
+      )}
+      {job?.status === "invalid" && !!job.raw_result && (
+        <div id="recommend-invalid" className="space-y-2 rounded-md border border-warning/40 bg-warning/5 p-3">
+          <p className="text-xs leading-5">
+            KiroCrew 已给出方案，但它没有通过工作流校验（原因见上）。可以导入后在下一步修改，或重新推荐。
+          </p>
+          <div className="flex flex-wrap gap-2">
+            <Button type="button" size="sm" variant="outline" id="recommend-import"
+              onClick={() => update((d) => ({ ...d, method: "import", importContent: job.raw_result ?? "" }))}>导入并修改</Button>
+          </div>
+          <Collapsible>
+            <CollapsibleTrigger className="group flex items-center gap-1 text-xs font-medium text-primary">
+              查看 KiroCrew 返回的原始内容 <ChevronDown className="size-3.5 group-data-[state=open]:rotate-180" />
+            </CollapsibleTrigger>
+            <CollapsibleContent>
+              <pre id="recommend-raw" className="mt-2 max-h-72 overflow-auto rounded-md bg-muted/50 p-3 text-xs leading-5 whitespace-pre-wrap">
+                {job.raw_result}
+              </pre>
+            </CollapsibleContent>
+          </Collapsible>
+        </div>
       )}
       <p className="text-xs leading-5 text-muted-foreground">以当前匹配到的任务为基础，由真实 Kiro Agent 重新设计任务与提示词。关闭窗口后可重新打开查看；采用前不会执行。</p>
     </section>

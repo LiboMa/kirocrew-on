@@ -252,6 +252,26 @@ describe("launch wizard", () => {
     expect(calls.find((c) => c.path === "/v1/workflows/parse")?.body).toEqual({ content: "```json\n{\"steps\": []}\n```" });
   });
 
+  test("an invalid recommendation says why and can be imported to fix (D66)", async () => {
+    const raw = "说明\n```json\n{\"name\": \"建议\", \"steps\": []}\n```";
+    const calls = start({
+      "GET /workers": [worker],
+      "POST /designs": { id: "run-design", version: 1, status: "preparing" },
+      "GET /designs/run-design": { id: "run-design", version: 1, status: "invalid", raw_result: raw,
+        error: "KiroCrew 生成内容尚未通过工作流校验：流程须包含 1–12 个顺序任务" },
+    });
+    const dialog = await openWizard();
+    await fillNeed(dialog);
+    await next(dialog);
+    await userEvent.click(within(dialog).getByRole("radio", { name: /KiroCrew 推荐/ }));
+    await waitFor(() => expect(within(dialog).getByRole("button", { name: "让 KiroCrew 推荐" })).toBeEnabled());
+    await waitFor(() => expect(calls.some((c) => c.path === "/v1/workflows/resolve")).toBe(true));
+    await userEvent.click(within(dialog).getByRole("button", { name: "让 KiroCrew 推荐" }));
+    expect(await within(dialog).findByText(/流程须包含 1–12 个顺序任务/)).toBeInTheDocument();
+    await userEvent.click(within(dialog).getByRole("button", { name: "导入并修改" }));
+    expect(await within(dialog).findByLabelText(/工作流内容/)).toHaveValue(raw);
+  });
+
   test("KiroCrew recommendation: the Agent's tasks replace the draft only when adopted", async () => {
     const config = { name: "AI 建议", steps: [{ id: "plan", name: "Agent 设计的任务", tool: "codex", model: "auto", effort: "high", prompt: "按建议执行" }] };
     const calls = start({
