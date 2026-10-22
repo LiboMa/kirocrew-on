@@ -17,7 +17,10 @@ def openapi():
     step_list = {"type": "array", "items": ref("Step"), "minItems": 1, "maxItems": 12}   # D66
     listed = lambda items: {"type": "array", "items": {"type": "string", "maxLength": 500}, "maxItems": items}
     from . import roles, skills
-    contract = {"kind": {"enum": ["implement", "review", "test", "deliver", "design"]}, "role": {"enum": list(roles.KINDS)},
+    contract = {"kind": {"enum": ["implement", "review", "test", "deliver", "design", "research", "write"]},
+                "role": {"enum": list(roles.KINDS)},
+                # D69: which failures stop the Session; omitted, inferred from kind (research diverge, design design, else converge)
+                "phase": {"enum": ["diverge", "design", "converge"]},
                 "deliverables": listed(20),
                 "acceptance": listed(20), "verify": listed(10), "depends_on": listed(8), "paths": listed(20),
                 "skills": {"type": "array", "items": {"enum": list(skills.CATALOG)}, "maxItems": skills.LIMIT},

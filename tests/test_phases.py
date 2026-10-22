@@ -142,5 +142,23 @@ class PromptTests(unittest.TestCase):
         self.assertNotIn("发散阶段", briefing({}, {"kind": "implement"}))
 
 
+class EntryTests(unittest.TestCase):
+    """D69 Task 4: an imported workflow may carry its phases, in either language; the API says what a phase is."""
+    def test_an_imported_phase_in_chinese_or_english(self):
+        from octopus.workflow_import import import_workflow
+        content = ('{"name": "调研", "steps": [{"name": "调研", "tool": "kiro", "prompt": "调研", "阶段": "发散"},'
+                   '{"name": "方案", "tool": "claude", "prompt": "方案", "phase": "design"},'
+                   '{"name": "撰写", "tool": "codex", "prompt": "写", "phase": "later"}]}')
+        result = import_workflow(content, "json")
+        self.assertEqual([s.get("phase") for s in result["steps"]], ["diverge", "design", None])
+        self.assertTrue(any("later" in note for note in result["notes"]))
+
+    def test_the_openapi_names_the_phases_and_the_general_kinds(self):
+        from octopus.schema import openapi
+        text = str(openapi())
+        self.assertIn("'diverge', 'design', 'converge'", text)
+        self.assertIn("'research', 'write'", text)
+
+
 if __name__ == "__main__":
     unittest.main()

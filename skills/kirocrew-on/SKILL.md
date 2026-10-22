@@ -54,6 +54,8 @@ KiroCrew ON 在远端执行开发任务：KiroCrew 的 Kiro Agent 先识别意�
 - 自己写 `steps` 时，每个任务可带 `role`（`spec`、`sde`、`integration_test`、`security_test`、`challenge`、`evaluator`）：Agent 按对应的
   角色卡片工作，`kind` 仍决定门禁；审查类角色（`security_test` / `challenge` / `evaluator`）不要用实现该改动的工具（会被拒绝）。
   续作时 `execution.role` 给 `null` 或空串即去掉任务的角色（`kind` 不变）。
+  可带 `phase`（D69 按阶段把关）：`diverge` 发散（头脑风暴、调研、多方案）任务自身的失败只记提示、结论交给下一个任务；`design` 设计在阶段末把关一次；
+  `converge` 收敛（实现、撰写、测试、交付）照常。不写按 `kind` 推断（`research` 为发散、`design` 为设计、审查取所审任务的阶段、其余为收敛）。
   还可带 `skills`（至多 4 个，取自平台技能包：`test-driven-development`、`systematic-debugging`、`verification-before-completion`、
   `receiving-code-review`、`frontend-design`）：Agent 开始前读取并按其方法工作，如界面任务带 `frontend-design`、实现任务带
   `test-driven-development`。由 KiroCrew 规划时规划者自己推荐，不必替它写。
