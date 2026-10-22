@@ -2,9 +2,30 @@
 import json
 from urllib.parse import parse_qs, urlsplit
 
-from .domain import run_access
+from . import journal
+from .domain import audit, run_access
 from .security import Error, elevated, require
 from .transport import worker_request
+
+# The longest native login an entry gives (the Worker's crew_entry_ttl: at most 8 hours): a page opened that long before a
+# native task began may still be open, and able to stop it.
+LOGIN_LIFETIME = 8 * 3600
+
+
+def record(db, actor, rid, worker_id):
+    """A person is given the native KiroCrew page (D57 §6.3): on the Session's timeline, and audited. Its login covers the
+    whole Gateway of the Worker (K03), so from now on any native task there may be stopped by hand."""
+    journal.record(db, rid, "crew.entry_opened", journal.person(actor), worker_id=worker_id)
+    audit(db, actor, "run.crew_entry", "run", rid, {"worker_id": worker_id})
+
+
+def entered(db, worker_id, created):
+    """Whether a person may have stopped, in the native page, a native task on ``worker_id`` begun at ``created``: someone
+    was given an entry there whose login was still valid then, or since. KiroCrew records no difference between such a stop
+    and its own teardown of a running child (teardown-finding, 2026-10-22); a stop with no entry is the platform's fault.
+    A stop made on the Gateway without the platform (an SSM tunnel) is not seen: at most one extra retry."""
+    return db.execute("SELECT 1 FROM audit WHERE at>=? AND action='run.crew_entry' AND json_extract(detail,'$.worker_id')=? "
+                      "LIMIT 1", (created - LOGIN_LIFETIME, worker_id)).fetchone() is not None
 
 
 def browser_origin(value):
@@ -94,12 +115,13 @@ def create(service, actor, rid):
             params["sid"] == [run["native_parent"]] and len(params["token"]) == 1,
             "Worker 返回的原生会话入口与当前 Session 不一致", 409, "entry_mismatch")
     # Membership, closure and Worker changes during the network request take effect.
-    with service.db.read() as db:
+    with service.db.transaction() as db:
         current = run_access(db, actor, rid, admin=False, shares=False)
         available(current)
         current_worker = service._worker(db, actor["id"], current["worker_id"], current["team_id"])
         require(current["native_parent"] == run["native_parent"] and
                 current_worker["id"] == worker["id"] and current_worker["config"] == worker["config"],
                 "Session 执行环境已变化，请重试", 409, "worker_changed")
-    # Do not persist this response in runs, commands, events, exports or model context.
+        record(db, actor, rid, worker["id"])   # before the link is given: a stop made with it is never retried
+    # Do not persist this response in runs, commands, events, exports or model context (only that it was opened).
     return {"url": result["url"], "origin": origin, "native_parent": run["native_parent"]}

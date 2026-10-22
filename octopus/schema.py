@@ -109,9 +109,16 @@ def openapi():
                          "recovery": ref("RecoveryPolicy"), "rerun": {"type": "array", "items": text, "maxItems": 8}},
                         ["request_id", "expected_version", "task_id"]),
         "Control": obj({**command, "confirmation": text}, ["request_id", "expected_version"]),
+        # D57 §6.2: after two diagnoses of the same failure waited for the user, only rediagnose starts another
+        "Recover": obj({**command, "rediagnose": {"type": "boolean"}}, ["request_id", "expected_version"]),
         "AssignWorker": obj({**command, "worker_id": text}, ["request_id", "expected_version", "worker_id"]),
         "Empty": obj({}), "Error": obj({"error": text, "code": text}, ["error", "code"]),
     }
+    schemas["Recover"]["description"] = ("Execute scope. Starts a Coordinator diagnosis of the Session's failed task. When the "
+                                         "last two diagnoses of that task, failing on the same gate, waited for the user (counted "
+                                         "since the latest continue or since the task last passed), it is refused with 409 "
+                                         "already_waiting and the last diagnosis's reason and instructions; rediagnose: true "
+                                         "starts one anyway.")
     schemas["Resolve"]["description"] = "Read-only preview. Explicit workflow_id, template_id or steps wins. If omitted, match permitted workflows/templates using explainable rules. No native tasks or workspace are created."
     schemas["Design"]["description"] = "Execute scope. Starts a real Kiro workflow-design task via the chosen Worker and native ACP. Only recommends; does not run or save the recommended workflow. Poll /designs/{id}, then adopt and edit config.steps."
     schemas["WorkflowDocument"]["description"] = "A workflow generated ahead of time (console export, legacy schema 1 or a bare step list) as JSON, YAML or Markdown with one code block. Parsed and normalized by code; /workflows/parse previews the result and its notes."
@@ -174,7 +181,7 @@ def openapi():
         "/v1/runs/{id}/archive": {"post": "Empty"},
         "/v1/runs/{id}/credentials": {"post": "Rebind"},
         "/v1/runs/{id}/app": {"get": None, "post": "AppAction"}, "/v1/runs/{id}/app/open": {"post": "Empty"},
-        "/v1/runs/{id}/recover": {"post": "Control"},
+        "/v1/runs/{id}/recover": {"post": "Recover"},
         "/v1/runs/{id}/confirm": {"post": "Control"}, "/v1/runs/{id}/accept": {"post": "Control"},
         "/v1/runs/{id}/publish": {"post": "Publish"},
         "/v1/runs/{id}/publish-policy": {"post": "PublishPolicy"},

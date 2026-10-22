@@ -64,13 +64,41 @@ class CrewEntryTests(unittest.TestCase):
 
     def test_entry_uses_saved_identity_without_mutating_or_persisting_credentials(self):
         with self.db.read() as db:
-            before = "\n".join(db.iterdump())
+            before = set(db.iterdump())
         result = self.create()
         self.assertEqual(result["native_parent"], self.parent)
         self.assertEqual(self.calls[-1], ("/crew-entry", {"run_id": self.rid, "native_parent": self.parent}))
         with self.db.read() as db:
-            self.assertEqual(before, "\n".join(db.iterdump()))
+            after = set(db.iterdump())
+        # D57 §6.3: only the record that the entry was opened (its event and audit row) is written, never the link
+        self.assertEqual({line.split(" VALUES")[0] for line in after - before},
+                         {'INSERT INTO "events"', 'INSERT INTO "audit"', 'INSERT INTO "sqlite_sequence"'})
+        self.assertEqual({line.split(" VALUES")[0] for line in before - after} - {'INSERT INTO "sqlite_sequence"'}, set())
+        self.assertNotIn("fixture-link-only", "\n".join(after))
         self.assertNotIn("fixture-link-only", dumps(self.service.run(self.actor, self.rid)))
+
+    def test_opening_the_entry_is_on_the_timeline_and_audited(self):   # D57 §6.3: a stop after it may be a person's
+        self.create()
+        with self.db.read() as db:
+            events = [json.loads(r["payload"]) for r in db.execute(
+                "SELECT payload FROM events WHERE run_id=? AND kind='crew.entry_opened'", (self.rid,))]
+            audit = [dict(r) for r in db.execute("SELECT * FROM audit WHERE action='run.crew_entry'")]
+            self.assertTrue(crew_entry.entered(db, "worker", __import__("time").time()))
+            self.assertFalse(crew_entry.entered(db, "another-worker", __import__("time").time()))
+        self.assertEqual(len(events), 1)
+        self.assertEqual((events[0]["worker_id"], events[0]["actor"]["id"]), ("worker", self.actor["id"]))
+        self.assertEqual([(a["actor_id"], a["kind"], a["target"], json.loads(a["detail"])) for a in audit],
+                         [(self.actor["id"], "run", self.rid, {"worker_id": "worker"})])
+
+    def test_a_refused_entry_records_nothing(self):
+        with self.assertRaises(Error):
+            self.create(self.actors["bob"])
+        self.reply = {**self.reply, "native_parent": "another-session"}   # the Worker's answer does not match the Session
+        with self.assertRaises(Error):
+            self.create()
+        with self.db.read() as db:
+            self.assertIsNone(db.execute("SELECT 1 FROM events WHERE kind='crew.entry_opened'").fetchone())
+            self.assertIsNone(db.execute("SELECT 1 FROM audit WHERE action='run.crew_entry'").fetchone())
 
     def test_private_session_closed_missing_and_disabled_worker(self):
         with self.assertRaises(Error) as denied:

@@ -282,6 +282,80 @@ class KeptChecksTests(ReplanCase):
         run = self.tick(self.start(KEPT_STEPS), 40)
         self.assertEqual((run["tasks"][0]["spec"]["verify"], run["tasks"][0]["spec"]["verify_required"]), ([], []))
 
+WAIT = {"action": "wait_for_user", "reason": "等待", "instructions": "检查"}
+
+
+class ExemptReplanTests(ReplanCase):
+    """D57 §6.1: a replan for a problem in a task's contract — as the failed Attempt's evidence shows, not as the Coordinator
+    says — does not use the Session's one replan; at most two such."""
+
+    def setUp(self):
+        super().setUp()
+        self.contract = set()   # (task, number) whose failure is its contract's
+
+    def request(self, config, path, body, **kwargs):
+        result = super().request(config, path, body, **kwargs)
+        record = self.bodies.get(body.get("attempt_id"), {})
+        if path == "/inspect" and not record.get("coordination"):
+            spec = record["spec"]
+            number = sum(1 for b in self.bodies.values() if not b.get("coordination") and b["spec"]["id"] == spec["id"])
+            if (spec["id"], number) in self.contract:
+                result["outcome"] = dumps({**json.loads(result["outcome"]), "failure_type": "contract"})
+        return result
+
+    def snapshot(self, rid):
+        with self.db.read() as db:
+            return json.loads(db.execute("SELECT snapshot FROM runs WHERE id=?", (rid,)).fetchone()[0])
+
+    def environments(self):
+        return [(b["coordination"]["environment"]["replanned"], b["coordination"]["environment"].get("replan_exempt", False))
+                for b in self.bodies.values() if b.get("coordination")]
+
+    def test_a_contract_replan_does_not_use_the_quota(self):
+        self.failing, self.contract = {("review", 1), ("check", 1)}, {("review", 1)}
+        self.decisions = [REPLAN, REPLAN, WAIT, WAIT]
+        rid = self.start(recovery={"enabled": True, "max_cycles": 3})
+        run = self.tick(rid, 80)
+        self.assertEqual(run["status"], "completed", run.get("error"))
+        self.assertEqual(self.environments(), [(False, True), (False, False)])   # what the Coordinator was told
+        snapshot = self.snapshot(rid)
+        self.assertEqual([(r["task"], bool(r.get("exempt"))) for r in planning.replans(snapshot)],
+                         [("replan-1", True), ("replan-2", False)])
+        self.assertTrue(planning.planning_task("replan-1", snapshot))   # the earlier one is still a planning task
+        tasks = {t["id"]: t for t in run["tasks"]}
+        self.assertEqual((tasks["replan-1"]["mapping"]["source"], tasks["review-2"]["mapping"]["label"]),
+                         ("platform", "KiroCrew 重新规划"))
+
+    def test_the_coordinators_word_does_not_make_a_replan_exempt(self):
+        self.failing = {("review", 1), ("check", 1)}   # implementation failures, whatever the reason says
+        self.decisions = [{**REPLAN, "reason": "合同问题：检查命令在环境中不可执行"}, REPLAN, WAIT]
+        rid = self.start(recovery={"enabled": True, "max_cycles": 3})
+        run = self.tick(rid, 80)
+        self.assertEqual(run["status"], "blocked")
+        self.assertIn("已重新规划过", run["error"])
+        self.assertFalse(planning.replans(self.snapshot(rid))[0].get("exempt"))
+
+    def test_at_most_two_contract_replans_are_exempt(self):
+        self.failing = self.contract = {("review", 1), ("check", 1), ("check-2", 1), ("check-3", 1)}
+        self.decisions = [REPLAN] * 4 + [WAIT] * 2
+        rid = self.start(recovery={"enabled": True, "max_cycles": 5})
+        run = self.tick(rid, 160)
+        self.assertEqual(run["status"], "blocked")
+        self.assertIn("已重新规划过", run["error"])
+        self.assertEqual([bool(r.get("exempt")) for r in planning.replans(self.snapshot(rid))], [True, True, False])
+        self.assertEqual(self.environments(), [(False, True), (False, True), (False, False), (True, False)])
+
+    def test_a_rework_after_two_replans_reruns_neither_planner(self):
+        self.failing, self.contract = {("review", 1), ("check", 1), ("check-2", 1)}, {("review", 1)}
+        self.decisions = [REPLAN, REPLAN, {"action": "rework", "target_task_id": "code", "reason": "实现有缺陷",
+                                           "instructions": "修复"}, WAIT, WAIT]
+        rid = self.start(recovery={"enabled": True, "max_cycles": 4})
+        run = self.tick(rid, 120)
+        self.assertEqual(run["status"], "completed", run.get("error"))
+        self.assertEqual((len(self.dispatched("replan-1")), len(self.dispatched("replan-2"))), (1, 1))
+        self.assertEqual(len(self.dispatched("code")), 2)
+
+
 class ReplanReviewTests(ReplanCase):
     def test_the_replan_prompt_fits_the_worker_limit(self):
         long = "很长的内容" * 3000

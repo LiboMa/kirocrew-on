@@ -136,7 +136,7 @@ def expand(db, rid, text, models=None, replan=False, tools=None):
     # ids of tasks that are, or were (replaced by a replan — run or not — their Attempts kept as history), in this Session
     taken = {row["id"] for row in db.execute("SELECT id FROM tasks WHERE run_id=?", (rid,))} | \
         {row[0] for row in db.execute("SELECT DISTINCT task_id FROM attempts WHERE run_id=?", (rid,))} | \
-        {r.get("id") for r in (current.get("replan") or {}).get("replaced") or []}
+        {r.get("id") for plan in replans(current) for r in plan.get("replaced") or []}
     limit, renames = (6 if replan else 7), {}
     published = models or {}
     steps = []
@@ -330,6 +330,12 @@ def _fix_kept_checks(db, rid, kept, fixes, notes):
     return fixed
 
 
+def replans(snapshot):
+    """Every replan of the Session, earliest first: the latest is its ``replan``; those before it (D57 §6.1: a replan for a
+    problem in a task's contract leaves the Session's one replan unused) are kept in ``replan_history``."""
+    return [*(snapshot.get("replan_history") or []), *([snapshot["replan"]] if snapshot.get("replan") else [])]
+
+
 def pending(snapshot, task_id=PLAN_ID):
     """Whether ``task_id``'s plan is still to be applied: the first plan, or the Coordinator's replan (D41)."""
     if task_id != PLAN_ID:
@@ -343,13 +349,13 @@ def planner_task(task_id, snapshot):
     """Whether the task is KiroCrew's own planner in this Session (D44, D46): the agent-planned Session's plan task or the
     Coordinator's replan task — never a given plan's or a template's step that happens to be named ``plan``."""
     return (task_id == PLAN_ID and (snapshot.get("planning") or {}).get("mode") == "agent") or \
-        task_id == (snapshot.get("replan") or {}).get("task")
+        any(task_id == r.get("task") for r in replans(snapshot))
 
 
 def planning_task(task_id, snapshot=None):
     """The KiroCrew planning tasks: the first plan, and the Coordinator's replan as the Session's snapshot names it (D41).
     They change no business code: no candidate, no gates; a replan never replaces them."""
-    return task_id == PLAN_ID or bool(snapshot) and task_id == (snapshot.get("replan") or {}).get("task")
+    return task_id == PLAN_ID or bool(snapshot) and any(task_id == r.get("task") for r in replans(snapshot))
 
 
 def _clip(text, limit):
@@ -408,4 +414,4 @@ def replan_step(task_id, replaced, failure, decision, models=None, tools=None, l
             "prompt": prompt}
 
 
-__all__ = ["PLAN_ID", "REPLAN_PREFIX", "plan_step", "replan_step", "planning_task", "expand", "pending", "Error"]
+__all__ = ["PLAN_ID", "REPLAN_PREFIX", "plan_step", "replan_step", "planning_task", "expand", "pending", "replans", "Error"]

@@ -150,8 +150,11 @@ TOOLS = [
                                   "rerun": {"type": "array", "items": STRING},
                                   "credentials": object_schema({"source": {"type": ["string", "null"]}})},
                                  ["run_id", "request_id", "expected_version", "task_id"])},
-    {"name": "octopus_recover", "description": "在原 Session 和 Workspace 启动 KiroCrew Coordinator 诊断，按实际失败证据重试、退回上游返工并复审，或说明缺失输入。异步执行，以状态与纠错记录确认结果。",
-     "inputSchema": object_schema({"run_id": STRING, "request_id": STRING, "expected_version": {"type": "integer"}},
+    {"name": "octopus_recover", "description": "在原 Session 和 Workspace 启动 KiroCrew Coordinator 诊断，按实际失败证据重试、退回上游返工并复审，或说明缺失输入。异步执行，以状态与纠错记录确认结果。"
+                                     "同一任务的同一问题已连续两次诊断为等待用户时，返回 409 already_waiting 与上次的说明，不再诊断；"
+                                     "用户明确要求重新诊断时传 rediagnose: true。",
+     "inputSchema": object_schema({"run_id": STRING, "request_id": STRING, "expected_version": {"type": "integer"},
+                                   "rediagnose": {"type": "boolean"}},
                                  ["run_id", "request_id", "expected_version"])},
     {"name": "octopus_control", "description": "停止、关闭、重新打开 Session；删除要求完整 Session ID 确认，并先备份。",
      "inputSchema": object_schema({"run_id": STRING, "request_id": STRING, "expected_version": {"type": "integer"},

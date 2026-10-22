@@ -103,8 +103,9 @@ def required_checks(run, spec):
     run = dict(run)
     snapshot = run.get("snapshot")
     snapshot = json.loads(snapshot or "{}") if isinstance(snapshot, str) else snapshot if isinstance(snapshot, dict) else run
+    from .planning import replans
     planner = spec.get("origin") == "planner" or snapshot.get("match_mode") == "agent" or \
-        spec.get("id") in ((snapshot.get("replan") or {}).get("tasks") or [])
+        any(spec.get("id") in (r.get("tasks") or []) for r in replans(snapshot))
     return [] if planner else list(spec.get("verify") or [])
 
 
@@ -495,10 +496,11 @@ def mapping(snapshot, task, evidence=None):
         quote = spec["requested"].get("quote") or ""
         return {"source": "requested", "label": f"需求中指定：「{quote if len(quote) <= 30 else quote[:30] + '…'}」" if quote
                 else "需求中指定"}
-    planned, replan = snapshot.get("planning") or {}, snapshot.get("replan") or {}
-    if task["id"] == replan.get("task"):
+    from .planning import replans
+    planned, replanned = snapshot.get("planning") or {}, replans(snapshot)   # D57 §6.1: there may be more than one
+    if any(task["id"] == r.get("task") for r in replanned):
         return {"source": "platform", "label": "平台：重新规划（Kiro）"}
-    if task["id"] in (replan.get("tasks") or []):
+    if any(task["id"] in (r.get("tasks") or []) for r in replanned):
         return {"source": "planner", "label": "KiroCrew 重新规划" + _followed(snapshot, spec)}
     if task["id"] == "plan" and planned.get("mode") == "agent":
         return {"source": "platform", "label": "平台：需求分析与规划（Kiro）"}
@@ -2460,7 +2462,8 @@ class Service:
                     done.append(True)
                     fields.update(version=version, updated=time.time())
                     journal.change(db, "runs", rid, who, "command." + action, event={
-                        "version": version, **{k: body[k] for k in ("task_id", "worker_id", "rerun") if k in body}, **extra,
+                        "version": version, **{k: body[k] for k in ("task_id", "worker_id", "rerun", "rediagnose") if k in body},
+                        **extra,
                         **({"oversight": True, "by": {"id": actor["id"], "username": actor["username"]}} if oversight else {})},
                         **fields)
                 if action == "continue":
@@ -2529,6 +2532,8 @@ class Service:
                            reasons=reasons, **({"recovery": snapshot["recovery"]} if "recovery" in body else {}))
                 elif action == "recover":
                     from .recovery import schedule
+                    # D57 §6.2: 「仍要重新诊断」 — a diagnosis even after two that waited for the user on the same failure
+                    require(isinstance(body.get("rediagnose", False), bool), "rediagnose 须为布尔值")
                     require(run["lifecycle"] == "open" and run["worker_id"] and run["native_parent"] and
                             run["status"] in {"blocked", "failed", "stopped"}, "此 Session 当前不能启动诊断", 409, "busy")
                     reason = unserved(db, run)
@@ -2545,7 +2550,7 @@ class Service:
                     journal.change(db, "runs", rid, who, "run.settings", event={"execution_contract": [old, snapshot["execution_contract"]]},
                                    snapshot=dumps(snapshot))
                     restart_budget(db, rid, who)   # as a continue: the budget counts from the user's request
-                    schedule(db, self.db, run, task, attempt, manual=True, actor=who)
+                    schedule(db, self.db, run, task, attempt, manual=True, actor=who, rediagnose=body.get("rediagnose", False))
                 elif action == "assign-worker":
                     require(run["status"] == "waiting_worker" and run["lifecycle"] == "open",
                             "运行已分配 Worker 或已关闭", 409, "invalid_state")
