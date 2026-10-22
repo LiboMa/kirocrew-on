@@ -8,6 +8,7 @@ from __future__ import annotations
 
 from contextlib import contextmanager
 import fcntl
+import hashlib
 import json
 import os
 from pathlib import Path
@@ -26,9 +27,184 @@ HIDDEN = "[凭证已隐去]"
 SKIP_DIRS = {"node_modules", ".venv", "venv", "__pycache__", ".pytest_cache", ".mypy_cache", "target", ".gradle",
              ".turbo", ".parcel-cache", ".cache"}
 ENV_KEPT = {".env.example", ".env.sample"}
-# What a credential looks like in a diff: GitHub (fine-grained, classic, OAuth, app), GitLab, AWS keys, private keys.
+# What BLOCKS — the candidate's no_secrets gate, the publish scan and Knowledge items (D35 §5.2, D37 §3): GitHub
+# (fine-grained, classic, OAuth, app), GitLab, AWS Access Key IDs that start AKIA (not the temporary ASIA ones), private
+# keys. It stays exactly as it was before D57 until the owner approves blocking on more (no gate may block more than
+# before without that approval); the wider SECRET_RULES below only mask and are listed as findings.
 SUSPICIOUS = re.compile(rb"github_pat_[A-Za-z0-9_]{20,}|gh[pousr]_[A-Za-z0-9]{30,}|glpat-[A-Za-z0-9_-]{20,}|AKIA[0-9A-Z]{16}"
                         rb"|-----BEGIN [A-Z ]*PRIVATE KEY-----")
+# What a credential looks like (D57 §3.2), by kind, for masking what is shown or stored and listing what was masked
+# (find_secrets, mask_text, checks.masked_tail) — never for blocking. Catch first: a lookalike costs a person's
+# judgment (and is remembered, D57 §3.4), a missed key costs the key, so the rules take keys glued to their context,
+# URL-encoded or JSON-escaped. At one place the first kind in this order names the span (anthropic before openai; a
+# labelled AWS secret before the key-ID shape it may start with), and overlapping spans are reported, masked and hashed
+# as one. A rule with a group named "secret" reports only that group (an AWS secret, not its label).
+_AWS_SEPARATOR = rb"(?:[\s\"'\\:=>]|%2[27]|%3[ADad]){1,12}"   # = : => quotes, escaped or URL-encoded, a space
+# A private key's line break in a file, or written as \n in JSON (as \\n when that JSON is itself a JSON string, …).
+_LINE_BREAK = rb"(?:\r?\n|\\+[rn])"
+_KEY_CHAR = rb"(?:[A-Za-z0-9+/=]|\\+/)"   # base64, and "/" as PHP's json_encode writes it
+# How the key writes its line breaks, as seen right after its BEGIN: "lb" unset for real ones, else the backslashes
+# before their n or r (one in JSON, two in JSON inside a JSON string, four, …).
+_KEY_ESCAPING = rb"(?:(?=[ \t]*(?P<lb>\\+)[rn])|)"
+# A header value runs to its own line's end: a real line break, or, when the key's are escaped, a backslash run before
+# n or r that is one — whole escaped backslashes (two "lb" each), then "lb" exactly — so a path keeps its \n and \r
+# (C:\Users\nick, \rob, D:\keys\new; C:\\Users\\nick in JSON) at any depth. Other escapes (\" \u0022 \/) and the
+# backslashes right before the real end of the line (C:\keys\) are part of the value.
+_KEY_VALUE = (rb"(?:[^\r\n\\]|\\+(?![\\rn])"
+              rb"|(?(lb)(?=\\)(?:(?P=lb)(?P=lb))*(?!(?P=lb)(?P=lb))(?!(?P=lb)[rn])\\*|\\+)[rn])*")
+# OpenPGP armour and PEM header lines (RFC 4880 §6.2, RFC 1421): only these names, so that an error message after a
+# key header ("ModuleNotFoundError: …") is not taken for one.
+_KEY_HEADERS = (rb"(?:(?:\s|\\+[nrt])+(?:Version|Comment|Hash|Charset|MessageID|Proc-Type|DEK-Info):" + _KEY_VALUE
+                + rb")*")
+# A line of the key's body when its end is not there: a whole line of base64, or a run of base64 with a digit, + / or =
+# in it that is not followed by ":" or a "." that is not an ellipsis (base64 has neither): a word alone on a line is
+# masked with it, and a line cut short before "..."; an error message after a key header ("python3.11: …",
+# "/usr/bin/env: …", "/bin/sh: 1: …") is not.
+_KEY_LINE = (rb"(?:" + _KEY_CHAR + rb"+(?=[ \t]*(?:" + _LINE_BREAK + rb"|\Z))|[A-Za-z]*(?:[0-9+/=]|\\+/)"
+             + _KEY_CHAR + rb"*(?!:|\.(?!\.)|" + _KEY_CHAR + rb"))")
+_KEY_BEGIN = rb"-----BEGIN [A-Z ]*PRIVATE KEY(?: BLOCK)?-----"
+_KEY_END = rb"-----END [A-Z ]*PRIVATE KEY(?: BLOCK)?-----"
+SECRET_RULES = [
+    ("github", re.compile(rb"github_pat_[A-Za-z0-9_]{20,}|gh[pousr]_[A-Za-z0-9]{30,}")),
+    ("gitlab", re.compile(rb"glpat-[A-Za-z0-9_-]{20,}")),
+    # aws_secret_access_key, AWS_SECRET_ACCESS_KEY, SecretAccessKey (STS, IAM), aws_secret_key, Terraform's secret_key
+    ("aws_secret_key", re.compile(rb"(?i:secret[_-]?(?:access[_-]?)?key)" + _AWS_SEPARATOR
+                                  + rb"(?P<secret>[A-Za-z0-9/+]{40})(?![A-Za-z0-9/+=])")),
+    # aws_session_token, SessionToken (STS), boto's aws_security_token, a presigned URL's X-Amz-Security-Token (encoded)
+    ("aws_session_token", re.compile(rb"(?i:aws[_-]?session[_-]?token|sessiontoken|aws[_-]?security[_-]?token"
+                                     rb"|x-amz-security-token)" + _AWS_SEPARATOR
+                                     + rb"(?P<secret>(?:[A-Za-z0-9/+=]|%[0-9A-Fa-f]{2}){100,})")),
+    # A key ID anywhere; a secret glued to it (or after one , ; : | or space, as in the IAM CSV) goes with it.
+    ("aws_access_key", re.compile(rb"(?:AKIA|ASIA)[0-9A-Z]{16}(?:[,;:|\s]?[A-Za-z0-9/+]{40}(?![A-Za-z0-9/+=]))?")),
+    ("anthropic", re.compile(rb"sk-ant-[A-Za-z0-9_-]{32,}")),
+    # Project, service-account and admin keys, and a legacy "sk-" with letters and digits only: anywhere, as these rules
+    # only mask (after a colour code, an escape, inside disk-… alike).
+    ("openai", re.compile(rb"sk-(?:(?:proj|svcacct|admin)-[A-Za-z0-9_-]{32,}|[A-Za-z0-9]{32,})")),
+    ("slack", re.compile(rb"(?:xox[abprs]|xapp|xoxe(?:\.xox[bp])?)-[0-9]+-[A-Za-z0-9-]{10,}")),
+    # The platform's own API Token, as security.create_token makes it: "oct_" and token_urlsafe(32), exactly.
+    ("octopus_token", re.compile(rb"oct_[A-Za-z0-9_-]{43}(?![A-Za-z0-9_-])")),
+    # The whole block — its header lines, then the body, in a file or JSON-escaped (once or more) — when its end comes
+    # before any other "-----", so masking leaves none of the key; else the header and the body lines after it.
+    ("private_key", re.compile(_KEY_BEGIN + _KEY_ESCAPING + _KEY_HEADERS
+                               + rb"(?:(?:[A-Za-z0-9+/=\s:,.]|\\+[nrt/]|-(?!----))*?" + _KEY_END
+                               + rb"|(?:(?:[ \t]*" + _LINE_BREAK + rb")+[ \t]*" + _KEY_LINE + rb")*)")),
+]
+_PRIVATE_KEY = [kind for kind, _ in SECRET_RULES].index("private_key")
+_KEY_BEGINS, _KEY_ENDS = re.compile(_KEY_BEGIN), re.compile(_KEY_END)
+# The lines of base64 right before a private key's END, read backwards from it (so that finding where they begin costs
+# what they are long): whole lines, each with the END line's own prefix "q" (docker compose's "web-1  | ", pytest's
+# "E         + ", grep's "key.pem-" / "key.pem-26-", an indent; captured from the prefix put before a NUL), or, when the
+# END follows an escaped line break, JSON-escaped lines ("\/" reads "/\" backwards).
+_BACKWARDS_BASE64 = rb"(?:[A-Za-z0-9+=]|/\\*)+"
+_LINES_BEFORE = re.compile(rb"(?P<q>[^\0]*)\0(?:\n\r?[ \t]*" + _BACKWARDS_BASE64 + rb"(?P=q)(?=\n|\Z))+")
+_ESCAPED_LINES_BEFORE = re.compile(rb"[ \t]*(?:(?:n\\+(?:r\\+)?|r\\+)[ \t]*" + _BACKWARDS_BASE64
+                                   + rb"[ \t]*(?=[nr]\\|\Z))+")
+_PREFIX_SHAPE = bytes.maketrans(b"0123456789:", b"0000000000-")   # grep: "key.pem:26:" heads its lines "key.pem-25-"
+_BASE64 = frozenset(b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/=")
+
+
+def _masked(value):
+    """A credential as it may be shown (D57 §3.3): its first four and last two characters; a value too short to keep
+    most of it hidden that way is shown as the ellipsis alone."""
+    text = value.decode(errors="replace")
+    return text[:4] + "…" + text[-2:] if len(text) >= 12 else "…"
+
+
+def find_secrets(data, extra=(), cut=None, dropped=True):
+    """Where ``data`` (bytes) holds what looks like a credential, in order: ``{kind, start, end, line, masked, hash}``,
+    ``start``/``end`` the span in ``data``, ``line`` from 1, ``hash`` the span's SHA-256 (hex). ``extra`` are values to
+    be found as they are (a Worker Token, which has no prefix to know it by): kind ``worker_token``, named before any
+    rule. ``cut``: where the shown part of ``data`` begins (an output's tail kept to its last bytes), ``dropped``:
+    whether what came before ``data`` was dropped. A private key's END after ``cut`` with no BEGIN between them belongs
+    to a key whose BEGIN is out of view — dropped with that head, or before ``cut`` and not yet ended — so everything
+    from ``cut`` through the END is one private_key. And whether or not its BEGIN is there, the lines of base64 right
+    before an END are masked with it (the end of a key printed by tail, grep -B or a diff); an END with none right before
+    it (a hint that names it) is only a line."""
+    data = bytes(data)
+    spans = []   # (start, priority, end, kind)
+    for value in extra:
+        value = value.encode() if isinstance(value, str) else bytes(value or b"")
+        at = data.find(value) if value else -1   # an empty (or unset) value is never "found" everywhere
+        while at >= 0:
+            spans.append((at, -1, at + len(value), "worker_token"))
+            at = data.find(value, at + len(value))
+    for priority, (kind, pattern) in enumerate(SECRET_RULES):
+        for match in pattern.finditer(data):
+            start, end = match.span("secret") if "secret" in pattern.groupindex else match.span()
+            spans.append((start, priority, end, kind))
+    floor = 0
+    for match in _KEY_ENDS.finditer(data):   # the lines of a key right before its END, whether or not its BEGIN is there
+        start = _lines_before(data, floor, match.start())
+        if start is not None:
+            spans.append((start, _PRIVATE_KEY, match.end(), "private_key"))
+        floor = match.end()
+    if cut is not None:
+        for match in _KEY_ENDS.finditer(data, max(cut - 64, 0)):   # an END the cut runs through counts too
+            if match.end() > cut:
+                if not _KEY_BEGINS.search(data, cut, match.start()) and (dropped or _open_key(data, match.start())):
+                    spans.append((cut, _PRIVATE_KEY, match.end(), "private_key"))
+                break
+    merged = []   # [start, end, kind]: spans that overlap or touch become their union, named by the first
+    for start, _, end, kind in sorted(spans):
+        if merged and start <= merged[-1][1]:
+            merged[-1][1] = max(merged[-1][1], end)
+        else:
+            merged.append([start, end, kind])
+    found, line, counted = [], 1, 0
+    for start, end, kind in merged:
+        line += data.count(b"\n", counted, start)
+        counted = start
+        found.append({"kind": kind, "start": start, "end": end, "line": line, "masked": _masked(data[start:end]),
+                      "hash": hashlib.sha256(data[start:end]).hexdigest()})
+    return found
+
+
+def _lines_before(data, floor, at):
+    """Where the lines of base64 right before the private-key END at ``at`` begin (not before ``floor``, the end of the
+    END before it), or None when none come right before it (an END only named: "hint: expected -----END …", a grep hit
+    with its context left out)."""
+    newline = data.rfind(b"\n", floor, at)   # never further back than ``floor``: one pass over the data for all ENDs
+    line = newline + 1 if newline >= 0 else 0 if floor == 0 else floor - 1   # floor - 1: the line began before it
+    start = max(line, floor)
+    before = data[start:at].rstrip(b" \t")
+    if before[-2:-1] == b"\\" and before[-1:] in (b"n", b"r"):   # in an escaped string: its lines, escaped
+        found = _ESCAPED_LINES_BEFORE.match(data[start:at][::-1])
+        start = at - found.end() if found else None
+    elif line >= floor and b"\0" not in data[line:at] and (at == line or data[at - 1] not in _BASE64):
+        # (a prefix that ends in base64 could not be told from the line's own characters)
+        prefix = data[line:at].translate(_PREFIX_SHAPE)
+        found = _LINES_BEFORE.match(prefix[::-1] + b"\0" + data[floor:line].translate(_PREFIX_SHAPE)[::-1])
+        start = line - (found.end() - len(prefix) - 1) + len(prefix) if found else None
+    else:
+        start = None
+    while start is not None and data[start:start + 1] in (b" ", b"\t"):
+        start += 1
+    return start
+
+
+def _open_key(data, before):
+    """Whether the last private-key BEGIN in ``data`` before ``before`` has no END after it there."""
+    begin = None
+    for begin in _KEY_BEGINS.finditer(data, 0, before):
+        pass
+    return begin is not None and not _KEY_ENDS.search(data, begin.end(), before)
+
+
+def mask_text(text, extra=()):
+    """``text`` with every credential ``find_secrets`` finds replaced by its masked form, and what was found (``start``/
+    ``end`` in characters of ``text``). Masking masked text changes nothing."""
+    data = text.encode(errors="surrogatepass")
+    found = find_secrets(data, [v.encode(errors="surrogatepass") if isinstance(v, str) else v for v in extra or ()])
+    pieces, at, chars = [], 0, 0
+    for hit in found:
+        start, end = hit["start"], hit["end"]
+        between = data[at:start].decode(errors="surrogatepass")
+        secret = len(data[start:end].decode(errors="surrogatepass"))
+        pieces += [between, hit["masked"]]
+        chars += len(between)
+        hit["start"], hit["end"] = chars, chars + secret
+        chars, at = chars + secret, end
+    return "".join(pieces) + data[at:].decode(errors="surrogatepass"), found
 
 
 def env_file(name):
