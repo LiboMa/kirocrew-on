@@ -91,7 +91,9 @@ def login(url, username, password, home=None):
 def client_from(url, environ, home=None):
     path = config_path(home)
     saved = json.loads(path.read_text()) if path.is_file() else {}
-    url, token = url or environ.get("OCTOPUS_URL") or saved.get("url"), environ.get("OCTOPUS_API_TOKEN") or saved.get("token")
+    url = url or environ.get("OCTOPUS_URL") or saved.get("url")
+    same = bool(url and saved.get("url")) and url.rstrip("/") == saved["url"].rstrip("/")
+    token = environ.get("OCTOPUS_API_TOKEN") or (saved.get("token") if same else None)   # a saved token for its platform only
     if not url or not token:
         raise ValueError("还没有登录：请先运行 octopus login --url <平台地址>")
     return Client(url, token)
@@ -150,13 +152,17 @@ def run(argv, client, cwd):
         repo = None if args.new else local.repository(cwd)
         source = local.source(repo) if repo else {"type": "new"}
         if source["type"] == "git":
-            count = local.unpushed(repo)
-            if count and args.push_base:
+            missing, count = local.missing_branch(repo), local.unpushed(repo)
+            if missing and not args.push_base:
+                raise ValueError(f"当前分支 {missing} 不在 origin 上，执行环境克隆不到它：加 --push-base 先推送，或切换到 origin 上已有的分支")
+            if (count or missing) and args.push_base:
                 local.push_base(repo)
             elif count and not args.allow_unpushed:
                 raise ValueError(f"本地有 {count} 个提交尚未推送到 origin，执行环境看不到它们：加 --push-base 先推送，"
                                  "或加 --allow-unpushed 按 origin 上已有的提交提交")
-        body = {"request_id": _request(), "input": args.input, "source": source,
+        body = {"request_id": _request(), "input": args.input, "source": source, "dir": str(repo or cwd),
+                "allow_unpushed": True,   # checked (and pushed) here already
+
                 **{key: value for key, value in (("plan", args.plan), ("admission", args.admission), ("team_id", args.team)) if value}}
         result = mcp.call(client, "octopus_start", body)
         if repo:

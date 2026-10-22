@@ -69,6 +69,17 @@ class LoginTests(unittest.TestCase):
             self.assertEqual(issued[2]["label"], "octopus CLI")
             self.assertIn(("DELETE", "/v1/tokens/token-login", None), [c[:3] for c in api.calls])   # the login token is not kept
 
+    def test_a_saved_token_goes_only_to_its_platform(self):   # final review: --url sent it anywhere
+        with tempfile.TemporaryDirectory() as home:
+            path = cli.config_path(Path(home))
+            path.parent.mkdir(parents=True)
+            path.write_text(json.dumps({"url": "https://k.example", "token": "oct_saved"}))
+            self.assertEqual(cli.client_from(None, {}, Path(home)).token, "oct_saved")
+            with self.assertRaises(ValueError) as caught:
+                cli.client_from("https://elsewhere.example", {}, Path(home))
+            self.assertIn("octopus login", str(caught.exception))
+            self.assertEqual(cli.client_from("https://elsewhere.example", {"OCTOPUS_API_TOKEN": "oct_env"}, Path(home)).token, "oct_env")
+
     def test_without_a_login_the_user_is_told_how(self):
         with tempfile.TemporaryDirectory() as home, self.assertRaises(ValueError) as caught:
             cli.client_from(None, {}, Path(home))
@@ -105,6 +116,18 @@ class CommandTests(LocalCase):
         with mock.patch.object(local, "push_base") as pushed:
             run(["submit", "再做一次", "--push-base"], api, self.repo)
         pushed.assert_called_once()
+
+    def test_submit_from_inside_the_repository(self):   # final review: the process's own directory is the repository
+        commit(self.repo, {"b.txt": "b\n"})
+        api, here = Api(), os.getcwd()
+        os.chdir(self.repo)
+        self.addCleanup(os.chdir, here)
+        run(["submit", "做登录", "--allow-unpushed"], api, self.repo)
+        self.assertTrue([c for c in api.calls if c[1] == "/v1/runs"])
+        git(self.repo, "switch", "-q", "-c", "feature")
+        with self.assertRaises(ValueError) as caught:
+            run(["submit", "新分支", "--allow-unpushed"], api, self.repo)
+        self.assertIn("--push-base", str(caught.exception))
 
     def test_status_plan_and_confirm_use_the_linked_session(self):
         local.link(self.repo, {"run_id": RID})

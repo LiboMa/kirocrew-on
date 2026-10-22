@@ -24,7 +24,12 @@ class SyncCase(ConfirmationCase):
         self.checks = {}
 
     def request(self, config, path, body, **kwargs):
+        if path == "/verify/start":
+            self.checks[body["attempt_id"]] = "job-2"
+            return {"job": "job-2"}
         if path == "/verify/status":
+            if body["job"].startswith("unstarted"):   # the Worker never started it: as after a Worker restart
+                raise Error(404, "check_unknown", "检查任务不存在")
             return {"state": "done", "passed": True, "failed": None, "results": [{"command": "npm test", "exit": 0, "seconds": 1}]}
         return super().request(config, path, body, **kwargs)
 
@@ -112,6 +117,43 @@ class SyncTests(SyncCase):
         self.assertEqual(caught.exception.code, "sync_not_fast_forward")
         self.assertEqual(self.service.run(self.actor, rid)["tasks"][1]["status"], "accepted")   # nothing recorded
 
+    def test_a_bad_request_is_refused_before_the_worker_moves_anything(self):   # final review
+        rid, _ = self.finished()
+        for bad in ("x", None):
+            with mock.patch.object(sync, "worker_upload") as upload, self.assertRaises(Error) as caught:
+                self.service.sync(self.actor, rid, b"bundle", NEW, bad, self.service.run(self.actor, rid)["version"], None, old=OLD)
+            self.assertEqual(caught.exception.status, 400)
+            upload.assert_not_called()
+
+    def test_checks_that_cannot_start_now_are_started_by_the_engine(self):   # the branch moved: it is recorded all the same
+        rid, _ = self.finished((dict(CODE, verify=["npm test"]), REVIEW))
+        version = self.service.run(self.actor, rid)["version"]
+        with mock.patch.object(sync, "worker_upload", return_value=SYNCED), \
+                mock.patch.object(sync, "worker_request", side_effect=Error(503, "worker_unavailable", "Worker 未返回可核实回执")):
+            result = self.service.sync(self.actor, rid, b"bundle", NEW, "sync-fixture-0009", version, None, old=OLD)
+        attempt = self.service.run(self.actor, rid)["tasks"][0]["attempts"][-1]
+        self.assertEqual((attempt["id"], attempt["status"], attempt["evidence"]["candidate"]["sha"]), (result["attempt_id"], "running", NEW))
+        run = self.tick(rid)
+        self.assertEqual(self.checks.get(result["attempt_id"]), "job-2")   # the engine started them
+        self.assertEqual((run["tasks"][0]["attempts"][-1]["status"], run["status"]), ("accepted", "completed"))
+
+    def test_the_tasks_before_must_be_accepted(self):   # as a continue requires (final review)
+        api = dict(CODE, id="api", name="接口", kind="implement")
+        rid = self.start(steps=[api, dict(CODE, id="ui", name="界面", kind="implement"), REVIEW])
+        with self.db.transaction() as db:
+            db.execute("UPDATE runs SET status='stopped', workspace='/w' WHERE id=?", (rid,))
+        with mock.patch.object(sync, "worker_upload") as upload, self.assertRaises(Error) as caught:
+            self.service.sync(self.actor, rid, b"bundle", NEW, "sync-fixture-0010", self.service.run(self.actor, rid)["version"], None, old=OLD)
+        self.assertEqual((caught.exception.status, caught.exception.code), (409, "dependency"))
+        upload.assert_not_called()
+
+    def test_the_note_reaches_the_review_as_a_handoff(self):
+        rid, _ = self.finished()
+        self.sync(rid, note="把按钮改成蓝色")
+        attempt = self.service.run(self.actor, rid)["tasks"][0]["attempts"][-1]
+        self.assertIn("把按钮改成蓝色", attempt["result"])
+        self.assertIn("2 个本地提交", attempt["result"])
+
     def test_the_cli_is_a_client(self):
         self.assertEqual(requests.client_of("octopus CLI"), "cli")
 
@@ -136,6 +178,26 @@ class SyncRouteTests(AccessCase):
                                 headers={"Content-Type": "application/octet-stream"})
         self.assertEqual((status, body["head"]), (200, NEW))
         self.assertEqual(upload.call_args.args[2], b"\\x00bundle-bytes")
+
+    def test_an_administrator_syncing_someone_elses_session_is_audited(self):   # A2, as for a continue (final review)
+        with self.db.transaction() as db:
+            # a shared environment serving bob, not his own boundary (D49 R10 leaves it to whoever may operate)
+            db.execute("UPDATE workers SET owner_id=?, scope='shared' WHERE id='w-bob'", (self.a["id"],))
+            db.execute("INSERT INTO worker_spaces(worker_id,user_id) VALUES('w-bob',?)", (self.b["id"],))
+        version = self.service.run(self.b, self.rid)["version"]
+        with mock.patch.object(sync, "worker_upload", return_value=SYNCED), mock.patch.object(sync, "worker_request", return_value={"job": "j"}):
+            self.service.sync(self.a, self.rid, b"bundle", NEW, "sync-admin-00001", version, None, old=OLD)
+        with self.db.read() as db:
+            actions = [r[0] for r in db.execute("SELECT action FROM audit WHERE target=?", (self.rid,))]
+        self.assertIn("run.sync", actions)
+
+    def test_a_disabled_environment_is_not_called(self):
+        with self.db.transaction() as db:
+            db.execute("UPDATE workers SET enabled=0 WHERE id='w-bob'")
+        with mock.patch.object(sync, "worker_upload") as upload, self.assertRaises(Error) as caught:
+            self.service.sync(self.b, self.rid, b"bundle", NEW, "sync-route-0002", self.service.run(self.b, self.rid)["version"], None, old=OLD)
+        self.assertEqual(caught.exception.status, 409)
+        upload.assert_not_called()
 
     def test_a_bundle_link_is_for_its_holder(self):
         with self.http() as call:

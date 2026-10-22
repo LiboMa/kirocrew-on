@@ -532,11 +532,15 @@ def start(client, args):
     from .policies import repo_of
     directory, push, allow = _here(args), args.pop("push_base", False), args.pop("allow_unpushed", False)
     repo = local.repository(directory)
-    here = repo is not None and (args.get("source") or {}).get("type") == "git" and \
-        repo_of(args["source"]) == repo_of(local.source(repo))
+    named = repo_of(args.get("source") or {})
+    here = repo is not None and named is not None and named == repo_of(local.source(repo))
     if here:
-        count = local.unpushed(repo)
-        if count and push:
+        missing, count = local.missing_branch(repo), local.unpushed(repo)
+        if missing and not push:
+            return {"missing_branch": missing, "submitted": False,
+                    "hint": f"当前分支 {missing} 不在 origin 上，执行环境克隆不到它。告诉用户并请他选择：同意推送则带 push_base: true "
+                            "重新提交（用用户自己的凭证 git push -u origin HEAD），或切换到 origin 上已有的分支。"}
+        if (count or missing) and push:
             local.push_base(repo)
         elif count and not allow:
             return {"unpushed": count, "submitted": False,

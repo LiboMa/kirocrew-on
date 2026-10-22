@@ -195,6 +195,8 @@ KiroCrew ON 在远端执行开发任务：KiroCrew 的 Kiro Agent 先识别意�
 - 想在本机接着改：`octopus_pull`（`checkout: true` 切换到本地分支 `octopus/<run>`），上下文（报告、计划、各任务交接）在
   `.octopus/sessions/<run>/`。在这个分支上修改并 **提交** 后 `octopus_sync`（`note` 写给审查者）：平台把它作为新候选，重新运行检查，
   其后的审查 / 测试任务重新执行；会话页的修订历史记「本地同步」。同步前把要同步的提交告诉用户并得到同意。
+- `octopus_pull` 返回 `diverged: true` 时（本地分支与会话分支都有新提交）：把 `hint` 告诉用户，在本地分支上 `git rebase <remote_ref>`
+  （或 merge）后再 `octopus_sync`；返回 `ahead` 表示只有本地领先，可直接同步。`octopus_start` 返回 `missing_branch` 时当前分支不在 origin 上。
 - 拒绝时原样告诉用户：`sync_not_fast_forward`（远端又有了新提交：先 `octopus_pull` 再改）、`sync_secret_found` / `bundle_secret_found`
   （提交里有疑似凭证或 `.env`：用户自己移除后再提交）、`sync_dirty`（会话的工作区还有未纳入候选的改动：等会话结束或续作）、`busy`。
 - 用户也可以用命令行：`octopus login`，之后 `octopus submit / status / plan / confirm / pull / sync / watch / search …`。

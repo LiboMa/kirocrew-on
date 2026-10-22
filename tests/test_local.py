@@ -94,6 +94,24 @@ class SourceTests(LocalCase):
             self.assertEqual(local.source(self.repo)["url"], "https://github.com/o/app.git", address)
         self.assertEqual(local.https("https://gitlab.example.com/g/s/r"), "https://gitlab.example.com/g/s/r")
 
+    def test_an_address_with_a_port_or_another_scheme(self):   # final review
+        self.assertEqual(local.https("ssh://git@gitlab.example.com:2222/g/r.git"), "https://gitlab.example.com/g/r.git")
+        for kept in ("git://example.com/r.git", "file:///srv/r.git", "../r.git", "/srv/r.git"):
+            self.assertEqual(local.https(kept), kept)
+
+    def test_a_branch_origin_lacks_is_reported(self):   # final review: no new commits, but origin has no such branch
+        self.assertIsNone(local.missing_branch(self.repo))
+        git(self.repo, "switch", "-q", "-c", "feature")
+        self.assertEqual(local.missing_branch(self.repo), "feature")
+
+    def test_git_never_waits_for_a_terminal(self):   # final review: a credential prompt hung push_base in MCP
+        from unittest import mock
+        with mock.patch.object(local.subprocess, "run", wraps=local.subprocess.run) as run:
+            local.repository(self.repo)
+        kwargs = run.call_args.kwargs
+        self.assertEqual((kwargs["env"]["GIT_TERMINAL_PROMPT"], kwargs["stdin"]), ("0", local.subprocess.DEVNULL))
+        self.assertTrue(kwargs["timeout"])
+
     def test_unpushed_commits_are_counted(self):
         self.assertEqual(local.unpushed(self.repo), 0)
         commit(self.repo, {"b.txt": "b\n"})
@@ -139,15 +157,37 @@ class PullTests(LocalCase):
 
     def test_local_commits_on_the_branch_are_never_overwritten(self):
         local.pull(self.platform, RID, self.repo, checkout=True)
-        commit(self.repo, {"src/a.js": "mine\n"})
-        with self.assertRaises(ValueError) as caught:
-            local.pull(self.platform, RID, self.repo)
-        self.assertIn("sync", str(caught.exception))
+        mine = commit(self.repo, {"src/a.js": "mine\n"})
+        self.assertEqual(local.pull(self.platform, RID, self.repo)["ahead"], 1)
+        self.assertEqual(git(self.repo, "rev-parse", BRANCH), mine)
         git(self.remote, "switch", "-q", BRANCH)
         moved = commit(self.remote, {"src/b.js": "remote\n"})
         git(self.repo, "switch", "-q", "main")
         git(self.repo, "branch", "-q", "-f", BRANCH, self.candidate)   # the local branch is behind, no commits of its own
         self.assertEqual(local.pull(self.platform, RID, self.repo)["head"], moved)
+
+
+class DivergedTests(LocalCase):
+    def test_when_both_moved_the_remote_head_is_kept_aside_and_a_rebase_is_asked_for(self):   # final review: no dead end
+        local.pull(self.platform, RID, self.repo, checkout=True)
+        mine = commit(self.repo, {"src/mine.js": "mine\n"})
+        git(self.remote, "switch", "-q", BRANCH)
+        moved = commit(self.remote, {"src/remote.js": "remote\n"})
+        result = local.pull(self.platform, RID, self.repo)
+        self.assertTrue(result["diverged"])
+        self.assertEqual(git(self.repo, "rev-parse", result["remote_ref"]), moved)
+        self.assertIn("rebase", result["hint"])
+        self.assertEqual(git(self.repo, "rev-parse", BRANCH), mine)   # the local commits are untouched
+        self.assertEqual(local.linked(self.repo)["head"], moved)
+        git(self.repo, *AGENT, "rebase", "-q", result["remote_ref"])
+        new = git(self.repo, "rev-parse", "HEAD")
+        self.assertEqual(local.sync(self.platform, RID, self.repo)["head"], new)
+
+    def test_when_only_the_local_branch_moved_a_pull_is_not_an_error(self):
+        local.pull(self.platform, RID, self.repo, checkout=True)
+        commit(self.repo, {"src/mine.js": "mine\n"})
+        result = local.pull(self.platform, RID, self.repo)
+        self.assertEqual((result["head"], result.get("ahead")), (self.candidate, 1))
 
 
 class SyncTests(LocalCase):

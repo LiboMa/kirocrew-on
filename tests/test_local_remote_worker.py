@@ -104,6 +104,49 @@ class LocalRemoteWorkerTests(unittest.TestCase):
         self.assertEqual((caught.exception.status, caught.exception.code), (409, "sync_dirty"))
         self.assertEqual((self.project / "src/a.js").read_text(), "an agent's unfinished change\n")
 
+    def test_a_refused_sync_leaves_no_object_behind(self):   # final review: the rejected .env was kept in the object store
+        local = self.local()
+        new = self.commit(local, {".env": "TOKEN=abc\n", "src/a.js": "x\n"})
+        blob = git(local, "rev-parse", new + ":.env")
+        with self.assertRaises(Error):
+            self.node.sync({"run_id": RID, "old": self.head, "head": new}, self.bundle_of(local, self.head))
+        missing = subprocess.run(["git", "-C", str(self.project), "cat-file", "-e", blob], capture_output=True)
+        self.assertNotEqual(missing.returncode, 0)
+
+    def test_a_bundle_header_must_name_one_branch_head(self):   # final review: refs from the header reached git fetch
+        local = self.local()
+        new = self.commit(local, {"src/a.js": "two\n"})
+        data = self.bundle_of(local, self.head)
+        header, _, pack = data.partition(b"\n\n")
+        for extra in (f"{new} refs/heads/x:refs/heads/evil".encode(), f"{new} --upload-pack=touch".encode()):
+            hostile = header + b"\n" + extra + b"\n\n" + pack
+            with self.assertRaises(Error) as caught:
+                self.node.sync({"run_id": RID, "old": self.head, "head": new}, hostile)
+            self.assertEqual(caught.exception.status, 409)
+        renamed = header.replace(b" HEAD", b" refs/heads/x:refs/heads/evil") + b"\n\n" + pack
+        with self.assertRaises(Error):
+            self.node.sync({"run_id": RID, "old": self.head, "head": new}, renamed)
+        self.assertEqual(git(self.project, "for-each-ref", "--format=%(refname)", "refs/heads/evil"), "")
+        self.assertEqual(git(self.project, "rev-parse", "HEAD"), self.head)
+
+    def test_the_same_sync_again_answers_the_same(self):   # final review: a retry after the platform failed to record it
+        local = self.local()
+        new = self.commit(local, {"src/a.js": "two\n"})
+        data = self.bundle_of(local, self.head)
+        first = self.node.sync({"run_id": RID, "old": self.head, "head": new}, data)
+        again = self.node.sync({"run_id": RID, "old": self.head, "head": new}, data)
+        self.assertEqual(again, first)
+
+    def test_an_untracked_file_in_the_way_is_not_overwritten(self):   # final review: reset --hard replaced it silently
+        local = self.local()
+        new = self.commit(local, {"src/new.js": "from local\n"})
+        (self.project / "src/new.js").write_text("an agent's untracked file\n")
+        with self.assertRaises(Error) as caught:
+            self.node.sync({"run_id": RID, "old": self.head, "head": new}, self.bundle_of(local, self.head))
+        self.assertEqual(caught.exception.status, 409)
+        self.assertEqual((self.project / "src/new.js").read_text(), "an agent's untracked file\n")
+        self.assertEqual(git(self.project, "rev-parse", "HEAD"), self.head)
+
     def test_the_declared_head_must_be_in_the_bundle_and_the_size_is_bounded(self):
         local = self.local()
         new = self.commit(local, {"src/a.js": "two\n"})

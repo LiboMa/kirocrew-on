@@ -1918,12 +1918,13 @@ class Service:
         require(isinstance(head, str) and SHA.fullmatch(head) and isinstance(old, str) and SHA.fullmatch(old),
                 "head 与 old 须为完整的提交 ID")
         require(note is None or isinstance(note, str) and len(note) <= 2000, "说明最多 2000 个字符")
+        require(isinstance(request_id, str) and re.fullmatch(r"[a-zA-Z0-9_.-]{8,100}", request_id), "需要 8–100 字符 request_id")
         body = {"request_id": request_id, "head": head, "old": old, "note": note,
                 "bundle": hashlib.sha256(data).hexdigest()}   # the command's digest covers the bytes, not the bytes
         with self.db.read() as db:
             run = run_access(db, actor, rid)
-            done = db.execute("SELECT hash, response FROM commands WHERE actor=? AND key=?", (actor["id"], request_id)).fetchone() \
-                if isinstance(request_id, str) else None
+            oversight = not self._readable(db, actor, rid, admin=False)   # an elevated admin's: audited (A2)
+            done = db.execute("SELECT hash, response FROM commands WHERE actor=? AND key=?", (actor["id"], request_id)).fetchone()
             if done is None:
                 require(type(expected_version) is int and expected_version == run["version"], "Session 版本已更新", 409,
                         "version_conflict")
@@ -1934,21 +1935,27 @@ class Service:
                 require(json.loads(run["snapshot"]).get("purpose") != "workflow_design", "工作流建议会话不能同步", 409, "invalid_state")
                 require(run["lifecycle"] == "open" and run["status"] in SETTLED, "请先等待结束或停止", 409, "busy")
                 require(run["worker_id"] and run["workspace"], "会话尚未准备源码，不能同步", 409, "no_workspace")
-                worker = db.execute("SELECT config, retired FROM workers WHERE id=?", (run["worker_id"],)).fetchone()
-                require(worker is not None and not worker["retired"], "执行环境已退役，不能同步", 409, "retired")
+                reason = unserved(db, run)
+                require(reason is None, reason, 409, "environment_unavailable")
+                worker = db.execute("SELECT config FROM workers WHERE id=?", (run["worker_id"],)).fetchone()
                 config = {k: v for k, v in json.loads(worker["config"]).items() if k in ("url", "token")}
                 tasks = [{**dict(t), "spec": json.loads(t["spec"])} for t in
                          db.execute("SELECT * FROM tasks WHERE run_id=? ORDER BY ordinal", (rid,))]
                 require(tasks, "会话没有任务", 409, "invalid_state")
+                writer = next((t for t in reversed(tasks) if t["spec"].get("kind") in evaluation.WRITERS), tasks[-1])
+                require(all(t["status"] == "accepted" for t in tasks if t["ordinal"] < writer["ordinal"]), "先完成上游 Task",
+                        409, "dependency")   # as a continue of the task that writes code requires
         if done is not None:   # the same request again: its answer, the Worker untouched (as _command, before it)
             require(done["hash"] == hashlib.sha256(dumps(["sync", rid, body]).encode()).hexdigest(), "request_id 对应不同请求",
                     409, "idempotency_conflict")
             return json.loads(done["response"])
-        writer = next((t for t in reversed(tasks) if t["spec"].get("kind") in evaluation.WRITERS), tasks[-1])
         candidate = remote.apply(config, rid, data, old, head)
         aid = uid("attempt")
         commands = writer["spec"].get("verify") or []
-        job = remote.start_checks(config, rid, aid, commands) if commands else None
+        try:
+            job = remote.start_checks(config, rid, aid, commands) if commands else None
+        except Error:   # the branch has moved: record it all the same; the engine starts the checks (as after a restart)
+            job = "unstarted-" + aid
 
         def execute():
             fresh = db.execute("SELECT version, status FROM runs WHERE id=?", (rid,)).fetchone()
@@ -1971,8 +1978,10 @@ class Service:
             if checking:
                 evidence["checks"] = {"job": job, "started": now, "commands": len(commands)}
             status = "running" if checking else "accepted"
-            db.execute("INSERT INTO attempts(id,run_id,task_id,number,spec,status,evidence,created,updated) VALUES(?,?,?,?,?,?,?,?,?)",
-                       (aid, rid, writer["id"], number, dumps(writer["spec"]), status, dumps(evidence), now, now))
+            handoff = f"本地同步：{candidate.get('commits')} 个本地提交（{actor.get('username') or actor['id']}）" + (f"：{note}" if note else "")
+            db.execute("INSERT INTO attempts(id,run_id,task_id,number,spec,status,evidence,result,created,updated) "
+                       "VALUES(?,?,?,?,?,?,?,?,?,?)",
+                       (aid, rid, writer["id"], number, dumps(writer["spec"]), status, dumps(evidence), handoff, now, now))
             journal.change(db, "tasks", (rid, writer["id"]), who, "attempt.created", "本地同步",
                            event={"id": aid, "task_id": writer["id"], "number": number}, current_attempt=aid, status=status)
             later = [t["id"] for t in tasks if t["ordinal"] > writer["ordinal"]]
@@ -1987,13 +1996,17 @@ class Service:
                                                                        "task_id": writer["id"], "attempt_id": aid},
                            version=version, updated=now, desired="active", error=reason,
                            status="running" if checking else "ready" if not reason else "waiting_worker")
+            if oversight:
+                audit(db, actor, "run.sync", "run", rid, {"version": version, "head": head})
             from .revisions import record
             record(db, rid, version, "synced", f"本地同步：{candidate.get('commits')} 个本地提交，到 {head[:7]}"
                    + (f"（{note[:60]}）" if note else ""), actor["id"], now)
             return {"id": rid, "session_id": rid, "version": version, "attempt_id": aid, "task_id": writer["id"], "head": head,
                     "commits": candidate.get("commits"), "status": "running" if checking else "ready"}
         with self.db.transaction() as db:
-            return self._command(db, actor, "sync", rid, body, execute)
+            result = self._command(db, actor, "sync", rid, body, execute)
+        self._stop_app(rid, "session")   # as a continue does: the preview ran the code before it
+        return result
 
     def bundle_entry(self, actor, rid):
         """Whether the actor may pull the Session's branch (D58 §5): read access and a prepared workspace."""

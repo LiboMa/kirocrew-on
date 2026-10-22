@@ -3,6 +3,7 @@ Session's branch and context pulled into it as a git bundle, local commits synce
 submission's remote could not see. The CLI and the MCP tools share these; the platform checks everything again."""
 import hashlib
 import json
+import os
 import re
 import subprocess
 import tempfile
@@ -16,8 +17,13 @@ PERSONAL = (".octopus/session.json", ".octopus/sessions/")   # never committed: 
 SYNC_LIMIT = 20 * 1024 * 1024   # as the platform's
 
 
-def _run(cwd, *args):
-    return subprocess.run(["git", "-C", str(cwd), *args], capture_output=True, text=True)
+def _run(cwd, *args, timeout=300):
+    """git, never waiting for a terminal (a credential prompt would hang an MCP call) nor longer than ``timeout``."""
+    try:
+        return subprocess.run(["git", "-C", str(cwd), *args], capture_output=True, text=True, stdin=subprocess.DEVNULL,
+                              timeout=timeout, env={**os.environ, "GIT_TERMINAL_PROMPT": "0"})
+    except subprocess.TimeoutExpired:
+        raise ValueError(f"git {args[0]} 超过 {timeout} 秒未完成") from None
 
 
 def _git(cwd, *args):
@@ -41,8 +47,11 @@ def _repo(directory):
 
 
 def https(url):
-    """The HTTPS form of a git@host:path or ssh:// address: the execution environment clones over HTTPS only."""
-    found = re.fullmatch(r"(?:ssh://)?(?:[^@/]+@)?([^:/]+)[:/](.+?)/?", url) if not url.startswith(("https://", "http://")) else None
+    """The HTTPS form of an ssh:// (port dropped) or git@host:path address — the execution environment clones over HTTPS
+    only; anything else (https, git://, file://, a path) as it is."""
+    ssh = re.fullmatch(r"ssh://(?:[^@/]+@)?([^:/]+)(?::\d+)?/(.+?)/?", url)
+    scp = re.fullmatch(r"[^@/:]+@([^:/]+):(?!/)(.+?)/?", url)
+    found = ssh or scp
     return f"https://{found.group(1)}/{found.group(2)}" if found else url
 
 
@@ -65,6 +74,15 @@ def unpushed(directory):
     if _run(repo, "rev-parse", "--verify", "--quiet", f"refs/remotes/origin/{branch}").returncode == 0:
         return int(_git(repo, "rev-list", "--count", f"origin/{branch}..HEAD"))
     return int(_git(repo, "rev-list", "--count", "HEAD", "--not", "--remotes=origin"))
+
+
+def missing_branch(directory):
+    """The current branch, when origin has no such branch (the execution environment could not clone it); else None."""
+    repo = _repo(directory)
+    branch = _git(repo, "rev-parse", "--abbrev-ref", "HEAD")
+    if branch == "HEAD" or _run(repo, "remote", "get-url", "origin").returncode:
+        return None
+    return None if _run(repo, "rev-parse", "--verify", "--quiet", f"refs/remotes/origin/{branch}").returncode == 0 else branch
 
 
 def push_base(directory):
@@ -148,20 +166,28 @@ def pull(client, rid, directory, checkout=False, full=False):
         branch = ref.removeprefix("refs/heads/")
         existing = _run(repo, "rev-parse", "--verify", "--quiet", ref).stdout.strip()
         _git(repo, "fetch", "-q", "--no-tags", str(bundle), ref)
-        if existing and existing != sha and not _ancestor(repo, existing, sha):
-            raise ValueError(f"本地分支 {branch} 有尚未同步的提交：先 sync，或删除这个本地分支后重新 pull")
         current = _git(repo, "rev-parse", "--abbrev-ref", "HEAD")
-        if current == branch:
+        extra = {}
+        if existing and existing != sha and _ancestor(repo, sha, existing):   # only the local branch moved: nothing to bring
+            extra = {"ahead": int(_git(repo, "rev-list", "--count", f"{sha}..{existing}"))}
+        elif existing and existing != sha and not _ancestor(repo, existing, sha):   # both moved: keep the remote aside
+            aside = f"refs/octopus/{rid}/remote"
+            _git(repo, "update-ref", aside, sha)
+            extra = {"diverged": True, "remote_ref": aside,
+                     "hint": f"本地分支 {branch} 与会话分支都有新提交：会话的最新提交已取为 {aside}。请在 {branch} 上 "
+                             f"git rebase {aside}（或 merge）后再 sync"}
+        elif current == branch:
             if existing != sha:
                 _git(repo, "merge", "-q", "--ff-only", sha)
         else:
             _git(repo, "update-ref", ref, sha, *([existing] if existing else []))
-            if checkout:
-                _git(repo, "switch", "-q", branch)
+        if checkout and current != branch:
+            _git(repo, "switch", "-q", branch)
     folder, view = _context(client, rid, repo)
     link(repo, {"run_id": rid, "request_id": (view.get("request") or {}).get("id"), "url": getattr(client, "url", None),
                 "branch": branch, "head": sha})
-    return {"branch": branch, "head": sha, "full": whole, "checked_out": checkout or current == branch, "context": str(folder)}
+    return {"branch": branch, "head": sha, "full": whole, "checked_out": checkout or current == branch, "context": str(folder),
+            **extra}
 
 
 def sync(client, rid, directory, note=None):

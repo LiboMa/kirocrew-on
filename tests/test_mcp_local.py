@@ -73,6 +73,19 @@ class StartTests(Agent):
         self.call("octopus_start", {"request_id": "start-00000003", "input": "做登录", "source": self.SOURCE, "allow_unpushed": True})
         self.assertEqual(len(self.started), 2)
 
+    def test_a_branch_origin_lacks_stops_a_submission_of_this_repository(self):
+        git(self.repo, "switch", "-q", "-c", "feature")
+        answer = self.call("octopus_start", {"request_id": "start-00000006", "input": "做登录",
+                                             "source": dict(self.SOURCE, ref="feature"), "allow_unpushed": True})
+        self.assertEqual(answer["missing_branch"], "feature")
+        self.assertEqual(self.started, [])
+
+    def test_unrecognised_repositories_are_not_the_same_one(self):
+        git(self.repo, "remote", "set-url", "origin", "../somewhere")   # no host/owner/repo to compare
+        commit(self.repo, {"b.txt": "b\n"})
+        self.call("octopus_start", {"request_id": "start-00000007", "input": "x", "source": {"type": "git", "url": "../other"}})
+        self.assertEqual(len(self.started), 1)
+
     def test_another_repository_or_a_new_project_is_submitted_as_given(self):
         commit(self.repo, {"b.txt": "b\n"})
         self.call("octopus_start", {"request_id": "start-00000004", "input": "别的仓库",

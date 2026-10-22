@@ -81,18 +81,18 @@ def publish_candidate(project, message, branch, scratch):
     return _git(project, *COMMITTER, "commit-tree", tree, "-p", head, "-m", message)   # no hooks, no signing
 
 
-def unpublishable(project, base, head):
+def unpublishable(project, base, head, env=None):
     """What in ``base..head`` must not be published, as names to show (never content): every object new since ``base`` is
     read as git stores it — any file type, any name, every commit message — and every path a new commit introduces is
     checked for a .env, so a secret committed and later removed is found in the history the bundle carries. Fails
     closed: any git failure is an error, not a pass."""
-    commits = _git(project, "rev-list", head, "--not", base).split()
-    objects = _git(project, "rev-list", "--objects", "--no-object-names", head, "--not", base).split()
+    commits = _git(project, "rev-list", head, "--not", base, env=env).split()
+    objects = _git(project, "rev-list", "--objects", "--no-object-names", head, "--not", base, env=env).split()
     if not commits:
         return []
     new, introduced, found = set(objects), {}, []   # introduced: new blob → the paths new commits put it at
     tokens = _git_bytes(project, "diff-tree", "--stdin", "-r", "-z", "-m", "--root", "--no-renames", "--no-commit-id",
-                        stdin="".join(c + "\n" for c in commits).encode()).split(b"\0")
+                        stdin="".join(c + "\n" for c in commits).encode(), env=env).split(b"\0")
     i = 0
     while i < len(tokens):
         fields = tokens[i][1:].split(b" ") if tokens[i].startswith(b":") else []
@@ -105,17 +105,17 @@ def unpublishable(project, base, head):
             i += 2
         else:
             i += 1
-    for sha, kind in _suspicious_objects(project, objects):
+    for sha, kind in _suspicious_objects(project, objects, env):
         found.extend([f"提交 {sha[:7]} 的说明"] if kind == "commit" else sorted(introduced.get(sha) or {sha[:12]}))
     return list(dict.fromkeys(found))
 
 
-def _suspicious_objects(project, objects):
+def _suspicious_objects(project, objects, env=None):
     """(sha, type) of the blobs and commits among ``objects`` whose stored bytes match SUSPICIOUS, read through one
     ``git cat-file --batch`` in chunks (a large file is never held whole)."""
     hits = []
     with subprocess.Popen(["git", "cat-file", "--batch"], cwd=project, stdin=subprocess.PIPE, stdout=subprocess.PIPE,
-                          stderr=subprocess.DEVNULL, env={**os.environ, "GIT_TERMINAL_PROMPT": "0"}) as process:
+                          stderr=subprocess.DEVNULL, env={**os.environ, "GIT_TERMINAL_PROMPT": "0", **(env or {})}) as process:
         def feed():
             try:
                 process.stdin.write("".join(o + "\n" for o in objects).encode())
@@ -275,10 +275,16 @@ def candidate_diff(project, sha, parent):
             "truncated": len(raw) > DIFF_BYTES or len(lines) > DIFF_LINES}
 
 
-def change_stats(project, old, new):
+def ancestor(project, old, new, env=None):
+    """Whether ``old`` is an ancestor of (or is) ``new``."""
+    return subprocess.run(["git", "merge-base", "--is-ancestor", old, new], cwd=project, capture_output=True,
+                          env={**os.environ, "GIT_TERMINAL_PROMPT": "0", **(env or {})}).returncode == 0
+
+
+def change_stats(project, old, new, env=None):
     """What ``old..new`` changed, as a candidate records it (D37): files, inserted and deleted lines, the paths."""
     names, insertions, deletions = [], 0, 0
-    for record in _git_bytes(project, "diff", "--numstat", "-z", "--no-renames", old, new, "--").split(b"\0"):
+    for record in _git_bytes(project, "diff", "--numstat", "-z", "--no-renames", old, new, "--", env=env).split(b"\0"):
         parts = record.decode(errors="replace").split("\t", 2)
         if len(parts) == 3 and parts[2]:
             names.append(parts[2])

@@ -10,6 +10,7 @@ import math
 import os
 from pathlib import Path
 import re
+import secrets
 import shutil
 import socket
 import stat
@@ -236,6 +237,7 @@ class Worker:
         self.crew_yolo = crew_yolo   # the boundary's standing YOLO: without it a continuation cannot ask for auto approval
         self.root.mkdir(parents=True, exist_ok=True, mode=0o700)
         self.token, self.port = token, gateway_port
+        self._sync_guard, self._sync_locks = threading.Lock(), {}   # D58: one sync at a time per Session
         self.home = Path(crew_home or Path.home() / ".kiro/crew").resolve()
         self.isolation = isolation
         self.routing_log = Path(routing_log).resolve() if routing_log else None
@@ -732,42 +734,67 @@ class Worker:
         return bundle
 
     def sync(self, body, data):
-        """A local fast-forward of the Session's branch, brought in from a bundle (D58 §6): the branch and the workspace
-        move to ``head`` only when the branch is still at ``old``, the workspace holds nothing a reset would lose, ``head``
-        descends from ``old`` and nothing new looks like a credential or a .env file. Answers what a candidate records."""
+        """A local fast-forward of the Session's branch, brought in from a bundle (D58 §6). The bundle is untrusted: its
+        header must name exactly one head (``head``), and its objects are unpacked into a quarantine directory first —
+        nothing of a refused sync stays in the repository. The branch and workspace move (a fast-forward merge, which never
+        overwrites an untracked file) only when the branch is still at ``old``, the workspace holds nothing a move would
+        lose, ``head`` descends from ``old`` and nothing new looks like a credential or a .env file. The same sync again,
+        once the branch is at ``head``, answers the same (a retry after the platform failed to record it)."""
         require(len(data) <= SYNC_LIMIT, f"同步的内容超过 {SYNC_LIMIT // 1048576} MB", 413, "sync_too_large")
         for key in ("old", "head"):
             require(isinstance(body.get(key), str) and workspace.SHA.fullmatch(body[key]), f"{key} 须为完整的提交 ID")
         run, project, base, branch = self._session_project(body["run_id"])
         require(base and branch, "此会话的项目没有 Git 基线，无法同步", 409, "sync_unsupported")
         old, new = body["old"], body["head"]
-        bundle = run / ".sync.bundle"
-        try:
-            tip = workspace._git(project, "rev-parse", "--verify", f"refs/heads/{branch}^{{commit}}")
-            require(tip == old and workspace._git(project, "rev-parse", "--abbrev-ref", "HEAD") == branch,
-                    "会话分支已有新的提交（另一次同步或续作）：请先拉回（pull），在其上修改后再同步", 409, "sync_not_fast_forward")
-            state = workspace.clean_against(project, old)
-            require(state["clean"], "会话的工作区有尚未纳入候选的改动：" + "、".join(state["changed_files"][:20])
-                    + "。请等会话结束、或续作纳入这些改动后再同步", 409, "sync_dirty")
-            bundle.write_bytes(data)
-            heads = dict(reversed(line.split(" ", 1)) for line in
-                         workspace._git(project, "bundle", "list-heads", str(bundle)).splitlines() if " " in line)
-            ref = next((name for name, sha in heads.items() if sha == new), None)
-            require(ref is not None, "上传的内容中没有声明的提交", 409, "sync_invalid")
-            workspace._git(project, "fetch", "-q", "--no-tags", str(bundle), ref)
-            ancestor = subprocess.run(["git", "-C", str(project), "merge-base", "--is-ancestor", old, new], capture_output=True)
-            require(ancestor.returncode == 0, "本地提交不是基于会话分支的当前提交：请先拉回（pull），在其上修改后再同步", 409,
-                    "sync_not_fast_forward")
-            found = workspace.unpublishable(project, old, new)
-            require(not found, "同步被拒绝：本地提交中有疑似凭证或 .env 文件：" + "、".join(found[:20]), 409, "sync_secret_found")
-            commits = int(workspace._git(project, "rev-list", "--count", f"{old}..{new}"))
-            workspace._git(project, "reset", "-q", "--hard", new)   # HEAD is the branch (checked above): both move
-            return {"sha": new, "parent": old, "changed": True, "commits": commits, "secrets": [],
-                    **workspace.change_stats(project, old, new)}
-        except ValueError as exc:
-            raise Error(409, "sync_failed", workspace.scrub(exc)) from None
-        finally:
-            bundle.unlink(missing_ok=True)
+        with self._sync_lock(body["run_id"]):
+            quarantine = run / f".sync-{secrets.token_hex(8)}"
+            try:
+                tip = workspace._git(project, "rev-parse", "--verify", f"refs/heads/{branch}^{{commit}}")
+                if tip == new and new != old and workspace.ancestor(project, old, new):   # already applied: a retry
+                    return self._synced(project, old, new)
+                require(tip == old and workspace._git(project, "rev-parse", "--abbrev-ref", "HEAD") == branch,
+                        "会话分支已有新的提交（另一次同步或续作）：请先拉回（pull），在其上修改后再同步", 409, "sync_not_fast_forward")
+                state = workspace.clean_against(project, old)
+                require(state["clean"], "会话的工作区有尚未纳入候选的改动：" + "、".join(state["changed_files"][:20])
+                        + "。请等会话结束、或续作纳入这些改动后再同步", 409, "sync_dirty")
+                objects = quarantine / "objects"
+                (objects / "pack").mkdir(parents=True)
+                bundle = quarantine / "sync.bundle"
+                bundle.write_bytes(data)
+                heads = workspace._git(project, "bundle", "list-heads", str(bundle)).splitlines()
+                sha, _, ref = heads[0].partition(" ") if len(heads) == 1 else ("", "", "")
+                require(sha == new and (ref == "HEAD" or (ref.startswith("refs/heads/") and subprocess.run(
+                    ["git", "check-ref-format", ref], capture_output=True).returncode == 0)),
+                        "上传的内容须只含一个分支提交（声明的 head）", 409, "sync_invalid")
+                store = Path(workspace._git(project, "rev-parse", "--path-format=absolute", "--git-path", "objects"))
+                env = {"GIT_OBJECT_DIRECTORY": str(objects), "GIT_ALTERNATE_OBJECT_DIRECTORIES": str(store)}
+                workspace._git(project, "bundle", "unbundle", str(bundle), env=env)   # refs are not written; objects stay here
+                require(workspace.ancestor(project, old, new, env), "本地提交不是基于会话分支的当前提交：请先拉回（pull），"
+                        "在其上修改后再同步", 409, "sync_not_fast_forward")
+                found = workspace.unpublishable(project, old, new, env)
+                require(not found, "同步被拒绝：本地提交中有疑似凭证或 .env 文件：" + "、".join(found[:20]), 409, "sync_secret_found")
+                for item in objects.rglob("*"):   # checked: the objects join the repository's store
+                    if item.is_file():
+                        target = store / item.relative_to(objects)
+                        target.parent.mkdir(parents=True, exist_ok=True)
+                        os.replace(item, target)
+                moved = subprocess.run(["git", "-C", str(project), "merge", "-q", "--ff-only", new], capture_output=True, text=True)
+                require(moved.returncode == 0, "会话的工作区有会被覆盖的文件，未同步：" + workspace.scrub(moved.stderr.strip())[-300:],
+                        409, "sync_dirty")
+                return self._synced(project, old, new)
+            except ValueError as exc:
+                raise Error(409, "sync_failed", workspace.scrub(exc)) from None
+            finally:
+                shutil.rmtree(quarantine, ignore_errors=True)
+
+    @staticmethod
+    def _synced(project, old, new):
+        return {"sha": new, "parent": old, "changed": True, "secrets": [],
+                "commits": int(workspace._git(project, "rev-list", "--count", f"{old}..{new}")), **workspace.change_stats(project, old, new)}
+
+    def _sync_lock(self, rid):
+        with self._sync_guard:
+            return self._sync_locks.setdefault(rid, threading.Lock())
 
     def publish_bundle(self, plan):
         """The bundle file of ``plan``: the branch with its whole history — the platform holds no copy of the repository
