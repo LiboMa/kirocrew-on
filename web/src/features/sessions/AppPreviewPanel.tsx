@@ -15,7 +15,9 @@ const LIVE = new Set(["installing", "starting", "running"]);
 // Kept equal to octopus/domain.py SETTLED by tests/test_evaluator.py (a person judging appearance needs the preview, D46 P3).
 const SETTLED = new Set(["failed", "blocked", "completed", "stopped", "waiting_worker", "awaiting_confirmation", "awaiting_acceptance"]);
 
-function startReason(run: Run): string {
+/** Why the preview cannot be started (or, for a viewer, stopped) here; "" when it can. */
+export function previewReason(run: Run): string {
+  if (run.permissions?.operate === false) return "你以查看身份访问此会话，不能启动或停止预览。";   // D64
   if (!run.worker_id || !run.workspace) return "源码尚未准备，暂不能启动预览。";
   if (run.lifecycle !== "open") return "会话已关闭，请先重新打开。";
   if (run.permissions?.resume === false) return "Team 已归档，不能启动预览。";
@@ -30,7 +32,7 @@ export function AppPreviewPanel({ run, onOpen }: { run: Run; onOpen: () => void 
   const [busy, setBusy] = useState<"start" | "stop" | null>(null);
   const status = app?.status ?? "stopped";
   const live = LIVE.has(status);
-  const reason = startReason(run);
+  const reason = previewReason(run);
 
   const act = async (action: "start" | "stop") => {
     setBusy(action);
@@ -71,7 +73,8 @@ export function AppPreviewPanel({ run, onOpen }: { run: Run; onOpen: () => void 
             )}
             {status === "running" && <Button size="sm" id="app-open" onClick={onOpen}>打开</Button>}
             {live && (
-              <Button size="sm" variant="outline" id="app-stop" disabled={!!busy} onClick={() => act("stop")}>停止</Button>
+              <Button size="sm" variant="outline" id="app-stop" disabled={!!busy || run.permissions?.operate === false}
+                onClick={() => act("stop")}>停止</Button>
             )}
           </div>
           {reason && !live && <p className="text-muted-foreground" id="app-reason">{reason}</p>}

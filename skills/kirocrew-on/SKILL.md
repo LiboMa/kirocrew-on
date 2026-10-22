@@ -85,7 +85,7 @@ KiroCrew ON 在远端执行开发任务：KiroCrew 的 Kiro Agent 先识别意�
 - `octopus_runs` 列出用户可见的会话（最新的在前，每个只有状态、进度、需要处理的事与错误首行；默认 20 个，`status` 过滤；还可按 `space`、`repo`（如 `github.com/o/r`）、`branch`、`stage`（当前进行到的任务类别，`done` 为全部验收）、`tool`、`client`、`submitter`、`since` / `until`（`YYYY-MM-DD`）组合过滤；`q` 为全文搜索（需求、规划、任务说明、最近的结论与错误，多个词须全部命中）；`more: true` 时缩小条件或加大 `limit`）；详情用 `octopus_status`；`octopus_me` 返回当前身份、是否管理员、Token scope 与所在 Team。
 - `octopus_requests` 列出用户提交过的需求（Request：来源客户端 `client`、需求前 200 字、准入方式与依据、对应会话；`status`、`client`、`q`
   过滤，`more` 同上）。`octopus_policies`（可传 `team_id`）只读地列出用户的准入规则与映射偏好；规则只能由用户在控制台维护，不要替用户改准入。
-- 别人共享给用户的会话（D64）：`octopus_runs` 加 `shared: true` 列出；`octopus_status` 的 `access` 说明用户以什么身份访问（`via: share` 时 `role` 为 `viewer` 只能查看、`collaborator` 可续作与停止）。查看者不要尝试续作、停止或批准；共享只能由会话创建者在控制台设置，不要替用户共享。
+- 别人共享给用户的会话（D64）：`octopus_runs` 加 `shared: true` 列出；`octopus_status` 的 `access` 说明用户以什么身份访问（`via: share` 时 `role` 为 `viewer` 只能查看、`collaborator` 可续作与停止）。查看者不要尝试续作、停止或批准；共享只能由会话创建者、Team owner 或平台管理员在控制台设置，不要替用户共享。
 - `octopus_quotas` 只读：用户与其 Team 同时运行的任务数上限与占用。「需要处理」写「排队：已达到并发上限」时无需重新提交：有任务结束后按排队先后自动开始；上限由平台管理员或 Team owner 在控制台设置，不要替用户改。
 - `octopus_changes`（传 `run_id`）列出会话的变更记录：谁（用户与客户端，或 Engine / Worker / KiroCrew / 协调者）在什么时候改了什么、
   前后值与原因；`who: "user"` 只看人的操作。用户问“谁停止了这个会话”“上一轮改了什么设置”时用它。

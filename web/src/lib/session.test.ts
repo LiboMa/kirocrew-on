@@ -1,6 +1,7 @@
 import { describe, expect, test } from "vitest";
 import type { Run, RunTask } from "@/api/types";
 import { EMPTY_FILTERS, filtersFromUrl, listParams, type RunListFilters } from "@/lib/runList";
+import { previewReason } from "@/features/sessions/AppPreviewPanel";
 import {
   canContinue,
   canDelete,
@@ -9,6 +10,7 @@ import {
   canStop,
   closeAction,
   crewEntryReason,
+  deleteReason,
   rerunPlan,
   statusText,
 } from "@/lib/session";
@@ -28,6 +30,17 @@ const run = (overrides: Partial<Run> = {}): Run => ({
   native_parent: "octopus-run-1", workspace: "/w", purpose: null, error: null, source: { type: "new" },
   progress: { accepted: 0, total: 2 }, tasks: [task("code", "blocked", 1), task("review", "pending")], created: 1, updated: 2,
   ...overrides,
+});
+
+describe("a shared Session (D64)", () => {
+  test("a share is told it cannot delete, and a viewer cannot start or stop the preview", () => {
+    const shared = run({ access: { via: "share", role: "collaborator", by: "bob" },
+      permissions: { operate: true, delete: false } });
+    expect(deleteReason(shared)).toBe("共享的会话不能删除");
+    expect(deleteReason(run({ permissions: { operate: true, delete: false } }))).toBe("只有 Team owner 可以删除他人创建的会话");
+    expect(previewReason(run({ status: "completed", worker_id: "w1", workspace: "/w", permissions: { operate: false, delete: false } })))
+      .toBe("你以查看身份访问此会话，不能启动或停止预览。");
+  });
 });
 
 describe("session actions follow the classic console rules", () => {

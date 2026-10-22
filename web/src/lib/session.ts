@@ -88,7 +88,8 @@ export function canDelete(run: Run): boolean {
 
 /** Why deleting is not offered, when the server says the user may not delete this Session. */
 export function deleteReason(run: Run): string {
-  return run.permissions?.delete === false ? "只有 Team owner 可以删除他人创建的会话" : "";
+  if (run.permissions?.delete !== false) return "";
+  return run.access?.via === "share" ? "共享的会话不能删除" : "只有 Team owner 可以删除他人创建的会话";
 }
 
 export function crewEntryReason(run: Run): string {

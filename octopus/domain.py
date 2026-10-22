@@ -385,12 +385,12 @@ def run_access(db, actor, rid, owner=False, admin=True, read=False, shares=True)
 def access_of(db, actor, run):
     """How the actor reaches ``run`` (D64): its creator, a member of its Team, a share (with its role and who shared
     it), or an administrator's oversight."""
-    if run["owner_id"] == actor["id"]:
-        return {"via": "owner"}
-    if run["team_id"]:
+    if run["team_id"]:   # as run_access judges it: a Team Session through its Team, even for its creator
         role = db.execute("SELECT role FROM members WHERE team_id=? AND user_id=?", (run["team_id"], actor["id"])).fetchone()
         if role is not None:
-            return {"via": "team", "role": role["role"]}
+            return {"via": "owner"} if run["owner_id"] == actor["id"] else {"via": "team", "role": role["role"]}
+    elif run["owner_id"] == actor["id"]:
+        return {"via": "owner"}
     from .shares import best
     share = best(db, actor, run)
     if share is not None:
@@ -1948,7 +1948,14 @@ class Service:
             require(may_publish(db, actor, run), "只有会话的创建者、Team owner 或平台管理员可以共享", 403, "forbidden")
             if run["team_id"]:
                 active_team(db, run["team_id"])
+            require(run["lifecycle"] != "deleted", "已删除的会话不能共享", 409, "invalid_state")
             kind, subject, role, name = shares.parse(db, actor, body)
+            if kind == "user":   # one who already reaches it — its creator, or a member of its Team — needs no share
+                member = run["team_id"] and db.execute("SELECT 1 FROM members WHERE team_id=? AND user_id=?",
+                                                       (run["team_id"], subject)).fetchone()
+                require(not (member or not run["team_id"] and subject == run["owner_id"]),
+                        f"不必共享给 {name}：已能访问此会话（创建者或所在 Team 的成员）")
+            require(not (kind == "team" and subject == run["team_id"]), "不必共享给会话所在的 Team：它的成员本来就能访问")
             sid = shares.store(db, actor, rid, kind, subject, role)
             audit(db, actor, "share.create", "run", rid, {"share": sid, "kind": kind, "subject": subject or None, "name": name,
                                                           "role": role})
@@ -2182,6 +2189,8 @@ class Service:
         value["request"] = dict(request) if request else None   # D55; Sessions from before have none
         value["permissions"] = run_permissions(db, actor, run)
         value["access"] = access_of(db, actor, run)   # D64
+        if value["access"]["via"] == "share":
+            value["request"] = None   # D55's submission is not shared with its Session
         snapshot = json.loads(run["snapshot"])
         value.update({key: snapshot.get(key) for key in ("name", "workflow_name", "workflow_version",
                                                        "selection", "match_mode", "match_reason", "purpose", "planning", "replan",

@@ -314,6 +314,47 @@ class EntryTests(ShareCase):
 
 
 
+class FollowUpTests(ShareCase):
+    """D64's deferred minors (final review), done after the deploy."""
+    def test_a_creator_who_left_the_team_and_was_shared_back_is_a_viewer_everywhere(self):
+        tid = self.team()   # alice owns it, bob a member
+        rid = self.start(self.b, request="start-0000000004", team_id=tid)["id"]
+        with self.db.transaction() as db:
+            db.execute("DELETE FROM members WHERE team_id=? AND user_id=?", (tid, self.b["id"]))
+        self.service.share_run(self.a, rid, {"kind": "user", "username": "bob", "role": "viewer"})
+        self.assertEqual(self.service.run(self.b, rid)["access"], {"via": "share", "role": "viewer", "by": "alice"})
+        self.assertIn(rid, [r["id"] for r in self.service.runs(self.b, shared=True)])
+
+    def test_a_shared_session_does_not_name_its_request(self):   # D55: the submission is not shared
+        self.share(kind="user", username="eve")
+        self.assertIsNone(self.service.run(self.e, self.rid)["request"])
+        self.assertIsNotNone(self.service.run(self.b, self.rid)["request"])
+
+    def test_pointless_shares_are_refused(self):
+        tid = self.team()
+        rid = self.start(self.b, request="start-0000000005", team_id=tid)["id"]
+        for target, body in (("a member", {"kind": "user", "username": "bob"}), ("its Team", {"kind": "team", "id": tid})):
+            with self.subTest(target), self.assertRaises(Error) as caught:
+                self.service.share_run(self.a, rid, {**body, "role": "viewer"})
+            self.assertEqual(caught.exception.status, 400)
+        with self.assertRaises(Error) as caught:   # a personal Session's creator
+            self.share(kind="user", username="bob")
+        self.assertEqual(caught.exception.status, 400)
+        with self.db.transaction() as db:
+            db.execute("UPDATE runs SET lifecycle='deleted' WHERE id=?", (self.rid,))
+        with self.assertRaises(Error) as caught:
+            self.share(actor=self.a, kind="everyone")
+        self.assertEqual(caught.exception.code, "invalid_state")
+
+    def test_a_member_who_did_not_create_it_keeps_a_members_rights(self):
+        tid = self.team()
+        rid = self.start(self.a, request="start-0000000006", team_id=tid)["id"]   # alice's; bob an ordinary member
+        self.service.share_run(self.a, rid, {"kind": "everyone", "role": "viewer"})
+        with self.db.read() as db:
+            run_access(db, self.b, rid)   # a write: as a member, not as the company's viewer
+        self.assertEqual(self.service.run(self.b, rid)["access"], {"via": "team", "role": "member"})
+
+
 class McpShareTests(unittest.TestCase):
     def test_a_coding_agent_lists_what_is_shared_with_the_user_and_sees_how_it_reaches_a_session(self):
         from octopus import mcp
