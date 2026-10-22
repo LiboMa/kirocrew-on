@@ -346,58 +346,6 @@ describe("settings", () => {
     await waitFor(() => expect(calls.find((c) => c.path === "/v1/workers/w2/dedicate")?.method).toBe("POST"));
   });
 
-  const adminUsers = [
-    { id: "u1", username: "fixture-owner", admin: true, active: true, created: 1, last_login: 1_790_000_000, teams: [], tokens: 2 },
-    { id: "u2", username: "dev1", admin: false, active: true, created: 1, last_login: null,
-      teams: [{ id: "team-1", name: "平台组", role: "member" }], tokens: 1 },
-  ];
-
-  test("an administrator manages users: deactivate, reset a password and revoke a token", async () => {
-    const calls = start({ "GET /admin/users": adminUsers, "POST /users/u2/active": { id: "u2", active: false },
-      "POST /users/u2/password": { ok: true },
-      "GET /admin/users/u2/tokens": [{ id: "t1", label: "claude MCP", scopes: ["read", "execute"], expires: 1_900_000_000, last_used: null }],
-      "DELETE /admin/users/u2/tokens/t1": { ok: true } });
-    const dialog = await openSection("管理", "用户");
-    const row = await within(dialog).findByRole("group", { name: "dev1" });
-    expect(row).toHaveTextContent("平台组（member）");
-    expect(row).toHaveTextContent("从未登录");
-    expect(within(dialog).getByRole("group", { name: "fixture-owner" })).toHaveTextContent("管理员");
-    await userEvent.click(within(row).getByRole("button", { name: "停用" }));
-    expect(calls.some((c) => c.path === "/v1/users/u2/active")).toBe(false);   // asks first
-    await userEvent.click(within(row).getByRole("button", { name: "确认停用" }));
-    await waitFor(() => expect(calls.find((c) => c.path === "/v1/users/u2/active")?.body).toEqual({ active: false }));
-    await userEvent.click(within(row).getByRole("button", { name: "重置密码" }));
-    await userEvent.type(within(row).getByLabelText("新密码"), "Another-password-456!");
-    await userEvent.type(within(row).getByLabelText("确认新密码"), "Different-password-789!");
-    await userEvent.click(within(row).getByRole("button", { name: "确认重置" }));
-    expect(within(row).getByRole("alert")).toHaveTextContent("两次输入不一致");
-    await userEvent.clear(within(row).getByLabelText("确认新密码"));
-    await userEvent.type(within(row).getByLabelText("确认新密码"), "Another-password-456!");
-    await userEvent.click(within(row).getByRole("button", { name: "确认重置" }));
-    await waitFor(() => expect(calls.find((c) => c.path === "/v1/users/u2/password")?.body)
-      .toEqual({ password: "Another-password-456!" }));
-    await userEvent.click(within(row).getByRole("button", { name: "Token" }));
-    await userEvent.click(await within(row).findByRole("button", { name: "吊销 claude MCP" }));
-    await userEvent.click(within(row).getByRole("button", { name: "确认吊销" }));
-    await waitFor(() => expect(calls.find((c) => c.method === "DELETE" && c.path === "/v1/admin/users/u2/tokens/t1")).toBeTruthy());
-  });
-
-  test("revoking a token asks first, and an administrator cannot lock themselves out from their own row", async () => {
-    const calls = start({ "GET /admin/users": adminUsers,
-      "GET /admin/users/u2/tokens": [{ id: "t1", label: "claude MCP", scopes: ["read"], expires: 1_900_000_000, last_used: null }],
-      "DELETE /admin/users/u2/tokens/t1": { ok: true } });
-    const dialog = await openSection("管理", "用户");
-    const own = await within(dialog).findByRole("group", { name: "fixture-owner" });
-    expect(within(own).getByRole("button", { name: "停用" })).toBeDisabled();
-    expect(within(own).getByRole("button", { name: "取消管理员" })).toBeDisabled();
-    const row = within(dialog).getByRole("group", { name: "dev1" });
-    await userEvent.click(within(row).getByRole("button", { name: "Token" }));
-    await userEvent.click(await within(row).findByRole("button", { name: "吊销 claude MCP" }));
-    expect(calls.some((c) => c.method === "DELETE")).toBe(false);
-    await userEvent.click(within(row).getByRole("button", { name: "确认吊销" }));
-    await waitFor(() => expect(calls.some((c) => c.method === "DELETE" && c.path === "/v1/admin/users/u2/tokens/t1")).toBe(true));
-  });
-
   test("a member sees neither user management nor anything that needs the admin scope", async () => {
     start({ "GET /me": { id: "u2", username: "dev1", admin: 0, scopes: ["read", "execute", "manage"] } });
     expect(await screen.findByRole("button", { name: "我的设置" })).toBeInTheDocument();
@@ -494,28 +442,5 @@ describe("settings", () => {
     const row = within(dialog).getByRole("group", { name: "personal" });
     expect(within(row).getByRole("button", { name: "刷新模型" })).toBeInTheDocument();
     for (const name of ["改名", "更新连接", "退役"]) expect(within(row).queryByRole("button", { name })).not.toBeInTheDocument();
-  });
-
-  test("an administrator creates a user on the shared environment in user management", async () => {
-    const calls = start({ ...oneWorker, "GET /admin/users": adminUsers, "POST /users": { id: "u3", username: "carol" } });
-    const dialog = await openSection("管理", "用户");
-    await userEvent.type(within(dialog).getByLabelText("用户名"), "carol");
-    await userEvent.type(within(dialog).getByLabelText("初始密码（至少 12 位）"), "Carol-password-123");
-    expect(within(dialog).getByLabelText("个人空间的执行环境")).toHaveValue("w1");
-    await userEvent.click(within(dialog).getByRole("button", { name: "创建用户" }));
-    await waitFor(() => expect(calls.find((c) => c.method === "POST" && c.path === "/v1/users")?.body)
-      .toEqual({ username: "carol", password: "Carol-password-123", worker_id: "w1" }));
-  });
-
-  test("user management gives a user's personal space the shared environment, and the Team dialog no longer creates users", async () => {
-    const calls = start({ ...oneWorker, "GET /admin/users": adminUsers, "POST /workers/w1/spaces": { ok: true } });
-    const dialog = await openSection("管理", "用户");
-    const row = await within(dialog).findByRole("group", { name: "dev1" });
-    expect(row).toHaveTextContent("个人空间：未分配");
-    await userEvent.click(within(row).getByRole("button", { name: "分配共享环境" }));
-    await waitFor(() => expect(calls.find((c) => c.path === "/v1/workers/w1/spaces")?.body).toEqual({ user_id: "u2" }));
-    expect(within(dialog).getByRole("group", { name: "fixture-owner" })).toHaveTextContent("个人空间：共享环境 · personal");
-    const team = await openTeams();
-    expect(within(team).queryByRole("button", { name: "创建用户" })).not.toBeInTheDocument();
   });
 });

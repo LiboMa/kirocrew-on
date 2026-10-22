@@ -488,6 +488,8 @@ export interface AdminUser {
   last_login: number | null;
   teams: { id: string; name: string; role: string }[];
   tokens: number;
+  /** Sessions of theirs that are open and not settled; absent from older platforms. */
+  running?: number;
 }
 
 export interface UserToken {
