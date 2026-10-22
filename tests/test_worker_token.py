@@ -7,8 +7,12 @@ import unittest
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
+from unittest import mock
+
 from octopus import transport, vault
+from octopus.db import dumps
 from octopus.security import Error
+from tests.test_access import AccessCase
 
 TOKEN = "w" * 40
 
@@ -84,6 +88,43 @@ class PlatformPassesTheSealedTokenTests(unittest.TestCase):
         with mock.patch.object(diffs, "worker_request", return_value={"files": [], "diff": "", "truncated": False}) as call:
             case.service.attempt_diff(case.b, case.rid, "attempt-c")
         self.assertEqual(call.call_args.args[0], {"url": "https://worker.test", "token_sealed": "v1.x.y"})
+
+
+class SealedOnWriteTests(AccessCase):
+    HEALTH = {"isolation": "dedicated", "boundary": "b-9", "host_principal": "hp-9"}
+
+    def stored(self, wid):
+        with self.db.read() as db:
+            return json.loads(db.execute("SELECT config FROM workers WHERE id=?", (wid,)).fetchone()[0])
+
+    def test_registering_and_reconnecting_keep_only_the_sealed_token(self):
+        body = {"name": "w9", "owner_id": self.b["id"], "connection": {"url": "https://10.0.0.9:8943", "token": "t" * 40}}
+        with mock.patch("octopus.server.validate_worker", return_value=self.HEALTH), self.http() as call:
+            status, created = call("POST", "/v1/workers", self.tokens["alice"], body)
+            self.assertEqual(status, 201)
+            config = self.stored(created["id"])
+            self.assertNotIn("token", config)
+            self.assertEqual(vault.open_(vault.key_file(None, self.db.root), config["token_sealed"]), "t" * 40)
+            status, _ = call("POST", f"/v1/workers/{created['id']}/connection", self.tokens["alice"],
+                             {"connection": {"url": "https://10.0.0.8:8943", "token": "n" * 40}})
+            self.assertEqual(status, 200)
+            config = self.stored(created["id"])
+            self.assertNotIn("token", config)
+            self.assertEqual(vault.open_(vault.key_file(None, self.db.root), config["token_sealed"]), "n" * 40)
+            for path in ("/v1/workers", "/v1/admin/environments"):
+                listed = json.dumps(call("GET", path, self.tokens["alice"])[1])
+                self.assertNotIn("token_sealed", listed, path)
+                self.assertNotIn("t" * 40, listed, path)
+
+    def test_a_capability_refresh_keeps_the_seal(self):
+        sealed = vault.seal(vault.key_file(None, self.db.root), "t" * 40)
+        with self.db.transaction() as db:
+            db.execute("INSERT INTO workers(id,name,owner_id,config,scope) VALUES('w8','w8',?,?,'dedicated')",
+                       (self.b["id"], dumps({"url": "https://10.0.0.9:8943", "token_sealed": sealed, "capabilities": self.HEALTH})))
+        with mock.patch("octopus.server.worker_request", return_value={**self.HEALTH, "models": {}}), self.http() as call:
+            self.assertEqual(call("GET", "/v1/workers/w8/capabilities", self.tokens["bob"])[0], 200)
+        config = self.stored("w8")
+        self.assertEqual((config.get("token"), config["token_sealed"]), (None, sealed))
 
 
 if __name__ == "__main__":

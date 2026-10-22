@@ -19,7 +19,7 @@ import sqlite3
 import struct
 from urllib.parse import parse_qs, quote, unquote, urlsplit
 
-from . import __version__, remote_preview
+from . import __version__, remote_preview, workers
 from .db import dumps, uid
 from .domain import Service, audit, name, team_environment
 from .security import Error, authenticate, check_password, create_user, elevated, issue_token, require, scope
@@ -204,6 +204,8 @@ def server(database, port=8918, host="127.0.0.1", allowed_hosts=(), origin_secre
         raise ValueError("源站密钥为空或过短（至少 32 个字符）；检查 origin_secret_file")
     service = Service(database, default_admission)
     service.credentials.configured = credentials_key_file
+    from . import transport
+    transport.configure(service.credentials.key)   # D59: Worker tokens are stored sealed with the same key
     service.credentials.private_hosts = frozenset(credentials_private_hosts)
     signing_key = preview_key(database.root)
     hosts, local_hosts = set(), set()
@@ -728,7 +730,8 @@ def server(database, port=8918, host="127.0.0.1", allowed_hosts=(), origin_secre
                         moved = json.loads(row["config"]).get("capabilities", {}).get("boundary") != health.get("boundary")
                         # A new boundary is a redeployed host: what an earlier Team left there is gone (P2).
                         db.execute("UPDATE workers SET config=?, last_team=CASE WHEN ? THEN NULL ELSE last_team END "
-                                   "WHERE id=?", (dumps({**config, "capabilities": health}), int(moved), row["id"]))
+                                   "WHERE id=?", (dumps(workers.seal({**config, "capabilities": health}, service.credentials.key)),
+                                                  int(moved), row["id"]))
                         audit(db, actor, "worker.connection", "worker", row["id"], {"boundary_changed": moved})
                     return self.respond({"id": row["id"], "capabilities": health})
                 if len(segments) == 4 and segments[:2] == ["v1", "workers"] and segments[3] == "enabled":
@@ -793,7 +796,8 @@ def server(database, port=8918, host="127.0.0.1", allowed_hosts=(), origin_secre
                                         "不同执行空间不能复用同一宿主账户；请使用独立账号/容器/主机", 409, "isolation_required")
                         wid = uid("worker")
                         db.execute("INSERT INTO workers(id,name,owner_id,team_id,config,scope) VALUES(?,?,?,?,?,?)",
-                                   (wid, name(body.get("name")), actor["id"] if spare else user, team, dumps(config),
+                                   (wid, name(body.get("name")), actor["id"] if spare else user, team,
+                                    dumps(workers.seal(config, service.credentials.key)),   # D59: never plaintext
                                     "spare" if spare else "dedicated"))
                         audit(db, actor, "worker.register", "worker", wid, {"scope": "spare" if spare else "dedicated",
                                                                             "team_id": team, "owner_id": None if spare else user})
