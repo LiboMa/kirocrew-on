@@ -180,7 +180,7 @@ M4（共享与组织）、M5（仓库闭环）在 MVP 之后分别立项，各�
 
 ### 验收条件
 
-- [ ] 四个客户端各自完成：connect → submit → status → pull → 本地修改并推送 → sync → 远端复审通过。
+- [ ] 四个客户端各自完成：connect → submit → status → pull → 本地修改并推送 → sync → 远端复审通过。（D58，EC2 c4469aa，2026-10-22：Claude Code 的 MCP 工具与 `octopus` 命令行各走通——SSH 克隆的本地仓库提交（按 HTTPS），远端实现（claude）、审查（codex）、Evaluator 与 Knowledge 通过；pull 增量拉回分支与上下文；本地提交 sync 后写代码任务的「本地同步」Attempt 运行检查、审查与 Evaluator 重新进行，Evaluator 指出本地改动使末行验收不成立，自动纠错返工后完成；返工后 pull 快进；带 `.env` 的 sync 被拒（sync_secret_found）。待：Codex、Kiro IDE 由负责人在各自客户端核对，run-45aa7b87…）
 - [ ] connect 重复执行结果不变，用户原有 Skills 与 MCP 配置保留。
 - [x] 控制台可按全部过滤条件与全文检索找到 Session，详情覆盖 Pipeline、门禁、Attempt、恢复记录、事件、diff、报告。（D56，EC2 8cfef39，2026-10-22：经控制台所用的 API 实测，状态 / 空间 / 仓库（短写与 https 地址）/ 分支 / 阶段 / 工具 / 客户端 / 提交者 / 时间 / 全文及组合均命中，94 个会话 14 页无重复无遗漏、与总数一致；候选的代码改动可读；控制台界面由测试覆盖，负责人可在控制台复核）
 
@@ -299,9 +299,9 @@ M4（共享与组织）、M5（仓库闭环）在 MVP 之后分别立项，各�
 | # | 交付 | 状态 | 已有 / 剩余 |
 |---|---|---|---|
 | 1 | `octopus connect` | ◐ EC2 | 已有：`claude`、`kiro`（Kiro CLI），合并写入 MCP 与 Skill、`--dry-run`。剩余：Codex、Kiro IDE（现为 `docs/CONNECT.md` 手动说明）、写前备份核对 |
-| 2 | 用户 CLI | ◐ 本机 | D58：`octopus login / submit / plan / confirm / status / watch / report / pull / sync / continue / approvals / search`（中文摘要或 `--json`，默认用本仓库关联的会话）；运维命令不变 |
+| 2 | 用户 CLI | ✅ EC2 | D58：`octopus login / submit / plan / confirm / status / watch / report / pull / sync / continue / approvals / search`（中文摘要或 `--json`，默认用本仓库关联的会话）；运维命令不变 |
 | 3 | MCP 工具 | ◐ | 已有 37 个：除工作流、teams、runs、status、preview、start、continue、recover、control 外，计划确认、验收、报告、批准、修订、补充说明、Request（`octopus_requests`，D55）、规则（`octopus_policies` 只读）；`octopus_runs` 按仓库、阶段、工具、客户端、提交者、时间过滤与全文搜索（D56，本机）。会话关联（`octopus_link`，D58，本机） |
-| 4 | 本地 / 远端联动 | ◐ 本机 | D58：git bundle 交换提交；`.octopus/session.json` 会话关联；pull 拉回分支与上下文；sync 只接受快进，最后一个写代码的任务重新检查、下游重新审查；未推送提交检测与 `--push-base`；MCP `octopus_link / octopus_pull / octopus_sync` |
+| 4 | 本地 / 远端联动 | ✅ EC2 | D58：git bundle 交换提交；`.octopus/session.json` 会话关联；pull 拉回分支与上下文；sync 只接受快进，最后一个写代码的任务重新检查、下游重新审查；未推送提交检测与 `--push-base`；MCP `octopus_link / octopus_pull / octopus_sync` |
 | 5 | 监控控制台 | ◐ EC2 | 已有（React，D19–D23）：列表、空间切换、状态筛选与关键字搜索（客户端）、详情（任务、Attempt 证据、恢复记录、事件轨迹）、续作 / 诊断 / 停止 / 关闭 / 重开 / 删除 / 导出 / 分配 Worker / 原生入口 / 预览、发起向导、工作流库、设置。门禁、报告、修订对比、待批准、发布、用量（D37–D47）。D56（本机）：服务端分页，按状态 / 仓库 / 分支 / 阶段 / 工具 / 客户端 / 提交者 / 时间过滤与全文搜索（筛选写进地址栏），每次 Attempt 的代码改动（diff）。剩余：复制 CLI 命令（随 M3-2）；`/classic/` 待对齐后移除 |
 
 §7 验收条件均未勾选（依赖 pull / sync 与服务端搜索）。

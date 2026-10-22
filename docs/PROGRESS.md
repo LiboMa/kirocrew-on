@@ -1,16 +1,16 @@
 # 进度与完成记录
 
-> 由 `tools/progress.py` 生成（2026-10-22 09:18 CST）：任务状态取自 `docs/progress.json`，提交记录取自 git。看板：`docs/progress-dashboard.html`；实时看板：`python3 tools/progress.py --serve --ec2`（http://127.0.0.1:8765/）。
+> 由 `tools/progress.py` 生成（2026-10-22 10:30 CST）：任务状态取自 `docs/progress.json`，提交记录取自 git。看板：`docs/progress-dashboard.html`；实时看板：`python3 tools/progress.py --serve --ec2`（http://127.0.0.1:8765/）。
 
-- **本轮完成度**：87%　**MVP 完成度**：41%
-- **分支**：HEAD `79143dc`；自 `origin/main` 起 374 个提交——已推送 335、已部署 EC2 36、仅本机 3；EC2 运行 `8cfef39`
+- **本轮完成度**：87%　**MVP 完成度**：52%
+- **分支**：HEAD `69eaec6`；自 `origin/main` 起 390 个提交——已推送 335、已部署 EC2 49、仅本机 6；EC2 运行 `c4469aa`
 - **回归**：1412 后端 + 92 + 205 控制台（connect codex / kiro-ide 本机）；EC2 运行 95e5aa9
 
 ## 模块
 
 | 模块 | 完成度 | 已验收 | 已部署 · 待验收 | 本机完成 · 待部署 | 进行中 | 卡点 · 等外部 | 未开始 |
 |---|---|---|---|---|---|---|---|
-| MVP 里程碑（M1–M5） | 41% | 7 | 4 | 0 | 2 | 0 | 14 |
+| MVP 里程碑（M1–M5） | 52% | 9 | 5 | 1 | 1 | 0 | 11 |
 | D46 Agent 角色与提示体系 | 87% | 8 | 3 | 0 | 0 | 1 | 0 |
 | D49 每人一个执行边界 | 80% | 2 | 2 | 0 | 1 | 0 | 0 |
 | D50 编码技能包 | 100% | 2 | 0 | 0 | 0 | 0 | 0 |
@@ -43,14 +43,33 @@
 
 ## 完成记录（按决策，最近的在前）
 
-### D58（3 个提交：仅本机 3）
+### D59（8 个提交：已部署 EC2 2、仅本机 6）
 
-- `79143dc` 2026-10-22 〔仅本机〕 feat(sync): POST /v1/runs/<id>/sync——本地提交成为新候选，重新检查并让下游任务重新审查；pull 的 bundle 下载（D58）——二进制上传（≤ 20 MB）经 Worker 快进；最后一个写代码的任务记「本地同步」Attempt（候选、synced、门禁），有检查命令时照常运行与判定，其后的任务重新执行；修订「本地同步」、事件 run.synced；同一 request_id 只同步一次；权限与续作相同；POST /v1/runs/<id>/bundle 给出 10 分钟的拉回链接；CLI 的 Token 记为 client cli
-- `4b7c9c7` 2026-10-22 〔仅本机〕 feat(worker): 会话分支的 pull bundle 与 sync（D58）——POST /pull/bundle 按发布同样核查疑似凭证与 .env 后给出分支（自基线或完整历史）；POST /sync 导入本地提交的 bundle，只在会话分支仍在 old、工作区没有未纳入候选的改动、head 是快进且新内容没有疑似凭证时把分支与工作区移到 head，返回与候选相同的字段；上限 20 MB
-- `a522f79` 2026-10-22 〔仅本机〕 docs(spec,plan): D58 M3-2 用户 CLI 与 M3-4 本地 / 远端联动——git bundle 交换提交（不经托管方）、会话关联 .octopus/session.json、pull 拉回分支与上下文、sync 只接受快进并让最后一个写代码的任务重新检查、下游重新审查、未推送提交检测与 --push-base；CLI 与 MCP 共用 octopus/local.py；6 个任务的实施计划
+- `69eaec6` 2026-10-22 〔仅本机〕 fix(transport): 密封 Token 的密钥改由 configure_key 设定，不再覆盖 Worker TLS 证书的 configure（D59，部署前发现）
+- `324e3e7` 2026-10-22 〔仅本机〕 docs: D59 Worker Token 密封——OPERATIONS 主密钥说明、MVP-RELEASE K10、进度
+- `c252a3b` 2026-10-22 〔仅本机〕 test(bootstrap): 重新注册后 Worker Token 以密封形式保存（D59）
+- `880733d` 2026-10-22 〔仅本机〕 feat(workers): 平台启动时把已有的明文 Worker Token 密封（D59 K10）——迁移之后执行一次、可重复执行，没有配置密钥时按 D35 在数据目录生成
+- `2e22515` 2026-10-22 〔仅本机〕 feat(workers): 注册与更新连接时把 Worker Token 密封后存入（D59 K10）——数据库只有 token_sealed；平台启动时把 D35 的密钥交给 transport；列表与环境视图不含任何 Token 字段；能力刷新保留密封值
+- `3278287` 2026-10-22 〔仅本机〕 feat(workers): transport 接受密封的 Worker Token（token_sealed）并只在发请求时解开（D59 K10）——解不开时 503 worker_secret 并请平台管理员重新连接，不回退到明文；明文 token 照旧可用；diff 与 sync 传给 Worker 的连接保留 token_sealed
+- `a878ce0` 2026-10-22 〔已部署 EC2〕 docs(plan): D59 Worker Token 移出数据库的实施计划（4 个任务）
+- `b3228ca` 2026-10-22 〔已部署 EC2〕 docs(spec): D59 M4-2 Worker Token 移出数据库（K10）——用 D35 的 vault 与密钥密封为 token_sealed，只在 transport 发请求时解封，写入即密封，启动时把已有的明文密封（可重复执行）
 
-### D56（7 个提交：已部署 EC2 7）
+### D58（10 个提交：已部署 EC2 10）
 
+- `c4469aa` 2026-10-22 〔已部署 EC2〕 fix(sync,local): 终审修正（D58）——Worker 的 sync 把上传的 bundle 当不可信输入：头部只接受一个分支提交、对象先解包到隔离目录，核查通过才迁入（被拒绝的同步不留任何对象、不写任何 ref），用 fast-forward merge 移动（不覆盖未跟踪文件），按会话加锁，同一同步重放时给出同样的结果；平台在调用 Worker 前校验 request_id，与续作一致要求上游任务已验收、执行环境可用，管理员代为同步写审计，同步后停止预览；检查未能启动时照样记录 Attempt、由引擎重新启动检查；同步的 Attempt 写交接摘要（含说明）；CLI 在仓库内 --allow-unpushed 不再崩溃；当前分支不在 origin 上时 submit 停下；两边都有新提交时 pull 把会话的最新提交取为 refs/octopus/<run>/remote 并提示 rebase，只有本地领先时不报错；SSH 地址的端口与非 SSH 地址正确处理；无法识别的仓库不算本仓库；保存的 Token 只发给它的平台；git 调用不等待终端、有超时
+- `7dc4f09` 2026-10-22 〔已部署 EC2〕 fix(server): 拉回的下载里不用 name 作循环变量（它是模块的名称校验函数，tests/test_server_shadowing 拦下）（D58）
+- `3d18672` 2026-10-22 〔已部署 EC2〕 docs: D58 本地 / 远端联动与使用者命令行——OPERATIONS、CONNECT、MVP-RELEASE §14.3、BACKLOG、进度
+- `f90374e` 2026-10-22 〔已部署 EC2〕 feat(console): 本地同步的 Attempt、修订与事件，客户端 CLI（D58）
+- `5426f37` 2026-10-22 〔已部署 EC2〕 feat(mcp): octopus_link、octopus_pull、octopus_sync 与提交前的未推送检测（D58）——在用户本机的仓库执行，与 CLI 同一套本地逻辑；octopus_start 提交本仓库时若有 origin 没有的提交先停下（push_base 经用户同意后推送，或 allow_unpushed），成功后关联仓库；octopus_status 缺 run_id 时读关联；Skill 写明联动流程与拒绝原因
+- `4e0642d` 2026-10-22 〔已部署 EC2〕 feat(cli): 使用者的 octopus 命令（login、submit、plan、confirm、status、watch、report、pull、sync、continue、approvals、search）（D58 M3-2）——login 用用户名与密码登录后改存一枚 30 天的「octopus CLI」Token（0600），并吊销登录用的那枚；submit 在 Git 仓库内取 origin 与当前分支，本地有未推送提交时停下并提示 --push-base / --allow-unpushed，成功后关联仓库；其余命令默认用本仓库关联的会话、与 MCP 同样的调用，输出中文摘要或 --json；运维命令不变
+- `3960d03` 2026-10-22 〔已部署 EC2〕 feat(local): 本地仓库与会话的关联、pull、sync 与未推送提交检测（D58）——.octopus/session.json 与 .octopus/sessions/ 写入 .git/info/exclude；pull 把会话分支的 bundle 取为本地 octopus/<run>（缺基线时自动取完整历史，从不覆盖本地分支自己的提交），并写报告、计划与各任务交接；sync 只在工作区已提交、当前分支包含会话 head 时把其后的提交打成 bundle 上传，同一同步的 request_id 固定；源码取 origin（SSH 地址按 HTTPS）与当前分支；未推送提交计数与 --push-base；Client 增加 upload 与 /bundle/ 下载
+- `79143dc` 2026-10-22 〔已部署 EC2〕 feat(sync): POST /v1/runs/<id>/sync——本地提交成为新候选，重新检查并让下游任务重新审查；pull 的 bundle 下载（D58）——二进制上传（≤ 20 MB）经 Worker 快进；最后一个写代码的任务记「本地同步」Attempt（候选、synced、门禁），有检查命令时照常运行与判定，其后的任务重新执行；修订「本地同步」、事件 run.synced；同一 request_id 只同步一次；权限与续作相同；POST /v1/runs/<id>/bundle 给出 10 分钟的拉回链接；CLI 的 Token 记为 client cli
+- `4b7c9c7` 2026-10-22 〔已部署 EC2〕 feat(worker): 会话分支的 pull bundle 与 sync（D58）——POST /pull/bundle 按发布同样核查疑似凭证与 .env 后给出分支（自基线或完整历史）；POST /sync 导入本地提交的 bundle，只在会话分支仍在 old、工作区没有未纳入候选的改动、head 是快进且新内容没有疑似凭证时把分支与工作区移到 head，返回与候选相同的字段；上限 20 MB
+- `a522f79` 2026-10-22 〔已部署 EC2〕 docs(spec,plan): D58 M3-2 用户 CLI 与 M3-4 本地 / 远端联动——git bundle 交换提交（不经托管方）、会话关联 .octopus/session.json、pull 拉回分支与上下文、sync 只接受快进并让最后一个写代码的任务重新检查、下游重新审查、未推送提交检测与 --push-base；CLI 与 MCP 共用 octopus/local.py；6 个任务的实施计划
+
+### D56（8 个提交：已部署 EC2 8）
+
+- `789cada` 2026-10-22 〔已部署 EC2〕 docs: D56 已部署 EC2 8cfef39，§7 验收 3 勾选（经 API 实测全部过滤、全文与翻页，候选 diff 可读）；BACKLOG 记终审延后项与 .kiro/settings 进入候选；进度
 - `8cfef39` 2026-10-22 〔已部署 EC2〕 fix(console,diff): 终审修正（D56）——「进行中」只发送会话状态（dispatching 是任务状态，曾使整组 400），控制台的会话状态清单与服务端一致并有测试；列表读取失败时显示原因，不再看起来像空列表；创建时间按使用者本地的日换算；失去访问权的会话即使读过也会移出；正在输入的仓库 / 分支不因其他筛选变化而清空；全文恢复匹配工作流名称；diff 不显示下载同样不含的文件（.env 等，只给数量），不用仓库自己的 textconv 与前缀设置；工作区已不在的会话返回 409 而不是 500
 - `b5cf2bf` 2026-10-22 〔已部署 EC2〕 docs: D56 会话列表的过滤、全文、分页与代码改动——OPERATIONS、MVP-RELEASE §14.3、BACKLOG、进度
 - `501b519` 2026-10-22 〔已部署 EC2〕 feat(diff): Attempt 详情可看候选的代码改动（D56）——Worker 的 /candidate 新增只读的 mode: diff（相对上一个候选或会话基线，每个文件的增删行数与统一 diff，200 KB / 4000 行截断）；GET /v1/runs/<id>/attempts/<attempt>/diff 按会话的访问检查读取，没有候选 404 no_candidate，被凭证检查挡在分支外的候选 409 candidate_secret（从不显示），旧 Worker 409 worker_outdated 并请平台管理员升级；控制台每次 Attempt 多一个「代码改动」折叠区，展开才请求，点开文件看它的 diff
