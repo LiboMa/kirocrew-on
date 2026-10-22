@@ -88,6 +88,28 @@
 - **MCP**：`octopus_start` 的 `source` 接受 `{"type": "none"}`，说明里写明一般任务；Skill 同步。
 - **命令行**：`octopus submit --no-repo`（来源 `none`）。
 
+## 6a. 实现前的决定（实现者视角检查之后，设计者决定）
+
+1. **什么算「一般任务」**：任务类型为 research / write，或会话来源为 `none`，两者满足其一即算；后者包括该会话中的 review / design。
+   - Worker 只收到 `new`，由平台在派发请求中加 `"work": "general"`，告诉 Worker 用一般任务的标题、目录名与交接要求。
+   - 旧 Worker 不认识这个字段，会照旧用研发措辞，这不影响执行。
+   - 控制台的「文件改动」按同一规则显示。
+2. **`none` 会话的任务类型不受限**：可以有 implement / test / deliver，例如在工作目录里写一个脚本。
+   - Evaluator 照旧按 implement / deliver 追加。
+   - 发布照旧 409，产出通过下载取得。
+3. **提示长度**：一般任务只加一条短规则（约一行）。
+   - 来源为 `none` 时，规划提示略去只对仓库有意义的条目：检出、.gitignore、preview.json、PR、改代码的 evaluator。
+   - 首次规划与重新规划都以现有的长度测试卡住；Worker 的硬上限是 8000。
+4. **旧 Worker**：Worker 的 `/health` 新增能力 `general_kinds`。
+   - 没有这项能力的执行环境，平台派发时把 research / write 改为 `deliver`。门禁本来同档，所以不改变判定。
+   - 不要求所有执行边界先升级。
+5. **发布核验与审查独立性**：在 `_verified` 中，research / write 与 deliver 相同，不要求后面跟审查。
+   - 审查独立性（`roles.unindependent`）只看 implement / deliver 的作者，与今天相同。
+   - 纠错时，research / write 算作者：换工具复审时避开它们的工具。
+6. **原生 Agent 的系统提示**（composition 装进 poc-* 的 COMMON / WORKER）：本期不改。
+   - 每个任务的信封（envelope）更具体，并且后到，Agent 以它为准。
+   - 改系统提示需要重新部署所有执行边界，记入 BACKLOG。
+
 ## 7. 验收
 
 - 本机：
