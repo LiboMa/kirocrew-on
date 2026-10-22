@@ -820,6 +820,20 @@ Draft PR（GitHub）/ Draft MR（GitLab）。
 `GET /v1/runs/<id>/changes?who=user|system&kind=<前缀>&before=<id>&limit=<1–200>`；导出（`/export`）含 `changes`。
 此前的事件按记录列出（命令归为人，其余标为「系统（旧记录）」）。
 
+### 会话共享（D64，M4-1）
+
+- **共享给谁**：某个人（按用户名）、某个 Team（共享人自己所在、未归档的；管理员任意未归档的——该 Team 当时与之后的成员）、全公司（平台上全部有效用户）。
+- **角色**：查看（viewer）——会话详情、时间线与实时事件流、「KiroCrew 会话」观察、修订、变更记录、代码改动、报告与导出、远程预览、`octopus pull`、
+  待批准列表；协作（collaborator）——与该会话 Team 的普通成员相同：再加续作、停止、请求诊断、确认计划、关闭 / 重新打开、开关预览、`octopus sync`，
+  仍受 D49 R10（别人的执行边界上只有边界主人能下达指令）约束。全公司只能是查看。
+- **不对共享开放**：删除、发布与发布策略、补充说明、答复审批、验收（这三项本来就只属于创建者、Team owner、管理员）、改派执行环境、更换凭证、
+  删除沉淀的知识、原生 KiroCrew 入口；D55 的提交记录（Request）也不因共享可见。
+- **谁能共享**：创建者、Team 会话的 Team owner、平台管理员——会话页「共享」或 `GET|POST /v1/runs/<id>/shares`、`DELETE /v1/runs/<id>/shares/<share>`；
+  同一对象再次共享即改角色；审计 `share.create` / `share.delete`；已归档 Team 的会话不能新增共享（可取消）。Coding Agent 没有共享工具。
+- **看到哪里**：侧栏「共享给我」（`GET /v1/runs?shared=1`，MCP `octopus_runs` 的 `shared: true`）；会话页写明「你以 查看 / 协作 身份访问（由 X 共享）」，
+  会话视图与 MCP 状态的 `access`。默认列表不含共享来的。
+- **取消**：下一个请求起生效，打开着的实时事件流一秒内收到 `access_revoked` 并关闭，预览按文件核对。**收不回**：已下载的导出与源码、已 `pull` 到本地的分支。
+
 ### 用户、Token 与管理员权限（访问管理第 1 期）
 
 - **scope**：`read`（查看）、`execute`（会话操作）、`manage`（自己的配置：工作流、本人 Token 与密码、作为 Team owner 管理本 Team）、

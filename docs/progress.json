@@ -161,10 +161,10 @@
         },
         {
           "id": "m4-org",
-          "name": "M4-1 组织层：会话共享给个人 / Team / 公司",
-          "status": "todo",
-          "ref": "BACKLOG 共享与组织",
-          "more": "需设计：尚无设计文档与实施计划。"
+          "name": "M4-1 会话共享给个人 / Team / 全公司",
+          "status": "local",
+          "ref": "D64",
+          "more": "「公司」为平台全部用户（负责人 2026-10-22）。viewer 只读；collaborator 与普通 Team 成员相同（仍受 D49 R10）；全公司只能查看；删除、发布、改派、原生入口与 Request 不对共享开放；会话页「共享」、侧栏「共享给我」、MCP octopus_runs shared / access；迁移 12 shares，迁移器补跑缺失编号。待：终审、部署与 EC2。"
         },
         {
           "id": "m4-k10",
