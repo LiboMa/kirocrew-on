@@ -160,20 +160,66 @@ class ReplanTests(ReplanCase):
         self.assertEqual(contexts[:2], [False, True])
 
 
-    def test_a_replan_must_keep_the_required_checks_of_the_tasks_it_replaces(self):   # D57 §13.1
-        steps_with = STEPS[:2] + [{**STEPS[2], "verify": ["npm test", "npm run lint"], "verify_required": ["npm test"]}]
+    def replan_with(self, plan_steps, last=None, request_steps=None):
+        """A Session whose deliver task has a required check (and an advisory one), replanned into ``plan_steps``."""
+        last = last or {**STEPS[2], "verify": ["npm test", "npm run lint"], "verify_required": ["npm test"]}
+        self.plan = "```json\n" + json.dumps({"intent": "i", "summary": "s", "name": "n", "steps": plan_steps},
+                                                ensure_ascii=False) + "\n```"
         self.decisions = [REPLAN, {"action": "wait_for_user", "reason": "规划失败", "instructions": "检查"}]
-        rid = self.start(steps_with)
-        run = self.tick(rid)
-        replan = {t["id"]: t for t in run["tasks"]}["replan-1"]
-        self.assertEqual(replan["status"], "blocked")   # NEW_PLAN carries no "npm test"
-        self.assertIn("被替换任务的必过检查", replan["attempts"][-1]["error"])
-        self.assertIn("npm test", replan["attempts"][-1]["error"])
-        self.assertNotIn("npm run lint", replan["attempts"][-1]["error"])   # an advisory one may go
+        rid = self.start(request_steps or STEPS[:2] + [last])
+        run = self.tick(rid, 40)
+        return run, {t["id"]: t for t in run["tasks"]}
+
+    def test_a_replan_that_omits_a_required_check_has_it_placed_by_the_platform(self):   # D57 §13.1
+        run, tasks = self.replan_with([
+            {"id": "deliver", "name": "重新交付", "tool": "claude", "prompt": "交付", "kind": "deliver", "acceptance": ["可交付"]},
+            {"id": "extra", "name": "补测试", "tool": "claude", "prompt": "补测试", "kind": "test", "acceptance": ["a"], "verify": ["true"]},
+            {"id": "check", "name": "复审", "tool": "codex", "prompt": "复审", "kind": "review", "acceptance": ["无阻断问题"]}])
+        self.assertEqual(run["status"], "completed", run.get("error"))
         self.assertEqual(run["replan"]["replaced"][-1]["required"], ["npm test"])
+        placed = tasks["deliver-2"]["spec"]   # the task that takes the replaced one's id, not the last one
+        self.assertEqual((placed["verify"], placed["verify_required"]), (["npm test"], ["npm test"]))
+        self.assertEqual((tasks["extra"]["spec"]["verify"], tasks["extra"]["spec"]["verify_required"]), (["true"], []))
+        self.assertIn("平台把原任务「交付」的必过检查补到了 deliver-2：npm test", run["replan"]["notes"])
+        self.assertFalse(any("npm run lint" in json.dumps(t["spec"]) for t in run["tasks"][1:]))   # an advisory one may go
         prompt = self.dispatched("replan-1")[0]["spec"]["prompt"]
         self.assertIn("被替换任务的必过检查", prompt)
         self.assertIn("npm test", prompt)
+
+    def test_a_check_carried_only_into_a_review_is_not_counted(self):   # its checks never run (domain.runs_checks)
+        run, tasks = self.replan_with([
+            {"id": "notes", "name": "整理说明", "tool": "claude", "prompt": "整理", "kind": "deliver", "acceptance": ["a"]},
+            {"id": "check", "name": "复审", "tool": "codex", "prompt": "复审", "kind": "review", "acceptance": ["无阻断问题"],
+             "verify": ["npm test"], "verify_required": ["npm test"]}])
+        self.assertEqual(run["status"], "completed", run.get("error"))
+        self.assertEqual((tasks["notes"]["spec"]["verify"], tasks["notes"]["spec"]["verify_required"]), (["npm test"], ["npm test"]))
+        self.assertIn("平台把原任务「交付」的必过检查补到了 notes：npm test", run["replan"]["notes"])
+
+    def test_a_replan_whose_tasks_run_no_checks_cannot_keep_a_required_one(self):
+        run, tasks = self.replan_with([{"id": "check", "name": "复审", "tool": "codex", "prompt": "复审", "kind": "review",
+                                        "acceptance": ["无阻断问题"], "verify": ["npm test"], "verify_required": ["npm test"]}])
+        replan = tasks["replan-1"]
+        self.assertEqual(replan["status"], "blocked")
+        self.assertIn("被替换任务必过检查", replan["attempts"][-1]["error"])
+        self.assertIn("「npm test」", replan["attempts"][-1]["error"])
+        self.assertNotIn("npm run lint", replan["attempts"][-1]["error"])
+        self.assertNotIn("check", tasks)
+
+    def test_a_long_required_check_is_placed_as_it_is_where_there_is_room(self):
+        long = "python3 -m pytest tests/ -q " + " ".join(f"--deselect tests/test_slow.py::test_{i:03d}" for i in range(11))
+        self.assertEqual(len(long[:450]), 450)
+        long = long[:450].rstrip()
+        full = [f"echo check-{i}" for i in range(10)]   # the task taking the replaced id has no room left
+        run, tasks = self.replan_with(
+            [{"id": "deliver", "name": "重新交付", "tool": "claude", "prompt": "交付", "kind": "deliver", "acceptance": ["a"],
+              "verify": full},
+             {"id": "extra", "name": "补测试", "tool": "claude", "prompt": "补测试", "kind": "test", "acceptance": ["a"]},
+             {"id": "check", "name": "复审", "tool": "codex", "prompt": "复审", "kind": "review", "acceptance": ["a"]}],
+            last={**STEPS[2], "verify": [long]})
+        self.assertEqual(run["status"], "completed", run.get("error"))
+        self.assertEqual((tasks["deliver-2"]["spec"]["verify"], tasks["deliver-2"]["spec"]["verify_required"]), (full, []))
+        self.assertEqual((tasks["extra"]["spec"]["verify"], tasks["extra"]["spec"]["verify_required"]), ([long], [long]))
+        self.assertTrue(any(note.startswith("平台把原任务「交付」的必过检查补到了 extra：python3 -m pytest") for note in run["replan"]["notes"]))
 
     def test_a_replan_that_keeps_the_required_checks_is_applied(self):
         steps_with = STEPS[:2] + [{**STEPS[2], "verify": ["npm test"]}]   # the user's: required
@@ -185,6 +231,7 @@ class ReplanTests(ReplanCase):
         self.assertEqual(run["status"], "completed", run.get("error"))
         test = {t["id"]: t for t in run["tasks"]}["review-2"]["spec"]
         self.assertEqual((test["verify"], test["verify_required"], test["origin"]), (["true", "npm test"], ["npm test"], "planner"))
+        self.assertFalse(any(note.startswith("平台把") for note in run["replan"]["notes"]))   # nothing for the platform to place
 
 
 
@@ -255,11 +302,13 @@ class ReplanReviewTests(ReplanCase):
         steps([with_kept])
         self.assertLessEqual(len(with_kept["prompt"]), 7800)   # the kept tasks' checks (D54 §9 a) and preferences (D55) fit too
         required = planning.replan_step("replan-1", [{"id": "t%d" % i, "name": "任务" * 40, "kind": "implement",
-                                                      "required": ["r" * 400] * 10} for i in range(12)],
+                                                      "required": [f"r{j}" * 200 for j in range(10)]} for i in range(12)],
                                         long, {"reason": long, "instructions": long}, {"claude": ["m" * 60] * 60},
                                         {"kiro": {"available": True, "reason": long}}, [long] * 5,
                                         {"available": ["c" * 40] * 60, "missing": ["d" * 40] * 60},
-                                        [{**k, "required": k["verify"]} for k in kept])
+                                        [{**k, "required": k["verify"]} for k in kept],
+                                        [{"id": "policy-%d" % i, "scope": "team", "role": "security_test", "tool": "opencode",
+                                          "model": "m" * 200} for i in range(30)])
         steps([required])   # D57 §13.1: the required checks to carry over, and the kept ones', fit as well
         self.assertIn("被替换任务的必过检查", required["prompt"])
         self.assertIn("用户的映射偏好", with_kept["prompt"])

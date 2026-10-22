@@ -58,6 +58,16 @@ LIMITS = {"deliverables": (20, 500), "acceptance": (20, 500), "verify": (10, 500
           "paths": (20, 500), "depends_on": (8, 48)}
 
 
+# Kinds whose checks the platform never runs (a design changes no code; a review is bound to the candidate instead): the
+# Engine starts a task's checks only when runs_checks says so, and the Agent is told which (worker.briefing).
+UNCHECKED = ("review", "design")
+
+
+def runs_checks(spec):
+    """Whether the platform runs ``spec``'s verify commands when the task ends (D37 §5)."""
+    return spec.get("kind") not in UNCHECKED
+
+
 def strings(value, field, items, chars):
     require(isinstance(value, list) and len(value) <= items and all(isinstance(x, str) for x in value),
             f"{field} 须为不超过 {items} 项的字符串列表")

@@ -11,7 +11,7 @@ from .db import dumps, uid
 from .transport import worker_request
 from . import evaluation, gates, journal, knowledge, planning, quotas, recovery, waiting
 from .security import Error
-from .domain import CONTRACT, awaits_confirmation, required_checks, unserved
+from .domain import CONTRACT, awaits_confirmation, required_checks, runs_checks, unserved
 from .gates import BLOCKED
 
 LEGACY = ("id", "name", "tool", "model", "effort", "prompt")
@@ -839,7 +839,7 @@ class Engine:
             records.append(gates.record("artifacts_locked", status, detail))
             if files:   # D57 §4: the accepted tasks' files it changed, named for the review that follows
                 records[-1]["files"] = files[0]
-        commands = spec.get("verify") or []
+        commands = (spec.get("verify") or []) if runs_checks(spec) else []   # never a review's or a design's (D57 §13.1)
         if not commands:
             records.append(gates.record("checks_pass", "skip", "任务没有检查命令"))
             return None, None, False

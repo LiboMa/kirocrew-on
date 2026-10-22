@@ -4,6 +4,7 @@ tasks; code then validates that plan and appends the tasks to the same Session.
 The Agent only proposes. Parsing, the 1–8 task limit, tools, ids and model availability are decided here.
 """
 import json
+import re
 import time
 
 from .db import dumps
@@ -242,10 +243,10 @@ def _quoted(quote, requirement):
 def _required_checks(db, rid, current, steps, notes, replan):
     """D57 §5.1, §13: which of the planned tasks' checks must pass. A planner's mark counts with a quote from the requirement
     (the Session's input), or — in a replan — for a required check of a task it replaces, carried over as it is; any other
-    is advisory and said so. A replan that drops or rewrites a replaced task's required check is invalid."""
+    is advisory and said so. A replaced task's required check the replan left out is placed by the platform (_carry)."""
     requirement = db.execute("SELECT input FROM runs WHERE id=?", (rid,)).fetchone()["input"]
-    inherited = list(dict.fromkeys(command for task in ((current.get("replan") or {}).get("replaced") or []) if replan
-                                   for command in task.get("required") or []))
+    replaced = ((current.get("replan") or {}).get("replaced") or []) if replan else []
+    inherited = list(dict.fromkeys(command for task in replaced for command in task.get("required") or []))
     for step in steps:
         basis, required = step.pop("verify_basis", {}), []
         for command in step.get("verify_required") or []:
@@ -262,9 +263,34 @@ def _required_checks(db, rid, current, steps, notes, replan):
             step.pop("verify_required", None)
         if kept := {command: basis[command] for command in required if command in basis}:
             step["verify_basis"] = kept
-    dropped = [command for command in inherited if not any(command in step.get("verify_required", []) for step in steps)]
-    require(not dropped, "重新规划没有承接被替换任务的必过检查（须原样写入新任务的 verify 与 verify_required）："
-            + "、".join(f"「{command[:200]}」" for command in dropped[:5]), 409, "plan_invalid")
+    _carry(replaced, steps, notes)
+
+
+def _carry(replaced, steps, notes):
+    """D57 §13.1: every required check of a replaced task stays required, as it is, on a new task whose checks the platform
+    runs (domain.runs_checks: one on a review or a design never runs). One the replan did not carry so is placed by the
+    platform and said so: on a task that has it among its checks already, else the one that takes the replaced task's id
+    (task-3 → task-3-2), else the last such task, else any other with room (LIMITS). Invalid only when none can hold it."""
+    from .domain import LIMITS, runs_checks
+    runnable, room, missing = [step for step in steps if runs_checks(step)], LIMITS["verify"][0], []
+    for task in replaced:
+        stem = re.compile(re.escape(str(task.get("id"))) + r"(?:-\d+)?")
+        for command in task.get("required") or []:
+            if any(command in step.get("verify_required", []) for step in runnable):
+                continue
+            ordered = sorted(runnable, key=lambda step: (command not in step.get("verify", []), not stem.fullmatch(step["id"]),
+                                                         -steps.index(step)))
+            target = next((step for step in ordered if command in step.get("verify", []) or len(step.get("verify", [])) < room),
+                          None)
+            if target is None:
+                missing.append(command)
+                continue
+            if command not in target.get("verify", []):
+                target["verify"] = [*target.get("verify", []), command]
+            target["verify_required"] = [*target.get("verify_required", []), command]
+            notes.append(f"平台把原任务「{task.get('name') or task.get('id')}」的必过检查补到了 {target['id']}：{_clip(command, 120)}")
+    require(not missing, f"重新规划没有能承接被替换任务必过检查的新任务（审查与设计任务的检查平台不运行，每个任务至多 {room} 条检查）："
+            + "、".join(f"「{_clip(command, 200)}」" for command in missing[:5]), 409, "plan_invalid")
 
 
 def _fix_kept_checks(db, rid, kept, fixes, notes):
@@ -353,8 +379,9 @@ def replan_step(task_id, replaced, failure, decision, models=None, tools=None, l
     the accepted tasks' conclusions — so the prompt stays within the Worker's 8000 characters whatever the Session holds."""
     required = list(dict.fromkeys(command for r in replaced for command in r.get("required") or []))   # D57 §13.1
     replaced = [{"id": r.get("id"), "name": _clip(r.get("name"), 60), "kind": r.get("kind")} for r in replaced][:12]
-    carry = f"被替换任务的必过检查（新任务须原样写入 verify 与 verify_required，否则计划不合法）：{_clip(dumps(required), 300)}\n" \
-        if required else ""
+    # the platform places what the plan leaves out (_carry): the list only helps the planner put them where they belong
+    carry = (f"被替换任务的必过检查（原样写入新任务的 verify 与 verify_required，审查与设计任务除外；没写的由平台补上）："
+             f"{_clip(dumps(required), 120)}\n") if required else ""
     prompt = f"""你是此 Session 的 KiroCrew 规划者。协调者判断原计划有问题，请重新规划剩余的工作。
 用户需求见上方「本次研发任务」与「需求与验收标准（KiroCrew 规划补全）」；已完成并验收的任务及其结论见「前序交接」，它们保留，不要重复。
 失败任务已有的改动仍在会话分支上（工作区中），可在其基础上继续。保留用户只做分析、只审查、离线、标准库等明确约束。

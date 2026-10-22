@@ -4,7 +4,7 @@ import time
 
 from . import journal
 from .db import dumps, uid
-from .domain import SETTLED, TOOLS, required_checks, steps, unserved
+from .domain import SETTLED, TOOLS, required_checks, runs_checks, steps, unserved
 from .security import Error, require
 
 LIVE = {"pending", "dispatching", "dispatch_unknown", "running", "waiting_approval"}
@@ -691,8 +691,7 @@ class Coordinator:
         # D57 §13.1: the checks of these tasks that must pass, for the new tasks to carry over as they are (the platform
         # runs none of a review's or a design's)
         replaced = [{"id": row["id"], "name": spec.get("name", row["id"]), "kind": spec.get("kind"),
-                     **({"required": required} if spec.get("kind") not in ("review", "design")
-                        and (required := required_checks(fresh, spec)) else {})}
+                     **({"required": required} if runs_checks(spec) and (required := required_checks(fresh, spec)) else {})}
                     for row in later for spec in [json.loads(row["spec"])]]
         failure = f"任务「{replaced[0]['name']}」：{str(context.get('error') or '')[:1500]}"
         used = {row[0] for row in db.execute("SELECT id FROM tasks WHERE run_id=? UNION SELECT task_id FROM attempts WHERE run_id=?",
