@@ -52,7 +52,7 @@ def name(value):
 
 # Optional task structure (D34 §6.1): what a task delivers and how it is checked, kept in its spec only when given.
 # verify_required (D57 §5): those of the checks that must pass, named by their text; the others only report.
-CONTRACT = ("kind", "role", "deliverables", "acceptance", "verify", "verify_required", "depends_on", "paths", "skills")
+CONTRACT = ("kind", "role", "phase", "deliverables", "acceptance", "verify", "verify_required", "depends_on", "paths", "skills")
 MAX_TASKS = 12   # D66 (owner 2026-10-22): a workflow or a Session; was 8 — a 9-task recommendation was refused
 KINDS = ("implement", "review", "test", "deliver", "design", "research", "write")
 # D65: general work, not bound to Git — research (调研) and write (撰写), judged like a delivery; never an Evaluator's or
@@ -149,6 +149,10 @@ def steps(value, known=(), planned=False):
         if "kind" in step:
             require(step["kind"] in KINDS, "任务类别只能是 implement、review、test、deliver、design、research（调研）或 write（撰写）")
             item["kind"] = step["kind"]
+        if "phase" in step:   # D69: diverge / design / converge decides which failures stop the Session
+            from .phases import PHASES
+            require(step["phase"] in PHASES, "阶段（phase）只能是 diverge（发散）、design（设计）或 converge（收敛）")
+            item["phase"] = step["phase"]
         if "role" in step:   # D46 P2: how the Agent works; kind keeps deciding the gates
             from . import roles
             require(step["role"] in roles.KINDS, "角色只能是 " + "、".join(roles.KINDS))
