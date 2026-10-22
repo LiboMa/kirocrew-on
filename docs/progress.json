@@ -121,23 +121,23 @@
         {
           "id": "m3-cli",
           "name": "M3-2 用户 CLI（login / submit / plan / confirm / status / watch / report / pull / sync / continue / approvals / search）",
-          "status": "todo",
-          "ref": "§7 #2",
-          "more": "现有命令为运维类；使用者经 MCP 与控制台操作。需设计：尚无设计文档与实施计划。"
+          "status": "local",
+          "ref": "D58",
+          "more": "octopus login / submit / plan / confirm / status / watch / report / pull / sync / continue / approvals / search（中文摘要或 --json）。待：部署与 EC2 验收。"
         },
         {
           "id": "m3-mcp",
           "name": "M3-3 MCP 补齐：Request、搜索、会话关联",
-          "status": "doing",
-          "ref": "§7 #3",
-          "more": "37 个工具；Request（octopus_requests）与只读规则（D55）；octopus_runs 按仓库、阶段、工具、客户端、提交者、时间过滤与全文搜索（D56）。剩余：会话关联（随 M3-4 sync）。"
+          "status": "local",
+          "ref": "D58",
+          "more": "40 个工具：Request、只读规则（D55），octopus_runs 全部过滤（D56），octopus_link / pull / sync 与提交前的未推送检测（D58）。待：部署。"
         },
         {
           "id": "m3-sync",
           "name": "M3-4 本地 / 远端联动：pull、sync、--push-base、.octopus/session.json",
-          "status": "todo",
-          "ref": "§7 #4",
-          "more": "§7 验收 1（四个客户端 connect → … → sync → 复审）依赖它；现用 deploy.sh space 与远程预览替代。需设计：尚无设计文档与实施计划。"
+          "status": "local",
+          "ref": "D58",
+          "more": "git bundle 交换提交；会话关联；pull 拉回分支与上下文；sync 只接受快进、重新检查与审查；未推送检测与 --push-base；MCP octopus_link / pull / sync。待：部署与 EC2 验收（§7 验收 1）。"
         },
         {
           "id": "m3-console",

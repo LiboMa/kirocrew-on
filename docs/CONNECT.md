@@ -84,6 +84,19 @@ env = { OCTOPUS_API_TOKEN = "<Token>", PYTHONPATH = "<kirocrew-on>" }
 **其他 MCP 客户端**：按 §1 的 command / args / env 配置 stdio 服务器。不支持 Skill 的客户端，
 把 `octopus skill --url <平台地址>` 的输出放进该客户端的说明文件（如 `AGENTS.md`）。
 
+## 3a．命令行（D58）
+
+不用 Coding Agent 时，可以直接用 `octopus` 命令（安装方式同 MCP 服务）：
+
+```bash
+octopus login --url https://<平台地址>        # 用户名与密码；保存一枚 30 天的 CLI Token
+cd <本地仓库> && octopus submit "实现登录页"   # 源码取 origin 与当前分支；有未推送提交时提示 --push-base
+octopus status                                 # 或 plan / confirm / watch / report
+octopus pull --checkout                        # 会话分支到本地 octopus/<run>，上下文在 .octopus/sessions/<run>/
+# 修改并 git commit 之后
+octopus sync --note "改了样式"                 # 远端重新检查，审查重新进行
+```
+
 ## 4．验证
 
 1. 新开一个会话（或重启客户端）：已运行的会话不会加载新的 MCP 服务器。

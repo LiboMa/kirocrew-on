@@ -416,6 +416,25 @@ CloudFront 只使用 us-east-1 的证书）：分发加上别名与证书（SNI�
 - 只有 KiroCrew 规划会话的规划任务（`plan`）与重新规划任务在确认前运行；提交或模板中名为 `plan` 的任务同样等待确认。
 - 等待确认的时间不计入会话预算；确认与续作一样重新计算预算，并停止正在运行的远程预览。已归档 Team 的会话不能确认。
 
+### 本地与远端联动、使用者命令行（D58）
+
+- **交换方式**：本地与会话之间用 git bundle 交换提交，不经过代码托管方；使用者不需要源仓库的写权限，新建项目也能用。发布（推送与 PR）照旧由 D35 / D47 完成。
+- **会话关联**：仓库根目录的 `.octopus/session.json`（与上下文目录 `.octopus/sessions/<run>/`）写入 `.git/info/exclude`，不进入提交。
+  submit、pull 时写入；status、pull、sync 等省略会话 ID 时读取。MCP `octopus_link` 可手动关联。
+- **pull**：`POST /v1/runs/<id>/bundle` 给出 10 分钟的链接，`GET /bundle/<票据>/<id>.bundle`（`?full=1` 为完整历史）由 Worker 的
+  `/pull/bundle` 生成，按发布同样核查疑似凭证与 `.env`（`bundle_secret_found`）。本地取为 `octopus/<run>` 分支，不覆盖该分支上本地自己的提交；
+  缺会话基线时自动取完整历史；同时写报告、计划与各任务交接。
+- **sync**：`POST /v1/runs/<id>/sync`（`application/octet-stream` 的 bundle，≤ 20 MB；查询参数 `request_id`、`expected_version`、`old`、`head`、
+  `note`）。Worker 的 `/sync` 只在会话分支仍在 `old`、工作区没有未纳入候选的改动、`head` 是快进且新内容没有疑似凭证时移动分支与工作区；
+  拒绝码 `sync_not_fast_forward`、`sync_dirty`、`sync_secret_found`、`sync_too_large`。平台为最后一个写代码的任务（implement / deliver）
+  记一个「本地同步」Attempt（证据 `synced`：谁、几个提交、说明），有检查命令时照常运行与判定，其后的任务重新执行（审查绑定新候选）；
+  修订「本地同步」、事件 `run.synced`。权限与续作相同；同一 `request_id` 只同步一次。Worker 早于 D58 时 409 `worker_outdated`。
+- **未推送提交**：在仓库内提交且源码是这个仓库的 origin 时，本地有 origin 没有的提交会先停下；`--push-base`（MCP `push_base`，须用户同意）
+  先 `git push -u origin HEAD`，`--allow-unpushed` 按 origin 已有的提交提交。SSH 形式的 origin 按 HTTPS 提交（执行环境只用 HTTPS 克隆）。
+- **使用者命令行**：`octopus login --url <平台地址>`（Token 保存在 `~/.config/kirocrew-on/cli.json`，0600，标签「octopus CLI」，30 天；
+  Request 的 client 记为 `cli`），之后 `octopus submit / plan / confirm / status / watch / report / pull / sync / continue / approvals / search`，
+  `--json` 输出 JSON，`--run` 指定会话。运维命令（serve、worker、connect、backup 等）不变。
+
 ### Request、准入规则与映射偏好（D55）
 
 - **默认先确认**（负责人 2026-10-21）：`default_admission` 的默认值改为 `confirm`。升级后，没有带 `admission`、也没有命中规则的新会话
