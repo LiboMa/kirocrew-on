@@ -79,8 +79,9 @@ UNCHECKED = ("review", "design")
 
 
 def runs_checks(spec):
-    """Whether the platform runs ``spec``'s verify commands when the task ends (D37 §5)."""
-    return spec.get("kind") not in UNCHECKED
+    """Whether the platform runs ``spec``'s verify commands when the task ends (D37 §5): never a diverge task's (D69)."""
+    from .phases import own
+    return spec.get("kind") not in UNCHECKED and own(spec) != "diverge"
 
 
 def strings(value, field, items, chars):

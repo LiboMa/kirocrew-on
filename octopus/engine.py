@@ -9,7 +9,7 @@ import time
 
 from .db import dumps, uid
 from .transport import worker_request
-from . import crew_entry, evaluation, gates, journal, knowledge, planning, quotas, recovery, waiting
+from . import crew_entry, evaluation, gates, journal, knowledge, phases, planning, quotas, recovery, waiting
 from .security import Error
 from .domain import (CONTRACT, GENERAL_KINDS, release_confirmations, required_checks, runs_checks, unserved,
                      worker_source)
@@ -1337,8 +1337,19 @@ class Engine:
                 retry = None   # this Attempt already was the automatic retry: recovery decides
             elif over := recovery.refused(db, run, "retry"):
                 retry, evidence["budget_refused"] = None, over   # past the budget (D42): recovery decides, and says why
+            relaxed = None
             if retry:
                 evidence["transient"] = retry
+            elif state == "blocked" and current["current_attempt"] == attempt["id"] and active and not design_fix \
+                    and (relaxed := phases.relax(evidence, spec, snapshot, error, [
+                        json.loads(row["spec"]) for row in db.execute("SELECT spec FROM tasks WHERE run_id=? ORDER BY ordinal",
+                                                                     (rid,))])):
+                # D69: this phase lets the failure through — accepted with the warning, its conclusion goes on
+                if evidence["phase_relaxed"] == "native_completed":   # nothing came back: the next task is told so
+                    evidence["handoff_generated"] = True
+                    result["handoff"] = evidence["handoff_text"] = (
+                        generated_handoff(task, attempt, evidence, native) + f"\n\n任务未完成：{error}；后续任务照常开始，缺少它的产出。")
+                state, error = "accepted", None
             elif state == "blocked" and current["current_attempt"] == attempt["id"] and active \
                     and knowledge.platform(snapshot, task["id"]):   # D46 P4: the platform's side task never holds a Session
                 evidence["knowledge_skipped"] = error
