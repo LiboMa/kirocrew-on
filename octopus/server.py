@@ -61,6 +61,7 @@ def loopback_host(value):
         return False
 
 
+HASHED = re.compile(r"-[A-Za-z0-9_-]{8,}\.[a-z0-9]+$")   # a Vite build's file name: name-<content hash>.ext
 CLASSIC = {"/app.js": "app.js", "/launch.js": "launch.js", "/recommend.js": "recommend.js", "/style.css": "style.css",
            "/crew.js": "crew.js", "/crew-entry.html": "crew-entry.html", "/recovery-ui.js": "recovery-ui.js"}
 TYPES = {".html": "text/html; charset=utf-8", ".js": "text/javascript; charset=utf-8", ".css": "text/css; charset=utf-8",
@@ -246,14 +247,14 @@ def server(database, port=8918, host="127.0.0.1", allowed_hosts=(), origin_secre
         def log_message(self, *_):
             pass  # No tokens, request bodies or query strings in access logs.
 
-        def respond(self, value, status=200, kind="application/json; charset=utf-8", headers=()):
+        def respond(self, value, status=200, kind="application/json; charset=utf-8", headers=(), cache="no-store"):
             data = value if isinstance(value, bytes) else dumps(value).encode()
             self.send_response(status)
             for key, header in headers:
                 self.send_header(key, header)
             self.send_header("Content-Type", kind)
             self.send_header("Content-Length", str(len(data)))
-            self.send_header("Cache-Control", "no-store")
+            self.send_header("Cache-Control", cache)
             self.send_header("X-Content-Type-Options", "nosniff")
             self.send_header("Referrer-Policy", "no-referrer")
             self.send_header("Content-Security-Policy",
@@ -480,7 +481,10 @@ def server(database, port=8918, host="127.0.0.1", allowed_hosts=(), origin_secre
                         require(isinstance(body, dict), "请求体必须是对象")
                 if method == "GET" and (static := console_file(path)):
                     file, kind = static
-                    return self.respond(file.read_bytes(), kind=kind)
+                    # A build asset is named by its content hash (Vite): cached for good; the page itself never is
+                    hashed = path.startswith("/assets/") and HASHED.search(path) is not None
+                    return self.respond(file.read_bytes(), kind=kind,
+                                        cache="public, max-age=31536000, immutable" if hashed else "no-store")
                 require(not path.startswith("/assets/"), "Not found", 404, "not_found")
                 if method == "GET" and path.startswith("/preview/"):
                     ticket, _, relative = path[len("/preview/"):].partition("/")

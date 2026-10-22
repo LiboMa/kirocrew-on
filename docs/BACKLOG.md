@@ -294,7 +294,7 @@
 - 向导：导入 / 推荐后切换到模板时来源提示未更新；切换空间未重置推荐 Worker；推荐轮询遇 403 / 404 不停止；提交瞬间在途轮询可能回写草稿。
 - 原生入口弹窗缺少账户切换保护；`crew_url` 公网来源未规范化 `:443` 写法。
 - 导入说明未列出 ID 改写、Effort 大小写、失败任务序号；document 的 `name` 未用于 Session 名称。
-- 构建产物 `no-store`（584 KB 包每次重新下载）；经典版步骤条跳转跳过隐藏任务字段校验。
+- 经典版步骤条跳转跳过隐藏任务字段校验。（构建产物的 no-store 已改：带哈希的 /assets/ 长期缓存，见 test_static_cache）
 - `default_url` 由 `0.0.0.0` 拼接（应使用 `probe_host`）；systemd 单元可恢复 `NoNewPrivileges` 等加固项；
   `bootstrap-worker` 不比对已有 Worker 的 URL / Token；记录接受的 KiroCrew commit 而不只是版本号。
 - OpenCode 执行未通过（K01）：EC2 上 shell 写文件被 KiroCrew 工具门禁拒绝，需查明命中的门禁层；替代配置 deliver→claude 可用。
