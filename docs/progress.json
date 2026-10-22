@@ -169,9 +169,9 @@
         {
           "id": "m4-k10",
           "name": "M4-2 Worker Token 移出数据库（K10）",
-          "status": "local",
+          "status": "accepted",
           "ref": "D59",
-          "more": "Worker Token 以 D35 主密钥密封为 token_sealed，只在 transport 调用时解开；注册与更新连接即密封；启动时把旧明文密封（可重复执行）。待：部署与 EC2 核对。"
+          "more": "Worker Token 以 D35 主密钥密封为 token_sealed，只在调用时解开；注册与更新连接即密封；启动时把旧明文密封。EC2 30ca5b7（2026-10-22）：3 个 Worker 只剩 token_sealed，数据库文件中没有各边界的明文 Token；3 个 Worker 的能力刷新（含远程 w1）与一个会话（实现 + Evaluator）走通。待负责人：删除 D59 之前的备份（含明文）。"
         },
         {
           "id": "m4-k03",

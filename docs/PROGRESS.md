@@ -1,16 +1,16 @@
 # 进度与完成记录
 
-> 由 `tools/progress.py` 生成（2026-10-22 10:30 CST）：任务状态取自 `docs/progress.json`，提交记录取自 git。看板：`docs/progress-dashboard.html`；实时看板：`python3 tools/progress.py --serve --ec2`（http://127.0.0.1:8765/）。
+> 由 `tools/progress.py` 生成（2026-10-22 11:00 CST）：任务状态取自 `docs/progress.json`，提交记录取自 git。看板：`docs/progress-dashboard.html`；实时看板：`python3 tools/progress.py --serve --ec2`（http://127.0.0.1:8765/）。
 
-- **本轮完成度**：87%　**MVP 完成度**：52%
-- **分支**：HEAD `69eaec6`；自 `origin/main` 起 390 个提交——已推送 335、已部署 EC2 49、仅本机 6；EC2 运行 `c4469aa`
+- **本轮完成度**：87%　**MVP 完成度**：56%
+- **分支**：HEAD `117e2fb`；自 `origin/main` 起 397 个提交——已推送 335、已部署 EC2 57、仅本机 5；EC2 运行 `30ca5b7`
 - **回归**：1412 后端 + 92 + 205 控制台（connect codex / kiro-ide 本机）；EC2 运行 95e5aa9
 
 ## 模块
 
 | 模块 | 完成度 | 已验收 | 已部署 · 待验收 | 本机完成 · 待部署 | 进行中 | 卡点 · 等外部 | 未开始 |
 |---|---|---|---|---|---|---|---|
-| MVP 里程碑（M1–M5） | 52% | 9 | 5 | 1 | 1 | 0 | 11 |
+| MVP 里程碑（M1–M5） | 56% | 10 | 5 | 1 | 1 | 0 | 10 |
 | D46 Agent 角色与提示体系 | 87% | 8 | 3 | 0 | 0 | 1 | 0 |
 | D49 每人一个执行边界 | 80% | 2 | 2 | 0 | 1 | 0 | 0 |
 | D50 编码技能包 | 100% | 2 | 0 | 0 | 0 | 0 | 0 |
@@ -43,19 +43,29 @@
 
 ## 完成记录（按决策，最近的在前）
 
-### D59（8 个提交：已部署 EC2 2、仅本机 6）
+### D60（5 个提交：仅本机 5）
 
-- `69eaec6` 2026-10-22 〔仅本机〕 fix(transport): 密封 Token 的密钥改由 configure_key 设定，不再覆盖 Worker TLS 证书的 configure（D59，部署前发现）
-- `324e3e7` 2026-10-22 〔仅本机〕 docs: D59 Worker Token 密封——OPERATIONS 主密钥说明、MVP-RELEASE K10、进度
-- `c252a3b` 2026-10-22 〔仅本机〕 test(bootstrap): 重新注册后 Worker Token 以密封形式保存（D59）
-- `880733d` 2026-10-22 〔仅本机〕 feat(workers): 平台启动时把已有的明文 Worker Token 密封（D59 K10）——迁移之后执行一次、可重复执行，没有配置密钥时按 D35 在数据目录生成
-- `2e22515` 2026-10-22 〔仅本机〕 feat(workers): 注册与更新连接时把 Worker Token 密封后存入（D59 K10）——数据库只有 token_sealed；平台启动时把 D35 的密钥交给 transport；列表与环境视图不含任何 Token 字段；能力刷新保留密封值
-- `3278287` 2026-10-22 〔仅本机〕 feat(workers): transport 接受密封的 Worker Token（token_sealed）并只在发请求时解开（D59 K10）——解不开时 503 worker_secret 并请平台管理员重新连接，不回退到明文；明文 token 照旧可用；diff 与 sync 传给 Worker 的连接保留 token_sealed
+- `117e2fb` 2026-10-22 〔仅本机〕 docs: D60 排队可见——运维说明（排队、不计、没有开始、处理）；MVP-RELEASE 与进度看板 M4-4 第 1 期
+- `ef0e4b2` 2026-10-22 〔仅本机〕 feat(engine): 排队可见（D60 Task 2）——KiroCrew 推迟的原生任务在会话显示「排队：等待执行环境资源（原因类别）」，事件 attempt.queued / attempt.dequeued；看门狗不计排队，从排队结束起计时；排队时间不计时间预算；never started 自动重新派发（不占自动重试与预算，连续第 3 次交给协调者，排队前已开始过的照旧交给协调者）
+- `ea26a8a` 2026-10-22 〔仅本机〕 feat(worker): inspect 认出被 KiroCrew 推迟的原生任务（D60）——列表与状态文件都没有时改问 GET /api/spawn/{id}，排队中且任务文字带本 Attempt 标记的回 queued（原因、说明、已等待、是否 resuming），不再报「原生任务归属当前不可核实」
+- `8c8bbe3` 2026-10-22 〔仅本机〕 docs(plan): D60 排队可见的实施计划（3 个任务）
+- `c943720` 2026-10-22 〔仅本机〕 docs(spec): D60 M4-4 第 1 期——排队可见、看门狗不计排队、never started 自动重派（MVP 1.1.0 调研报告任务一；以 EC2 上 KiroCrew 0.10.0 的 spawn 回执与 GET /api/spawn/{id} 为准）
+
+### D59（9 个提交：已部署 EC2 9）
+
+- `30ca5b7` 2026-10-22 〔已部署 EC2〕 fix(workers): 终审修正（D59）——远程预览的校验头从密封的 Token 计算（升级后远程 Worker 不再 500）；主密钥文件丢失或不可读时一律 503 worker_secret；主密钥不可读时平台照常启动（使用密封 Token 的调用 503，跳过本次密封）；每个进程只解开一次（不再每次调用都运行 openssl）；OPERATIONS 写明恢复步骤与 D59 之前的备份含明文
+- `69eaec6` 2026-10-22 〔已部署 EC2〕 fix(transport): 密封 Token 的密钥改由 configure_key 设定，不再覆盖 Worker TLS 证书的 configure（D59，部署前发现）
+- `324e3e7` 2026-10-22 〔已部署 EC2〕 docs: D59 Worker Token 密封——OPERATIONS 主密钥说明、MVP-RELEASE K10、进度
+- `c252a3b` 2026-10-22 〔已部署 EC2〕 test(bootstrap): 重新注册后 Worker Token 以密封形式保存（D59）
+- `880733d` 2026-10-22 〔已部署 EC2〕 feat(workers): 平台启动时把已有的明文 Worker Token 密封（D59 K10）——迁移之后执行一次、可重复执行，没有配置密钥时按 D35 在数据目录生成
+- `2e22515` 2026-10-22 〔已部署 EC2〕 feat(workers): 注册与更新连接时把 Worker Token 密封后存入（D59 K10）——数据库只有 token_sealed；平台启动时把 D35 的密钥交给 transport；列表与环境视图不含任何 Token 字段；能力刷新保留密封值
+- `3278287` 2026-10-22 〔已部署 EC2〕 feat(workers): transport 接受密封的 Worker Token（token_sealed）并只在发请求时解开（D59 K10）——解不开时 503 worker_secret 并请平台管理员重新连接，不回退到明文；明文 token 照旧可用；diff 与 sync 传给 Worker 的连接保留 token_sealed
 - `a878ce0` 2026-10-22 〔已部署 EC2〕 docs(plan): D59 Worker Token 移出数据库的实施计划（4 个任务）
 - `b3228ca` 2026-10-22 〔已部署 EC2〕 docs(spec): D59 M4-2 Worker Token 移出数据库（K10）——用 D35 的 vault 与密钥密封为 token_sealed，只在 transport 发请求时解封，写入即密封，启动时把已有的明文密封（可重复执行）
 
-### D58（10 个提交：已部署 EC2 10）
+### D58（11 个提交：已部署 EC2 11）
 
+- `361b7fb` 2026-10-22 〔已部署 EC2〕 docs: D58 已部署 EC2 c4469aa 并验收（Claude Code MCP 与 CLI 走通 submit → pull → sync → 复审；.env 被拒）；§7 验收 1 记录（Codex、Kiro IDE 待负责人核对）；进度
 - `c4469aa` 2026-10-22 〔已部署 EC2〕 fix(sync,local): 终审修正（D58）——Worker 的 sync 把上传的 bundle 当不可信输入：头部只接受一个分支提交、对象先解包到隔离目录，核查通过才迁入（被拒绝的同步不留任何对象、不写任何 ref），用 fast-forward merge 移动（不覆盖未跟踪文件），按会话加锁，同一同步重放时给出同样的结果；平台在调用 Worker 前校验 request_id，与续作一致要求上游任务已验收、执行环境可用，管理员代为同步写审计，同步后停止预览；检查未能启动时照样记录 Attempt、由引擎重新启动检查；同步的 Attempt 写交接摘要（含说明）；CLI 在仓库内 --allow-unpushed 不再崩溃；当前分支不在 origin 上时 submit 停下；两边都有新提交时 pull 把会话的最新提交取为 refs/octopus/<run>/remote 并提示 rebase，只有本地领先时不报错；SSH 地址的端口与非 SSH 地址正确处理；无法识别的仓库不算本仓库；保存的 Token 只发给它的平台；git 调用不等待终端、有超时
 - `7dc4f09` 2026-10-22 〔已部署 EC2〕 fix(server): 拉回的下载里不用 name 作循环变量（它是模块的名称校验函数，tests/test_server_shadowing 拦下）（D58）
 - `3d18672` 2026-10-22 〔已部署 EC2〕 docs: D58 本地 / 远端联动与使用者命令行——OPERATIONS、CONNECT、MVP-RELEASE §14.3、BACKLOG、进度
