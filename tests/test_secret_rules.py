@@ -102,7 +102,6 @@ class SecretRuleTests(unittest.TestCase):
                 hits = sources.find_secrets(data)
                 self.assertEqual([h["kind"] for h in hits], [kind])   # one span is reported once, as its own kind
                 self.assertEqual(data[hits[0]["start"]:hits[0]["end"]], secret.encode())
-                self.assertIsNotNone(sources.SUSPICIOUS.search(data))   # the publish and candidate scans know it too
 
     def test_anthropic_is_told_from_openai_and_both_are_found(self):
         anthropic = "sk-" + "ant-" + "api03-" + chars("a1", 93) + "AA"
@@ -146,7 +145,6 @@ class SecretRuleTests(unittest.TestCase):
         for text, secrets_, kinds in cases:
             with self.subTest(text=text[:60]):
                 self.assert_masked(text, *secrets_, kinds=kinds)
-                self.assertIsNotNone(sources.SUSPICIOUS.search(text.encode()))
 
     def test_aws_credentials_as_the_cli_prints_them(self):
         access = "ASIA" + chars("sts", 16, "upper")
@@ -192,6 +190,24 @@ class SecretRuleTests(unittest.TestCase):
         self.assert_masked("key:\n" + armoured, *body.splitlines(), kinds=["private_key"])
         self.assertEqual(sources.mask_text(armoured)[0], "----…--\n")
         self.assert_masked(json.dumps(armoured), *body.splitlines(), kinds=["private_key"])
+
+    def test_what_blocks_is_unchanged(self):
+        # The owner's rule: no gate blocks more than before without the owner's approval. SUSPICIOUS (what the candidate,
+        # publish and Knowledge scans block on) is the rule from before D57's wider kinds, which only mask and warn.
+        self.assertEqual(sources.SUSPICIOUS.pattern,
+                         rb"github_pat_[A-Za-z0-9_]{20,}|gh[pousr]_[A-Za-z0-9]{30,}|glpat-[A-Za-z0-9_-]{20,}"
+                         rb"|AKIA[0-9A-Z]{16}|-----BEGIN [A-Z ]*PRIVATE KEY-----")
+        blocked = [secret for kind, secret, _ in SAMPLES if kind in ("github", "gitlab", "private_key")]
+        blocked += ["AKIA" + chars("akia", 16, "upper"), "x" + AKIA + "y"]
+        for secret in blocked:
+            with self.subTest(blocked=secret[:20]):
+                self.assertIsNotNone(sources.SUSPICIOUS.search(secret.encode()))
+        masked_only = [ANT, OPENAI, PROJECT, BOT, OCT, "ASIA" + chars("asia", 16, "upper"), LABEL + " = " + AWS_SECRET,
+                       '"Session' + 'Token": "' + SESSION + '"', "xa" + "pp-" + "1-" + "A0123456789-" + "1" * 13]
+        for text in masked_only:
+            with self.subTest(masked_only=text[:20]):
+                self.assertIsNone(sources.SUSPICIOUS.search(text.encode()))
+                self.assertTrue(sources.find_secrets(text.encode()))   # still masked and listed
 
     def test_lookalikes_are_not_secrets(self):
         lookalikes = [

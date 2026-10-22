@@ -27,11 +27,18 @@ HIDDEN = "[凭证已隐去]"
 SKIP_DIRS = {"node_modules", ".venv", "venv", "__pycache__", ".pytest_cache", ".mypy_cache", "target", ".gradle",
              ".turbo", ".parcel-cache", ".cache"}
 ENV_KEPT = {".env.example", ".env.sample"}
-# What a credential looks like (D57 §3.2), by kind. Catch first: a lookalike costs a person's judgment (and is
-# remembered, D57 §3.4), a missed key costs the key, so the rules take keys glued to their context, URL-encoded or
-# JSON-escaped. At one place the first kind in this order names the span (anthropic before openai; a labelled AWS secret
-# before the key-ID shape it may start with), and overlapping spans are reported, masked and hashed as one. A rule with
-# a group reports only the group (an AWS secret, not its label).
+# What BLOCKS — the candidate's no_secrets gate, the publish scan and Knowledge items (D35 §5.2, D37 §3): GitHub
+# (fine-grained, classic, OAuth, app), GitLab, AWS Access Key IDs, private keys. It stays exactly as it was before D57
+# until the owner approves blocking on more (no gate may block more than before without that approval); the wider
+# SECRET_RULES below only mask and are listed as findings.
+SUSPICIOUS = re.compile(rb"github_pat_[A-Za-z0-9_]{20,}|gh[pousr]_[A-Za-z0-9]{30,}|glpat-[A-Za-z0-9_-]{20,}|AKIA[0-9A-Z]{16}"
+                        rb"|-----BEGIN [A-Z ]*PRIVATE KEY-----")
+# What a credential looks like (D57 §3.2), by kind, for masking what is shown or stored and listing what was masked
+# (find_secrets, mask_text, checks.masked_tail) — never for blocking. Catch first: a lookalike costs a person's
+# judgment (and is remembered, D57 §3.4), a missed key costs the key, so the rules take keys glued to their context,
+# URL-encoded or JSON-escaped. At one place the first kind in this order names the span (anthropic before openai; a
+# labelled AWS secret before the key-ID shape it may start with), and overlapping spans are reported, masked and hashed
+# as one. A rule with a group reports only the group (an AWS secret, not its label).
 _AWS_SEPARATOR = rb"(?:[\s\"'\\:=>]|%2[27]|%3[ADad]){1,12}"   # = : => quotes, escaped or URL-encoded, a space
 _LINE_BREAK = rb"(?:\r?\n|\\[rn])"   # in a file, or written as \n in JSON
 SECRET_RULES = [
@@ -60,8 +67,6 @@ SECRET_RULES = [
                                rb"-----END [A-Z ]*PRIVATE KEY(?: BLOCK)?-----"
                                rb"|(?:(?:[ \t]*" + _LINE_BREAK + rb")+[ \t]*(?:[A-Za-z0-9+/=]|\\/)+)*)")),
 ]
-# Any of them, for the scans that only ask whether something is there (a publish, a candidate, a Knowledge item).
-SUSPICIOUS = re.compile(b"|".join(b"(?:" + pattern.pattern + b")" for _, pattern in SECRET_RULES))
 
 
 def _masked(value):
@@ -138,8 +143,7 @@ LEFT_OUT = tuple(f":(exclude,glob)**/{name}/**" for name in sorted(SKIP_DIRS)) +
     ":(exclude,glob)**/.env.*", ":(exclude,glob)**/.env.*/**")
 KEPT = tuple(f":(glob)**/{name}" for name in sorted(ENV_KEPT))
 COMMITTER = ("-c", "user.name=KiroCrew ON", "-c", "user.email=kirocrew-on@localhost", "-c", "commit.gpgsign=false")
-OVERLAP = 4096   # longer than what SUSPICIOUS needs to know any kind by (a private key by its header line alone), so
-                 # a credential across two read chunks is still found
+OVERLAP = 4096   # longer than any match SUSPICIOUS needs, so a match across two read chunks is still found
 
 
 def publish_candidate(project, message, branch, scratch):
