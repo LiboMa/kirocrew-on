@@ -20,6 +20,7 @@ export type Dialog =
   | { kind: "tokens" }
   | { kind: "credentials" }
   | { kind: "policies" }
+  | { kind: "run-share"; run: Run }
   | { kind: "quotas" }
   | { kind: "workers" }
   | { kind: "users" }
@@ -57,6 +58,9 @@ export interface ConsoleState {
   /** An administrator's view of every Session, in every space (B5). */
   allSessions: boolean;
   setAllSessions: (all: boolean) => void;
+  /** D64: the list shows only what others shared with the user. */
+  sharedSessions: boolean;
+  setSharedSessions: (shared: boolean) => void;
   selected: string | null;
   select: (id: string | null) => void;
   open: (dialog: Dialog) => void;

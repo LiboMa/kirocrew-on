@@ -397,7 +397,11 @@ export interface Run {
     /** D49 R7: why the native entry stays closed (e.g. another member's boundary). */
     native_reason?: string;
     /** D49 R10: whether the actor may continue, diagnose, confirm, add a note or answer an approval, and why not. */
-    direct?: boolean; direct_reason?: string };
+    direct?: boolean; direct_reason?: string;
+    /** D64: who may share it (its creator, a Team owner, an admin) and move it to another environment (never a share). */
+    share?: boolean; assign?: boolean };
+  /** D64: how the user reaches it — their own, their Team's, a share (viewer / collaborator) or an admin's oversight. */
+  access?: { via: "owner" | "team" | "share" | "admin"; role?: string; by?: string | null };
   /** KiroCrew Agent planning: intent recognition, requirement enrichment and the generated tasks. */
   planning?: { mode: "agent"; applied: boolean; intent?: string; summary?: string; name?: string; tasks?: string[]; notes?: string[] } | null;
 }
@@ -490,6 +494,17 @@ export interface UserToken {
   scopes: string[];
   expires: number | null;   // D62: null never expires
   last_used: number | null;
+}
+
+/** D64: who a Session is shared with. */
+export interface RunShare {
+  id: string;
+  kind: "user" | "team" | "everyone";
+  subject: string | null;
+  name: string;
+  role: "viewer" | "collaborator";
+  by: string | null;
+  created: number;
 }
 
 /** D61: limits on running tasks — one's own, one's Teams'; an administrator also sees the default and each person's. */

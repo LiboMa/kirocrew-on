@@ -1,5 +1,6 @@
 import {
   CircleStop, Copy, Download, Eye, ExternalLink, FolderDown, ListRestart, MonitorPlay, MoreHorizontal, Play, Power, RotateCcw, Stethoscope,
+  Share2,
   Trash2,
   UserCog,
 } from "lucide-react";
@@ -32,7 +33,8 @@ import { bindingLabel } from "@/lib/credentials";
 import { usageLine } from "@/lib/usage";
 import { basisText, clientLabel } from "@/lib/policies";
 import {
-  canContinue, canDelete, canRecover, canStop, closeAction, crewEntryReason, deleteReason, directReason, resumeReason, rework, statusText,
+  canContinue, canDelete, canRecover, canStop, closeAction, crewEntryReason, deleteReason, directReason, resumeReason, rework,
+  shareAccess, statusText,
 } from "@/lib/session";
 
 export function SessionView({ id }: { id: string }) {
@@ -140,6 +142,11 @@ export function SessionView({ id }: { id: string }) {
             <FolderDown /> 下载源码
           </Button>
           <ReportButton run={run} />
+          {run.permissions?.share && (
+            <Button size="sm" variant="outline" onClick={() => open({ kind: "run-share", run })} id="run-share">
+              <Share2 /> 共享
+            </Button>
+          )}
           {app?.openable && (
             <Button size="sm" onClick={actions.openApp} id="run-open-app">
               <MonitorPlay /> 打开远程预览
@@ -177,6 +184,7 @@ export function SessionView({ id }: { id: string }) {
         {crewReason && <p id="crew-entry-hint" className="text-xs text-muted-foreground">{crewReason}</p>}
         {run.placement?.hint && <p id="placement-hint" className="text-xs text-muted-foreground">{run.placement.hint}</p>}
         {directReason(run) && <p id="direct-hint" className="text-xs text-muted-foreground">{directReason(run)}</p>}
+        {shareAccess(run) && <p id="share-access" className="text-xs text-muted-foreground">{shareAccess(run)}</p>}
         {workers.find((w) => w.id === run.worker_id)?.scope === "shared" && (
           <p id="shared-environment" className="text-xs text-muted-foreground">共享执行环境：环境内会话的 Agent 互相可读，记忆未分隔。</p>
         )}
@@ -234,7 +242,7 @@ export function SessionView({ id }: { id: string }) {
               : "需求已保存。请选择此开发空间的 Worker 后开始执行。"}
             {run.attention?.workers !== 0 && (
               <Button size="sm" variant="outline" onClick={() => open({ kind: "assign", run })} id="assign-worker"
-                disabled={!!resumeReason(run)}><UserCog /> 分配 Worker</Button>
+                disabled={!!resumeReason(run) || run.permissions?.assign === false}><UserCog /> 分配 Worker</Button>
             )}
           </AlertDescription>
         </Alert>

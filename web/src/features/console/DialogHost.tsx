@@ -4,6 +4,7 @@ import { AssignWorkerDialog, ContinueDialog, ControlDialog } from "@/features/se
 import { CredentialsDialog } from "@/features/settings/CredentialsDialog";
 import { PoliciesDialog } from "@/features/settings/PoliciesDialog";
 import { QuotasDialog } from "@/features/settings/QuotasDialog";
+import { RunShareDialog } from "@/features/sessions/RunShareDialog";
 import { TeamDialog } from "@/features/settings/TeamDialog";
 import { PasswordDialog } from "@/features/settings/PasswordDialog";
 import { TokensDialog } from "@/features/settings/TokensDialog";
@@ -32,6 +33,8 @@ export function DialogHost({ dialog }: { dialog: Dialog | null }) {
       return <PoliciesDialog />;
     case "quotas":
       return <QuotasDialog />;
+    case "run-share":
+      return <RunShareDialog run={dialog.run} />;
     case "workers":
       return <WorkersDialog />;
     case "users":

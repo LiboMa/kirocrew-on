@@ -7,12 +7,12 @@ type Handler = (body: unknown, url: URL, init: RequestInit) => unknown;
 
 /** Routes fetch("/v1/...") to handlers keyed by "METHOD /path"; unmatched calls fail the test loudly. */
 export function mockApi(routes: Record<string, Handler | unknown>) {
-  const calls: { method: string; path: string; body: unknown }[] = [];
+  const calls: { method: string; path: string; body: unknown; query: string }[] = [];
   const fetchMock = vi.fn(async (input: string, init: RequestInit = {}) => {
     const url = new URL(input, "http://console.test");
     const method = init.method ?? "GET";
     const body = init.body ? JSON.parse(init.body as string) : undefined;
-    calls.push({ method, path: url.pathname, body });
+    calls.push({ method, path: url.pathname, body, query: url.search });
     if (url.pathname.endsWith("/events") && url.searchParams.get("stream")) {
       // A "STREAM /runs/<id>/events" route answers the first connection; later reconnects stay pending.
       const stream = routes[`STREAM ${url.pathname.replace(/^\/v1/, "")}`] as (() => Response) | undefined;

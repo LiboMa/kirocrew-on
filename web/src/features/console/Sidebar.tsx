@@ -14,7 +14,8 @@ import { RUN_FILTERS, statusText } from "@/lib/session";
 import { cn } from "@/lib/utils";
 
 export function Sidebar() {
-  const { runs, workflows, selected, select, open, users, me, allTeams, allSessions, setAllSessions, filters, setFilters,
+  const { runs, workflows, selected, select, open, users, me, allTeams, allSessions, setAllSessions, sharedSessions,
+    setSharedSessions, filters, setFilters,
     spaceTotal, hasMore, loadMore, loadingMore, listError } = useConsole();
   // D56: filtered on the server, newest first; the search is sent once typing pauses.
   const [query, setQuery] = useState(filters.q);
@@ -42,13 +43,20 @@ export function Sidebar() {
             <Input value={query} onChange={(e) => setQuery(e.target.value)} placeholder="搜索需求、任务说明、结论或 ID"
               className="h-9 bg-card pl-8" aria-label="搜索会话" type="search" />
           </div>
-          {elevated(me) && (
-            <button type="button" onClick={() => setAllSessions(!allSessions)} aria-pressed={allSessions}
-              className={cn("w-full rounded-md border px-2.5 py-1.5 text-left text-xs transition-colors",
-                allSessions ? "border-primary bg-primary/10 text-primary" : "bg-card text-muted-foreground hover:bg-accent")}>
-              全部会话
+          <div className="flex gap-1.5">
+            <button type="button" onClick={() => setSharedSessions(!sharedSessions)} aria-pressed={sharedSessions}
+              className={cn("flex-1 rounded-md border px-2.5 py-1.5 text-left text-xs transition-colors",
+                sharedSessions ? "border-primary bg-primary/10 text-primary" : "bg-card text-muted-foreground hover:bg-accent")}>
+              共享给我
             </button>
-          )}
+            {elevated(me) && (
+              <button type="button" onClick={() => setAllSessions(!allSessions)} aria-pressed={allSessions}
+                className={cn("flex-1 rounded-md border px-2.5 py-1.5 text-left text-xs transition-colors",
+                  allSessions ? "border-primary bg-primary/10 text-primary" : "bg-card text-muted-foreground hover:bg-accent")}>
+                全部会话
+              </button>
+            )}
+          </div>
           <div className="flex flex-wrap gap-1.5" role="group" aria-label="按状态筛选">
             {RUN_FILTERS.map(([value, label]) => (
               <button key={value} type="button" onClick={() => setFilters({ ...filters, group: value })} aria-pressed={filters.group === value}
@@ -73,7 +81,7 @@ export function Sidebar() {
                   <span>{run.progress.accepted}/{run.progress.total} 交接</span>
                   <span className="ml-auto font-mono">{formatTime(run.updated, true)}</span>
                 </span>
-                {allSessions && <span className="mt-1 block text-[11px] text-muted-foreground">{where(run)}</span>}
+                {(allSessions || sharedSessions) && <span className="mt-1 block text-[11px] text-muted-foreground">{where(run)}</span>}
               </button>
             ))}
             {listError && <p role="alert" className="px-3 py-2 text-xs leading-5 text-destructive">会话列表读取失败：{listError}</p>}

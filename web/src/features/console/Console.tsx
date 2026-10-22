@@ -16,7 +16,10 @@ const runFromUrl = () => new URLSearchParams(window.location.search).get("run");
 
 export function Console() {
   const me = useMe();
-  const [allSessions, setAllSessions] = useState(false);
+  const [allSessions, setAllState] = useState(false);
+  const [sharedSessions, setSharedState] = useState(false);   // D64: what others shared with the user
+  const setAllSessions = useCallback((all: boolean) => { setAllState(all); if (all) setSharedState(false); }, []);
+  const setSharedSessions = useCallback((shared: boolean) => { setSharedState(shared); if (shared) setAllState(false); }, []);
   const workspace = useWorkspace();
   // An administrator sees every Team (D28) but can only switch to and submit in the Teams they belong to.
   const memberTeams = useMemo(() => workspace.teams.filter((t) => t.role != null), [workspace.teams]);
@@ -26,9 +29,10 @@ export function Console() {
   const [navOpen, setNavOpen] = useState(false);
   // D56: the list is filtered and paged on the server; the filters live in the address bar too.
   const [filters, setFiltersState] = useState<RunListFilters>(() => filtersFromUrl(window.location.search));
-  const scope = allSessions ? null : space;
-  const pages = useRunPages(listParams(filters, scope), allSessions);
-  const count = useRunCount(listParams(EMPTY_FILTERS, scope, 1), allSessions);
+  const scope = allSessions || sharedSessions ? null : space;
+  const shared = sharedSessions ? "&shared=1" : "";
+  const pages = useRunPages(listParams(filters, scope) + shared, allSessions);
+  const count = useRunCount(listParams(EMPTY_FILTERS, scope, 1) + shared, allSessions);
   const runs = useMemo(() => pages.data?.pages.flatMap((page) => page.items) ?? [], [pages.data]);
   const chosen = useRun(selected);
 
@@ -79,8 +83,10 @@ export function Console() {
     runTotal: pages.data?.pages[0]?.total ?? 0, spaceTotal: count.data?.total ?? 0, hasMore: !!pages.hasNextPage,
     listError: pages.error?.message ?? null,
     loadMore: () => void pages.fetchNextPage(), loadingMore: pages.isFetchingNextPage, filters, setFilters,
-    space, setSpace, allSessions, setAllSessions, selected, select, open: setDialog, close: () => setDialog(null),
-  } : null, [me.data, workspace, runs, pages, count.data, filters, setFilters, space, setSpace, allSessions, selected, select]);
+    space, setSpace, allSessions, setAllSessions, sharedSessions, setSharedSessions, selected, select, open: setDialog,
+    close: () => setDialog(null),
+  } : null, [me.data, workspace, runs, pages, count.data, filters, setFilters, space, setSpace, allSessions, setAllSessions,
+    sharedSessions, setSharedSessions, selected, select]);
 
   if (!value || workspace.loading || pages.isPending) {
     return (

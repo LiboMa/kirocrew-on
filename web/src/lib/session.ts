@@ -7,6 +7,8 @@ const design = (run: Run) => run.purpose === "workflow_design";
 const resumable = (run: Run) => run.permissions?.resume !== false;
 /** D49 R10: on a person's own boundary only they give the work its instructions. */
 const directed = (run: Run) => run.permissions?.direct !== false;
+/** D64: a viewer (a share) reads the Session and operates nothing. */
+const operable = (run: Run) => run.permissions?.operate !== false;
 
 /** Why continuing, diagnosing, confirming, notes and approvals are not offered: another member's boundary (D49 R10). */
 export function directReason(run: Run): string {
@@ -15,7 +17,7 @@ export function directReason(run: Run): string {
 
 
 export function canContinue(run: Run): boolean {
-  return !ACTIVE_STATES.has(run.status) && open(run) && !design(run) && resumable(run) && directed(run);
+  return !ACTIVE_STATES.has(run.status) && open(run) && !design(run) && resumable(run) && directed(run) && operable(run);
 }
 
 /** D46 P3: not passing what the Evaluator left to a person reworks the change it reviewed, with the open items in hand. */
@@ -59,19 +61,25 @@ export function canRetryTask(run: Run, index: number): boolean {
 }
 
 export function canRecover(run: Run): boolean {
-  return !design(run) && !ACTIVE_STATES.has(run.status) && open(run) && resumable(run) && directed(run) &&
+  return !design(run) && !ACTIVE_STATES.has(run.status) && open(run) && resumable(run) && directed(run) && operable(run) &&
     ["blocked", "failed", "stopped"].includes(run.status) && !!run.native_parent &&
     run.tasks.some((task) => task.status !== "accepted" && (task.attempts?.length ?? 0) > 0);
 }
 
 export function canStop(run: Run): boolean {
-  return open(run) && run.status !== "stopped" && run.status !== "stopping";
+  return open(run) && run.status !== "stopped" && run.status !== "stopping" && operable(run);
 }
 
 export function closeAction(run: Run): { action: "close" | "reopen"; label: string; disabled: boolean } {
   const closed = run.lifecycle === "closed";
   return { action: closed ? "reopen" : "close", label: closed ? "重新打开" : "关闭",
-    disabled: run.lifecycle === "deleted" || run.status === "stopping" || (closed && !resumable(run)) };
+    disabled: run.lifecycle === "deleted" || run.status === "stopping" || (closed && !resumable(run)) || !operable(run) };
+}
+
+/** D64: how a user reached a Session they did not create through a share, for the header. */
+export function shareAccess(run: Run): string {
+  if (run.access?.via !== "share") return "";
+  return `你以${run.access.role === "collaborator" ? "协作" : "查看"}身份访问此会话${run.access.by ? `（由 ${run.access.by} 共享）` : ""}`;
 }
 
 export function canDelete(run: Run): boolean {
