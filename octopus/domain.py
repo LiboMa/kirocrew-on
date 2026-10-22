@@ -2110,6 +2110,7 @@ class Service:
                                                        "publish_target", "publish_suggestion", "placement")})
         value["source"] = json.loads(value["source"])
         value["session_id"] = run["id"]
+        value["quota_wait"] = quotas.waiting(snapshot, run) or None if run["status"] == "ready" else None   # D61
         creator = db.execute("SELECT username FROM users WHERE id=?", (run["owner_id"],)).fetchone()
         value["created_by"] = {"id": run["owner_id"], "username": creator["username"] if creator else None}
         from . import credentials as repo_credentials
@@ -2235,8 +2236,8 @@ class Service:
             return {"title": "协调者正在诊断与安排修复", "detail": run["error"] or "正在读取失败证据，等待原生诊断结果。",
                     "action": "等待诊断结果；也可停止本 Session", "task_id": task["id"] if task else None}
         if run["status"] != "blocked":
-            from .waiting import queue_attention
-            return queue_attention(run, task)
+            from .waiting import queue_attention, quota_attention
+            return queue_attention(run, task) or quota_attention(run)
         attempt = (task.get("attempts") or [{}])[-1] if task else {}
         failure = attempt.get("evidence", {}).get("failure_type")
         from .waiting import handed_over, kiro_login_failure

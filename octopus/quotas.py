@@ -4,6 +4,7 @@ person's own limit; a Team's owner (or an administrator) the Team's. A scope nob
 A running task is an Attempt — or a Coordinator's diagnosis — that holds a native run or its check commands, in a
 Session that still goes on: what a stopped, closed or blocked Session left behind (a disabled Worker's ``running`` row)
 holds no place."""
+import json
 import time
 
 from .security import require
@@ -12,6 +13,7 @@ LIMITS = (1, 50)
 RUNNING = ("dispatching", "running", "waiting_approval", "dispatch_unknown")
 SETTLED = ("blocked", "failed", "stopped", "completed", "waiting_worker")
 SCOPES = ("default", "user", "team")
+SEEN, REFRESH = 180, 60   # a wait counts for the order while it was seen this recently; it is seen again this often
 
 
 def _limit(db, scope, subject):
@@ -45,6 +47,24 @@ def full(db, run):
         team = db.execute("SELECT name FROM teams WHERE id=?", (run["team_id"],)).fetchone()
         return {"scope": "team", "limit": limit["team"], "used": used, "team_name": team["name"] if team else run["team_id"]}
     return None
+
+
+def waiting(snapshot, run):
+    """The Session's wait for a place (``quota_wait`` in its snapshot), if it is current: a stop or a continue since (a new
+    version) starts the turn again."""
+    mark = snapshot.get("quota_wait") or {}
+    return mark if mark.get("version") == run["version"] else {}
+
+
+def ahead(db, run, since, now):
+    """Another Session of the same person or Team waited longer than ``since``, is still waiting and has room now: it goes
+    first (the Engine advances Sessions on several threads, in no order of their waits)."""
+    for other in db.execute("SELECT * FROM runs WHERE id!=? AND status='ready' AND desired='active' AND lifecycle='open' "
+                            "AND (owner_id=? OR team_id=?)", (run["id"], run["owner_id"], run["team_id"] or "")):
+        mark = waiting(json.loads(other["snapshot"]), other)
+        if mark and mark["since"] < since and now - mark.get("seen", 0) <= SEEN and full(db, other) is None:
+            return True
+    return False
 
 
 def parse(body):

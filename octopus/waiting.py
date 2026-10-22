@@ -26,6 +26,22 @@ def queue_title(reason):
     return "排队：等待执行环境资源（" + QUEUE_REASONS.get(reason, "执行环境资源不足") + "）"
 
 
+def quota_title(full, team_session):
+    """The wait for a place under a limit (D61), naming the scope that is full."""
+    who = (f"Team「{full.get('team_name')}」" if full["scope"] == "team" else "提交者" if team_session else "你")
+    return f"排队：已达到并发上限（{who}同时运行的任务已达 {full['used']} 个，上限 {full['limit']}）"
+
+
+def quota_attention(run):
+    mark = run.get("quota_wait") if run["status"] == "ready" else None
+    if not mark:
+        return None
+    return {"title": quota_title(mark, bool(run.get("team_id"))),
+            "detail": "同时运行的任务数已到上限，此会话的下一个任务在排队。",
+            "action": "无需操作：有任务结束后按排队先后自动开始；需要更多并发请联系平台管理员"
+                      + ("或 Team owner。" if mark["scope"] == "team" else "。"), "task_id": None}
+
+
 def queue_attention(run, task):
     """「需要处理」 of a Session whose running task KiroCrew deferred (D60): nothing to do, it starts on its own."""
     mark = ((((task or {}).get("attempts") or [{}])[-1].get("evidence") or {}).get("queued") or {}) \

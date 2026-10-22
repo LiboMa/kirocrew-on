@@ -9,7 +9,7 @@ import time
 
 from .db import dumps, uid
 from .transport import worker_request
-from . import evaluation, gates, journal, knowledge, planning, recovery, waiting
+from . import evaluation, gates, journal, knowledge, planning, quotas, recovery, waiting
 from .security import Error
 from .domain import CONTRACT, awaits_confirmation, unserved
 from .gates import BLOCKED
@@ -433,6 +433,41 @@ class Engine:
             self.update(run["id"], run["status"], message)
         else:
             self.update(run["id"], "blocked", message)
+
+    def _quota_wait(self, db, run):
+        """D61: before a Session's next task starts — in the write that would create its Attempt, so two Sessions cannot
+        take one place — the person's and the Team's running tasks are counted. Full, or a Session that waited longer has
+        room now: it waits (recorded once, refreshed now and then for the order). Its turn: the wait ends, and its time is
+        not counted in the time budget. True while it waits."""
+        snapshot, now = json.loads(run["snapshot"]), time.time()
+        mark = quotas.waiting(snapshot, run)
+        full = quotas.full(db, run)
+        if full is None and not quotas.ahead(db, run, mark.get("since", now), now):
+            if mark:
+                since = snapshot.get("budget_since") or run["created"]
+                snapshot["budget_waited"] = (snapshot.get("budget_waited") or 0) + max(0.0, now - max(mark["since"], since))
+            if "quota_wait" in snapshot:
+                del snapshot["quota_wait"]
+                if mark:
+                    journal.change(db, "runs", run["id"], journal.ENGINE, "run.quota_go", "有空位，开始下一个任务",
+                                   event={"waited": round(now - mark["since"])}, quiet=("snapshot",), snapshot=dumps(snapshot),
+                                   error=None, updated=now)
+                else:   # a wait from before a stop or a continue: it is not this turn's
+                    journal.change(db, "runs", run["id"], journal.ENGINE, "run.quota_wait", quiet=("snapshot",),
+                                   snapshot=dumps(snapshot))
+            return False
+        if full is None:
+            return True   # a place, but someone waited longer: it takes it first
+        text = waiting.quota_title(full, bool(run["team_id"]))
+        if not mark:
+            snapshot["quota_wait"] = {"since": now, "seen": now, "version": run["version"], **full}
+            journal.change(db, "runs", run["id"], journal.ENGINE, "run.quota_wait", text, event=full, quiet=("snapshot",),
+                           snapshot=dumps(snapshot), error=text, updated=now)
+        elif now - mark.get("seen", 0) >= quotas.REFRESH or run["error"] != text:
+            snapshot["quota_wait"] = {**mark, **full, "seen": now}
+            journal.change(db, "runs", run["id"], journal.ENGINE, "run.quota_wait", quiet=("snapshot", "error"),
+                           snapshot=dumps(snapshot), error=text)   # seen again: nothing new to record
+        return True
 
     def _queue(self, run, task, attempt, prior, queued):
         """A native run KiroCrew deferred (D60): shown on the Session as a queue — the kind of wait, not the host's numbers —
@@ -950,6 +985,8 @@ class Engine:
                 journal.change(db, "runs", rid, journal.ENGINE, "run.awaiting_confirmation", "计划待确认",
                                event={"status": "awaiting_confirmation"}, status="awaiting_confirmation", updated=time.time())
                 return
+            if attempt is None and self._quota_wait(db, fresh):
+                return   # D61: the person's or the Team's running tasks are at their limit
             if attempt is None:
                 if evaluation.refresh(db, rid, task, json.loads(fresh["snapshot"]), config):   # D46 P3: today's items
                     task = db.execute("SELECT * FROM tasks WHERE run_id=? AND id=?", (rid, task["id"])).fetchone()

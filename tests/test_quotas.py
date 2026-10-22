@@ -8,6 +8,7 @@ from octopus import quotas
 from octopus.db import dumps
 from octopus.security import Error
 from tests.test_access import AccessCase
+from tests.test_watchdog import WatchdogCase
 
 
 class QuotaCase(AccessCase):
@@ -156,6 +157,171 @@ class PermissionTests(QuotaCase):
         document = openapi()
         self.assertEqual(set(document["paths"]["/v1/quotas"]), {"get", "post"})
         self.assertEqual(set(document["components"]["schemas"]["Quota"]["properties"]), {"scope", "id", "running"})
+
+
+
+class EngineQuotaTests(WatchdogCase):
+    """The owner's Sessions on one Worker; a Session's tasks run until ``finish`` says they are done."""
+    def setUp(self):
+        super().setUp()
+        self.signal, self.done, self.exit_once = False, set(), set()
+        self.engine.workers = 4
+        from concurrent.futures import ThreadPoolExecutor
+        self.engine.pool = ThreadPoolExecutor(max_workers=4)
+
+    def request(self, config, path, body, **kwargs):
+        if path == "/inspect" and body["run_id"] in self.exit_once:
+            self.exit_once.discard(body["run_id"])
+            self.calls.append((path, body))
+            return {"native": {"done": True, "error": "ACP process exited", "result": ""}, "evidence": {}, "handoff": ""}
+        if path == "/inspect" and body["run_id"] in self.done:
+            self.calls.append((path, body))
+            return {"native": {"done": True, "result": "完成"}, "evidence": {"actual_backend": "claude"}, "handoff": "交接",
+                    "outcome": dumps({"decision": "pass", "summary": "完成并验证", "failure_type": "none", "findings": []})}
+        return super().request(config, path, body, **kwargs)
+
+    def limit(self, scope, subject, running):
+        with self.db.transaction() as db:
+            quotas.store(db, self.actor, scope, subject, running)
+
+    def started(self, n):
+        return [self.start(request=f"quota-fixture-{i}") for i in range(n)]
+
+    def attempts(self, rid):
+        with self.db.read() as db:
+            return [dict(r) for r in db.execute("SELECT status, task_id FROM attempts WHERE run_id=? ORDER BY created", (rid,))]
+
+    def kinds(self, rid):
+        with self.db.read() as db:
+            return [r[0] for r in db.execute("SELECT kind FROM events WHERE run_id=? ORDER BY id", (rid,))]
+
+    def ticks(self, n=3):
+        for _ in range(n):
+            self.engine.tick()
+
+    def test_over_the_limit_the_next_task_waits(self):
+        self.limit("user", self.actor["id"], 1)
+        first = self.start()
+        self.ticks()
+        second = self.start(request="quota-fixture-2")
+        self.ticks(4)
+        self.assertEqual([a["status"] for a in self.attempts(first)], ["running"])
+        self.assertEqual(self.attempts(second), [])
+        run = self.service.run(self.actor, second)
+        text = "排队：已达到并发上限（你同时运行的任务已达 1 个，上限 1）"
+        self.assertEqual((run["status"], run["error"]), ("ready", text))
+        self.assertEqual(run["attention"]["title"], text)
+        self.assertIn("无需操作", run["attention"]["action"])
+        self.assertEqual(self.kinds(second).count("run.quota_wait"), 1)
+
+    def test_it_starts_when_a_task_ends(self):
+        self.limit("user", self.actor["id"], 1)
+        first = self.start()
+        self.ticks()
+        second = self.start(request="quota-fixture-2")
+        self.ticks()
+        self.done.add(first)
+        self.ticks(4)
+        self.assertTrue(self.attempts(second))
+        self.assertIn("run.quota_go", self.kinds(second))
+        run = self.service.run(self.actor, second)
+        self.assertIsNone(run["error"])
+        with self.db.read() as db:
+            snapshot = json.loads(db.execute("SELECT snapshot FROM runs WHERE id=?", (second,)).fetchone()[0])
+        self.assertNotIn("quota_wait", snapshot)
+        self.assertGreater(snapshot["budget_waited"], 0)
+
+    def test_two_ready_sessions_and_one_place(self):   # both advance in the same tick, on two threads
+        self.limit("default", "", 1)
+        runs = self.started(2)
+        self.ticks()
+        self.assertEqual(sum(bool(self.attempts(rid)) for rid in runs), 1)
+
+    def test_the_one_that_waited_longer_goes_first(self):
+        self.limit("user", self.actor["id"], 1)
+        first = self.start()
+        self.ticks()
+        second = self.start(request="quota-fixture-2")
+        self.ticks()
+        third = self.start(request="quota-fixture-3")
+        self.ticks()
+        self.done.add(first)
+        self.ticks(4)
+        self.assertTrue(self.attempts(second))
+        self.assertEqual(self.attempts(third), [])
+
+    def test_a_stopped_waiter_does_not_hold_the_others(self):
+        self.limit("user", self.actor["id"], 1)
+        first = self.start()
+        self.ticks()
+        second = self.start(request="quota-fixture-2")
+        self.ticks()
+        third = self.start(request="quota-fixture-3")
+        self.ticks()
+        version = self.service.run(self.actor, second)["version"]
+        self.service.operate(self.actor, second, "stop", {"request_id": "quota-stop-0001", "expected_version": version})
+        self.done.add(first)
+        self.ticks(4)
+        self.assertTrue(self.attempts(third))
+
+    def test_a_waiter_not_seen_for_long_does_not_hold_the_order(self):   # e.g. its Worker backs off: it is not looked at
+        self.limit("user", self.actor["id"], 1)
+        first = self.start()
+        self.ticks()
+        second = self.start(request="quota-fixture-2")
+        self.ticks()
+        third = self.start(request="quota-fixture-3")
+        self.ticks()
+        self.engine.backoff[second] = (1, self.engine.clock() + 10_000)
+        with self.db.transaction() as db:
+            snapshot = json.loads(db.execute("SELECT snapshot FROM runs WHERE id=?", (second,)).fetchone()[0])
+            snapshot["quota_wait"]["seen"] -= 1000
+            db.execute("UPDATE runs SET snapshot=? WHERE id=?", (dumps(snapshot), second))
+        self.done.add(first)
+        self.ticks(4)
+        self.assertTrue(self.attempts(third))
+
+    def test_a_teams_limit_names_the_team(self):
+        with self.db.transaction() as db:
+            db.execute("INSERT INTO teams(id,name,created) VALUES('team-q','编排组',0)")
+            db.execute("INSERT INTO members VALUES('team-q',?,'owner')", (self.actor["id"],))
+            db.execute("INSERT INTO worker_spaces(worker_id,team_id) VALUES('worker','team-q')")
+        self.limit("team", "team-q", 1)
+        runs = self.started(2)
+        with self.db.transaction() as db:
+            db.execute("UPDATE runs SET team_id='team-q'")
+        self.ticks(4)
+        waiting = next(rid for rid in runs if not self.attempts(rid))
+        self.assertEqual(self.service.run(self.actor, waiting)["error"],
+                         "排队：已达到并发上限（Team「编排组」同时运行的任务已达 1 个，上限 1）")
+
+    def test_lowering_the_limit_keeps_what_runs(self):
+        runs = self.started(2)
+        self.ticks()
+        self.limit("user", self.actor["id"], 1)
+        self.ticks(3)
+        self.assertEqual([[a["status"] for a in self.attempts(rid)] for rid in runs], [["running"], ["running"]])
+        self.assertEqual(self.stops(), [])
+        third = self.start(request="quota-fixture-3")
+        self.ticks(3)
+        self.assertEqual(self.attempts(third), [])
+
+    def test_an_automatic_retry_does_not_wait(self):   # it takes the place of the Attempt that just ended
+        self.limit("user", self.actor["id"], 1)
+        first = self.start()
+        self.ticks()
+        second = self.start(request="quota-fixture-2")
+        self.ticks()
+        self.exit_once.add(first)
+        self.ticks(3)
+        self.assertEqual([a["status"] for a in self.attempts(first)], ["blocked", "running"])
+        self.assertEqual(self.attempts(second), [])
+
+    def test_without_limits_nothing_changes(self):
+        runs = self.started(2)
+        self.ticks()
+        self.assertTrue(all(self.attempts(rid) for rid in runs))
+        self.assertFalse(any(k.startswith("run.quota") for rid in runs for k in self.kinds(rid)))
 
 
 if __name__ == "__main__":
