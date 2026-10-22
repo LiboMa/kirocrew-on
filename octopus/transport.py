@@ -19,12 +19,19 @@ def configure(ca_file):
 
 
 _KEY = None   # D59: the D35 key that opens a Worker's sealed token (set by the platform at start)
+_OPENED = {}   # sealed → token: opened once per process (an openssl run each Worker call was ~33 ms)
 
 
 def configure_key(key_path):
     """The key that opens sealed Worker tokens (D59); ``configure`` above is the Worker TLS authority."""
     global _KEY
     _KEY = key_path
+    forget()
+
+
+def forget():
+    """Drop the tokens opened so far (a new key, or a test)."""
+    _OPENED.clear()
 
 
 def connection(config):
@@ -37,8 +44,12 @@ def connection(config):
     try:
         if not sealed or _KEY is None:
             raise vault.VaultError("没有可用的访问凭据")
-        return {"url": config["url"], "token": vault.open_(_KEY, sealed)}
-    except vault.VaultError:
+        if sealed not in _OPENED:
+            if len(_OPENED) > 256:
+                _OPENED.clear()
+            _OPENED[sealed] = vault.open_(_KEY, sealed)
+        return {"url": config["url"], "token": _OPENED[sealed]}
+    except (vault.VaultError, OSError):   # a key file gone or unreadable is the same answer
         raise Error(503, "worker_secret", "执行环境的访问凭据无法解开：请平台管理员重新连接该执行环境") from None
 
 

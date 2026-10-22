@@ -87,7 +87,8 @@ def upstream(config, port, via):
                 and 1 <= via["port"] <= 65535 and isinstance(via.get("name"), str) and NAME.fullmatch(via["name"]),
                 "Worker 报告的预览端口或名称无效", 502, "worker_invalid")
     require(via, "此 Worker 主机尚未配置预览端口：请平台管理员为它配置远程预览", 409, "app_unreachable")
-    return {"url": f"https://{host}:{via['port']}", "name": via["name"], "verify": verify_value(config["token"]),
+    from .transport import connection   # D59: the stored token is sealed
+    return {"url": f"https://{host}:{via['port']}", "name": via["name"], "verify": verify_value(connection(config)["token"]),
             "port": port}
 
 

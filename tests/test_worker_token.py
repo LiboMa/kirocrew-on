@@ -73,6 +73,30 @@ class TransportTests(unittest.TestCase):
         self.assertEqual(transport._KEY, self.key)
         self.assertIsNone(transport._context)
 
+    def test_a_missing_key_file_is_the_same_answer(self):   # final review I1: FileNotFoundError leaked as a 500
+        config = {"url": self.url, "token_sealed": vault.seal(self.key, TOKEN)}
+        Path(self.key).unlink()
+        transport.forget()
+        with self.assertRaises(Error) as caught:
+            transport.worker_request(config, "/x", {})
+        self.assertEqual((caught.exception.status, caught.exception.code), (503, "worker_secret"))
+
+    def test_a_sealed_token_is_opened_once_per_process(self):   # final review M2: an openssl run per Worker call
+        from unittest import mock
+        config = {"url": self.url, "token_sealed": vault.seal(self.key, TOKEN)}
+        transport.forget()
+        with mock.patch.object(vault, "open_", wraps=vault.open_) as opened:
+            for _ in range(3):
+                transport.worker_request(config, "/x", {})
+        self.assertEqual(opened.call_count, 1)
+
+    def test_a_remote_preview_upstream_reads_the_sealed_token(self):   # final review C2: KeyError 'token' on remote Workers
+        from octopus import remote_preview
+        sealed = {"url": "https://10.42.1.50:8943", "token_sealed": vault.seal(self.key, TOKEN)}
+        plain = {"url": "https://10.42.1.50:8943", "token": TOKEN}
+        via = {"port": 8945, "name": "w1.worker.kirocrew-on"}
+        self.assertEqual(remote_preview.upstream(sealed, 0, via), remote_preview.upstream(plain, 0, via))
+
     def test_the_connection_is_url_and_token(self):
         sealed = {"url": self.url, "token_sealed": vault.seal(self.key, TOKEN), "capabilities": {"x": 1}}
         self.assertEqual(transport.connection(sealed), {"url": self.url, "token": TOKEN})
@@ -134,6 +158,31 @@ class SealedOnWriteTests(AccessCase):
 
 
 class SealedAtStartTests(AccessCase):
+    def setUp(self):
+        super().setUp()
+        self.addCleanup(transport.configure_key, None)   # server() sets the module's key: not for the next test
+
+    def test_an_unreadable_key_does_not_keep_the_platform_down(self):   # final review I2
+        from octopus.server import server
+        app = server(self.db, 0, credentials_key_file=str(Path(self.db.root) / "missing.key"))
+        app.server_close()
+        with self.assertRaises(Error) as caught:
+            transport.worker_request({"url": "http://127.0.0.1:9", "token_sealed": "v1.a.b"}, "/x", {})
+        self.assertEqual(caught.exception.code, "worker_secret")
+
+    def test_no_plaintext_is_left_in_the_database_files(self):   # final review M3: free pages and the WAL kept it
+        from octopus.server import server
+        secret = "q" * 40
+        with self.db.transaction() as db:
+            db.execute("INSERT INTO workers(id,name,owner_id,config,scope) VALUES('older','older',?,?,'dedicated')",
+                       (self.b["id"], dumps({"url": "https://10.0.0.9:8943", "token": secret, "capabilities": {}})))
+        app = server(self.db, 0)
+        app.server_close()
+        for name in ("octopus.sqlite3", "octopus.sqlite3-wal"):
+            path = Path(self.db.root) / name
+            if path.exists():
+                self.assertNotIn(secret.encode(), path.read_bytes(), name)
+
     def test_plaintext_from_before_is_sealed_once(self):
         from octopus import workers
         from octopus.server import server

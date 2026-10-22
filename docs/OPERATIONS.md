@@ -304,7 +304,7 @@ CloudFront 只使用 us-east-1 的证书）：分发加上别名与证书（SNI�
   - 平台：管理员管理，并授权给 Team 或用户（`POST|DELETE /v1/credentials/<id>/grants`）。
   - 看不到为 404，不能管理为 403。
 - **秘密只写**：创建或轮换时提交，之后只返回元数据与末 4 位，审计 `credential.*` 不含秘密。MCP 不创建凭证。
-- **Worker Token（D59，K10）**：各执行环境的访问 Token 也用这把主密钥密封（`workers.config.token_sealed`），数据库里不再有明文；平台只在调用 Worker 时解开。升级到 D59 的那次启动会把已有的明文一次性密封（可重复执行）。主密钥丢失或被换时 Worker 调用返回 503 `worker_secret`：放回原密钥，或在控制台「执行环境」中重新连接（更新连接）各环境。
+- **Worker Token（D59，K10）**：各执行环境的访问 Token 也用这把主密钥密封（`workers.config.token_sealed`），数据库里不再有明文；平台只在调用 Worker 时解开（每个进程解开一次后留在内存）。升级到 D59 的那次启动会把已有的明文一次性密封（可重复执行）。D59 之前的数据库备份（每日备份与迁移前备份）仍含明文：确认新版本运行正常后删除它们，或重新注册各执行环境以轮换 Token。主密钥丢失、不可读或被换时平台照常启动，但调用使用密封 Token 的 Worker 返回 503 `worker_secret`：放回原密钥后重启平台；原密钥找不回时，在各 Worker 主机上重新注册（`deploy.sh worker-host register <名称>`，本机边界 `octopus bootstrap-worker`），平台用新密钥重新密封；代码仓库凭证需逐个轮换。
 - **主密钥**：`/etc/kirocrew-on/credentials.key`（root:octopus 0640，安装脚本首次生成，不在 SSM、不进备份）。数据库备份只含密文：
   恢复到另一台主机时，须把同一个主密钥文件放到同一路径（`platform.toml` 的 `credentials_key_file`），否则现有凭证无法解密，
   需要逐个轮换。主密钥丢失后，现有凭证无法恢复，只能逐个轮换（重新录入 Token）。
