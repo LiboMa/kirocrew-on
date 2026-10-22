@@ -71,6 +71,11 @@ def handoff(row):
         item["candidate"] = {"sha": str(candidate["sha"])[:12], "files": (candidate.get("names") or [])[:30]}
     if evidence.get("check_results"):
         item["checks"] = [{"command": clip(r.get("command"), 200), "exit": r.get("exit")} for r in evidence["check_results"][:10]]
+    # D57 §4: what its gates only warned of (an accepted task's files it changed, no change, …), for the review that follows
+    warned = [{"name": g.get("name"), **({"detail": clip(g["detail"], 200)} if g.get("detail") else {}),
+               **({"files": list(g["files"])[:30]} if g.get("files") else {})} for g in gates.warnings(evidence.get("gates"))]
+    if warned:
+        item["warnings"] = warned[:10]
     return item
 
 

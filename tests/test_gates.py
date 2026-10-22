@@ -107,10 +107,41 @@ class BasicGateTests(unittest.TestCase):
                 self.assertEqual(self.names(records)[-2:], [("outcome_valid", "warn"), ("outcome_pass", "fail")])
                 self.assertEqual(records[-1]["detail"], message)
 
+    def test_the_common_ways_of_stating_a_rejection_are_read(self):   # review of D57 §4: decorated, headed, spelled
+        def told(decision):
+            return f"结果写明了 {decision}，但结果文件不合法：outcome.json 无效"
+        cases = (   # (outcome file, reply, the decision it states)
+            ("", "**Decision:** changes_requested", "changes_requested"),
+            ("", "**结论**：changes_requested", "changes_requested"),
+            ("", "Verdict: `changes_requested`", "changes_requested"),
+            ("", "结论： **changes_requested**", "changes_requested"),
+            ("", "审查完成。\n\n## 结论\n\nchanges_requested — 2 项必须修复", "changes_requested"),
+            ("", "## Decision\n\n**Blocked**：缺少数据库地址", "blocked"),
+            ('{"decision": "changes requested"}', "完成", "changes_requested"),
+            ('{"decision": "changes-requested"}', "完成", "changes_requested"),
+            ('{"decision": "Changes - Requested", "summary": ""}', "完成", "changes_requested"),
+            ('{"status": "changes_requested"}', "完成", "changes_requested"),   # the wrong key
+            ('{"result": "blocked"}', "完成", "blocked"),
+            ('{"decision": "fail"}', "完成", "fail"),   # before D57 any decision but pass failed
+            ('{"verdict": "Rejected"}', "完成", "rejected"),
+            ('"changes_requested"', "完成", "changes_requested"),   # a bare JSON string
+            ("", "decision: fail", "fail"),   # fail / rejected as the value of a decision-like key
+            ("", "**结论**：rejected", "rejected"),
+            ('{"outcome": {"decision": "changes_requested"}}', "完成", "changes_requested"),   # nested: read as text
+        )
+        for outcome, text, decision in cases:
+            with self.subTest(outcome=outcome, text=text):
+                error, kind, records = judge(native={**DONE, "result": text}, invalid="outcome.json 无效", outcome=outcome)
+                self.assertEqual((error, kind), (told(decision), "implementation"))
+                self.assertEqual(self.names(records)[-2:], [("outcome_valid", "warn"), ("outcome_pass", "fail")])
+
     def test_an_invalid_outcome_without_a_stated_decision_passes_with_a_warning(self):
         for outcome, text in (('{"decision": "maybe"}', "完成"), ('{"decision": "pass", "summary": ""}', "完成"),
                               ("不是 JSON", "已按审查的 changes_requested 意见修复，测试通过"),   # mentioned, not stated
-                              ('{"decision": "pass", "summary": "不再 blocked", "failure_type": "x"}', "完成")):
+                              ('{"decision": "pass", "summary": "不再 blocked", "failure_type": "x"}', "完成"),
+                              # fail / rejected in prose, or a word that only starts like one, is not a verdict
+                              ("", "3 个测试曾经 fail，现已修复"), ("", "rejected 的请求已重试\nfail"),
+                              ("", "## 结论\n\nFailing 的用例已修复"), ('{"decision": "pass", "note": "failover"}', "完成")):
             with self.subTest(outcome=outcome, text=text):
                 error, _, records = judge(native={**DONE, "result": text}, invalid="outcome.json 无效", outcome=outcome)
                 self.assertIsNone(error)

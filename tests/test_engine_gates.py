@@ -395,6 +395,24 @@ class EngineGateTests(TeamsWorkersCase):
         self.assertEqual(self.gates(evidence)["checks_pass"], "pass")   # the gates after it still judged
         self.assertEqual([w["name"] for w in evidence["warnings"]], ["artifacts_locked"])
 
+    def test_the_review_that_follows_is_told_the_upstream_warnings(self):   # D57 §4: 「交给后续审查」
+        worker = FakeWorker()
+        names = {"code": ["src/a.py"], "docs": ["src/a.py", "README.md"]}
+        worker.candidate = lambda body: {"sha": {"code": C1, "docs": "d" * 40}[worker.dispatched[body["attempt_id"]]["spec"]["id"]],
+                                         "parent": body.get("parent", BASE), "changed": True, "files": 2, "insertions": 1,
+                                         "deletions": 0, "rewritten": False, "secrets": [],
+                                         "names": names[worker.dispatched[body["attempt_id"]]["spec"]["id"]]}
+        docs = {"id": "docs", "name": "文档", "tool": "claude", "prompt": "写文档", "kind": "deliver",
+                "acceptance": ["有文档"], "paths": ["README.md"]}
+        self.session([{**IMPLEMENT, "verify": []}, docs, {**REVIEW, "tool": "codex"}])
+        self.run_engine(worker, ticks=24)
+        review = [b for b in worker.dispatched.values() if b["spec"]["id"] == "review"][0]
+        upstream = {u["id"]: u for u in review["upstream"]}
+        self.assertNotIn("warnings", upstream["code"])   # nothing to note
+        warned, = upstream["docs"]["warnings"]
+        self.assertEqual((warned["name"], warned["files"]), ("artifacts_locked", ["src/a.py"]))
+        self.assertIn("「实现」的交付物：src/a.py", warned["detail"])
+
     def test_a_locked_file_warning_starts_no_diagnosis(self):
         """docs changes the implementation's src/a.py without listing it: a warning, and no Coordinator is asked (D57 §4;
         D54's paths_add is kept for Attempts blocked before it, and checked below)."""

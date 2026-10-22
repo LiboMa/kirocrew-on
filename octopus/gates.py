@@ -18,12 +18,23 @@ INSTALLS = re.compile(r"\b(?:npm|pnpm|yarn|bun)\s+(?:i|install|ci|add)\b|\bpip3?
 
 # A warn (D57 §4) is recorded and shown like any verdict but passes: it neither blocks the task nor starts recovery.
 STATUSES = ("pass", "warn", "fail", "skip")
-# D57 §4: what an invalid outcome (or the reply) still says of the verdict — `"decision": "changes_requested"`, a
-# `结论：blocked`, or the word alone on a line. A malformed file never turns a rejection into a pass; a mention in prose
-# ("按 changes_requested 的意见修复") is not a verdict.
+# D57 §4: what an invalid outcome (or the reply) still says of the verdict. A malformed file never turns a rejection into
+# a pass; a mention in prose ("按 changes_requested 的意见修复", "不再 blocked") is not a verdict.
 REJECTIONS = ("changes_requested", "blocked")
-STATED = re.compile(r"""(?i)(?:\bdecision\b|\bverdict\b|结论|决定)["']?\s*[:：=]\s*["']?(changes_requested|blocked)\b""")
-ALONE = re.compile(r"""(?im)^[\s>#*_`"'-]*(changes_requested|blocked)[\s*_`"'.。!！]*$""")
+# Before D57 any decision but pass failed: fail / rejected count as well, but only where a verdict is written — a top-level
+# JSON value or the value of a decision-like key (a heading included) — never as a word on its own.
+VERDICTS = REJECTIONS + ("fail", "rejected")
+_DECO = r"""[\s*_`"'“”‘’]*"""   # Markdown and quotes around the key, the separator and the value
+_KEY = r"(?:\bdecision\b|\bverdict\b|结论|决定)"
+_VALUE = r"(changes[ \t_-]*requested|blocked|fail|rejected)\b"
+STATED = re.compile(rf"(?i){_KEY}{_DECO}[:：=]{_DECO}{_VALUE}")   # **Decision:** changes_requested, 结论：`blocked`
+HEADED = re.compile(rf"""(?im)^[ \t]*#{{1,6}}[ \t]*[*_`"']*{_KEY}[ \t*_`"':：]*\n(?:[ \t]*\n)*[ \t>*_`"'-]*{_VALUE}""")   # ## 结论 …
+ALONE = re.compile(r"""(?im)^[ \t>#*_`"'-]*(changes[ \t_-]*requested|blocked)[ \t*_`"'.。!！]*$""")   # alone on a line
+
+
+def verdict(value):
+    """A decision as written, compared as a token: lower case, runs of spaces, - and _ as one _."""
+    return re.sub(r"[\s_-]+", "_", value.strip().lower()) if isinstance(value, str) else ""
 
 
 def record(name, status, detail=None):
@@ -39,7 +50,8 @@ def warnings(records):
 
 def stated(outcome, text):
     """(decision, summary, failure_type) of a rejection an invalid outcome still states — in the file, then in the reply
-    — or None when neither states one. The summary and failure_type are the file's when the file states it and they can
+    — or None when neither states one. A file that parses as JSON states one when its decision, or any other top-level
+    string, is exactly a verdict token. The summary and failure_type are the file's when the file states it and they can
     be read; otherwise none and implementation."""
     from .recovery import FAILURES
     outcome = outcome if isinstance(outcome, str) else ""
@@ -47,21 +59,22 @@ def stated(outcome, text):
         value = json.loads(outcome) if outcome.strip() else None
     except ValueError:
         value = None
-    value = value if isinstance(value, dict) else {}
-    named = value["decision"].strip().lower() if isinstance(value.get("decision"), str) else ""
-    for index, source in enumerate((outcome, text or "")):
-        found = named if index == 0 and named in REJECTIONS else None
-        if not found:
-            match = STATED.search(source) or ALONE.search(source)
-            found = match and match.group(1).lower()
-        if not found:
-            continue
-        if index:   # only the reply says so: nothing of the file is taken
-            return found, None, "implementation"
-        summary = value.get("summary").strip()[:8000] if isinstance(value.get("summary"), str) else ""
-        failure = value.get("failure_type") if value.get("failure_type") in FAILURES - {"none"} else "implementation"
-        return found, summary or None, failure
-    return None
+    file = value if isinstance(value, dict) else {}
+    named = [file.get("decision"), *file.values()] if file else [value]   # the decision key first
+    found = next((verdict(v) for v in named if verdict(v) in VERDICTS), None)
+    if not found:
+        for index, source in enumerate((outcome, text or "")):
+            match = STATED.search(source) or HEADED.search(source) or ALONE.search(source)
+            if match and index:   # only the reply says so: nothing of the file is taken
+                return verdict(match.group(1)), None, "implementation"
+            if match:
+                found = verdict(match.group(1))
+                break
+    if not found:
+        return None
+    summary = file.get("summary").strip()[:8000] if isinstance(file.get("summary"), str) else ""
+    failure = file.get("failure_type") if file.get("failure_type") in FAILURES - {"none"} else "implementation"
+    return found, summary or None, failure
 
 
 def basic(native, result, spec, evidence, report, invalid, lost, missing, blocked_line):
