@@ -651,6 +651,7 @@ CloudFront 只使用 us-east-1 的证书）：分发加上别名与证书（SNI�
 - **协调者**排除 `@kirocrew-core/monitor_*`（不自行布置监视循环、追加回合）。新边界的 `agent.adaptive_concurrency_mode` 为 `fixed`（并发上限即 `max_subagents`）。
 - 不再发送 KiroCrew 已忽略的 `solo_reason` / `solo_details`。
 - **父会话不跑多余的一轮**（2026-10-23）：每次派发、续接与模型探测拿到原生 ID 后，Worker 调用 `POST /api/spawn/mark-collected`（`{ids, parent_session}`，KiroCrew 自己的阻塞式 spawn 工具用来表示父会话已拿到结果）。结束时 KiroCrew 不再把结果注入平台的父会话、不起协调者跑一轮，也不触发波次汇总；平台照旧从 `GET /api/spawn/{id}` 读结果。标记失败（旧 Gateway）不影响派发，`dispatch.json` 的 `collected: true` 表示已标记。标记只在 Gateway 内存中：运行中重启后，该任务结束时照旧跑一轮。原生页面的父会话因此不再逐个任务出现回复。
+  EC2 核对（2026-10-23，a183d84，run-d62631d5）：两个 Attempt 都记 `collected: true`，Gateway 日志两次「skipping injection」，父会话一轮也没跑；部署前同样两个任务的 run-656be0a4 跑了 2 轮。
 - **配置契约**：平台写入 `config.json` 的键列在 `tests/kirocrew_contract.json`（版本须等于 `deploy/versions.env` 的 `KIROCREW_ACCEPTED_VERSION`）。
   本机回归核对 `seed()` 只写清单内的键；部署时的原生测试在主机上核对清单中每个键都是已安装 KiroCrew 的配置字段，并用 KiroCrew 自己的加载器读回
   新生成的配置，不得有被忽略的键（`_extra_keys` / `_extra_sections`）。升级 KiroCrew 时先在新版本上核实清单并改版本号，原生测试不过则部署中止。

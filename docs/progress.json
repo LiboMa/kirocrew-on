@@ -1,6 +1,6 @@
 {
   "_comment": "进度看板与 docs/PROGRESS.md 的唯一数据源：任务状态在这里维护；提交记录由 tools/progress.py 从 git 生成（负责人 2026-10-20）。",
-  "checks": "1779 后端 + 92 + 272 控制台 + 7 个浏览器测试（135 项检查）；EC2 运行 bc651cc",
+  "checks": "1806 后端 + 92 + 控制台 + 7 个浏览器测试（135 项检查）；EC2 运行 a183d84（父会话不再多跑一轮，核对通过）",
   "status": {
     "accepted": {
       "label": "已验收",
@@ -237,9 +237,9 @@
         {
           "id": "m2-d65-general",
           "name": "D65 一般任务：任务类型不与 Git 绑定（research / write、不需要代码仓库）",
-          "status": "deployed",
-          "ref": "spec 2026-10-22-general-tasks · EC2 bc651cc",
-          "more": "第 1 部分已上线（fd5f821）；第 2、3 步本机完成：work: general 措辞、规划「本会话没有代码仓库」、向导「不需要代码仓库」、下载产出、octopus submit --no-repo、MCP 与 Skill。EC2 run-3852f436（无仓库，调研 → 撰写 → 审查）已一次完成。"
+          "status": "accepted",
+          "ref": "spec 2026-10-22-general-tasks · EC2 bc651cc run-656be0a4 · a183d84 run-d62631d5",
+          "more": "EC2 2026-10-23：Agent 规划、不需要仓库，约 3 分钟完成、中间不停；1 个 write 任务，指令写「本次任务」与工作目录，产出 compare.md（标题 + 3 段）。规划提示提「源码检出」、写作任务配 sde 的问题由 1ef70d6 修复，a183d84 上复核通过。"
         },
         {
           "id": "m3-d66-limit",

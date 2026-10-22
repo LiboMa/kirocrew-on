@@ -1,16 +1,16 @@
 # 进度与完成记录
 
-> 由 `tools/progress.py` 生成（2026-10-23 03:09 CST）：任务状态取自 `docs/progress.json`，提交记录取自 git。看板：`docs/progress-dashboard.html`；实时看板：`python3 tools/progress.py --serve --ec2`（http://127.0.0.1:8765/）。
+> 由 `tools/progress.py` 生成（2026-10-23 04:21 CST）：任务状态取自 `docs/progress.json`，提交记录取自 git。看板：`docs/progress-dashboard.html`；实时看板：`python3 tools/progress.py --serve --ec2`（http://127.0.0.1:8765/）。
 
-- **本轮完成度**：87%　**MVP 完成度**：67%
-- **分支**：HEAD `bc651cc`；自 `origin/main` 起 499 个提交——已推送 452、已部署 EC2 47、仅本机 0；EC2 运行 `bc651cc`
-- **回归**：1779 后端 + 92 + 272 控制台 + 7 个浏览器测试（135 项检查）；EC2 运行 bc651cc
+- **本轮完成度**：87%　**MVP 完成度**：68%
+- **分支**：HEAD `a183d84`；自 `origin/main` 起 503 个提交——已推送 452、已部署 EC2 51、仅本机 0；EC2 运行 `a183d84`
+- **回归**：1806 后端 + 92 + 控制台 + 7 个浏览器测试（135 项检查）；EC2 运行 a183d84（父会话不再多跑一轮，核对通过）
 
 ## 模块
 
 | 模块 | 完成度 | 已验收 | 已部署 · 待验收 | 本机完成 · 待部署 | 进行中 | 卡点 · 等外部 | 未开始 |
 |---|---|---|---|---|---|---|---|
-| MVP 里程碑（M1–M5） | 67% | 14 | 14 | 0 | 1 | 0 | 9 |
+| MVP 里程碑（M1–M5） | 68% | 15 | 13 | 0 | 1 | 0 | 9 |
 | D46 Agent 角色与提示体系 | 87% | 8 | 3 | 0 | 0 | 1 | 0 |
 | D49 每人一个执行边界 | 80% | 2 | 2 | 0 | 1 | 0 | 0 |
 | D50 编码技能包 | 100% | 2 | 0 | 0 | 0 | 0 | 0 |
@@ -61,8 +61,10 @@
 - `64278a1` 2026-10-23 〔已部署 EC2〕 feat(phases): 任务的阶段（D69 第 1 步）——phase 为 diverge / design / converge，未写时按类别推断（research 发散、design 设计、审查取所审任务的阶段、其余收敛）；设计阶段末的判定；可放行的失败为白名单（原生出错、工具不符、执行者或审查者的结论，缺输入 / 认证 / 环境 / 安全除外），放行时 fail 改为带前缀的提示并移除 gate 与 failure_type；平台自己的任务没有阶段
 - `dff5d2a` 2026-10-22 〔已部署 EC2〕 docs: D69 按阶段把关的设计稿与实施计划（负责人选「按阶段把关」；含 D57 会话的约束与审阅意见）
 
-### D65（6 个提交：已推送 2、已部署 EC2 4）
+### D65（8 个提交：已推送 2、已部署 EC2 6）
 
+- `1ef70d6` 2026-10-23 〔已部署 EC2〕 fix(planning): 没有仓库的会话，规划提示不再说「源码已由平台准备在…源码检出」，一般任务的契约写明不写 role（EC2 run-656be0a4 验收：写作任务配了 sde 被忽略）；OPERATIONS 记 D65 线上验收
+- `f1dddda` 2026-10-23 〔已部署 EC2〕 docs: 进度看板——EC2 运行 bc651cc（检查只读自己的行、构建产物长期缓存、D65 入口、D57 打码规则）
 - `c964058` 2026-10-23 〔已部署 EC2〕 docs: D65 一般任务的运维说明与看板
 - `5a84791` 2026-10-23 〔已部署 EC2〕 feat(general): 一般任务的入口（D65 第 3 步）——发起向导的代码来源多一项「不需要代码仓库（调研、分析、写作等一般任务）」，提交 source none；这类会话页不显示发布、按钮写「下载产出」；octopus submit --no-repo；MCP octopus_start 与 Skill 写明 source none 与 research / write
 - `5145e67` 2026-10-23 〔已部署 EC2〕 feat(general): 一般任务的规划与 Agent 指令（D65 第 2 步）——平台对没有代码仓库的会话与 research / write 任务在派发中写 work: general，Worker 据此写「本次任务」「工作目录」与对应结尾（研发任务的指令逐字不变，旧 Worker 忽略该字段）；没有仓库时规划提示多一节「本会话没有代码仓库」；首次规划写明一般任务契约的写法
@@ -716,8 +718,9 @@
 - `b57cba1` 2026-10-12 〔已推送〕 docs: BACKLOG 记录访问管理第 2 期审查延后项
 - `638e4e6` 2026-10-12 〔已推送〕 docs(plan): 访问管理第 2 期——Team 与 Worker 管理、派发前核对、管理操作审计
 
-### 未标记 · 测试（7 个提交：已推送 5、已部署 EC2 2）
+### 未标记 · 测试（8 个提交：已推送 5、已部署 EC2 3）
 
+- `8da8ba5` 2026-10-23 〔已部署 EC2〕 test(browser): 截图写到运行器给的 $BROWSER_ARTIFACTS（没设就不截图），不再写死主仓库路径；BACKLOG 记 Gateway 复查
 - `bc651cc` 2026-10-23 〔已部署 EC2〕 test(checks): 环境判断的真实命令用例改用空 HOME、放宽到 120 秒——机器忙时 bash 登录 profile 拖慢十条命令，超过 30 秒就假失败
 - `828caee` 2026-10-23 〔已部署 EC2〕 test(browser): 真实浏览器核对会话列表的置顶与取消置顶、管理页面打开执行环境
 - `02f44e3` 2026-10-18 〔已推送〕 test(kirocrew): HTTP 字段契约——平台发给 KiroCrew 的每个请求体只许用其处理函数读取的键（tests/kirocrew_contract.json http：spawn、chat slots 及 context / note / resume / approve、stop-all）；本机回归以 AST 扫描 Worker 的全部请求体，部署时原生测试核对已安装 KiroCrew 的处理模块仍读取这些键；OPERATIONS 与 BACKLOG 更新
@@ -726,8 +729,9 @@
 - `bd552c4` 2026-10-16 〔已推送〕 test(credentials): 测试中固定 github.com / gitlab.example.com 的解析结果——本机代理的 fake-IP（198.18.0.0/15）不再使凭据测试被 refused_address 拒绝
 - `fd9f1f4` 2026-10-12 〔已推送〕 test(access): 权限矩阵覆盖 Team 与 Worker 管理；OpenAPI 记录第 2 期接口与 admin scope
 
-### 未标记 · 其他（5 个提交：已推送 1、已部署 EC2 4）
+### 未标记 · 其他（6 个提交：已推送 1、已部署 EC2 5）
 
+- `a183d84` 2026-10-23 〔已部署 EC2〕 perf(worker): 派发、续接与模型探测后调用 KiroCrew 的 mark-collected——子 Agent 结束时不再注入平台的父会话、不再多跑一轮协调者（每个任务省一次 Kiro 用量与一个常驻进程）；结果照旧从 GET /api/spawn/{id} 读；失败不影响派发；HTTP 契约登记新请求体
 - `64a73cd` 2026-10-23 〔已部署 EC2〕 Merge commit '89082a4' into feat/m11-gates
 - `46e6959` 2026-10-23 〔已部署 EC2〕 perf(console): 带内容哈希的构建产物长期缓存（BACKLOG：每次打开控制台都重新下载约 800 KB）——/assets/ 下 Vite 生成的 name-<hash>.ext 回 Cache-Control: public, max-age=31536000, immutable；页面与不带哈希的文件照旧 no-store，部署后立即取到新文件
 - `21495ea` 2026-10-23 〔已部署 EC2〕 perf(worker): 检查运行中的尝试只读它自己的那一行（EC2 2026-10-22 13:25–13:30：owner 边界的 Gateway 事件循环最长卡住 18 秒，被其看门狗以 SIGALRM 结束，两个子 Agent 中途断开）——每次 inspect 都读完整 /api/spawn 列表（58 条、310 KB、约 150 ms 占用 Gateway 唯一的事件循环线程），一条自己的 GET /api/spawn/{id} 只有 7 KB / 16 ms；state.json 证明归属的运行中尝试改读自己的行，已结束、排队或无法证明归属的照旧读列表（只有列表写明是否被人停止）
