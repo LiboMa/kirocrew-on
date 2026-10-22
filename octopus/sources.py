@@ -324,7 +324,8 @@ def rewind(project, expected, keep=None, into=None):
     what came before it, the implementer's, are never touched — and what remains changed in tracked files restored: what a
     check counts (``clean_against``), and nothing else. ``reverted`` lists those tracked files. Then, given ``keep`` (the
     untracked files the review started with), the untracked files it created are moved into ``into`` (outside the project),
-    never deleted: ``removed`` lists them (``_move_out``). Its limits:
+    never deleted: ``removed`` lists them (``_move_out``); ``listing_failed`` when they could not be listed (none moved, the
+    tracked files put back all the same). Its limits:
 
     - without ``keep`` the untracked files the reviewer created (and never committed) are kept: the next candidate's
       ``git add -A`` takes them; an untracked file in ``keep`` the reviewer changed stays as it is;
@@ -351,16 +352,22 @@ def rewind(project, expected, keep=None, into=None):
     if rewound:   # what is left staged (a left-out file a dropped commit added) back to untracked; files untouched
         _git(project, "-c", "core.hooksPath=" + os.devnull, "reset", "-q", env=SAFE_GIT_ENV)
     removed = [] if keep is None else _move_out(project, keep, into)
-    return {**clean_against(project, expected), "reverted": reverted, "rewound": rewound, "removed": removed}
+    return {**clean_against(project, expected), "reverted": reverted, "rewound": rewound, "removed": removed or [],
+            **({"listing_failed": True} if removed is None else {})}
 
 
 def _move_out(project, keep, into):
     """The untracked files not in ``keep`` moved into ``into`` at the same relative paths, sorted: never deleted, a link
     moved as a link (never followed). A path that would resolve outside the project, one whose place in ``into`` is taken,
     one that cannot be moved and a folder git lists as one entry (``tools/``, a repository the reviewer made) holding a file
-    of ``keep`` stay where they are. Folders the moves leave empty are removed, never the project."""
+    of ``keep`` stay where they are. Folders the moves leave empty are removed, never the project. None, with nothing
+    moved, when the untracked files cannot be listed (a large workspace past git's time)."""
+    try:
+        names = untracked(project)
+    except ValueError:   # after the tracked files were put back: that stands
+        return None
     root, keep, removed = Path(project).resolve(), set(keep), []
-    for name in untracked(project):
+    for name in names:
         parts = name.rstrip("/").split("/")
         if name in keep or name.startswith("/") or any(part in {"", ".", ".."} for part in parts) \
                 or name.endswith("/") and any(path.startswith(name) for path in keep):

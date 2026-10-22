@@ -687,6 +687,42 @@ class EngineGateTests(TeamsWorkersCase):
         self.assertIn("审查结论照常采用", gate["detail"])
         self.assertNotIn("gate", evidence)
 
+    def test_new_files_that_could_not_be_listed_on_rewind_are_said_not_failed(self):   # tracked files were put back
+        rejection = {"decision": "changes_requested", "summary": "缺少空输入的边界处理", "failure_type": "implementation",
+                     "reviewed_commit": C1}
+        for index, outcome in enumerate(({"decision": "pass", "summary": "无阻断问题", "reviewed_commit": C1}, rejection)):
+            with self.subTest(decision=outcome["decision"]):
+                worker = FakeWorker()
+                rid = self.session([{**IMPLEMENT, "verify": []}, REVIEW], request=f"start-000000010{index}")
+                worker.outcomes["review"] = outcome
+                worker.check = lambda body: {"head": C1, "clean": False, "changed_files": ["src/a.js"],
+                                             "created": ["review.md"], "tracked_only": False}
+                worker.rewind = lambda body: {"head": C1, "clean": True, "changed_files": [], "reverted": ["src/a.js"],
+                                              "rewound": 0, "removed": [], "listing_failed": True, "created": [],
+                                              "tracked_only": True}
+                self.run_engine(worker, ticks=16)
+                attempt, evidence = self.attempt(rid, "review")
+                gate = self.review_bound(evidence)
+                self.assertEqual((gate["status"], gate["files"]), ("warn", ["src/a.js"]))
+                self.assertIn("审查改动的已跟踪文件已由平台撤回：src/a.js；未能列出审查新建的文件，未做移出", gate["detail"])
+                self.assertNotIn("review-removed", gate["detail"])
+                self.assertNotIn("gate", evidence)
+                self.assertEqual(attempt["status"], "accepted" if outcome is not rejection else "blocked")
+
+    def test_a_rewind_that_leaves_the_workspace_off_the_candidate_names_what_it_did(self):
+        worker = FakeWorker()
+        rid = self.session([{**IMPLEMENT, "verify": []}, REVIEW])
+        worker.outcomes["review"] = {"decision": "pass", "summary": "无阻断问题", "reviewed_commit": C1}
+        worker.check = lambda body: {"head": C1, "clean": False, "changed_files": ["src/a.js"], "created": ["review.md"],
+                                     "tracked_only": False}
+        worker.rewind = lambda body: {"head": C1, "clean": False, "changed_files": ["src/a.js"], "reverted": ["src/a.js"],
+                                      "rewound": 0, "removed": ["review.md"], "created": [], "tracked_only": False}
+        self.run_engine(worker, ticks=16)
+        attempt, evidence = self.attempt(rid, "review")
+        self.assertEqual((self.gates(evidence)["review_bound"], attempt["status"]), ("fail", "blocked"))
+        self.assertIn(f"平台撤回审查改动的 src/a.js，移出审查新建的 review.md后，工作区仍不是候选 {C1[:7]}：src/a.js",
+                      attempt["error"])   # in the words _put_back_review uses
+
     def test_an_old_worker_without_created_keeps_todays_behaviour(self):   # no created, no tracked_only, no removed
         rejection = {"decision": "changes_requested", "summary": "缺少空输入的边界处理", "failure_type": "implementation",
                      "reviewed_commit": C1}

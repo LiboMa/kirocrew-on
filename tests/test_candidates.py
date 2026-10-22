@@ -293,6 +293,21 @@ class CandidateTests(unittest.TestCase):
             self.assertEqual(self.review("check", c1), {"head": c1, "clean": False, "changed_files": ["src/a.js"],
                                                         "created": [], "tracked_only": True})
 
+    def test_a_rewind_that_cannot_list_untracked_files_still_puts_back_tracked_files(self):   # nothing moved, and said
+        self.write({"src/a.js": "a"})
+        c1 = self.commit()["sha"]
+        folder = self.snapshot()
+        self.write({"review.md": "审查结论\n", "src/a.js": "审查者改了实现"})
+        self.assertEqual(self.review("check", c1)["created"], ["review.md"])
+        with patch.object(sources, "untracked", side_effect=ValueError("Git 操作超时（status，180 秒）")):
+            result = self.review("rewind", c1)
+        self.assertEqual((result["head"], result["clean"], result["reverted"], result["removed"], result["listing_failed"]),
+                         (c1, True, ["src/a.js"], [], True))
+        self.assertEqual(((self.project / "src/a.js").read_text(), (self.project / "review.md").read_text()),
+                         ("a", "审查结论\n"))
+        self.assertFalse((folder / "review-removed").exists())
+        self.assertNotIn("listing_failed", self.review("rewind", c1))   # listed: the flag only when it failed
+
     def test_rewind_never_moves_a_path_outside_the_project(self):
         outside = self.root / "outside"
         outside.mkdir()

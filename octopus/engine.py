@@ -693,6 +693,8 @@ class Engine:
             notes.append("审查改动的已跟踪文件已由平台撤回：" + names(reverted))
         if removed:
             notes += ["审查新建的文件已由平台移出：" + names(removed), "移出的文件保存在该次尝试的 review-removed 目录"]
+        if rewound.get("listing_failed"):   # e.g. a large workspace past git's time: the tracked files were put back
+            notes.append("未能列出审查新建的文件，未做移出")
         if left:   # e.g. a path that would resolve outside the project: left in place, and said
             notes.append("审查新建的这些文件未能移出，仍在工作区：" + names(left))
         if rewound.get("rewound"):
@@ -700,6 +702,15 @@ class Engine:
         if not notes:   # e.g. only what a candidate leaves out changed: still say what the platform did
             notes.append(f"会话分支已由平台恢复到候选 {sha[:7]}")
         return notes, list(dict.fromkeys(reverted + removed))
+
+    @staticmethod
+    def _undo(check, created, sha):
+        """What putting a review's changes back does, as messages name it: tracked files put back (撤回), new files moved
+        out (移出)."""
+        return "，".join(part for part in (
+            "撤回审查改动的 " + "、".join(check["changed_files"][:10]) if check["changed_files"] else
+            f"撤回审查期间被改动的会话分支（HEAD 不是候选 {sha[:7]}）" if check["head"] != sha else "",
+            "移出审查新建的 " + "、".join(created[:10]) if created else "") if part)
 
     def _entered(self, run, attempt):
         """Whether a person may have stopped this Attempt's native task in the native page (crew_entry.entered)."""
@@ -738,10 +749,7 @@ class Engine:
         tracked = bool(check["changed_files"]) or check["head"] != sha
         if not tracked and not created:   # tracked_only: no list of what it started with, so only tracked files are told
             return record("skip", "审查没有改动文件" if check.get("tracked_only") is False else "审查没有改动已跟踪的文件")
-        undo = "，".join(part for part in (   # tracked files are put back (撤回), new files moved out (移出)
-            "撤回审查改动的 " + "、".join(check["changed_files"][:10]) if check["changed_files"] else
-            f"撤回审查期间被改动的会话分支（HEAD 不是候选 {sha[:7]}）" if tracked else "",
-            "移出审查新建的 " + "、".join(created[:10]) if created else "") if part)
+        undo = self._undo(check, created, sha)
         try:
             rewound = self.request(config, "/candidate", {**body, "mode": "rewind"}, timeout=180)
         except Error as exc:
@@ -808,7 +816,7 @@ class Engine:
                         return fail("review_bound", f"审查期间会话分支被改动（HEAD 不是候选 {sha[:7]}）")
                 if rewound is not None:
                     if rewound.get("head") != sha or not rewound.get("clean"):
-                        return fail("review_bound", f"平台撤回审查的改动后，工作区仍不是候选 {sha[:7]}："
+                        return fail("review_bound", f"平台{self._undo(check, created, sha)}后，工作区仍不是候选 {sha[:7]}："
                                     + "、".join((rewound.get("changed_files") or [])[:10]))
                     notes, files = self._reverted(rewound, sha)
             if not (len(reviewed) >= 7 and sha.startswith(reviewed)):
