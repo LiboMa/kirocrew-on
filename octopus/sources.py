@@ -312,10 +312,16 @@ def restore(project, paths):
 
 def rewind(project, expected):
     """A review's changes put back (D57 §4): commits made on top of the candidate ``expected`` dropped — the candidate and
-    what came before it, the implementer's, are never touched — and what remains changed in tracked files restored. Only
-    what a check would count is put back (``clean_against``): a file a candidate leaves out (a .env, dependencies) stays in
-    the workspace as it is, untracked again if a dropped commit had added it, and so do untracked files. ``ValueError``,
-    with nothing moved, when HEAD is not ``expected`` or a commit on top of it."""
+    what came before it, the implementer's, are never touched — and what remains changed in tracked files restored: what a
+    check counts (``clean_against``), and nothing else. ``reverted`` lists those tracked files. Its limits:
+
+    - untracked files the reviewer created (and never committed) are kept: the next candidate's ``git add -A`` takes them;
+    - an untracked file outside what candidates leave out that a reviewer's ``git add -A`` swept into its commit (a report
+      the checks left) is removed along with that commit;
+    - a reviewer's changes to tracked files that candidates leave out (``node_modules``, a .env) are not undone; such a
+      file a dropped commit added stays in the workspace, untracked again.
+
+    ``ValueError``, with nothing moved, when HEAD is not ``expected`` or a commit on top of it."""
     head = _git(project, "rev-parse", "--verify", "HEAD^{commit}")
     rewound = 0
     if head != expected:

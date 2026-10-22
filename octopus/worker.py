@@ -620,8 +620,8 @@ class Worker:
     def candidate(self, body):
         """A task's candidate commit (D37 §3, ``mode: commit``), a review's check that the workspace is still the
         candidate it reviewed (§6, ``mode: check``), or putting back what a read-only platform task changed in tracked
-        files after that candidate (D46 P4, ``mode: restore``; never moves the branch), or what a review changed — its
-        commits on top of the candidate too, so the branch is back on it (D57 §4, ``mode: rewind``) — or what a
+        files after that candidate (D46 P4, ``mode: restore``; never moves the branch), or what a review changed in tracked
+        files — its commits on top of the candidate too, so the branch is back on it (D57 §4, ``mode: rewind``) — or what a
         candidate changed (D56, ``mode: diff``; read only)."""
         run = self.path(body["run_id"])
         self._undo_baseline(run)

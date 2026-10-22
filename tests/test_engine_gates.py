@@ -288,7 +288,7 @@ class EngineGateTests(TeamsWorkersCase):
         attempt, evidence = self.attempt(rid, "review")
         gate = self.review_bound(evidence)
         self.assertEqual((gate["status"], gate["files"]), ("warn", ["docs/review.md", "src/a.js"]))
-        self.assertIn("审查改动的文件已由平台撤回：docs/review.md、src/a.js", gate["detail"])
+        self.assertIn("审查改动的已跟踪文件已由平台撤回：docs/review.md、src/a.js", gate["detail"])
         self.assertIn("1 个提交", gate["detail"])
         self.assertIn("审查结论照常采用", gate["detail"])
         self.assertNotIn("代码", gate["detail"])   # many repositories hold documents
@@ -357,8 +357,8 @@ class EngineGateTests(TeamsWorkersCase):
         def old(body):
             raise Error(400, "invalid_request", "mode 只能是 commit、check、restore 或 diff")
         put_back = lambda body: {"head": C1, "clean": True, "changed_files": [], "reverted": ["src/a.js"], "rewound": 0}
-        cases = (("warn", edited, put_back, "审查改动的文件已由平台撤回：src/a.js"),
-                 ("skip", None, None, "审查没有改动文件"),
+        cases = (("warn", edited, put_back, "审查改动的已跟踪文件已由平台撤回：src/a.js"),
+                 ("skip", None, None, "审查没有改动已跟踪的文件"),
                  ("fail", edited, refused, "平台未能撤回审查改动的 src/a.js：Git 操作失败（exit 1）：index.lock"),
                  ("skip", edited, old, "未能撤回审查改动的 src/a.js：Worker 版本不支持"))   # a Worker from before D57
         for index, (status, check, rewind, words) in enumerate(cases):

@@ -660,7 +660,7 @@ class Engine:
         """What a Worker's rewind put back (D57 §4), as the notes a review_bound record shows, and the files."""
         reverted, notes = [str(name) for name in rewound.get("reverted") or []], []
         if reverted:
-            notes.append("审查改动的文件已由平台撤回：" + "、".join(reverted[:10])
+            notes.append("审查改动的已跟踪文件已由平台撤回：" + "、".join(reverted[:10])
                          + (f" 等 {len(reverted)} 个" if len(reverted) > 10 else ""))
         if rewound.get("rewound"):
             notes.append(f"审查期间的 {rewound['rewound']} 个提交已撤回，会话分支回到候选 {sha[:7]}")
@@ -672,8 +672,9 @@ class Engine:
         """A review that ended without passing — a rejection, an error, the watchdog's stop — leaves the workspace as the
         reviewer left it, and the rework's candidate would take its edits in: they are put back all the same (D57 §4).
         Recorded as review_bound beside the failure, which stays the Attempt's: its error, failure_type and gate are what
-        recovery sees. warn: put back; skip: nothing to put back (or a Worker that cannot); fail: putting back failed. A
-        review its gates judged (review_bound already recorded) was put back there."""
+        recovery sees. warn: put back; skip: no tracked file changed (or a Worker that cannot); fail: putting back failed.
+        Only tracked files are put back (``sources.rewind``: untracked files the reviewer created stay). A review its gates
+        judged (review_bound already recorded) was put back there."""
         spec, snapshot = json.loads(attempt["spec"]), json.loads(run["snapshot"])
         if spec.get("kind") != "review" or snapshot.get("execution_contract", 1) < 3 \
                 or planning.planning_task(attempt["task_id"], snapshot) \
@@ -695,7 +696,7 @@ class Engine:
             return record("skip", gates.OLD_WORKER) if exc.status == 404 else \
                 record("fail", f"无法核对审查的工作区，未能撤回审查的改动：{exc}")
         if not check["changed_files"] and check["head"] == sha:
-            return record("skip", "审查没有改动文件")
+            return record("skip", "审查没有改动已跟踪的文件")
         what = "审查改动的 " + "、".join(check["changed_files"][:10]) if check["changed_files"] else \
             f"审查期间被改动的会话分支（HEAD 不是候选 {sha[:7]}）"
         try:
