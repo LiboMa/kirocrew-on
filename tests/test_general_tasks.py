@@ -148,6 +148,17 @@ class PlanningTests(GeneralCase):
             self.assertIn("一般任务（research / write）：deliverables 写产出文件名", prompt)
             self.assertLessEqual(len(prompt), 7400)
 
+    def test_without_a_repository_the_planner_is_not_told_of_a_checkout(self):
+        """EC2 run-656be0a4 (2026-10-23): a none-source plan still read 「源码已由平台准备在…源码检出」, and its write task
+        came back with role sde (no role is for research / write), which the platform dropped with a note."""
+        from octopus import planning
+        plain, general = planning.plan_step()["prompt"], planning.plan_step(general=True)["prompt"]
+        self.assertIn("源码已由平台准备在", plain)
+        self.assertNotIn("源码检出", general)
+        self.assertIn("所有任务在同一个工作目录中完成", general)
+        self.assertIn("不写 role", general)
+        self.assertLessEqual(len(general), 7400)
+
     def test_an_agent_planned_session_without_a_repository_plans_as_one(self):
         rid = self.service.start(self.c, {"request_id": "start-0000000009", "input": "调研某主题并写一份报告",
                                           "source": {"type": "none"}, "team_id": "team-p", "plan": "agent"})["id"]

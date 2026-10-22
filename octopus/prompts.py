@@ -51,10 +51,12 @@ WORKER = """你是本次工作流的研发执行者，角色由当前任务决�
 """
 
 
-def intent_prompt(example_json, intent, design_workspace, prepared=False, role="KiroCrew 规划者"):
+def intent_prompt(example_json, intent, design_workspace, prepared=False, role="KiroCrew 规划者", general=False):
     """The planner's principles, shared by the first plan, a replan's own rules and workflow design (D46). ``prepared``: the
-    Session's source is checked out already (a plan inside a Session); otherwise a design may check one out to look."""
-    source = (f"源码已由平台准备在 {design_workspace}，后续任务在同一份检出上执行。" if prepared else
+    Session's source is checked out already (a plan inside a Session); otherwise a design may check one out to look.
+    ``general``: the Session has no repository (D65), so there is no checkout to speak of."""
+    source = ("本会话没有代码仓库：所有任务在同一个工作目录中完成，后续任务在同一目录上继续。" if general else
+              f"源码已由平台准备在 {design_workspace}，后续任务在同一份检出上执行。" if prepared else
               f"可以使用现有工具核实用户明确提供的仓库与项目资料；需要检出以辅助设计时，使用本次设计目录 {design_workspace}，"
               "保留来源和版本。运行开始后由平台准备源码，后续任务在同一份运行检出上执行。")
     return f"""你是此 Session 的 {role}。

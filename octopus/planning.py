@@ -48,15 +48,16 @@ GENERAL_KINDS_LINE = "；一般任务用 research 调研、write 撰写"
 GENERAL_KINDS_COMPACT = " / research / write"
 PHASE_LINE = "可写 phase：diverge（发散：头脑风暴、调研、多方案，只查安全底线）/ design（设计，阶段末把关）/ converge（实现、撰写、测试、交付）；不写按 kind 推断。"
 PHASE_COMPACT = "phase：diverge 发散 / design 设计 / converge 收敛（可不写）。"
-GENERAL_CONTRACT = "一般任务（research / write）：deliverables 写产出文件名，acceptance 写阅读即可核对的标准，不必写 paths 与 verify。"
+GENERAL_CONTRACT = "一般任务（research / write）：deliverables 写产出文件名，acceptance 写阅读即可核对的标准，不写 role，不必写 paths 与 verify。"
 
 
-def rules(count, depends, compact=False):
+def rules(count, depends, compact=False, general=False):
     """What every planned task carries and the gates it meets — the same for the first plan and a replan (D46);
-    ``compact``: the role and skill catalogues by name only (the replan's prompt is the tighter one)."""
+    ``compact``: the role and skill catalogues by name only (the replan's prompt is the tighter one); ``general``: no
+    repository (D65)."""
     from . import roles, skills
     return f"""3. 任务拆分与 Agent 映射：steps 为 {count} 个顺序任务，每个任务选择最合适的工具并写出具体 prompt；
-   后续任务将在同一个 Session、同一份源码检出上依次执行。
+   后续任务将在同一个 Session、{"同一个工作目录中" if general else "同一份源码检出上"}依次执行。
 4. 任务契约：每个任务必须给出 kind（implement / review / test / deliver / design{GENERAL_KINDS_COMPACT if compact else GENERAL_KINDS_LINE}）、deliverables、
    至少 1 条可检查的 acceptance（审查与测试任务的验收项取自 summary 的验收标准，不另加要求）；
    {REQUIRED_COMPACT if compact else REQUIRED}{depends}
@@ -124,13 +125,14 @@ preview.json、PR 或「改代码」的 evaluator。
 def plan_step(models=None, tools=None, limitations=None, commands=None, preferences=None, general=False):
     """The first task of an Agent-planned Session (always Kiro; it plans and does not change business code). ``general``:
     the Session has no repository (D65)."""
-    prompt = intent_prompt(dumps(EXAMPLE), "（见上方完整用户需求）", "本任务的工作目录（即本 Session 的源码检出）", prepared=True) + f"""
+    prompt = intent_prompt(dumps(EXAMPLE), "（见上方完整用户需求）", "本任务的工作目录（即本 Session 的源码检出）", prepared=True,
+                           general=general) + f"""
 
 ## 本任务的交付
 1. 意图识别：intent 一句话说明用户真正要完成什么、属于哪类工作。
 2. 需求补全：summary 写成 Markdown——目标、范围（含不做什么）、可验证的验收标准、关键假设与待确认问题；
    只补全用户没有说清但完成任务必需的内容，不改变用户的明确要求。
-{rules("1–7", "depends_on 只列前序任务的 id；")}
+{rules("1–7", "depends_on 只列前序任务的 id；", general=general)}
 
 {environment(models, tools, limitations, commands)}
 
