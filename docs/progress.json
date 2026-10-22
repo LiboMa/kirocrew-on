@@ -237,9 +237,9 @@
         {
           "id": "m2-d65-general",
           "name": "D65 一般任务：任务类型不与 Git 绑定（research / write、不需要代码仓库）",
-          "status": "doing",
+          "status": "local",
           "ref": "spec 2026-10-22-general-tasks · 第 1 部分 EC2 fd5f821",
-          "more": "已上线：来源 none、research / write 类别、发布 409。剩余：Worker 一般任务措辞与能力降级、向导「不需要代码仓库」、CLI --no-repo、Skill。"
+          "more": "第 1 部分已上线（fd5f821）；第 2、3 步本机完成：work: general 措辞、规划「本会话没有代码仓库」、向导「不需要代码仓库」、下载产出、octopus submit --no-repo、MCP 与 Skill。EC2 run-3852f436（无仓库，调研 → 撰写 → 审查）已一次完成。"
         },
         {
           "id": "m3-d66-limit",
