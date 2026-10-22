@@ -209,11 +209,15 @@ SSM 隧道（`localhost:15476`）方式仍可用：`crew_url` 指向本地端口
   （此前各步已完成、服务已重启）；写入后重新 `push` 即可。
   从旧版本迁移：在实例角色收窄之前，以 root 把现有密码写入该文件后再执行 `up` 与 `push`。
 
-### 会话列表（M3-3 / M3-5 第一步，2026-10-21）
+### 会话列表（M3-3 / M3-5，2026-10-21；D56 过滤、全文与分页）
 
 - `GET /v1/runs` 可带 `status`（会话状态）、`q`（会话 ID、名称或需求中的片段，1–200 字符）与 `limit`（1–200），在服务端过滤，最新的在前；不带参数时与之前相同（旧版 `/classic/`）。
   `view=list` 只给列表要的：任务的 ID、状态、名称、工具、类别与角色，规划不带补全的需求；React 控制台的会话列表（每 10 秒）与 MCP 用它——EC2 上任务说明占完整列表的三分之二。
 - MCP `octopus_runs` 返回精简列表 `{items, more}`：默认最近 20 个（`limit` 至多 50），每个只有 ID、名称、状态、时间、进度、需要处理的事（`attention` 标题）、错误首行、执行位置与 Worker；EC2 上 101 个会话的完整列表约 55 万字符，超出了 MCP 结果的上限。
+- D56 过滤（可组合）：`status` 可逗号分隔多个；`lifecycle`（open / closed）；`space`（personal 或 Team ID）；`repo`（`主机/所有者/仓库` 的片段，https、ssh、`git@host:path` 同一结果，新建项目不命中）；`branch`（源码 ref 或发布分支）；`stage`（第一个未验收任务的类别，`plan` 为规划，`done` 为全部验收）；`tool`；`client`（Request 的来源客户端，D55 之前的会话没有）；`submitter`（用户名或 ID）；`since` / `until`（Unix 秒或 `YYYY-MM-DD`，UTC）。`q` 为全文：会话 ID、名称、需求、规划的意图与补全、各任务名称与说明、各任务最近一次结论的摘要与错误、来源客户端的名称；多个词须全部命中。已删除的会话从不列出。
+- `page=1` 返回 `{items, next, total}`，把 `next` 作为 `cursor` 取下一页（`limit` 默认 50）；游标按（创建时间, ID），翻页时新建的会话不重复不遗漏。不带 `page` 时照旧返回数组。实现是逐行核对访问权限的扫描，几百个会话为毫秒级；会话数上千后再建索引（BACKLOG）。
+- 控制台侧栏：搜索停顿 300 ms 后查询；状态分组、「筛选」面板（仓库、分支、阶段、工具、客户端、提交者、创建时间）与可移除的标签写进地址栏，可分享；「加载更多」翻页；数字取服务端总数。列表按创建时间排序（不再按最近更新）。
+- 代码改动（D56）：`GET /v1/runs/<id>/attempts/<attempt>/diff` 经会话的 Worker 读取候选相对上一个候选（或会话基线）的改动——每个文件的增删行数与统一 diff，200 KB / 4000 行截断；控制台在每次 Attempt 的「代码改动」中显示。没有候选 404 `no_candidate`；凭证检查挡在分支外的候选 409 `candidate_secret`，从不显示；Worker 早于 D56 时 409 `worker_outdated`。
 
 ### 使用者看到的提示与管理员的处理（D53）
 
@@ -223,6 +227,7 @@ SSM 隧道（`localhost:15476`）方式仍可用：`crew_url` 指向本地端口
 |---|---|---|
 | 你还没有自己的执行边界 / 你的执行边界目前已停用（会话在 Team 的环境执行） | `placement.hint` | `deploy.sh boundary add <名称> --owner <用户名>`；已停用的在控制台重新启用（不要再建第二个） |
 | 等待 Kiro 登录恢复 / Worker 上 kiro-cli 登录已过期 | `tool_auth_expired` | `deploy.sh kiro-login --boundary <边界>`（Worker 主机用 `--host <名称>`）；边界主人用自己的 IdC 账号在浏览器授权设备码（15 分钟内有效） |
+| 这个执行环境的 Worker 版本较旧，还不能显示代码改动 | `worker_outdated` | 该环境的主机执行 `deploy.sh push`（Worker 主机为 `deploy.sh worker-host add <名称>` 重装），Worker 随平台同一版本 |
 | 该执行环境尚未开通原生 KiroCrew 入口 | `crew_origin_required` | `deploy.sh worker-host add <名称>`（或依次 `push`、`native`；见「Worker 主机」） |
 | 这个执行环境的原生 KiroCrew 入口还没有对外开通（控制台） | 浏览器端判断：`crew_url` 为本机回环 | 平台主机上的边界：`deploy.sh boundary native <名称>`；临时用 `deploy.sh tunnel --boundary <名称>` 在本机打开 |
 | 此执行环境的 Worker 版本尚不支持原生会话入口 / 工作流建议 | `worker_upgrade_required` | 更新该 Worker：`deploy.sh push`（平台主机）或 `deploy.sh worker-host push <名称>` |

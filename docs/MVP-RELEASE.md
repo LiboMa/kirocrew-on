@@ -300,9 +300,9 @@ M4（共享与组织）、M5（仓库闭环）在 MVP 之后分别立项，各�
 |---|---|---|---|
 | 1 | `octopus connect` | ◐ EC2 | 已有：`claude`、`kiro`（Kiro CLI），合并写入 MCP 与 Skill、`--dry-run`。剩余：Codex、Kiro IDE（现为 `docs/CONNECT.md` 手动说明）、写前备份核对 |
 | 2 | 用户 CLI | ○ | 现有命令为运维类（init、serve、worker、connect、skill、wait-ready、bootstrap-worker、backup、archive、restore-verify）；login / submit / status / watch / pull / sync 等未做，用户经 MCP 与控制台操作 |
-| 3 | MCP 工具 | ◐ EC2 | 已有 15 个：工作流列表 / 匹配 / 推荐 / 解析 / 保存 / 共享、teams、runs、status（精简与完整）、preview、start、continue、recover、control。剩余：Request、计划确认、搜索、报告、批准、会话关联 |
+| 3 | MCP 工具 | ◐ | 已有 37 个：除工作流、teams、runs、status、preview、start、continue、recover、control 外，计划确认、验收、报告、批准、修订、补充说明、Request（`octopus_requests`，D55）、规则（`octopus_policies` 只读）；`octopus_runs` 按仓库、阶段、工具、客户端、提交者、时间过滤与全文搜索（D56，本机）。剩余：会话关联（随 M3-4） |
 | 4 | 本地 / 远端联动 | ○ | 替代：`deploy.sh space <run-id>` 在主机上运行产出并转发到本机、`/preview`。pull / sync / 会话关联后排（BACKLOG） |
-| 5 | 监控控制台 | ◐ EC2 | 已有（React，D19–D23）：列表、空间切换、状态筛选与关键字搜索（客户端）、详情（任务、Attempt 证据、恢复记录、事件轨迹）、续作 / 诊断 / 停止 / 关闭 / 重开 / 删除 / 导出 / 分配 Worker / 原生入口 / 预览、发起向导、工作流库、设置。剩余：服务端分页，按仓库 / 分支 / 工具 / 客户端 / 提交者 / 时间过滤，全文搜索，diff、门禁与报告视图；`/classic/` 待对齐后移除 |
+| 5 | 监控控制台 | ◐ EC2 | 已有（React，D19–D23）：列表、空间切换、状态筛选与关键字搜索（客户端）、详情（任务、Attempt 证据、恢复记录、事件轨迹）、续作 / 诊断 / 停止 / 关闭 / 重开 / 删除 / 导出 / 分配 Worker / 原生入口 / 预览、发起向导、工作流库、设置。门禁、报告、修订对比、待批准、发布、用量（D37–D47）。D56（本机）：服务端分页，按状态 / 仓库 / 分支 / 阶段 / 工具 / 客户端 / 提交者 / 时间过滤与全文搜索（筛选写进地址栏），每次 Attempt 的代码改动（diff）。剩余：复制 CLI 命令（随 M3-2）；`/classic/` 待对齐后移除 |
 
 §7 验收条件均未勾选（依赖 pull / sync 与服务端搜索）。
 

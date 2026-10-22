@@ -130,7 +130,7 @@
           "name": "M3-3 MCP 补齐：Request、搜索、会话关联",
           "status": "doing",
           "ref": "§7 #3",
-          "more": "已有 35 个工具（含计划确认、验收、报告、批准、修订、补充说明）；2026-10-21 octopus_runs 改为精简列表（status / q / limit、more），EC2 上完整列表约 55 万字符超出 MCP 结果上限。剩余：Request、会话关联。"
+          "more": "37 个工具；Request（octopus_requests）与只读规则（D55）；octopus_runs 按仓库、阶段、工具、客户端、提交者、时间过滤与全文搜索（D56）。剩余：会话关联（随 M3-4 sync）。"
         },
         {
           "id": "m3-sync",
@@ -142,9 +142,9 @@
         {
           "id": "m3-console",
           "name": "M3-5 控制台：服务端分页、按仓库 / 分支 / 工具 / 客户端 / 提交者 / 时间过滤、全文搜索",
-          "status": "doing",
-          "ref": "§7 #5",
-          "more": "2026-10-21：GET /v1/runs 支持 status / q / limit 的服务端过滤与 view=list（列表不带任务说明与规划补全，控制台每 10 秒拉取的列表随之变小）。剩余：控制台的服务端分页，按仓库 / 分支 / 工具 / 客户端 / 提交者 / 时间过滤，全文搜索。"
+          "status": "local",
+          "ref": "D56",
+          "more": "服务端分页、按状态 / 仓库 / 分支 / 阶段 / 工具 / 客户端 / 提交者 / 时间过滤与全文搜索（GET /v1/runs?page=1，筛选写进地址栏），每次 Attempt 的代码改动（Worker mode diff）。待：部署与 EC2 验收（§7 验收 3）。"
         },
         {
           "id": "m3-classic",
