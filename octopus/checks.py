@@ -3,12 +3,15 @@
 (D57 §13.3: a failing advisory check must not keep a required one from running). Each command and all of them together
 are time-limited; a command that overruns has its whole process group ended, and what the total limit leaves is skipped.
 What remains is the exit code, the time and the output's tail with credentials hidden; ``unrunnable`` tells a failure
-the environment caused (a missing command or module, no git identity) from one of what the command checks (D57 §5)."""
+the environment caused (a missing command or module, no git identity) from one of what the command checks, and the
+Worker records its answer in each failed result (D57 §5). A commit a check makes has the platform's identity only where
+git finds none of its own."""
 import os
 import re
 import shutil
 import signal
 import subprocess
+import tempfile
 import threading
 import time
 import uuid
@@ -24,9 +27,9 @@ KEEP = 3600   # a finished job is answered for an hour
 COMMON = ("python3", "python", "pip3", "pip", "pytest", "uv", "node", "npm", "npx", "pnpm", "yarn", "go", "cargo",
           "java", "mvn", "gradle", "make", "ruby", "bundle", "php", "dotnet", "deno", "bun", "git", "docker")
 # A check that makes a commit (git am, git commit) needs an identity the host may not have (D57 §5): the one the
-# platform's own commits carry, unless the Worker's environment gives one.
+# platform's own commits carry, as a default (see _git_defaults).
 _NAME, _EMAIL = (dict(setting.split("=", 1) for setting in sources.COMMITTER[1::2])[key] for key in ("user.name", "user.email"))
-IDENTITY = {"GIT_AUTHOR_NAME": _NAME, "GIT_AUTHOR_EMAIL": _EMAIL, "GIT_COMMITTER_NAME": _NAME, "GIT_COMMITTER_EMAIL": _EMAIL}
+PYTHON_MODULE, NODE_MODULE = "缺少 Python 模块：{}", "缺少 Node 模块：{}"
 # (pattern, reason) for a failure the environment caused, tried in order on the output's tail (D57 §5). A shell's own
 # "not found" counts only at a line's start: what a login profile the check's shell sources prints ("~/.bashrc: line 3:
 # setopt: command not found") starts with that file's path, and says nothing about the check.
@@ -38,27 +41,84 @@ UNRUNNABLE = [
     (re.compile(r"^make(?:\[\d+\])?: ([^\s:/]+): (?:No such file or directory|Command not found)\s*$", re.M), "命令不存在：{}"),
     # the interpreter's own ("python3: No module named pytest") or an import that failed; not a skip reason quoting one
     (re.compile(r"(?:^\S*python[\d.]*: |(?:ModuleNotFoundError|ImportError): )No module named '?([\w.]+)'?", re.M),
-     "缺少 Python 模块：{}"),
+     PYTHON_MODULE),
     # a package, not a file of the project ('./routes', '/p/server.js') or a path alias ('@/utils', '~/lib', '#internal')
-    (re.compile(r"Cannot find (?:module|package) '(?!@/|~/|#)([^'./][^']*)'"), "缺少 Node 模块：{}"),
+    (re.compile(r"Cannot find (?:module|package) '(?!@/|~/|#)([^'./][^']*)'"), NODE_MODULE),
     (re.compile(r"(?:Committer|Author) identity unknown|empty ident name|unable to auto-detect email address"),
      "检查环境没有 git 提交者身份"),
     (re.compile(r"Cannot connect to the Docker daemon"), "Docker 服务不可用"),
 ]
+# A missing module the project has itself, at its root or under src/ (an Agent's wrong import, a file it did not write),
+# is the project's error, not the environment's: what such a module's file may end in.
+OWN_MODULES = {PYTHON_MODULE: (".py",), NODE_MODULE: (".js", ".mjs", ".cjs", ".jsx", ".ts", ".tsx", ".json")}
 
 
-def unrunnable(result):
+def unrunnable(result, project=None):
     """Why a check failed because of where it ran rather than what it checks (D57 §5), in words for the user; None when it
-    passed, failed on its own, or never came to an exit code (a timeout, a stop, the total limit, a runner error)."""
+    passed, failed on its own, or never came to an exit code (a timeout, a stop, the total limit, a runner error). With
+    ``project``, a module the project has itself is its own error; without it, what the Worker recorded with the project
+    at hand is the answer (results of an older Worker are judged from the output alone)."""
+    if "unrunnable" in result:
+        return result["unrunnable"]
     code = result.get("exit")
     if code in (0, None):
         return None
     tail = str(result.get("tail") or "")
     for pattern, reason in UNRUNNABLE:
-        found = pattern.search(tail)
-        if found:
-            return reason.format(*found.groups())
+        names = [found.groups() for found in pattern.finditer(tail)]
+        if not names:
+            continue
+        if project is not None and reason in OWN_MODULES and any(_own(project, reason, name) for name, in names):
+            return None
+        return reason.format(*names[0])
     return "命令不存在（退出码 127）" if code == 127 else None
+
+
+def _own(project, reason, name):
+    """Whether the project has the top level of the module ``name`` (myapp of myapp.models, lodash of lodash/fp, @scope/x
+    of @scope/x/y) at its root or under src/, as a directory or a module file."""
+    parts = name.split(".") if reason == PYTHON_MODULE else name.split("/")
+    top = os.path.join(*parts[:2]) if name.startswith("@") and len(parts) > 1 else parts[0]
+    return any(os.path.isdir(os.path.join(base, top)) or any(os.path.isfile(os.path.join(base, top + end)) for end in OWN_MODULES[reason])
+               for base in (str(project), os.path.join(str(project), "src")))
+
+
+def _quoted(value):
+    return '"' + value.replace("\\", "\\\\").replace('"', '\\"') + '"'
+
+
+def _git_defaults(env):
+    """The checks' global git config (D57 §5): the platform's identity first, then the user's own global config as git
+    finds it ($XDG_CONFIG_HOME/git/config or ~/.config/git/config, then ~/.gitconfig), so the user's, the repository's and
+    a ``-c`` identity all win over the default (GIT_AUTHOR_NAME and the like would win over every one of them). A file of
+    its own outside the project, removed when the job ends; None when the caller chose a global config or it cannot be
+    written. (A git older than 2.32 ignores it: no default, as before.)"""
+    if "GIT_CONFIG_GLOBAL" in env:
+        return None
+    home = env.get("HOME") or None
+    xdg = env.get("XDG_CONFIG_HOME") or (home and os.path.join(home, ".config"))
+    included = [path for path in (xdg and os.path.join(xdg, "git", "config"), home and os.path.join(home, ".gitconfig"))
+                if path and "\n" not in path]
+    lines = ["[user]", f"\tname = {_quoted(_NAME)}", f"\temail = {_quoted(_EMAIL)}",
+             *(["[include]", *(f"\tpath = {_quoted(path)}" for path in included)] if included else [])]
+    try:
+        handle, path = tempfile.mkstemp(prefix="octopus-checks-", suffix=".gitconfig")
+    except OSError:
+        return None
+    try:
+        with os.fdopen(handle, "w") as stream:
+            stream.write("\n".join(lines) + "\n")
+    except OSError:
+        _remove(path)
+        return None
+    return path
+
+
+def _remove(path):
+    try:
+        os.unlink(path)
+    except OSError:
+        pass
 
 
 class Checks:
@@ -121,8 +181,9 @@ class Checks:
         # The Worker's own modules (its unit sets PYTHONPATH to the release) are not the project's (as apps.py).
         env = {key: item for key, item in os.environ.items() if key != "PYTHONPATH"}
         env["PATH"] = os.pathsep.join([*self.path_prepend, os.environ.get("PATH", "/usr/bin:/bin")])
-        for key, item in IDENTITY.items():
-            env.setdefault(key, item)
+        gitconfig = _git_defaults(env)
+        if gitconfig:
+            env["GIT_CONFIG_GLOBAL"] = gitconfig
         # A baseline run asks only whether the commands fail before the change: its first failure answers that, and the
         # project stays on the baseline (previews, downloads and publishing wait) until the run ends.
         stop = value["kind"] == "baseline"
@@ -148,6 +209,9 @@ class Checks:
                     except Exception as exc:   # e.g. the project is gone: a failed check, never a job left running
                         result = {"command": command, "exit": None, "seconds": 0.0,
                                   "tail": f"无法运行检查命令（{type(exc).__name__}）"}
+                    else:
+                        if result["exit"] not in (0, None):   # judged here, where the project is at hand
+                            result["unrunnable"] = unrunnable(result, project)
                 with self.lock:
                     value["results"].append(result)
                 passed = passed and result["exit"] == 0
@@ -156,6 +220,8 @@ class Checks:
                     if stop:
                         break
         finally:
+            if gitconfig:
+                _remove(gitconfig)
             if restore:
                 try:
                     restore()

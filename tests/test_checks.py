@@ -60,27 +60,67 @@ class CheckTests(unittest.TestCase):
         self.assertEqual((value["passed"], value["failed"]), (False, 1))
         self.assertFalse((self.project / "never").exists())
 
-    def test_git_commits_work_without_a_configured_identity(self):
-        # On EC2 a verify "git am …" failed: "Committer identity unknown … empty ident name … not allowed"
+    def bare_git(self, **extra):
+        """A host whose git has no identity: an empty HOME, no system config, no identity in the environment."""
         home = self.project / "home"
-        home.mkdir()
+        home.mkdir(exist_ok=True)
         subprocess.run(["git", "init", "-q", str(self.project / "repo")], check=True)
         bare = {key: value for key, value in os.environ.items()
-                if not key.startswith(("GIT_AUTHOR_", "GIT_COMMITTER_")) and key != "EMAIL"}
-        bare.update(HOME=str(home), XDG_CONFIG_HOME=str(home / ".config"), GIT_CONFIG_NOSYSTEM="1")
-        with patch.dict(os.environ, bare, clear=True):
-            checks = Checks()
-            value = finished(checks, checks.start("run-a", "attempt-1", self.project / "repo",
-                                                  ["git commit -q --allow-empty -m x", "git log -1 --format='%an <%ae>|%cn <%ce>'"])["job"])
-        self.assertEqual([r["exit"] for r in value["results"]], [0, 0], value["results"][0]["tail"])
-        self.assertIn("KiroCrew ON <kirocrew-on@localhost>|KiroCrew ON <kirocrew-on@localhost>", value["results"][1]["tail"])
+                if not key.startswith(("GIT_AUTHOR_", "GIT_COMMITTER_", "GIT_CONFIG")) and key != "EMAIL"}
+        bare.update(HOME=str(home), XDG_CONFIG_HOME=str(home / ".config"), GIT_CONFIG_NOSYSTEM="1", **extra)
+        return home, patch.dict(os.environ, bare, clear=True)
 
-    def test_an_identity_the_workers_environment_gives_is_kept(self):
-        with patch.dict(os.environ, {"GIT_AUTHOR_NAME": "Ops", "GIT_AUTHOR_EMAIL": "ops@example.com"}):
+    def run_git(self, commands, environment):
+        with environment:
             checks = Checks()
-            value = finished(checks, checks.start("run-a", "attempt-1", self.project,
-                                                  ['echo "$GIT_AUTHOR_NAME|$GIT_AUTHOR_EMAIL|$GIT_COMMITTER_NAME|$GIT_COMMITTER_EMAIL"'])["job"])
-        self.assertIn("Ops|ops@example.com|KiroCrew ON|kirocrew-on@localhost", value["results"][0]["tail"])
+            value = finished(checks, checks.start("run-a", "attempt-1", self.project / "repo", commands)["job"])
+        self.assertEqual([r["exit"] for r in value["results"]], [0] * len(commands), [r["tail"] for r in value["results"]])
+        return [r["tail"] for r in value["results"]]
+
+    def test_git_commits_work_without_a_configured_identity(self):
+        # On EC2 a verify "git am …" failed: "Committer identity unknown … empty ident name … not allowed"
+        _, environment = self.bare_git()
+        tails = self.run_git(["git commit -q --allow-empty -m x", "git log -1 --format='%an <%ae>|%cn <%ce>'"], environment)
+        self.assertIn("KiroCrew ON <kirocrew-on@localhost>|KiroCrew ON <kirocrew-on@localhost>", tails[1])
+
+    def test_the_projects_own_identity_wins_over_the_default(self):
+        # e.g. a test suite that commits as "-c user.name=agent" and checks the author
+        _, environment = self.bare_git()
+        subprocess.run(["git", "-C", str(self.project / "repo"), "config", "user.name", "Repo Owner"], check=True)
+        subprocess.run(["git", "-C", str(self.project / "repo"), "config", "user.email", "owner@example.com"], check=True)
+        tails = self.run_git(["git commit -q --allow-empty -m repo", "git log -1 --format='%an <%ae>|%cn <%ce>'",
+                              "git -c user.name=agent -c user.email=a@a commit -q --allow-empty -m c",
+                              "git log -1 --format='%an <%ae>|%cn <%ce>'"], environment)
+        self.assertIn("Repo Owner <owner@example.com>|Repo Owner <owner@example.com>", tails[1])
+        self.assertIn("agent <a@a>|agent <a@a>", tails[3])
+
+    def test_the_users_own_global_git_config_still_applies(self):
+        home, environment = self.bare_git()
+        (home / ".config" / "git").mkdir(parents=True)
+        (home / ".config" / "git" / "config").write_text("[alias]\n\txdg = !echo from-xdg\n\tboth = !echo xdg-wins\n")
+        (home / ".gitconfig").write_text("[user]\n\tname = Home User\n[alias]\n\thello = !echo from-home\n\tboth = !echo home-wins\n")
+        tails = self.run_git(["git hello", "git xdg", "git both", "git commit -q --allow-empty -m h",
+                              "git log -1 --format='%an <%ae>'"], environment)
+        self.assertEqual([t.strip().splitlines()[-1] for t in tails[:3]], ["from-home", "from-xdg", "home-wins"])
+        self.assertIn("Home User <kirocrew-on@localhost>", tails[4])   # the name is the user's; the email, absent, the default
+
+    def test_a_global_config_the_caller_chose_is_kept(self):
+        chosen = self.project / "chosen.gitconfig"
+        chosen.write_text("[user]\n\tname = Ops\n\temail = ops@example.com\n")
+        _, environment = self.bare_git(GIT_CONFIG_GLOBAL=str(chosen))
+        tails = self.run_git(['echo "[$GIT_CONFIG_GLOBAL]"', "git commit -q --allow-empty -m o", "git log -1 --format='%an <%ae>'"],
+                             environment)
+        self.assertIn(f"[{chosen}]", tails[0])
+        self.assertIn("Ops <ops@example.com>", tails[2])
+
+    def test_the_default_identity_is_a_file_outside_the_project_removed_afterwards(self):
+        _, environment = self.bare_git()
+        tails = self.run_git(['echo "[$GIT_CONFIG_GLOBAL]"', 'echo "[${GIT_AUTHOR_NAME:-}${GIT_COMMITTER_NAME:-}]"'], environment)
+        path = Path(tails[0].strip().splitlines()[-1].strip("[]"))
+        self.assertTrue(path.is_absolute(), tails[0])
+        self.assertFalse(path.resolve().is_relative_to(self.project.resolve()))
+        self.assertFalse(path.exists())   # removed when the job ended
+        self.assertIn("[]", tails[1])     # no identity variables: they would win over the project's own
 
     def test_all_passing_commands_pass(self):
         checks = Checks()
@@ -192,21 +232,52 @@ class CheckTests(unittest.TestCase):
         for result, reason in environment:
             with self.subTest(result=result):
                 self.assertEqual(checks_module.unrunnable({"command": "c", "seconds": 0.1, **result}), reason)
+                self.assertEqual(checks_module.unrunnable({"command": "c", "seconds": 0.1, **result}, self.project), reason)
         for result in not_environment:
             with self.subTest(result=result):
                 self.assertIsNone(checks_module.unrunnable({"command": "c", "seconds": 0.1, **result}))
         self.assertTrue(all(isinstance(template, str) for _, template in checks_module.UNRUNNABLE))
 
+    def test_a_module_the_project_has_itself_is_the_projects_error(self):
+        # an Agent's import that is wrong ("from myapp.models import …") must not pass for a missing package
+        (self.project / "myapp").mkdir()
+        (self.project / "tool.py").write_text("")
+        (self.project / "src" / "lib").mkdir(parents=True)
+        (self.project / "src" / "single.py").write_text("")
+        (self.project / "src" / "utils").mkdir()
+        (self.project / "src" / "helpers.ts").write_text("")
+        python = "Traceback (most recent call last):\nModuleNotFoundError: No module named '{}'\n"
+        node = "Error: Cannot find module '{}'\nRequire stack:\n- /p/app.js\n"
+        cases = [(python.format("yaml"), "缺少 Python 模块：yaml"), (python.format("myapp.models"), None),
+                 (python.format("myapp"), None), (python.format("tool"), None), (python.format("lib.x"), None),
+                 (python.format("single"), None), ("/usr/bin/python3: No module named pytest\n", "缺少 Python 模块：pytest"),
+                 (node.format("left-pad"), "缺少 Node 模块：left-pad"), (node.format("./util"), None),
+                 (node.format("../shared/x"), None), (node.format("/p/server.js"), None), (node.format("utils"), None),
+                 (node.format("helpers"), None), (node.format("lodash/fp"), "缺少 Node 模块：lodash/fp")]
+        for tail, reason in cases:
+            with self.subTest(tail=tail):
+                self.assertEqual(checks_module.unrunnable({"command": "c", "exit": 1, "seconds": 0.1, "tail": tail}, self.project), reason)
+        # without the project (the platform's side), what the Worker recorded with it is the answer
+        own = {"command": "c", "exit": 1, "seconds": 0.1, "tail": python.format("myapp.models")}
+        self.assertEqual(checks_module.unrunnable(own), "缺少 Python 模块：myapp.models")
+        self.assertIsNone(checks_module.unrunnable({**own, "unrunnable": None}))
+        self.assertEqual(checks_module.unrunnable({**own, "unrunnable": "命令不存在：x"}), "命令不存在：x")
+
     def test_unrunnable_reads_what_the_shell_python_and_git_really_print(self):
+        (self.project / "myapp").mkdir()
         checks = Checks()
         value = finished(checks, checks.start("run-a", "attempt-1", self.project, [
             "d57-no-such-command --version",
             f"{sys.executable} -c 'import d57_no_such_module'",
             "git init -q repo && cd repo && GIT_AUTHOR_NAME= GIT_COMMITTER_NAME= git commit -q --allow-empty -m x",
-            f"{sys.executable} -c 'assert 1 == 2'"])["job"])
-        self.assertEqual([checks_module.unrunnable(r) for r in value["results"]],
-                         ["命令不存在：d57-no-such-command", "缺少 Python 模块：d57_no_such_module", "检查环境没有 git 提交者身份", None],
-                         [r["tail"] for r in value["results"]])
+            f"{sys.executable} -c 'assert 1 == 2'",
+            f"{sys.executable} -c 'import myapp.models'",
+            "true"])["job"])
+        expected = ["命令不存在：d57-no-such-command", "缺少 Python 模块：d57_no_such_module", "检查环境没有 git 提交者身份", None, None, None]
+        tails = [r["tail"] for r in value["results"]]
+        self.assertEqual([checks_module.unrunnable(r) for r in value["results"]], expected, tails)
+        # the Worker records its answer, made with the project at hand, in each failed result
+        self.assertEqual([r.get("unrunnable", "absent") for r in value["results"]], [*expected[:5], "absent"], tails)
 
     def test_cancel_ends_a_running_job(self):
         checks = Checks()

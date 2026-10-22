@@ -324,7 +324,10 @@ CloudFront 只使用 us-east-1 的证书）：分发加上别名与证书（SNI�
   - `implement` / `deliver` 没有改动时 `diff_present` 失败；`test` 与未标类别的任务没有改动时记为跳过。
 - **检查命令**（`checks_pass`）：
   - Worker 在会话的项目目录中以执行用户运行任务的 `verify`：`bash -lc`，`PATH` 同远程预览，不带 Worker 自己的 `PYTHONPATH`；
-    Worker 的环境没有给出 git 身份时，作者与提交者默认为 `KiroCrew ON <kirocrew-on@localhost>`（D57）。
+    项目、`-c` 与执行用户自己的 git 配置都没有身份时，作者与提交者默认为 `KiroCrew ON <kirocrew-on@localhost>`（D57；
+    经 `GIT_CONFIG_GLOBAL` 指向的临时文件给出，文件再引入用户自己的全局配置，任务结束即删除）。
+  - 失败的命令另记 `unrunnable`：因环境无法执行的原因（命令不存在、缺少模块、没有 git 身份等），否则为空；缺的模块
+    在项目根目录或 `src/` 下就有时算项目自己的错误。
   - 顺序执行，前面的失败不挡后面的命令，每条都运行（D57；会话基线上的运行仍在第一条失败时停下）；每条 10 分钟、合计
     20 分钟，超时结束整个进程组，合计时限用完后余下的命令记为跳过。命令留在后台的进程（如为检查而启动的服务）
     在命令结束时一并结束。
