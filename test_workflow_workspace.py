@@ -187,7 +187,8 @@ class AgentContractTests(unittest.TestCase):
                     self.assertEqual(updated[key], value)
             self.assertIn("真实研发工作", updated["prompt"])
             # the user's own config stays; the seed only adds KiroCrew's YOLO switch (crew_yolo, on by default)
-            self.assertEqual(json.loads(config.read_text()), {"user_config": "preserve", "agent": {"dangerously_skip_permissions": True}})
+            self.assertEqual(json.loads(config.read_text()), {"user_config": "preserve", "agent": {"dangerously_skip_permissions": True},
+                                                              "session": {"eager_spawn": False}})   # D63
             self.assertEqual(session.read_text(), '{"history":"preserve"}\n')
             legacy = json.loads((kiro / "agents/poc-pipeline-code.json").read_text())
             self.assertIn("本地多 ACP PoC", legacy["prompt"])
