@@ -31,10 +31,14 @@ COMMON = ("python3", "python", "pip3", "pip", "pytest", "uv", "node", "npm", "np
 _NAME, _EMAIL = (dict(setting.split("=", 1) for setting in sources.COMMITTER[1::2])[key] for key in ("user.name", "user.email"))
 PYTHON_MODULE, NODE_MODULE = "缺少 Python 模块：{}", "缺少 Node 模块：{}"
 # A path the check's own shell cannot find ("./run_tests.sh", "scripts/lint.sh": a script never written) is the project's
-# error, never the environment's, whatever else the output says; and a 127 is a missing command only where no line says
-# a path is missing (a script of the project's that calls a helper it lacks: "scripts/run.sh: line 2: ./helper.sh: …").
-MISSING_PATH = re.compile(r"^(?:\S*/)?(?:(?:ba|da)?sh: (?:line \d+: |\d+: )?[^\s:]*/[^\s:]*: (?:No such file or directory|"
-                          r"(?:command )?not found)|zsh: (?:no such file or directory|command not found): \S*/\S*)\s*$", re.M)
+# error, never the environment's, whatever else the output says. bash reports a PATH miss as "command not found", never
+# as "No such file or directory": that, even for a bare name, is a file argument, a "source" target or a redirect that
+# is not there ("bash run_tests.sh"). dash's bare "sh: 1: X: not found" is a PATH miss. And a 127 is a missing command
+# only where no line says a path is missing (a script of the project's calling a helper it lacks: "scripts/run.sh: line
+# 2: ./helper.sh: …"); a bare name there would also be a wrapper's PATH miss ("timeout: failed to run command 'pytest'").
+MISSING_PATH = re.compile(r"^(?:\S*/)?(?:(?:ba|da)?sh: (?:line \d+: |\d+: )?(?:[^\s:]+: No such file or directory|"
+                          r"[^\s:]*/[^\s:]*: (?:command )?not found)"
+                          r"|zsh: (?:no such file or directory|command not found): \S*/\S*)\s*$", re.M)
 SAYS_MISSING_PATH = re.compile(r"[^\s:]*/[^\s:]*: (?:No such file or directory|(?:command )?not found)\s*$", re.M)
 # (pattern, reason) for a failure the environment caused, tried in order on the output's tail (D57 §5). A shell's own
 # "not found" counts only at a line's start and for a bare command name: what a login profile the check's shell sources
