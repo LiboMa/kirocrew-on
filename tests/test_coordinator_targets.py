@@ -62,6 +62,13 @@ class PromptTests(unittest.TestCase):
         for words in ("allowed_targets", "refused", "排在失败任务之后的任务"):
             self.assertIn(words, text)
 
+    def test_the_coordinator_is_told_which_gates_only_warn(self):   # D57 §4
+        text = coordinator_instructions({"environment": {}}, __import__("pathlib").Path("/w"))
+        for name in ("diff_present", "artifacts_locked", "tests_fail_on_baseline", "handoff_present", "outcome_valid"):
+            self.assertIn(name, text[text.index("只记提示"):])
+        self.assertIn("evidence.handoff_text", text)
+        self.assertIn("升级前", text[text.index("locked_files"):text.index("locked_files") + 120])   # paths_add: old Sessions only
+
     def test_the_planner_does_not_plan_a_fix_task_after_a_review(self):
         for prompt in (planning.plan_step()["prompt"],
                        planning.replan_step("replan-1", [], "失败", {"reason": "r", "instructions": "i"})["prompt"]):

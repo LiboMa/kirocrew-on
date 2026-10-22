@@ -85,8 +85,10 @@ TAILS = {
     "design": "只做分析，不修改业务代码；在交接中给出结论、依据与后续任务所需的输入。",
     "review": "只读审查，不修改代码；结论绑定审查对象，缺陷用 changes_requested。",
     "test": "只写测试与测试报告，不修改实现；按项目既有依赖与规范工作。",
-    "implement": "依据需求修改源码并真实验证，按项目既有依赖与规范工作；本任务须在源码目录中产生改动（平台检查 diff_present）。",
-    "deliver": "依据需求完成交付并真实验证，按项目既有依赖与规范工作；本任务须在源码目录中产生改动（平台检查 diff_present）。",
+    "implement": "依据需求修改源码并真实验证，按项目既有依赖与规范工作；需求要改代码时，改动应留在源码目录中；"
+                 "只产出不提交的补丁或报告也可以。",
+    "deliver": "依据需求完成交付并真实验证，按项目既有依赖与规范工作；交付涉及代码时，改动应留在源码目录中；"
+               "只产出不提交的补丁或报告也可以。",
 }
 DEFAULT_TAIL = "依据需求进行开发和真实验证，按项目既有依赖与规范工作。"
 COMMON_TAIL = ("记录具体修改、测试命令、结果和限制。若不能完成，最终回答单独一行写 BLOCKED 并说明恢复条件"
@@ -121,7 +123,8 @@ def envelope(task_input, requirement, contract, prompt, upstream, project, hando
     role = (contract or {}).get("role")   # D46 P2: the role card comes first
     card = f"# 你的角色：{roles.LABELS[role]}\n{roles.card(role)}\n\n" if role in roles.KINDS else ""
     return (card + "# 本次研发任务\n\n" + task_input + briefing(requirement, contract) + "\n\n## 任务\n" + prompt +
-            "\n\n## 前序交接\n前序任务的结论、发现、候选与检查；handoff 是其完整交接文件的路径，需要细节时读取。\n" +
+            "\n\n## 前序交接\n前序任务的结论、发现、候选与检查；handoff 是其完整交接文件的路径，需要细节时读取；"
+            "执行者没有写交接时，handoff_text 是平台根据其结果生成的交接。\n" +
             dumps(upstream) + f"\n\n源码目录：{project}\n交接文件：{handoff}\n" + tail + common + HANDOFF + extra)
 
 
@@ -617,8 +620,9 @@ class Worker:
     def candidate(self, body):
         """A task's candidate commit (D37 §3, ``mode: commit``), a review's check that the workspace is still the
         candidate it reviewed (§6, ``mode: check``), or putting back what a read-only platform task changed in tracked
-        files after that candidate (D46 P4, ``mode: restore``; never moves the branch), or what a candidate changed
-        (D56, ``mode: diff``; read only)."""
+        files after that candidate (D46 P4, ``mode: restore``; never moves the branch), or what a review changed in tracked
+        files — its commits on top of the candidate too, so the branch is back on it (D57 §4, ``mode: rewind``) — or what a
+        candidate changed (D56, ``mode: diff``; read only)."""
         run = self.path(body["run_id"])
         self._undo_baseline(run)
         try:   # a Session whose workspace is gone (cleaned up long after it ended) says so, not a 500
@@ -628,7 +632,7 @@ class Worker:
         base, branch = record.get("commit"), record.get("branch")
         require(base and branch, "此会话的项目没有 Git 基线，无法生成候选", 409, "candidate_unsupported")
         mode = body.get("mode")
-        require(mode in {"commit", "check", "restore", "diff"}, "mode 只能是 commit、check、restore 或 diff")
+        require(mode in {"commit", "check", "restore", "rewind", "diff"}, "mode 只能是 commit、check、restore、rewind 或 diff")
         for key in ("parent", "expected", "since"):
             require(body.get(key) is None or (isinstance(body[key], str) and workspace.SHA.fullmatch(body[key])),
                     f"{key} 须为完整的提交 ID")
@@ -646,6 +650,15 @@ class Worker:
                 if state["changed_files"]:
                     workspace.restore(project, state["changed_files"])
                 return workspace.clean_against(project, body["expected"])
+            if mode == "rewind":
+                require(body.get("expected"), "rewind 需要 expected")
+                state = workspace.clean_against(project, body["expected"])
+                if state["head"] != body["expected"]:   # only commits made on top of the candidate are dropped
+                    require(workspace.ancestor(project, body["expected"], state["head"], env=workspace.SAFE_GIT_ENV),
+                            f"会话分支不在候选 {body['expected'][:7]} 之上，不能撤回", 409, "conflict")
+                    current = workspace._git(project, "rev-parse", "--abbrev-ref", "HEAD")
+                    require(current == branch, f"工作区不在会话分支 {branch}（当前 {current}），不能撤回", 409, "conflict")
+                return workspace.rewind(project, body["expected"])
             message = str(body.get("message") or "KiroCrew ON：任务候选")[:300]
             return workspace.task_candidate(project, message, branch, run, body.get("parent"), base, body.get("since"))
         except ValueError as exc:

@@ -2084,6 +2084,7 @@ class Service:
         head, sound, unreviewed, reviewed = None, False, False, False
         for row in db.execute("SELECT id,task_id,evidence FROM attempts WHERE run_id=? ORDER BY updated, created", (rid,)):
             evidence = json.loads(row["evidence"] or "{}")
+            # only a fail fails: a warn (D57 §4) passes, as pass and skip do
             passed = row["id"] in current and not any(g.get("status") == "fail" for g in evidence.get("gates", []))
             candidate = evidence.get("candidate") or {}
             if candidate.get("sha") and candidate.get("moved", True):

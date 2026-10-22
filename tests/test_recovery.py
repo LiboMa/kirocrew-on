@@ -9,7 +9,7 @@ from unittest.mock import patch
 
 from octopus.db import Database, dumps
 from octopus.domain import Service
-from octopus.engine import Engine
+from octopus.engine import BLOCKED, Engine
 from octopus.security import Error, authenticate, create_user, issue_token
 from tests.old_worker import as_old_worker
 
@@ -244,18 +244,32 @@ class RecoveryTests(unittest.TestCase):
         reconcile(self.db)
         self.assertEqual(self.service.run(self.actor, self.run["id"])["recovery"]["used"], 1)
 
-    def test_missing_quality_report_cannot_be_accepted(self):
+    def test_a_missing_quality_report_is_judged_by_the_result_text(self):   # D57 §4: a warning, not a failure
         original = self.request
         def missing(config, path, body, **kwargs):
             result = original(config, path, body, **kwargs)
             result.pop("outcome", None)
             return result
         self.engine = Engine(self.db, missing)
+        result = self.tick()
+        self.assertEqual((result["status"], result["progress"]["accepted"], result["recovery"]["used"]), ("completed", 2, 0))
+        gates = {g["name"]: g["status"] for g in result["tasks"][0]["attempts"][0]["evidence"]["gates"]}
+        self.assertEqual((gates["outcome_valid"], gates["outcome_pass"]), ("warn", "skip"))
+
+    def test_a_blocked_reply_without_a_quality_report_cannot_be_accepted(self):
+        original = self.request
+        def blocked(config, path, body, **kwargs):
+            result = original(config, path, body, **kwargs)
+            if result.pop("outcome", None) is not None:   # a task's reply, not the Coordinator's
+                result["native"]["result"] = "BLOCKED：缺少目标仓库源码"
+            return result
+        self.engine = Engine(self.db, blocked)
         self.decision = {"action": "wait_for_user", "reason": "执行结果未交付", "instructions": "补充本轮真实 outcome 后重跑"}
         result = self.tick()
-        self.assertEqual(result["status"], "blocked")
-        self.assertEqual(result["progress"]["accepted"], 0)
-        self.assertEqual(result["tasks"][0]["attempts"][0]["evidence"]["failure_type"], "contract")
+        self.assertEqual((result["status"], result["progress"]["accepted"]), ("blocked", 0))
+        attempt = result["tasks"][0]["attempts"][0]
+        self.assertEqual(attempt["error"], BLOCKED)
+        self.assertEqual([(g["name"], g["status"]) for g in attempt["evidence"]["gates"]], [("native_completed", "fail")])
 
     def test_mcp_recovery_routes_to_same_versioned_api(self):
         from octopus import mcp

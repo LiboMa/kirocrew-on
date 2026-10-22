@@ -88,10 +88,35 @@ class CompactStatusTests(unittest.TestCase):
         view = mcp.call(One(), "octopus_status", {"run_id": RID})
         latest = view["session"]["tasks"][0]["latest"]
         self.assertEqual(latest["gates"], {"passed": 2, "failed": [{"name": "checks_pass", "detail": "检查命令失败：npm test（退出码 1）"}],
-                                           "skipped": ["review_bound"]})
+                                           "warned": [], "skipped": ["review_bound"]})
         self.assertEqual(latest["candidate"], {"sha": "abc1234" + "0" * 5, "files": 2, "insertions": 12, "deletions": 3})
         self.assertEqual(view["session"]["verified"]["task_id"], "implement")
         self.assertNotIn("原始输出", json.dumps(view, ensure_ascii=False))
+
+    def test_warned_gates_and_the_session_count_are_listed(self):   # D57 §4
+        warn = {"name": "diff_present", "status": "warn", "detail": "本任务没有改动入库文件\n" + RAW}
+        earlier, final = attempt(1, "accepted", "pass", "首版"), attempt(3, "accepted", "pass", "只写了报告")
+        earlier["evidence"]["gates"] = [warn, {**warn, "name": "outcome_valid"}]   # not the latest: not counted
+        final["evidence"]["gates"] = [{"name": "native_completed", "status": "pass"}, warn]
+        session = json.loads(json.dumps({**SESSION, "tasks": [{**SESSION["tasks"][0], "attempts": [earlier, final]},
+                                                              *SESSION["tasks"][1:]]}))
+        view = mcp.compact_status(session, [])["session"]
+        latest = view["tasks"][0]["latest"]
+        self.assertEqual(latest["gates"]["warned"], [{"name": "diff_present", "detail": "本任务没有改动入库文件"}])
+        self.assertEqual((latest["gates"]["passed"], latest["gates"]["failed"]), (1, []))
+        self.assertEqual(view["warnings"], 1)
+        self.assertEqual(mcp.compact_status(SESSION, [])["session"]["warnings"], 0)
+
+    def test_a_generated_handoff_is_flagged_not_inlined(self):   # D57 §4: compact, as a real one's path is
+        session = json.loads(json.dumps(SESSION))
+        evidence = session["tasks"][0]["attempts"][-1]["evidence"]
+        del evidence["handoff_path"]
+        evidence.update(handoff_generated=True, handoff_text="（平台生成：执行者没有写交接文件）\n" + RAW)
+        view = mcp.compact_status(session, [])
+        latest = view["session"]["tasks"][0]["latest"]
+        self.assertEqual((latest["handoff"], latest["handoff_generated"]), (None, True))
+        self.assertNotIn("原始输出", json.dumps(view, ensure_ascii=False))
+        self.assertNotIn("handoff_generated", mcp.compact_status(SESSION, [])["session"]["tasks"][0]["latest"])
 
     def test_a_switched_attempt_says_what_it_was_switched_from(self):
         session = json.loads(json.dumps(SESSION))

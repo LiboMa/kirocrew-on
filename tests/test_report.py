@@ -198,6 +198,26 @@ class ReportTests(unittest.TestCase):
         self.assertIn("## 任务", report.markdown(damaged))
         report.html(damaged)
 
+    def test_a_warned_gate_is_marked_apart_from_a_pass_and_a_fail(self):   # D57 §4
+        value = view()
+        value["tasks"][0]["attempts"][-1]["evidence"]["gates"][5] = {"name": "diff_present", "status": "warn",
+                                                                     "detail": "本任务没有改动入库文件"}
+        self.assertIn("| diff_present | ⚠ | 本任务没有改动入库文件 |", report.markdown(value))
+        self.assertIn('<tr class="warn"><td>diff_present</td><td>⚠</td>', report.html(value))
+
+    def test_the_report_counts_the_final_attempts_warnings(self):   # D57 §4: 「提示 N 项」, only when there are any
+        value = view()
+        code, review = value["tasks"]
+        code["attempts"][0]["evidence"]["gates"][0] = {"name": "native_completed", "status": "warn"}   # not the final one
+        code["attempts"][-1]["evidence"]["gates"][5] = {"name": "diff_present", "status": "warn", "detail": "本任务没有改动入库文件"}
+        review["attempts"][-1]["evidence"]["gates"].append({"name": "review_bound", "status": "warn", "detail": "已撤回 a.py"})
+        md, page = report.markdown(value), report.html(value)
+        self.assertIn("- 提示 2 项", md)
+        self.assertLess(md.index("- 提示 2 项"), md.index("## 需求"))   # a summary, before the sections
+        self.assertIn('<p class="warn">提示 2 项</p>', page)
+        for text in (report.markdown(view()), report.html(view())):
+            self.assertIsNone(re.search(r"提示 \d+ 项", text))
+
     def test_an_old_session_reports_without_gates(self):
         old = view(verified=None, publish=None, recovery=None, planning=None)
         for task in old["tasks"]:

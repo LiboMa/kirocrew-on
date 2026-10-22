@@ -65,6 +65,11 @@ export function SessionView({ id }: { id: string }) {
   const close = closeAction(run);
   const design = run.purpose === "workflow_design";
   const percent = run.progress.total ? (100 * run.progress.accepted) / run.progress.total : 0;
+  // D57 §4: what the tasks' latest Attempts noted without blocking
+  const warnings = run.tasks.reduce((sum, task) => {
+    const latest = task.attempts?.[task.attempts.length - 1];
+    return sum + (latest?.evidence?.gates ?? []).filter((gate) => gate.status === "warn").length;
+  }, 0);
 
   return (
     <div className="mx-auto max-w-6xl space-y-5 px-4 py-6 sm:px-8" id="run-view">
@@ -102,7 +107,8 @@ export function SessionView({ id }: { id: string }) {
             <PublishControl run={run} />
           </div>
           <div className="flex flex-col items-end gap-2">
-            <StatusBadge status={run.lifecycle === "closed" ? "stopped" : run.status} label={statusText(run)} className="text-xs" />
+            <StatusBadge status={run.lifecycle === "closed" ? "stopped" : run.status} className="text-xs"
+              label={run.lifecycle !== "closed" && run.status === "completed" && warnings ? `完成 · ${warnings} 项提示` : statusText(run)} />
             <div className="w-44 space-y-1 text-right">
               <span className="text-xs text-muted-foreground">交接进度 {run.progress.accepted} / {run.progress.total}</span>
               <Progress value={percent} aria-label="交接进度" />

@@ -77,6 +77,7 @@ class PlanningTests(unittest.TestCase):
         prompt = planning.plan_step()["prompt"]
         self.assertIn("会话基线", prompt)       # tests_fail_on_baseline
         self.assertIn("paths 中列出", prompt)   # artifacts_locked
+        self.assertIn("记提示", prompt)         # D57 §4: both are warnings now
         self.assertIn("不安装依赖", prompt)
         self.assertIn(".gitignore", prompt)
 

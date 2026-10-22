@@ -64,12 +64,30 @@ def handoff(row):
         item["suggestions"] = [clip(s, 200) for s in outcome["suggestions"][:5]]
     if evidence.get("handoff_path"):
         item["handoff"] = evidence["handoff_path"]
+    elif evidence.get("handoff_text"):   # D57 §4: the platform wrote it (no file on the Worker): given whole
+        item["handoff_text"] = evidence["handoff_text"]
     candidate = evidence.get("candidate") or {}
     if candidate.get("sha"):
         item["candidate"] = {"sha": str(candidate["sha"])[:12], "files": (candidate.get("names") or [])[:30]}
     if evidence.get("check_results"):
         item["checks"] = [{"command": clip(r.get("command"), 200), "exit": r.get("exit")} for r in evidence["check_results"][:10]]
+    # D57 §4: what its gates only warned of (an accepted task's files it changed, no change, …), for the review that follows
+    warned = [{"name": g.get("name"), **({"detail": clip(g["detail"], 200)} if g.get("detail") else {}),
+               **({"files": list(g["files"])[:30]} if g.get("files") else {})} for g in gates.warnings(evidence.get("gates"))]
+    if warned:
+        item["warnings"] = warned[:10]
     return item
+
+
+GENERATED = "（平台生成：执行者没有写交接文件）"
+
+
+def generated_handoff(task, attempt, evidence, native):
+    """D57 §4: the handoff the platform writes when the executor wrote none — what ``handoff`` tells a later task of it,
+    from the native result, under a first line that says who wrote it. Kept in the evidence as ``handoff_text``: a
+    later task, the recovery context and the Coordinator read it there, as they read a real one at ``handoff_path``."""
+    item = handoff({"id": task["id"], "spec": attempt["spec"], "evidence": dumps(evidence), "result": native.get("result")})
+    return GENERATED + "\n" + json.dumps(item, ensure_ascii=False, indent=2)
 
 
 BROKEN = frozenset({"native_error", "native_stopped", "auth", "tool", "model"})   # the conversation itself failed
@@ -296,7 +314,8 @@ class Engine:
         with self.db.transaction() as db:
             journal.change(db, "attempts", attempt_id, actor, "attempt.state", "Knowledge 沉淀未完成",
                            event={"id": attempt_id, "status": "accepted", "skipped": reason},
-                           status="accepted", error=None, evidence=dumps({**evidence, "knowledge_skipped": reason}),
+                           status="accepted", error=None, evidence=dumps({**evidence, "knowledge_skipped": reason,
+                                                                          "warnings": gates.warnings(evidence.get("gates"))}),
                            updated=time.time())
             journal.change_rows(db, "tasks", "current_attempt=?", (attempt_id,), actor, "task.state", status="accepted")
         self.update(run["id"], "ready", None, actor=actor)
@@ -553,7 +572,7 @@ class Engine:
         if answer.get("finished"):   # it ended on its own meanwhile: its result is judged as usual on the next look
             self._mark_watchdog(attempt, prior, None)
             return True
-        return self._stalled(run, task, attempt, {**prior, **(result.get("evidence") or {})}, info, settings)
+        return self._stalled(run, task, attempt, {**prior, **(result.get("evidence") or {})}, info, settings, config)
 
     def _mark_watchdog(self, attempt, prior, value):
         evidence = {key: item for key, item in prior.items() if key != "watchdog"}
@@ -563,7 +582,7 @@ class Engine:
             journal.change(db, "attempts", attempt["id"], journal.ENGINE, "attempt.watchdog", quiet=("evidence",),
                            evidence=dumps(evidence), updated=time.time())
 
-    def _stalled(self, run, task, attempt, evidence, info, settings):
+    def _stalled(self, run, task, attempt, evidence, info, settings, config=None):
         """The Attempt the watchdog stopped: blocked as a native error, retried once, then diagnosed (D39 §3.2)."""
         rid, reason = run["id"], info["reason"]
         prior = json.loads(attempt["evidence"] or "{}")
@@ -576,6 +595,8 @@ class Engine:
         evidence = {**evidence, "failure_type": "native_error", "watchdog": {**info, "stopped_at": self.wall()},
                     **({"transient": "stalled"} if retry else {}),
                     **({"budget_refused": over} if over else {})}
+        if config is not None:   # D57 §4: what a stopped review changed is put back, as for any review that did not pass
+            self._put_back_review(run, config, attempt, evidence)
         if not retry and knowledge.platform(json.loads(run["snapshot"]), task["id"]):   # D46 P4: skipped, not diagnosed
             self._skip_knowledge(run, attempt["id"], evidence, reason, journal.ENGINE)
             return True
@@ -669,6 +690,63 @@ class Engine:
             done = "未能还原：" + str(exc)[:160]
         return fail("read_only", f"Knowledge 任务修改了 {files}（{done}），未沉淀")
 
+    @staticmethod
+    def _reverted(rewound, sha):
+        """What a Worker's rewind put back (D57 §4), as the notes a review_bound record shows, and the files."""
+        reverted, notes = [str(name) for name in rewound.get("reverted") or []], []
+        if reverted:
+            notes.append("审查改动的已跟踪文件已由平台撤回：" + "、".join(reverted[:10])
+                         + (f" 等 {len(reverted)} 个" if len(reverted) > 10 else ""))
+        if rewound.get("rewound"):
+            notes.append(f"审查期间的 {rewound['rewound']} 个提交已撤回，会话分支回到候选 {sha[:7]}")
+        if not notes:   # e.g. only what a candidate leaves out changed: still say what the platform did
+            notes.append(f"会话分支已由平台恢复到候选 {sha[:7]}")
+        return notes, reverted
+
+    def _put_back_review(self, run, config, attempt, evidence):
+        """A review that ended without passing — a rejection, an error, the watchdog's stop — leaves the workspace as the
+        reviewer left it, and the rework's candidate would take its edits in: they are put back all the same (D57 §4).
+        Recorded as review_bound beside the failure, which stays the Attempt's: its error, failure_type and gate are what
+        recovery sees. warn: put back; skip: no tracked file changed (or a Worker that cannot); fail: putting back failed.
+        Only tracked files are put back (``sources.rewind``: untracked files the reviewer created stay). A review its gates
+        judged (review_bound already recorded) was put back there."""
+        spec, snapshot = json.loads(attempt["spec"]), json.loads(run["snapshot"])
+        if spec.get("kind") != "review" or snapshot.get("execution_contract", 1) < 3 \
+                or planning.planning_task(attempt["task_id"], snapshot) \
+                or any(g.get("name") == "review_bound" for g in evidence.get("gates") or []):
+            return
+        with self.db.read() as db:
+            latest = self._head_candidate(db, run["id"])
+        if latest is None:
+            return
+        sha = latest["sha"]
+        body = {"run_id": run["id"], "attempt_id": attempt["id"], "expected": sha}
+        record = lambda status, detail, **extra: evidence.setdefault("gates", []).append(
+            {**gates.record("review_bound", status, detail), **extra})
+        try:
+            check = self.request(config, "/candidate", {**body, "mode": "check"})
+        except Error as exc:
+            if not 400 <= exc.status < 500:
+                raise
+            return record("skip", gates.OLD_WORKER) if exc.status == 404 else \
+                record("fail", f"无法核对审查的工作区，未能撤回审查的改动：{exc}")
+        if not check["changed_files"] and check["head"] == sha:
+            return record("skip", "审查没有改动已跟踪的文件")
+        what = "审查改动的 " + "、".join(check["changed_files"][:10]) if check["changed_files"] else \
+            f"审查期间被改动的会话分支（HEAD 不是候选 {sha[:7]}）"
+        try:
+            rewound = self.request(config, "/candidate", {**body, "mode": "rewind"}, timeout=180)
+        except Error as exc:
+            if not 400 <= exc.status < 500:
+                raise
+            return record("fail", f"平台未能撤回{what}：{exc}") if exc.status == 409 else \
+                record("skip", f"未能撤回{what}：{gates.OLD_WORKER}")
+        if rewound.get("head") != sha or not rewound.get("clean"):
+            return record("fail", f"平台撤回{what}后，工作区仍不是候选 {sha[:7]}："
+                          + "、".join((rewound.get("changed_files") or [])[:10]))
+        notes, reverted = self._reverted(rewound, sha)
+        record("warn", "；".join(notes), **({"files": reverted[:30]} if reverted else {}))
+
     def _more_gates(self, run, config, task, attempt, spec, evidence, report, latest, start=None):
         """diff_present, no_secrets and the start of checks_pass for a code task; review_bound for a review (D37 §4).
         (error, failure_type, checking): ``checking`` when the verify commands were started."""
@@ -686,9 +764,9 @@ class Engine:
             if latest is None:
                 records.append(gates.record("review_bound", "skip", "此前没有候选"))
                 return None, None, False
+            body = {"run_id": run["id"], "attempt_id": attempt["id"], "expected": latest["sha"]}
             try:
-                check = self.request(config, "/candidate", {"run_id": run["id"], "attempt_id": attempt["id"], "mode": "check",
-                                                            "expected": latest["sha"]})
+                check = self.request(config, "/candidate", {**body, "mode": "check"})
             except Error as exc:
                 if exc.status == 404:
                     records.append(gates.record("review_bound", "skip", gates.OLD_WORKER))
@@ -697,13 +775,33 @@ class Engine:
                     return fail("review_bound", f"无法核对审查的工作区：{exc}")
                 raise
             sha, reviewed = latest["sha"], str((report or {}).get("reviewed_commit") or "")
-            if check["changed_files"]:
-                return fail("review_bound", "审查不应修改代码，修改应交给实现任务：" + "、".join(check["changed_files"][:10]))
-            if check["head"] != sha:
-                return fail("review_bound", f"审查期间会话分支被改动（HEAD 不是候选 {sha[:7]}）")
+            notes, reverted = [], []
+            if check["changed_files"] or check["head"] != sha:
+                # D57 §4: what the review changed is put back by the platform, its branch back on the candidate
+                try:
+                    rewound = self.request(config, "/candidate", {**body, "mode": "rewind"}, timeout=180)
+                except Error as exc:
+                    if exc.status == 409:   # refused (HEAD not on top of the candidate, another branch) or failed: not bound
+                        what = "审查改动了 " + "、".join(check["changed_files"][:10]) if check["changed_files"] else \
+                            f"审查期间会话分支被改动（HEAD 不是候选 {sha[:7]}）"
+                        return fail("review_bound", f"{what}，平台未能撤回：{exc}")
+                    if 400 <= exc.status < 500:   # a Worker from before D57 cannot put it back: judged as before
+                        if check["changed_files"]:
+                            return fail("review_bound", "审查不应修改代码，修改应交给实现任务：" + "、".join(check["changed_files"][:10]))
+                        return fail("review_bound", f"审查期间会话分支被改动（HEAD 不是候选 {sha[:7]}）")
+                    raise
+                if rewound.get("head") != sha or not rewound.get("clean"):
+                    return fail("review_bound", f"平台撤回审查的改动后，工作区仍不是候选 {sha[:7]}："
+                                + "、".join((rewound.get("changed_files") or [])[:10]))
+                notes, reverted = self._reverted(rewound, sha)
             if not (len(reviewed) >= 7 and sha.startswith(reviewed)):
-                return fail("review_bound", f"审查报告的 reviewed_commit（{reviewed or '缺失'}）与候选 {sha[:7]} 不符")
-            records.append(gates.record("review_bound", "pass", sha[:12]))
+                notes.append(f"审查报告写的版本（{reviewed[:12] or '缺失'}）与候选 {sha[:7]} 不符")
+            if notes:   # D57 §13.4: the verdict counts, bound to the candidate
+                records.append(gates.record("review_bound", "warn", "；".join(notes) + "；审查结论照常采用"))
+                if reverted:
+                    records[-1]["files"] = reverted[:30]
+            else:
+                records.append(gates.record("review_bound", "pass", sha[:12]))
             evidence["reviewed"] = sha
             return None, None, False
         message = f"KiroCrew ON：{spec.get('name') or task['id']}（{run['id']}/{task['id']} 第 {attempt['number']} 次）"
@@ -724,9 +822,11 @@ class Engine:
                                  "moved": not candidate["secrets"], "start": start,
                                  **{key: candidate[key] for key in ("names", "names_truncated") if key in candidate}}
         if not candidate["changed"]:
-            if kind in ("implement", "deliver"):
-                return fail("diff_present", "任务没有改动任何文件")
-            records.append(gates.record("diff_present", "skip", "没有改动（此类任务不要求）"))
+            if kind in ("implement", "deliver"):   # D57 §4: a warning, not a failure
+                records.append(gates.record("diff_present", "warn",
+                                            "本任务没有改动入库文件。如果它本来就只产出补丁或报告，可以忽略。"))
+            else:
+                records.append(gates.record("diff_present", "skip", "没有改动（此类任务不要求）"))
         else:
             records.append(gates.record("diff_present", "pass", f"{candidate['files']} 个文件"))
         if candidate["secrets"]:
@@ -735,11 +835,9 @@ class Engine:
         locked = self._locked(run, task, spec, candidate)
         if locked:
             status, detail, *files = locked
-            if status == "fail":
-                result = fail("artifacts_locked", detail)
-                records[-1]["files"] = files[0]   # D54: what the Coordinator may give this task (context.locked_files)
-                return result
             records.append(gates.record("artifacts_locked", status, detail))
+            if files:   # D57 §4: the accepted tasks' files it changed, named for the review that follows
+                records[-1]["files"] = files[0]
         commands = spec.get("verify") or []
         if not commands:
             records.append(gates.record("checks_pass", "skip", "任务没有检查命令"))
@@ -758,7 +856,8 @@ class Engine:
         return None, None, True
 
     def _locked(self, run, task, spec, candidate):
-        """artifacts_locked (D37 §11.2): (status, detail), or None when the candidate changed nothing."""
+        """artifacts_locked (D37 §11.2): (status, detail), with the files it names for a warning, or None when the candidate
+        changed nothing."""
         if not candidate.get("changed"):
             return None
         if "names" not in candidate:
@@ -787,7 +886,8 @@ class Engine:
         if not broken:
             return "pass", None
         listed = "；".join(f"改动了已验收任务「{owner}」的交付物：{'、'.join(files[:10])}" for owner, files in broken.items())
-        return "fail", listed + "；如需修改，请在本任务的 paths 中列出", sorted(n for files in broken.values() for n in files)
+        # D57 §4: a warning — the change stays, for the review that follows to look at
+        return "warn", listed + "（本任务的 paths 未列出，请审查时确认）", sorted(n for files in broken.values() for n in files)
 
     def _start_baseline(self, run, config, attempt, evidence):
         """tests_fail_on_baseline (D37 §11.1): the second run of the verify commands, on the Session's baseline."""
@@ -824,7 +924,6 @@ class Engine:
             return
         evidence["baseline_results"] = status.get("results") or []
         evidence["baseline_artifacts"] = status.get("artifacts") or []
-        base = str(evidence["baseline"].get("base") or "")[:7]
         last = evidence["baseline_results"][-1] if evidence["baseline_results"] else {}
         unjudged = (status.get("error") or ("基线检查中断（Worker 重启）" if status.get("lost") else None)
                     or ("基线检查已停止" if last.get("stopped") or (not status.get("passed") and status.get("failed") is None) else None)
@@ -833,11 +932,9 @@ class Engine:
         if unjudged:   # nothing about the tests: never a pass or a fail
             evidence["gates"].append(gates.record("tests_fail_on_baseline", "skip", unjudged))
             return self._settle(run, task, attempt, evidence, None)
-        if status.get("passed"):
-            error = f"新增的测试在改动之前（基线 {base}）也通过，不能证明新行为"
-            evidence["gates"].append(gates.record("tests_fail_on_baseline", "fail", error))
-            evidence.update(failure_type="gate", gate="tests_fail_on_baseline")
-            return self._settle(run, task, attempt, evidence, error)
+        if status.get("passed"):   # D57 §4: a warning, not a failure
+            evidence["gates"].append(gates.record("tests_fail_on_baseline", "warn", "测试在改动前也能通过，可能没测到改动"))
+            return self._settle(run, task, attempt, evidence, None)
         failed = evidence["baseline_results"][status["failed"]] if status.get("failed") is not None else {}
         evidence["gates"].append(gates.record("tests_fail_on_baseline", "pass",
                                               f"基线上失败：{failed.get('command', '')}（退出码 {failed.get('exit')}）"))
@@ -893,6 +990,8 @@ class Engine:
     def _settle(self, run, task, attempt, evidence, error):
         """Accept or block an Attempt whose checks ended, like advance does for any other; recovery follows a block."""
         rid, state = run["id"], "blocked" if error else "accepted"
+        if state == "accepted":
+            evidence["warnings"] = gates.warnings(evidence.get("gates"))   # D57 §4: listed, not blocking
         with self.db.transaction() as db:
             current = db.execute("SELECT * FROM tasks WHERE run_id=? AND id=?", (rid, task["id"])).fetchone()
             active = db.execute("SELECT desired FROM runs WHERE id=?", (rid,)).fetchone()[0] == "active"
@@ -1118,7 +1217,7 @@ class Engine:
             # the watchdog's stop, finished after the platform stopped waiting for it (or across a restart)
             mark = prior["watchdog"]
             return self._stalled(run, task, attempt, evidence, {k: v for k, v in mark.items()},
-                                 recovery.policy(snapshot.get("recovery"), legacy=True))
+                                 recovery.policy(snapshot.get("recovery"), legacy=True), config)
         retry = None
         if native.get("done"):
             text = str(native.get("result", "")).strip()
@@ -1145,6 +1244,9 @@ class Engine:
             # The five checks every Attempt passes, named and recorded (D37 §4).
             error, failure_type, evidence["gates"] = gates.basic(native, result, spec, evidence, report, invalid, lost,
                                                                  missing, blocked_line)
+            if any(g["name"] == "handoff_present" and g["status"] == "warn" for g in evidence["gates"]):
+                evidence["handoff_generated"] = True   # D57 §4: the executor wrote none; the platform did
+                result["handoff"] = evidence["handoff_text"] = generated_handoff(task, attempt, evidence, native)
             if not error and gated:
                 error, failure_type, checking = self._more_gates(run, config, task, attempt, spec, evidence, report, latest,
                                                                  start)
@@ -1163,6 +1265,8 @@ class Engine:
                     evidence["gate"] = "evaluated"
                 elif pending:
                     evidence["evaluation"] = {"pending": pending}
+            if error:   # D57 §4: a review that did not pass is put back too; its failure stays what recovery sees
+                self._put_back_review(run, config, attempt, evidence)
             if lost and not error:
                 evidence["result_missing"] = True
             if error:
@@ -1171,6 +1275,8 @@ class Engine:
                 if retry == "never_started" and (evidence.get("queued") or {}).get("resuming"):
                     retry = None   # it had begun before its queue: not a lack of resources (D60 §3.4)
             state = "blocked" if error else "accepted"
+            if state == "accepted" and invalid and knowledge.platform(snapshot, task["id"]):
+                evidence["knowledge_skipped"] = invalid   # D57 §4: accepted with the warning, but its list cannot be read
             if state == "accepted" and (evidence.get("evaluation") or {}).get("pending"):
                 state = "awaiting_acceptance"   # D46 P3: what the Evaluator left to a person
         with self.db.transaction() as db:
@@ -1204,6 +1310,8 @@ class Engine:
                     and knowledge.platform(snapshot, task["id"]):   # D46 P4: the platform's side task never holds a Session
                 evidence["knowledge_skipped"] = error
                 state, error = "accepted", None
+            if state in {"accepted", "awaiting_acceptance"}:   # D57 §4: listed, not blocking; kept when a person accepts
+                evidence["warnings"] = gates.warnings(evidence.get("gates"))
             journal.change(db, "attempts", attempt["id"], journal.WORKER, "attempt.state",
                            event={"id": attempt["id"], "task_id": task["id"], "status": state, "error": error,
                                   "evidence": evidence},

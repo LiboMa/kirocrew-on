@@ -1,4 +1,5 @@
-"""D37 §4: the first five gates are today's checks, named and recorded; their verdicts do not change."""
+"""D37 §4: the first five gates are today's checks, named and recorded. D57 §4: a missing handoff and an invalid outcome
+are warnings; the other verdicts do not change."""
 import unittest
 
 from octopus import gates
@@ -8,8 +9,10 @@ SPEC = {"tool": "claude", "model": "auto", "effort": ""}
 DONE = {"done": True, "result": "完成", "error": ""}
 
 
-def judge(native=DONE, handoff="交接", evidence=None, report=None, invalid=None, lost=False, missing=False, blocked=False):
-    return gates.basic(native, {"handoff": handoff}, SPEC, {"actual_backend": "claude", **(evidence or {})}, report,
+def judge(native=DONE, handoff="交接", evidence=None, report=None, invalid=None, lost=False, missing=False, blocked=False,
+          outcome=None):
+    result = {"handoff": handoff, **({"outcome": outcome} if outcome is not None else {})}
+    return gates.basic(native, result, SPEC, {"actual_backend": "claude", **(evidence or {})}, report,
                        invalid, lost, missing, blocked)
 
 
@@ -39,9 +42,7 @@ class BasicGateTests(unittest.TestCase):
             (dict(native={**DONE, "error": "boom"}), ("boom", "native_error", "native_completed")),
             (dict(native={**DONE, "stopped": True}), ("原生任务已停止", "native_stopped", "native_completed")),
             (dict(missing=True), (BLOCKED, "native_error", "native_completed")),
-            (dict(handoff=""), ("缺少本次交接文件", "contract", "handoff_present")),
             (dict(evidence={"actual_backend": "codex"}), ("实际 ACP 后端未核实或与配置不匹配", "tool", "identity_match")),
-            (dict(invalid="outcome.json 无效"), ("outcome.json 无效", "contract", "outcome_valid")),
             (dict(report={"decision": "changes_requested", "summary": "缺测试", "failure_type": "tests"}),
              ("缺测试", "tests", "outcome_pass")),
         ]
@@ -51,6 +52,100 @@ class BasicGateTests(unittest.TestCase):
                 self.assertEqual((error, kind), (message, failure))
                 self.assertEqual(records[-1]["name"], gate)
                 self.assertEqual(records[-1]["status"], "fail")
+
+    def test_a_missing_handoff_is_a_warning_and_the_next_gates_still_judge(self):   # D57 §4
+        passing = {"decision": "pass", "summary": "ok", "failure_type": "none"}
+        error, failure, records = judge(handoff="", report=passing)
+        self.assertEqual((error, failure), (None, None))
+        self.assertEqual(self.names(records), [("native_completed", "pass"), ("identity_match", "pass"),
+                                               ("handoff_present", "warn"), ("outcome_valid", "pass"), ("outcome_pass", "pass")])
+        self.assertEqual(records[2]["detail"], "执行者没有写交接文件，平台已用原生结果生成一份")
+        later = ((dict(evidence={"actual_backend": "codex"}), ("实际 ACP 后端未核实或与配置不匹配", "identity_match")),
+                 (dict(report={"decision": "changes_requested", "summary": "缺测试", "failure_type": "tests"}),
+                  ("缺测试", "outcome_pass")))
+        for kwargs, (message, gate) in later:   # the gates after it still fail as before
+            with self.subTest(gate=gate):
+                error, _, records = judge(handoff="", **kwargs)
+                self.assertEqual((error, records[-1]["name"], records[-1]["status"]), (message, gate, "fail"))
+                self.assertIn(("handoff_present", "warn"), self.names(records))
+
+    def test_an_invalid_outcome_is_a_warning_judged_by_the_result_text(self):   # D57 §4
+        error, failure, records = judge(invalid="outcome.json 无效")
+        self.assertEqual((error, failure), (None, None))
+        self.assertEqual(self.names(records)[-2:], [("outcome_valid", "warn"), ("outcome_pass", "skip")])
+        self.assertIn("outcome.json 无效", records[-2]["detail"])
+        self.assertIn("按结果文字判断", records[-2]["detail"])
+        # a standalone BLOCKED line in the result still fails as BLOCKED
+        error, failure, records = judge(invalid="outcome.json 无效", blocked=True)
+        self.assertEqual((error, records[-1]["status"]), (BLOCKED, "fail"))
+        self.assertNotIn("pass", [r["status"] for r in records if r["name"].startswith("outcome")])
+
+    def test_an_invalid_outcome_that_states_a_rejection_is_that_rejection(self):   # D57 §4: never a way to pass
+        invalid = "outcome.json 无效"
+        cases = (
+            ('{"decision": "changes_requested"}', "完成",
+             ("结果写明了 changes_requested，但结果文件不合法：outcome.json 无效", "implementation")),
+            ('{"decision": "Changes_Requested", "summary": "缺测试", "failure_type": "tests", "findings": "x"}', "完成",
+             ("缺测试", "tests")),
+            ('{"decision": "blocked", "summary": "缺少数据库地址", "failure_type": "nonsense"}', "完成",
+             ("缺少数据库地址", "implementation")),   # an unreadable failure_type: implementation
+            ('{"verdict": "changes_requested", "summary": "缺测试", "failure_type": "tests"}', "完成",
+             ("缺测试", "tests")),   # the wrong key, still a stated verdict
+            ("{decision: blocked, summary: 缺少数据库地址}", "完成",
+             ("结果写明了 blocked，但结果文件不合法：outcome.json 无效", "implementation")),
+            ("", "审查完成，发现两个问题。\n\n**changes_requested**",
+             ("结果写明了 changes_requested，但结果文件不合法：outcome.json 无效", "implementation")),
+            ("", "结论：changes_requested，见交接",
+             ("结果写明了 changes_requested，但结果文件不合法：outcome.json 无效", "implementation")),
+            ('{"decision": "pass", "summary": ""}', '{"decision": "changes_requested"}',
+             ("结果写明了 changes_requested，但结果文件不合法：outcome.json 无效", "implementation")),
+        )
+        for outcome, text, (message, failure) in cases:
+            with self.subTest(outcome=outcome, text=text):
+                error, kind, records = judge(native={**DONE, "result": text}, invalid=invalid, outcome=outcome)
+                self.assertEqual((error, kind), (message, failure))
+                self.assertEqual(self.names(records)[-2:], [("outcome_valid", "warn"), ("outcome_pass", "fail")])
+                self.assertEqual(records[-1]["detail"], message)
+
+    def test_the_common_ways_of_stating_a_rejection_are_read(self):   # review of D57 §4: decorated, headed, spelled
+        def told(decision):
+            return f"结果写明了 {decision}，但结果文件不合法：outcome.json 无效"
+        cases = (   # (outcome file, reply, the decision it states)
+            ("", "**Decision:** changes_requested", "changes_requested"),
+            ("", "**结论**：changes_requested", "changes_requested"),
+            ("", "Verdict: `changes_requested`", "changes_requested"),
+            ("", "结论： **changes_requested**", "changes_requested"),
+            ("", "审查完成。\n\n## 结论\n\nchanges_requested — 2 项必须修复", "changes_requested"),
+            ("", "## Decision\n\n**Blocked**：缺少数据库地址", "blocked"),
+            ('{"decision": "changes requested"}', "完成", "changes_requested"),
+            ('{"decision": "changes-requested"}', "完成", "changes_requested"),
+            ('{"decision": "Changes - Requested", "summary": ""}', "完成", "changes_requested"),
+            ('{"status": "changes_requested"}', "完成", "changes_requested"),   # the wrong key
+            ('{"result": "blocked"}', "完成", "blocked"),
+            ('{"decision": "fail"}', "完成", "fail"),   # before D57 any decision but pass failed
+            ('{"verdict": "Rejected"}', "完成", "rejected"),
+            ('"changes_requested"', "完成", "changes_requested"),   # a bare JSON string
+            ("", "decision: fail", "fail"),   # fail / rejected as the value of a decision-like key
+            ("", "**结论**：rejected", "rejected"),
+            ('{"outcome": {"decision": "changes_requested"}}', "完成", "changes_requested"),   # nested: read as text
+        )
+        for outcome, text, decision in cases:
+            with self.subTest(outcome=outcome, text=text):
+                error, kind, records = judge(native={**DONE, "result": text}, invalid="outcome.json 无效", outcome=outcome)
+                self.assertEqual((error, kind), (told(decision), "implementation"))
+                self.assertEqual(self.names(records)[-2:], [("outcome_valid", "warn"), ("outcome_pass", "fail")])
+
+    def test_an_invalid_outcome_without_a_stated_decision_passes_with_a_warning(self):
+        for outcome, text in (('{"decision": "maybe"}', "完成"), ('{"decision": "pass", "summary": ""}', "完成"),
+                              ("不是 JSON", "已按审查的 changes_requested 意见修复，测试通过"),   # mentioned, not stated
+                              ('{"decision": "pass", "summary": "不再 blocked", "failure_type": "x"}', "完成"),
+                              # fail / rejected in prose, or a word that only starts like one, is not a verdict
+                              ("", "3 个测试曾经 fail，现已修复"), ("", "rejected 的请求已重试\nfail"),
+                              ("", "## 结论\n\nFailing 的用例已修复"), ('{"decision": "pass", "note": "failover"}', "完成")):
+            with self.subTest(outcome=outcome, text=text):
+                error, _, records = judge(native={**DONE, "result": text}, invalid="outcome.json 无效", outcome=outcome)
+                self.assertIsNone(error)
+                self.assertEqual(self.names(records)[-2:], [("outcome_valid", "warn"), ("outcome_pass", "skip")])
 
     def test_a_blocked_reply_with_a_failing_outcome_reports_the_outcome(self):
         report = {"decision": "blocked", "summary": "缺少数据库地址", "failure_type": "input"}
@@ -66,6 +161,15 @@ class BasicGateTests(unittest.TestCase):
         error, failure, records = judge(report=None)
         self.assertIsNone(error)
         self.assertEqual(self.names(records)[-2:], [("outcome_valid", "skip"), ("outcome_pass", "skip")])
+
+
+class GateRecordTests(unittest.TestCase):
+    def test_warn_is_a_recorded_status(self):   # D57 §4: recorded and shown, never blocking
+        warned = gates.record("x", "warn", "d")
+        self.assertEqual((warned["status"], warned["detail"]), ("warn", "d"))
+        self.assertEqual(gates.warnings([gates.record("a", "pass"), warned, gates.record("b", "fail", "e")]), [warned])
+        with self.assertRaises(ValueError):
+            gates.record("x", "maybe")
 
 
 class CoveredTests(unittest.TestCase):

@@ -1,5 +1,7 @@
 """Named gates (D37 §4): each Attempt's acceptance as a list of recorded verdicts. The first five are the checks the
-Engine always made; their messages and failure types are unchanged."""
+Engine always made; their messages and failure types are unchanged, except that a missing handoff and an invalid outcome
+are warnings (D57 §4)."""
+import json
 import re
 import time
 
@@ -14,8 +16,65 @@ INSTALLS = re.compile(r"\b(?:npm|pnpm|yarn|bun)\s+(?:i|install|ci|add)\b|\bpip3?
                       r"|\bcargo\s+fetch\b|\bmvn\b.*\binstall\b")
 
 
+# A warn (D57 §4) is recorded and shown like any verdict but passes: it neither blocks the task nor starts recovery.
+STATUSES = ("pass", "warn", "fail", "skip")
+# D57 §4: what an invalid outcome (or the reply) still says of the verdict. A malformed file never turns a rejection into
+# a pass; a mention in prose ("按 changes_requested 的意见修复", "不再 blocked") is not a verdict.
+REJECTIONS = ("changes_requested", "blocked")
+# Before D57 any decision but pass failed: fail / rejected count as well, but only where a verdict is written — a top-level
+# JSON value or the value of a decision-like key (a heading included) — never as a word on its own.
+VERDICTS = REJECTIONS + ("fail", "rejected")
+_DECO = r"""[\s*_`"'“”‘’]*"""   # Markdown and quotes around the key, the separator and the value
+_KEY = r"(?:\bdecision\b|\bverdict\b|结论|决定)"
+_VALUE = r"(changes[ \t_-]*requested|blocked|fail|rejected)\b"
+STATED = re.compile(rf"(?i){_KEY}{_DECO}[:：=]{_DECO}{_VALUE}")   # **Decision:** changes_requested, 结论：`blocked`
+HEADED = re.compile(rf"""(?im)^[ \t]*#{{1,6}}[ \t]*[*_`"']*{_KEY}[ \t*_`"':：]*\n(?:[ \t]*\n)*[ \t>*_`"'-]*{_VALUE}""")   # ## 结论 …
+ALONE = re.compile(r"""(?im)^[ \t>#*_`"'-]*(changes[ \t_-]*requested|blocked)[ \t*_`"'.。!！]*$""")   # alone on a line
+
+
+def verdict(value):
+    """A decision as written, compared as a token: lower case, runs of spaces, - and _ as one _."""
+    return re.sub(r"[\s_-]+", "_", value.strip().lower()) if isinstance(value, str) else ""
+
+
 def record(name, status, detail=None):
+    if status not in STATUSES:
+        raise ValueError(f"未知的门禁状态：{status}")
     return {"name": name, "status": status, **({"detail": detail} if detail else {}), "at": time.time()}
+
+
+def warnings(records):
+    """The records an accepted Attempt carries as its warnings (D57 §4)."""
+    return [r for r in records or [] if r.get("status") == "warn"]
+
+
+def stated(outcome, text):
+    """(decision, summary, failure_type) of a rejection an invalid outcome still states — in the file, then in the reply
+    — or None when neither states one. A file that parses as JSON states one when its decision, or any other top-level
+    string, is exactly a verdict token. The summary and failure_type are the file's when the file states it and they can
+    be read; otherwise none and implementation."""
+    from .recovery import FAILURES
+    outcome = outcome if isinstance(outcome, str) else ""
+    try:
+        value = json.loads(outcome) if outcome.strip() else None
+    except ValueError:
+        value = None
+    file = value if isinstance(value, dict) else {}
+    named = [file.get("decision"), *file.values()] if file else [value]   # the decision key first
+    found = next((verdict(v) for v in named if verdict(v) in VERDICTS), None)
+    if not found:
+        for index, source in enumerate((outcome, text or "")):
+            match = STATED.search(source) or HEADED.search(source) or ALONE.search(source)
+            if match and index:   # only the reply says so: nothing of the file is taken
+                return verdict(match.group(1)), None, "implementation"
+            if match:
+                found = verdict(match.group(1))
+                break
+    if not found:
+        return None
+    summary = file.get("summary").strip()[:8000] if isinstance(file.get("summary"), str) else ""
+    failure = file.get("failure_type") if file.get("failure_type") in FAILURES - {"none"} else "implementation"
+    return found, summary or None, failure
 
 
 def basic(native, result, spec, evidence, report, invalid, lost, missing, blocked_line):
@@ -31,10 +90,9 @@ def basic(native, result, spec, evidence, report, invalid, lost, missing, blocke
     records.append(record("native_completed", "fail" if error else "pass", error))
     if error:
         return error, failure, records
-    if not result.get("handoff", "").strip():
-        records.append(record("identity_match", "skip"))   # checked in today's order: handoff first
-        records.append(record("handoff_present", "fail", "缺少本次交接文件"))
-        return "缺少本次交接文件", "contract", records
+    # D57 §4: a missing handoff is the platform's to write (the Engine does, from the native result); judging goes on
+    handoff = record("handoff_present", "pass") if result.get("handoff", "").strip() else \
+        record("handoff_present", "warn", "执行者没有写交接文件，平台已用原生结果生成一份")
     actual = EFFORT.sub("", evidence.get("actual_model") or "")
     # A backend, model or effort that is not the one requested is the tool's failure: recovery may switch (D38 §3.2).
     # One the evidence does not show (no routing record) is not: switching cannot fix it, it waits for the user as before.
@@ -45,15 +103,23 @@ def basic(native, result, spec, evidence, report, invalid, lost, missing, blocke
                                  (bool(spec["effort"] and evidence.get("actual_effort") and evidence["actual_effort"] != spec["effort"]),
                                   True, "实际 Effort 与本次配置不匹配")):
         if wrong:
-            records += [record("handoff_present", "pass"), record("identity_match", "fail", message)]
+            records += [handoff, record("identity_match", "fail", message)]
             return message, "tool" if seen else "model", records
-    records += [record("identity_match", "pass"), record("handoff_present", "pass")]
+    records += [record("identity_match", "pass"), handoff]
     if report is None and invalid is None:
         records += [record("outcome_valid", "skip"), record("outcome_pass", "skip")]
         return None, None, records
-    if invalid:
-        records.append(record("outcome_valid", "fail", invalid))
-        return invalid, "contract", records
+    if invalid:   # D57 §4: judged by what the file and the reply state (a standalone BLOCKED line failed above)
+        rejection = stated(result.get("outcome"), str(native.get("result") or ""))
+        if rejection:   # as outcome_pass judges a readable one: the agent's rejection stands
+            decision, summary, failure = rejection
+            message = summary or f"结果写明了 {decision}，但结果文件不合法：{invalid}"
+            records += [record("outcome_valid", "warn", f"{invalid}；结果写明了 {decision}，按该结论判断"),
+                        record("outcome_pass", "fail", message)]
+            return message, failure, records
+        records += [record("outcome_valid", "warn", f"{invalid}；已按结果文字判断：没有写明 changes_requested 或 blocked，按通过"),
+                    record("outcome_pass", "skip", "结果文件不合法，没有可读的结论")]
+        return None, None, records
     records.append(record("outcome_valid", "pass"))
     if report["decision"] != "pass":
         records.append(record("outcome_pass", "fail", report["summary"]))

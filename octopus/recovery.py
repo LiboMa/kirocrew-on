@@ -119,14 +119,15 @@ result 只能是 pass、fail 或 n/a。验收标准之外、且不是必须修�
     if contract and contract.get("kind") == "test" and contract.get("verify"):
         gates += """
 平台在通过检查之后，还会在会话基线（第一个任务改动之前的源码）上叠加本任务改动的文件，再运行一次本任务的检查命令：
-新增或修改的测试必须在那里失败，才能证明它们测试了新行为（tests_fail_on_baseline）；在改动之前也能通过的测试不被接受。
+新增或修改的测试应在那里失败，才能说明它们测到了新行为；在改动之前也能通过时，平台会记一条提示（tests_fail_on_baseline），
+不会因此退回，但请确认测试确实覆盖了改动。
 测试任务只写测试，不修改实现文件（需要改实现时在 outcome.json 中说明并使用 changes_requested）；检查命令中不安装依赖
 （依赖已在工作区中），测试产生的文件（覆盖率、报告）写入 .gitignore。
 """
     if contract and contract.get("paths"):
         gates += """
-此前任务已验收的交付物，只能修改本任务 paths 中列出的那些（artifacts_locked）；需要改动其他此前任务的文件时，
-在 outcome.json 中说明原因并使用 blocked，不要直接修改。
+此前任务已验收的交付物，应只修改本任务 paths 中列出的那些；改动了其他此前任务的文件时，平台会记一条提示并列出这些文件
+（artifacts_locked），交给后续审查确认。确需改动时，在交接中写明改了哪些文件、为什么。
 """
     return f"""
 
@@ -147,7 +148,10 @@ failure_type 可选 implementation/tests/environment/input/auth/model/native_err
 def coordinator_instructions(context, folder):
     return f"""
 ## 你是此 Run 的诊断与纠错 Coordinator
-完整读取 context.json、失败任务的真实返回、交接路径及当前源码，判断可执行恢复办法。
+完整读取 context.json、失败任务的真实返回、交接路径及当前源码，判断可执行恢复办法。执行者没有写交接时，
+evidence.handoff_text 是平台根据其结果生成的交接。
+以下门禁只记提示（warn），不会让任务失败，也不会进入诊断：diff_present、artifacts_locked、tests_fail_on_baseline、
+handoff_present、outcome_valid。evidence.gates 中 status 为 warn 的记录不是本次失败的原因。
 只诊断和提出修复指令；不要自己实现业务修复或派生任务。Engine 会按决定派发所选 Coding Agent。
 保留工作流配置，不迁移源码、不删除历史。不要把停止或权限拒绝当作可绕过的失败。
 失败原因在于工具本身时，可以用 switch_tool 推荐换用的工具与模型。工具本身的失败是：failure_type 为 tool
@@ -170,9 +174,9 @@ evidence.watchdog 存在时是看门狗停止了没有进展的任务：先判�
 重试或返工无法修改它——未重新规划过时用 replan 并写明改用的命令，否则用 wait_for_user，请用户续作时修改该任务的 verify。
 判断是否已有足够源码、依赖与输入；缺少仓库、需要用户授权或认证时 wait_for_user，不猜测项目地址。
 若是当前任务可自行修复的问题用 retry；若审查问题需要上游实现者修复用 rework。
-失败门是 artifacts_locked 时 context 有 locked_files（门禁拒绝的、此前已验收任务的文件）：这些修改确应由失败的任务完成时，
-retry / rework 失败的任务并在决定中加 "paths_add": [locked_files 中的文件]（至多 10 个），平台把它们加入该任务的 paths 后门禁放行；
-reason 写明为什么由它修改。不能加 locked_files 之外的文件，不能用于其他任务或其他动作。
+context 有 locked_files 时（只出现在平台升级前被 artifacts_locked 拦下的任务上；现在这项门禁只记提示）：这些修改确应由失败的任务完成时，
+retry / rework 失败的任务并在决定中加 "paths_add": [locked_files 中的文件]（至多 10 个），平台把它们加入该任务的 paths；
+reason 写明为什么由它修改。不能加 locked_files 之外的文件，不能用于其他任务或其他动作。没有 locked_files 时不要写 paths_add。
 目标只能是失败步骤或其上游步骤：target_task_id 只能取 context.allowed_targets 中的 id。排在失败任务之后的任务（例如计划中
 审查之后的「按审查修复」任务）不能作为目标——审查发现的问题交给产出该代码的上游任务 rework，其后的任务会自动重跑。
 context.previous_decisions 是此前各轮的决定及其结果（status）；带 refused 的是平台拒绝过的决定，refused 写明原因——不要重复同一决定。
@@ -413,7 +417,8 @@ def schedule(db, database, run, task, attempt, *, manual=False, actor=None):
                                     "kind": json.loads(t["spec"]).get("kind")}
                                    for t in ordered if t["ordinal"] <= task["ordinal"]],
                "manual": manual}
-    # D54: the files artifacts_locked refused, which a retry / rework of this task may add to its paths (paths_add)
+    # D54: the files artifacts_locked refused, which a retry / rework of this task may add to its paths (paths_add).
+    # Since D57 §4 the gate only warns: kept for Attempts it blocked before then.
     locked = next((g.get("files") for g in (context["evidence"].get("gates") or [])
                    if g.get("name") == "artifacts_locked" and g.get("status") == "fail" and g.get("files")), None)
     if locked:
