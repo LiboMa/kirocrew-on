@@ -57,10 +57,11 @@ _KEY_VALUE = (rb"(?:[^\r\n\\]|\\+(?![\\rn])"
 _KEY_HEADERS = (rb"(?:(?:\s|\\+[nrt])+(?:Version|Comment|Hash|Charset|MessageID|Proc-Type|DEK-Info):" + _KEY_VALUE
                 + rb")*")
 # A line of the key's body when its end is not there: a whole line of base64, or a run of base64 with a digit, + / or =
-# in it that is not followed by ":" or "." (base64 has neither): a word alone on a line is masked with it; an error
-# message after a key header ("python3.11: …", "/usr/bin/env: …", "/bin/sh: 1: …") is not.
+# in it that is not followed by ":" or a "." that is not an ellipsis (base64 has neither): a word alone on a line is
+# masked with it, and a line cut short before "..."; an error message after a key header ("python3.11: …",
+# "/usr/bin/env: …", "/bin/sh: 1: …") is not.
 _KEY_LINE = (rb"(?:" + _KEY_CHAR + rb"+(?=[ \t]*(?:" + _LINE_BREAK + rb"|\Z))|[A-Za-z]*(?:[0-9+/=]|\\+/)"
-             + _KEY_CHAR + rb"*(?![:.]|" + _KEY_CHAR + rb"))")
+             + _KEY_CHAR + rb"*(?!:|\.(?!\.)|" + _KEY_CHAR + rb"))")
 _KEY_BEGIN = rb"-----BEGIN [A-Z ]*PRIVATE KEY(?: BLOCK)?-----"
 _KEY_END = rb"-----END [A-Z ]*PRIVATE KEY(?: BLOCK)?-----"
 SECRET_RULES = [
@@ -90,6 +91,16 @@ SECRET_RULES = [
 ]
 _PRIVATE_KEY = [kind for kind, _ in SECRET_RULES].index("private_key")
 _KEY_BEGINS, _KEY_ENDS = re.compile(_KEY_BEGIN), re.compile(_KEY_END)
+# The lines of base64 right before a private key's END, read backwards from it (so that finding where they begin costs
+# what they are long): whole lines, each with the END line's own prefix "q" (docker compose's "web-1  | ", pytest's
+# "E         + ", grep's "key.pem-" / "key.pem-26-", an indent; captured from the prefix put before a NUL), or, when the
+# END follows an escaped line break, JSON-escaped lines ("\/" reads "/\" backwards).
+_BACKWARDS_BASE64 = rb"(?:[A-Za-z0-9+=]|/\\*)+"
+_LINES_BEFORE = re.compile(rb"(?P<q>[^\0]*)\0(?:\n\r?[ \t]*" + _BACKWARDS_BASE64 + rb"(?P=q)(?=\n|\Z))+")
+_ESCAPED_LINES_BEFORE = re.compile(rb"[ \t]*(?:(?:n\\+(?:r\\+)?|r\\+)[ \t]*" + _BACKWARDS_BASE64
+                                   + rb"[ \t]*(?=[nr]\\|\Z))+")
+_PREFIX_SHAPE = bytes.maketrans(b"0123456789:", b"0000000000-")   # grep: "key.pem:26:" heads its lines "key.pem-25-"
+_BASE64 = frozenset(b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/=")
 
 
 def _masked(value):
@@ -106,7 +117,9 @@ def find_secrets(data, extra=(), cut=None, dropped=True):
     rule. ``cut``: where the shown part of ``data`` begins (an output's tail kept to its last bytes), ``dropped``:
     whether what came before ``data`` was dropped. A private key's END after ``cut`` with no BEGIN between them belongs
     to a key whose BEGIN is out of view — dropped with that head, or before ``cut`` and not yet ended — so everything
-    from ``cut`` through the END is one private_key; in output kept whole, an END no BEGIN opened is only a line."""
+    from ``cut`` through the END is one private_key. And whether or not its BEGIN is there, the lines of base64 right
+    before an END are masked with it (the end of a key printed by tail, grep -B or a diff); an END with none right before
+    it (a hint that names it) is only a line."""
     data = bytes(data)
     spans = []   # (start, priority, end, kind)
     for value in extra:
@@ -119,6 +132,12 @@ def find_secrets(data, extra=(), cut=None, dropped=True):
         for match in pattern.finditer(data):
             start, end = match.span("secret") if "secret" in pattern.groupindex else match.span()
             spans.append((start, priority, end, kind))
+    floor = 0
+    for match in _KEY_ENDS.finditer(data):   # the lines of a key right before its END, whether or not its BEGIN is there
+        start = _lines_before(data, floor, match.start())
+        if start is not None:
+            spans.append((start, _PRIVATE_KEY, match.end(), "private_key"))
+        floor = match.end()
     if cut is not None:
         for match in _KEY_ENDS.finditer(data, max(cut - 64, 0)):   # an END the cut runs through counts too
             if match.end() > cut:
@@ -138,6 +157,29 @@ def find_secrets(data, extra=(), cut=None, dropped=True):
         found.append({"kind": kind, "start": start, "end": end, "line": line, "masked": _masked(data[start:end]),
                       "hash": hashlib.sha256(data[start:end]).hexdigest()})
     return found
+
+
+def _lines_before(data, floor, at):
+    """Where the lines of base64 right before the private-key END at ``at`` begin (not before ``floor``, the end of the
+    END before it), or None when none come right before it (an END only named: "hint: expected -----END …", a grep hit
+    with its context left out)."""
+    newline = data.rfind(b"\n", floor, at)   # never further back than ``floor``: one pass over the data for all ENDs
+    line = newline + 1 if newline >= 0 else 0 if floor == 0 else floor - 1   # floor - 1: the line began before it
+    start = max(line, floor)
+    before = data[start:at].rstrip(b" \t")
+    if before[-2:-1] == b"\\" and before[-1:] in (b"n", b"r"):   # in an escaped string: its lines, escaped
+        found = _ESCAPED_LINES_BEFORE.match(data[start:at][::-1])
+        start = at - found.end() if found else None
+    elif line >= floor and b"\0" not in data[line:at] and (at == line or data[at - 1] not in _BASE64):
+        # (a prefix that ends in base64 could not be told from the line's own characters)
+        prefix = data[line:at].translate(_PREFIX_SHAPE)
+        found = _LINES_BEFORE.match(prefix[::-1] + b"\0" + data[floor:line].translate(_PREFIX_SHAPE)[::-1])
+        start = line - (found.end() - len(prefix) - 1) + len(prefix) if found else None
+    else:
+        start = None
+    while start is not None and data[start:start + 1] in (b" ", b"\t"):
+        start += 1
+    return start
 
 
 def _open_key(data, before):

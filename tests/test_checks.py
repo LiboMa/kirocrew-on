@@ -332,7 +332,7 @@ class CheckTests(unittest.TestCase):
 
     def test_masking_never_changes_what_unrunnable_answers(self):
         # D57 §3.3, §5: the Worker judges a failure on the output as the command printed it, before masking, so a key
-        # header, a key or an END line near the error never turns an environment warning into a check failure; what it
+        # header, a key, its last lines or an END line near the error never turns an environment warning into a failure; what it
         # stores is masked, the reason too
         key, body = private_key("RSA", 640)
         header, end = "-----BEGIN RSA PRIVATE" + " KEY-----", "-----END RSA PRIVATE" + " KEY-----"
@@ -342,7 +342,8 @@ class CheckTests(unittest.TestCase):
                     ("/usr/bin/env: ‘node’: No such file or directory", 127),
                     ("/bin/sh: 1: pytest: not found", 127), ("/bin/bash: line 1: pytest: command not found", 127),
                     ("ModuleNotFoundError: No module named 'requests'", 1)]
-        contexts = ["{}\n", header + "\n{}\n", key + "\n{}\n", "{}\nhint: expected " + end + "\n",
+        contexts = ["{}\n", header + "\n{}\n", key + "\n{}\n", "\n".join(body.splitlines()[-6:]) + "\n" + end + "\n{}\n",
+                    "{}\nhint: expected " + end + "\n",
                     "key.pem:" + end + "\n{}\n", "x" * 5000 + "\n{}\nhint: expected " + end + "\n",
                     "x" * 9000 + "\n{}\n" + end + "\n"]   # the last: its head dropped, so masked from the cut to the END
         outputs = [(context.format(message), code) for message, code in messages for context in contexts]

@@ -295,8 +295,8 @@ class Checks:
             for chunk in iter(lambda: proc.stdout.read(8192), b""):
                 output.extend(chunk)
                 if len(output) > 2 * TAIL:   # enough to mask a credential across the tail's edge, little to hold
+                    dropped = True   # first: a reader still running after GRACE never shows a dropped head as whole
                     del output[:-2 * TAIL]
-                    dropped = True
         reader = threading.Thread(target=read, daemon=True)
         reader.start()
         timeout = False

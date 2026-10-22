@@ -278,6 +278,60 @@ class SecretRuleTests(unittest.TestCase):
             with self.subTest(name):
                 self.assert_masked(text, *lines, letters, kinds=["private_key"])
                 self.assert_masked(text, *lines, letters, tail=True)
+        # cut short right before "..." (an ellipsis is no sentence's "."): masked through
+        fragment = next(line[:40] for line in lines[2:] if any(c.isdigit() for c in line[:40]))
+        text = "\n".join([header, *lines[:2], fragment]) + "...\n"
+        self.assert_masked(text, *lines[:2], fragment, kinds=["private_key"])
+        self.assert_masked(text, *lines[:2], fragment, tail=True)
+
+    def test_the_lines_before_an_end_whose_begin_is_not_there_are_masked(self):
+        # nothing dropped and no BEGIN anywhere: a key's last lines and its END — pytest's "Skipping N identical leading
+        # characters in diff", tail key.pem, grep -B, docker compose — are masked with the END line, each line written
+        # with the END line's own prefix; what is not one of those lines stays shown
+        key, body = private_key("RSA", 1280)
+        lines, end = body.splitlines(), key.splitlines()[-1]
+        last, cut = lines[-6:], lines[-7][25:]   # a line pytest cut where its skipped characters end
+        pgp, pgp_body = pgp_key()
+        pgp_end = pgp.splitlines()[-1]
+        prefixed = lambda prefix, rows: "".join(prefix + row + "\n" for row in rows)
+        cases = {   # name: (before, the key's tail, after, its lines)
+            "10 lines and END": ("", "\n".join(lines[-10:]) + "\n" + end, "", lines[-10:]),
+            "tail key.pem": ("$ tail -n 7 key.pem\n", prefixed("", last + [end]), "$ echo ok\nok\n", last),
+            "pytest skipping": ("E         Skipping 1500 identical leading characters in diff, use -v to show\n",
+                                prefixed("E           ", [cut, *last, end]), "\nFAILED tests/test_k.py::test_key\n",
+                                [cut, *last]),
+            "pytest diff": ("E         - x\n", prefixed("E         + ", last + [end]), "", last),
+            "grep -B": ("", prefixed("key.pem-", last) + "key.pem:" + end + "\n", "other.pem:nothing\n", last),
+            "grep -n -B": ("", "".join(f"key.pem-{20 + i}-{row}\n" for i, row in enumerate(last))
+                           + "key.pem:26:" + end + "\n", "", last),
+            "docker compose": ("web-1  | listening on :8080\n", prefixed("web-1  | ", last + [end]), "web-1  | done\n", last),
+            "crlf": ("$ cat k\r\n", prefixed("", last + [end]).replace("\n", "\r\n"), "ok\r\n", last),
+            "yaml": ("key: |\n", prefixed("  ", last + [end]), "next: 1\n", last),
+            "pgp": ("", prefixed("", pgp_body.splitlines()[-4:] + ["=Ab3d", pgp_end]), "", pgp_body.splitlines()[-4:]),
+            "json": ('{"log": "pytest says:\\n', json.dumps("\n".join(last + [end]) + "\n")[1:-1], '", "next": "shown"}',
+                     last),
+            "json twice": ('"{\\"log\\": \\"pytest says:\\\\n',
+                           json.dumps(json.dumps("\n".join(last + [end]) + "\n")[1:-1])[1:-1], '\\"}"', last),
+        }
+        for name, (before, tail_of_key, after, rows) in cases.items():
+            text = before + tail_of_key + after
+            for how in ("mask_text", "masked_tail"):
+                with self.subTest(name, how=how):
+                    if how == "mask_text":
+                        shown, found = sources.mask_text(text)
+                    else:
+                        shown, found = checks.masked_tail(text.encode())
+                    self.assertEqual([f["kind"] for f in found], ["private_key"], shown[:300])
+                    self.assertEqual([row[i:i + 10] for row in rows for i in range(len(row) - 9)
+                                      if row[i:i + 10] in shown], [], shown[:300])
+                    self.assertTrue(shown.startswith(before) and shown.endswith(after), shown[:300])
+        # the END only named (a hint, a grep hit), or lines that are not the key's: nothing is masked
+        for text in ["ModuleNotFoundError: No module named 'x'\n… hint: expected " + end + "\n",
+                     "Binary file matches\nkey.pem:" + end + "\n",
+                     "x = 1\n\n" + end + "\n"]:
+            with self.subTest(text[-60:]):
+                self.assertEqual(sources.mask_text(text), (text, []))
+                self.assertEqual(checks.masked_tail(text.encode()), (text, []))
 
     def test_a_key_whose_begin_was_cut_off_is_masked_up_to_its_end(self):
         # the check's output keeps only its last 8 KB: a key longer than that tail lost its BEGIN with the head
