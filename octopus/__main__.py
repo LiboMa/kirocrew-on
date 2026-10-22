@@ -267,8 +267,8 @@ def main(argv=None):
             raise SystemExit(f"错误：写入 {args.client} 配置失败（{reason}）{note}") from None
         for action in actions:
             print(action)
-        issued = not (args.token or os.environ.get("OCTOPUS_API_TOKEN"))
-        lifetime = f"Token {7 if args.admin else 30} 天有效" if issued else "使用你提供的 Token"
+        from .connect import lifetime as said   # D62: what the platform gave, not what was asked (final review C1)
+        lifetime = said(issued.get("expires")) if issued else "使用你提供的 Token"
         print(f"完成：重新打开客户端后可用 kirocrew-on 的 MCP 工具；{lifetime}，可在控制台撤销。" if not args.dry_run
               else "（dry-run，未写入）")
     elif args.command == "skill":

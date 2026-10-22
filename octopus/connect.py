@@ -49,14 +49,21 @@ def issue_token(client_factory, url, client, username, password, admin=False, ex
             "label": f"{client} MCP" + (" admin" if admin else ""),
             "scopes": ["read", "execute", "manage"] + (["admin"] if admin else []),
             "ttl": (7 if admin else 30) * 86400, **({"expires_in": expires} if expires else {})})
-        return {"token": issued["token"], "id": issued.get("id")}
+        return {"token": issued["token"], "id": issued.get("id"), "expires": issued.get("expires")}
     finally:
         try:
             session.request("POST", "/v1/logout", {})
         except (RuntimeError, OSError) as exc:   # best effort: the issued token (or the real error) must still reach the user
             if issued is not None:
-                return {"token": issued["token"], "id": issued.get("id"),
+                return {"token": issued["token"], "id": issued.get("id"), "expires": issued.get("expires"),
                         "warning": f"临时登录未能登出（{exc}），可在控制台撤销名为 Web login 的 Token"}
+
+
+def lifetime(expires):
+    """How long an issued token lasts, as the platform answered (D62): None never expires."""
+    if expires is None:
+        return "Token 永不过期"
+    return "Token 有效期至 " + time.strftime("%Y-%m-%d", time.localtime(expires))
 
 
 def revoke(client_factory, url, issued):

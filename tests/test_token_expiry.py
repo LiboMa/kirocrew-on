@@ -90,6 +90,12 @@ class ClientTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "30 天"):
             connect.issue_token(self.fake([]), "https://p", "claude", "bob", "pw", admin=True, expires="365d")
 
+    def test_connect_says_how_long_the_token_lasts(self):   # final review C1: it printed 30 days for a never-expiring one
+        issued = connect.issue_token(self.fake([]), "https://p", "claude", "bob", "pw", expires="never")
+        self.assertIsNone(issued["expires"])
+        self.assertEqual(connect.lifetime(None), "Token 永不过期")
+        self.assertEqual(connect.lifetime(time.mktime((2027, 1, 31, 12, 0, 0, 0, 0, -1))), "Token 有效期至 2027-01-31")
+
     def test_cli_login_asks_for_the_chosen_expiry(self):
         calls = []
         with tempfile.TemporaryDirectory() as home, mock.patch.object(cli, "Client", self.fake(calls)):
