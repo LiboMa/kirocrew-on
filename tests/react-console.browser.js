@@ -30,6 +30,22 @@ async page => {
     check(true,"新标签页凭会话 Cookie 保持登录");
     await tab.close();
 
+    // Owner 2026-10-22: pin from a row's menu (it shows on top), then unpin; the admin page lists the environments
+    await p.getByRole("button",{name:/^会话操作：/}).first().click();
+    await p.getByRole("menuitem",{name:"置顶"}).click();
+    await p.getByRole("region",{name:"置顶"}).waitFor();
+    check(await p.getByRole("region",{name:"置顶"}).locator("[data-run]").count()===1,"会话列表行菜单置顶，置顶分组在列表顶部");
+    await p.getByRole("region",{name:"置顶"}).getByRole("button",{name:/^会话操作：/}).click();
+    await p.getByRole("menuitem",{name:"取消置顶"}).click();
+    await p.getByRole("region",{name:"置顶"}).waitFor({state:"detached"});
+    check(true,"取消置顶后置顶分组消失");
+    await p.getByRole("button",{name:"管理"}).click();
+    await p.getByRole("navigation",{name:"管理"}).getByRole("link",{name:"执行环境"}).click();
+    await p.getByText(/刷新状态/).first().waitFor();
+    check(new URL(p.url()).searchParams.get("view")==="admin","管理页面可打开执行环境，地址栏记下所在页面");
+    await p.getByRole("button",{name:"返回会话"}).click();
+    await p.waitForSelector("#session-list [data-run]");
+
     // D56: the list is filtered by the server, 300 ms after typing stops
     const listed=async n=>p.waitForFunction(n=>document.querySelectorAll("#session-list [data-run]").length===n,n,{timeout:5000}).then(()=>true,()=>false);
     const firstId=await p.locator("#session-list [data-run]").first().getAttribute("data-run");
