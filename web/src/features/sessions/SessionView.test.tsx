@@ -37,6 +37,19 @@ function open(run: Run, extra: Record<string, unknown> = {}) {
 }
 
 describe("session detail", () => {
+  test("every HTML page the Session produced can be previewed (EC2 2026-10-22: reports in report/ and artifacts/)", async () => {
+    const run = makeRun({ id: "run-h", status: "completed", worker_id: "w1" });
+    const pages = [{ path: "artifacts/report/index.html", url: "/preview/t.k.e.n/artifacts/report/index.html" },
+      { path: "report/summary.html", url: "/preview/t.k.e.n/report/summary.html" }];
+    open(run, { "POST /runs/run-h/preview": { url: pages[0].url, entry: pages[0].path, expires_in: 600, pages } });
+    const opened = vi.spyOn(window, "open").mockReturnValue(null);
+    await userEvent.click(await screen.findByRole("button", { name: "选择预览页面" }));
+    expect(await screen.findByRole("menuitem", { name: /artifacts\/report\/index\.html/ })).toBeInTheDocument();
+    await userEvent.click(screen.getByRole("menuitem", { name: /report\/summary\.html/ }));
+    expect(opened).toHaveBeenCalledWith(pages[1].url, "_blank", "noopener");
+    opened.mockRestore();
+  });
+
   test("the local preview command is for administrators only (D53)", async () => {
     const run = makeRun({ id: "run-l", status: "completed" });
     open(run, { "GET /me": { id: "u2", username: "dev1", admin: 0, scopes: ["read", "execute", "manage"] } });

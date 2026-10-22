@@ -1185,15 +1185,16 @@ class Service:
         return dict(row)
 
     def preview_entry(self, actor, rid):
-        """The file the preview opens first (e.g. index.html), asked from the run's Worker."""
+        """(entry, pages): the page the preview opens first and every HTML page the Session produced, asked from the run's
+        Worker; an older Worker names its entry only."""
         with self.db.read() as db:
             run = run_access(db, actor, rid, read=True)
             require(run["worker_id"], "此 Session 尚未分配 Worker，没有可预览的产出", 409, "no_preview")
             worker = db.execute("SELECT config FROM workers WHERE id=?", (run["worker_id"],)).fetchone()
         from .transport import worker_request
-        entry = worker_request(json.loads(worker["config"]), "/files", {"run_id": rid, "path": ""})["entry"]
+        found = worker_request(json.loads(worker["config"]), "/files", {"run_id": rid, "path": ""})
         self.audit_read(actor, rid, "preview")
-        return entry
+        return found["entry"], list(found.get("pages") or [found["entry"]])
 
     def archive_entry(self, actor, rid):
         """Whether the actor may download the run's source and how large it is: a dry run on the Worker, so a

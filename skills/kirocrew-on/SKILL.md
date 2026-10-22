@@ -179,7 +179,7 @@ KiroCrew ON 在远端执行开发任务：KiroCrew 的 Kiro Agent 先识别意�
   - `running` 后 `open`，把链接交给用户本人：10 分钟内有效、只能打开一次，打开后浏览器保持 8 小时；不要转发到公开渠道。
   - 看完后 `stop`。每个执行环境最多 3 个（409 `app_limit`）；会话执行任务时不能启动（409 `app_busy`），续作或关闭会话会停止预览；
     空闲 30 分钟自动停止。409 `app_unsupported` / `app_preview_unconfigured` 表示执行环境或平台尚未支持，改用 `octopus_download`。
-- `octopus_preview`（传 `run_id`）返回 Web 预览链接，静态页面可在浏览器中直接打开。
+- `octopus_preview`（传 `run_id`）返回 Web 预览链接：`url` 打开最合适的一页，`pages` 列出会话产出的全部 HTML 页面（如 `report/`、`artifacts/<名称>/` 下的报告）及各自的链接，都给用户。
 - 链接 10 分钟有效，每次打开都核对你仍能查看该会话；返回 403（`preview_expired` / `preview_invalid` / `preview_forbidden`）时重新调用 `octopus_preview` 取新链接（`preview_forbidden` 表示已无权查看，告诉用户）。
 - 预览在与控制台隔离的沙箱中运行：页面里的 `localStorage`、`sessionStorage`、IndexedDB 与 Cookie 都不可用。
   依赖它们的功能（如保存设置、计数）在预览中失效不代表产出有缺陷；要验证这类功能，用 `octopus_download` 下载到本机打开，

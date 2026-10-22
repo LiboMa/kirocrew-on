@@ -678,9 +678,11 @@ def server(database, port=8918, host="127.0.0.1", allowed_hosts=(), origin_secre
                     return self.respond({"url": f"/archive/{ticket}/{segments[2]}.zip", "expires_in": PREVIEW_TTL,
                                          "bytes_estimate": estimate["bytes"], "files": estimate["files"]})
                 if len(segments) == 4 and segments[:2] == ["v1", "runs"] and segments[3] == "preview" and method == "POST":
-                    entry = service.preview_entry(actor, segments[2])
-                    return self.respond({"url": "/preview/" + preview_ticket(segments[2], actor["id"], signing_key) + "/" + entry,
-                                         "entry": entry, "expires_in": PREVIEW_TTL})
+                    entry, pages = service.preview_entry(actor, segments[2])
+                    base = "/preview/" + preview_ticket(segments[2], actor["id"], signing_key) + "/"
+                    # One ticket for the Session: every page it produced (report/, artifacts/<name>/ …) opens with it.
+                    return self.respond({"url": base + quote(entry, safe="/"), "entry": entry, "expires_in": PREVIEW_TTL,
+                                         "pages": [{"path": page, "url": base + quote(page, safe="/")} for page in pages]})
                 if path == "/v1/workflows/parse":
                     require(method == "POST", "Method not allowed", 405)
                     from .workflow_import import import_workflow

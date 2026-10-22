@@ -422,6 +422,21 @@ class PreviewAccessTests(AccessCase):
             status, result = call("POST", f"/v1/runs/{rid}/preview", self.tokens["bob"], {})
             self.assertEqual((status, result["expires_in"]), (200, 600))
             self.assertEqual(result["url"].split("/")[2].count("."), 3)
+            self.assertEqual([page["path"] for page in result["pages"]], ["index.html"])   # an older Worker: its entry only
+
+    def test_every_page_the_session_produced_has_a_link(self):   # EC2 2026-10-22: reports in report/ and artifacts/
+        from unittest.mock import patch
+        self.shared_env(users=("bob",))
+        rid = self.start(self.b)["id"]
+        pages = ["artifacts/report/index.html", "报告/总结.html"]
+        with self.http() as call, patch("octopus.transport.worker_request", return_value={"entry": pages[0], "pages": pages}):
+            status, result = call("POST", f"/v1/runs/{rid}/preview", self.tokens["bob"], {})
+        self.assertEqual(status, 200)
+        self.assertEqual(result["entry"], "artifacts/report/index.html")
+        self.assertTrue(result["url"].endswith("/artifacts/report/index.html"))
+        self.assertEqual([page["path"] for page in result["pages"]], pages)
+        ticket = result["url"].split("/")[2]
+        self.assertEqual(result["pages"][1]["url"], f"/preview/{ticket}/%E6%8A%A5%E5%91%8A/%E6%80%BB%E7%BB%93.html")
 
 class ReviewFixTests(AccessCase):
     """Findings of the phase-1 review, each reproduced first."""

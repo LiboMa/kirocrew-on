@@ -21,6 +21,7 @@ import { NativeSessionPanel } from "@/features/sessions/NativeSessionPanel";
 import { AppPreviewPanel } from "@/features/sessions/AppPreviewPanel";
 import { ChangesPanel } from "@/features/sessions/ChangesPanel";
 import { CredentialControl } from "@/features/sessions/CredentialControl";
+import { PreviewPages } from "@/features/sessions/PreviewPages";
 import { PublishControl } from "@/features/sessions/PublishControl";
 import { RevisionsPanel } from "@/features/sessions/RevisionsPanel";
 import { KnowledgePanel } from "@/features/sessions/KnowledgePanel";
@@ -150,9 +151,12 @@ export function SessionView({ id }: { id: string }) {
               <MonitorPlay /> 打开远程预览
             </Button>
           )}
-          <Button size="sm" variant="outline" onClick={actions.preview} disabled={!run.worker_id} id="run-preview">
-            <Eye /> 预览产出
-          </Button>
+          <span className="inline-flex gap-0.5">
+            <Button size="sm" variant="outline" onClick={actions.preview} disabled={!run.worker_id} id="run-preview">
+              <Eye /> 预览产出
+            </Button>
+            <PreviewPages run={run} />
+          </span>
           <Button size="sm" variant="outline" onClick={actions.stop} disabled={!canStop(run) || !!actions.busy} id="run-stop">
             <CircleStop /> 停止
           </Button>

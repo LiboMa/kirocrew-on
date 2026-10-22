@@ -492,6 +492,26 @@ class Worker:
 
     PREVIEW_ENTRIES = ("index.html", "dist/index.html", "build/index.html", "public/index.html", "web/index.html",
                        "out/index.html", "site/index.html")
+    # Directories whose HTML is a dependency's, never the Session's output (EC2 run-968d6e37: a cloned repository's .venv).
+    NOT_PAGES = {"node_modules", "venv", "site-packages", "__pycache__", "bower_components"}
+    PAGES = 30
+
+    def pages(self, project):
+        """The HTML the Session produced, best first: a web project's own entry (PREVIEW_ENTRIES), then the newest. EC2
+        2026-10-22: reports written to report/ or artifacts/<name>/ were 「未找到可预览的 index.html」."""
+        found, seen = [], 0
+        for root, directories, files in os.walk(project):
+            directories[:] = sorted(d for d in directories if not d.startswith(".") and d not in self.NOT_PAGES)
+            for name in files:
+                seen += 1
+                if name.lower().endswith((".html", ".htm")) and not name.startswith("."):
+                    path = Path(root) / name
+                    found.append((path.relative_to(project).as_posix(), path.stat().st_mtime))
+            if seen > 20000:   # a very large project: what was found so far
+                break
+        entries = [e for e in self.PREVIEW_ENTRIES if any(f == e for f, _ in found)]
+        rest = [f for f, _ in sorted(found, key=lambda item: (-item[1], item[0])) if f not in entries]
+        return (entries + rest)[:self.PAGES]
 
     def files(self, body):
         """Read-only project files for the console preview: never outside the project, never hidden files (.env, .git)."""
@@ -501,11 +521,10 @@ class Worker:
         relative = body.get("path") or ""
         require(isinstance(relative, str) and len(relative) <= 500 and "\x00" not in relative, "路径无效")
         if not relative:
-            entry = next((e for e in self.PREVIEW_ENTRIES if (project / e).is_file()), None)
-            entry = entry or next((p.name for p in sorted(project.glob("*.html"))), None)
-            require(entry is not None, "未找到可预览的 index.html；需要开发服务器的项目请在会话页「远程预览」里启动，或「下载源码」在本机运行",
+            pages = self.pages(project)
+            require(bool(pages), "此会话还没有产出 HTML 页面；需要开发服务器的项目请在会话页「远程预览」里启动，或「下载源码」在本机运行",
                     404, "no_preview")
-            return {"entry": entry}
+            return {"entry": pages[0], "pages": pages}
         target = (project / relative).resolve()
         require(target.is_relative_to(project) and target.is_file(), "文件不存在", 404, "not_found")
         require(not any(part.startswith(".") for part in target.relative_to(project).parts), "文件不存在", 404, "not_found")

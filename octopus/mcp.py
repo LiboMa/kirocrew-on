@@ -63,7 +63,8 @@ TOOLS = [
                     "（decision、summary、findings、交接文件）和最近 10 条事件；detail=true 返回完整记录（含各次尝试的原始输出与证据，可能很大）。",
      "inputSchema": object_schema({"run_id": STRING, "detail": {"type": "boolean"}, "dir": STRING})},   # D58: run_id from the link
     {"name": "octopus_preview",
-     "description": "返回某个 Session 产出的 Web 预览链接（Workspace 中的 index.html 等静态页面，10 分钟有效，在隔离环境中运行，"
+     "description": "返回某个 Session 产出的 Web 预览链接（url 打开最合适的一页；pages 列出它产出的全部 HTML 页面及各自的链接，"
+                    "如 report/、artifacts/<名称>/ 下的报告；10 分钟有效，在隔离环境中运行，"
                     "页面内 localStorage、sessionStorage、IndexedDB 与 Cookie 不可用）；"
                     "需要开发服务器的项目用 octopus_app 在执行环境启动预览，或用 octopus_download 下载后在本机运行。",
      "inputSchema": object_schema({"run_id": STRING}, ["run_id"]), "annotations": {"readOnlyHint": True}},
@@ -599,7 +600,8 @@ def call(client, name, args):
         return client.request("POST", "/v1/workflows/resolve", args)
     if name == "octopus_preview":
         result = client.request("POST", "/v1/runs/" + args["run_id"] + "/preview", {})
-        return {**result, "url": client.url + result["url"]}
+        return {**result, "url": client.url + result["url"],   # every HTML page the Session produced, with its own link
+                "pages": [{**page, "url": client.url + page["url"]} for page in result.get("pages") or []]}
     if name == "octopus_parse_workflow":
         return client.request("POST", "/v1/workflows/parse", args)
     if name == "octopus_report":
