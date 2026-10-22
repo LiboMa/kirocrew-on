@@ -13,6 +13,7 @@ from octopus.security import Error, issue_token
 from octopus.server import server
 from octopus.worker import Worker, write
 from tests import test_crew_entry
+from tests.test_secret_rules import chars
 
 LONG = "长" * 25_000
 
@@ -59,6 +60,19 @@ class WorkerObserveTests(unittest.TestCase):
         # The Worker reports the platform's release number (MVP 0.1.0), not a constant of its own.
         import octopus
         self.assertEqual((octopus.__version__, node.health()["version"]), ("0.1.0", "0.1.0"))
+
+    def test_the_worker_masks_secrets_and_its_own_token(self):
+        # D57 §3.3: the Worker's own token too (no rule knows it); masked before the 20 000-character cut
+        secret = "ghp" + "_" + chars("worker-observe", 36, "alnum")
+        token = "x" * 40   # the node's own (see node())
+        edge = "长" * (Worker.OBSERVE_TEXT - 10) + secret
+        node = self.node({"key": self.parent, "messages": [
+            {"role": "assistant", "content": f"GH_TOKEN={secret}\nAuthorization: Bearer {token}"},
+            {"role": "assistant", "content": edge}]})
+        first, second = node.observe({"run_id": self.rid, "native_parent": self.parent})["messages"]
+        self.assertEqual(first["content"], f"GH_TOKEN={secret[:4]}…{secret[-2:]}\nAuthorization: Bearer xxxx…xx")
+        self.assertTrue(all(secret[i:i + 8] not in second["content"] for i in range(len(secret) - 8)))
+        self.assertLessEqual(len(second["content"]), Worker.OBSERVE_TEXT)
 
     def test_refuses_another_session_bad_paging_and_a_missing_slot(self):
         from octopus import gateway_client
@@ -186,6 +200,25 @@ class McpObserveTests(unittest.TestCase):
         tool = next(t for t in mcp.TOOLS if t["name"] == "octopus_observe")
         self.assertEqual(tool["inputSchema"]["required"], ["run_id"])
         self.assertTrue(tool["annotations"]["readOnlyHint"])
+
+    def test_mcp_observe_masks_secrets(self):
+        # D57 §3.3: masked, never refused (the native conversation itself is a known limit); masked before it is cut, so a
+        # credential across the cut leaves none of itself
+        secret = "sk-" + "ant-" + "api03-" + chars("observe", 93) + "AA"
+        edge = "长" * (mcp.OBSERVE_TEXT - 10) + secret
+
+        class Client:
+            def request(self, method, path, body=None):
+                return {"native_parent": "octopus-x", "messages": [
+                    {"role": "assistant", "content": f"已配置 ANTHROPIC_API_KEY={secret}", "truncated": False, "ts": None},
+                    {"role": "assistant", "content": edge, "truncated": False, "ts": None}]}
+        result = mcp.call(Client(), "octopus_observe", {"run_id": "run-" + "b" * 32})
+        first, second = result["messages"]
+        self.assertEqual(first["content"], "已配置 ANTHROPIC_API_KEY=sk-a…AA")
+        self.assertFalse(first["truncated"])
+        self.assertTrue(all(secret[i:i + 8] not in second["content"] for i in range(len(secret) - 8)))
+        self.assertLessEqual(len(second["content"]), mcp.OBSERVE_TEXT)
+        self.assertEqual(result["native_parent"], "octopus-x")
 
 
 class DedicateTests(unittest.TestCase):

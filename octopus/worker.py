@@ -270,7 +270,8 @@ class Worker:
         # Remote preview (D36 §5): on a Worker host the platform reaches the apps through this host's nginx preview
         # port (TLS, preview_tls_name in its certificate); without one, on the platform host's loopback.
         self.apps = Apps(path_prepend)
-        self.checks = Checks(path_prepend)   # a task's verify commands (D37 §5)
+        # a task's verify commands (D37 §5); their output shows this Worker's own token masked too (D57 §3.3)
+        self.checks = Checks(path_prepend, mask=(token,))
         self.preview_tls_port, self.preview_tls_name = preview_tls_port, preview_tls_name
 
     @staticmethod
@@ -488,6 +489,8 @@ class Worker:
             if not isinstance(message, dict):
                 continue
             content = message.get("content") if isinstance(message.get("content"), str) else ""
+            # D57 §3.3: credentials and this Worker's own token masked, before the cut (so none is left half shown)
+            content = workspace.mask_text(content, (self.token,))[0]
             messages.append({"role": str(message.get("role") or ""), "content": content[:self.OBSERVE_TEXT],
                              "truncated": len(content) > self.OBSERVE_TEXT,
                              "ts": message["ts"] if isinstance(message.get("ts"), str) else None})
@@ -1619,7 +1622,9 @@ class Worker:
             # declarative parent-chat projection is shortened.
             header = (f"Octopus 执行 Attempt {attempt} 已返回。原生 Task：{dispatch['native_id']}。"
                       f"实际后端：{evidence.get('actual_backend') or '未核实'}。交接验证由平台进行。\n\n")
-            raw = str(native.get("result", ""))
+            # D57 §3.3: KiroCrew shows and keeps the parent conversation — credentials and this Worker's own token are
+            # masked there, before the cut; the platform reads the result as written below
+            raw = workspace.mask_text(str(native.get("result", "")), (self.token,))[0]
             footer = "\n\n（父对话仅显示摘要；完整结果保留在原生子任务和 Octopus 执行记录中。）"
             note = header + raw
             if len(note) > 3800:

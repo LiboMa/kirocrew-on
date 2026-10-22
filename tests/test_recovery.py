@@ -127,6 +127,49 @@ class RecoveryTests(RecoveryCase):
         self.assertTrue(revisions[1]["summary"].startswith("自动纠错：退回「"))
         self.assertFalse(revisions[1]["reconstructed"])
 
+    def test_a_diagnosis_result_is_stored_masked(self):
+        # D57 §3.3: the diagnosis's result, evidence and decision as they are stored; the decision is applied as given
+        from tests.test_secret_rules import ANT
+        shown = ANT[:4] + "…" + ANT[-2:]
+        self.decision = {**self.decision, "instructions": f"用 {ANT} 复跑测试并重新提交审查"}
+        plain = self.request
+
+        def request(config, path, body, **kwargs):
+            result = plain(config, path, body, **kwargs)
+            if path == "/inspect" and self.bodies[body["attempt_id"]].get("coordination"):
+                result = {**result, "native": {**result["native"], "result": f"诊断：日志里有 {ANT}"},
+                          "evidence": {**result["evidence"], "note": f"见 {ANT}"}}
+            return result
+        self.engine.request = request
+        result = self.tick()
+        self.assertEqual((result["status"], self.rounds), ("completed", {"code": 2, "review": 2}))
+        with self.db.read() as db:
+            row = dict(db.execute("SELECT * FROM recoveries WHERE run_id=?", (self.run["id"],)).fetchone())
+            stored = "\n".join(json.dumps([dict(r) for r in db.execute(f"SELECT * FROM {table}")], ensure_ascii=False)
+                               for table in ("runs", "tasks", "attempts", "events", "recoveries", "revisions"))
+        self.assertEqual(row["status"], "applied")
+        self.assertEqual(row["result"], f"诊断：日志里有 {shown}")
+        self.assertEqual(json.loads(row["evidence"])["note"], f"见 {shown}")
+        decision = json.loads(row["decision"])
+        self.assertEqual((decision["action"], decision["target_task_id"]), ("rework", "code"))
+        self.assertEqual(decision["instructions"], f"用 {shown} 复跑测试并重新提交审查")
+        self.assertNotIn(ANT[4:-2], stored)
+
+    def test_a_diagnosis_that_waits_for_the_user_is_stored_masked(self):
+        from tests.test_secret_rules import ANT
+        shown = ANT[:4] + "…" + ANT[-2:]
+        self.decision = {"action": "wait_for_user", "target_task_id": "code", "missing": "credentials",
+                         "reason": "需要新的 Key", "instructions": f"旧 Key {ANT} 已失效，请提供新的"}
+        result = self.tick()
+        self.assertEqual(result["status"], "blocked")
+        with self.db.read() as db:
+            row = dict(db.execute("SELECT * FROM recoveries WHERE run_id=?", (self.run["id"],)).fetchone())
+            error = db.execute("SELECT error FROM runs WHERE id=?", (self.run["id"],)).fetchone()[0]
+            events = "".join(r[0] for r in db.execute("SELECT payload FROM events WHERE run_id=?", (self.run["id"],)))
+        self.assertEqual((row["status"], json.loads(row["decision"])["action"]), ("blocked", "wait_for_user"))
+        self.assertEqual((row["error"], error), (f"需要新的 Key；旧 Key {shown} 已失效，请提供新的",) * 2)
+        self.assertNotIn(ANT[4:-2], row["decision"] + events)
+
     def test_cycle_limit_stops_without_infinite_dispatch(self):
         self.always_fail = True
         result = self.tick(40)

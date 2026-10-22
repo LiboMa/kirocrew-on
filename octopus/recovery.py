@@ -3,10 +3,11 @@ import json
 import re
 import time
 
-from . import crew_entry, journal
+from . import crew_entry, journal, sources
 from .db import dumps, uid
 from .domain import SETTLED, TOOLS, required_checks, runs_checks, steps, unserved
 from .security import Error, require
+from .transport import worker_token
 
 LIVE = {"pending", "dispatching", "dispatch_unknown", "running", "waiting_approval"}
 FAILURES = {"implementation", "tests", "environment", "input", "auth", "model",
@@ -626,17 +627,20 @@ class Coordinator:
             return
         result = self.engine.request(config, "/inspect", {"run_id": run["id"], "attempt_id": item["attempt_id"]})
         native, evidence = result.get("native") or {}, result.get("evidence") or {}
+        # D57 §3.3: the diagnosis is stored masked (copies: the decision below is read as the Coordinator wrote it)
+        mask = lambda value: sources.mask_value(value, (worker_token(config),))[0]
         if not native.get("done"):
             state = "waiting_approval" if native.get("awaiting_approval") else "running"
             with self.db.transaction() as db:
                 journal.change(db, "recoveries", item["id"], journal.WORKER, "recovery.state", event={"id": item["id"]},
-                               status=state, evidence=dumps(evidence), updated=time.time())
+                               status=state, evidence=dumps(mask(evidence)), updated=time.time())
             return
         # D57 §6.3: the platform's fault, not the Coordinator's — its runtime, its sandbox, KiroCrew's teardown
         kind = fault(native, self._entered(run, item) if native.get("stopped") else True)
         with self.db.transaction() as db:
             journal.change(db, "recoveries", item["id"], journal.WORKER, "recovery.state", event={"id": item["id"]},
-                           result=native.get("result"), evidence=dumps({**evidence, **({"platform_fault": kind} if kind else {})}),
+                           result=mask(native.get("result")),
+                           evidence=dumps(mask({**evidence, **({"platform_fault": kind} if kind else {})})),
                            updated=time.time())
         if kind and self._retry(run, item, context, kind):
             return
@@ -700,6 +704,7 @@ class Coordinator:
 
     def finish(self, run, item, *, decision=None, error=None):
         now = time.time()
+        extra = (worker_token(json.loads(run.get("worker_config") or "{}")),)   # D57 §3.3: what is stored is masked
         with self.db.transaction() as db:
             fresh = db.execute("SELECT * FROM runs WHERE id=?", (run["id"],)).fetchone()
             failed = db.execute("SELECT * FROM tasks WHERE run_id=? AND id=?",
@@ -713,7 +718,7 @@ class Coordinator:
                 error = "协调者扩大可改动路径未通过核对：paths_add 只用于重试或返工失败的任务"
                 decision = {**decision, "refused": error}
             elif decision and decision["action"] == "replan":
-                refusal = self._replan(db, fresh, failed, item, decision, now)
+                refusal = self._replan(db, fresh, failed, item, decision, now, extra)
                 if not refusal:
                     return
                 decision = fallback({**decision, "refused": refusal}, failed["id"], refusal)   # D71: keep going
@@ -753,10 +758,11 @@ class Coordinator:
                 # D71: a refused decision is not a stop — the failed task is retried with what the Coordinator said
                 decision, error = fallback({**decision, "refused": error}, failed["id"], error), None
                 target, widened = failed, None
+            stored = sources.mask_value(decision, extra)[0] if decision else None   # decided on as written, stored masked
             if error or decision["action"] == "wait_for_user":
-                message = error or (decision["reason"] + "；" + decision["instructions"])
+                message = sources.mask_text(error or (decision["reason"] + "；" + decision["instructions"]), extra)[0]
                 journal.change(db, "recoveries", item["id"], journal.RECOVERY, "recovery.state", event={"id": item["id"]},
-                               status="blocked", decision=dumps(decision) if decision else None, error=message, updated=now)
+                               status="blocked", decision=dumps(stored) if stored else None, error=message, updated=now)
                 journal.change(db, "runs", run["id"], journal.RECOVERY, "recovery.blocked",
                                event={"id": item["id"], "error": message}, status="blocked", error=message, updated=now)
                 return
@@ -776,13 +782,13 @@ class Coordinator:
                                spec=dumps(switched))
             version = fresh["version"] + 1
             journal.change(db, "recoveries", item["id"], journal.RECOVERY, "recovery.state", event={"id": item["id"]},
-                           status="applied", decision=dumps(decision), error=None, updated=now)
+                           status="applied", decision=dumps(stored), error=None, updated=now)
             journal.change(db, "runs", run["id"], journal.RECOVERY, "recovery.applied", decision.get("reason"),
                            event={"id": item["id"], "number": item["number"], "target_task_id": target["id"],
                                   "invalidated": invalidated}, status="ready", error=None, version=version, updated=now)
             from .revisions import record
             name = json.loads(target["spec"]).get("name", target["id"])
-            reason = decision.get("reason")
+            reason = stored.get("reason")
             if decision["action"] == "switch_tool":
                 was = decision["switched_from"]
                 title = (f"自动纠错：「{name}」由 {was['tool']} / {was['model']} 换为 {switched['tool']} / {switched['model']}"
@@ -792,9 +798,9 @@ class Coordinator:
             if widened:
                 title += f"；扩大「{name}」的可改动路径：{'、'.join(decision['paths_add'])}"
             record(db, run["id"], version, "recovered", title, fresh["owner_id"], now, recovery_id=item["id"],
-                   decision=decision, invalidated=invalidated)
+                   decision=stored, invalidated=invalidated)
 
-    def _replan(self, db, fresh, failed, item, decision, now):
+    def _replan(self, db, fresh, failed, item, decision, now, extra=()):
         """The Coordinator's replan (D41 §3.2): the failed task and those after it are replaced by a KiroCrew planning task;
         accepted tasks stay. Once per Session — besides up to two for a problem in the task's contract (D57 §6.1); never for
         a design Session or for a planning task itself."""
@@ -837,14 +843,14 @@ class Coordinator:
                               "instructions": decision.get("instructions"), "recovery": item["number"],
                               **({"exempt": True} if exempt else {})}
         snapshot["steps"] = snapshot.get("steps", []) + [spec]
-        version = fresh["version"] + 1
+        version, stored = fresh["version"] + 1, sources.mask_value(decision, extra)[0]   # D57 §3.3: stored masked
         journal.change(db, "recoveries", item["id"], journal.RECOVERY, "recovery.state", event={"id": item["id"]},
-                       status="applied", decision=dumps(decision), error=None, updated=now)
+                       status="applied", decision=dumps(stored), error=None, updated=now)
         journal.change(db, "runs", rid, journal.RECOVERY, "recovery.applied", decision.get("reason"),
                        event={"id": item["id"], "number": item["number"], "replan": True,
                               "invalidated": [r["id"] for r in replaced]},
                        status="ready", error=None, version=version, snapshot=dumps(snapshot), updated=now)
         names = "、".join(r["name"] for r in replaced)
-        reason = decision.get("reason")
+        reason = stored.get("reason")
         record(db, rid, version, "recovered", f"自动纠错：重新规划，替换「{names}」" + (f"（{reason}）" if reason else ""),
-               fresh["owner_id"], now, recovery_id=item["id"], decision=decision, invalidated=[r["id"] for r in replaced])
+               fresh["owner_id"], now, recovery_id=item["id"], decision=stored, invalidated=[r["id"] for r in replaced])

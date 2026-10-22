@@ -53,6 +53,16 @@ def connection(config):
         raise Error(503, "worker_secret", "执行环境的访问凭据无法解开：请平台管理员重新连接该执行环境") from None
 
 
+def worker_token(config):
+    """The token the platform calls this Worker with, only to mask it where an Agent there may have printed it (D57 §3.3);
+    None when it cannot be opened, or is shorter than any Worker's (validate_worker)."""
+    try:
+        token = connection(config)["token"]
+    except (Error, KeyError, TypeError, AttributeError):
+        return None
+    return token if isinstance(token, str) and len(token) >= 32 else None
+
+
 def worker_stream(config, path, body, timeout=60):
     """A Worker response read as a stream (a download); errors answer like worker_request's."""
     config = connection(config)

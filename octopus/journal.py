@@ -4,6 +4,7 @@ import hashlib
 import time
 
 from .db import dumps
+from .sources import mask_value
 
 ENGINE, WORKER, KIROCREW, RECOVERY = ({"kind": kind} for kind in ("engine", "worker", "kirocrew", "recovery"))
 KEYS = {"runs": ("id",), "tasks": ("run_id", "id"), "attempts": ("id",), "recoveries": ("id",)}
@@ -28,7 +29,10 @@ def shown(value):
 
 
 def record(db, rid, kind, actor, changes=None, reason=None, **extra):
+    """An event, every string in it masked (D57 §3.3): whatever a writer passes — its reason, its own fields, the values
+    it changed — never keeps a credential's text."""
     payload = {**extra, "actor": actor, **({"changes": changes} if changes else {}), **({"reason": reason} if reason else {})}
+    payload = mask_value(payload)[0]
     db.execute("INSERT INTO events(run_id,kind,payload,created) VALUES(?,?,?,?)", (rid, kind, dumps(payload), time.time()))
 
 

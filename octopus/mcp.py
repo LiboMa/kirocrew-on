@@ -10,6 +10,7 @@ import zipfile
 from . import __version__
 from .client import ApiError
 from .db import dumps
+from .sources import mask_text
 
 
 def object_schema(properties=None, required=()):
@@ -619,9 +620,11 @@ def call(client, name, args):
     if name == "octopus_observe":
         query = "limit=" + str(int(args.get("limit", 20))) + ("&before=" + str(int(args["before"])) if "before" in args else "")
         result = client.request("GET", "/v1/runs/" + args["run_id"] + "/observe?" + query)
-        result["messages"] = [{**m, "content": m["content"][:OBSERVE_TEXT],
-                               "truncated": m.get("truncated") or len(m["content"]) > OBSERVE_TEXT}
-                              for m in result.get("messages", [])]
+        # D57 §3.3: credentials masked before the cut, whatever Worker answered (masked, never refused)
+        shown = [(m, mask_text(m["content"])[0]) for m in result.get("messages", [])]
+        result["messages"] = [{**m, "content": content[:OBSERVE_TEXT],
+                               "truncated": m.get("truncated") or len(content) > OBSERVE_TEXT}
+                              for m, content in shown]
         return result
     if name == "octopus_recommend_workflow":
         return client.request("POST", "/v1/designs", args)

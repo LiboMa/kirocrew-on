@@ -137,9 +137,10 @@ def _remove(path):
         pass
 
 
-def masked_tail(raw, dropped=None):
+def masked_tail(raw, dropped=None, extra=()):
     """The last TAIL bytes of a command's output (``raw``: the bytes kept of it) as they are shown and stored, every
-    credential masked (D57 §3.3), and what was masked: ``[{kind, line, masked, hash}]``, ``line`` counted in the tail.
+    credential masked (D57 §3.3) — ``extra`` too, values no rule knows (the Worker's own token) — and what was masked:
+    ``[{kind, line, masked, hash}]``, ``line`` counted in the tail.
     Masked before it is cut, so a credential across the cut is masked whole; and nothing from before the cut is shown,
     so the masks' shorter text never makes room for the head of ``raw``, which may be the rest of a credential whose
     start was already dropped and so is not recognised. A private key whose BEGIN is out of view — dropped with the
@@ -149,7 +150,7 @@ def masked_tail(raw, dropped=None):
     dropped = len(raw) >= 2 * TAIL if dropped is None else dropped
     before = raw.count(b"\n", 0, cut)
     pieces, at, found = [], cut, []
-    for hit in sources.find_secrets(raw, cut=cut, dropped=dropped):
+    for hit in sources.find_secrets(raw, extra, cut=cut, dropped=dropped):
         if hit["end"] <= cut:
             continue   # in the part kept only so that one across the cut is still recognised
         pieces += [raw[at:hit["start"]], hit["masked"].encode()]   # nothing between for the one across the cut
@@ -160,15 +161,17 @@ def masked_tail(raw, dropped=None):
     return tail.encode()[-TAIL:].decode(errors="ignore"), found
 
 
-def _shown(reason):
+def _shown(reason, extra=()):
     """An ``unrunnable`` reason as it is stored and shown: judged on the output as printed, so masked and scrubbed as the
     tail is (a module name may be a credential)."""
-    return None if reason is None else sources.scrub(sources.mask_text(reason)[0])
+    return None if reason is None else sources.scrub(sources.mask_text(reason, extra)[0])
 
 
 class Checks:
-    def __init__(self, path_prepend=(), per_command=600, total=1200):
+    def __init__(self, path_prepend=(), per_command=600, total=1200, mask=()):
+        """``mask``: what the output's tail masks besides what the rules know (the Worker's own token, D57 §3.3)."""
         self.path_prepend, self.per_command, self.total = tuple(str(p) for p in path_prepend), per_command, total
+        self.mask = tuple(value for value in mask if value)
         self.jobs, self.by_attempt, self.lock = {}, {}, threading.Lock()
 
     def commands(self):
@@ -256,7 +259,7 @@ class Checks:
                                   "tail": f"无法运行检查命令（{type(exc).__name__}）"}
                     else:   # judged here, where the project is at hand, and on the output before it was masked
                         if result["exit"] not in (0, None):
-                            result["unrunnable"] = _shown(unrunnable(result, project, output))
+                            result["unrunnable"] = _shown(unrunnable(result, project, output), self.mask)
                 with self.lock:
                     value["results"].append(result)
                 passed = passed and result["exit"] == 0
@@ -312,7 +315,7 @@ class Checks:
             proc.stdout.close()
         value["current"] = None
         raw = bytes(output)
-        tail, findings = masked_tail(raw, dropped)
+        tail, findings = masked_tail(raw, dropped, self.mask)
         result = {"command": command, "exit": None if timeout or value["cancelled"] else proc.returncode,
                   "seconds": round(time.monotonic() - began, 1), "tail": tail}
         if findings:

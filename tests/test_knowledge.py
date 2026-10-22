@@ -212,6 +212,22 @@ class WriteTests(KnowledgeCase):
         self.assertFalse(any("ghp_" in (i["rule"] + (i["reason"] or "")) for i in run["knowledge"]["items"]))
         self.assertTrue(all(i["reason"] for i in skipped))
 
+    def test_items_are_judged_as_written_and_kept_masked(self):
+        # D57 §3.3: the outcome is stored masked, yet one the publish scan refuses as written stays refused (its text
+        # nowhere); one it lets through is written as stored, masked
+        from tests.test_secret_rules import OPENAI
+        github = "ghp_" + "a" * 36
+        self.knowledge = [{"rule": f"令牌 {github}"}, f"串 {github}", {"rule": "接口 Key", "avoid": f"不要写死 {OPENAI}"},
+                          "构建用 make build"]
+        rid, run = self.run_()
+        self.assertEqual(self.writes[0]["items"], [{"rule": "接口 Key", "avoid": f"不要写死 {OPENAI[:4]}…{OPENAI[-2:]}"},
+                                                   {"rule": "构建用 make build"}])
+        self.assertEqual([i["reason"] for i in run["knowledge"]["items"] if i["result"] == "skipped"], ["含疑似秘密，未写入"] * 2)
+        with self.db.read() as db:
+            stored = "".join(json.dumps([dict(r) for r in db.execute(f"SELECT * FROM {t}")]) for t in ("attempts", "events"))
+        self.assertNotIn(github[4:-2], stored)
+        self.assertNotIn(OPENAI[4:-2], stored)
+
     def test_nothing_listed_writes_nothing(self):
         self.knowledge = []
         _, run = self.run_()

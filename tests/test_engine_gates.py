@@ -1,5 +1,6 @@
 """D37 §3–§9: the Engine asks the Worker for each code task's candidate and runs its checks before accepting it, binds a
 review to the latest candidate, sends gate failures through recovery, and leaves old Sessions and old Workers alone."""
+import hashlib
 import json
 from pathlib import Path
 import tempfile
@@ -11,6 +12,7 @@ from octopus.db import dumps
 from octopus.engine import Engine
 from octopus.security import Error
 from octopus.worker import Worker
+from tests.test_secret_rules import chars
 from tests.test_teams_workers import TeamsWorkersCase
 
 C1, C0, BASE = "c" * 40, "0" * 40, "b" * 40
@@ -1086,6 +1088,163 @@ class EngineGateTests(TeamsWorkersCase):
         attempt, evidence = self.attempt(rid, "test")
         self.assertEqual(self.gates(evidence).get("tests_fail_on_baseline"), "skip")
         self.assertEqual(attempt["status"], "accepted")
+
+
+# Put together while the test runs (tests/test_secret_rules.py): no complete credential is written in this file.
+SECRET = "ghp" + "_" + chars("task-7-result", 36, "alnum")
+SHOWN = SECRET[:4] + "…" + SECRET[-2:]
+TASK = {**IMPLEMENT, "id": "task-1"}
+
+
+class SecretMaskingTests(TeamsWorkersCase):
+    """D57 §3.3, owner 2026-10-22 (no new gate may hold a user): what the platform stores of an Attempt is masked when it is
+    written, and what was masked is listed — evidence.secrets and one warn record — never a block, a failure or another
+    status; the verdicts are made on what the Agent and its checks wrote."""
+    session, run_engine, attempt, gates = (EngineGateTests.session, EngineGateTests.run_engine, EngineGateTests.attempt,
+                                           EngineGateTests.gates)
+
+    def stored(self):
+        """Every row the platform keeps, as text: the Session, its tasks, Attempts, events, recoveries and revisions."""
+        with self.db.read() as db:
+            return "\n".join(json.dumps([dict(row) for row in db.execute(f"SELECT * FROM {table}")], ensure_ascii=False)
+                             for table in ("runs", "tasks", "attempts", "events", "recoveries", "revisions"))
+
+    def run_status(self, rid):
+        with self.db.read() as db:
+            return db.execute("SELECT status FROM runs WHERE id=?", (rid,)).fetchone()["status"]
+
+    def masked_record(self, evidence):
+        records = [g for g in evidence["gates"] if g["name"] == "secrets_masked"]
+        self.assertEqual(len(records), 1, evidence["gates"])
+        return records[0]
+
+    def test_a_secret_in_the_result_is_stored_masked_and_warns(self):
+        worker, rid = FakeWorker(), self.session([TASK])
+        worker.results["task-1"] = f"完成：已写入配置 GH_TOKEN={SECRET}"
+        self.run_engine(worker)
+        attempt, evidence = self.attempt(rid, "task-1")
+        self.assertEqual(attempt["result"], f"完成：已写入配置 GH_TOKEN={SHOWN}")
+        stored = self.stored()
+        self.assertNotIn(SECRET[4:-2], stored)   # attempts.result, the evidence and the journal alike
+        self.assertIn(SHOWN, stored)
+        self.assertEqual((attempt["status"], self.run_status(rid)), ("accepted", "completed"))   # nothing held
+        self.assertEqual(evidence["secrets"], [{"kind": "github", "location": "result:task-1", "masked": SHOWN,
+                                                "hash": hashlib.sha256(SECRET.encode()).hexdigest()}])
+        record = self.masked_record(evidence)
+        self.assertEqual((record["status"], record["detail"]), ("warn", "已打码 1 处疑似密钥：github（result:task-1）"))
+        self.assertIn("secrets_masked", [w["name"] for w in evidence["warnings"]])
+        self.assertNotIn("gate", evidence)
+        self.assertNotIn("failure_type", evidence)
+
+    def test_a_secret_in_a_check_tail_is_listed(self):
+        # an older Worker's tail, as the command printed it, and a tail the Worker masked with what it masked listed
+        shown = {"kind": "github", "line": 2, "masked": SHOWN, "hash": hashlib.sha256(SECRET.encode()).hexdigest()}
+        cases = (("raw", {"tail": f"ok\nexport GH_TOKEN={SECRET}\n"}),
+                 ("masked by the Worker", {"tail": f"ok\nexport GH_TOKEN={SHOWN}\n", "findings": [shown]}))
+        for number, (name, tail) in enumerate(cases):
+            with self.subTest(name):
+                worker, rid = FakeWorker(), self.session([TASK], request="start-%016d" % (70 + number))
+                worker.verify = [{"state": "done", "passed": True, "failed": None,
+                                  "results": [{"command": "npm test", "exit": 0, "seconds": 1.0, **tail}]}]
+                self.run_engine(worker)
+                attempt, evidence = self.attempt(rid, "task-1")
+                self.assertEqual(evidence["check_results"][0]["tail"], f"ok\nexport GH_TOKEN={SHOWN}\n")
+                self.assertNotIn(SECRET[4:-2], self.stored())
+                self.assertEqual([(s["kind"], s["location"], s["masked"], s["hash"]) for s in evidence["secrets"]],
+                                 [("github", "checks:task-1", SHOWN, shown["hash"])])
+                self.assertEqual(self.masked_record(evidence)["detail"], "已打码 1 处疑似密钥：github（checks:task-1）")
+                self.assertEqual((attempt["status"], self.gates(evidence)["checks_pass"], self.run_status(rid)),
+                                 ("accepted", "pass", "completed"))
+
+    def test_a_secret_in_a_failing_check_command_is_judged_as_before(self):
+        # the required check is known by its text as written, the masked one only stored (D57 §5)
+        command = f"curl -fsS -H 'Authorization: token {SECRET}' https://api.example.test/health"
+        worker, rid = FakeWorker(), self.session([{**TASK, "verify": [command]}])
+        worker.verify = [{"state": "done", "passed": False, "failed": 0,
+                          "results": [{"command": command, "exit": 22, "seconds": 1.0, "tail": "", "unrunnable": None}]}]
+        self.run_engine(worker, ticks=8)
+        attempt, evidence = self.attempt(rid, "task-1")
+        shown = command.replace(SECRET, SHOWN)
+        self.assertEqual((attempt["status"], evidence["gate"], evidence["failure_type"]), ("blocked", "checks_pass", "gate"))
+        self.assertEqual(attempt["error"], f"检查命令失败：{shown}（退出码 22）")
+        self.assertEqual(evidence["check_results"][0]["command"], shown)
+        self.assertEqual(next(g for g in evidence["gates"] if g["name"] == "checks_pass")["detail"], attempt["error"])
+        with self.db.read() as db:
+            run = db.execute("SELECT status, error FROM runs WHERE id=?", (rid,)).fetchone()
+            events = "".join(row[0] for row in db.execute("SELECT payload FROM events WHERE run_id=?", (rid,)))
+        self.assertEqual(tuple(run), ("blocked", attempt["error"]))
+        self.assertNotIn(SECRET[4:-2], attempt["evidence"] + events)
+        self.assertEqual(sorted({s["location"] for s in evidence["secrets"]}), ["checks:task-1", "error:task-1"])
+        self.assertEqual(self.masked_record(evidence)["status"], "warn")
+
+    def test_a_secret_changes_nothing_but_what_is_stored(self):
+        # the same Session with and without a credential in its result, outcome and check output: judged alike
+        def session(number, secret):
+            worker = FakeWorker()
+            worker.results["task-1"] = f"完成 {secret}"
+            worker.outcomes["task-1"] = {"decision": "pass", "summary": f"完成 {secret}", "findings": [f"见 {secret}"]}
+            worker.verify = [{"state": "done", "passed": True, "failed": None,
+                              "results": [{"command": "npm test", "exit": 0, "seconds": 1.0, "tail": f"ok {secret}"}]}]
+            rid = self.session([TASK, {**REVIEW, "id": "task-2"}], request="start-%016d" % (80 + number))
+            self.run_engine(worker, ticks=20)
+            judged = []
+            for task in ("task-1", "task-2"):
+                attempt, evidence = self.attempt(rid, task)
+                judged.append((attempt["status"], [(g["name"], g["status"]) for g in evidence["gates"]
+                                                   if g["name"] != "secrets_masked"],
+                               sorted(set(evidence) - {"secrets"}), [w["name"] for w in evidence.get("warnings", [])
+                                                                     if w["name"] != "secrets_masked"]))
+            return rid, worker, (judged, self.run_status(rid), [p for p, _ in worker.calls])
+        _, _, clean = session(0, "无凭证")
+        rid, worker, masked = session(1, SECRET)
+        self.assertEqual(clean, masked)
+        judged, status, _ = masked
+        self.assertEqual(([a for a, *_ in judged], status), (["accepted", "accepted"], "completed"))
+        _, evidence = self.attempt(rid, "task-1")
+        self.assertEqual(self.masked_record(evidence)["detail"],
+                         "已打码 3 处疑似密钥：github（result:task-1）、github（outcome:task-1）、github（checks:task-1）")
+        upstream = next(b for b in worker.dispatched.values() if b["spec"]["id"] == "task-2")["upstream"][0]
+        self.assertNotIn(SECRET[4:-2], json.dumps(upstream, ensure_ascii=False))   # the next task is told the masked text
+        self.assertIn(SHOWN, upstream["summary"])
+
+    def test_the_handoff_the_platform_writes_is_masked(self):
+        worker, rid = FakeWorker(), self.session([TASK])
+        worker.outcomes["task-1"] = {"decision": "pass", "summary": f"完成 {SECRET}"}   # what the handoff tells of it
+        self.run_engine(EngineGateTests.without_handoff(worker, "task-1"))
+        attempt, evidence = self.attempt(rid, "task-1")
+        self.assertIs(evidence["handoff_generated"], True)
+        self.assertIn(f"完成 {SHOWN}", evidence["handoff_text"])
+        self.assertNotIn(SECRET[4:-2], self.stored())
+        self.assertEqual([s["location"] for s in evidence["secrets"]], ["outcome:task-1", "handoff:task-1"])
+        self.assertEqual(attempt["status"], "accepted")
+
+    def test_the_workers_own_token_is_masked(self):
+        # the token the platform calls this Session's Worker with: what an Agent there could print, though no rule knows it
+        token = json.loads(TeamsWorkersCase.config("b-p"))["token"]
+        worker, rid = FakeWorker(), self.session([TASK])
+        worker.results["task-1"] = f"Worker 配置：Bearer {token}"
+        self.run_engine(worker)
+        attempt, evidence = self.attempt(rid, "task-1")
+        self.assertNotIn(token, self.stored())
+        self.assertEqual(attempt["result"], f"Worker 配置：Bearer {token[:4]}…{token[-2:]}")
+        self.assertEqual([(s["kind"], s["location"]) for s in evidence["secrets"]], [("worker_token", "result:task-1")])
+        self.assertEqual(attempt["status"], "accepted")
+
+    def test_masking_twice_lists_once(self):
+        # the result is stored while the checks run and again when they end: one finding, one record
+        worker, rid = FakeWorker(), self.session([TASK])
+        worker.results["task-1"] = f"完成 {SECRET}"
+        worker.verify = [{"state": "running", "passed": None, "failed": None, "results": []},
+                         {"state": "done", "passed": True, "failed": None,
+                          "results": [{"command": "npm test", "exit": 0, "seconds": 1.0, "tail": f"ok {SECRET}"}]}]
+        self.run_engine(worker)
+        attempt, evidence = self.attempt(rid, "task-1")
+        self.assertEqual([s["location"] for s in evidence["secrets"]], ["result:task-1", "checks:task-1"])
+        self.assertEqual(self.masked_record(evidence)["detail"],
+                         "已打码 2 处疑似密钥：github（result:task-1）、github（checks:task-1）")
+        self.assertEqual([w["name"] for w in evidence["warnings"]], ["secrets_masked"])
+        self.assertEqual(attempt["status"], "accepted")
+
 
 class WorkerReviewTests(unittest.TestCase):
     def test_a_review_is_told_which_commit_to_review(self):

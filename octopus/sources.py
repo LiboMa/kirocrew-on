@@ -207,6 +207,25 @@ def mask_text(text, extra=()):
     return "".join(pieces) + data[at:].decode(errors="surrogatepass"), found
 
 
+def mask_value(value, extra=()):
+    """``value`` as JSON holds it (dicts, lists, strings, numbers) with every string masked as ``mask_text`` masks it, and
+    what was found, in order. A copy: the value itself, which verdicts read, is left as it was (D57 §3.3). Keys stay as
+    they are: they are the writer's names for what it stores."""
+    found = []
+
+    def walk(item):
+        if isinstance(item, str):
+            text, hits = mask_text(item, extra)
+            found.extend(hits)
+            return text
+        if isinstance(item, dict):
+            return {key: walk(child) for key, child in item.items()}
+        if isinstance(item, (list, tuple)):
+            return [walk(child) for child in item]
+        return item
+    return walk(value), found
+
+
 def env_file(name):
     """A .env file or folder (or .env.<anything>), which holds secrets; the examples stay."""
     return (name == ".env" or name.startswith(".env.")) and name not in ENV_KEPT

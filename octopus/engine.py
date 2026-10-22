@@ -8,8 +8,8 @@ import threading
 import time
 
 from .db import dumps, uid
-from .transport import worker_request
-from . import crew_entry, evaluation, gates, journal, knowledge, phases, planning, quotas, recovery, waiting
+from .transport import worker_request, worker_token
+from . import crew_entry, evaluation, gates, journal, knowledge, phases, planning, quotas, recovery, sources, waiting
 from .security import Error
 from .domain import (CONTRACT, GENERAL_KINDS, general, release_confirmations, required_checks, runs_checks, unserved,
                      worker_source)
@@ -79,6 +79,71 @@ def generated_handoff(task, attempt, evidence, native):
     later task, the recovery context and the Coordinator read it there, as they read a real one at ``handoff_path``."""
     item = handoff({"id": task["id"], "spec": attempt["spec"], "evidence": dumps(evidence), "result": native.get("result")})
     return GENERATED + "\n" + json.dumps(item, ensure_ascii=False, indent=2)
+
+
+# D57 §3.3, under the owner's rule of 2026-10-22 (no new gate may hold a user): what the platform stores of an Attempt is
+# masked as it is written, and what was masked is listed — a warning, never a block, a failure or another status. Where
+# each part was is "<category>:<task_id>"; the platform's own records of commits, files and jobs, which later judging
+# reads, are kept as they are.
+CATEGORIES = {"outcome": "outcome", "evaluation": "outcome", "handoff_text": "handoff", "check_results": "checks",
+              "baseline_results": "checks"}
+CHECK_GATES = frozenset({"checks_pass", "tests_fail_on_baseline"})
+KEPT = frozenset({"secrets", "candidate", "reviewed", "baseline", "checks", "check_artifacts", "baseline_artifacts"})
+SECRETS_NAMED = 5
+
+
+def masked(evidence, task_id, extra=(), **texts):
+    """``texts`` (result=…, error=…) masked as they are stored, and ``evidence`` masked in place — once every verdict was
+    made on them as written. What was masked joins ``evidence["secrets"]`` ({kind, location, masked, hash}, each where it
+    was once) and is named by one warn record, secrets_masked, which neither blocks nor sets ``gate`` or ``failure_type``."""
+    found = []
+
+    def mask(value, category):
+        value, hits = sources.mask_value(value, extra)
+        found.extend((category, hit) for hit in hits)
+        return value
+    shown = {name: mask(text, name) for name, text in texts.items()}
+    for key in [key for key in evidence if key not in KEPT]:
+        if key in ("gates", "warnings") and isinstance(evidence[key], list):   # a check's verdict quotes its command
+            evidence[key] = [mask(r, "checks" if isinstance(r, dict) and r.get("name") in CHECK_GATES else "error")
+                             for r in evidence[key]]
+        elif key == "outcome" and isinstance(evidence[key], dict):
+            evidence[key] = _judged(evidence[key], mask(evidence[key], "outcome"))
+        else:
+            evidence[key] = mask(evidence[key], CATEGORIES.get(key, "error"))
+    for key in ("check_results", "baseline_results"):   # what the Worker masked in their output (checks.masked_tail)
+        found.extend(("checks", hit) for result in evidence.get(key) or [] if isinstance(result, dict)
+                     for hit in result.get("findings") or [] if isinstance(hit, dict))
+    listed = [item for item in evidence.get("secrets") or [] if isinstance(item, dict)]
+    seen = {(item.get("location"), item.get("hash")) for item in listed}
+    for category, hit in found:
+        item = {"kind": hit.get("kind"), "location": f"{category}:{task_id}", "masked": hit.get("masked"),
+                "hash": hit.get("hash")}
+        if (item["location"], item["hash"]) not in seen:
+            seen.add((item["location"], item["hash"]))
+            listed.append(item)
+    if listed:
+        evidence["secrets"] = listed
+        named = "、".join(f"{item['kind']}（{item['location']}）" for item in listed[:SECRETS_NAMED])
+        record = gates.record("secrets_masked", "warn", f"已打码 {len(listed)} 处疑似密钥：{named}"
+                              + ("等" if len(listed) > SECRETS_NAMED else ""))
+        records = evidence.setdefault("gates", [])
+        at = next((i for i, r in enumerate(records) if isinstance(r, dict) and r.get("name") == "secrets_masked"), None)
+        if at is None:
+            records.append(record)
+        else:
+            records[at] = record
+    return shown
+
+
+def _judged(outcome, shown):
+    """``shown`` (the masked outcome) with the verdict its knowledge entries get later kept as written: Knowledge reads them
+    from what is stored (D46 P4), and one the publish scan refuses as written is marked so (knowledge.suspicious)."""
+    entries, stored = outcome.get("knowledge"), shown.get("knowledge")
+    if isinstance(entries, list) and isinstance(stored, list):
+        shown["knowledge"] = [{**(item if isinstance(item, dict) else {"rule": item}), "suspicious": True}
+                              if knowledge.suspicious(entry) else item for entry, item in zip(entries, stored)]
+    return shown
 
 
 BROKEN = frozenset({"native_error", "native_stopped", "auth", "tool", "model"})   # the conversation itself failed
@@ -205,8 +270,25 @@ class Engine:
             if run["desired"] != "active" and status not in {"stopping", "stopped", "reopening"}:
                 return
             rest = {k: v for k, v in extra.items() if k not in binding}
+            error = sources.mask_text(error)[0] if isinstance(error, str) else error   # D57 §3.3: stored masked
             journal.change(db, "runs", rid, actor, "run.state", reason, event={"status": status, "error": error},
                            status=status, error=error, updated=time.time(), **rest)
+
+    def _mask(self, run, task_id, evidence, **texts):
+        """``masked`` with this Session's Worker token — the one the platform calls it with — besides the rules."""
+        return masked(evidence, task_id, (self._token(run),), **texts)
+
+    @staticmethod
+    def _token(run):
+        try:
+            return worker_token(json.loads(run.get("worker_config") or "{}"))
+        except (ValueError, TypeError):
+            return None
+
+    @staticmethod
+    def _task_of(db, attempt_id):
+        row = db.execute("SELECT task_id FROM attempts WHERE id=?", (attempt_id,)).fetchone()
+        return row["task_id"] if row else None
 
     def tick(self, wait=True):
         with self.guard:
@@ -304,9 +386,11 @@ class Engine:
         """D46 P4: the platform's Knowledge task that cannot run or finish is passed over with its reason — never blocked,
         never diagnosed — so a Session the Evaluator passed completes (R5)."""
         with self.db.transaction() as db:
+            evidence = {**evidence, "knowledge_skipped": reason}
+            reason = self._mask(run, self._task_of(db, attempt_id), evidence, error=reason)["error"]   # D57 §3.3
             journal.change(db, "attempts", attempt_id, actor, "attempt.state", "Knowledge 沉淀未完成",
                            event={"id": attempt_id, "status": "accepted", "skipped": reason},
-                           status="accepted", error=None, evidence=dumps({**evidence, "knowledge_skipped": reason,
+                           status="accepted", error=None, evidence=dumps({**evidence,
                                                                           "warnings": gates.warnings(evidence.get("gates"))}),
                            updated=time.time())
             journal.change_rows(db, "tasks", "current_attempt=?", (attempt_id,), actor, "task.state", status="accepted")
@@ -394,6 +478,7 @@ class Engine:
             self.backoff[run["id"]] = (failures, self.clock() + min(60.0, self.retry_unavailable * 2 ** (failures - 1)))
         # Error codes are stable; do not publish transport credentials/tracebacks.
         message = str(exc) if hasattr(exc, "code") else "后台操作失败，请检查 Worker 与原生状态"
+        message = sources.mask_text(message, (self._token(run),))[0]   # D57 §3.3: stored and shown masked
         with self.db.read() as db:
             current = db.execute(
                 "SELECT a.* FROM attempts a JOIN tasks t ON t.current_attempt=a.id "
@@ -590,6 +675,7 @@ class Engine:
                     **({"budget_refused": over} if over else {})}
         if config is not None:   # D57 §4: what a stopped review changed is put back, as for any review that did not pass
             self._put_back_review(run, config, attempt, evidence)
+        reason = self._mask(run, task["id"], evidence, error=reason)["error"]   # D57 §3.3: stored masked
         if not retry and knowledge.platform(json.loads(run["snapshot"]), task["id"]):   # D46 P4: skipped, not diagnosed
             self._skip_knowledge(run, attempt["id"], evidence, reason, journal.ENGINE)
             return True
@@ -627,10 +713,11 @@ class Engine:
         if self._knowledge_attempt(run, attempt_id):
             return self._skip_knowledge(run, attempt_id, evidence, message, actor)
         with self.db.transaction() as db:
+            evidence = {**evidence, "failure_type": "tool", "refused": code}
+            message = self._mask(run, self._task_of(db, attempt_id), evidence, error=message)["error"]   # D57 §3.3
             journal.change(db, "attempts", attempt_id, actor, "attempt.state",
                            event={"id": attempt_id, "status": "blocked", "error": message},
-                           status="blocked", error=message, evidence=dumps({**evidence, "failure_type": "tool", "refused": code}),
-                           updated=time.time())
+                           status="blocked", error=message, evidence=dumps(evidence), updated=time.time())
             journal.change_rows(db, "tasks", "current_attempt=?", (attempt_id,), actor, "task.state", status="blocked")
         self.update(run["id"], "blocked", message, actor=actor)
         recovery.automatic(self.db, run["id"], attempt_id)
@@ -1002,6 +1089,7 @@ class Engine:
         elif spec.get("kind") == "test":
             started = self._start_baseline(run, config, attempt, evidence)
             if started:
+                self._mask(run, task["id"], evidence)   # the checks' output, stored while the baseline runs
                 with self.db.transaction() as db:
                     journal.change(db, "attempts", attempt["id"], journal.WORKER, "attempt.checking", "在会话基线上运行测试",
                                    event={"id": attempt["id"], "task_id": task["id"]}, evidence=dumps(evidence), updated=time.time())
@@ -1011,6 +1099,7 @@ class Engine:
     def _settle(self, run, task, attempt, evidence, error):
         """Accept or block an Attempt whose checks ended, like advance does for any other; recovery follows a block."""
         rid, state = run["id"], "blocked" if error else "accepted"
+        error = self._mask(run, task["id"], evidence, error=error)["error"]   # judged: the checks' output stored masked
         if state == "accepted":
             evidence["warnings"] = gates.warnings(evidence.get("gates"))   # D57 §4: listed, not blocking
         with self.db.transaction() as db:
@@ -1275,10 +1364,11 @@ class Engine:
                 error, failure_type, checking = self._more_gates(run, config, task, attempt, spec, evidence, report, latest,
                                                                  start)
                 if checking:   # the verify commands run; the Attempt is judged when they end
+                    shown = self._mask(run, task["id"], evidence, result=native.get("result"))
                     with self.db.transaction() as db:
                         journal.change(db, "attempts", attempt["id"], journal.WORKER, "attempt.checking",
                                        event={"id": attempt["id"], "task_id": task["id"], "commands": evidence["checks"]["commands"]},
-                                       status="running", evidence=dumps(evidence), result=native.get("result"), updated=time.time())
+                                       status="running", evidence=dumps(evidence), result=shown["result"], updated=time.time())
                     return self.update(rid, "running", actor=journal.WORKER)
             if not error and gated and evaluation.applies(snapshot, spec, config):   # D46 P3: the Evaluator's verdicts
                 error, pending = evaluation.verdicts(spec, report)
@@ -1357,13 +1447,15 @@ class Engine:
                     and knowledge.platform(snapshot, task["id"]):   # D46 P4: the platform's side task never holds a Session
                 evidence["knowledge_skipped"] = error
                 state, error = "accepted", None
+            shown = self._mask(run, task["id"], evidence, result=native.get("result"), error=error)   # judged: stored masked
+            error = shown["error"]
             if state in {"accepted", "awaiting_acceptance"}:   # D57 §4: listed, not blocking; kept when a person accepts
                 evidence["warnings"] = gates.warnings(evidence.get("gates"))
             journal.change(db, "attempts", attempt["id"], journal.WORKER, "attempt.state",
                            event={"id": attempt["id"], "task_id": task["id"], "status": state, "error": error,
                                   "evidence": evidence},
                            quiet=() if native.get("done") else ("result",),
-                           status=state, evidence=dumps(evidence), result=native.get("result"), error=error, updated=time.time())
+                           status=state, evidence=dumps(evidence), result=shown["result"], error=error, updated=time.time())
             if retry:
                 why = {**recovery.WHY, "result_missing": "原生任务没有返回结果",
                        "never_started": "原生任务未能开始（执行环境资源不足）"}[retry]
@@ -1388,7 +1480,9 @@ class Engine:
                 db.execute("INSERT INTO attempts(id,run_id,task_id,number,spec,status,evidence,created,updated) "
                            "VALUES(?,?,?,?,?,'dispatching',?,?,?)",
                            (aid, rid, task["id"], attempt["number"] + 1, current["spec"],
-                            dumps({"design_repair": {"of": attempt["id"], "error": design_fix}}), now, now))
+                            dumps({"design_repair": {"of": attempt["id"],   # it may quote the result: stored masked
+                                                     "error": sources.mask_text(design_fix, (self._token(run),))[0]}}),
+                            now, now))
                 journal.change(db, "tasks", (rid, task["id"]), journal.ENGINE, "attempt.retry",
                                f"推荐未通过平台校验（{design_fix}），自动请 KiroCrew 修正一次",
                                event={"attempt": attempt["id"], "retry": aid, "transient": "design_invalid"},

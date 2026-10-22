@@ -63,6 +63,27 @@ class JournalTests(unittest.TestCase):
         self.assertEqual(first["payload"]["changes"], {"status": ["pending", "running"]})
         self.assertEqual(second["payload"]["changes"], [{"id": "code", "changes": {"status": ["running", "pending"]}}])
 
+    def test_events_never_hold_a_secret(self):
+        # D57 §3.3: whatever a writer passes — a reason, the event's own fields, the changes it records — is masked
+        from tests.test_secret_rules import AKIA, ANT
+        shown = lambda secret: secret[:4] + "…" + secret[-2:]
+        with self.db.transaction() as db:
+            journal.change(db, "runs", "run-1", journal.ENGINE, "run.state", f"原因 {ANT}",
+                           event={"error": f"失败：{AKIA}", "evidence": {"outcome": {"findings": [f"见 {ANT}"]}}},
+                           input=f"需求 {AKIA}", error=f"失败：{AKIA}")
+            journal.record(db, "run-1", "run.note", journal.ENGINE, reason=f"说明 {ANT}", detail=[{"text": AKIA}])
+        payloads = [event["payload"] for event in self.events()]
+        stored = json.dumps(payloads, ensure_ascii=False)
+        for secret in (AKIA, ANT):
+            self.assertNotIn(secret[4:-2], stored)
+        first, second = payloads
+        self.assertEqual(first["reason"], f"原因 {shown(ANT)}")
+        self.assertEqual(first["error"], f"失败：{shown(AKIA)}")
+        self.assertEqual(first["evidence"], {"outcome": {"findings": [f"见 {shown(ANT)}"]}})
+        self.assertEqual(first["changes"]["input"], ["需求", f"需求 {shown(AKIA)}"])
+        self.assertEqual((second["reason"], second["detail"]), (f"说明 {shown(ANT)}", [{"text": shown(AKIA)}]))
+        self.assertEqual(first["actor"], {"kind": "engine"})   # what holds no credential stays as it was
+
     def test_clients_from_token_labels(self):
         self.assertEqual([journal.client(x) for x in ("Web login", "claude MCP", "kiro MCP", "API", None)],
                          ["console", "mcp", "mcp", "api", "api"])

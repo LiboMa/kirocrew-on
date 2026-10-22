@@ -413,6 +413,18 @@ class WorkerCheckTests(unittest.TestCase):
             self.assertTrue(finished(node.checks, job, limit=10)["results"][0].get("stopped"))
             self.assertEqual(node.verify_status({"job": job})["state"], "done")
 
+    def test_a_check_that_prints_the_workers_token_shows_it_masked(self):
+        # D57 §3.3: no rule knows the Worker's own token; an Agent there could still have written it where a check prints it
+        with tempfile.TemporaryDirectory() as directory:
+            node, project = make_worker(Path(directory))
+            (project / "token.txt").write_text(f"Bearer {node.token}\n")
+            job = node.verify_start({"run_id": RID, "attempt_id": "attempt-1", "commands": ["cat token.txt; exit 3"]})["job"]
+            result = finished(node.checks, job)["results"][0]
+            self.assertNotIn(node.token, json.dumps(result))
+            self.assertTrue(result["tail"].endswith(f"Bearer {node.token[:4]}…{node.token[-2:]}\n"), result["tail"])
+            self.assertEqual([f["kind"] for f in result["findings"]], ["worker_token"])
+            self.assertEqual((result["exit"], result["command"]), (3, "cat token.txt; exit 3"))   # the command as planned
+
 
 if __name__ == "__main__":
     unittest.main()

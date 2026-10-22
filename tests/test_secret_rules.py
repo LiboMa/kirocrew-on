@@ -485,6 +485,24 @@ class SecretRuleTests(unittest.TestCase):
         self.assertIn(worker[:4] + "…" + worker[-2:], masked)
         self.assertEqual(found("anything", [b"", None]), [])   # an empty or unset value is never "found" everywhere
         self.assertEqual(sources.mask_text("anything", ["", None]), ("anything", []))
+        tail, hits = checks.masked_tail(text.encode(), extra=[worker])   # a check's output: the Worker's own token too
+        self.assertNotIn(worker, tail)
+        self.assertEqual([(h["kind"], h["line"], h["masked"]) for h in hits],
+                         [("worker_token", line, worker[:4] + "…" + worker[-2:]) for line in (1, 2)])
+
+    def test_mask_value_masks_every_string_and_keeps_the_rest(self):
+        # what the platform stores as JSON (an Attempt's evidence, an event): its strings, at any depth; keys, numbers,
+        # booleans and None as they are
+        value = {"outcome": {"summary": f"见 {ANT}", "findings": [f"a {AKIA}", {"issue": OCT}], "score": 3, "ok": True},
+                 "list": [None, 1.5, "fine"], f"{AKIA}": "key stays"}
+        masked, hits = sources.mask_value(value)
+        self.assertEqual(masked, {"outcome": {"summary": f"见 {ANT[:4]}…{ANT[-2:]}",
+                                              "findings": [f"a {AKIA[:4]}…{AKIA[-2:]}", {"issue": f"{OCT[:4]}…{OCT[-2:]}"}],
+                                              "score": 3, "ok": True},
+                                  "list": [None, 1.5, "fine"], f"{AKIA}": "key stays"})
+        self.assertEqual([h["kind"] for h in hits], ["anthropic", "aws_access_key", "octopus_token"])
+        self.assertEqual(value["outcome"]["summary"], f"见 {ANT}")   # a copy: the value read for verdicts is untouched
+        self.assertEqual(sources.mask_value("plain"), ("plain", []))
 
     def test_mask_happens_before_truncation(self):
         # a credential across the 4096-byte cut is masked whole before the tail is cut, so no part of it remains

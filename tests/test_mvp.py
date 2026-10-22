@@ -207,6 +207,31 @@ class MVPTests(unittest.TestCase):
         self.assertEqual(result["native"]["result"],complete)
         self.assertIn("完整结果保留",notes[0])
 
+    def test_the_parent_note_shows_a_result_masked(self):
+        # D57 §3.3: the parent conversation is shown and kept by KiroCrew: the result's credentials and the Worker's own
+        # token masked there, before it is cut; the platform still reads the result as written (and masks what it stores)
+        from tests.test_secret_rules import chars
+        node,body=self.native_worker()
+        node.native=lambda path,payload=None,method=None:{"id":"abc12345"}
+        node.dispatch(body)
+        secret="ghp"+"_"+chars("parent-note",36,"alnum")
+        complete=f"Token：{node.token}\n"+" ".join([secret]*150)   # as written, longer than a note
+        notes=[]
+        def native(path,payload=None,method=None):
+            if path=="/api/spawn":
+                return {"agents":[{"id":"abc12345","parent":"dashboard:octopus-"+body["run_id"],"done":True}]}
+            if path=="/api/spawn/abc12345":return {"done":True,"result":complete}
+            if path.endswith("/note"):
+                notes.append(payload["content"])
+                return {"ok":True}
+            raise AssertionError(path)
+        node.native=native
+        self.assertEqual(node.inspect(body)["native"]["result"],complete)
+        self.assertNotIn(node.token,notes[0])
+        self.assertIn(f"Token：{node.token[:4]}…{node.token[-2:]}",notes[0])
+        self.assertTrue(all(secret[i:i+8] not in notes[0] for i in range(len(secret)-8)))
+        self.assertLessEqual(len(notes[0]),4000)
+
     def test_recovery_worker_preserves_context_and_uses_native_coordinator(self):
         node, body = self.native_worker()
         calls = []

@@ -112,7 +112,6 @@ def items(report, known=None):
     secret (the publish scan) — whose text is then not kept either — and none this environment already holds for the
     repository or a person removed there (``known``: {rule: removed})."""
     known = known or {}
-    from .sources import SUSPICIOUS
     raw = (report or {}).get("knowledge")
     if raw is None:
         return [], []
@@ -126,7 +125,7 @@ def items(report, known=None):
         avoid = avoid.strip() if isinstance(avoid, str) else ""
         if not rule:
             rest.append({"rule": "（空条目）", "result": "skipped", "reason": "条目缺少 rule"})
-        elif SUSPICIOUS.search(f"{rule}\n{avoid}".encode()):
+        elif suspicious(entry):
             rest.append({"rule": "（含疑似秘密，内容未保存）", "result": "skipped", "reason": "含疑似秘密，未写入"})
         elif len(rule) > RULE or len(avoid) > AVOID:
             rest.append({"rule": rule[:RULE] + ("…" if len(rule) > RULE else ""), "avoid": avoid[:AVOID] or None,
@@ -139,6 +138,19 @@ def items(report, known=None):
         else:
             keep.append({"rule": rule, **({"avoid": avoid} if avoid else {})})
     return keep, rest
+
+
+def suspicious(entry):
+    """Whether a listed entry holds what looks like a secret (the publish scan), judged on it as the Agent wrote it: an
+    entry the platform stored masked (D57 §3.3) carries that answer as ``suspicious``."""
+    from .sources import SUSPICIOUS
+    if isinstance(entry, dict) and entry.get("suspicious") is True:
+        return True
+    rule = entry.get("rule") if isinstance(entry, dict) else entry
+    avoid = entry.get("avoid") if isinstance(entry, dict) else None
+    rule = rule.strip() if isinstance(rule, str) else ""
+    avoid = avoid.strip() if isinstance(avoid, str) else ""
+    return bool(SUSPICIOUS.search(f"{rule}\n{avoid}".encode()))
 
 
 def known(db, worker, repo):
