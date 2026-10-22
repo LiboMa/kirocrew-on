@@ -854,6 +854,17 @@ def server(database, port=8918, host="127.0.0.1", allowed_hosts=(), origin_secre
                     require(limit is None or limit.isdigit(), "limit 须为 1–200 的整数")
                     return self.respond(service.requests(actor, status=one("status"), q=one("q"), client=one("client"),
                                                          limit=int(limit) if limit else None))
+                if len(segments) in {4, 5} and segments[:2] == ["v1", "runs"] and segments[3] == "shares":   # D64
+                    rid = segments[2]
+                    if len(segments) == 5:
+                        require(method == "DELETE", "Method not allowed", 405)
+                        scope(self.identity(), "manage")
+                        return self.respond(service.unshare_run(actor, rid, segments[4]))
+                    require(method in {"GET", "POST"}, "Method not allowed", 405)
+                    if method == "POST":
+                        scope(self.identity(), "manage")
+                        return self.respond(service.share_run(actor, rid, body), 201)
+                    return self.respond(service.run_shares(actor, rid))
                 if len(segments) in {4, 5} and segments[:2] == ["v1", "runs"] and segments[3] == "revisions":
                     require(method == "GET", "Method not allowed", 405)
                     rid = segments[2]

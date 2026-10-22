@@ -355,21 +355,47 @@ def give_environment(db, worker, team):
     assign_spare(db, worker, team)
 
 
-def run_access(db, actor, rid, owner=False, admin=True):
+def run_access(db, actor, rid, owner=False, admin=True, read=False, shares=True):
     """The run if the actor may see it (404 otherwise, never revealing that it exists). owner=True also requires the
-    right to delete it (403 with the reason). An elevated admin sees and operates every run unless admin=False (A2)."""
+    right to delete it (403 with the reason). An elevated admin sees and operates every run unless admin=False (A2).
+    D64: a Session shared with the actor lets them in too — for a read (``read=True``) whatever the role, otherwise only
+    as a collaborator (what an ordinary Team member is); never to delete it, and not at all with ``shares=False`` (the
+    native entry, D55's Requests). Every caller that only reads says so: one that does not is refused to a viewer."""
     row = db.execute("SELECT * FROM runs WHERE id=?", (rid,)).fetchone()
     require(row is not None, "Session 不存在或无权限", 404, "not_found")
     if admin and elevated(actor):
         return dict(row)
     if row["team_id"]:
         role = db.execute("SELECT role FROM members WHERE team_id=? AND user_id=?", (row["team_id"], actor["id"])).fetchone()
-        require(role is not None, "Session 不存在或无权限", 404, "not_found")
-        require(not owner or role["role"] == "owner" or row["owner_id"] == actor["id"],
-                "只有 Team owner 可以删除他人创建的会话", 403, "forbidden")
-    else:
-        require(row["owner_id"] == actor["id"], "Session 不存在或无权限", 404, "not_found")
+        if role is not None:
+            require(not owner or role["role"] == "owner" or row["owner_id"] == actor["id"],
+                    "只有 Team owner 可以删除他人创建的会话", 403, "forbidden")
+            return dict(row)
+    elif row["owner_id"] == actor["id"]:
+        return dict(row)
+    from .shares import best
+    share = best(db, actor, row)
+    require(share is not None, "Session 不存在或无权限", 404, "not_found")
+    require(not owner, "共享的会话不能删除：只有创建者、Team owner 或平台管理员可以删除", 403, "forbidden")
+    require(shares, "此操作不对共享开放：只属于会话的创建者与所在 Team", 403, "forbidden")
+    require(read or share["role"] == "collaborator", "你以查看身份访问此会话，不能操作", 403, "forbidden")
     return dict(row)
+
+
+def access_of(db, actor, run):
+    """How the actor reaches ``run`` (D64): its creator, a member of its Team, a share (with its role and who shared
+    it), or an administrator's oversight."""
+    if run["owner_id"] == actor["id"]:
+        return {"via": "owner"}
+    if run["team_id"]:
+        role = db.execute("SELECT role FROM members WHERE team_id=? AND user_id=?", (run["team_id"], actor["id"])).fetchone()
+        if role is not None:
+            return {"via": "team", "role": role["role"]}
+    from .shares import best
+    share = best(db, actor, run)
+    if share is not None:
+        return {"via": "share", "role": share["role"], "by": share["by_name"]}
+    return {"via": "admin"}
 
 
 def audit(db, actor, action, kind, target, detail=None):
@@ -1898,6 +1924,39 @@ class Service:
             audit(db, actor, "policy.delete", "policy", policy_id, {"kind": row["kind"], "team_id": row["team_id"],
                                                                      "rule": json.loads(row["rule"])})
             return {"id": policy_id, "deleted": True}
+
+    def run_shares(self, actor, rid):
+        """Who a Session is shared with (D64): for those who may share it."""
+        with self.db.read() as db:
+            run = run_access(db, actor, rid, read=True)
+            require(may_publish(db, actor, run), "只有会话的创建者、Team owner 或平台管理员可以管理共享", 403, "forbidden")
+            from . import shares
+            return shares.listed(db, rid)
+
+    def share_run(self, actor, rid, body):
+        """Share a Session with a person, a Team or the whole company (viewer only); sharing again changes the role."""
+        from . import shares
+        with self.db.transaction() as db:
+            run = run_access(db, actor, rid, read=True)
+            require(may_publish(db, actor, run), "只有会话的创建者、Team owner 或平台管理员可以共享", 403, "forbidden")
+            if run["team_id"]:
+                active_team(db, run["team_id"])
+            kind, subject, role, name = shares.parse(db, actor, body)
+            sid = shares.store(db, actor, rid, kind, subject, role)
+            audit(db, actor, "share.create", "run", rid, {"share": sid, "kind": kind, "subject": subject or None, "name": name,
+                                                          "role": role})
+            return shares.view(db, db.execute("SELECT * FROM shares WHERE id=?", (sid,)).fetchone())
+
+    def unshare_run(self, actor, rid, sid):
+        with self.db.transaction() as db:
+            run = run_access(db, actor, rid, read=True)
+            require(may_publish(db, actor, run), "只有会话的创建者、Team owner 或平台管理员可以管理共享", 403, "forbidden")
+            row = db.execute("SELECT * FROM shares WHERE id=? AND run_id=?", (sid, rid)).fetchone()
+            require(row is not None, "共享不存在", 404, "not_found")
+            db.execute("DELETE FROM shares WHERE id=?", (sid,))
+            audit(db, actor, "share.delete", "run", rid, {"share": sid, "kind": row["kind"], "subject": row["subject"] or None,
+                                                          "role": row["role"]})
+            return {"id": sid, "deleted": True}
 
     def quotas(self, actor):
         """The actor's limit on running tasks and their Teams' (D61); an administrator also sees the default and each person's."""

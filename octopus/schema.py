@@ -95,6 +95,8 @@ def openapi():
         # D55: {"repos": "github.com/o/*", "mode": "auto|confirm"} (admission) or a mapping preference
         "Policy": obj({"kind": {"enum": ["admission", "mapping"]}, "scope": {"enum": ["personal", "team"]}, "team_id": text,
                        "rule": {"type": "object"}}, ["kind", "scope", "rule"]),
+        "Share": obj({"kind": {"enum": ["user", "team", "everyone"]}, "username": text, "id": text,
+                      "role": {"enum": ["viewer", "collaborator"]}}, ["kind", "role"]),   # D64
         "Quota": obj({"scope": {"enum": ["default", "user", "team"]}, "id": text,
                       "running": {"type": ["integer", "null"], "minimum": 1, "maximum": 50}}, ["scope", "running"]),   # D61
         "KnowledgeForget": obj({"id": text}, ["id"]),   # D46 P4: one item of the Session's knowledge.items
@@ -156,6 +158,7 @@ def openapi():
         "/v1/requests": {"get": None}, "/v1/requests/{id}": {"get": None},
         "/v1/policies": {"get": None, "post": "Policy"}, "/v1/policies/{id}": {"delete": "Empty"},
         "/v1/quotas": {"get": None, "post": "Quota"},
+        "/v1/runs/{id}/shares": {"get": None, "post": "Share"}, "/v1/runs/{id}/shares/{share}": {"delete": "Empty"},
         "/v1/runs/{id}/events": {"get": None}, "/v1/runs/{id}/export": {"get": None},
         "/v1/runs/{id}/crew-entry": {"post": "Empty"}, "/v1/runs/{id}/preview": {"post": "Empty"},
         "/v1/runs/{id}/observe": {"get": None},
@@ -320,6 +323,16 @@ def openapi():
                                      "the branch, worker_outdated for an older Worker.")
                 op["parameters"].append({"in": "path", "name": "attempt", "required": True, "schema": text})
                 op["operationId"] = "get_v1_runs_id_attempts_attempt_diff"
+            if path.startswith("/v1/runs/{id}/shares"):   # D64
+                op["description"] = {
+                    ("/v1/runs/{id}/shares", "get"): "Read scope. Who the Session is shared with — for its creator, a Team owner or an administrator.",
+                    ("/v1/runs/{id}/shares", "post"): "Manage scope. Share the Session with a person (username), a Team the caller is in (id) or "
+                    "the whole company (everyone, viewer only), as a viewer (reads) or a collaborator (what an ordinary Team member is). "
+                    "Sharing again changes the role. Audited.",
+                    ("/v1/runs/{id}/shares/{share}", "delete"): "Manage scope. Stop sharing; it takes effect on the next request (an open "
+                    "event stream closes within a second). Audited."}[(path, method)]
+                if "{share}" in path:
+                    op["parameters"].append({"in": "path", "name": "share", "required": True, "schema": text})
             if path.startswith("/v1/policies"):
                 op["description"] = {
                     ("/v1/policies", "get"): "Read scope. The caller's own rules and those of their Teams (team_id: one Team's): admission rules by repository (repos host/owner/repo with *, mode auto|confirm) and mapping preferences; deletable says whether the caller may remove it.",

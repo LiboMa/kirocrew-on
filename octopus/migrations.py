@@ -178,10 +178,20 @@ CREATE TABLE IF NOT EXISTS quotas(
  updated REAL NOT NULL, PRIMARY KEY(scope,subject));
 """
 
+# D64: a Session shared with a person (subject: user id), a Team (team id) or the whole company (subject '').
+SHARES = """
+CREATE TABLE IF NOT EXISTS shares(
+ id TEXT PRIMARY KEY, run_id TEXT NOT NULL REFERENCES runs(id), kind TEXT NOT NULL CHECK(kind IN ('user','team','everyone')),
+ subject TEXT NOT NULL DEFAULT '', role TEXT NOT NULL CHECK(role IN ('viewer','collaborator')),
+ created_by TEXT NOT NULL REFERENCES users(id), created REAL NOT NULL, UNIQUE(run_id,kind,subject),
+ CHECK(kind != 'everyone' OR role = 'viewer'));
+CREATE INDEX IF NOT EXISTS shares_subject ON shares(kind,subject);
+"""
+
 MIGRATIONS = [(1, "baseline", BASELINE), (2, "environments", ENVIRONMENTS), (3, "access", ACCESS),
               (4, "teams_workers", TEAMS_WORKERS), (5, "apps", APPS), (6, "credentials", CREDENTIALS),
               (7, "knowledge", KNOWLEDGE), (8, "knowledge_kept", KNOWLEDGE_KEPT),
-              (9, "requests_policies", REQUESTS_POLICIES), (10, "quotas", QUOTAS)]
+              (9, "requests_policies", REQUESTS_POLICIES), (10, "quotas", QUOTAS), (12, "shares", SHARES)]   # 11: D57's (another branch)
 
 
 def _statements(script):
@@ -225,7 +235,10 @@ def apply(path, migrations=MIGRATIONS, *, backup_dir, clock=time.time):
         latest = max(number for number, _, _ in migrations)
         if found > latest:
             raise RuntimeError(f"数据库 schema 版本 {found} 高于程序支持的 {latest}；请使用更新的版本或从备份恢复")
-        pending = sorted(m for m in migrations if m[0] > found)
+        # D64: every number not applied yet, not only those above the highest — two branches each add one, and the one
+        # that lands second is not skipped for good (their migrations are independent by rule).
+        applied = {row[0] for row in db.execute("SELECT version FROM schema_version")}
+        pending = sorted(m for m in migrations if m[0] not in applied)
         backup = _backup(db, backup_dir, found, clock) if pending and found > 0 else None
         for number, name, script in pending:
             db.execute("BEGIN IMMEDIATE")
