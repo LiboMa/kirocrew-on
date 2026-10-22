@@ -39,8 +39,8 @@ class TransportTests(unittest.TestCase):
         self.tmp = tempfile.TemporaryDirectory()
         self.addCleanup(self.tmp.cleanup)
         self.key = vault.key_file(None, self.tmp.name)
-        transport.configure(self.key)
-        self.addCleanup(transport.configure, None)
+        transport.configure_key(self.key)
+        self.addCleanup(transport.configure_key, None)
         self.server = ThreadingHTTPServer(("127.0.0.1", 0), Stub)
         threading.Thread(target=self.server.serve_forever, daemon=True).start()
         self.addCleanup(self.server.server_close)
@@ -67,6 +67,11 @@ class TransportTests(unittest.TestCase):
         self.assertEqual(Stub.seen, [])
         with self.assertRaises(Error):
             transport.worker_request({"url": self.url}, "/x", {})
+
+    def test_the_tls_authority_and_the_key_are_configured_apart(self):   # caught before deploy: configure(ca) was replaced
+        transport.configure(None)   # the Worker TLS authority, as `octopus serve` sets it
+        self.assertEqual(transport._KEY, self.key)
+        self.assertIsNone(transport._context)
 
     def test_the_connection_is_url_and_token(self):
         sealed = {"url": self.url, "token_sealed": vault.seal(self.key, TOKEN), "capabilities": {"x": 1}}

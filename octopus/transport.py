@@ -21,7 +21,8 @@ def configure(ca_file):
 _KEY = None   # D59: the D35 key that opens a Worker's sealed token (set by the platform at start)
 
 
-def configure(key_path):
+def configure_key(key_path):
+    """The key that opens sealed Worker tokens (D59); ``configure`` above is the Worker TLS authority."""
     global _KEY
     _KEY = key_path
 
