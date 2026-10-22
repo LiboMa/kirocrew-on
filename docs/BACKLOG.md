@@ -298,3 +298,13 @@
 - `default_url` 由 `0.0.0.0` 拼接（应使用 `probe_host`）；systemd 单元可恢复 `NoNewPrivileges` 等加固项；
   `bootstrap-worker` 不比对已有 Worker 的 URL / Token；记录接受的 KiroCrew commit 而不只是版本号。
 - OpenCode 执行未通过（K01）：EC2 上 shell 写文件被 KiroCrew 工具门禁拒绝，需查明命中的门禁层；替代配置 deliver→claude 可用。
+
+## 稳定性（2026-10-22 发现）
+
+- **Gateway 事件循环卡住后被看门狗结束**：EC2 2026-10-22 13:25–13:30，owner 边界的 Gateway 事件循环多次卡住（最长 18 秒），KiroCrew 的 loop_watchdog 以 SIGALRM 结束进程，两个子 Agent 中途断开（「Orphaned: gateway_restart」），由自动纠错救回。
+  - 已处理（21495ea）：Worker 检查运行中的尝试改读自己的那一行，不再每次读完整列表（310 KB / 150 ms → 7 KB / 16 ms）。
+  - 仍待：
+    - 持久化记录超过 50 条后，KiroCrew 每次列表都报截断（日志约每 1.5 秒一条），疑似 KiroCrew 原生页面在轮询；
+    - 事件循环其余的阻塞来源在上游 KiroCrew，崩溃转储在 `<边界>/crew/logs/crash-dumps/`。
+- **浏览器测试截图写到主仓库的绝对路径**：`tests/mvp-*.browser.js` 的 `screenshot({path: "/Users/…/state/browser/…"})`，从其他工作树运行也写到主仓库；应改为运行器传入的目录。
+
