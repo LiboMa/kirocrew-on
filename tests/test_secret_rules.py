@@ -4,8 +4,10 @@ and generated characters), so no complete credential is written in this file."""
 import base64
 import hashlib
 import json
+import re
 import secrets
 import unittest
+from urllib.parse import quote
 
 from octopus import checks, sources
 
@@ -25,19 +27,25 @@ def chars(seed, n, alphabet="url"):
     return out[:n]
 
 
-def private_key(kind="RSA"):
-    body = base64.b64encode(hashlib.sha512(kind.encode()).digest() * 12).decode()
-    lines = "\n".join(body[i:i + 64] for i in range(0, len(body), 64))
+def body_lines(seed, size):
+    """``size`` bytes of a made-up key body as 64-character base64 lines, every line different."""
+    return "\n".join(chars(f"{seed}{n}", 64, "std") for n in range(size // 64))
+
+
+def private_key(kind="RSA", size=1024):
+    lines = body_lines(kind or "pkcs8", size)
     label = (kind + " " if kind else "") + "PRIVATE" + " KEY"
     return f"-----BEGIN {label}-----\n{lines}\n-----END {label}-----", lines
 
 
-def pgp_key():
-    body = base64.b64encode(hashlib.sha512(b"pgp").digest() * 10).decode()
-    lines = "\n".join(body[i:i + 64] for i in range(0, len(body), 64))
+ARMOUR = "Version: GnuPG v2\nComment: Alice Example <alice@example.com> (work)\n"
+
+
+def pgp_key(armour=ARMOUR, size=640, end=True):
+    lines = body_lines("pgp", size)
     label = "PGP " + "PRIVATE" + " KEY BLOCK"
-    armour = "Version: GnuPG v2\nComment: Alice Example <alice@example.com> (work)\n"
-    return f"-----BEGIN {label}-----\n{armour}\n{lines}\n=Ab3d\n-----END {label}-----\n", lines
+    tail = f"\n=Ab3d\n-----END {label}-----\n" if end else "\n"
+    return f"-----BEGIN {label}-----\n{armour}\n{lines}{tail}", lines
 
 
 AWS_SECRET = chars("aws-secret", 40, "std").replace("=", "A")
@@ -65,9 +73,13 @@ SAMPLES = [
     ("aws_secret_key", AWS_SECRET, "aws_secret_" + "key = {}"),
     ("aws_secret_key", AWS_SECRET, "secret_" + "access_key: {}"),
     ("aws_secret_key", AWS_SECRET, "aws configure set " + LABEL + " {}"),
+    ("aws_secret_key", AWS_SECRET, 'provider "aws" {{\n  secret_' + 'key = "{}"\n}}'),   # Terraform
     ("aws_session_token", SESSION, '"Session' + 'Token": "{}"'),
     ("aws_session_token", SESSION, "aws_session_" + "token = {}"),
     ("aws_session_token", SESSION, "export AWS_SESSION_" + "TOKEN={}"),
+    ("aws_session_token", SESSION, "aws_security_" + "token = {}"),   # boto
+    ("aws_session_token", quote(SESSION, safe=""),
+     "https://b.s3.amazonaws.com/k?X-Amz-Algorithm=AWS4-HMAC-SHA256&X-Amz-Security-" + "Token={}&X-Amz-Signature=ab12"),
     ("anthropic", "sk-" + "ant-" + "api03-" + chars("anthropic", 93) + "AA", "ANTHROPIC_API_KEY={}"),
     ("anthropic", "sk-" + "ant-" + "a" * 90, "x-api-key: {}"),
     ("openai", "sk-" + chars("openai-legacy", 48, "alnum"), "Authorization: Bearer {}"),
@@ -137,6 +149,10 @@ class SecretRuleTests(unittest.TestCase):
             ("\\n" + OPENAI, [OPENAI], ["openai"]), ("\\t" + OPENAI, [OPENAI], ["openai"]),
             ("Bearer%20" + OPENAI, [OPENAI], ["openai"]), ("%22" + OPENAI + "%22", [OPENAI], ["openai"]),
             ("_" + OPENAI, [OPENAI], ["openai"]),
+            ("\x1b[32m" + OPENAI + "\x1b[0m", [OPENAI], ["openai"]),   # coloured
+            ("\x1b[01;31m\x1b[K" + OPENAI + "\x1b[m\x1b[K", [OPENAI], ["openai"]),   # grep --color
+            ("\\x22" + OPENAI + "\\x22", [OPENAI], ["openai"]), ("\\u0022" + OPENAI + "\\u0022", [OPENAI], ["openai"]),
+            ("disk-" + OPENAI[3:], [OPENAI[3:]], ["openai"]), ("risk-" + OPENAI[3:], [OPENAI[3:]], ["openai"]),
             ("a" + PROJECT, [PROJECT], ["openai"]), ("Bearer%20" + PROJECT, [PROJECT], ["openai"]),
             ("%22" + BOT + "%22", [BOT], ["slack"]), ("\\n" + BOT, [BOT], ["slack"]), ("x" + BOT, [BOT], ["slack"]),
             ("\\n" + OCT, [OCT], ["octopus_token"]), ("Bearer%20" + OCT, [OCT], ["octopus_token"]),
@@ -191,12 +207,68 @@ class SecretRuleTests(unittest.TestCase):
         self.assertEqual(sources.mask_text(armoured)[0], "----…--\n")
         self.assert_masked(json.dumps(armoured), *body.splitlines(), kinds=["private_key"])
 
+    def test_private_key_bodies_escaped_twice_or_with_escaped_armour_are_masked(self):
+        pem, body = private_key("RSA")
+        lines = body.splitlines()
+        twice = json.dumps(json.dumps({"private_key": pem}))   # a JSON log line carrying a JSON string
+        self.assertIn("\\\\n", twice)
+        self.assert_masked(twice, *lines, kinds=["private_key"])
+        self.assert_masked(twice[:twice.index("-----END")], *lines, kinds=["private_key"])   # and with no END
+        armour = ('Version: GnuPG v2\nComment: Alice "work" key\nComment: https://example.com/?a=1&b=2#x;\n'
+                  "Comment: C:\\Users\\alice\\key.asc\n")
+        for end in (True, False):
+            armoured, body = pgp_key(armour, end=end)
+            lines = body.splitlines()
+            escaped = json.dumps(armoured)
+            for text in (armoured, escaped, escaped.replace('\\"', "\\u0022"), escaped.replace("/", "\\/"),
+                         json.dumps(escaped)):
+                with self.subTest(end=end, text=text[:70]):
+                    self.assert_masked(text, *lines, kinds=["private_key"])
+        armoured, body = pgp_key("Comment:\n", end=False)   # an empty header line, and no END
+        self.assert_masked(armoured, *body.splitlines(), kinds=["private_key"])
+
+    def test_a_key_whose_begin_was_cut_off_is_masked_up_to_its_end(self):
+        # the check's output keeps only its last 8 KB: a key longer than that tail lost its BEGIN with the head
+        output = "".join(f"test {n} ok\n" for n in range(200))   # about 2 KB after the key
+        for name, (key, body) in [("pgp 7 KB", pgp_key(size=7040)), ("rsa 8192", private_key("RSA", 6400))]:
+            raw = (key + output).encode()[-2 * checks.TAIL:]
+            self.assertNotIn(b"-----BEGIN", raw)
+            tail, found = checks.masked_tail(raw)
+            with self.subTest(name):
+                self.assertEqual([f["kind"] for f in found], ["private_key"])
+                self.assertEqual(found[0]["line"], 1)
+                self.assert_masked(tail, *body.splitlines())
+                self.assertTrue(tail.endswith(output[-500:]))   # what came after the key is still shown
+        key, body = private_key("RSA", 6400)
+        lines = body.splitlines()
+        for offset in (-100, -1, 0, 1, 20, 31, 64, 1000, checks.TAIL - 40, checks.TAIL):
+            after = "x" * (checks.TAIL - offset)   # the key's END ends ``offset`` bytes after the cut
+            raw = (key + after).encode()[-2 * checks.TAIL:]
+            with self.subTest(offset=offset):
+                self.assertEqual(len(raw) - checks.TAIL + offset, raw.index(b"KEY-----", raw.index(b"-----END")) + 8)
+                tail, found = checks.masked_tail(raw)
+                self.assertEqual([f["kind"] for f in found], ["private_key"] if offset > 0 else [])
+                self.assertTrue(all(line[i:i + 10] not in tail for line in lines for i in range(55)), tail[:120])
+                self.assertTrue(tail.endswith(after[-100:]) if after else True)
+
+    def test_errors_after_a_key_header_are_not_hidden_from_unrunnable(self):
+        # masking must not swallow what tells an environment failure from the check's own (D57 §5)
+        header = "-----BEGIN RSA PRIVATE" + " KEY-----\n"
+        for message, reason in [("ModuleNotFoundError: No module named 'requests'", "缺少 Python 模块：requests"),
+                                ("env: 'node': No such file or directory", "命令不存在：node"),
+                                ("Error: Cannot find module 'express'", "缺少 Node 模块：express")]:
+            with self.subTest(message):
+                tail, found = checks.masked_tail((header + message + "\n").encode())
+                self.assertIn(message, tail)
+                self.assertEqual([f["kind"] for f in found], ["private_key"])
+                self.assertEqual(checks.unrunnable({"command": "c", "exit": 1, "seconds": 0.1, "tail": tail}), reason)
+
     def test_what_blocks_is_unchanged(self):
         # The owner's rule: no gate blocks more than before without the owner's approval. SUSPICIOUS (what the candidate,
         # publish and Knowledge scans block on) is the rule from before D57's wider kinds, which only mask and warn.
-        self.assertEqual(sources.SUSPICIOUS.pattern,
-                         rb"github_pat_[A-Za-z0-9_]{20,}|gh[pousr]_[A-Za-z0-9]{30,}|glpat-[A-Za-z0-9_-]{20,}"
-                         rb"|AKIA[0-9A-Z]{16}|-----BEGIN [A-Z ]*PRIVATE KEY-----")
+        before = re.compile(rb"github_pat_[A-Za-z0-9_]{20,}|gh[pousr]_[A-Za-z0-9]{30,}|glpat-[A-Za-z0-9_-]{20,}"
+                            rb"|AKIA[0-9A-Z]{16}|-----BEGIN [A-Z ]*PRIVATE KEY-----")
+        self.assertEqual((sources.SUSPICIOUS.pattern, sources.SUSPICIOUS.flags), (before.pattern, before.flags))
         blocked = [secret for kind, secret, _ in SAMPLES if kind in ("github", "gitlab", "private_key")]
         blocked += ["AKIA" + chars("akia", 16, "upper"), "x" + AKIA + "y"]
         for secret in blocked:
@@ -213,7 +285,6 @@ class SecretRuleTests(unittest.TestCase):
         lookalikes = [
             "oct_fixture", "oct" + "_" + chars("short", 42), "oct" + "_" + chars("long", 44),
             "sk-test", "sk-" + "ant-test", "task-" + "implement-the-login-page-and-its-tests-today",
-            "disk-" + chars("disk", 40, "alnum"), "risk-" + chars("risk", 40, "alnum"),
             "ghp_test_secret_value", "github_pat_example",
             chars("bare-url", 43), chars("bare-std", 40, "std"), base64.b64encode(b"just some text here!").decode(),
             "xoxb", "xoxb-", "xox" + "b-your-token-here", "xox" + "b-123-abc",

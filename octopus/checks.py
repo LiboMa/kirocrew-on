@@ -140,11 +140,12 @@ def masked_tail(raw):
     credential masked (D57 §3.3), and what was masked: ``[{kind, line, masked, hash}]``, ``line`` counted in the tail.
     Masked before it is cut, so a credential across the cut is masked whole; and nothing from before the cut is shown,
     so the masks' shorter text never makes room for the head of ``raw``, which may be the rest of a credential whose
-    start was already dropped and so is not recognised."""
+    start was already dropped and so is not recognised. A private key longer than what is kept, its BEGIN dropped, is
+    masked from the cut through its END."""
     cut = max(len(raw) - TAIL, 0)
     before = raw.count(b"\n", 0, cut)
     pieces, at, found = [], cut, []
-    for hit in sources.find_secrets(raw):
+    for hit in sources.find_secrets(raw, cut=cut):
         if hit["end"] <= cut:
             continue   # in the part kept only so that one across the cut is still recognised
         pieces += [raw[at:hit["start"]], hit["masked"].encode()]   # nothing between for the one across the cut

@@ -28,9 +28,9 @@ SKIP_DIRS = {"node_modules", ".venv", "venv", "__pycache__", ".pytest_cache", ".
              ".turbo", ".parcel-cache", ".cache"}
 ENV_KEPT = {".env.example", ".env.sample"}
 # What BLOCKS — the candidate's no_secrets gate, the publish scan and Knowledge items (D35 §5.2, D37 §3): GitHub
-# (fine-grained, classic, OAuth, app), GitLab, AWS Access Key IDs, private keys. It stays exactly as it was before D57
-# until the owner approves blocking on more (no gate may block more than before without that approval); the wider
-# SECRET_RULES below only mask and are listed as findings.
+# (fine-grained, classic, OAuth, app), GitLab, AWS Access Key IDs that start AKIA (not the temporary ASIA ones), private
+# keys. It stays exactly as it was before D57 until the owner approves blocking on more (no gate may block more than
+# before without that approval); the wider SECRET_RULES below only mask and are listed as findings.
 SUSPICIOUS = re.compile(rb"github_pat_[A-Za-z0-9_]{20,}|gh[pousr]_[A-Za-z0-9]{30,}|glpat-[A-Za-z0-9_-]{20,}|AKIA[0-9A-Z]{16}"
                         rb"|-----BEGIN [A-Z ]*PRIVATE KEY-----")
 # What a credential looks like (D57 §3.2), by kind, for masking what is shown or stored and listing what was masked
@@ -40,33 +40,46 @@ SUSPICIOUS = re.compile(rb"github_pat_[A-Za-z0-9_]{20,}|gh[pousr]_[A-Za-z0-9]{30
 # labelled AWS secret before the key-ID shape it may start with), and overlapping spans are reported, masked and hashed
 # as one. A rule with a group reports only the group (an AWS secret, not its label).
 _AWS_SEPARATOR = rb"(?:[\s\"'\\:=>]|%2[27]|%3[ADad]){1,12}"   # = : => quotes, escaped or URL-encoded, a space
-_LINE_BREAK = rb"(?:\r?\n|\\[rn])"   # in a file, or written as \n in JSON
+# A private key's line break in a file, or written as \n in JSON (as \\n when that JSON is itself a JSON string, …).
+_LINE_BREAK = rb"(?:\r?\n|\\+[rn])"
+_KEY_CHAR = rb"(?:[A-Za-z0-9+/=]|\\+/)"   # base64, and "/" as PHP's json_encode writes it
+# OpenPGP armour and PEM header lines (RFC 4880 §6.2, RFC 1421): only these names, so that an error message after a
+# key header ("ModuleNotFoundError: …") is not taken for one. A value runs to the line break, escapes and all.
+_KEY_HEADERS = (rb"(?:(?:\s|\\+[nrt])+(?:Version|Comment|Hash|Charset|MessageID|Proc-Type|DEK-Info):"
+                rb"(?:[^\r\n\\]|\\+[^\\rn])*)*")
+# A line of the key's body when its end is not there: a whole line of base64, or base64 with a digit, + / or = in it
+# (a word alone on a line is masked with it; an error message after a key header is not).
+_KEY_LINE = (rb"(?:" + _KEY_CHAR + rb"+(?=[ \t]*(?:" + _LINE_BREAK + rb"|\Z))|[A-Za-z]*(?:[0-9+/=]|\\+/)"
+             + _KEY_CHAR + rb"*)")
+_KEY_BEGIN = rb"-----BEGIN [A-Z ]*PRIVATE KEY(?: BLOCK)?-----"
+_KEY_END = rb"-----END [A-Z ]*PRIVATE KEY(?: BLOCK)?-----"
 SECRET_RULES = [
     ("github", re.compile(rb"github_pat_[A-Za-z0-9_]{20,}|gh[pousr]_[A-Za-z0-9]{30,}")),
     ("gitlab", re.compile(rb"glpat-[A-Za-z0-9_-]{20,}")),
-    ("aws_secret_key", re.compile(rb"(?i:aws[_-]secret[_-]key|secret[_-]?access[_-]?key)" + _AWS_SEPARATOR
+    # aws_secret_access_key, AWS_SECRET_ACCESS_KEY, SecretAccessKey (STS, IAM), aws_secret_key, Terraform's secret_key
+    ("aws_secret_key", re.compile(rb"(?i:secret[_-]?(?:access[_-]?)?key)" + _AWS_SEPARATOR
                                   + rb"([A-Za-z0-9/+]{40})(?![A-Za-z0-9/+=])")),
-    ("aws_session_token", re.compile(rb"(?i:aws[_-]?session[_-]?token|sessiontoken)" + _AWS_SEPARATOR
-                                     + rb"([A-Za-z0-9/+=]{100,})")),
+    # aws_session_token, SessionToken (STS), boto's aws_security_token, a presigned URL's X-Amz-Security-Token (encoded)
+    ("aws_session_token", re.compile(rb"(?i:aws[_-]?session[_-]?token|sessiontoken|aws[_-]?security[_-]?token"
+                                     rb"|x-amz-security-token)" + _AWS_SEPARATOR
+                                     + rb"((?:[A-Za-z0-9/+=]|%[0-9A-Fa-f]{2}){100,})")),
     # A key ID anywhere; a secret glued to it (or after one , ; : | or space, as in the IAM CSV) goes with it.
     ("aws_access_key", re.compile(rb"(?:AKIA|ASIA)[0-9A-Z]{16}(?:[,;:|\s]?[A-Za-z0-9/+]{40}(?![A-Za-z0-9/+=]))?")),
     ("anthropic", re.compile(rb"sk-ant-[A-Za-z0-9_-]{32,}")),
-    # A legacy key is "sk-" and letters and digits only, so it must not follow a letter or digit (task-, disk-, risk-)
-    # unless that is the end of an escape (\n) or of a URL-encoded byte (%20).
-    ("openai", re.compile(rb"sk-(?:proj|svcacct|admin)-[A-Za-z0-9_-]{32,}"
-                          rb"|(?:(?<![A-Za-z0-9])|(?<=\\[nrt])|(?<=%[0-9A-Fa-f]{2}))sk-[A-Za-z0-9]{32,}")),
+    # Project, service-account and admin keys, and a legacy "sk-" with letters and digits only: anywhere, as these rules
+    # only mask (after a colour code, an escape, inside disk-… alike).
+    ("openai", re.compile(rb"sk-(?:(?:proj|svcacct|admin)-[A-Za-z0-9_-]{32,}|[A-Za-z0-9]{32,})")),
     ("slack", re.compile(rb"(?:xox[abprs]|xapp|xoxe(?:\.xox[bp])?)-[0-9]+-[A-Za-z0-9-]{10,}")),
     # The platform's own API Token, as security.create_token makes it: "oct_" and token_urlsafe(32), exactly.
     ("octopus_token", re.compile(rb"oct_[A-Za-z0-9_-]{43}(?![A-Za-z0-9_-])")),
-    # The whole block — armour header lines (Version:, Comment: …), then the body, in a file or JSON-escaped — when its
-    # end comes before any other "-----", so masking leaves none of the key; else the header and the lines after it
-    # that look like base64.
-    ("private_key", re.compile(rb"-----BEGIN [A-Z ]*PRIVATE KEY(?: BLOCK)?-----"
-                               rb"(?:(?:\s|\\[nrt])+[A-Za-z-]+: [^\r\n\\]*)*"
-                               rb"(?:(?:[A-Za-z0-9+/=\s:,.]|\\[nrt/]|-(?!----))*?"
-                               rb"-----END [A-Z ]*PRIVATE KEY(?: BLOCK)?-----"
-                               rb"|(?:(?:[ \t]*" + _LINE_BREAK + rb")+[ \t]*(?:[A-Za-z0-9+/=]|\\/)+)*)")),
+    # The whole block — its header lines, then the body, in a file or JSON-escaped (once or more) — when its end comes
+    # before any other "-----", so masking leaves none of the key; else the header and the body lines after it.
+    ("private_key", re.compile(_KEY_BEGIN + _KEY_HEADERS
+                               + rb"(?:(?:[A-Za-z0-9+/=\s:,.]|\\+[nrt/]|-(?!----))*?" + _KEY_END
+                               + rb"|(?:(?:[ \t]*" + _LINE_BREAK + rb")+[ \t]*" + _KEY_LINE + rb")*)")),
 ]
+_PRIVATE_KEY = [kind for kind, _ in SECRET_RULES].index("private_key")
+_KEY_BEGINS, _KEY_ENDS = re.compile(_KEY_BEGIN), re.compile(_KEY_END)
 
 
 def _masked(value):
@@ -76,11 +89,13 @@ def _masked(value):
     return text[:4] + "…" + text[-2:] if len(text) >= 12 else "…"
 
 
-def find_secrets(data, extra=()):
+def find_secrets(data, extra=(), cut=None):
     """Where ``data`` (bytes) holds what looks like a credential, in order: ``{kind, start, end, line, masked, hash}``,
     ``start``/``end`` the span in ``data``, ``line`` from 1, ``hash`` the span's SHA-256 (hex). ``extra`` are values to
     be found as they are (a Worker Token, which has no prefix to know it by): kind ``worker_token``, named before any
-    rule."""
+    rule. ``cut``: where the shown part of ``data`` begins when its head may have been dropped (an output's tail kept
+    to its last bytes): a private key's END after ``cut`` with no BEGIN between them lost its BEGIN with that head, so
+    everything from ``cut`` through the END is one private_key."""
     data = bytes(data)
     spans = []   # (start, priority, end, kind)
     for value in extra:
@@ -93,6 +108,12 @@ def find_secrets(data, extra=()):
         for match in pattern.finditer(data):
             start, end = match.span(1) if pattern.groups else match.span()
             spans.append((start, priority, end, kind))
+    if cut is not None:
+        for match in _KEY_ENDS.finditer(data, max(cut - 64, 0)):   # an END the cut runs through counts too
+            if match.end() > cut:
+                if not _KEY_BEGINS.search(data, cut, match.start()):
+                    spans.append((cut, _PRIVATE_KEY, match.end(), "private_key"))
+                break
     merged = []   # [start, end, kind]: spans that overlap or touch become their union, named by the first
     for start, _, end, kind in sorted(spans):
         if merged and start <= merged[-1][1]:
