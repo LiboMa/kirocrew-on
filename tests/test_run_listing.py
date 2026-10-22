@@ -75,7 +75,7 @@ class McpListingTests(unittest.TestCase):
         self.assertFalse(result["more"])
         schema = next(t for t in mcp.TOOLS if t["name"] == "octopus_runs")["inputSchema"]["properties"]
         self.assertEqual(set(schema), {"status", "q", "limit", "space", "repo", "branch", "stage", "tool", "client", "submitter",
-                                       "since", "until"})
+                                       "since", "until", "shared"})   # D64: shared with the user
 
     def test_the_filters_are_passed_to_the_server(self):   # D56
         client = Client([{**VIEW, "id": "run-a"}])
