@@ -46,7 +46,9 @@ KiroCrew ON 在远端执行开发任务：KiroCrew 的 Kiro Agent 先识别意�
 
 - `request_id`：每个新需求生成新的 UUID；同一请求重试时沿用，后台只执行一次。
 - `input`：完整需求——要做什么、约束、验收标准。用户给的仓库地址、分支与限制原样写进去。
-- `source`：新项目 `{"type": "new"}`；已有仓库 `{"type": "git", "url": "<仓库地址>", "ref": "<分支，可省略>"}`。
+- `source`：新项目 `{"type": "new"}`；已有仓库 `{"type": "git", "url": "<仓库地址>", "ref": "<分支，可省略>"}`；
+  不需要代码仓库的一般工作（调研、分析、写作、方案）用 `{"type": "none"}`（D65）：产出是工作目录中的文件，会话页「下载产出」取得，不发布到仓库。
+  这类任务的 `kind` 用 `research`（调研）或 `write`（撰写），也可用 `review` / `design`。
 - 默认不传 `steps` / `workflow_id` / `template_id` / `document`：由 KiroCrew 的 Kiro Agent 规划
   （Session 第 1 个任务「需求分析与任务规划」，完成后自动追加并执行生成的任务）。
 - 用户已经有写好的工作流（JSON / YAML / 含一个代码块的 Markdown）时，放进 `document: {"content": "..."}` 按原样运行；

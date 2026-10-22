@@ -82,6 +82,7 @@ export function NeedStep({ draft, update, workflowMode }: { draft: Draft; update
               <option value="">请选择目标源码，不能默认使用空项目</option>
               <option value="new">明确创建一个全新项目</option>
               <option value="git">开发已有 Git 仓库</option>
+              <option value="none">不需要代码仓库（调研、分析、写作等一般任务）</option>
             </NativeSelect>
           </div>
         )}

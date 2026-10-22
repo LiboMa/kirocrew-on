@@ -114,6 +114,12 @@ class CommandTests(LocalCase):
             run(["submit", "再做一次", "--push-base"], api, self.repo)
         pushed.assert_called_once()
 
+    def test_submit_work_that_needs_no_repository(self):   # D65: octopus submit --no-repo
+        api = Api()
+        run(["submit", "调研 JSON Schema 校验方案并写报告", "--no-repo"], api, self.repo)
+        body = next(c[2] for c in api.calls if c[1] == "/v1/runs")
+        self.assertEqual(body["source"], {"type": "none"})
+
     def test_submit_from_inside_the_repository(self):   # final review: the process's own directory is the repository
         commit(self.repo, {"b.txt": "b\n"})
         api, here = Api(), os.getcwd()

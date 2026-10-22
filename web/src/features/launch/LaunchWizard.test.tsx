@@ -87,6 +87,19 @@ describe("launch wizard", () => {
     expect(body).toMatchObject({ source: { type: "git", url: "https://github.com/kirocrew/app.git" }, credentials: { source: "cred-1" } });
   });
 
+  test("work that needs no repository is submitted as such (D65)", async () => {
+    const calls = start();
+    const dialog = await openWizard();
+    await userEvent.type(within(dialog).getByLabelText("这次要完成什么？"), "调研 JSON Schema 校验方案并写一份报告。");
+    await userEvent.selectOptions(within(dialog).getByLabelText("代码来源"), "none");
+    await next(dialog);
+    await next(dialog);
+    await next(dialog);
+    await userEvent.click(within(dialog).getByRole("button", { name: "确认任务并提交" }));
+    await waitFor(() => expect(calls.some((c) => c.method === "POST" && c.path === "/v1/runs")).toBe(true));
+    expect((calls.find((c) => c.method === "POST" && c.path === "/v1/runs")?.body as Record<string, unknown>).source).toEqual({ type: "none" });
+  });
+
   test("left to matching, no credential is named", async () => {
     const calls = start({ "GET /credentials": credentials });
     const body = await submitGit(await openWizard(), calls);

@@ -108,7 +108,7 @@ TOOLS = [
      "inputSchema": object_schema({"content": STRING, "format": {"type": "string", "enum": ["json", "yaml", "markdown"]}},
                                   ["content"]),
      "annotations": {"readOnlyHint": True}},
-    {"name": "octopus_start", "description": "提交开发需求。未指定工作流、模板、steps 或 document 时，由 KiroCrew 的 Kiro Agent 识别意图、补全需求并拆分任务（第 1 个任务“需求分析与任务规划”，完成后自动追加并执行生成的任务）；plan=\"match\" 改用规则匹配模板。也可提交 Agent 预先生成的工作流文档 document（按提交内容运行）。返回登记回执，不代表执行完成；用 octopus_status 查看进度，octopus_continue 迭代。",
+    {"name": "octopus_start", "description": "提交开发需求。未指定工作流、模板、steps 或 document 时，由 KiroCrew 的 Kiro Agent 识别意图、补全需求并拆分任务（第 1 个任务“需求分析与任务规划”，完成后自动追加并执行生成的任务）；plan=\"match\" 改用规则匹配模板。也可提交 Agent 预先生成的工作流文档 document（按提交内容运行）。source 的 type：git（已有仓库，带 url、ref）、new（新建项目）或 none（不需要代码仓库：调研、分析、写作等一般任务，产出在会话页「下载产出」取得）。返回登记回执，不代表执行完成；用 octopus_status 查看进度，octopus_continue 迭代。",
      "inputSchema": object_schema({
          "request_id": STRING, "input": STRING, "name": STRING, "template_id": STRING,
          "workflow_id": STRING, "workflow_version": {"type": "integer"},

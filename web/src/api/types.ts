@@ -261,7 +261,7 @@ export interface Recovery {
 }
 
 export interface RunSource {
-  type: "new" | "git";
+  type: "new" | "git" | "none";   // none: no repository (D65)
   url?: string;
   ref?: string;
 }

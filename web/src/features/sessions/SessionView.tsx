@@ -105,7 +105,7 @@ export function SessionView({ id }: { id: string }) {
                 <CredentialControl run={run} />
               </p>
             )}
-            <PublishControl run={run} />
+            {run.source?.type !== "none" && <PublishControl run={run} />}   {/* D65: no repository, nothing to publish */}
           </div>
           <div className="flex flex-col items-end gap-2">
             <StatusBadge status={run.lifecycle === "closed" ? "stopped" : run.status} className="text-xs"
@@ -137,8 +137,9 @@ export function SessionView({ id }: { id: string }) {
           </Tooltip>
           <Button size="sm" variant="outline" onClick={actions.downloadSource} id="run-download"
             disabled={!run.worker_id || !run.workspace || !!actions.busy}
-            title={!run.worker_id || !run.workspace ? "源码尚未准备，暂无可下载的内容" : "下载源码（含 .git，不含依赖目录与 .env）"}>
-            <FolderDown /> 下载源码
+            title={!run.worker_id || !run.workspace ? "工作目录尚未准备，暂无可下载的内容"
+              : run.source?.type === "none" ? "下载产出（工作目录中的文件）" : "下载源码（含 .git，不含依赖目录与 .env）"}>
+            <FolderDown /> {run.source?.type === "none" ? "下载产出" : "下载源码"}
           </Button>
           <ReportButton run={run} />
           {run.permissions?.share && (

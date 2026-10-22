@@ -354,6 +354,13 @@ describe("session detail", () => {
     expect(screen.getByText("阶段：设计")).toBeInTheDocument();
   });
 
+  test("a Session without a repository offers its output, not publishing (D65)", async () => {
+    open(makeRun({ id: "run-n", status: "completed", worker_id: "w1", workspace: "/w/n", source: { type: "none" } }));
+    expect(await screen.findByRole("button", { name: /下载产出/ })).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /下载源码/ })).not.toBeInTheDocument();
+    expect(screen.queryByText(/发布到/)).not.toBeInTheDocument();
+  });
+
   test("nothing is left for a person to accept (D71)", async () => {   // an earlier version's wait, until the Engine accepts it
     open({ ...blocked, status: "awaiting_acceptance", error: null,
       attention: { title: "即将继续", detail: "验收确认已取消，待人判断的项记为提示。", action: "无需操作。" } } as Run);

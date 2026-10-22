@@ -44,6 +44,7 @@ def parser():
     submit.add_argument("--plan", choices=["agent", "match"])
     submit.add_argument("--team")
     submit.add_argument("--new", action="store_true", help="新建项目，不用本地仓库")
+    submit.add_argument("--no-repo", action="store_true", help="不需要代码仓库：调研、分析、写作等一般任务（D65）")
     submit.add_argument("--push-base", action="store_true", help="先把当前分支推送到 origin")
     submit.add_argument("--allow-unpushed", action="store_true", help="按 origin 上已有的提交提交")
     command("plan", "查看计划：任务、工具、映射来源、验收与检查")
@@ -151,8 +152,8 @@ def run(argv, client, cwd):
     args = parser().parse_args(argv)
     say = (lambda value, text: print(json.dumps(value, ensure_ascii=False, indent=2) if args.json else text))
     if args.command == "submit":
-        repo = None if args.new else local.repository(cwd)
-        source = local.source(repo) if repo else {"type": "new"}
+        repo = None if args.new or args.no_repo else local.repository(cwd)
+        source = {"type": "none"} if args.no_repo else local.source(repo) if repo else {"type": "new"}
         if source["type"] == "git":
             missing, count = local.missing_branch(repo), local.unpushed(repo)
             if missing and not args.push_base:
