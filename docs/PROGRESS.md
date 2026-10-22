@@ -1,16 +1,16 @@
 # 进度与完成记录
 
-> 由 `tools/progress.py` 生成（2026-10-21 22:54 CST）：任务状态取自 `docs/progress.json`，提交记录取自 git。看板：`docs/progress-dashboard.html`；实时看板：`python3 tools/progress.py --serve --ec2`（http://127.0.0.1:8765/）。
+> 由 `tools/progress.py` 生成（2026-10-22 09:18 CST）：任务状态取自 `docs/progress.json`，提交记录取自 git。看板：`docs/progress-dashboard.html`；实时看板：`python3 tools/progress.py --serve --ec2`（http://127.0.0.1:8765/）。
 
-- **本轮完成度**：87%　**MVP 完成度**：39%
-- **分支**：HEAD `bea5a71`；自 `origin/main` 起 363 个提交——已推送 335、已部署 EC2 27、仅本机 1；EC2 运行 `80bc0c4`
+- **本轮完成度**：87%　**MVP 完成度**：41%
+- **分支**：HEAD `79143dc`；自 `origin/main` 起 374 个提交——已推送 335、已部署 EC2 36、仅本机 3；EC2 运行 `8cfef39`
 - **回归**：1412 后端 + 92 + 205 控制台（connect codex / kiro-ide 本机）；EC2 运行 95e5aa9
 
 ## 模块
 
 | 模块 | 完成度 | 已验收 | 已部署 · 待验收 | 本机完成 · 待部署 | 进行中 | 卡点 · 等外部 | 未开始 |
 |---|---|---|---|---|---|---|---|
-| MVP 里程碑（M1–M5） | 39% | 7 | 3 | 0 | 3 | 0 | 14 |
+| MVP 里程碑（M1–M5） | 41% | 7 | 4 | 0 | 2 | 0 | 14 |
 | D46 Agent 角色与提示体系 | 87% | 8 | 3 | 0 | 0 | 1 | 0 |
 | D49 每人一个执行边界 | 80% | 2 | 2 | 0 | 1 | 0 | 0 |
 | D50 编码技能包 | 100% | 2 | 0 | 0 | 0 | 0 | 0 |
@@ -43,9 +43,26 @@
 
 ## 完成记录（按决策，最近的在前）
 
-### D55（10 个提交：已部署 EC2 9、仅本机 1）
+### D58（3 个提交：仅本机 3）
 
-- `bea5a71` 2026-10-21 〔仅本机〕 docs(progress): D55 已部署 EC2 80bc0c4——迁移 9 生效；§6 验收 1 第 1 步通过（不带 admission 停在计划待确认、回执带 request_id、octopus_requests 可见）；准入规则在 EC2 命中两种仓库写法；owner 边界内存不足致子 Agent 排队，观察中
+- `79143dc` 2026-10-22 〔仅本机〕 feat(sync): POST /v1/runs/<id>/sync——本地提交成为新候选，重新检查并让下游任务重新审查；pull 的 bundle 下载（D58）——二进制上传（≤ 20 MB）经 Worker 快进；最后一个写代码的任务记「本地同步」Attempt（候选、synced、门禁），有检查命令时照常运行与判定，其后的任务重新执行；修订「本地同步」、事件 run.synced；同一 request_id 只同步一次；权限与续作相同；POST /v1/runs/<id>/bundle 给出 10 分钟的拉回链接；CLI 的 Token 记为 client cli
+- `4b7c9c7` 2026-10-22 〔仅本机〕 feat(worker): 会话分支的 pull bundle 与 sync（D58）——POST /pull/bundle 按发布同样核查疑似凭证与 .env 后给出分支（自基线或完整历史）；POST /sync 导入本地提交的 bundle，只在会话分支仍在 old、工作区没有未纳入候选的改动、head 是快进且新内容没有疑似凭证时把分支与工作区移到 head，返回与候选相同的字段；上限 20 MB
+- `a522f79` 2026-10-22 〔仅本机〕 docs(spec,plan): D58 M3-2 用户 CLI 与 M3-4 本地 / 远端联动——git bundle 交换提交（不经托管方）、会话关联 .octopus/session.json、pull 拉回分支与上下文、sync 只接受快进并让最后一个写代码的任务重新检查、下游重新审查、未推送提交检测与 --push-base；CLI 与 MCP 共用 octopus/local.py；6 个任务的实施计划
+
+### D56（7 个提交：已部署 EC2 7）
+
+- `8cfef39` 2026-10-22 〔已部署 EC2〕 fix(console,diff): 终审修正（D56）——「进行中」只发送会话状态（dispatching 是任务状态，曾使整组 400），控制台的会话状态清单与服务端一致并有测试；列表读取失败时显示原因，不再看起来像空列表；创建时间按使用者本地的日换算；失去访问权的会话即使读过也会移出；正在输入的仓库 / 分支不因其他筛选变化而清空；全文恢复匹配工作流名称；diff 不显示下载同样不含的文件（.env 等，只给数量），不用仓库自己的 textconv 与前缀设置；工作区已不在的会话返回 409 而不是 500
+- `b5cf2bf` 2026-10-22 〔已部署 EC2〕 docs: D56 会话列表的过滤、全文、分页与代码改动——OPERATIONS、MVP-RELEASE §14.3、BACKLOG、进度
+- `501b519` 2026-10-22 〔已部署 EC2〕 feat(diff): Attempt 详情可看候选的代码改动（D56）——Worker 的 /candidate 新增只读的 mode: diff（相对上一个候选或会话基线，每个文件的增删行数与统一 diff，200 KB / 4000 行截断）；GET /v1/runs/<id>/attempts/<attempt>/diff 按会话的访问检查读取，没有候选 404 no_candidate，被凭证检查挡在分支外的候选 409 candidate_secret（从不显示），旧 Worker 409 worker_outdated 并请平台管理员升级；控制台每次 Attempt 多一个「代码改动」折叠区，展开才请求，点开文件看它的 diff
+- `5abedab` 2026-10-22 〔已部署 EC2〕 feat(console): 会话列表服务端过滤、全文搜索与分页，筛选写进地址栏（D56）——搜索停顿 300 ms 后查询，状态分组按状态与生命周期发给服务端，「筛选」面板（仓库、分支、阶段、工具、客户端、提交者、创建时间）与可移除的标签，「加载更多」按游标翻页，标签页与概况的数字取服务端总数；选中的会话不在已加载的页里时按 ID 读取，只有 404 / 403 才提示不可访问；服务端列表不再返回已删除的会话，全文也匹配来源客户端的名称（原控制台的 D55 搜索）
+- `8636d63` 2026-10-21 〔已部署 EC2〕 feat(mcp): octopus_runs 按空间、仓库、分支、阶段、工具、客户端、提交者、时间过滤与全文搜索（D56）；Skill 同步
+- `bce2261` 2026-10-21 〔已部署 EC2〕 feat(runs): 会话列表按空间、状态（可多个）、生命周期、仓库、分支、阶段、工具、客户端、提交者、时间与全文过滤，服务端分页（D56 M3-5）——仓库按 主机/所有者/仓库 比较（https、ssh、git@ 同一结果）；全文覆盖需求、规划、各任务名称与说明、最近一次结论与错误，多词全部命中；page=1 返回 {items, next, total}，游标按（创建时间, ID），翻页时新建的会话不重复不遗漏；不带 page 照旧返回数组
+- `0dcc989` 2026-10-21 〔已部署 EC2〕 docs(spec,plan): D56 M3-5 控制台——服务端按空间、状态、仓库、分支、阶段、工具、客户端、提交者、时间与全文过滤，分页（不带 page 时照旧返回数组），MCP octopus_runs 同步；Attempt 详情的代码改动（Worker mode diff）；5 个任务的实施计划
+
+### D55（11 个提交：已部署 EC2 11）
+
+- `b840dbb` 2026-10-21 〔已部署 EC2〕 docs: M2 §6 验收 1 勾选（D55，EC2 80bc0c4：Request 登记、默认先确认、按准入规则直接执行）；BACKLOG 记 EC2 现场的 Harness 问题（内存不足不可见、deliver 不入库产物与 diff_present、评审写文件与 review_bound）；进度
+- `bea5a71` 2026-10-21 〔已部署 EC2〕 docs(progress): D55 已部署 EC2 80bc0c4——迁移 9 生效；§6 验收 1 第 1 步通过（不带 admission 停在计划待确认、回执带 request_id、octopus_requests 可见）；准入规则在 EC2 命中两种仓库写法；owner 边界内存不足致子 Agent 排队，观察中
 - `80bc0c4` 2026-10-21 〔已部署 EC2〕 fix(policies): 终审修正（D55）——最具体的准入规则按字面字符多少取胜（较早的 github.com/o/* 不再被较新的 * 盖过）；MCP 精简状态带 admission、admission_basis 与 request，Coding Agent 能说明会话为何等待；报告抬头写明准入依据；管理员能在列表中看到并删除他为非所在 Team 建的规则；管理员读他人的 Request 写审计（与会话一致）；BACKLOG 记延后的次要项
 - `e36ac62` 2026-10-21 〔已部署 EC2〕 docs: D55 Request、准入规则与映射偏好——OPERATIONS 新节（默认已改为 confirm）、MVP-RELEASE §14.2 第 1、4、5 行、进度、BACKLOG 延后项
 - `02e581d` 2026-10-21 〔已部署 EC2〕 feat(console): 会话页写明来自哪个请求与准入依据；设置「准入与映射偏好」（D55）——头部一行「来自请求 request-xxxxxx · Codex；按准入规则「github.com/o/*」自动开始 / 按平台默认等待确认」（提交时自己指定的不重复）；新对话框分「准入规则」「映射偏好」两组，显示作用域与内容，可删除自己能维护的，新增时选作用域（个人、本人是 owner 的 Team）、仓库模式与准入方式，或按类别 / 角色的工具与模型，服务端的拒绝原样显示在表单下；会话搜索也匹配来源客户端（输入「Codex」）

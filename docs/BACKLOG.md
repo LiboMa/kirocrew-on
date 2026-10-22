@@ -172,6 +172,8 @@
 - 会话数上千后为过滤与全文建索引（SQLite FTS5 或摘要列）；现在逐行扫描并解析快照。
 - 列表按创建时间排序；按最近更新排序需要另一种游标（更新时间会变）。
 - diff 的逐行评论、跨 Attempt 的累计 diff（相对会话基线的总改动）。
+- EC2 实测（2026-10-22）：run-b0b3d23c 的候选含 `.kiro/settings/.kirocrew-cli-settings.lock` 与 `.kiro/settings/cli.json`（KiroCrew 的工具配置）；考虑把 `.kiro/settings/` 加入候选与下载排除（left_out）。
+- 终审延后的次要项：已加载的各页都每 10 秒刷新（设计只要求首页）；已跟踪文件中被删掉的硬编码密钥仍出现在 diff 的删除行；含 tab / 换行 / 引号的路径在 AttemptDiff 中匹配不到；「清除筛选」不清除搜索与状态分组、空状态无此按钮；context 的 runTotal 未用；没有行级条件时仍解析快照；工具筛选只看任务当前的 spec；切换空间时短暂显示上一空间的列表。
 
 ## EC2 现场发现的 Harness 问题（2026-10-21）
 
