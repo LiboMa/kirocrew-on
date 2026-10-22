@@ -618,16 +618,16 @@ class Worker:
             marker.unlink(missing_ok=True)
 
     @staticmethod
-    def _snapshot_untracked(run, folder):
-        """The untracked files a review starts with (D57 §4), in its Attempt's folder, outside the project: what it creates
-        beside them is moved out when its changes are put back. A listing that fails leaves the review without one."""
-        snapshot = folder / "untracked.json"
-        snapshot.unlink(missing_ok=True)   # from a dispatch that stopped before its native task was spawned
+    def _untracked_at_start(run, folder):
+        """The untracked files a review starts with (D57 §4), kept in its Attempt's folder, outside the project: what it
+        creates beside them is moved out when its changes are put back. None when they cannot be listed: the review runs
+        without them."""
         try:
-            write(snapshot, {"paths": workspace.untracked(workspace.project_dir(run))})
+            return workspace.untracked(workspace.project_dir(run))
         except Exception as exc:   # never holds the review up
             print(f"KiroCrew ON Worker: 未记录审查开始时的未跟踪文件（{folder.name}：{workspace.scrub(exc)[:200]}）",
                   file=sys.stderr, flush=True)
+            return None
 
     @staticmethod
     def _review_snapshot(run, attempt):
@@ -644,9 +644,13 @@ class Worker:
     @staticmethod
     def _created(state, project, keep):
         """A check's or a rewind's state with the untracked files the review created (``created``, D57 §4);
-        ``tracked_only`` when the Attempt has no snapshot, so only its tracked files could be told."""
-        created = sorted(set(workspace.untracked(project)) - set(keep)) if keep is not None else []
-        return {**state, "created": created, "tracked_only": keep is None}
+        ``tracked_only`` when only its tracked files could be told: the Attempt has no snapshot, or listing failed."""
+        if keep is not None:
+            try:
+                return {**state, "created": sorted(set(workspace.untracked(project)) - set(keep)), "tracked_only": False}
+            except ValueError:   # never a failure of its own: told as by a Worker without snapshots
+                pass
+        return {**state, "created": [], "tracked_only": True}
 
     def candidate(self, body):
         """A task's candidate commit (D37 §3, ``mode: commit``), a review's check that the workspace is still the
@@ -1219,6 +1223,11 @@ class Worker:
         folder = run / "attempts" / attempt
         # Checked before the lock: a slow kiro-cli must not hold every other request of this Worker.
         login = self.tool_auth() if spec["tool"] == "kiro" or body.get("coordination") or body.get("design") else "ok"
+        try:   # D57 §4: a review's untracked files, listed before the lock too (a large workspace is slow to list)
+            review = (self.contract(spec, body.get("contract")).get("kind") or spec.get("kind")) == "review"
+        except Error:
+            review = False   # refused, and said, under the lock
+        listed = self._untracked_at_start(run, folder) if review and not (folder / "dispatch.json").exists() else None
         with self.lock:
             record = folder / "dispatch.json"
             if record.exists():
@@ -1305,8 +1314,10 @@ class Worker:
                 value["skills"] = given
             if resume is not None and unresumable is None:
                 value["continuing"] = resume   # kept for a reconcile: a lost receipt still knows the chain
-            if (contract.get("kind") or spec.get("kind")) == "review":   # D57 §4: before its native task starts
-                self._snapshot_untracked(run, folder)
+            if review:   # D57 §4: a first dispatch only, before its native task starts
+                (folder / "untracked.json").unlink(missing_ok=True)   # from a dispatch that stopped before it was recorded
+                if listed is not None:
+                    write(folder / "untracked.json", {"paths": listed})
             write(record, value)  # Persist before the native side effect.
             try:
                 spawn = {

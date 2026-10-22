@@ -237,12 +237,28 @@ class CandidateTests(unittest.TestCase):
                                        "spec": {"id": kind, "name": kind, "tool": "claude", "model": "auto", "effort": "",
                                                 "prompt": kind},
                                        "contract": {"kind": kind, "acceptance": ["完成"]}, **extra})
-        self.assertEqual(dispatch(ATTEMPT, "review")["status"], "running")
+        held, listing = [], sources.untracked
+
+        def probe():   # from another thread, as another request of this Worker would
+            free = self.node.lock.acquire(blocking=False)
+            held.append(not free)
+            if free:
+                self.node.lock.release()
+
+        def listed(project):   # a large workspace is slow to list: never while this Worker's other requests wait
+            thread = threading.Thread(target=probe)
+            thread.start()
+            thread.join()
+            return listing(project)
+        with patch.object(sources, "untracked", side_effect=listed):
+            self.assertEqual(dispatch(ATTEMPT, "review")["status"], "running")
+        self.assertEqual(held, [False])
         snapshot = run / "attempts" / ATTEMPT / "untracked.json"
         self.assertEqual(json.loads(snapshot.read_text()), {"paths": ["notes.txt"]})
         self.write({"review.md": "审查结论\n"})
-        dispatch(ATTEMPT, "review")   # the same Attempt again: the snapshot of its first dispatch stays
-        self.assertEqual(json.loads(snapshot.read_text()), {"paths": ["notes.txt"]})
+        with patch.object(sources, "untracked", side_effect=listed) as again:
+            dispatch(ATTEMPT, "review")   # the same Attempt again: the snapshot of its first dispatch stays, not relisted
+        self.assertEqual((json.loads(snapshot.read_text()), again.call_count), ({"paths": ["notes.txt"]}, 0))
         other = "attempt-" + "6" * 32
         self.assertEqual(dispatch(other, "implement")["status"], "running")
         self.assertFalse((run / "attempts" / other / "untracked.json").exists())
@@ -252,6 +268,30 @@ class CandidateTests(unittest.TestCase):
             self.assertEqual(dispatch(failed, "review")["status"], "running")
         self.assertFalse((run / "attempts" / failed / "untracked.json").exists())
         self.assertTrue((run / "attempts" / failed / "dispatch.json").is_file())
+
+    def test_a_folder_the_reviewer_made_a_repository_keeps_the_files_it_held(self):
+        self.write({"src/a.js": "a"})
+        c1 = self.commit()["sha"]
+        self.write({"tools/kept.sh": "echo kept\n"})
+        folder = self.snapshot()
+        self.assertEqual(json.loads((folder / "untracked.json").read_text()), {"paths": ["tools/kept.sh"]})
+        git(self.project, "init", "-q", "tools")   # git now lists the folder as one entry, tools/
+        self.write({"tools/new.md": "新文件\n"})
+        self.assertEqual(self.review("check", c1)["created"], ["tools/"])
+        result = self.review("rewind", c1)
+        self.assertEqual((result["removed"], result["created"]), ([], ["tools/"]))   # left in place, and said
+        self.assertEqual((self.project / "tools/kept.sh").read_text(), "echo kept\n")
+        self.assertEqual((self.project / "tools/new.md").read_text(), "新文件\n")
+        self.assertFalse((folder / "review-removed").exists())
+
+    def test_a_check_that_cannot_list_untracked_files_tells_tracked_files_only(self):   # never a failure of its own
+        self.write({"src/a.js": "a"})
+        c1 = self.commit()["sha"]
+        self.snapshot()
+        self.write({"review.md": "审查结论\n", "src/a.js": "审查者改了实现"})
+        with patch.object(sources, "untracked", side_effect=ValueError("Git 操作超时（status，180 秒）")):
+            self.assertEqual(self.review("check", c1), {"head": c1, "clean": False, "changed_files": ["src/a.js"],
+                                                        "created": [], "tracked_only": True})
 
     def test_rewind_never_moves_a_path_outside_the_project(self):
         outside = self.root / "outside"

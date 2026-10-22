@@ -629,15 +629,25 @@ class EngineGateTests(TeamsWorkersCase):
     def test_a_rejecting_review_that_creates_a_file_has_it_moved_out(self):   # D57 §4: _put_back_review
         rejection = {"decision": "changes_requested", "summary": "缺少空输入的边界处理", "failure_type": "implementation",
                      "reviewed_commit": C1}
-        put_back = lambda reverted, removed: lambda body: {
+        put_back = lambda reverted, removed, left=(): lambda body: {
             "head": C1, "clean": True, "changed_files": [], "reverted": reverted, "rewound": 0, "removed": removed,
-            "created": [], "tracked_only": False}
+            "created": list(left), "tracked_only": False}
+
+        def refused(body):
+            raise Error(409, "candidate_failed", "Git 操作失败（exit 1）：index.lock")
         cases = (("warn", {"changed_files": [], "created": ["review.md"]}, put_back([], ["review.md"]),
                   "审查新建的文件已由平台移出：review.md；移出的文件保存在该次尝试的 review-removed 目录", ["review.md"]),
                  ("warn", {"changed_files": ["src/a.js"], "created": ["review.md"]}, put_back(["src/a.js"], ["review.md"]),
                   "审查改动的已跟踪文件已由平台撤回：src/a.js；审查新建的文件已由平台移出：review.md；"
                   "移出的文件保存在该次尝试的 review-removed 目录", ["src/a.js", "review.md"]),
-                 ("skip", {"changed_files": [], "created": []}, None, "审查没有改动文件", None))
+                 ("skip", {"changed_files": [], "created": []}, None, "审查没有改动文件", None),
+                 # a folder the reviewer made a repository, holding files it started with: left in place, and said
+                 ("warn", {"changed_files": [], "created": ["tools/"]}, put_back([], [], ["tools/"]),
+                  "审查新建的这些文件未能移出，仍在工作区：tools/", None),
+                 ("warn", {"changed_files": [], "created": ["review.md"]}, refused,
+                  "平台未能移出审查新建的 review.md：Git 操作失败（exit 1）：index.lock", None),
+                 ("fail", {"changed_files": ["src/a.js"], "created": ["review.md"]}, refused,
+                  "平台未能撤回审查改动的 src/a.js，移出审查新建的 review.md：Git 操作失败（exit 1）：index.lock", None))
         for index, (status, changes, rewind, words, files) in enumerate(cases):
             with self.subTest(words=words):
                 worker = FakeWorker()
@@ -655,7 +665,7 @@ class EngineGateTests(TeamsWorkersCase):
                 gate = self.review_bound(evidence)
                 self.assertEqual((gate["status"], gate.get("files")), (status, files))
                 self.assertIn(words, gate["detail"])
-                self.assertEqual(gate["detail"].count("review-removed"), 1 if rewind else 0)
+                self.assertEqual(gate["detail"].count("review-removed"), 1 if "已由平台移出" in words else 0)
                 modes = [b["mode"] for p, b in worker.calls if p == "/candidate" and b["attempt_id"] == attempt["id"]]
                 self.assertEqual(modes, ["check", "rewind"] if rewind else ["check"])
 
@@ -673,7 +683,7 @@ class EngineGateTests(TeamsWorkersCase):
         attempt, evidence = self.attempt(rid, "review")
         gate = self.review_bound(evidence)
         self.assertEqual((gate["status"], attempt["status"], evidence["reviewed"]), ("warn", "accepted", C1))
-        self.assertIn("审查新建的 review.md 未能由平台移出：Git 操作失败（exit 128）", gate["detail"])
+        self.assertIn("平台未能移出审查新建的 review.md：Git 操作失败（exit 128）", gate["detail"])   # as _put_back_review says it
         self.assertIn("审查结论照常采用", gate["detail"])
         self.assertNotIn("gate", evidence)
 

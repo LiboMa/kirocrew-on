@@ -356,12 +356,14 @@ def rewind(project, expected, keep=None, into=None):
 
 def _move_out(project, keep, into):
     """The untracked files not in ``keep`` moved into ``into`` at the same relative paths, sorted: never deleted, a link
-    moved as a link (never followed). A path that would resolve outside the project, one whose place in ``into`` is taken
-    and one that cannot be moved stay where they are. Folders the moves leave empty are removed, never the project."""
+    moved as a link (never followed). A path that would resolve outside the project, one whose place in ``into`` is taken,
+    one that cannot be moved and a folder git lists as one entry (``tools/``, a repository the reviewer made) holding a file
+    of ``keep`` stay where they are. Folders the moves leave empty are removed, never the project."""
     root, keep, removed = Path(project).resolve(), set(keep), []
     for name in untracked(project):
         parts = name.rstrip("/").split("/")
-        if name in keep or name.startswith("/") or any(part in {"", ".", ".."} for part in parts):
+        if name in keep or name.startswith("/") or any(part in {"", ".", ".."} for part in parts) \
+                or name.endswith("/") and any(path.startswith(name) for path in keep):
             continue
         source, target = root.joinpath(*parts), Path(into).joinpath(*parts)
         if not source.parent.resolve().is_relative_to(root) or not os.path.lexists(source) or os.path.lexists(target):
