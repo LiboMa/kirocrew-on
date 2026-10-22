@@ -73,8 +73,11 @@ class EngineGateTests(TeamsWorkersCase):
         return engine
 
     def attempt(self, rid, task):
+        """The task's latest judged Attempt: D71 retries a failed task after a diagnosis that decided nothing, so its current
+        Attempt may be a new one still running."""
         with self.db.read() as db:
-            row = db.execute("SELECT a.* FROM attempts a JOIN tasks t ON t.current_attempt=a.id WHERE t.run_id=? AND t.id=?",
+            row = db.execute("SELECT * FROM attempts WHERE run_id=? AND task_id=? AND status NOT IN "
+                             "('pending','dispatching','running','dispatch_unknown','waiting_approval') ORDER BY number DESC LIMIT 1",
                              (rid, task)).fetchone()
         return dict(row), json.loads(row["evidence"] or "{}")
 

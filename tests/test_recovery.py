@@ -163,7 +163,8 @@ class RecoveryTests(RecoveryCase):
         self.assertEqual(result["native_parent"], "same-native-parent")
 
     def test_coordinator_waits_for_user_instead_of_claiming_fixed(self):
-        self.decision = {"action": "wait_for_user", "reason": "目标 API 需要认证", "instructions": "请配置项目测试账号后继续"}
+        self.decision = {"action": "wait_for_user", "missing": "credentials", "reason": "目标 API 需要认证",
+                         "instructions": "请配置项目测试账号后继续"}
         result = self.tick()
         self.assertEqual(result["status"], "blocked")
         self.assertEqual(result["recovery"]["latest"]["status"], "blocked")
@@ -182,12 +183,14 @@ class RecoveryTests(RecoveryCase):
         self.assertEqual(applied["decision"]["action"], "rework")
         self.assertEqual(applied["decision"]["normalized_from"], "retry")
 
-    def test_invalid_rework_target_cannot_skip_tasks_or_cross_run(self):
+    def test_invalid_rework_target_cannot_skip_tasks_or_cross_run(self):   # D71: refused, then the failed task is retried
         self.decision["target_task_id"] = "other-run-task"
         result = self.tick()
-        self.assertEqual(result["status"], "blocked")
-        self.assertEqual(result["recovery"]["latest"]["status"], "blocked")
-        self.assertEqual(self.rounds, {"code": 1, "review": 1})
+        latest = result["recovery"]["latest"]
+        self.assertEqual((latest["status"], latest["decision"]["action"], latest["decision"]["target_task_id"]),
+                         ("applied", "retry", "review"))
+        self.assertIn("other-run-task", latest["decision"]["refused"])
+        self.assertEqual(self.rounds, {"code": 1, "review": 2})
 
     def test_lost_coordinator_receipt_reuses_native_attempt_after_engine_restart(self):
         self.lose_ack = True
@@ -317,80 +320,7 @@ class RecoveryTests(RecoveryCase):
         self.assertIn("Worker 认证失效", result["attention"]["detail"])
 
 
-WAIT = {"action": "wait_for_user", "reason": "目标 API 需要认证", "instructions": "请配置项目测试账号后继续"}
-
-
-class GuardTests(RecoveryCase):
-    """D57 §6.2, §13.8: after the same task waited twice in a row for the user on the same failure, no diagnosis is
-    started for it again; the user is shown the last one, and may still ask for one (rediagnose)."""
-
-    def setUp(self):
-        super().setUp()
-        self.always_fail, self.decision = True, dict(WAIT)
-
-    def recover(self, number, **extra):
-        current = self.service.run(self.actor, self.run["id"])
-        return self.service.operate(self.actor, current["id"], "recover", {"request_id": f"guard-recover-{number:04d}",
-                                                                           "expected_version": current["version"], **extra})
-
-    def waited_twice(self):
-        self.tick()                                    # the review fails; the automatic diagnosis waits for the user
-        self.recover(1)
-        result = self.tick()                           # the requested one waits again
-        self.assertEqual([r["decision"]["action"] for r in result["recovery"]["history"]], ["wait_for_user"] * 2)
-        return result
-
-    def test_two_waits_for_the_same_gate_stop_further_diagnosis(self):
-        self.waited_twice()
-        with self.assertRaises(Error) as caught:
-            self.recover(2)
-        self.assertEqual((caught.exception.status, caught.exception.code), (409, "already_waiting"))
-        self.assertIn("目标 API 需要认证", str(caught.exception))       # what it waited for, as the diagnosis said it
-        self.assertIn("请配置项目测试账号后继续", str(caught.exception))
-        result = self.tick()
-        self.assertEqual((result["status"], result["recovery"]["used"]), ("blocked", 2))
-
-    def test_rediagnose_overrides_the_guard(self):
-        self.waited_twice()
-        self.recover(2, rediagnose=True)
-        result = self.tick()
-        self.assertEqual(result["recovery"]["used"], 3)
-        self.assertTrue(result["recovery"]["latest"]["context"]["manual"])
-        with self.assertRaises(Error):
-            self.recover(3, rediagnose="yes")
-
-    def test_a_continue_resets_the_guard(self):
-        result = self.waited_twice()
-        self.service.operate(self.actor, result["id"], "continue", {"request_id": "guard-continue-1",
-                                                                    "expected_version": result["version"], "task_id": "review"})
-        result = self.tick()                           # fails again: diagnosed on its own, it waits once since
-        self.assertEqual(result["recovery"]["used"], 3)
-        self.recover(4)                                # once is not twice
-        self.assertEqual(self.tick()["recovery"]["used"], 4)
-
-    def test_a_pass_of_the_task_resets_the_guard(self):
-        result = self.waited_twice()
-        now = time.time()
-        with self.db.transaction() as db:              # the review passed after those waits (and failed again later)
-            db.execute("INSERT INTO attempts(id,run_id,task_id,number,spec,status,evidence,created,updated) "
-                       "SELECT 'attempt-' || lower(hex(randomblob(16))), run_id, task_id, 99, spec, 'accepted', '{}', ?, ? "
-                       "FROM attempts WHERE run_id=? AND task_id='review' LIMIT 1", (now, now, result["id"]))
-        self.recover(5)
-        self.assertEqual(self.tick()["recovery"]["used"], 3)
-
-    def test_no_automatic_diagnosis_after_two_waits(self):
-        result = self.waited_twice()
-        failed = {t["id"]: t for t in result["tasks"]}["review"]["current_attempt"]
-        with self.db.transaction() as db:              # the same failure again on a new Attempt of the task
-            db.execute("INSERT INTO attempts(id,run_id,task_id,number,spec,status,evidence,result,error,created,updated) "
-                       "SELECT 'attempt-' || lower(hex(randomblob(16))), run_id, task_id, number+1, spec, status, evidence, "
-                       "result, error, created+1, updated+1 FROM attempts WHERE id=?", (failed,))
-            aid = db.execute("SELECT id FROM attempts WHERE run_id=? AND task_id='review' ORDER BY number DESC LIMIT 1",
-                             (result["id"],)).fetchone()[0]
-            db.execute("UPDATE tasks SET current_attempt=? WHERE run_id=? AND id='review'", (aid, result["id"]))
-        recovery.automatic(self.db, result["id"], aid)
-        self.assertEqual(self.service.run(self.actor, result["id"])["recovery"]["used"], 2)
-
+class FailingGateTests(unittest.TestCase):
     def test_the_failing_gate_is_the_first_failure_not_a_review_put_back_after_it(self):
         record = lambda name, status: {"name": name, "status": status}
         rejected = {"failure_type": "tests", "gates": [record("native_completed", "pass"), record("outcome_pass", "fail")]}
@@ -401,17 +331,6 @@ class GuardTests(RecoveryCase):
         self.assertEqual(recovery.failing_gate({"failure_type": "contract", "gates": [record("native_completed", "pass")]}),
                          "contract")   # no failed gate: its failure_type
         self.assertEqual(recovery.failing_gate({}, "input"), "input")
-        row = lambda number, evidence, action, created=10.0: {
-            "number": number, "failed_task_id": "review", "created": created,
-            "context": dumps({"evidence": evidence, "failure_type": evidence.get("failure_type")}),
-            "decision": dumps({"action": action, "reason": "r", "instructions": "i"}) if action else None}
-        rows = [row(1, rejected, "wait_for_user"), row(2, put_back, "wait_for_user")]
-        self.assertEqual(recovery.waits(rows, "review", "outcome_pass"), 2)
-        self.assertEqual(recovery.waits(rows, "review", "checks_pass"), 0)
-        self.assertEqual(recovery.waits(rows, "code", "outcome_pass"), 0)
-        self.assertEqual(recovery.waits(rows, "review", "outcome_pass", since=10.5), 0)
-        self.assertEqual(recovery.waits([row(1, rejected, "wait_for_user"), row(2, rejected, "retry"),
-                                         row(3, rejected, "wait_for_user"), row(4, rejected, None)], "review", "outcome_pass"), 1)
 
 
 SANDBOX = "kiro_crew.acp.client.AcpSandboxInitFailed: sandbox failed to initialize"
@@ -454,13 +373,15 @@ class DiagnosisRetryTests(RecoveryCase):
                 "SELECT payload FROM events WHERE run_id=? AND kind='recovery.retry'", (result["id"],))]
         self.assertEqual([(e["attempt"], e["retry"], e["transient"]) for e in retried], [(sent[0], sent[1], "runtime_sandbox")])
 
-    def test_a_diagnosis_that_dies_twice_ends_as_before(self):
+    def test_a_diagnosis_that_dies_twice_retries_the_failed_task(self):   # D71: no stop, the task is retried as it failed
         self.faults = [{"error": SANDBOX}, {"error": SANDBOX}]
         result = self.tick()
-        self.assertEqual((result["status"], result["recovery"]["used"]), ("blocked", 1))
+        self.assertEqual((result["status"], result["recovery"]["used"]), ("completed", 1))
         self.assertEqual(len(self.diagnoses()), 2)
-        self.assertEqual(result["recovery"]["latest"]["status"], "blocked")
-        self.assertIn("协调者执行失败或已停止", result["error"])
+        latest = result["recovery"]["latest"]
+        self.assertEqual((latest["status"], latest["decision"]["action"], latest["decision"]["fallback_from"]),
+                         ("applied", "retry", "none"))
+        self.assertIn("协调者执行失败或已停止", latest["decision"]["instructions"])
 
     def test_a_diagnosis_the_runtime_ended_is_retried_too(self):
         self.faults = [{"error": "kiro_crew.acp.client.AcpError: ACP process exited (code=-15, SIGTERM, external)"}]
@@ -488,22 +409,5 @@ class DiagnosisRetryTests(RecoveryCase):
             db.execute("UPDATE runs SET snapshot=? WHERE id=?", (dumps(snapshot), self.run["id"]))
         self.faults = [{"error": SANDBOX}]
         result = self.tick()
-        self.assertEqual((result["status"], len(self.diagnoses())), ("blocked", 1))
-
-
-class RediagnoseContractTests(unittest.TestCase):
-    def test_rediagnose_travels_through_the_api_and_the_mcp_schema(self):
-        from octopus import mcp
-        from octopus.schema import openapi
-        schema = openapi()
-        body = schema["paths"]["/v1/runs/{id}/recover"]["post"]["requestBody"]["content"]["application/json"]["schema"]
-        self.assertEqual(schema["components"]["schemas"][body["$ref"].rsplit("/", 1)[1]]["properties"]["rediagnose"],
-                         {"type": "boolean"})
-        tool = next(t for t in mcp.TOOLS if t["name"] == "octopus_recover")
-        self.assertEqual(tool["inputSchema"]["properties"]["rediagnose"]["type"], "boolean")
-        class Client:
-            def request(inner, method, path, body):
-                return body
-        sent = mcp.call(Client(), "octopus_recover", {"run_id": "run-x", "request_id": "mcp-recover-2", "expected_version": 3,
-                                                       "rediagnose": True})
-        self.assertTrue(sent["rediagnose"])
+        self.assertEqual(len(self.diagnoses()), 1)   # the diagnosis is not retried; D71: the failed task is
+        self.assertEqual(result["recovery"]["latest"]["decision"]["fallback_from"], "none")

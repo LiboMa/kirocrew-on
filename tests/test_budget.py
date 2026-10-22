@@ -13,7 +13,7 @@ STEPS = [{"id": "code", "name": "实现", "tool": "claude", "prompt": "实现", 
 CANCELLED = {"done": True, "result": "", "error": "cancelled (stop_reason=cancelled): turn cancelled by the runtime"}
 RETRY = {"action": "retry", "target_task_id": "review", "reason": "审查未通过", "instructions": "修复后复审"}
 SANDBOX = {"error": "kiro_crew.acp.client.AcpSandboxInitFailed: sandbox failed to initialize"}
-WAIT = {"action": "wait_for_user", "reason": "等待", "instructions": "检查"}
+WAIT = {"action": "wait_for_user", "missing": "input", "reason": "等待", "instructions": "检查"}   # D71: what only the user has
 
 
 class BudgetCase(ReplanCase):
@@ -132,8 +132,10 @@ class BudgetTests(BudgetCase):
         rid = self.begin(max_retries=1)
         run = self.tick(rid, 40)
         self.assertEqual(self.attempts(run, "code")[1]["evidence"].get("transient_retry_of"), self.attempts(run, "code")[0]["id"])
-        self.assertEqual((run["status"], len(self.diagnoses())), ("blocked", 1))   # the one retry was the task's
+        self.assertEqual(len(self.diagnoses()), 1)   # the one retry was the task's: the diagnosis is not retried
         self.assertEqual(self.budget(rid)["retries"], {"used": 1, "limit": 1})
+        # D71: the diagnosis decided nothing, so the failed task is retried as it failed (a cycle, not a retry)
+        self.assertEqual(run["recovery"]["history"][0]["decision"]["fallback_from"], "none")
 
     def test_past_the_time_budget_nothing_automatic_starts(self):
         self.cancelled = {("code", 1)}

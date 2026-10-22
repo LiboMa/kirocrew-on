@@ -56,7 +56,7 @@ class WatchdogCase(unittest.TestCase):
         if path == "/inspect" and any(b.get("coordination") for p, b in self.calls if p == "/dispatch"
                                       and b["attempt_id"] == body["attempt_id"]):
             return {"native": {"done": True, "result": "诊断"}, "evidence": {"actual_backend": "kiro"}, "handoff": "交接",
-                    "decision": dumps({"action": "wait_for_user", "reason": "仍然卡住", "instructions": "检查环境后续作"})}
+                    "decision": dumps({"action": "wait_for_user", "missing": "input", "reason": "仍然卡住", "instructions": "检查环境后续作"})}
         if getattr(self, "finished", False):
             return {"native": {"done": True, "result": "完成"}, "evidence": {"actual_backend": "claude"}, "handoff": "交接",
                     "outcome": dumps({"decision": "pass", "summary": "完成并验证", "failure_type": "none", "findings": []})}

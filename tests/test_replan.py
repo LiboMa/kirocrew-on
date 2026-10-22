@@ -25,6 +25,10 @@ NEW_PLAN = """重新规划如下：
 ```"""
 REPLAN = {"action": "replan", "reason": "计划缺少测试步骤，审查无法通过", "instructions": "加入测试任务后复审"}
 
+def refusals(run):
+    """D71: what the platform refused, as the decisions it fell back from say (the Session goes on)."""
+    return " ".join(r["decision"].get("refused") or "" for r in run["recovery"]["history"] if r.get("decision"))
+
 
 class ReplanCase(unittest.TestCase):
     def setUp(self):
@@ -38,7 +42,7 @@ class ReplanCase(unittest.TestCase):
             db.execute("INSERT INTO workers(id,name,owner_id,config) VALUES('worker','W',?,?)",
                        (user["id"], dumps({"url": "fixture", "token": "fixture", "capabilities": {}})))
         self.calls, self.bodies, self.plan = [], {}, NEW_PLAN
-        self.decisions = [REPLAN] + [{"action": "wait_for_user", "reason": "等待", "instructions": "检查"}] * 3
+        self.decisions = [REPLAN] + [{"action": "wait_for_user", "missing": "input", "reason": "等待", "instructions": "检查"}] * 3
         self.failing = {("review", 1)}
         self.engine = Engine(self.db, self.request)
 
@@ -123,7 +127,7 @@ class ReplanTests(ReplanCase):
         self.assertEqual([a["spec"]["name"] for a in new["attempts"]], ["补测试"])   # the old review's Attempts are not here
 
     def test_an_invalid_replan_blocks_the_replan_task(self):
-        self.plan, self.decisions = "没有计划", [REPLAN, {"action": "wait_for_user", "reason": "规划失败", "instructions": "检查"}]
+        self.plan, self.decisions = "没有计划", [REPLAN, {"action": "wait_for_user", "missing": "input", "reason": "规划失败", "instructions": "检查"}]
         rid = self.start()
         run = self.tick(rid)
         replan = {t["id"]: t for t in run["tasks"]}["replan-1"]
@@ -135,15 +139,13 @@ class ReplanTests(ReplanCase):
         self.failing = {("review", 1), ("check", 1)}
         rid = self.start(recovery={"enabled": True, "max_cycles": 3})
         run = self.tick(rid, 50)
-        self.assertEqual(run["status"], "blocked")
-        self.assertIn("已重新规划过", run["error"])
+        self.assertIn("已重新规划过", refusals(run))
 
     def test_the_planning_task_itself_is_not_replanned(self):
         rid = self.service.start(self.actor, {"request_id": "replan-fixture-plan", "input": "实现登录并验证",
                                               "source": {"type": "new"}, "worker_id": "worker"})["id"]   # Kiro plans it
         run = self.tick(rid)            # the plan task answers "完成": no plan, blocked; the Coordinator asks to replan
-        self.assertEqual(run["status"], "blocked")
-        self.assertIn("规划任务本身", run["error"])
+        self.assertIn("规划任务本身", refusals(run))
 
     def test_a_task_named_like_a_replan_is_an_ordinary_task(self):
         self.failing = {("replan-x", 1)}
@@ -152,7 +154,7 @@ class ReplanTests(ReplanCase):
         self.assertEqual(run["replan"]["replaced"][0]["id"], "replan-x")   # replaced like any other task
 
     def test_the_coordinator_is_told_whether_it_has_replanned(self):
-        self.decisions = [REPLAN, {"action": "wait_for_user", "reason": "再看", "instructions": "检查"}]
+        self.decisions = [REPLAN, {"action": "wait_for_user", "missing": "input", "reason": "再看", "instructions": "检查"}]
         self.failing = {("review", 1), ("check", 1)}
         rid = self.start(recovery={"enabled": True, "max_cycles": 3})
         self.tick(rid, 50)
@@ -165,7 +167,7 @@ class ReplanTests(ReplanCase):
         last = last or {**STEPS[2], "verify": ["npm test", "npm run lint"], "verify_required": ["npm test"]}
         self.plan = "```json\n" + json.dumps({"intent": "i", "summary": "s", "name": "n", "steps": plan_steps},
                                                 ensure_ascii=False) + "\n```"
-        self.decisions = [REPLAN, {"action": "wait_for_user", "reason": "规划失败", "instructions": "检查"}]
+        self.decisions = [REPLAN, {"action": "wait_for_user", "missing": "input", "reason": "规划失败", "instructions": "检查"}]
         rid = self.start(request_steps or STEPS[:2] + [last])
         run = self.tick(rid, 40)
         return run, {t["id"]: t for t in run["tasks"]}
@@ -282,7 +284,7 @@ class KeptChecksTests(ReplanCase):
         run = self.tick(self.start(KEPT_STEPS), 40)
         self.assertEqual((run["tasks"][0]["spec"]["verify"], run["tasks"][0]["spec"]["verify_required"]), ([], []))
 
-WAIT = {"action": "wait_for_user", "reason": "等待", "instructions": "检查"}
+WAIT = {"action": "wait_for_user", "missing": "input", "reason": "等待", "instructions": "检查"}
 
 
 class ExemptReplanTests(ReplanCase):
@@ -331,8 +333,7 @@ class ExemptReplanTests(ReplanCase):
         self.decisions = [{**REPLAN, "reason": "合同问题：检查命令在环境中不可执行"}, REPLAN, WAIT]
         rid = self.start(recovery={"enabled": True, "max_cycles": 3})
         run = self.tick(rid, 80)
-        self.assertEqual(run["status"], "blocked")
-        self.assertIn("已重新规划过", run["error"])
+        self.assertIn("已重新规划过", refusals(run))
         self.assertFalse(planning.replans(self.snapshot(rid))[0].get("exempt"))
 
     def test_at_most_two_contract_replans_are_exempt(self):
@@ -340,8 +341,7 @@ class ExemptReplanTests(ReplanCase):
         self.decisions = [REPLAN] * 4 + [WAIT] * 2
         rid = self.start(recovery={"enabled": True, "max_cycles": 5})
         run = self.tick(rid, 160)
-        self.assertEqual(run["status"], "blocked")
-        self.assertIn("已重新规划过", run["error"])
+        self.assertIn("已重新规划过", refusals(run))
         self.assertEqual([bool(r.get("exempt")) for r in planning.replans(self.snapshot(rid))], [True, True, False])
         self.assertEqual(self.environments(), [(False, True), (False, True), (False, False), (True, False)])
 
@@ -426,7 +426,7 @@ class ReplanReviewTests(ReplanCase):
     def test_a_rework_after_a_replan_does_not_rerun_the_planner(self):
         self.failing = {("review", 1), ("check", 1)}
         self.decisions = [REPLAN, {"action": "rework", "target_task_id": "code", "reason": "实现有缺陷", "instructions": "修复"}] + \
-            [{"action": "wait_for_user", "reason": "等待", "instructions": "检查"}] * 2
+            [{"action": "wait_for_user", "missing": "input", "reason": "等待", "instructions": "检查"}] * 2
         rid = self.start(recovery={"enabled": True, "max_cycles": 3})
         run = self.tick(rid, 60)
         self.assertEqual(len(self.dispatched("replan-1")), 1)

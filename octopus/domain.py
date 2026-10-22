@@ -2493,7 +2493,7 @@ class Service:
                     done.append(True)
                     fields.update(version=version, updated=time.time())
                     journal.change(db, "runs", rid, who, "command." + action, event={
-                        "version": version, **{k: body[k] for k in ("task_id", "worker_id", "rerun", "rediagnose") if k in body},
+                        "version": version, **{k: body[k] for k in ("task_id", "worker_id", "rerun") if k in body},
                         **extra,
                         **({"oversight": True, "by": {"id": actor["id"], "username": actor["username"]}} if oversight else {})},
                         **fields)
@@ -2561,8 +2561,6 @@ class Service:
                            reasons=reasons, **({"recovery": snapshot["recovery"]} if "recovery" in body else {}))
                 elif action == "recover":
                     from .recovery import schedule
-                    # D57 §6.2: 「仍要重新诊断」 — a diagnosis even after two that waited for the user on the same failure
-                    require(isinstance(body.get("rediagnose", False), bool), "rediagnose 须为布尔值")
                     require(run["lifecycle"] == "open" and run["worker_id"] and run["native_parent"] and
                             run["status"] in {"blocked", "failed", "stopped"}, "此 Session 当前不能启动诊断", 409, "busy")
                     reason = unserved(db, run)
@@ -2579,7 +2577,7 @@ class Service:
                     journal.change(db, "runs", rid, who, "run.settings", event={"execution_contract": [old, snapshot["execution_contract"]]},
                                    snapshot=dumps(snapshot))
                     restart_budget(db, rid, who)   # as a continue: the budget counts from the user's request
-                    schedule(db, self.db, run, task, attempt, manual=True, actor=who, rediagnose=body.get("rediagnose", False))
+                    schedule(db, self.db, run, task, attempt, manual=True, actor=who)   # D71: every request is diagnosed
                 elif action == "assign-worker":
                     require(run["status"] == "waiting_worker" and run["lifecycle"] == "open",
                             "运行已分配 Worker 或已关闭", 409, "invalid_state")

@@ -22,6 +22,11 @@ def step(sid, tool, kind, **extra):
             "acceptance": ["可运行"], **({"verify": ["true"]} if kind == "implement" else {}), **extra}
 
 
+
+def refusals(run):
+    """D71: what the platform refused, from the decisions it fell back from (the Session goes on)."""
+    return " ".join(r["decision"].get("refused") or "" for r in run["recovery"]["history"] if r.get("decision")).strip()
+
 class SwitchCase(unittest.TestCase):
     capabilities = {"tools": TOOLS, "models": MODELS, "limitations": ["已知问题 K01：…"],
                     "commands": {"available": ["python3"], "missing": ["python"]}}
@@ -93,13 +98,13 @@ class EnvironmentTests(SwitchCase):
             recovery.policy({"switch_tools": "no"})
 
     def test_the_coordinator_is_shown_the_environment(self):
-        self.decisions = [{"action": "wait_for_user", "reason": "需要用户确认", "instructions": "确认后续作"}]
+        self.decisions = [{"action": "wait_for_user", "missing": "input", "reason": "需要用户确认", "instructions": "确认后续作"}]
         on = self.start([step("code", "claude", "implement")])
         self.fail_rounds = {("code", 1)}
         self.tick(on["id"])
         off = self.start([step("code", "claude", "implement")], recovery={"enabled": True, "max_cycles": 2, "switch_tools": False})
         self.fail_rounds = {("code", 1), ("code", 2)}
-        self.decisions = [{"action": "wait_for_user", "reason": "需要用户确认", "instructions": "确认后续作"}]
+        self.decisions = [{"action": "wait_for_user", "missing": "input", "reason": "需要用户确认", "instructions": "确认后续作"}]
         self.tick(off["id"])
         first, second = self.coordination()
         self.assertEqual(first["environment"], {"tools": TOOLS, "models": MODELS, "limitations": ["已知问题 K01：…"],
@@ -126,7 +131,7 @@ class EnvironmentTests(SwitchCase):
 
 
 class ToolFailureTests(SwitchCase):
-    WAIT = {"action": "wait_for_user", "reason": "需要换用工具", "instructions": "请换用可用的工具后续作"}
+    WAIT = {"action": "wait_for_user", "missing": "input", "reason": "需要换用工具", "instructions": "请换用可用的工具后续作"}
 
     def test_an_unavailable_tool_goes_to_diagnosis_without_being_dispatched(self):
         self.decisions = [self.WAIT]
@@ -215,20 +220,20 @@ class SwitchTests(SwitchCase):
                  ("effort", [step("code", "claude", "implement")], self.switch(tool="codex", model="auto", effort="ultra"), "Effort")]
         for name, steps, decision, words in cases:
             with self.subTest(name):
+                self.setUp()   # D71: a refused Session goes on, so each case gets its own platform and decisions
                 self.decisions = [decision]
                 self.mismatch_rounds = {("code", 1)} if name in {"same", "model", "effort"} else set()
                 self.fail_rounds = {("review", 1)} if name == "target" else set()
                 run = self.tick(self.start(steps)["id"])
-                self.assertEqual(run["status"], "blocked")
-                self.assertTrue(run["error"].startswith("协调者换工具的推荐未通过核对："), run["error"])
-                self.assertIn(words, run["error"])
+                refused = refusals(run)   # D71: said, then the failed task is retried
+                self.assertTrue(refused.startswith("协调者换工具的推荐未通过核对："), refused)
+                self.assertIn(words, refused)
 
     def test_switching_turned_off_is_refused(self):
         self.decisions = [self.switch()]
         run = self.tick(self.start([step("code", "opencode", "implement")],
                                    recovery={"enabled": True, "max_cycles": 2, "switch_tools": False})["id"])
-        self.assertEqual(run["status"], "blocked")
-        self.assertIn("已关闭换工具", run["error"])
+        self.assertIn("已关闭换工具", refusals(run))   # D71: said, then retried
 
     def test_switches_are_bounded_by_the_cycle_limit(self):
         self.decisions = [self.switch(tool="claude"), self.switch(tool="codex")]
@@ -260,8 +265,7 @@ class SwitchWithoutToolsTests(SwitchCase):
         self.decisions, self.mismatch_rounds = [{"action": "switch_tool", "target_task_id": "code", "tool": "codex",
                                                  "model": "auto", "effort": "", "reason": "r", "instructions": "i"}], {("code", 1)}
         run = self.tick(self.start([step("code", "claude", "implement")])["id"])
-        self.assertEqual(run["status"], "blocked")
-        self.assertIn("未报告可用性", run["error"])
+        self.assertIn("未报告可用性", refusals(run))   # D71: said, then retried
 
 
 class ReviewAndVisibilityTests(SwitchCase):
@@ -272,8 +276,7 @@ class ReviewAndVisibilityTests(SwitchCase):
     def test_a_switched_implementation_may_not_take_its_reviewers_tool(self):
         self.decisions = [self.switch("claude")]
         run = self.tick(self.start([step("code", "opencode", "implement"), step("review", "claude", "review")])["id"])
-        self.assertEqual(run["status"], "blocked")
-        self.assertIn("其后的审查「审查」使用 claude", run["error"])
+        self.assertIn("其后的审查「审查」使用 claude", refusals(run))   # D71: said, then retried
 
     # Owner 2026-10-21: a test task is not the author of the change a review looks at (as roles.unindependent has it)
     def team(self, test_tool):
@@ -304,8 +307,7 @@ class ReviewAndVisibilityTests(SwitchCase):
         review = {"id": "review", "name": "独立测试与审查", "tool": "opencode", "prompt": "独立审查"}
         self.decisions = [self.switch("claude", target="review")]
         run = self.tick(self.start([code, review])["id"])
-        self.assertEqual(run["status"], "blocked")
-        self.assertIn("审查须使用与被审查代码（claude）不同的工具", run["error"])
+        self.assertIn("审查须使用与被审查代码（claude）不同的工具", refusals(run))   # D71: said, then retried
 
     def test_the_switch_stays_visible_after_a_later_retry(self):
         self.decisions = [self.switch("claude"), {"action": "retry", "target_task_id": "code", "reason": "测试未过",
