@@ -121,7 +121,7 @@ class CompactStatusTests(unittest.TestCase):
     def test_the_tool_schema_offers_detail(self):
         tool = next(t for t in mcp.TOOLS if t["name"] == "octopus_status")
         self.assertEqual(tool["inputSchema"]["properties"]["detail"], {"type": "boolean"})
-        self.assertEqual(tool["inputSchema"]["required"], ["run_id"])
+        self.assertEqual(tool["inputSchema"]["required"], [])   # D58: without run_id, the Session the directory is linked to
 
 
 if __name__ == "__main__":

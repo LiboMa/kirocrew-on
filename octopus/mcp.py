@@ -61,7 +61,7 @@ TOOLS = [
     {"name": "octopus_status",
      "description": "查询真实任务状态。默认返回精简视图：Session 状态、version、attention、规划、最近一次纠错决定、各任务最近一次尝试的结论"
                     "（decision、summary、findings、交接文件）和最近 10 条事件；detail=true 返回完整记录（含各次尝试的原始输出与证据，可能很大）。",
-     "inputSchema": object_schema({"run_id": STRING, "detail": {"type": "boolean"}}, ["run_id"])},
+     "inputSchema": object_schema({"run_id": STRING, "detail": {"type": "boolean"}, "dir": STRING})},   # D58: run_id from the link
     {"name": "octopus_preview",
      "description": "返回某个 Session 产出的 Web 预览链接（Workspace 中的 index.html 等静态页面，10 分钟有效，在隔离环境中运行，"
                     "页面内 localStorage、sessionStorage、IndexedDB 与 Cookie 不可用）；"
@@ -119,6 +119,7 @@ TOOLS = [
          "credentials": object_schema({"source": STRING}),
          "team_id": STRING, "worker_id": STRING, "recovery": RECOVERY,
          "admission": {"type": "string", "enum": ["confirm", "auto"]},
+         "dir": STRING, "push_base": {"type": "boolean"}, "allow_unpushed": {"type": "boolean"},
          "publish": object_schema({"auto": {"type": "boolean"}, "branch": STRING, "title": STRING, "repository": REPOSITORY,
                                    "credential": STRING})},
                                  ["request_id", "input", "source"])},
@@ -199,6 +200,20 @@ TOOLS += [
                     "直接开始（auto）还是先停在「计划待确认」（confirm）；映射偏好按任务类别或角色对应工具 / 模型，供 KiroCrew 规划者参考。"
                     "规则只能由用户在控制台「准入与映射偏好」中维护：不要替用户改准入。",
      "inputSchema": object_schema({"team_id": STRING}), "annotations": READ},
+    {"name": "octopus_link",
+     "description": "把本机的 Git 仓库（dir，默认当前目录）关联到一个会话：写 .octopus/session.json（加入 .git/info/exclude，不会提交）。"
+                    "之后 octopus_status、octopus_pull、octopus_sync 可省略 run_id。octopus_start 在本仓库提交时会自动关联。",
+     "inputSchema": object_schema({"run_id": STRING, "dir": STRING}, ["run_id"])},
+    {"name": "octopus_pull",
+     "description": "把会话分支拉回本机仓库（dir，默认当前目录），成为本地分支 octopus/<run>，不覆盖该分支上本地自己的提交；"
+                    "checkout=true 时切换过去；本地缺会话基线时自动取完整历史（full=true 总是）。同时把报告、计划与各任务交接写到 "
+                    ".octopus/sessions/<run>/。分支上有疑似凭证或 .env 时平台拒绝（bundle_secret_found）。",
+     "inputSchema": object_schema({"run_id": STRING, "dir": STRING, "checkout": {"type": "boolean"}, "full": {"type": "boolean"}})},
+    {"name": "octopus_sync",
+     "description": "把本机仓库在会话分支上新做的提交同步回会话（先 octopus_pull 并在 octopus/<run> 上修改、提交）：只接受快进，"
+                    "工作区须已提交；平台把它作为新候选，重新运行检查，并让其后的审查 / 测试任务重新执行。note 写给审查者的说明。"
+                    "调用前把要同步的提交告诉用户并得到同意。",
+     "inputSchema": object_schema({"run_id": STRING, "dir": STRING, "note": STRING})},
     {"name": "octopus_publish",
      "description": "把会话成果发布到它的源仓库：推送分支（默认 octopus/<run-id>）并创建或沿用 Draft PR（GitHub）/ Draft MR（GitLab）。"
                     "需要会话绑定一枚有写权限的凭证，且会话已结束执行；工作区未提交的改动会先提交（不含 .env 与依赖目录），"
@@ -506,8 +521,57 @@ def requests(client, args):
                       for r in items[:limit]], "more": len(items) > limit}
 
 
+def _here(args):
+    return Path(args.pop("dir", None) or os.getcwd())
+
+
+def start(client, args):
+    """Submit; from the local repository the source names (D58 §4), stop first on commits its origin does not have —
+    unless push_base (the user agreed to push) or allow_unpushed — and link the repository to the new Session."""
+    from . import local
+    from .policies import repo_of
+    directory, push, allow = _here(args), args.pop("push_base", False), args.pop("allow_unpushed", False)
+    repo = local.repository(directory)
+    here = repo is not None and (args.get("source") or {}).get("type") == "git" and \
+        repo_of(args["source"]) == repo_of(local.source(repo))
+    if here:
+        count = local.unpushed(repo)
+        if count and push:
+            local.push_base(repo)
+        elif count and not allow:
+            return {"unpushed": count, "submitted": False,
+                    "hint": f"本地有 {count} 个提交尚未推送到 origin，执行环境看不到它们。告诉用户并请他选择：同意推送则带 push_base: true "
+                            "重新提交（用用户自己的凭证 git push -u origin HEAD），或带 allow_unpushed: true 按 origin 上已有的提交提交。"}
+    result = client.request("POST", "/v1/runs", args)
+    if here:
+        local.link(repo, {"run_id": result["id"], "request_id": result.get("request_id"), "url": getattr(client, "url", None)})
+    return result
+
+
+def local_tool(client, name, args):
+    """octopus_link / octopus_pull / octopus_sync in the user's repository (D58), the same as the CLI's."""
+    from . import local
+    directory = _here(args)
+    rid = args.get("run_id") or (local.linked(directory) or {}).get("run_id")
+    if not rid:
+        raise ValueError("需要 run_id：这个目录还没有关联会话（octopus_start 在仓库内提交、或 octopus_link 会关联）")
+    if name == "octopus_link":
+        return {"path": str(local.link(directory, {"run_id": rid, "url": getattr(client, "url", None)})), "run_id": rid}
+    if name == "octopus_pull":
+        return local.pull(client, rid, directory, checkout=bool(args.get("checkout")), full=bool(args.get("full")))
+    return local.sync(client, rid, directory, note=args.get("note"))
+
+
 def call(client, name, args):
     args = dict(args)
+    if name in {"octopus_link", "octopus_pull", "octopus_sync"}:
+        return local_tool(client, name, args)
+    if name == "octopus_status" and not args.get("run_id"):   # D58: the Session the repository is linked to
+        from . import local
+        args["run_id"] = (local.linked(_here(args)) or {}).get("run_id")
+        if not args["run_id"]:
+            raise ValueError("需要 run_id：这个目录还没有关联会话")
+        args.pop("dir", None)
     if name == "octopus_runs":
         return runs(client, args)
     if name == "octopus_requests":
@@ -560,7 +624,7 @@ def call(client, name, args):
         session, events = client.request("GET", "/v1/runs/" + rid), client.request("GET", "/v1/runs/" + rid + "/events")
         return {"session": session, "events": events} if args.get("detail") else compact_status(session, events)
     if name == "octopus_start":   # the platform chooses the space's Worker (D28); waiting_worker → octopus_assign_worker
-        return client.request("POST", "/v1/runs", args)
+        return start(client, args)
     if name == "octopus_me":
         me, teams = client.request("GET", "/v1/me"), client.request("GET", "/v1/teams")
         return {**{key: me.get(key) for key in ("id", "username", "scopes", "client")}, "admin": bool(me.get("admin")),

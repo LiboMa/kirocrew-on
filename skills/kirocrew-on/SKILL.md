@@ -186,6 +186,19 @@ KiroCrew ON 在远端执行开发任务：KiroCrew 的 Kiro Agent 先识别意�
   依赖它们的功能（如保存设置、计数）在预览中失效不代表产出有缺陷；要验证这类功能，用 `octopus_download` 下载到本机打开，
   或用 `octopus_app` 在执行环境启动应用。
 
+## 本地与远端联动：`octopus_pull` / `octopus_sync`
+
+- 在用户的 Git 仓库里提交时（`octopus_start` 的 `source` 就是这个仓库的 origin），本地有 origin 没有的提交会先停下，返回
+  `unpushed` 与 `hint`：把提交数告诉用户；用户同意推送才带 `push_base: true` 重新提交，或带 `allow_unpushed: true` 按 origin 已有的提交提交。
+  提交成功后仓库自动关联会话（`.octopus/session.json`，不会提交）；`octopus_status`、`octopus_pull`、`octopus_sync` 可省略 `run_id`。
+  别的目录用 `octopus_link {run_id, dir}` 关联。
+- 想在本机接着改：`octopus_pull`（`checkout: true` 切换到本地分支 `octopus/<run>`），上下文（报告、计划、各任务交接）在
+  `.octopus/sessions/<run>/`。在这个分支上修改并 **提交** 后 `octopus_sync`（`note` 写给审查者）：平台把它作为新候选，重新运行检查，
+  其后的审查 / 测试任务重新执行；会话页的修订历史记「本地同步」。同步前把要同步的提交告诉用户并得到同意。
+- 拒绝时原样告诉用户：`sync_not_fast_forward`（远端又有了新提交：先 `octopus_pull` 再改）、`sync_secret_found` / `bundle_secret_found`
+  （提交里有疑似凭证或 `.env`：用户自己移除后再提交）、`sync_dirty`（会话的工作区还有未纳入候选的改动：等会话结束或续作）、`busy`。
+- 用户也可以用命令行：`octopus login`，之后 `octopus submit / status / plan / confirm / pull / sync / watch / search …`。
+
 ## 6．原则
 
 - 停止、关闭、删除会话前先征得用户同意（`octopus_control`）。
