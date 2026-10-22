@@ -486,14 +486,26 @@ CloudFront 只使用 us-east-1 的证书）：分发加上别名与证书（SNI�
 ### 看门狗（D39）
 
 - **判定**：运行中的 Attempt，安静时长（KiroCrew 子任务 `state.json` 最后写入至今，Worker 按自己的时钟计算；从派发或最后一次
-  等待批准时起算）超过 `idle_minutes`（默认 30），或总时长超过 `attempt_minutes`（默认 170）时，平台以 `DELETE /api/spawn/{id}`
-  停止该原生任务。等待批准与检查命令运行期间不判定；没有 `state.json` 时只按总时长判定。
+  等待批准或排队结束时起算）超过 `idle_minutes`（默认 30），或总时长超过 `attempt_minutes`（默认 170）时，平台以 `DELETE /api/spawn/{id}`
+  停止该原生任务。等待批准、排队与检查命令运行期间不判定；没有 `state.json` 时只按总时长判定。
   KiroCrew 自己在 180 分钟收回子任务（不经平台的自动重试），`attempt_minutes` 大于它时不起作用。
 - **之后**：Attempt `blocked`（原因写明分钟数与最后工具），自动重试一次（不消耗纠错轮次）；重试仍卡住时交给协调者诊断（可换工具）。
   自动纠错关闭的会话只停止、不重试。
 - **长命令**：单个命令运行期间 `updated_at` 不更新；大型构建或完整测试较慢的项目，启动或续作时设 `recovery.idle_minutes`（5–240）。
 - **旧 Worker**（不支持停止单个任务）：不行动，任务继续，避免两个 Agent 同时修改同一工作区。停止失败时一分钟后再试，同样不重试。
 - 重试在被停止任务留下的工作区上开始（未提交的部分改动仍在）：与 D34 的自动重试相同；D37 的候选按任务起点计算改动。
+
+### 排队（D60，M4-4 第 1 期）
+
+- **从哪来**：执行环境内存不足、负载过高或暂停接收新任务时，KiroCrew Gateway 推迟新的子 Agent（`POST /api/spawn` 回 `queued`，
+  `reason` 为 `low_memory` / `posture_critical` / `adaptive_cap_zero`）；只等并发槽位的照常 `spawned`。Worker 在列表里找不到任务时改问
+  `GET /api/spawn/{id}`，任务文字带本 Attempt 标记的才算本 Attempt 的排队（返工续接的回执写 `spawned` 也以它为准）。
+- **会话上**：「需要处理」写「排队：等待执行环境资源（执行环境内存不足 / 负载过高 / 暂停接收新任务）」，只写原因的类别；
+  内存数字等明细只在事件 `attempt.queued` 的 `detail`。开始执行时事件 `attempt.dequeued`（`waited` 秒），提示清空。
+- **不计**：排队期间看门狗不判定，排队结束起重新计时；排队的时间不计会话的时长预算（与等人相同）。
+- **没有开始**：原生任务以 `never started` 结束（排队一直没轮到）时自动重新派发，不占自动重试次数与预算（事件 `attempt.retry`，
+  `transient: never_started`）；连续第 3 次仍未开始，或排队前已开始过（`resuming`）的，交给协调者。
+- **处理**：长时间排队说明该执行环境资源不足：结束空闲的原生进程或扩容；需要时把会话改派到别的执行环境。配额（每人 / 每 Team 的并发与上限）是第 2 期。
 
 ### 发布：自动或人工确认（D47）
 
