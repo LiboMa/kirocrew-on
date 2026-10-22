@@ -1,5 +1,5 @@
 /* Real HTTP/SQLite fixture. Never submits to a native Worker. */
-async page => {
+async (page, {artifactRoot} = {}) => {
   const browser=await page.context().browser().browserType().launch({headless:true,channel:"chrome"});
   const context=await browser.newContext({viewport:{width:1480,height:1050},reducedMotion:"reduce"});
   const p=await context.newPage(),checks=[],errors=[];
@@ -125,7 +125,7 @@ async page => {
     await step(1);await method("template");
     await p.locator("#new-workflow").selectOption("auto");
     await title("Bug 修复");
-    await p.screenshot({path:"/Users/malibo/MyDev/Kiro-Family-Spaces/experiments/kirocrew-on/state/browser/intent-launch.png"});
+    if(artifactRoot)await p.screenshot({path:`${artifactRoot}/intent-launch.png`});
     check(errors.length===0,"新向导无浏览器脚本异常");
     return {ok:true,checks,nativeCalls:0,mode:"ephemeral HTTP/SQLite"};
   } finally {await context.close();await browser.close();}

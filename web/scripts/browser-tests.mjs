@@ -1,6 +1,7 @@
 // Browser regression runner: each tests/*.browser.js is a Playwright run-code function. Every file gets a fresh
 // ephemeral HTTP/SQLite fixture (tests/mvp_browser_fixture.py on 8921); nothing reaches a native Worker.
 // Usage: npm --prefix web run test:browser [-- tests/react-console.browser.js ...]   (build the console first)
+// Screenshots go to $BROWSER_ARTIFACTS when it is set (none otherwise), never to a fixed checkout.
 import { spawn } from "node:child_process";
 import { readFileSync } from "node:fs";
 import path from "node:path";
@@ -33,7 +34,7 @@ for (const file of files) {
   const started = Date.now();
   try {
     const test = new Function("return (" + readFileSync(path.join(root, file), "utf8") + ")")();
-    const result = await test(page);
+    const result = await test(page, { artifactRoot: process.env.BROWSER_ARTIFACTS });
     const count = result?.checks?.length ?? result?.passed ?? 0;
     console.log(`✓ ${file}  ${count} checks  ${((Date.now() - started) / 1000).toFixed(1)}s`);
   } catch (error) {

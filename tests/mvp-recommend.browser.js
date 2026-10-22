@@ -1,5 +1,5 @@
 /* UI-only generation stubs; workflow saves use the real ephemeral HTTP/SQLite fixture. */
-async page => {
+async (page, {artifactRoot} = {}) => {
   const browser=await page.context().browser().browserType().launch({headless:true,channel:"chrome"});
   const context=await browser.newContext({viewport:{width:1480,height:1100},reducedMotion:"reduce"});
   const p=await context.newPage(),checks=[],errors=[],requests=[];
@@ -103,7 +103,7 @@ async page => {
     await p.setViewportSize({width:390,height:844});
     check(await p.locator("#modal").evaluate(n=>n.scrollWidth<=n.clientWidth+1),"推荐控件在窄屏无横向溢出");
     await p.setViewportSize({width:1480,height:1100});
-    await p.screenshot({path:"/Users/malibo/MyDev/Kiro-Family-Spaces/experiments/kirocrew-on/state/browser/recommendation-ui.png"});
+    if(artifactRoot)await p.screenshot({path:`${artifactRoot}/recommendation-ui.png`});
     check(errors.length===0,"推荐流程无浏览器脚本错误");
     return {ok:true,checks,nativeCalls:0,mode:"generation HTTP stubs + real workflow persistence; not native evidence"};
   } finally {if(release)release();await context.close();await browser.close();}
