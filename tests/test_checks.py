@@ -296,18 +296,20 @@ class CheckTests(unittest.TestCase):
 
     def test_unrunnable_reads_what_the_shell_python_and_git_really_print(self):
         (self.project / "myapp").mkdir()
-        checks = Checks()
-        value = finished(checks, checks.start("run-a", "attempt-1", self.project, [
-            "d57-no-such-command --version",
-            f"{sys.executable} -c 'import d57_no_such_module'",
-            "git init -q repo && cd repo && GIT_AUTHOR_NAME= GIT_COMMITTER_NAME= git commit -q --allow-empty -m x",
-            f"{sys.executable} -c 'assert 1 == 2'",
-            f"{sys.executable} -c 'import myapp.models'",
-            "./d57-never-written.sh",
-            "sh -c scripts/d57-never-written.sh",
-            "bash d57-never-written.sh",
-            "sh d57-never-written.sh",
-            "true"])["job"])
+        # an empty HOME, so that no login profile slows the ten shells down on a loaded machine (as in run_outputs)
+        with tempfile.TemporaryDirectory() as home, patch.dict(os.environ, {"HOME": home}):
+            checks = Checks()
+            value = finished(checks, checks.start("run-a", "attempt-1", self.project, [
+                "d57-no-such-command --version",
+                f"{sys.executable} -c 'import d57_no_such_module'",
+                "git init -q repo && cd repo && GIT_AUTHOR_NAME= GIT_COMMITTER_NAME= git commit -q --allow-empty -m x",
+                f"{sys.executable} -c 'assert 1 == 2'",
+                f"{sys.executable} -c 'import myapp.models'",
+                "./d57-never-written.sh",
+                "sh -c scripts/d57-never-written.sh",
+                "bash d57-never-written.sh",
+                "sh d57-never-written.sh",
+                "true"])["job"], 120)
         expected = ["命令不存在：d57-no-such-command", "缺少 Python 模块：d57_no_such_module", "检查环境没有 git 提交者身份",
                     None, None, None, None, None, None, None]
         tails = [r["tail"] for r in value["results"]]
