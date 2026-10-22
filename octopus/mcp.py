@@ -98,8 +98,8 @@ TOOLS = [
                                   ["run_id", "origin", "request_id", "decision"]),
      "annotations": {"destructiveHint": True}},
     {"name": "octopus_steer",
-     "description": "给正在运行的 Kiro 任务补充说明（D46 P5b），插入它正在进行的这一轮。只用于用户要求的纠正或补充（把要发送的原文"
-                    "给用户确认），不要用它替用户决定；任务不在运行时 not_running，非 Kiro 后端或 Worker 未升级时 steer_unsupported。",
+     "description": "给正在运行的 Kiro 任务补充说明（D46 P5b），插入它正在进行的这一轮。只用于用户要求的纠正或补充（按用户的原意发送，"
+                    "发送后告诉用户），不要用它替用户决定；任务不在运行时 not_running，非 Kiro 后端或 Worker 未升级时 steer_unsupported。",
      "inputSchema": object_schema({"run_id": STRING, "task_id": STRING, "message": STRING},
                                   ["run_id", "task_id", "message"]),
      "annotations": {"destructiveHint": True}},
@@ -128,12 +128,6 @@ TOOLS = [
                     "只在用户明确要求时开启。新建源码的会话开启时需给出 repository 与 credential（见 octopus_publish）。",
      "inputSchema": object_schema({"run_id": STRING, "auto": {"type": "boolean"}, "repository": REPOSITORY, "credential": STRING},
                                   ["run_id", "auto"])},
-    {"name": "octopus_accept",
-     "description": "确认一个「验收待确认」（awaiting_acceptance）的 Session：Evaluator 判为需要人判断的验收项（见精简状态中 Evaluator "
-                    "任务 latest.pending）。调用前必须把这些项与证据展示给用户并得到明确同意；不同意时用 octopus_continue 返工。",
-     "inputSchema": object_schema({"run_id": STRING, "request_id": STRING, "expected_version": {"type": "integer"}},
-                                 ["run_id", "request_id", "expected_version"]),
-     "annotations": {"destructiveHint": True}},
     {"name": "octopus_continue", "description": "原 Session 修订并重跑 Task；保留 Workspace；可覆盖模型/Effort/工具与任务契约。"
                                                 "execution.verify 是你写的检查命令，默认全部为必过检查（失败即退回）；"
                                                 "可用 execution.verify_required 只列其中必过的几条，其余为建议检查（失败只记提示）。"
@@ -212,7 +206,7 @@ TOOLS += [
     {"name": "octopus_sync",
      "description": "把本机仓库在会话分支上新做的提交同步回会话（先 octopus_pull 并在 octopus/<run> 上修改、提交）：只接受快进，"
                     "工作区须已提交；平台把它作为新候选，重新运行检查，并让其后的审查 / 测试任务重新执行。note 写给审查者的说明。"
-                    "调用前把要同步的提交告诉用户并得到同意。",
+                    "同步后把同步了哪些提交告诉用户。",
      "inputSchema": object_schema({"run_id": STRING, "dir": STRING, "note": STRING})},
     {"name": "octopus_publish",
      "description": "把会话成果发布到它的源仓库：推送分支（默认 octopus/<run-id>）并创建或沿用 Draft PR（GitHub）/ Draft MR（GitLab）。"
@@ -672,13 +666,13 @@ def call(client, name, args):
     if name == "octopus_publish_policy":   # D47
         return client.request("POST", "/v1/runs/" + quote(args["run_id"], safe="") + "/publish-policy",
                               {k: args[k] for k in ("auto", "repository", "credential") if k in args})
-    if name in {"octopus_continue", "octopus_recover", "octopus_control", "octopus_accept"}:
+    if name in {"octopus_continue", "octopus_recover", "octopus_control"}:
         rid = args.pop("run_id")
         if name == "octopus_continue" and "credentials" in args:
             # A Session stopped on its credential: change (or remove) it first, then continue (D35 §4).
             client.request("POST", "/v1/runs/" + quote(rid, safe="") + "/credentials", {"source": args.pop("credentials").get("source")})
         action = args.pop("action") if name == "octopus_control" else name.removeprefix("octopus_")
-        if action not in {"continue", "recover", "stop", "close", "reopen", "delete", "accept"}:
+        if action not in {"continue", "recover", "stop", "close", "reopen", "delete"}:
             raise ValueError("Invalid action")
         return client.request("POST", "/v1/runs/" + rid + "/" + action, args)
     if name in ADMIN:

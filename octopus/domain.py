@@ -349,15 +349,29 @@ def confirm_plan(db, rid, who, actor, via):
 
 
 def release_confirmations(db, skip=()):
-    """D70 (owner 2026-10-22): no plan waits for confirmation any more. A Session an earlier version left in 「计划待确认」
-    starts as if confirmed — by the platform — once, here."""
-    rows = db.execute("SELECT id FROM runs WHERE status='awaiting_confirmation' AND lifecycle='open'").fetchall()
+    """No Session waits for a person any more (owner 2026-10-22). One an earlier version left in 「计划待确认」 starts as if
+    confirmed — by the platform (D70); one left in 「验收待确认」 has what its Evaluator left pending accepted as a warning
+    (D71). Once, here."""
+    rows = db.execute("SELECT id,status FROM runs WHERE status IN ('awaiting_confirmation','awaiting_acceptance') "
+                      "AND lifecycle='open'").fetchall()
     for row in rows:
         if row["id"] in skip:
             continue
-        confirm_plan(db, row["id"], journal.ENGINE, {"username": "platform"}, "platform")
+        if row["status"] == "awaiting_confirmation":
+            confirm_plan(db, row["id"], journal.ENGINE, {"username": "platform"}, "platform")
+            reason = "计划确认已取消，直接开始（D70）"
+        else:
+            for task in db.execute("SELECT * FROM tasks WHERE run_id=? AND status='awaiting_acceptance'", (row["id"],)).fetchall():
+                attempt = db.execute("SELECT * FROM attempts WHERE id=?", (task["current_attempt"],)).fetchone()
+                if attempt is not None:
+                    evidence = json.loads(attempt["evidence"] or "{}")
+                    evidence["evaluation"] = {**(evidence.get("evaluation") or {}), "automatic": True, "accepted_at": time.time()}
+                    journal.change(db, "attempts", attempt["id"], journal.ENGINE, "attempt.state", "验收确认已取消，按提示记录（D71）",
+                                   status="accepted", evidence=dumps(evidence), updated=time.time())
+                journal.change(db, "tasks", (row["id"], task["id"]), journal.ENGINE, "task.state", status="accepted")
+            reason = "验收确认已取消，待人判断的项记为提示（D71）"
         restart_budget(db, row["id"], journal.ENGINE)
-        journal.change(db, "runs", row["id"], journal.ENGINE, "run.state", "计划确认已取消，直接开始（D70）",
+        journal.change(db, "runs", row["id"], journal.ENGINE, "run.state", reason,
                        desired="active", status="ready", error=None, updated=time.time())
 
 
@@ -586,9 +600,8 @@ def _probe(config):
 
 
 class Service:
-    def __init__(self, database, default_acceptance="auto"):
+    def __init__(self, database):
         self.db = database
-        self.default_acceptance = default_acceptance   # D68: the Evaluator's pending items are warnings unless confirm
         self._opened, self._opened_lock = {}, threading.Lock()   # remote preview opening links already followed
         from .credentials import CredentialStore
         self.credentials = CredentialStore(database)   # D35; the server sets its key file
@@ -1110,9 +1123,8 @@ class Service:
                             "match_mode": resolved["mode"], "match_reason": resolved["reason"]}
                 snapshot.update(recovery=policy(body.get("recovery")) if design is None else policy({"enabled": False}),
                                 execution_contract=4 if design is None else 1)   # D46 P3: the Evaluator gate
-                if design is None:   # D70: every Session starts once planned; D68: acceptance as the platform was set
-                    snapshot.update(admission="auto", admission_basis={"mode": "auto", "basis": "default"},
-                                    acceptance=self.default_acceptance)
+                if design is None:   # D70: every Session starts once planned
+                    snapshot.update(admission="auto", admission_basis={"mode": "auto", "basis": "default"})
                 if "publish" in body:   # D47: the user's own word on publishing comes first
                     snapshot["publish_policy"] = {**publish_policy(body["publish"]), "source": "user"}
                 if bound:
@@ -2379,14 +2391,8 @@ class Service:
             return {"title": "发布到新仓库待确认", "detail": f"需求要求新建仓库 {name}，平台不会自动创建。",
                     "action": "在会话页核对 owner、仓库名与凭证后点「新建仓库并发布」；Coding Agent 经用户同意后用 octopus_publish "
                               "（repository、credential）。", "task_id": None}
-        if run["status"] == "awaiting_acceptance":   # D46 P3
-            task = next((t for t in run["tasks"] if t["status"] == "awaiting_acceptance"), None)
-            pending = ((((task or {}).get("attempts") or [{}])[-1].get("evidence") or {}).get("evaluation") or {}).get("pending") or []
-            return {"title": "验收待确认",
-                    "detail": "Evaluator 判为需要人判断：" + "；".join(f"{p['item']}（{p['evidence']}）" for p in pending[:5]),
-                    "action": "核对后在会话页点「确认通过」；不通过就点「不通过，返工…」，把这些验收项交回被审查的任务重做。"
-                              "Coding Agent 经用户同意后用 octopus_accept，返工用 octopus_continue。",
-                    "task_id": task["id"] if task else None}
+        if run["status"] == "awaiting_acceptance":   # D71: an earlier version's wait, until the Engine accepts it
+            return {"title": "即将继续", "detail": "验收确认已取消，待人判断的项记为提示。", "action": "无需操作。", "task_id": None}
         if run["status"] == "awaiting_confirmation":   # D70: an earlier version's wait, until the Engine starts it
             return {"title": "即将开始", "detail": "计划确认已取消，平台正在直接开始。", "action": "无需操作。", "task_id": None}
         if run["status"] == "diagnosing":
@@ -2458,7 +2464,7 @@ class Service:
                 "task_name": task["spec"]["name"] if task else None}
 
     def operate(self, actor, rid, action, body):
-        require(action in {"continue", "recover", "stop", "close", "reopen", "delete", "assign-worker", "accept"},
+        require(action in {"continue", "recover", "stop", "close", "reopen", "delete", "assign-worker"},
                 "不支持的操作")
         with self.db.transaction() as db:
             # D64: a collaborator does what an ordinary Team member does, except move the Session to another environment
@@ -2468,7 +2474,7 @@ class Service:
                 oversight = False
             except Error:
                 oversight = True   # allowed only as an elevated admin (A2): audited
-            if run["team_id"] and action in {"continue", "recover", "reopen", "assign-worker", "accept"}:
+            if run["team_id"] and action in {"continue", "recover", "reopen", "assign-worker"}:
                 active_team(db, run["team_id"])   # an archived Team's Sessions stay readable and stoppable (P3)
             if action in {"continue", "recover"}:
                 instruct = directs(db, actor, run)
@@ -2569,8 +2575,6 @@ class Service:
                                       (rid,)).fetchone()
                     attempt = db.execute("SELECT * FROM attempts WHERE id=?", (task["current_attempt"],)).fetchone() if task else None
                     require(attempt is not None, "尚无可诊断的失败执行；请补充输入并重跑", 409, "not_attempted")
-                    require(task["status"] != "awaiting_acceptance",   # D46 P3: nothing failed, a person is to judge
-                            "Evaluator 留下的验收项等待人确认，没有可诊断的失败：请续作返工，或重新运行后确认验收", 409, "awaiting_acceptance")
                     snapshot = json.loads(run["snapshot"])
                     old = snapshot.get("execution_contract", 1)
                     snapshot["execution_contract"] = max(old, 2)
@@ -2596,22 +2600,6 @@ class Service:
                         fields.update(worker_id=body["worker_id"], native_parent=None, workspace=None, status="preparing", error=None)
                     else:
                         fields.update(worker_id=body["worker_id"], status="ready" if run["native_parent"] else "preparing", error=None)
-                elif action == "accept":   # D46 P3: the person's word on what the Evaluator left pending
-                    require(may_publish(db, actor, run), "只有会话创建者、Team owner 或管理员可以确认验收", 403, "forbidden")
-                    require(run["status"] == "awaiting_acceptance" and run["lifecycle"] == "open",
-                            "此 Session 不在等待验收确认", 409, "invalid_state")
-                    task = db.execute("SELECT * FROM tasks WHERE run_id=? AND status='awaiting_acceptance' ORDER BY ordinal LIMIT 1",
-                                      (rid,)).fetchone()
-                    require(task is not None and task["current_attempt"], "没有待确认的验收", 409, "invalid_state")
-                    attempt = db.execute("SELECT * FROM attempts WHERE id=?", (task["current_attempt"],)).fetchone()
-                    evidence = json.loads(attempt["evidence"] or "{}")
-                    evidence["evaluation"] = {**(evidence.get("evaluation") or {}), "accepted_at": time.time(),
-                                              "accepted_by": {"id": actor["id"], "username": actor.get("username")}}
-                    journal.change(db, "attempts", attempt["id"], who, "run.accepted", status="accepted", evidence=dumps(evidence),
-                                   updated=time.time())
-                    journal.change(db, "tasks", (rid, task["id"]), who, "task.state", status="accepted")
-                    restart_budget(db, rid, who)   # the person's word allows the automatic work from here (as confirm)
-                    fields.update(desired="active", status="ready", error=None)
                 elif action == "reopen":
                     require(run["lifecycle"] == "closed", "只有已关闭的 Session 可重新打开", 409, "invalid_state")
                     fields.update(desired="reopen", status="reopening")

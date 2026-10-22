@@ -1,5 +1,5 @@
 import {
-  CircleStop, Copy, Download, Eye, ExternalLink, FolderDown, ListRestart, MonitorPlay, MoreHorizontal, Play, Power, RotateCcw, Stethoscope,
+  CircleStop, Copy, Download, Eye, ExternalLink, FolderDown, ListRestart, MonitorPlay, MoreHorizontal, Power, RotateCcw, Stethoscope,
   Share2,
   Trash2,
   UserCog,
@@ -34,7 +34,7 @@ import { bindingLabel } from "@/lib/credentials";
 import { usageLine } from "@/lib/usage";
 import { clientLabel } from "@/lib/policies";
 import {
-  canContinue, canDelete, canRecover, canStop, closeAction, crewEntryReason, deleteReason, directReason, resumeReason, rework,
+  canContinue, canDelete, canRecover, canStop, closeAction, crewEntryReason, deleteReason, directReason, resumeReason,
   shareAccess, statusText,
 } from "@/lib/session";
 
@@ -192,22 +192,6 @@ export function SessionView({ id }: { id: string }) {
         )}
       </header>
 
-      {run.status === "awaiting_acceptance" && (
-        <Alert id="accept-notice" className="border-warning/30 bg-warning/5">
-          <AlertTitle id="accept-notice-title">{run.attention?.title ?? "验收待确认"}</AlertTitle>
-          <AlertDescription className="flex flex-wrap items-center gap-3">
-            <span>{[run.attention?.detail, run.attention?.action].filter(Boolean).join(" ")}</span>
-            <Button size="sm" onClick={actions.accept} id="run-accept"
-              disabled={!!actions.busy || run.permissions?.publish === false || !!resumeReason(run)}>
-              <Play /> 确认通过
-            </Button>
-            <Button size="sm" variant="outline" onClick={() => open({ kind: "continue", run, ...rework(run) })} id="run-rework"
-              disabled={!!actions.busy || !canContinue(run)}>
-              <RotateCcw /> 不通过，返工…
-            </Button>
-          </AlertDescription>
-        </Alert>
-      )}
       {run.attention && run.status !== "waiting_worker" && run.status !== "awaiting_confirmation"
         && run.status !== "awaiting_acceptance" && (
         <Alert variant="destructive" id="run-attention" className="border-destructive/30 bg-destructive/5">

@@ -1279,7 +1279,7 @@ class Engine:
                     return self.update(rid, "running", actor=journal.WORKER)
             if not error and gated and evaluation.applies(snapshot, spec, config):   # D46 P3: the Evaluator's verdicts
                 error, pending = evaluation.verdicts(spec, report)
-                automatic = pending and not error and snapshot.get("acceptance") == "auto"   # D68: no one is asked again
+                automatic = bool(pending) and not error   # D71: what it leaves to a person is a warning, never a wait
                 evidence["gates"].append(gates.record(
                     "evaluated", "fail" if error else "warn" if automatic else "pass",
                     error or ("Evaluator 判为待人确认，按平台设置自动通过（不需要人工确认）：" + "；".join(
@@ -1303,9 +1303,6 @@ class Engine:
             state = "blocked" if error else "accepted"
             if state == "accepted" and invalid and knowledge.platform(snapshot, task["id"]):
                 evidence["knowledge_skipped"] = invalid   # D57 §4: accepted with the warning, but its list cannot be read
-            if state == "accepted" and (evidence.get("evaluation") or {}).get("pending") \
-                    and not evidence["evaluation"].get("automatic"):
-                state = "awaiting_acceptance"   # D46 P3: what the Evaluator left to a person (unless D68's automatic)
         with self.db.transaction() as db:
             current = db.execute("SELECT * FROM tasks WHERE run_id=? AND id=?", (rid, task["id"])).fetchone()
             # Old observations cannot complete a newly retried task.
@@ -1384,9 +1381,6 @@ class Engine:
                                status="dispatching", current_attempt=aid)
             elif current["current_attempt"] == attempt["id"] and active:
                 journal.change(db, "tasks", (rid, task["id"]), journal.WORKER, "task.state", status=state)
-                if state == "awaiting_acceptance":
-                    journal.record(db, rid, "run.awaiting_acceptance", journal.ENGINE, "验收待确认",
-                                   pending=len(evidence["evaluation"]["pending"]))
         if design_fix:
             return self.update(rid, "ready", None, reason="推荐未通过平台校验，自动请 KiroCrew 修正一次")
         if retry:

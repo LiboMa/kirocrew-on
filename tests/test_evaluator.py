@@ -17,7 +17,6 @@ CAPABILITIES = {"role_cards": True, "tools": {"kiro": {"available": True}, "clau
 class EvaluatorCase(ConfirmationCase):
     def setUp(self):
         super().setUp()
-        self.service.default_acceptance = "confirm"   # D68: these exercise the 「验收待确认」 path a platform can keep
         with self.db.transaction() as db:   # a Worker with role cards: the Evaluator gate applies
             db.execute("UPDATE workers SET config=? WHERE id='worker'",
                        (dumps({"url": "fixture", "token": "fixture", "capabilities": CAPABILITIES}),))
@@ -84,57 +83,41 @@ class RevisionTests(EvaluatorCase):
         self.assertEqual([t["id"] for t in diff["tasks"] if t["status"] == "added"], [])
 
 class AcceptanceTests(EvaluatorCase):
+    """D71 (owner 2026-10-22, gates retrospective): what the Evaluator leaves to a person is a warning; no Session waits
+    in 「验收待确认」 and there is nothing to accept."""
     def setUp(self):
         super().setUp()
         self.verdicts = [[{"item": "登录成功", "result": "pass", "evidence": "curl 200"},
                           {"item": "错误密码提示", "result": "pending", "evidence": "文案需产品确认"}]]
 
-    def accept(self, rid, version, request="accept-fixture-1"):
-        return self.service.operate(self.actor, rid, "accept", {"request_id": request, "expected_version": version})
-
-    def test_a_pending_item_waits_for_a_person_then_completes(self):
+    def test_a_pending_item_is_a_warning_and_the_session_completes(self):
         rid, run = self.run_()
-        self.assertEqual(run["status"], "awaiting_acceptance")
-        self.assertEqual(run["attention"]["title"], "验收待确认")
-        self.assertIn("错误密码提示", run["attention"]["detail"])
-        self.accept(rid, run["version"])
+        self.assertEqual(run["status"], "completed")
+        check = next(t for t in run["tasks"] if t["id"] == "check")
+        evidence = check["attempts"][-1]["evidence"]
+        self.assertTrue(evidence["evaluation"]["automatic"])
+        gate = next(g for g in evidence["gates"] if g["name"] == "evaluated")
+        self.assertEqual(gate["status"], "warn")
+        self.assertIn("错误密码提示", gate["detail"])
+
+    def test_a_session_left_waiting_for_acceptance_is_accepted_by_the_platform(self):   # an earlier version's wait
+        rid, run = self.run_()
+        check = next(t for t in run["tasks"] if t["id"] == "check")
+        with self.db.transaction() as db:
+            evidence = dict(check["attempts"][-1]["evidence"])
+            evidence["evaluation"] = {"pending": evidence["evaluation"]["pending"]}
+            db.execute("UPDATE attempts SET status='awaiting_acceptance', evidence=? WHERE id=?", (dumps(evidence), check["current_attempt"]))
+            db.execute("UPDATE tasks SET status='awaiting_acceptance' WHERE run_id=? AND id='check'", (rid,))
+            db.execute("UPDATE runs SET status='awaiting_acceptance' WHERE id=?", (rid,))
         run = self.tick(rid)
         self.assertEqual(run["status"], "completed")
         check = next(t for t in run["tasks"] if t["id"] == "check")
-        self.assertEqual(check["attempts"][-1]["evidence"]["evaluation"]["accepted_by"]["username"], "owner")
+        self.assertTrue(check["attempts"][-1]["evidence"]["evaluation"]["automatic"])
 
-    def test_only_a_waiting_session_can_be_accepted(self):
-        self.verdicts = [[{"item": "登录成功", "result": "pass", "evidence": "a"}, {"item": "错误密码提示", "result": "pass", "evidence": "b"}]]
+    def test_there_is_nothing_to_accept(self):
         rid, run = self.run_()
         with self.assertRaises(Error):
-            self.accept(rid, run["version"], "accept-fixture-2")
-
-    def test_awaiting_acceptance_can_be_stopped_or_continued(self):
-        rid, run = self.run_()
-        self.service.operate(self.actor, rid, "continue", {"request_id": "accept-fixture-3", "expected_version": run["version"],
-                                                           "task_id": "code", "input": "补上错误密码提示的文案"})
-        self.assertNotEqual(self.service.run(self.actor, rid)["status"], "awaiting_acceptance")
-
-    def test_a_rework_after_pending_reevaluates(self):
-        self.verdicts = [[{"item": "登录成功", "result": "pass", "evidence": "a"}, {"item": "错误密码提示", "result": "pending", "evidence": "b"}],
-                         [{"item": "登录成功", "result": "pass", "evidence": "a"}, {"item": "错误密码提示", "result": "pass", "evidence": "c"}]]
-        rid, run = self.run_()
-        self.service.operate(self.actor, rid, "continue", {"request_id": "accept-fixture-4", "expected_version": run["version"],
-                                                           "task_id": "code", "input": "补文案"})
-        self.assertEqual(self.tick(rid)["status"], "completed")
-
-    def test_an_archived_teams_session_cannot_accept(self):
-        with self.db.transaction() as db:
-            db.execute("INSERT INTO teams(id,name,created) VALUES('team-a','组',1)")
-            db.execute("INSERT INTO members(team_id,user_id,role) VALUES('team-a',?,'owner')", (self.actor["id"],))
-            db.execute("UPDATE workers SET owner_id=NULL, team_id='team-a'")
-        rid, run = self.run_(team_id="team-a")
-        self.assertEqual(run["status"], "awaiting_acceptance")
-        with self.db.transaction() as db:
-            db.execute("UPDATE teams SET archived=1 WHERE id='team-a'")
-        with self.assertRaises(Error) as caught:
-            self.accept(rid, run["version"], "accept-fixture-5")
-        self.assertEqual(caught.exception.code, "team_archived")
+            self.service.operate(self.actor, rid, "accept", {"request_id": "accept-fixture-1", "expected_version": run["version"]})
 
 
 class ScopeTests(ConfirmationCase):
@@ -213,28 +196,20 @@ class SurfaceTests(EvaluatorCase):
         self.verdicts = [[{"item": "登录成功", "result": "pass", "evidence": "curl 200"},
                           {"item": "错误密码提示", "result": "pending", "evidence": "文案需产品确认"}]]
 
-    def test_the_tools_accept_and_show_what_waits(self):
+    def test_the_tools_show_what_was_left_to_a_person(self):   # D71: as a warning; there is no octopus_accept
         from octopus import mcp
         rid, run = self.run_()
         view = mcp.compact_status(run, [])["session"]
         check = next(t for t in view["tasks"] if t["id"] == "check")
         self.assertEqual(check["latest"]["pending"][0]["item"], "错误密码提示")
-        seen = []
-        class Client:
-            def request(self, method, path, body):
-                seen.append((method, path))
-                return {}
-        mcp.call(Client(), "octopus_accept", {"run_id": rid, "request_id": "accept-mcp-1", "expected_version": run["version"]})
-        self.assertEqual(seen, [("POST", f"/v1/runs/{rid}/accept")])
+        self.assertNotIn("octopus_accept", {t["name"] for t in mcp.TOOLS})
 
     def test_the_report_judges_by_the_evaluator(self):
         from octopus import report
-        rid, run = self.run_()
-        self.service.operate(self.actor, rid, "accept", {"request_id": "accept-report-1", "expected_version": run["version"]})
-        view = self.tick(rid)
+        rid, view = self.run_()
         md, page = report.markdown(view), report.html(view)
         self.assertIn("## 验收（以 Evaluator 为准）", md)
-        self.assertIn("| 错误密码提示 | pending（owner 确认通过） |", md)
+        self.assertIn("| 错误密码提示 | pending（自动通过，记为提示） |", md)
         self.assertIn("<h2>验收（以 Evaluator 为准）</h2>", page)
 
 
@@ -243,20 +218,6 @@ class FinalReviewTests(EvaluatorCase):
         self.verdicts = [[{"item": "登录成功", "result": "pass", "evidence": "curl 200"},
                           {"item": "错误密码提示", "result": "pending", "evidence": "文案需产品确认"}]]
 
-    def test_a_team_member_who_is_not_the_creator_cannot_accept(self):
-        from octopus.security import authenticate, create_user, issue_token
-        with self.db.transaction() as db:
-            db.execute("INSERT INTO teams(id,name,created) VALUES('team-a','组',1)")
-            db.execute("INSERT INTO members(team_id,user_id,role) VALUES('team-a',?,'owner')", (self.actor["id"],))
-            db.execute("UPDATE workers SET owner_id=NULL, team_id='team-a'")
-            member = create_user(db, "member", "Fixture-password-123!", False)
-            db.execute("INSERT INTO members(team_id,user_id,role) VALUES('team-a',?,'member')", (member["id"],))
-            other = authenticate(db, issue_token(db, member["id"])["token"])
-        self.pending()
-        rid, run = self.run_(team_id="team-a")
-        with self.assertRaises(Error) as caught:
-            self.service.operate(other, rid, "accept", {"request_id": "accept-member-1", "expected_version": run["version"]})
-        self.assertEqual(caught.exception.code, "forbidden")
 
     def test_an_evaluator_without_items_judges_the_sessions_items(self):
         steps = [TEAM[0], {**TEAM[1], "acceptance": []}]
@@ -275,15 +236,6 @@ class FinalReviewTests(EvaluatorCase):
         self.assertIn("导出可用", added["spec"]["acceptance"])
         self.assertIn("导出可用", run["error"])   # judged: the fixture's Evaluator did not give a verdict for it
 
-    def test_the_compact_status_drops_pending_once_accepted(self):
-        from octopus import mcp
-        self.pending()
-        rid, run = self.run_()
-        self.service.operate(self.actor, rid, "accept", {"request_id": "accept-mcp-2", "expected_version": run["version"]})
-        view = mcp.compact_status(self.tick(rid), [])["session"]
-        latest = next(t for t in view["tasks"] if t["id"] == "check")["latest"]
-        self.assertNotIn("pending", latest)
-        self.assertEqual(latest["accepted_by"], "owner")
 
 
 class VerdictUnitTests(unittest.TestCase):
@@ -321,9 +273,9 @@ class ContractTests(unittest.TestCase):
         console = set(re.findall(r'"(\w+)"', re.search(r"const SETTLED = new Set\(\[(.*?)\]\)", text, re.S).group(1)))
         self.assertEqual(console, set(SETTLED))
 
-    def test_the_openapi_lists_accept(self):
+    def test_the_openapi_has_no_accept(self):   # D71
         from octopus.schema import openapi
-        self.assertIn("/v1/runs/{id}/accept", openapi()["paths"])
+        self.assertNotIn("/v1/runs/{id}/accept", openapi()["paths"])
 
 
 class BlockedPendingTests(EvaluatorCase):
@@ -345,12 +297,12 @@ class BlockedPendingTests(EvaluatorCase):
                 result["native"]["result"] = "已核对。\nBLOCKED：第二项需要产品负责人判断"
         return result
 
-    def test_a_blocked_outcome_with_only_pending_items_waits_for_a_person(self):
-        self.assertEqual(self.run_()[1]["status"], "awaiting_acceptance")
+    def test_a_blocked_outcome_with_only_pending_items_completes_with_a_warning(self):   # D71
+        self.assertEqual(self.run_()[1]["status"], "completed")
 
     def test_even_with_a_blocked_line(self):
         self.blocked_line = True
-        self.assertEqual(self.run_()[1]["status"], "awaiting_acceptance")
+        self.assertEqual(self.run_()[1]["status"], "completed")
 
     def test_a_blocked_outcome_without_pending_stays_blocked(self):
         self.verdicts = [[{"item": "登录成功", "result": "pass", "evidence": "a"}, {"item": "错误密码提示", "result": "pass", "evidence": "b"}]]
@@ -363,19 +315,6 @@ class BlockedPendingTests(EvaluatorCase):
         text = quality_instructions(Path("/w"), {"acceptance": ["A"], "role": "evaluator", "kind": "review"})
         self.assertIn("decision 写 pass", text)
         self.assertIn("decision 仍写 pass", roles.card("evaluator"))
-
-
-class StoppedAcceptanceTests(EvaluatorCase):
-    def test_a_session_waiting_for_acceptance_is_not_sent_to_diagnosis(self):
-        self.verdicts = [[{"item": "登录成功", "result": "pass", "evidence": "a"}, {"item": "错误密码提示", "result": "pending", "evidence": "b"}]]
-        rid, run = self.run_()
-        self.assertEqual(run["status"], "awaiting_acceptance")
-        self.service.operate(self.actor, rid, "stop", {"request_id": "stop-accept-1", "expected_version": run["version"]})
-        run = self.tick(rid)
-        self.assertEqual(run["status"], "stopped")
-        with self.assertRaises(Error) as caught:   # stopped, its Evaluator still waits for a person: nothing failed
-            self.service.operate(self.actor, rid, "recover", {"request_id": "recover-accept-1", "expected_version": run["version"]})
-        self.assertIn("验收", str(caught.exception))
 
 
 class SecondBatchTests(EvaluatorCase):
