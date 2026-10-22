@@ -152,6 +152,9 @@ def briefing(requirement, contract):
             text += "逐项完成并核对上述验收项；审查与测试以它们为判定依据。\n"
         if contract.get("kind") == "deliver":
             text += PREVIEW.lstrip("\n") + "\n"
+        from .phases import own
+        if own(contract) == "diverge":   # D69: its conclusion does not hold up the Session
+            text += "发散阶段：写出发现、依据与取舍，未完成项写在交接里；平台不会因本任务的结论阻断后续任务。\n"
     return text
 
 

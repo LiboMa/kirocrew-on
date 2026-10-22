@@ -43,16 +43,24 @@ def commands_line(commands):
             f"没有：{'、'.join(commands.get('missing') or []) or '无'}。verify 只用可用的命令。\n")
 
 
+# D69 / D65: the phases and the general kinds, one line each (the replan's prompt is the tighter one: its short forms)
+GENERAL_KINDS_LINE = "；一般任务用 research 调研、write 撰写"
+GENERAL_KINDS_COMPACT = " / research / write"
+PHASE_LINE = "可写 phase：diverge（发散：头脑风暴、调研、多方案，只查安全底线）/ design（设计，阶段末把关）/ converge（实现、撰写、测试、交付）；不写按 kind 推断。"
+PHASE_COMPACT = "phase：diverge 发散 / design 设计 / converge 收敛（可不写）。"
+
+
 def rules(count, depends, compact=False):
     """What every planned task carries and the gates it meets — the same for the first plan and a replan (D46);
     ``compact``: the role and skill catalogues by name only (the replan's prompt is the tighter one)."""
     from . import roles, skills
     return f"""3. 任务拆分与 Agent 映射：steps 为 {count} 个顺序任务，每个任务选择最合适的工具并写出具体 prompt；
    后续任务将在同一个 Session、同一份源码检出上依次执行。
-4. 任务契约：每个任务必须给出 kind（implement / review / test / deliver / design）、deliverables、
+4. 任务契约：每个任务必须给出 kind（implement / review / test / deliver / design{GENERAL_KINDS_COMPACT if compact else GENERAL_KINDS_LINE}）、deliverables、
    至少 1 条可检查的 acceptance（审查与测试任务的验收项取自 summary 的验收标准，不另加要求）；
    {REQUIRED_COMPACT if compact else REQUIRED}{depends}
    paths 写本任务可改动的路径，便于续作时判断哪些任务受影响。
+   {PHASE_COMPACT if compact else PHASE_LINE}
    平台会检查并记提示（不会因此退回）：test 任务新增的测试应在会话基线（实现之前的源码）上失败；后续任务若要修改此前任务
    交付的文件，应在自己的 paths 中列出这些文件。test 任务只写测试、不改实现，其 verify 不安装依赖（不写 npm install / pip install 等）；
    检查与测试生成的文件（覆盖率、报告、构建产物）应写入 .gitignore。审查与测试的结论：缺陷用 changes_requested，
@@ -75,7 +83,7 @@ def rules(count, depends, compact=False):
 def environment(models, tools, limitations, commands, compact=False):
     """The execution environment's facts, clipped so the planning prompt fits the Worker's 8000 characters (D46);
     ``compact`` for the replan, whose failure and decision take their own share."""
-    size = (450, 250, 250, 400) if compact else (700, 600, 400, 1200)   # every common command's line is under 200
+    size = (420, 250, 250, 400) if compact else (700, 600, 400, 1200)   # every common command's line is under 200; D69: 450 → 420 for the phase line
     return f"""## 此执行环境的 Coding 工具与已知限制
 {_clip(dumps(tools or {}), size[0])}
 available 为 false 的工具不要选择（需求明确指定的除外，见下；reason 为原因）；没有列出时表示执行环境未报告。

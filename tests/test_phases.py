@@ -124,5 +124,23 @@ class RequiredChecksTests(unittest.TestCase):
         self.assertIn("任务「research」的必过检查不会运行（发散阶段不运行检查命令）", " ".join(notes))
 
 
+class PromptTests(unittest.TestCase):
+    """D69 Task 3: the planner is told the phases in one line, and the kinds of general work (D65); a diverge task's
+    Agent is told its conclusion does not hold up the Session."""
+    def test_both_planning_prompts_name_the_phases_and_the_general_kinds(self):
+        from octopus import planning
+        for spec in (planning.plan_step(), planning.replan_step("replan-1", [], "失败", {"reason": "r", "instructions": "i"})):
+            with self.subTest(task=spec["id"]):
+                self.assertIn("phase：diverge", spec["prompt"])
+                self.assertIn("research", spec["prompt"])
+                self.assertIn("write", spec["prompt"])
+
+    def test_a_diverge_task_is_told_what_its_phase_means(self):
+        from octopus.worker import briefing
+        self.assertIn("发散阶段", briefing({}, {"kind": "research"}))
+        self.assertIn("发散阶段", briefing({}, {"kind": "implement", "phase": "diverge"}))
+        self.assertNotIn("发散阶段", briefing({}, {"kind": "implement"}))
+
+
 if __name__ == "__main__":
     unittest.main()
