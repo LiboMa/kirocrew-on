@@ -245,6 +245,28 @@ def baseline_restore(project, candidate):
     _git(project, "read-tree", "-u", "--reset", candidate)
 
 
+DIFF_BYTES, DIFF_LINES = 200_000, 4000   # D56: what the console shows of one candidate's diff
+
+
+def candidate_diff(project, sha, parent):
+    """What a candidate changed against ``parent`` — the candidate before it, or the Session's baseline (D56): each file's
+    line counts (all of them), and the unified diff clipped at DIFF_BYTES or DIFF_LINES. Read only; a commit the Session
+    does not have is refused (ValueError)."""
+    for commit in (sha, parent):
+        _git(project, "cat-file", "-e", commit + "^{commit}")
+    files = []
+    for record in _git_bytes(project, "diff", "--numstat", "-z", "--no-renames", parent, sha, "--").split(b"\0"):
+        parts = record.decode(errors="replace").split("\t", 2)   # "<added>\t<deleted>\t<path>", "-" for a binary file
+        if len(parts) == 3 and parts[2]:
+            added, deleted, path = parts
+            binary = added == "-"
+            files.append({"path": path, "insertions": 0 if binary else int(added), "deletions": 0 if binary else int(deleted),
+                          "binary": binary})
+    raw = _git_bytes(project, "-c", "core.quotePath=false", "diff", "--no-color", "--no-ext-diff", "--no-renames", parent, sha, "--")
+    lines = raw[:DIFF_BYTES].decode(errors="replace").splitlines(keepends=True)
+    return {"files": files, "diff": "".join(lines[:DIFF_LINES]), "truncated": len(raw) > DIFF_BYTES or len(lines) > DIFF_LINES}
+
+
 def clean_against(project, expected):
     """Whether the workspace is still ``expected`` (D37 §6, a review must not change code): HEAD, and uncommitted changes
     to tracked files outside what a download and a publish leave out."""

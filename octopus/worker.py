@@ -614,18 +614,22 @@ class Worker:
     def candidate(self, body):
         """A task's candidate commit (D37 §3, ``mode: commit``), a review's check that the workspace is still the
         candidate it reviewed (§6, ``mode: check``), or putting back what a read-only platform task changed in tracked
-        files after that candidate (D46 P4, ``mode: restore``; never moves the branch)."""
+        files after that candidate (D46 P4, ``mode: restore``; never moves the branch), or what a candidate changed
+        (D56, ``mode: diff``; read only)."""
         run = self.path(body["run_id"])
         self._undo_baseline(run)
         project, record = workspace.project_dir(run), workspace.read_record(run)
         base, branch = record.get("commit"), record.get("branch")
         require(base and branch, "此会话的项目没有 Git 基线，无法生成候选", 409, "candidate_unsupported")
         mode = body.get("mode")
-        require(mode in {"commit", "check", "restore"}, "mode 只能是 commit、check 或 restore")
+        require(mode in {"commit", "check", "restore", "diff"}, "mode 只能是 commit、check、restore 或 diff")
         for key in ("parent", "expected", "since"):
             require(body.get(key) is None or (isinstance(body[key], str) and workspace.SHA.fullmatch(body[key])),
                     f"{key} 须为完整的提交 ID")
         try:
+            if mode == "diff":
+                require(body.get("expected"), "diff 需要 expected")
+                return workspace.candidate_diff(project, body["expected"], body.get("parent") or base)
             if mode == "check":
                 require(body.get("expected"), "check 需要 expected")
                 return workspace.clean_against(project, body["expected"])

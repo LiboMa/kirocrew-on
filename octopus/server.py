@@ -765,6 +765,9 @@ def server(database, port=8918, host="127.0.0.1", allowed_hosts=(), origin_secre
                     if method == "POST":
                         return self.respond(service.create_policy(actor, body), 201)
                     return self.respond(service.policies(actor, (query.get("team_id") or [None])[-1] or None))
+                if len(segments) == 6 and segments[:2] == ["v1", "runs"] and segments[3] == "attempts" and segments[5] == "diff":
+                    require(method == "GET", "Method not allowed", 405)   # D56: what a candidate changed
+                    return self.respond(service.attempt_diff(actor, segments[2], segments[4]))
                 if segments[:2] == ["v1", "requests"] and len(segments) in {2, 3}:   # D55: submissions as made
                     require(method == "GET", "Method not allowed", 405)
                     if len(segments) == 3:

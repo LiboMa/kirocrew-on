@@ -2,7 +2,7 @@ import { useEffect, useState } from "react";
 import { useInfiniteQuery, useQuery, useQueryClient } from "@tanstack/react-query";
 import { api } from "@/api/client";
 import { followRunEvents, type StreamState } from "@/api/events";
-import type { ApprovalList, AppPreview, ChangeEntry, Credential, Environment, Me, Observation, Placement, Policy, RevisionDiff, RevisionEntry, Run, RunEvent, RunPage, Team, Template, User, Worker, Workflow } from "@/api/types";
+import type { ApprovalList, AppPreview, AttemptDiff, ChangeEntry, Credential, Environment, Me, Observation, Placement, Policy, RevisionDiff, RevisionEntry, Run, RunEvent, RunPage, Team, Template, User, Worker, Workflow } from "@/api/types";
 
 export const keys = {
   me: ["me"] as const,
@@ -20,6 +20,7 @@ export const keys = {
   credentials: ["credentials"] as const,
   policies: ["policies"] as const,
   placement: (space: string, run?: string) => ["placement", space, run ?? ""] as const,
+  diff: (run: string, attempt: string) => ["diff", run, attempt] as const,
 };
 
 const every = (ms: number) => ({ refetchInterval: ms, refetchIntervalInBackground: false });
@@ -82,6 +83,12 @@ export function useObservation(id: string | null, live: boolean, limit = 50) {
 /** The repository credentials the user may use or manage (D35); metadata only. */
 export function useCredentials(enabled = true) {
   return useQuery({ queryKey: keys.credentials, queryFn: () => api<Credential[]>("/credentials"), enabled, retry: false });
+}
+
+/** D56: what an Attempt's candidate changed, read once when its section is opened (a candidate never changes). */
+export function useAttemptDiff(run: string, attempt: string, enabled: boolean) {
+  return useQuery({ queryKey: keys.diff(run, attempt), enabled, retry: false, staleTime: Infinity,
+    queryFn: () => api<AttemptDiff>(`/runs/${encodeURIComponent(run)}/attempts/${encodeURIComponent(attempt)}/diff`) });
 }
 
 /** D55: the user's own admission rules and mapping preferences, and those of their Teams. */

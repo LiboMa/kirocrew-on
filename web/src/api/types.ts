@@ -151,6 +151,15 @@ export interface Gate {
   detail?: string;
 }
 
+/** D56: GET /v1/runs/<id>/attempts/<attempt>/diff — what the candidate changed against the one before it (or the baseline). */
+export interface AttemptDiff {
+  sha: string;
+  parent: string | null;
+  files: { path: string; insertions: number; deletions: number; binary: boolean }[];
+  diff: string;
+  truncated: boolean;
+}
+
 export interface Candidate {
   sha: string;
   parent: string;

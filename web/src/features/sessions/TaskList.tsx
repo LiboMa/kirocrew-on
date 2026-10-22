@@ -7,6 +7,7 @@ import { StatusBadge } from "@/components/StatusBadge";
 import { ROLE_LABELS, TOOLS, formatTime } from "@/lib/labels";
 import { canRetryTask } from "@/lib/session";
 import { SteerControl } from "@/features/sessions/SteerControl";
+import { AttemptDiff } from "@/features/sessions/AttemptDiff";
 
 function Meta({ label, value }: { label: string; value: string | null | undefined }) {
   return (
@@ -100,6 +101,9 @@ export function TaskList({ run, onContinue }: { run: Run; onContinue: (taskId: s
                               + `+${attempt.evidence.candidate.insertions} −${attempt.evidence.candidate.deletions}`} />
                           )}
                         </dl>
+                        {attempt.evidence.candidate?.changed && (
+                          <AttemptDiff runId={run.id} attemptId={attempt.id} candidate={attempt.evidence.candidate} />
+                        )}
                         {attempt.evidence.checks && !("check_results" in attempt.evidence) && (
                           <p className="mt-2 text-muted-foreground">正在运行检查命令（{attempt.evidence.checks.commands} 条）</p>
                         )}

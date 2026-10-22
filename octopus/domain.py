@@ -1909,6 +1909,23 @@ class Service:
             return found["role"] if found else None
         return member(db, actor["id"], team)
 
+    def attempt_diff(self, actor, rid, attempt_id):
+        """What an Attempt's candidate changed (D56): files and the clipped diff, through the Session's Worker; read with the
+        Session's own access check (and its admin audit). A candidate the secret check kept off the branch is never shown."""
+        from . import diffs
+        with self.db.read() as db:
+            run = run_access(db, actor, rid)
+            row = db.execute("SELECT evidence FROM attempts WHERE id=? AND run_id=?", (attempt_id, rid)).fetchone()
+            require(row is not None, "Attempt 不存在或无权限", 404, "not_found")
+            candidate = json.loads(row["evidence"] or "{}").get("candidate") or {}
+            require(candidate.get("sha"), "这次 Attempt 没有候选提交", 404, "no_candidate")
+            require(candidate.get("moved", True), "这个候选中有疑似凭证或 .env 文件，不显示它的改动", 409, "candidate_secret")
+            worker = db.execute("SELECT config FROM workers WHERE id=?", (run["worker_id"],)).fetchone() if run["worker_id"] else None
+            require(worker is not None, "会话没有执行环境，读不到它的改动", 409, "no_worker")
+            config = {key: value for key, value in json.loads(worker["config"]).items() if key in ("url", "token")}
+        self.audit_read(actor, rid, "diff")
+        return {**diffs.read(config, rid, attempt_id, candidate), "sha": candidate["sha"], "parent": candidate.get("parent")}
+
     @staticmethod
     def _readable(db, actor, rid, admin=True):
         try:

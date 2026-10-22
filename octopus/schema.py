@@ -155,7 +155,7 @@ def openapi():
         "/v1/runs/{id}/crew-entry": {"post": "Empty"}, "/v1/runs/{id}/preview": {"post": "Empty"},
         "/v1/runs/{id}/observe": {"get": None},
         "/v1/runs/{id}/revisions": {"get": None}, "/v1/runs/{id}/revisions/diff": {"get": None},
-        "/v1/runs/{id}/report": {"get": None},
+        "/v1/runs/{id}/report": {"get": None}, "/v1/runs/{id}/attempts/{attempt}/diff": {"get": None},
         "/v1/runs/{id}/approvals": {"get": None}, "/v1/runs/{id}/approvals/answer": {"post": "ApprovalAnswer"},
         "/v1/runs/{id}/revisions/{version}": {"get": None},
         "/v1/runs/{id}/changes": {"get": None},
@@ -293,6 +293,13 @@ def openapi():
                                      "description": "At most this many, newest first."},
                                     {"in": "query", "name": "view", "schema": {"enum": ["list"]},
                                      "description": "What a list needs: tasks by name and state, the plan without its summary."}]
+            if path == "/v1/runs/{id}/attempts/{attempt}/diff":
+                op["description"] = ("Read scope. What the Attempt's candidate changed against the one before it (or the Session's "
+                                     "baseline): files with line counts, and the unified diff clipped at 200 KB / 4000 lines "
+                                     "(truncated). 404 no_candidate; 409 candidate_secret for a candidate the secret check kept off "
+                                     "the branch, worker_outdated for an older Worker.")
+                op["parameters"].append({"in": "path", "name": "attempt", "required": True, "schema": text})
+                op["operationId"] = "get_v1_runs_id_attempts_attempt_diff"
             if path.startswith("/v1/policies"):
                 op["description"] = {
                     ("/v1/policies", "get"): "Read scope. The caller's own rules and those of their Teams (team_id: one Team's): admission rules by repository (repos host/owner/repo with *, mode auto|confirm) and mapping preferences; deletable says whether the caller may remove it.",
