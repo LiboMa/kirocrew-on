@@ -4,8 +4,8 @@ import { toast } from "sonner";
 import { api } from "@/api/client";
 import { keys, usePolicies } from "@/api/hooks";
 import type { Policy } from "@/api/types";
-import { FormDialog } from "@/components/FormDialog";
 import { NativeSelect } from "@/components/NativeSelect";
+import { Panel } from "@/components/Panel";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -36,9 +36,9 @@ function Row({ policy }: { policy: Policy }) {
   );
 }
 
-/** Settings → 映射偏好 (D55): the tools one prefers for the planner to weigh. */
-export function PoliciesDialog() {
-  const { close, me, teams, allTeams } = useConsole();
+/** 映射偏好 (D55): the tools one prefers for the planner to weigh. */
+export function PoliciesPanel() {
+  const { me, teams, allTeams } = useConsole();
   const client = useQueryClient();
   const { data: policies = [] } = usePolicies();
   const owned = elevated(me) ? allTeams : teams.filter((team) => team.role === "owner");
@@ -49,7 +49,7 @@ export function PoliciesDialog() {
   const [model, setModel] = useState("");
 
   return (
-    <FormDialog title="映射偏好" kicker="POLICIES" wide onClose={close} submitLabel="添加"
+    <Panel title="映射偏好" submitLabel="添加"
       description="新会话规划完成后直接开始，不再请人确认。映射偏好告诉 KiroCrew 规划者你希望某类任务或角色用哪个工具，规划者优先采纳、不采纳时写明理由。需求中明确指定的工具总是优先。Team 的偏好由 Team owner 维护。"
       onSubmit={async () => {
         const rule = { [by]: target, tool, ...(model.trim() ? { model: model.trim() } : {}) };
@@ -111,6 +111,6 @@ export function PoliciesDialog() {
             </div>
         </>
       </div>
-    </FormDialog>
+    </Panel>
   );
 }

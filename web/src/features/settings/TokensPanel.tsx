@@ -5,21 +5,19 @@ import { toast } from "sonner";
 import { api } from "@/api/client";
 import { keys } from "@/api/hooks";
 import type { ApiToken, IssuedToken } from "@/api/types";
-import { FormDialog } from "@/components/FormDialog";
 import { NativeSelect } from "@/components/NativeSelect";
+import { Panel } from "@/components/Panel";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
-import { useConsole } from "@/features/console/context";
 import { expiresText } from "@/lib/tokens";
 
 const SCOPES: Record<string, string[]> = { read: ["read"], execute: ["read", "execute"], manage: ["read", "execute", "manage"] };
 /** D62: how long a new token lasts. */
 const LIFETIMES = [["7d", "7 天"], ["30d", "30 天"], ["365d", "365 天"], ["never", "永不过期"]] as const;
 
-
-export function TokensDialog() {
-  const { close } = useConsole();
+/** 接入：API Token for Claude Code, Codex, Kiro CLI and other clients; a new one is shown exactly once. */
+export function TokensPanel() {
   const client = useQueryClient();
   const tokens = useQuery({ queryKey: keys.tokens, queryFn: () => api<ApiToken[]>("/tokens") });
   const [label, setLabel] = useState("");
@@ -30,7 +28,7 @@ export function TokensDialog() {
 
   if (issued) {
     return (
-      <FormDialog title="Token 已创建" kicker="API TOKEN" onClose={close}>
+      <Panel title="Token 已创建" actions={<Button type="button" variant="outline" onClick={() => setIssued(null)}>完成</Button>}>
         <p className="text-sm text-muted-foreground">仅显示这一次。将它配置到对应客户端的私有环境变量中。</p>
         <div className="flex items-center gap-2 rounded-lg border bg-muted/50 p-3">
           <code className="secret min-w-0 flex-1 font-mono text-xs break-all">{issued.token}</code>
@@ -38,12 +36,12 @@ export function TokensDialog() {
             onClick={() => navigator.clipboard?.writeText(issued.token).then(() => toast.success("已复制"))}><Copy /></Button>
         </div>
         <p className="text-xs text-muted-foreground">{expiresText(issued.expires)}，可随时撤销。</p>
-      </FormDialog>
+      </Panel>
     );
   }
 
   return (
-    <FormDialog title="API 与 Coding Agent 接入" kicker="API TOKENS" onClose={close} submitLabel="创建 API Token"
+    <Panel title="API 与 Coding Agent 接入" submitLabel="创建 API Token"
       description="为 Claude Code、Codex、Kiro CLI 等客户端各创建一枚 Token。所有请求沿用当前用户的共享权限；撤销 Token 会关闭对应状态流。"
       onSubmit={async () => {
         const result = await api<IssuedToken>("/tokens", "POST", { label: label || "Coding client", scopes: SCOPES[scope], expires_in: lifetime });
@@ -83,6 +81,6 @@ export function TokensDialog() {
           </NativeSelect>
         </div>
       </div>
-    </FormDialog>
+    </Panel>
   );
 }

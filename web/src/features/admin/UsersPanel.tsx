@@ -4,8 +4,8 @@ import { toast } from "sonner";
 import { api } from "@/api/client";
 import { keys } from "@/api/hooks";
 import type { AdminUser, UserToken, Worker } from "@/api/types";
-import { FormDialog } from "@/components/FormDialog";
 import { NativeSelect } from "@/components/NativeSelect";
+import { Panel } from "@/components/Panel";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -20,18 +20,17 @@ const environmentLabel = (w: Pick<Worker, "name" | "scope">) =>
 
 /** Platform administrators manage accounts: create, deactivate or restore, promote or demote, reset a password,
  * revoke tokens, and give a personal space the shared execution environment. */
-export function UsersDialog() {
-  const { close } = useConsole();
+export function UsersPanel() {
   const { data: users = [], error } = useQuery({ queryKey: ADMIN_USERS, queryFn: () => api<AdminUser[]>("/admin/users") });
   return (
-    <FormDialog title="用户管理" kicker="USERS" onClose={close} wide
+    <Panel title="用户"
       description="停用或重置密码会立即吊销该用户的全部 Token；平台至少保留一位有效的管理员，Team 唯一的 owner 不能被停用。">
       {error && <p className="text-sm text-destructive">{(error as Error).message}</p>}
       <CreateUser />
       <div className="space-y-2">
         {users.map((user) => <UserRow key={user.id} user={user} />)}
       </div>
-    </FormDialog>
+    </Panel>
   );
 }
 

@@ -100,13 +100,14 @@ async page => {
     await p.waitForFunction(()=>document.querySelector("#flow-list")?.textContent.includes("v2"));
     check((await p.locator("#flow-list").innerText()).includes("React 编辑后的流程"),"工作流编辑形成新版本");
 
-    await p.getByRole("button",{name:"设置"}).click();
-    await p.getByRole("menuitem",{name:/API 与 Coding Agent/}).click();
-    await dialog().getByLabel("新 Token 名称").fill("react-browser-client");
-    await dialog().getByRole("button",{name:"创建 API Token"}).click();
+    await p.getByRole("button",{name:"我的设置"}).click();
+    await p.getByRole("navigation",{name:"我的设置"}).getByRole("link",{name:/API 与 Coding Agent/}).click();
+    await p.getByLabel("新 Token 名称").fill("react-browser-client");
+    await p.getByRole("button",{name:"创建 API Token"}).click();
     await p.locator(".secret").waitFor();
     check((await p.locator(".secret").innerText()).startsWith("oct_"),"API Token 一次性显示");
-    await dialog().getByRole("button",{name:"关闭"}).click();
+    await p.getByRole("button",{name:"完成"}).click();
+    await p.getByRole("button",{name:"返回会话"}).click();
 
     await p.setViewportSize({width:390,height:844});
     await p.waitForTimeout(200);

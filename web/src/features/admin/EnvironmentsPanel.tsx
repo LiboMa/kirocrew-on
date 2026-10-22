@@ -5,8 +5,8 @@ import { X } from "lucide-react";
 import { api } from "@/api/client";
 import { keys, useEnvironments } from "@/api/hooks";
 import type { Environment, Worker } from "@/api/types";
-import { FormDialog } from "@/components/FormDialog";
 import { NativeSelect } from "@/components/NativeSelect";
+import { Panel } from "@/components/Panel";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -26,8 +26,8 @@ function health(environment: Environment) {
 }
 
 /** The single management entry for execution environments (D28): bindings, health, sharing, assignment, enabling. */
-export function WorkersDialog() {
-  const { workers, allTeams: teams, users, me, close } = useConsole();
+export function EnvironmentsPanel() {
+  const { workers, allTeams: teams, users, me } = useConsole();
   const client = useQueryClient();
   const [form, setForm] = useState({ name: "", owner: "user:" + me.id, url: "", token: "" });
   const [sharing, setSharing] = useState("");
@@ -55,7 +55,7 @@ export function WorkersDialog() {
     : teams.find((t) => t.id === w.team_id)?.name ?? users.find((u) => u.id === w.owner_id)?.username ?? "已分配空间";
 
   return (
-    <FormDialog title="执行环境 · KiroCrew Worker" kicker="WORKERS" onClose={close} submitLabel="登记 Worker"
+    <Panel title="执行环境" submitLabel="登记 Worker"
       description="每个 Worker 对应一个 KiroCrew Gateway。isolation 字段是部署声明，不能替代实际操作系统隔离。"
       onSubmit={me.admin ? async () => {
         const [kind, id] = form.owner.split(":");
@@ -170,7 +170,7 @@ export function WorkersDialog() {
           </div>
         </section>
       ) : <p className="text-sm text-muted-foreground">执行环境由管理员登记和分配。</p>}
-    </FormDialog>
+    </Panel>
   );
 }
 
