@@ -83,6 +83,7 @@ def append(db, rid, run, scope, config):
     """Add the Knowledge task a code-changing Session lacks (R3); returns its id, or None when none is added."""
     from . import journal
     from .db import dumps
+    from .planning import replans
     snapshot = json.loads(run["snapshot"])
     added = (snapshot.get("knowledge_added") or {}).get("tasks") or []
     rows = [dict(r) for r in db.execute("SELECT id, ordinal, spec FROM tasks WHERE run_id=? ORDER BY ordinal", (rid,))]
@@ -92,7 +93,7 @@ def append(db, rid, run, scope, config):
             or not key(json.loads(run["source"]), space(run)):
         return None
     ids = {r["id"] for r in rows} | {r[0] for r in db.execute("SELECT DISTINCT task_id FROM attempts WHERE run_id=?", (rid,))} \
-        | {t.get("id") for t in (snapshot.get("replan") or {}).get("replaced") or []}   # never an id used before
+        | {t.get("id") for plan in replans(snapshot) for t in plan.get("replaced") or []}   # never an id used before
     tid = next(name for name in ["knowledge", *(f"knowledge-{n}" for n in range(2, 100))] if name not in ids)
     spec = {"id": tid, "name": "Knowledge 沉淀", "tool": tool, "model": "auto", "effort": "", "prompt": PROMPT,
             "kind": "design", "role": ROLE, "acceptance": [ITEM]}

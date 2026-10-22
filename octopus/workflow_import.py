@@ -67,13 +67,42 @@ def requested_of(value, index, notes):
     return clean
 
 
+def required_of(item, label, notes):
+    """The planner's required checks and the requirement's words for them (D57 §5.1), as far as they name its own checks:
+    a quote marks its check too; anything else is dropped with a note rather than sinking the plan. ``planning.expand``
+    keeps only those whose quote is the requirement's."""
+    verify = [x.strip() for x in item.get("verify") or [] if isinstance(x, str)] if isinstance(item.get("verify"), list) else []
+    marked, quoted = item.get("verify_required"), item.get("verify_basis")
+    if marked is not None and not (isinstance(marked, list) and all(isinstance(x, str) for x in marked)):
+        notes.append(f"任务{label}：verify_required 不是命令列表，已忽略")
+        marked = []
+    if quoted is not None and not isinstance(quoted, dict):
+        notes.append(f"任务{label}：verify_basis 不是 {{命令: 需求原文片段}}，已忽略")
+        quoted = {}
+    basis = {}
+    for command, quote in (quoted or {}).items():
+        command = str(command).strip()   # a YAML key may be a number
+        if command not in verify or not isinstance(quote, str) or not quote.strip():
+            notes.append(f"任务{label}：verify_basis 中的「{command[:80]}」不是本任务的检查命令或没有原文，已忽略")
+        else:
+            basis[command] = quote.strip()[:200]
+    required = []
+    for command in [*(marked or []), *basis]:
+        if command.strip() not in verify:
+            notes.append(f"任务{label}：必过检查「{command[:80]}」不在本任务的 verify 中，已忽略")
+        elif command.strip() not in required:
+            required.append(command.strip())
+    return required, basis
+
+
 def normalize(raw, notes, known=(), planned=False):
     require(isinstance(raw, list), "工作流需要 steps 任务列表")
     require(1 <= len(raw) <= 8, "流程须包含 1–8 个顺序任务")
     seen, result, renamed = set(), [], {}
     for index, item in enumerate(raw, 1):
         require(isinstance(item, dict), f"第 {index} 个任务不是对象")
-        used = {"id", "model", "effort", "requested", *CONTRACT} | {key for keys in FIELD_ALIASES.values() for key in keys}
+        used = {"id", "model", "effort", "requested", *CONTRACT, *(("verify_basis",) if planned else ())} | \
+            {key for keys in FIELD_ALIASES.values() for key in keys}
         picked = {field: next((item[key] for key in keys if item.get(key) not in (None, "")), None)
                   for field, keys in FIELD_ALIASES.items()}
         ignored = sorted(set(item) - used)
@@ -100,6 +129,10 @@ def normalize(raw, notes, known=(), planned=False):
             if role not in roles.KINDS or role in roles.PLATFORM or (kind is not None and kind not in roles.KINDS[role]):
                 notes.append(f"任务「{picked['name'] or index}」的角色 {role!r} 无效或与类别 {kind} 不相容，已忽略")
                 del contract["role"]
+        if planned and ("verify_required" in contract or "verify_basis" in item):   # D57: never sinks a plan either
+            contract["verify_required"], basis = required_of(item, f"「{picked['name']}」" if picked["name"] else f" {index}", notes)
+            if basis:
+                contract["verify_basis"] = basis
         if planned and "skills" in contract:   # D50: what the planner named outside the pack never sinks a plan
             from . import skills as pack
             named = contract.pop("skills")

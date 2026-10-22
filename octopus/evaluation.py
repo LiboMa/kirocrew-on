@@ -99,12 +99,13 @@ def append(db, rid, snapshot, config):
     """Add the Evaluator a code-changing Session lacks (D46 P3 R2); returns its id, or None when none is needed."""
     from . import journal
     from .db import dumps
+    from .planning import replans
     rows = [dict(r) for r in db.execute("SELECT id, ordinal, spec FROM tasks WHERE run_id=? ORDER BY ordinal", (rid,))]
     tasks = [json.loads(r["spec"]) for r in rows]
     if not needed(tasks, snapshot, config):
         return None
     ids = {r["id"] for r in rows} | {r[0] for r in db.execute("SELECT DISTINCT task_id FROM attempts WHERE run_id=?", (rid,))} \
-        | {t.get("id") for t in (snapshot.get("replan") or {}).get("replaced") or []}   # never an id used before
+        | {t.get("id") for plan in replans(snapshot) for t in plan.get("replaced") or []}   # never an id used before
     tid = next(name for name in ["evaluator", *(f"evaluator-{n}" for n in range(2, 100))] if name not in ids)
     items = _items(tasks)
     tool, independent = _tool(tasks, config)

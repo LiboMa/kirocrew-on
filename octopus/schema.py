@@ -20,10 +20,13 @@ def openapi():
     contract = {"kind": {"enum": ["implement", "review", "test", "deliver", "design"]}, "role": {"enum": list(roles.KINDS)},
                 "deliverables": listed(20),
                 "acceptance": listed(20), "verify": listed(10), "depends_on": listed(8), "paths": listed(20),
-                "skills": {"type": "array", "items": {"enum": list(skills.CATALOG)}, "maxItems": skills.LIMIT}}
+                "skills": {"type": "array", "items": {"enum": list(skills.CATALOG)}, "maxItems": skills.LIMIT},
+                # D57 §5: those of verify that must pass; omitted, every check a person writes must pass
+                "verify_required": {**listed(10), "description": "Checks of verify (by their text) that must pass; the "
+                                    "others only report a warning. Omitted in steps or a continue's verify: all of them."}}
     schemas = {
         "Step": obj({"id": text, "name": text, **execution, **contract}, ["id", "name", "tool", "prompt"]),
-        "Execution": obj({"name": text, **execution}),
+        "Execution": obj({"name": text, **execution, **contract}),   # a continue may change the task contract too
         "Source": obj({"type": {"enum": ["new", "git"]}, "url": text, "ref": text}, ["type"]),
         "Login": obj({"username": text, "password": {"type": "string", "format": "password"}}, ["username", "password"]),
         "User": obj({"username": text, "password": {"type": "string", "format": "password"}, "admin": {"type": "boolean"},
@@ -106,9 +109,16 @@ def openapi():
                          "recovery": ref("RecoveryPolicy"), "rerun": {"type": "array", "items": text, "maxItems": 8}},
                         ["request_id", "expected_version", "task_id"]),
         "Control": obj({**command, "confirmation": text}, ["request_id", "expected_version"]),
+        # D57 §6.2: after two diagnoses of the same failure waited for the user, only rediagnose starts another
+        "Recover": obj({**command, "rediagnose": {"type": "boolean"}}, ["request_id", "expected_version"]),
         "AssignWorker": obj({**command, "worker_id": text}, ["request_id", "expected_version", "worker_id"]),
         "Empty": obj({}), "Error": obj({"error": text, "code": text}, ["error", "code"]),
     }
+    schemas["Recover"]["description"] = ("Execute scope. Starts a Coordinator diagnosis of the Session's failed task. When the "
+                                         "last two diagnoses of that task, failing on the same gate, waited for the user (counted "
+                                         "since the latest continue or since the task last passed), it is refused with 409 "
+                                         "already_waiting and the last diagnosis's reason and instructions; rediagnose: true "
+                                         "starts one anyway.")
     schemas["Resolve"]["description"] = "Read-only preview. Explicit workflow_id, template_id or steps wins. If omitted, match permitted workflows/templates using explainable rules. No native tasks or workspace are created."
     schemas["Design"]["description"] = "Execute scope. Starts a real Kiro workflow-design task via the chosen Worker and native ACP. Only recommends; does not run or save the recommended workflow. Poll /designs/{id}, then adopt and edit config.steps."
     schemas["WorkflowDocument"]["description"] = "A workflow generated ahead of time (console export, legacy schema 1 or a bare step list) as JSON, YAML or Markdown with one code block. Parsed and normalized by code; /workflows/parse previews the result and its notes."
@@ -171,7 +181,7 @@ def openapi():
         "/v1/runs/{id}/archive": {"post": "Empty"},
         "/v1/runs/{id}/credentials": {"post": "Rebind"},
         "/v1/runs/{id}/app": {"get": None, "post": "AppAction"}, "/v1/runs/{id}/app/open": {"post": "Empty"},
-        "/v1/runs/{id}/recover": {"post": "Control"},
+        "/v1/runs/{id}/recover": {"post": "Recover"},
         "/v1/runs/{id}/confirm": {"post": "Control"}, "/v1/runs/{id}/accept": {"post": "Control"},
         "/v1/runs/{id}/publish": {"post": "Publish"},
         "/v1/runs/{id}/publish-policy": {"post": "PublishPolicy"},

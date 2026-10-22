@@ -27,7 +27,7 @@ from . import gateway_client as crew_api
 from . import skills as pack
 from . import sources as workspace
 from .db import dumps
-from .domain import CONTRACT, steps
+from .domain import CONTRACT, runs_checks, steps
 from .security import Error, require
 
 
@@ -139,7 +139,7 @@ def briefing(requirement, contract):
             text += "意图：" + requirement["intent"] + "\n"
         text += requirement.get("summary", "")
     if contract:
-        checks = ("建议的检查命令（平台不运行）" if contract.get("kind") in {"review", "design"}
+        checks = ("建议的检查命令（平台不运行）" if not runs_checks(contract)
                   else "检查命令（任务结束后平台运行，须通过）")   # D46: say whether the platform runs them
         labels = (("deliverables", "交付物"), ("acceptance", "验收项"), ("verify", checks), ("paths", "可改动路径"))
         from . import roles

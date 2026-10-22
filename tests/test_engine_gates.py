@@ -31,7 +31,7 @@ class FakeWorker:
         self.verify = [{"state": "running", "passed": None, "failed": None, "results": []},
                        {"state": "done", "passed": True, "failed": None,
                         "results": [{"command": "npm test", "exit": 0, "seconds": 1.0, "tail": "ok"}]}]
-        self.outcomes = {}
+        self.outcomes, self.results = {}, {}   # results: a task's native result (the planner's plan)
 
     def __call__(self, config, path, body=None, **kwargs):
         self.calls.append((path, body))
@@ -43,8 +43,9 @@ class FakeWorker:
         if path == "/inspect":
             task = self.dispatched[body["attempt_id"]]["spec"]["id"]
             outcome = self.outcomes.get(task, {"decision": "pass", "summary": "完成"})
-            return {"status": "running", "native": {"done": True, "result": "完成", "error": ""},
-                    "evidence": {"actual_backend": "claude"}, "handoff": "交接", "outcome": dumps(outcome)}
+            return {"status": "running", "native": {"done": True, "result": self.results.get(task, "完成"), "error": ""},
+                    "evidence": {"actual_backend": "kiro" if task == "plan" else "claude"}, "handoff": "交接",
+                    "outcome": dumps(outcome)}
         if path == "/candidate":
             return {"commit": self.candidate, "rewind": self.rewind}.get(body["mode"], self.check)(body)
         if path == "/verify/start":
@@ -121,17 +122,132 @@ class EngineGateTests(TeamsWorkersCase):
         self.assertNotEqual(status, "diagnosing")
         self.assertEqual((status, recoveries), ("completed", 0))
 
-    def test_failing_checks_send_the_task_back_through_recovery(self):
+    def test_a_failing_required_check_still_goes_to_recovery(self):   # D57 §5: the checks the user wrote must pass
         worker, rid = FakeWorker(), self.session([IMPLEMENT], recovery=True)
         worker.verify = [{"state": "done", "passed": False, "failed": 0,
-                          "results": [{"command": "npm test", "exit": 1, "seconds": 2.0, "tail": "1 failing"}]}]
+                          "results": [{"command": "npm test", "exit": 1, "seconds": 2.0, "tail": "1 failing", "unrunnable": None}]}]
         self.run_engine(worker, ticks=5)
         attempt, evidence = self.attempt(rid, "code")
-        self.assertEqual((evidence["failure_type"], evidence["gate"]), ("gate", "checks_pass"))
-        self.assertIn("npm test", attempt["error"])
+        self.assertEqual(json.loads(attempt["spec"])["verify_required"], ["npm test"])   # steps given by the user
+        self.assertEqual((attempt["status"], evidence["failure_type"], evidence["gate"]), ("blocked", "gate", "checks_pass"))
+        self.assertEqual(attempt["error"], "检查命令失败：npm test（退出码 1）")
+        self.assertEqual(self.gates(evidence)["checks_pass"], "fail")
         with self.db.read() as db:
             context = json.loads(db.execute("SELECT context FROM recoveries WHERE run_id=?", (rid,)).fetchone()["context"])
         self.assertEqual(context["evidence"]["check_results"][0]["tail"], "1 failing")
+
+    def planned(self, step, request="start-0000000077"):
+        """An agent-planned Session whose plan has ``step`` after the KiroCrew planner's task (D57: the planner's checks)."""
+        worker = FakeWorker()
+        worker.results["plan"] = "```json\n" + dumps({"intent": "实现", "summary": "实现", "name": "计划", "steps": [step]}) + "\n```"
+        rid = self.service.start(self.c, {"request_id": request, "input": "研发需求与真实验证", "source": {"type": "new"},
+                                          "team_id": "team-p", "recovery": {"enabled": True, "max_cycles": 2}})["id"]
+        return worker, rid
+
+    def checks_gate(self, evidence):
+        return next(g for g in evidence["gates"] if g["name"] == "checks_pass")
+
+    def no_recovery(self, rid):
+        with self.db.read() as db:
+            return not db.execute("SELECT 1 FROM recoveries WHERE run_id=?", (rid,)).fetchone()
+
+    def test_a_failing_advisory_check_is_a_warning(self):   # D57 §5: a check the planner wrote on its own only reports
+        check = "python3 -m pytest tests/ -q -k 'not slow' --maxfail=1 --disable-warnings -p no:cacheprovider --tb=short -x"
+        worker, rid = self.planned({**IMPLEMENT, "verify": [check]})
+        worker.verify = [{"state": "done", "passed": False, "failed": 0,
+                          "results": [{"command": check, "exit": 1, "seconds": 2.0, "tail": "1 failed", "unrunnable": None}]}]
+        self.run_engine(worker, ticks=16)
+        attempt, evidence = self.attempt(rid, "code")
+        spec = json.loads(attempt["spec"])
+        self.assertEqual((spec["origin"], spec["verify_required"]), ("planner", []))
+        self.assertEqual(attempt["status"], "accepted")
+        gate = self.checks_gate(evidence)
+        self.assertEqual((gate["status"], gate["detail"]), ("warn", f"建议检查未通过：{check[:80]}（退出码 1）"))
+        self.assertGreater(len(check), 80)
+        self.assertIn("checks_pass", [w["name"] for w in evidence["warnings"]])
+        self.assertNotIn("gate", evidence)
+        self.assertTrue(self.no_recovery(rid))
+
+    def test_an_unrunnable_required_check_is_a_warning(self):   # D57 §5.4: the environment's failure never blocks
+        cases = (("recorded", {"tail": "bash: line 1: pytest: command not found", "unrunnable": "命令不存在：pytest"}),
+                 ("older worker", {"tail": "bash: line 1: pytest: command not found"}),   # judged from the output
+                 ("no output", {"tail": ""}))
+        for number, (name, result) in enumerate(cases):
+            with self.subTest(name):
+                worker = FakeWorker()
+                rid = self.session([{**IMPLEMENT, "verify": ["pytest -q"]}], recovery=True, request="start-%016d" % (40 + number))
+                worker.verify = [{"state": "done", "passed": False, "failed": 0,
+                                  "results": [{"command": "pytest -q", "exit": 127, "seconds": 0.1, **result}]}]
+                self.run_engine(worker, ticks=8)
+                attempt, evidence = self.attempt(rid, "code")
+                self.assertEqual(json.loads(attempt["spec"])["verify_required"], ["pytest -q"])
+                self.assertEqual(attempt["status"], "accepted")
+                gate = self.checks_gate(evidence)
+                self.assertEqual(gate["status"], "warn")
+                self.assertTrue(gate["detail"].startswith("无法执行（环境）："), gate["detail"])
+                self.assertIn("请确认环境，或把这条检查改写成可执行的形式", gate["detail"])
+                self.assertIn("命令不存在", gate["detail"])
+                self.assertTrue(self.no_recovery(rid))
+
+    def test_a_required_check_is_known_by_its_text_not_its_position(self):
+        # the required ones listed in another order than the checks run in (a verify_fixes may reorder them, D57)
+        step = {**IMPLEMENT, "verify": ["npm run lint", "npm test", "npm run e2e"], "verify_required": ["npm run e2e", "npm test"]}
+        cases = (("advisory fails", (1, 0, 0), "warn", "建议检查未通过：npm run lint（退出码 1）"),
+                 ("required fails", (0, 0, 2), "fail", "检查命令失败：npm run e2e（退出码 2）"),
+                 ("both fail", (1, 3, 0), "fail", "检查命令失败：npm test（退出码 3）"))
+        for number, (name, exits, status, detail) in enumerate(cases):
+            with self.subTest(name):
+                worker = FakeWorker()
+                rid = self.session([step], recovery=True, request="start-%016d" % (50 + number))
+                results = [{"command": c, "exit": e, "seconds": 1.0, "tail": "", **({"unrunnable": None} if e else {})}
+                           for c, e in zip(step["verify"], exits)]
+                worker.verify = [{"state": "done", "passed": False, "failed": exits.index(next(e for e in exits if e)),
+                                  "results": results}]
+                self.run_engine(worker, ticks=8)
+                attempt, evidence = self.attempt(rid, "code")
+                gate = self.checks_gate(evidence)
+                self.assertEqual((gate["status"], gate["detail"]), (status, detail))
+                self.assertEqual(attempt["status"], "blocked" if status == "fail" else "accepted")
+                if status == "fail":
+                    self.assertEqual((attempt["error"], evidence["gate"]), (detail, "checks_pass"))
+
+    def test_checks_that_did_not_finish_are_judged_by_whether_they_must_pass(self):
+        commands = ["npm test", "npm run e2e"]
+        timeout = {"command": "npm run e2e", "exit": None, "seconds": 600.0, "tail": "", "timeout": True}
+        skipped = {"command": "npm run e2e", "exit": None, "seconds": 0.0, "tail": "", "skipped": "total_timeout"}
+        passed = {"command": "npm test", "exit": 0, "seconds": 1.0, "tail": ""}
+        cases = (({"results": [passed, timeout]}, ["npm run e2e"], ("fail", "检查命令超时：npm run e2e")),
+                 ({"results": [passed, timeout]}, [], ("warn", "建议检查未通过：npm run e2e（超时）")),
+                 ({"results": [passed, skipped]}, [], ("warn", "建议检查未通过：npm run e2e（未运行：检查总时限已到）")),
+                 ({"results": [], "lost": True}, ["npm test"], ("fail", "检查命令中断（Worker 重启）")),
+                 ({"results": [], "lost": True}, [],
+                  ("warn", "建议检查未通过：npm test（未运行：检查命令中断（Worker 重启））；"
+                           "建议检查未通过：npm run e2e（未运行：检查命令中断（Worker 重启））")),
+                 ({"results": [passed]}, ["npm run e2e"], ("fail", "检查命令已停止")),   # stopped before it ran
+                 ({"results": [passed, {**passed, "command": "npm run e2e"}], "passed": True}, commands, ("pass", "2 条命令")))
+        for status, required, expected in cases:
+            with self.subTest(status=status, required=required):
+                self.assertEqual(gates.checks_verdict(commands, {"state": "done", "passed": False, **status}, required), expected)
+
+    def test_checks_of_agent_sessions_planned_before_d57_are_advisory(self):
+        # what such a task carries: its checks, without verify_required or origin; any other Session's are the user's
+        for number, (mode, status) in enumerate((("agent", "warn"), ("manual", "fail"))):
+            with self.subTest(mode):
+                worker, rid = FakeWorker(), self.session([IMPLEMENT], recovery=True, request="start-%016d" % (60 + number))
+                with self.db.transaction() as db:
+                    snapshot = self.snapshot(rid)
+                    snapshot["match_mode"] = mode
+                    spec = {k: v for k, v in IMPLEMENT.items()}
+                    spec.update(model="auto", effort="")
+                    db.execute("UPDATE runs SET snapshot=? WHERE id=?", (dumps(snapshot), rid))
+                    db.execute("UPDATE tasks SET spec=? WHERE run_id=? AND id='code'", (dumps(spec), rid))
+                worker.verify = [{"state": "done", "passed": False, "failed": 0,
+                                  "results": [{"command": "npm test", "exit": 1, "seconds": 2.0, "tail": "1 failing"}]}]
+                self.run_engine(worker, ticks=8)
+                attempt, evidence = self.attempt(rid, "code")
+                self.assertNotIn("verify_required", json.loads(attempt["spec"]))
+                self.assertEqual(self.checks_gate(evidence)["status"], status)
+                self.assertEqual(attempt["status"], "accepted" if status == "warn" else "blocked")
 
     def test_an_empty_diff_is_a_warning_for_every_kind(self):   # D57 §4: never a failure
         # implement / deliver warn; test and untyped tasks were never asked to change files and skip as before

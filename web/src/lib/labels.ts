@@ -32,7 +32,7 @@ export const EVENT_LABELS: Record<string, string> = {
   "run.created": "需求已登记", "attempt.created": "创建新的执行 Attempt", "attempt.state": "原生任务状态更新",
   "run.state": "开发状态更新", "run.completed": "全部任务已交接", "command.continue": "已提交原地续作",
   "command.recover": "收到诊断请求", "recovery.started": "Coordinator 开始诊断", "recovery.applied": "已安排返工与复审",
-  "recovery.blocked": "协调者等待补充条件", "command.stop": "收到停止请求", "command.close": "收到关闭请求",
+  "recovery.blocked": "协调者等待补充条件", "recovery.retry": "诊断遇到平台故障，自动重新诊断", "command.stop": "收到停止请求", "command.close": "收到关闭请求",
   "command.delete": "收到删除请求", "command.reopen": "收到重新打开请求", "session.stop": "原生任务已停止",
   "session.close": "已备份并关闭", "session.delete": "原生会话已删除，源码保留",
   "command.assign-worker": "已分配 Worker", "run.binding": "原生会话与工作区已就绪", "attempt.dispatched": "已派发原生任务",
@@ -50,6 +50,7 @@ export const EVENT_LABELS: Record<string, string> = {
   "app.stopped": "远程预览已停止", "approval.answered": "已答复工具审批", "attempt.checking": "正在运行检查命令",
   "attempt.waiting": "等待条件满足", "attempt.watchdog": "无进展检查", "attempt.budget": "预算用完，未自动处理",
   "task.replaced": "重新规划替换了后续任务", "task.tool_switched": "已切换执行工具", "task.verify_revised": "重新规划修正了检查命令", "task.paths_added": "协调者扩大了可改动路径",
+  "crew.entry_opened": "打开了原生 KiroCrew 页面",
 };
 
 /** D46 P2: the roles a task's Agent works in (octopus/roles.py LABELS; kept equal by tests/test_roles.py). */

@@ -12,6 +12,7 @@ STEPS = [{"id": "code", "name": "实现", "tool": "claude", "prompt": "实现", 
          {"id": "review", "name": "审查", "tool": "codex", "prompt": "审查", "kind": "review", "acceptance": ["无阻断问题"]}]
 CANCELLED = {"done": True, "result": "", "error": "cancelled (stop_reason=cancelled): turn cancelled by the runtime"}
 RETRY = {"action": "retry", "target_task_id": "review", "reason": "审查未通过", "instructions": "修复后复审"}
+SANDBOX = {"error": "kiro_crew.acp.client.AcpSandboxInitFailed: sandbox failed to initialize"}
 WAIT = {"action": "wait_for_user", "reason": "等待", "instructions": "检查"}
 
 
@@ -99,6 +100,39 @@ class BudgetTests(BudgetCase):
         self.assertEqual(len(run["recovery"]["history"]), 1)                              # the second goes to diagnosis
         self.assertFalse(review[1]["evidence"].get("transient_retry_of"))
         self.assertEqual(run["status"], "completed")
+        self.assertEqual(self.budget(rid)["retries"], {"used": 1, "limit": 1})
+
+    def faulty_diagnoses(self, faults):
+        """The next diagnoses end with ``faults`` in turn (D57 §6.3: the platform's, not the Coordinator's)."""
+        original = self.request
+        def request(config, path, body, **kwargs):
+            result = original(config, path, body, **kwargs)
+            if path == "/inspect" and self.bodies[body["attempt_id"]].get("coordination") and faults:
+                self.decisions.insert(0, json.loads(result.pop("decision")))   # its decision was never read
+                result["native"] = {**result["native"], **faults.pop(0)}
+            return result
+        self.engine = __import__("octopus.engine", fromlist=["Engine"]).Engine(self.db, request)
+
+    def diagnoses(self):
+        return [b for b in self.bodies.values() if b.get("coordination")]
+
+    def test_a_diagnosis_retried_after_a_platform_fault_is_a_retry_not_a_cycle(self):
+        self.failing = {("review", 1)}
+        self.faulty_diagnoses([dict(SANDBOX)])
+        rid = self.begin()
+        run = self.tick(rid, 40)
+        self.assertEqual(run["status"], "completed")
+        self.assertEqual(len(self.diagnoses()), 2)
+        budget = self.budget(rid)
+        self.assertEqual((budget["cycles"]["used"], budget["retries"]["used"]), (1, 1))
+
+    def test_the_retry_budget_spans_tasks_and_diagnoses(self):
+        self.cancelled, self.failing = {("code", 1)}, {("review", 1)}
+        self.faulty_diagnoses([dict(SANDBOX)])
+        rid = self.begin(max_retries=1)
+        run = self.tick(rid, 40)
+        self.assertEqual(self.attempts(run, "code")[1]["evidence"].get("transient_retry_of"), self.attempts(run, "code")[0]["id"])
+        self.assertEqual((run["status"], len(self.diagnoses())), ("blocked", 1))   # the one retry was the task's
         self.assertEqual(self.budget(rid)["retries"], {"used": 1, "limit": 1})
 
     def test_past_the_time_budget_nothing_automatic_starts(self):

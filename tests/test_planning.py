@@ -83,9 +83,7 @@ class PlanningTests(unittest.TestCase):
 
     def test_planned_tasks_need_their_contract(self):
         rid = self.start()["id"]
-        missing = [('{"name": "x", "steps": [{"name": "实现", "tool": "claude", "prompt": "实现", "kind": "implement", '
-                    '"acceptance": ["可运行"]}]}', "验证命令"),
-                   ('{"name": "x", "steps": [{"name": "审查", "tool": "codex", "prompt": "审查", "kind": "review"}]}', "验收项"),
+        missing = [('{"name": "x", "steps": [{"name": "审查", "tool": "codex", "prompt": "审查", "kind": "review"}]}', "验收项"),
                    ('{"name": "x", "steps": [{"name": "实现", "tool": "claude", "prompt": "实现", "acceptance": ["a"], '
                     '"verify": ["b"]}]}', "类别")]
         for text, word in missing:
@@ -107,6 +105,69 @@ class PlanningTests(unittest.TestCase):
         for text in ("", "没有代码块的回复", "```json\n{\"steps\": [{\"name\": \"x\", \"tool\": \"gpt\", \"prompt\": \"p\"}]}\n```"):
             with self.subTest(text=text[:20]), self.database.transaction() as db, self.assertRaises(Error):
                 planning.expand(db, rid, text)
+
+
+    def test_implement_tasks_no_longer_need_verify(self):   # D57 §5.2: a check the planner gives is advisory anyway
+        rid = self.start()["id"]
+        text = json.dumps({"name": "x", "steps": [
+            {"name": "实现", "tool": "claude", "prompt": "实现", "kind": "implement", "acceptance": ["可运行"]},
+            {"name": "测试", "tool": "claude", "prompt": "补测试", "kind": "test", "acceptance": ["测试覆盖"]}]}, ensure_ascii=False)
+        with self.database.transaction() as db:
+            planning.expand(db, rid, text)
+        specs = [t["spec"] for t in self.service.run(self.actor, rid)["tasks"]][1:]
+        self.assertEqual([s["kind"] for s in specs], ["implement", "test"])
+        self.assertFalse(any(s.get("verify") for s in specs))
+        prompt = planning.plan_step()["prompt"]
+        self.assertNotIn("至少 1 条 verify", prompt)
+        for words in ("verify_required", "verify_basis", "需求原文", "建议检查"):   # how a planner marks a required one
+            self.assertIn(words, prompt)
+
+    def test_the_planner_may_mark_a_check_required_only_with_a_quote_from_the_requirement(self):   # D57 §5.1, §13.2
+        rid = self.service.start(self.actor, {"request_id": "planning-request-quote", "source": {"type": "new"},
+                                              "input": "订单退款需要幂等保护。\n验收：npm test 全部通过，\n  并且 make check 退出 0"})["id"]
+        step = {"name": "实现幂等", "tool": "claude", "prompt": "实现", "kind": "implement", "acceptance": ["只退款一次"],
+                "verify": ["npm test", "make check", "npm run lint", "npm run e2e", "npm run audit"],
+                "verify_required": ["npm test", "npm run lint", "npm run e2e", "not in verify"],
+                "verify_basis": {"npm test": "验收：npm   test 全部通过", "make check": "通过，并且 make check\n退出 0",   # whitespace aside
+                                 "npm run lint": "代码风格检查通过", "npm run audit": 42}}
+        with self.database.transaction() as db:
+            applied = planning.expand(db, rid, json.dumps({"name": "x", "steps": [step]}, ensure_ascii=False))
+        spec = self.service.run(self.actor, rid)["tasks"][1]["spec"]
+        self.assertEqual(spec["origin"], "planner")
+        self.assertEqual(spec["verify"], step["verify"])
+        self.assertEqual(spec["verify_required"], ["npm test", "make check"])   # a quote alone marks one too
+        self.assertEqual(spec["verify_basis"], {"npm test": "验收：npm   test 全部通过", "make check": "通过，并且 make check\n退出 0"})
+        notes = "；".join(applied["notes"])
+        self.assertIn("npm run lint", notes)   # its quote is not the requirement's
+        self.assertIn("npm run e2e", notes)    # no quote at all
+        self.assertIn("按建议检查", notes)
+        self.assertIn("not in verify", notes)
+
+    def test_verify_fixes_cannot_change_a_required_check(self):   # D57 §13.1: only the user changes a required check
+        steps = [{"id": "api", "name": "接口", "tool": "claude", "prompt": "接口", "kind": "implement", "acceptance": ["可用"],
+                  "verify": ["npm test", "npm run lint"], "verify_required": ["npm test"]},
+                 {"id": "ui", "name": "界面", "tool": "claude", "prompt": "界面", "kind": "implement", "acceptance": ["可用"],
+                  "verify": ["npm run build", "npm run lint"], "verify_required": ["npm run build"]},
+                 {"id": "check", "name": "审查", "tool": "codex", "prompt": "审查", "kind": "review", "acceptance": ["无阻断问题"]}]
+        rid = self.service.start(self.actor, {"request_id": "planning-request-fixes", "input": "实现接口与界面",
+                                              "source": {"type": "new"}, "steps": steps})["id"]
+        with self.database.transaction() as db:
+            db.execute("UPDATE tasks SET status='accepted' WHERE run_id=? AND id IN ('api','ui')", (rid,))
+            db.execute("DELETE FROM tasks WHERE run_id=? AND id='check'", (rid,))
+        plan = {"name": "剩余", "steps": [{"name": "复审", "tool": "codex", "prompt": "复审", "kind": "review", "acceptance": ["a"]}],
+                "verify_fixes": [{"task_id": "api", "verify": ["npm test -- --ci", "npm run lint"]},   # rewrites the required one
+                                 {"task_id": "ui", "verify": ["npm run lint -- --quiet", "npm run build"]}]}   # reorders it
+        with self.database.transaction() as db:
+            applied = planning.expand(db, rid, json.dumps(plan, ensure_ascii=False), replan=True)
+        specs = {t["id"]: t["spec"] for t in self.service.run(self.actor, rid)["tasks"]}
+        self.assertEqual(specs["api"]["verify"], ["npm test", "npm run lint"])
+        self.assertEqual((specs["ui"]["verify"], specs["ui"]["verify_required"]),
+                         (["npm run lint -- --quiet", "npm run build"], ["npm run build"]))
+        notes = "；".join(applied["notes"])
+        self.assertIn("「接口」的必过检查不能由重新规划删除或改写", notes)
+        self.assertIn("npm test", notes)
+        self.assertIn("保留任务「界面」的检查命令由重新规划修正", notes)
+        self.assertEqual(applied["verify_fixed"], ["ui"])
 
 
 if __name__ == "__main__":

@@ -189,6 +189,17 @@ class WatchdogReviewTests(WatchdogCase):
         self.assertEqual(attempts[0]["evidence"]["failure_type"], "native_error")   # not native_stopped (someone's stop)
         self.assertEqual(attempts[1]["evidence"].get("transient_retry_of"), attempts[0]["id"])
 
+    def test_a_watchdog_stop_is_its_own_retry_not_a_teardown(self):   # D57 §6.3: the platform's own stop
+        self.stop_error = Error(503, "native_unavailable", "KiroCrew Gateway 暂不可用")
+        rid = self.start()
+        self.later(rid, 1)
+        self.native_stopped = True        # nobody opened the native page: only the watchdog stopped it
+        run = self.tick(rid, 6)           # the retry is seen stopped too
+        attempts = sorted(run["tasks"][0]["attempts"], key=lambda a: a["number"])
+        self.assertEqual(attempts[0]["evidence"].get("transient"), "stalled")
+        self.assertEqual(len(attempts), 2)                     # its one retry, never a second as a teardown
+        self.assertNotIn("transient", attempts[1]["evidence"])
+
     def test_time_waiting_for_approval_is_not_idle(self):
         rid = self.start()
         self.tick(rid, 2)

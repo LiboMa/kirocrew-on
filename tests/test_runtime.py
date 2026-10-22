@@ -6,7 +6,7 @@ import tempfile
 import unittest
 from unittest.mock import patch
 
-from octopus import gateway_client
+from octopus import crew_entry, gateway_client, recovery
 from octopus.db import dumps
 from octopus.engine import Engine
 from octopus.security import Error
@@ -24,6 +24,12 @@ DIED = {"done": True, "result": "", "error": "kiro_crew.acp.client.AcpProcessDie
 # EC2 run-6d7c132b…: the Agent replied, then KiroCrew could not clean up a process its tree left behind (process_identity.py)
 CLEANUP = {"done": True, "result": "已完成：README.md 增加一节。", "error": "kill failed: pid 762595 exited and its process group "
            "762595 still has members, but none could be verified as this run's; not signalled"}
+# D57 §6.3, §13.9: the Agent's sandbox could not be set up — the platform's fault, never the task's
+SANDBOX = {"done": True, "result": "", "error": "kiro_crew.acp.client.AcpSandboxInitFailed: sandbox failed to initialize"}
+# run-16848466 (teardown-finding): KiroCrew tore down a running child with its unclaimed parent — the same words and the same
+# stopped=True as a stop a person makes in the native page
+TORN_DOWN = {"done": True, "result": "", "stopped": True,
+             "error": "ACP process exited (code=-9, SIGKILL, killed by Crew (forced stop))"}
 
 
 class RuntimeCase(TeamsWorkersCase):
@@ -66,6 +72,18 @@ class RuntimeCase(TeamsWorkersCase):
     def kinds(self, rid):
         with self.db.read() as db:
             return [r["kind"] for r in db.execute("SELECT kind FROM events WHERE run_id=? ORDER BY id", (rid,))]
+
+    def open_entry(self, rid, ago=0, worker=None):
+        """A person was given the native KiroCrew page through the platform ``ago`` seconds ago (the only way to stop a
+        native task by hand, K03)."""
+        with self.db.transaction() as db:
+            worker = worker or db.execute("SELECT worker_id FROM runs WHERE id=?", (rid,)).fetchone()[0]
+            crew_entry.record(db, self.c, rid, worker)
+            db.execute("UPDATE audit SET at=at-? WHERE id=(SELECT MAX(id) FROM audit)", (ago,))
+
+    def budget(self, rid):
+        with self.db.read() as db:
+            return recovery.budget(db, db.execute("SELECT * FROM runs WHERE id=?", (rid,)).fetchone())
 
 
 class TransientTests(RuntimeCase):
@@ -130,13 +148,84 @@ class TransientTests(RuntimeCase):
         self.assertEqual(attempts[-1]["status"], "accepted")
         self.assertTrue(any(a["evidence"].get("transient_retry_of") for a in attempts))
 
+    def test_a_sandbox_init_failure_of_a_task_is_retried_once(self):   # D57 §13.9
+        rid = self.session()
+        self.natives = [SANDBOX]
+        self.tick(6)
+        run, attempts = self.detail(rid)
+        self.assertEqual([a["status"] for a in attempts], ["blocked", "accepted"])
+        self.assertEqual(attempts[0]["evidence"]["transient"], "runtime_sandbox")
+        self.assertEqual((run["status"], run["recovery"]["used"]), ("completed", 0))
+        self.assertEqual(self.budget(rid)["retries"]["used"], 1)   # within the automatic retry budget
+
     def test_a_deliberate_native_stop_is_not_retried(self):
         rid = self.session(recovery=False)
         self.natives = [{**CANCELLED, "stopped": True}]
-        self.tick(4)
+        self.tick(2)                                    # prepare, dispatch
+        self.open_entry(rid)                            # a person opens the native page, then stops the task there
+        self.tick(2)
         run, attempts = self.detail(rid)
         self.assertEqual((run["status"], len(attempts)), ("blocked", 1))
         self.assertEqual(attempts[0]["evidence"]["failure_type"], "native_stopped")
+        self.assertNotIn("transient", attempts[0]["evidence"])
+
+    def test_a_stop_from_a_page_opened_before_the_task_began_is_not_retried(self):
+        rid = self.session()
+        self.open_entry(rid, ago=2 * 3600)              # its native login lasts up to 8 hours: the page may still be open
+        self.natives = [TORN_DOWN]
+        self.tick(4)
+        run, attempts = self.detail(rid)
+        self.assertEqual((run["status"], len(attempts)), ("blocked", 1))
+        self.assertNotIn("transient", attempts[0]["evidence"])
+
+    def test_a_stop_nobody_could_have_made_by_hand_is_retried_once(self):   # KiroCrew's parent-end teardown
+        rid = self.session()
+        self.natives = [TORN_DOWN]
+        self.tick(6)
+        run, attempts = self.detail(rid)
+        self.assertEqual([a["status"] for a in attempts], ["blocked", "accepted"])
+        self.assertEqual(attempts[0]["evidence"]["failure_type"], "native_stopped")
+        self.assertEqual(attempts[0]["evidence"]["transient"], "runtime_teardown")
+        self.assertEqual(attempts[1]["evidence"]["transient_retry_of"], attempts[0]["id"])
+        self.assertEqual((run["status"], run["recovery"]["used"]), ("completed", 0))
+        self.assertEqual(self.budget(rid)["retries"]["used"], 1)
+        self.assertIn("attempt.retry", self.kinds(rid))
+
+    def test_an_entry_elsewhere_or_whose_login_has_ended_does_not_count(self):
+        for case, entry in {"another environment": {"worker": "env-other"}, "long ago": {"ago": 9 * 3600}}.items():
+            with self.subTest(case):
+                self.natives = [TORN_DOWN]
+                rid = self.service.start(self.c, {"request_id": "start-entry-" + case.replace(" ", "-"), "input": "研发需求与真实验证",
+                                                  "source": {"type": "new"}, "team_id": "team-p",
+                                                  "steps": [{"id": "code", "name": "实现", "tool": "claude", "prompt": "实现"}]})["id"]
+                self.open_entry(rid, **entry)
+                self.tick(6)
+                run, attempts = self.detail(rid)
+                self.assertEqual([a["status"] for a in attempts], ["blocked", "accepted"])
+                self.assertEqual(attempts[0]["evidence"]["transient"], "runtime_teardown")
+
+    def test_a_second_teardown_is_not_retried(self):
+        rid = self.session()
+        self.natives = [TORN_DOWN, TORN_DOWN]
+        self.tick(6)
+        run, attempts = self.detail(rid)
+        self.assertEqual([a["status"] for a in attempts], ["blocked", "blocked"])
+        self.assertNotIn("transient", attempts[1]["evidence"])
+        self.assertEqual((run["status"], run["recovery"]["used"]), ("blocked", 0))   # a stop: the user decides, as before
+
+    def test_a_stop_the_platform_made_is_not_retried(self):
+        rid = self.session()
+        self.natives = [TORN_DOWN]
+        def stop():
+            with self.db.transaction() as db:   # the user's stop through the platform, while the result is in flight
+                db.execute("UPDATE runs SET desired='stop',status='stopping' WHERE id=?", (rid,))
+        self.tick(2)
+        self.after_inspect = stop
+        self.tick(1)
+        run, attempts = self.detail(rid)
+        self.assertEqual(len(attempts), 1)
+        self.assertNotIn("transient", attempts[0]["evidence"])
+        self.assertNotIn("attempt.retry", self.kinds(rid))
 
     def test_a_running_task_with_a_growing_reply_records_no_event_per_poll(self):
         rid = self.session()

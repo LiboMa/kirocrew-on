@@ -48,6 +48,48 @@ def warnings(records):
     return [r for r in records or [] if r.get("status") == "warn"]
 
 
+# D57 §5.4: the words a check the environment could not run is reported in, required or not
+UNRUNNABLE = "无法执行（环境）：{}。请确认环境，或把这条检查改写成可执行的形式。"
+
+
+def checks_verdict(commands, status, required):
+    """checks_pass of a finished check job (D57 §5): (status, detail), one record for the Attempt. Each check is judged by
+    its text, wherever it stands: one the environment could not run (``checks.unrunnable``) is a warning, required or
+    not; a required one that failed otherwise fails, the first of them named as before; an advisory one that failed is a
+    warning. A required check that never ran (the job stopped or was lost) fails too."""
+    from .checks import unrunnable
+    results = status.get("results") or []
+    if status.get("passed"):
+        return "pass", f"{len(results)} 条命令"
+    required, ran = set(required), {result.get("command") for result in results}
+    failure, notes = None, []
+    for result in results:
+        command, code = str(result.get("command") or ""), result.get("exit")
+        if code == 0:
+            continue
+        reason = unrunnable(result)
+        if reason:
+            notes.append(UNRUNNABLE.format(reason))
+        elif command in required:
+            failure = failure or (f"检查命令超时：{command}" if result.get("timeout") else
+                                  "检查命令已停止" if result.get("stopped") else
+                                  f"检查命令未运行（检查总时限已到）：{command}" if result.get("skipped") else
+                                  f"检查命令失败：{command}（退出码 {code}）")
+        else:
+            how = (f"退出码 {code}" if code is not None else "超时" if result.get("timeout") else "已停止" if result.get("stopped")
+                   else "未运行：检查总时限已到" if result.get("skipped") else "无法运行")
+            notes.append(f"建议检查未通过：{command[:80]}（{how}）")
+    lost = "检查命令中断（Worker 重启）" if status.get("lost") else "检查命令已停止"
+    for command in (c for c in commands if c not in ran):   # never ran: the job ended before them
+        if command in required:
+            failure = failure or lost
+        else:
+            notes.append(f"建议检查未通过：{command[:80]}（未运行：{lost}）")
+    if failure or (not notes and required):
+        return "fail", failure or lost
+    return "warn", "；".join(notes) or "建议检查没有全部通过"
+
+
 def stated(outcome, text):
     """(decision, summary, failure_type) of a rejection an invalid outcome still states — in the file, then in the reply
     — or None when neither states one. A file that parses as JSON states one when its decision, or any other top-level

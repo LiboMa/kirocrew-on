@@ -9,37 +9,27 @@ import time
 
 from .db import dumps, uid
 from .transport import worker_request
-from . import evaluation, gates, journal, knowledge, planning, quotas, recovery, waiting
+from . import crew_entry, evaluation, gates, journal, knowledge, planning, quotas, recovery, waiting
 from .security import Error
-from .domain import CONTRACT, awaits_confirmation, unserved
+from .domain import CONTRACT, awaits_confirmation, required_checks, runs_checks, unserved
 from .gates import BLOCKED
 
 LEGACY = ("id", "name", "tool", "model", "effort", "prompt")
 
 
-CANCELLED = re.compile(r"stop_reason=cancelled|turn cancelled by the runtime", re.I)
-# The Agent's ACP process ended under the task (a Gateway restart, a killed process): design §8.1 L0, not the task's fault.
-# KiroCrew words it two ways: AcpError "ACP process exited" (acp/client.py) and AcpProcessDied "Runtime process died …"
-# (acp/session_handle.py, EC2 run-f7670bfb…).
-EXITED = re.compile(r"ACP process exited|AcpProcessDied|Runtime process died", re.I)
-# The Agent ended, then KiroCrew could not clean up a process its tree left behind (process_identity.py, EC2 run-6d7c132b…).
-CLEANUP = re.compile(r"process group \d+ still has members", re.I)
+# The native runtime's own faults (cancelled, exited, cleanup, sandbox) are recovery.FAULTS: a diagnosis is retried on them too.
 # KiroCrew ended a run its admission gate never let start (D60, EC2 2026-10-21 "never started: waiting for memory").
 NEVER_STARTED = re.compile(r"^\s*never started", re.I)
 QUEUE_POLL = 20   # seconds between looks at a queued native run (D60): not every tick on a Gateway short of memory
 
 
-def transient(native, error, missing, blocked_line):
+def transient(native, error, missing, blocked_line, entered=True):
     """A failure the native runtime caused rather than the task (D34 §5.1): retried once without a recovery cycle. A stop
-    someone made in the native KiroCrew page is theirs to resume, never retried."""
-    if native.get("stopped"):
-        return None
-    if CANCELLED.search(native.get("error") or ""):
-        return "runtime_cancelled"
-    if EXITED.search(native.get("error") or ""):
-        return "runtime_exited"
-    if CLEANUP.search(native.get("error") or ""):
-        return "runtime_cleanup"
+    someone may have made in the native KiroCrew page (``entered``: crew_entry.entered) is theirs to resume, never retried;
+    one nobody could have made is KiroCrew's teardown of a running child (D57 §6.3)."""
+    kind = recovery.fault(native, entered)
+    if kind or native.get("stopped"):
+        return kind
     if NEVER_STARTED.search(native.get("error") or ""):
         return "never_started"
     if error == BLOCKED and missing and not blocked_line:
@@ -704,6 +694,11 @@ class Engine:
             notes.append(f"会话分支已由平台恢复到候选 {sha[:7]}")
         return notes, reverted
 
+    def _entered(self, run, attempt):
+        """Whether a person may have stopped this Attempt's native task in the native page (crew_entry.entered)."""
+        with self.db.read() as db:
+            return crew_entry.entered(db, run["worker_id"], attempt["created"])
+
     def _put_back_review(self, run, config, attempt, evidence):
         """A review that ended without passing — a rejection, an error, the watchdog's stop — leaves the workspace as the
         reviewer left it, and the rework's candidate would take its edits in: they are put back all the same (D57 §4).
@@ -839,7 +834,7 @@ class Engine:
             records.append(gates.record("artifacts_locked", status, detail))
             if files:   # D57 §4: the accepted tasks' files it changed, named for the review that follows
                 records[-1]["files"] = files[0]
-        commands = spec.get("verify") or []
+        commands = (spec.get("verify") or []) if runs_checks(spec) else []   # never a review's or a design's (D57 §13.1)
         if not commands:
             records.append(gates.record("checks_pass", "skip", "任务没有检查命令"))
             return None, None, False
@@ -962,30 +957,25 @@ class Engine:
             return
         evidence["check_results"] = status["results"]
         evidence["check_artifacts"] = status.get("artifacts") or []
-        failed = status["results"][status["failed"]] if status.get("failed") is not None else None
-        if status["passed"]:
-            evidence["gates"].append(gates.record("checks_pass", "pass", f"{len(status['results'])} 条命令"))
-            error = None
-            if json.loads(attempt["spec"]).get("kind") == "test" and not (evidence.get("candidate") or {}).get("changed"):
-                evidence["gates"].append(gates.record("tests_fail_on_baseline", "skip", "测试任务没有改动"))
-            elif json.loads(attempt["spec"]).get("kind") == "test":
-                started = self._start_baseline(run, config, attempt, evidence)
-                if started:
-                    with self.db.transaction() as db:
-                        journal.change(db, "attempts", attempt["id"], journal.WORKER, "attempt.checking", "在会话基线上运行测试",
-                                       event={"id": attempt["id"], "task_id": task["id"]}, evidence=dumps(evidence), updated=time.time())
-                    return
-        else:
-            if status.get("lost"):
-                error = "检查命令中断（Worker 重启）"
-            elif failed is None:
-                error = "检查命令已停止"
-            elif failed.get("timeout"):
-                error = f"检查命令超时：{failed['command']}"
-            else:
-                error = f"检查命令失败：{failed['command']}（退出码 {failed['exit']}）"
-            evidence["gates"].append(gates.record("checks_pass", "fail", error))
+        spec = json.loads(attempt["spec"])
+        # D57 §5: only a required check's own failure blocks (a 「本地同步」's checks are judged the same way)
+        verdict, detail = gates.checks_verdict(spec.get("verify") or [], status, required_checks(run, spec))
+        evidence["gates"].append(gates.record("checks_pass", verdict, detail))
+        error = None
+        if verdict == "fail":
+            error = detail
             evidence.update(failure_type="gate", gate="checks_pass")
+        elif spec.get("kind") == "test" and not (evidence.get("candidate") or {}).get("changed"):
+            evidence["gates"].append(gates.record("tests_fail_on_baseline", "skip", "测试任务没有改动"))
+        elif spec.get("kind") == "test" and verdict == "warn":   # compared with the baseline only when all of them pass
+            evidence["gates"].append(gates.record("tests_fail_on_baseline", "skip", "检查命令没有全部通过，不在基线上比较"))
+        elif spec.get("kind") == "test":
+            started = self._start_baseline(run, config, attempt, evidence)
+            if started:
+                with self.db.transaction() as db:
+                    journal.change(db, "attempts", attempt["id"], journal.WORKER, "attempt.checking", "在会话基线上运行测试",
+                                   event={"id": attempt["id"], "task_id": task["id"]}, evidence=dumps(evidence), updated=time.time())
+                return
         self._settle(run, task, attempt, evidence, error)
 
     def _settle(self, run, task, attempt, evidence, error):
@@ -1071,8 +1061,8 @@ class Engine:
             if task["status"] in {"failed", "blocked", "stopped"}:
                 return
             attempt = db.execute("SELECT * FROM attempts WHERE id=?", (task["current_attempt"],)).fetchone()
-            replan = json.loads(fresh["snapshot"]).get("replan") or {}
-            if attempt is None and task["id"] == replan.get("task") and replan.get("applied"):
+            replan = next((r for r in planning.replans(json.loads(fresh["snapshot"])) if r.get("task") == task["id"]), {})
+            if attempt is None and replan.get("applied"):
                 # A rework of an earlier task resets the replan task too; its plan is already applied: it stands as it was
                 # (D41) — a new planning run would only be discarded.
                 done = db.execute("SELECT id FROM attempts WHERE run_id=? AND task_id=? AND status='accepted' "
@@ -1135,6 +1125,7 @@ class Engine:
             # The spec a Worker validates keeps its six fields (a Worker not yet upgraded runs it as before); the task
             # contract and the requirement KiroCrew completed travel beside it (D34 §6.2).
             contract = {key: spec[key] for key in CONTRACT if key in spec}
+            contract.pop("verify_required", None)   # D57: the platform judges which must pass; an older Worker refuses it
             if not (config.get("capabilities") or {}).get("role_cards"):   # D46 P2: an older Worker refuses the field
                 contract.pop("role", None)
             have = (config.get("capabilities") or {}).get("skills")
@@ -1272,7 +1263,8 @@ class Engine:
                 evidence["result_missing"] = True
             if error:
                 evidence["failure_type"] = failure_type
-                retry = transient(native, error, missing, blocked_line)
+                retry = transient(native, error, missing, blocked_line,
+                                  self._entered(run, attempt) if native.get("stopped") else True)
                 if retry == "never_started" and (evidence.get("queued") or {}).get("resuming"):
                     retry = None   # it had begun before its queue: not a lack of resources (D60 §3.4)
             state = "blocked" if error else "accepted"
@@ -1319,8 +1311,7 @@ class Engine:
                            quiet=() if native.get("done") else ("result",),
                            status=state, evidence=dumps(evidence), result=native.get("result"), error=error, updated=time.time())
             if retry:
-                why = {"runtime_cancelled": "运行时取消了原生任务", "runtime_exited": "原生运行时进程退出",
-                       "runtime_cleanup": "原生运行时未能清理残留进程", "result_missing": "原生任务没有返回结果",
+                why = {**recovery.WHY, "result_missing": "原生任务没有返回结果",
                        "never_started": "原生任务未能开始（执行环境资源不足）"}[retry]
                 # The retry is created here and marked, so it is never retried again; a stop or continue before it is
                 # dispatched cancels or replaces it like any other Attempt.

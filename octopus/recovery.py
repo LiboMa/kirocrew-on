@@ -1,10 +1,11 @@
 """Durable Coordinator decisions and bounded repair, using the existing Worker."""
 import json
+import re
 import time
 
-from . import journal
+from . import crew_entry, journal
 from .db import dumps, uid
-from .domain import SETTLED, TOOLS, steps, unserved
+from .domain import SETTLED, TOOLS, required_checks, runs_checks, steps, unserved
 from .security import Error, require
 
 LIVE = {"pending", "dispatching", "dispatch_unknown", "running", "waiting_approval"}
@@ -16,6 +17,94 @@ IDLE_MINUTES, ATTEMPT_MINUTES = 30, 170   # below KiroCrew's own subagent deadli
 LIMITS = {"idle_minutes": (IDLE_MINUTES, 5, 240), "attempt_minutes": (ATTEMPT_MINUTES, 30, 720)}
 # The automatic recovery budget beside max_cycles (D42): retries without a diagnosis and the time since the user's last word.
 BUDGET = {"max_retries": (4, 0, 20, "的整数"), "budget_minutes": (720, 30, 4320, "的整数（分钟）")}
+
+# The native runtime's own faults (design §8.1 L0, D57 §6.3): neither the task's nor the diagnosis's. Each is retried once
+# without a recovery cycle, within the automatic retry budget; their words are KiroCrew's (tests/kirocrew_contract.json).
+CANCELLED = re.compile(r"stop_reason=cancelled|turn cancelled by the runtime", re.I)
+# The Agent's ACP process ended under the task (a Gateway restart, a killed process): design §8.1 L0, not the task's fault.
+# KiroCrew words it two ways: AcpError "ACP process exited" (acp/client.py) and AcpProcessDied "Runtime process died …"
+# (acp/session_handle.py, EC2 run-f7670bfb…).
+EXITED = re.compile(r"ACP process exited|AcpProcessDied|Runtime process died", re.I)
+# The Agent ended, then KiroCrew could not clean up a process its tree left behind (process_identity.py, EC2 run-6d7c132b…).
+CLEANUP = re.compile(r"process group \d+ still has members", re.I)
+# The Agent's sandbox could not be set up (D57 §13.9: the diagnosis that never began, EC2 2026-10-21).
+SANDBOX = re.compile(r"AcpSandboxInitFailed|sandbox failed to initialize", re.I)
+FAULTS = (("runtime_sandbox", SANDBOX), ("runtime_cancelled", CANCELLED), ("runtime_exited", EXITED), ("runtime_cleanup", CLEANUP))
+PLATFORM_FAULT = re.compile("|".join(pattern.pattern for _, pattern in FAULTS), re.I)
+# What each is, on the timeline where it is retried; and KiroCrew's teardown of a running child with its parent.
+WHY = {"runtime_sandbox": "原生运行时的沙箱未能初始化", "runtime_cancelled": "运行时取消了原生任务",
+       "runtime_exited": "原生运行时进程退出", "runtime_cleanup": "原生运行时未能清理残留进程",
+       "runtime_teardown": "原生任务被 KiroCrew 回收（期间没有人打开原生页面）"}
+# D57 §6.1: replans for a problem in a task's contract that leave the Session's one replan unused
+EXEMPT_REPLANS = 2
+
+
+def fault(native, entered=True):
+    """The native runtime's fault a finished native run — a task's or a diagnosis's — ended on, or None. A stop is a
+    person's when someone may have made it in the native page (``entered``: crew_entry.entered), theirs to resume and never
+    retried; one nobody could have made is KiroCrew tearing a running child down with its parent (teardown-finding)."""
+    if native.get("stopped"):
+        return None if entered else "runtime_teardown"
+    error = native.get("error") or ""
+    return next((kind for kind, pattern in FAULTS if pattern.search(error)), None)
+
+
+def failing_gate(evidence, failure_type=None):
+    """What an Attempt failed on, for counting the diagnoses that waited on it (D57 §13.8): the gate it names, else its first
+    failed gate record — never the review_bound recorded after it when a failed review was put back — else its failure_type."""
+    first = next((g.get("name") for g in evidence.get("gates") or []
+                  if g.get("status") == "fail" and g.get("name") != "review_bound"), None)
+    return evidence.get("gate") or first or evidence.get("failure_type") or failure_type
+
+
+def _waited(row, task_id, gate):
+    """A diagnosis of ``task_id`` failing on ``gate``: its decision's action, "" when it decided nothing; None for another."""
+    context = json.loads(row["context"])
+    if row["failed_task_id"] != task_id or failing_gate(context.get("evidence") or {}, context.get("failure_type")) != gate:
+        return None
+    return (json.loads(row["decision"]) or {}).get("action", "") if row["decision"] else ""
+
+
+def waits(rows, task_id, gate, since=0):
+    """How many diagnoses in a row, since ``since`` (the user's latest continue or the task's latest pass), waited for the
+    user on ``task_id`` failing on ``gate`` (D57 §6.2). One that decided nothing (it failed, or was cancelled) neither
+    counts nor ends the run; one that decided anything else ends it."""
+    count = 0
+    for row in reversed(list(rows)):
+        if row["created"] < since:
+            break
+        action = _waited(row, task_id, gate)
+        if action == "wait_for_user":
+            count += 1
+        elif action:
+            break
+    return count
+
+
+def held(db, rows, run, task, attempt):
+    """The diagnosis that last waited for the user when the same task, failing on the same gate, has waited twice in a row
+    (D57 §6.2, §13.8): no diagnosis is started for it again until the user continues or the task passes, unless the user
+    asks for one (rediagnose); None otherwise."""
+    gate = failing_gate(json.loads(attempt["evidence"] or "{}"), "native_error")
+    if waits(rows, task["id"], gate) < 2:   # most Sessions, on every tick of a blocked one: nothing more to read
+        return None
+    continued = db.execute("SELECT MAX(created) FROM revisions WHERE run_id=? AND json_extract(content,'$.kind')='continued'",
+                           (run["id"],)).fetchone()[0] or 0
+    passed = db.execute("SELECT MAX(updated) FROM attempts WHERE run_id=? AND task_id=? AND status='accepted'",
+                        (run["id"], task["id"])).fetchone()[0] or 0
+    if waits(rows, task["id"], gate, max(continued, passed)) < 2:
+        return None
+    return next(row for row in reversed(list(rows)) if _waited(row, task["id"], gate) == "wait_for_user")
+
+
+def replan_quota(snapshot, failure):
+    """(used, exempt): whether the Session's one replan is used, and whether a replan now would leave it unused (D57 §6.1):
+    the failed Attempt's evidence shows a problem in its contract (``failure``, never the Coordinator's word), and fewer
+    than EXEMPT_REPLANS such replans were made."""
+    from .planning import replans
+    done = replans(snapshot)
+    return any(not r.get("exempt") for r in done), \
+        failure == "contract" and sum(1 for r in done if r.get("exempt")) < EXEMPT_REPLANS
 
 
 def policy(value=None, *, legacy=False):
@@ -168,7 +257,8 @@ evidence.watchdog 存在时是看门狗停止了没有进展的任务：先判�
 实现、测试、契约或门禁本身的问题仍用 retry 或 rework，不换工具。
 计划本身有问题时（任务拆分不当、缺少必要的步骤、顺序错误、任务目标与需求不符，在原任务上重试或返工无法完成需求）用 replan：
 平台保留已验收的任务，请 KiroCrew 重新规划失败的任务及其后的工作；写明原计划的问题与重新规划的要求。
-每个会话只能重新规划一次：environment.replanned 为 true 时不能再用 replan。
+每个会话只能重新规划一次：environment.replanned 为 true 时不能再用 replan，除非 environment.replan_exempt 为 true
+（平台按失败证据判定问题出在任务合同上，这次重新规划不占额度）。
 任务的 spec 带 requested（需求中指定的工具或模型）时，不能换用其他工具或模型：用 wait_for_user 说明原因。
 检查命令以退出码 127 失败表示命令在执行环境中不存在（environment.commands 列出常见命令中可用与没有的）：这是任务契约中 verify 的问题，
 重试或返工无法修改它——未重新规划过时用 replan 并写明改用的命令，否则用 wait_for_user，请用户续作时修改该任务的 verify。
@@ -260,7 +350,9 @@ def switch(db, run, failed, decision, context):
                     f"其后的审查「{later.get('name') or later['id']}」使用 {tool}，审查须与被审查代码的工具不同；请换用其他工具")
     earlier = [r["id"] for r in db.execute("SELECT id FROM tasks WHERE run_id=? AND ordinal<? ORDER BY ordinal",
                                           (run["id"], failed["ordinal"]))]
-    return steps([{**spec, "tool": tool, "model": model, "effort": effort}], known=earlier)[0], before
+    switched = steps([{**spec, "tool": tool, "model": model, "effort": effort}], known=earlier)[0]
+    switched.pop("verify_required", None)   # D57 §5: which checks must pass, and who wrote them, stay as they were
+    return {**switched, **{key: spec[key] for key in ("verify_required", "verify_basis", "origin") if key in spec}}, before
 
 
 def widen(decision, context, failed, target):
@@ -316,11 +408,13 @@ def budget(db, run, now=None):
     if now is None:   # a Session that stopped stops counting: the time it ran, not the time since
         settled = run["status"] in SETTLED or run["lifecycle"] != "open"
         now = run["updated"] if settled else time.time()
-    cycles = sum(1 for row in db.execute("SELECT context FROM recoveries WHERE run_id=? AND created>=?", (run["id"], since))
-                 if not json.loads(row["context"]).get("manual"))
+    rounds = [json.loads(row["context"]) for row in db.execute("SELECT context FROM recoveries WHERE run_id=? AND created>=?",
+                                                                (run["id"], since))]
+    cycles = sum(1 for context in rounds if not context.get("manual"))
     retries = sum(1 for row in db.execute("SELECT evidence FROM attempts WHERE run_id=? AND created>=?", (run["id"], since))
                   if (marks := json.loads(row["evidence"] or "{}")).get("transient_retry_of")
-                  and not marks.get("never_started"))   # D60: a run that did not start is dispatched again for free
+                  and not marks.get("never_started")) \
+        + sum(1 for context in rounds if context.get("retry_of"))   # D57 §6.3: a diagnosis dispatched again, not a round
     value = {"since": since, "reset": bool(snapshot.get("budget_since")),
              "cycles": {"used": cycles, "limit": settings["max_cycles"]},
              "retries": {"used": retries, "limit": settings.get("max_retries", BUDGET["max_retries"][0])},
@@ -383,7 +477,7 @@ def summary(db, run):
             "latest": rows[-1] if rows else None, "history": rows}
 
 
-def schedule(db, database, run, task, attempt, *, manual=False, actor=None):
+def schedule(db, database, run, task, attempt, *, manual=False, actor=None, rediagnose=False):
     settings = policy(json.loads(run["snapshot"]).get("recovery"), legacy=True)
     rows = list(db.execute("SELECT * FROM recoveries WHERE run_id=? ORDER BY number", (run["id"],)))
     if any(r["status"] in LIVE for r in rows):
@@ -396,10 +490,16 @@ def schedule(db, database, run, task, attempt, *, manual=False, actor=None):
         if (not settings["enabled"] or failure in NEEDS_INPUT or json.loads(attempt["evidence"]).get("requested") or
                 any(r["failed_attempt_id"] == attempt["id"] for r in rows) or (run["worker_id"] and unserved(db, run))):
             return None
+        if held(db, rows, run, task, attempt):   # D57 §6.2: the user has the diagnosis's word on it twice already
+            return None
         key = refused(db, run, "cycle")   # last: the cheap checks above end most ticks of a blocked Session
         if key:
             mark_refused(db, attempt["id"], key)
             return None
+    elif not rediagnose and (last := held(db, rows, run, task, attempt)):
+        # D57 §6.2: asked again, the user is given what the diagnosis said; only rediagnose starts another
+        said = json.loads(last["decision"])
+        raise Error(409, "already_waiting", said["reason"] + "；" + said["instructions"])
     ordered = [dict(t) for t in db.execute("SELECT id,ordinal,spec FROM tasks WHERE run_id=? ORDER BY ordinal",
                                          (run["id"],))]
     context = {"run_id": run["id"], "input": run["input"], "workspace": run["workspace"],
@@ -429,8 +529,10 @@ def schedule(db, database, run, task, attempt, *, manual=False, actor=None):
     context["environment"] = {"tools": capabilities.get("tools") or {}, "models": capabilities.get("models") or {},
                               "limitations": capabilities.get("limitations") or [],
                               **({"commands": capabilities["commands"]} if capabilities.get("commands") else {}),
-                              "switch_tools": settings.get("switch_tools", True),
-                              "replanned": bool(json.loads(run["snapshot"]).get("replan"))}
+                              "switch_tools": settings.get("switch_tools", True)}
+    # whether the Session's one replan is used, and whether a replan for this failure would not use it (D57 §6.1)
+    used, exempt = replan_quota(json.loads(run["snapshot"]), failure)
+    context["environment"].update(replanned=used, **({"replan_exempt": True} if exempt else {}))
     planned = json.loads(run["snapshot"]).get("planning") or {}
     if planned.get("applied"):   # what the tasks are judged against (D34 §6.2)
         context["requirement"] = {"intent": planned.get("intent", ""), "summary": planned.get("summary", "")}
@@ -557,9 +659,14 @@ class Coordinator:
                 journal.change(db, "recoveries", item["id"], journal.WORKER, "recovery.state", event={"id": item["id"]},
                                status=state, evidence=dumps(evidence), updated=time.time())
             return
+        # D57 §6.3: the platform's fault, not the Coordinator's — its runtime, its sandbox, KiroCrew's teardown
+        kind = fault(native, self._entered(run, item) if native.get("stopped") else True)
         with self.db.transaction() as db:
             journal.change(db, "recoveries", item["id"], journal.WORKER, "recovery.state", event={"id": item["id"]},
-                           result=native.get("result"), evidence=dumps(evidence), updated=time.time())
+                           result=native.get("result"), evidence=dumps({**evidence, **({"platform_fault": kind} if kind else {})}),
+                           updated=time.time())
+        if kind and self._retry(run, item, context, kind):
+            return
         try:
             require(not native.get("error") and not native.get("stopped"), "协调者执行失败或已停止")
             require(result.get("handoff") and evidence.get("actual_backend") == "kiro", "协调者交接或原生后端未核实")
@@ -578,6 +685,39 @@ class Coordinator:
             self.finish(run, item, decision=decision)
         except (Error, ValueError, TypeError) as exc:
             self.finish(run, item, error="自动诊断未形成可执行决定：" + str(exc))
+
+    def _entered(self, run, item):
+        """Whether a person may have stopped this diagnosis in the native page (crew_entry.entered)."""
+        with self.db.read() as db:
+            return crew_entry.entered(db, run["worker_id"], item["created"])
+
+    def _retry(self, run, item, context, kind):
+        """D57 §6.3: a diagnosis the platform failed is dispatched again once, on the same round with a new Attempt ID — an
+        automatic retry of the budget, not another round. False when it is not: it was the retry, the budget refuses (said
+        on the round), or the Session changed (finish says so)."""
+        if context.get("retry_of"):
+            return False
+        now, aid = time.time(), uid("attempt")
+        with self.db.transaction() as db:
+            fresh = dict(db.execute("SELECT * FROM runs WHERE id=?", (run["id"],)).fetchone())
+            failed = db.execute("SELECT current_attempt FROM tasks WHERE run_id=? AND id=?",
+                                (run["id"], item["failed_task_id"])).fetchone()
+            if (fresh["desired"] != "active" or fresh["lifecycle"] != "open" or fresh["status"] != "diagnosing" or
+                    not failed or failed["current_attempt"] != item["failed_attempt_id"]):
+                return False
+            over = refused(db, fresh, "retry")
+            if over:
+                row = db.execute("SELECT evidence FROM recoveries WHERE id=?", (item["id"],)).fetchone()
+                journal.change(db, "recoveries", item["id"], journal.RECOVERY, "recovery.state", quiet=("evidence",),
+                               evidence=dumps({**json.loads(row["evidence"] or "{}"), "budget_refused": over}))
+                return False
+            journal.change(db, "recoveries", item["id"], journal.RECOVERY, "recovery.retry", f"{WHY[kind]}，自动重新诊断一次",
+                           event={"id": item["id"], "number": item["number"], "attempt": item["attempt_id"], "retry": aid,
+                                  "transient": kind},
+                           attempt_id=aid, status="pending", native_id=None, context_hash=None, result=None, evidence="{}",
+                           error=None, context=dumps({**context, "retry_of": item["attempt_id"],
+                                                      "retry": {"transient": kind, "at": now}}), updated=now)
+        return True
 
     def finish(self, run, item, *, decision=None, error=None):
         now = time.time()
@@ -668,11 +808,15 @@ class Coordinator:
 
     def _replan(self, db, fresh, failed, item, decision, now):
         """The Coordinator's replan (D41 §3.2): the failed task and those after it are replaced by a KiroCrew planning task;
-        accepted tasks stay. Once per Session; never for a design Session or for a planning task itself."""
+        accepted tasks stay. Once per Session — besides up to two for a problem in the task's contract (D57 §6.1); never for
+        a design Session or for a planning task itself."""
         from . import planning
         from .revisions import record
         rid, snapshot = fresh["id"], json.loads(fresh["snapshot"])
-        refusal = ("已重新规划过一次，不能再次重新规划" if snapshot.get("replan") else
+        # D57 §6.1: a replan for a problem in the failed task's contract, as its Attempt's evidence shows, uses no quota
+        row = db.execute("SELECT evidence FROM attempts WHERE id=?", (item["failed_attempt_id"],)).fetchone()
+        used, exempt = replan_quota(snapshot, json.loads((row["evidence"] if row else None) or "{}").get("failure_type"))
+        refusal = ("已重新规划过一次，不能再次重新规划" if used and not exempt else
                    "工作流设计会话不重新规划" if snapshot.get("purpose") == "workflow_design" else
                    "失败的是规划任务本身，不能以重新规划替换" if planning.planning_task(failed["id"], snapshot) else None)
         if refusal:
@@ -686,13 +830,17 @@ class Coordinator:
         environment = context.get("environment") or {}
         later = [dict(row) for row in db.execute("SELECT * FROM tasks WHERE run_id=? AND ordinal>=? ORDER BY ordinal",
                                                  (rid, failed["ordinal"]))]
-        replaced = [{"id": row["id"], "name": json.loads(row["spec"]).get("name", row["id"]),
-                     "kind": json.loads(row["spec"]).get("kind")} for row in later]
+        # D57 §13.1: the checks of these tasks that must pass, for the new tasks to carry over as they are (the platform
+        # runs none of a review's or a design's)
+        replaced = [{"id": row["id"], "name": spec.get("name", row["id"]), "kind": spec.get("kind"),
+                     **({"required": required} if runs_checks(spec) and (required := required_checks(fresh, spec)) else {})}
+                    for row in later for spec in [json.loads(row["spec"])]]
         failure = f"任务「{replaced[0]['name']}」：{str(context.get('error') or '')[:1500]}"
         used = {row[0] for row in db.execute("SELECT id FROM tasks WHERE run_id=? UNION SELECT task_id FROM attempts WHERE run_id=?",
                                              (rid, rid))}
         task_id = next(planning.REPLAN_PREFIX + str(n) for n in range(1, 100) if planning.REPLAN_PREFIX + str(n) not in used)
-        kept = [{"id": row["id"], "name": spec.get("name", row["id"]), "verify": spec["verify"]} for row in db.execute(
+        kept = [{"id": row["id"], "name": spec.get("name", row["id"]), "verify": spec["verify"],
+                 **({"required": required} if (required := required_checks(fresh, spec)) else {})} for row in db.execute(
             "SELECT id, spec FROM tasks WHERE run_id=? AND status='accepted' AND ordinal<? ORDER BY ordinal", (rid, failed["ordinal"]))
             if (spec := json.loads(row["spec"])).get("verify")]   # D54 §9 a: their checks are reviewed with the plan
         spec = planning.replan_step(task_id, replaced, failure, decision, environment.get("models"), environment.get("tools"),
@@ -700,8 +848,11 @@ class Coordinator:
         journal.remove_rows(db, "tasks", "run_id=? AND ordinal>=?", (rid, failed["ordinal"]), journal.RECOVERY, "task.replaced",
                             decision.get("reason"), event={"tasks": replaced})
         db.execute("INSERT INTO tasks(run_id,id,ordinal,spec) VALUES(?,?,?,?)", (rid, spec["id"], failed["ordinal"], dumps(spec)))
+        if snapshot.get("replan"):   # the earlier replans stay known: their tasks, and the ids they replaced
+            snapshot["replan_history"] = [*(snapshot.get("replan_history") or []), snapshot["replan"]]
         snapshot["replan"] = {"task": spec["id"], "applied": False, "replaced": replaced, "reason": decision.get("reason"),
-                              "instructions": decision.get("instructions"), "recovery": item["number"]}
+                              "instructions": decision.get("instructions"), "recovery": item["number"],
+                              **({"exempt": True} if exempt else {})}
         snapshot["steps"] = snapshot.get("steps", []) + [spec]
         version = fresh["version"] + 1
         journal.change(db, "recoveries", item["id"], journal.RECOVERY, "recovery.state", event={"id": item["id"]},
