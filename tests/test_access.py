@@ -333,6 +333,18 @@ class UserLifecycleTests(AccessCase):
             self.assertEqual(call("DELETE", f"/v1/admin/users/{self.b['id']}/tokens/{target['id']}", self.tokens["alice"], {})[0], 404)
         self.assertIn(("user.revoke_token", self.b["id"]), [(e["action"], e["target"]) for e in self.service.audit_log(self.a)])
 
+    def test_admin_user_list_counts_each_persons_sessions_in_progress(self):
+        """The admin portal's 「运行中的会话」 column: open Sessions that have not settled, per submitter."""
+        self.shared_env(users=("bob", "eve"))
+        first, second = self.start(self.b)["id"], self.start(self.b, "start-0000000002")["id"]
+        self.start(self.e, "start-0000000003")
+        running = lambda: {u["username"]: u["running"] for u in self.service.admin_users(self.a)}
+        self.assertEqual(running(), {"alice": 0, "bob": 2, "eve": 1})
+        with self.db.transaction() as db:
+            db.execute("UPDATE runs SET status='completed' WHERE id=?", (first,))
+            db.execute("UPDATE runs SET lifecycle='closed' WHERE id=?", (second,))
+        self.assertEqual(running(), {"alice": 0, "bob": 0, "eve": 1})
+
 class TokenTests(AccessCase):
     def last_used(self, name="bob"):
         with self.db.read() as db:
