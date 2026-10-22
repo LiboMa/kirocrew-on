@@ -194,6 +194,13 @@
           "more": "负责人 2026-10-22。控制台「有效期」（默认 30 天）、POST /v1/tokens 的 expires_in、octopus connect / login --expires；永不过期显示「永不过期」（expires null）；带 admin 的最长 30 天；长期 Token 不另加限制（负责人决定）。EC2 ab29b40：7 天 Token 7.0 天到期、永不过期的 Token 列表为 null 且能认证、forever 被拒 400，测试 Token 已撤销。"
         },
         {
+          "id": "m4-eager-spawn",
+          "name": "边界的 KiroCrew 不预先起会话（eager_spawn 关）",
+          "status": "accepted",
+          "ref": "D63",
+          "more": "EC2 c887aac（负责人同意后 2026-10-22 部署）：两个边界的 config.json 为 eager_spawn=false；空闲 ACP 进程 9 个 1246 MB → 3 个 376 MB，主机已用内存 5391 → 2921 MB；新会话的 slot 不再预先起会话，会话照常完成。根因：KiroCrew 0.10 默认开启，平台 slot 从不认领，内存吃紧时回收连带 SIGKILL 子 Agent（run-16848466…）。后续：子 Agent 结束时父会话仍跑一轮 coordinator（BACKLOG）。"
+        },
+        {
           "id": "m5-conn01",
           "name": "M5 CONN-01 GitHub App：连接、列仓库、只读克隆",
           "status": "todo",

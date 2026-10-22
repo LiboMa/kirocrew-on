@@ -1,16 +1,16 @@
 # 进度与完成记录
 
-> 由 `tools/progress.py` 生成（2026-10-22 14:06 CST）：任务状态取自 `docs/progress.json`，提交记录取自 git。看板：`docs/progress-dashboard.html`；实时看板：`python3 tools/progress.py --serve --ec2`（http://127.0.0.1:8765/）。
+> 由 `tools/progress.py` 生成（2026-10-22 14:39 CST）：任务状态取自 `docs/progress.json`，提交记录取自 git。看板：`docs/progress-dashboard.html`；实时看板：`python3 tools/progress.py --serve --ec2`（http://127.0.0.1:8765/）。
 
-- **本轮完成度**：87%　**MVP 完成度**：58%
-- **分支**：HEAD `ab29b40`；自 `origin/main` 起 421 个提交——已推送 335、已部署 EC2 86、仅本机 0；EC2 运行 `ab29b40`
+- **本轮完成度**：87%　**MVP 完成度**：59%
+- **分支**：HEAD `c887aac`；自 `origin/main` 起 423 个提交——已推送 335、已部署 EC2 88、仅本机 0；EC2 运行 `c887aac`
 - **回归**：1412 后端 + 92 + 205 控制台（connect codex / kiro-ide 本机）；EC2 运行 95e5aa9
 
 ## 模块
 
 | 模块 | 完成度 | 已验收 | 已部署 · 待验收 | 本机完成 · 待部署 | 进行中 | 卡点 · 等外部 | 未开始 |
 |---|---|---|---|---|---|---|---|
-| MVP 里程碑（M1–M5） | 58% | 11 | 6 | 0 | 1 | 0 | 10 |
+| MVP 里程碑（M1–M5） | 59% | 12 | 6 | 0 | 1 | 0 | 10 |
 | D46 Agent 角色与提示体系 | 87% | 8 | 3 | 0 | 0 | 1 | 0 |
 | D49 每人一个执行边界 | 80% | 2 | 2 | 0 | 1 | 0 | 0 |
 | D50 编码技能包 | 100% | 2 | 0 | 0 | 0 | 0 | 0 |
@@ -43,8 +43,13 @@
 
 ## 完成记录（按决策，最近的在前）
 
-### D62（2 个提交：已部署 EC2 2）
+### D63（1 个提交：已部署 EC2 1）
 
+- `c887aac` 2026-10-22 〔已部署 EC2〕 fix(composition): 边界的 KiroCrew 配置关掉 session.eager_spawn（D63）——KiroCrew 0.10 默认为每个 chat slot 预先起会话；平台的 slot 从不认领，白占进程，内存吃紧时被回收还连带 SIGKILL 正在运行的子 Agent（EC2 run-16848466…，parent-end teardown）；新配置与已有配置都写 false，明确开启的保留
+
+### D62（3 个提交：已部署 EC2 3）
+
+- `4eaf293` 2026-10-22 〔已部署 EC2〕 docs: D62 已在 EC2 验收（ab29b40）——7 天 Token 7 天到期、永不过期的列表为 null 且能认证、非法取值 400
 - `ab29b40` 2026-10-22 〔已部署 EC2〕 fix(tokens): 终审修正（D62）——octopus connect 完成时按平台实际给的有效期提示（永不过期 / 有效期至某日），不再写死 30 天；旧版控制台的 Token 列表显示「永不过期」而不是 1970 年
 - `d75e34f` 2026-10-22 〔已部署 EC2〕 feat(tokens): API Token 有效期可选 7 / 30 / 365 天或永不过期（D62，负责人 2026-10-22）——POST /v1/tokens 的 expires_in；永不过期以远期日期保存、API 返回 expires null、列表显示「永不过期」；带 admin 的最长 30 天；控制台「有效期」（默认 30 天，修正写死的「7 天后到期」）；octopus connect / login --expires（同时发 ttl，旧平台照旧 30 天）；OpenAPI 与运维说明
 
