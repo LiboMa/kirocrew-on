@@ -17,6 +17,8 @@ export interface Step {
   deliverables?: string[];
   acceptance?: string[];
   verify?: string[];
+  /** D57 §5: those of verify (by their text) that must pass; the others only warn. */
+  verify_required?: string[];
   depends_on?: string[];
   paths?: string[];
   /** D50: methods from the platform's skill pack the task's Agent reads first (at most 4). */

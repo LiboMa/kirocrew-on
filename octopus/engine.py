@@ -11,7 +11,7 @@ from .db import dumps, uid
 from .transport import worker_request
 from . import evaluation, gates, journal, knowledge, planning, quotas, recovery, waiting
 from .security import Error
-from .domain import CONTRACT, awaits_confirmation, unserved
+from .domain import CONTRACT, awaits_confirmation, required_checks, unserved
 from .gates import BLOCKED
 
 LEGACY = ("id", "name", "tool", "model", "effort", "prompt")
@@ -962,30 +962,25 @@ class Engine:
             return
         evidence["check_results"] = status["results"]
         evidence["check_artifacts"] = status.get("artifacts") or []
-        failed = status["results"][status["failed"]] if status.get("failed") is not None else None
-        if status["passed"]:
-            evidence["gates"].append(gates.record("checks_pass", "pass", f"{len(status['results'])} 条命令"))
-            error = None
-            if json.loads(attempt["spec"]).get("kind") == "test" and not (evidence.get("candidate") or {}).get("changed"):
-                evidence["gates"].append(gates.record("tests_fail_on_baseline", "skip", "测试任务没有改动"))
-            elif json.loads(attempt["spec"]).get("kind") == "test":
-                started = self._start_baseline(run, config, attempt, evidence)
-                if started:
-                    with self.db.transaction() as db:
-                        journal.change(db, "attempts", attempt["id"], journal.WORKER, "attempt.checking", "在会话基线上运行测试",
-                                       event={"id": attempt["id"], "task_id": task["id"]}, evidence=dumps(evidence), updated=time.time())
-                    return
-        else:
-            if status.get("lost"):
-                error = "检查命令中断（Worker 重启）"
-            elif failed is None:
-                error = "检查命令已停止"
-            elif failed.get("timeout"):
-                error = f"检查命令超时：{failed['command']}"
-            else:
-                error = f"检查命令失败：{failed['command']}（退出码 {failed['exit']}）"
-            evidence["gates"].append(gates.record("checks_pass", "fail", error))
+        spec = json.loads(attempt["spec"])
+        # D57 §5: only a required check's own failure blocks (a 「本地同步」's checks are judged the same way)
+        verdict, detail = gates.checks_verdict(spec.get("verify") or [], status, required_checks(run, spec))
+        evidence["gates"].append(gates.record("checks_pass", verdict, detail))
+        error = None
+        if verdict == "fail":
+            error = detail
             evidence.update(failure_type="gate", gate="checks_pass")
+        elif spec.get("kind") == "test" and not (evidence.get("candidate") or {}).get("changed"):
+            evidence["gates"].append(gates.record("tests_fail_on_baseline", "skip", "测试任务没有改动"))
+        elif spec.get("kind") == "test" and verdict == "warn":   # compared with the baseline only when all of them pass
+            evidence["gates"].append(gates.record("tests_fail_on_baseline", "skip", "检查命令没有全部通过，不在基线上比较"))
+        elif spec.get("kind") == "test":
+            started = self._start_baseline(run, config, attempt, evidence)
+            if started:
+                with self.db.transaction() as db:
+                    journal.change(db, "attempts", attempt["id"], journal.WORKER, "attempt.checking", "在会话基线上运行测试",
+                                   event={"id": attempt["id"], "task_id": task["id"]}, evidence=dumps(evidence), updated=time.time())
+                return
         self._settle(run, task, attempt, evidence, error)
 
     def _settle(self, run, task, attempt, evidence, error):
@@ -1135,6 +1130,7 @@ class Engine:
             # The spec a Worker validates keeps its six fields (a Worker not yet upgraded runs it as before); the task
             # contract and the requirement KiroCrew completed travel beside it (D34 §6.2).
             contract = {key: spec[key] for key in CONTRACT if key in spec}
+            contract.pop("verify_required", None)   # D57: the platform judges which must pass; an older Worker refuses it
             if not (config.get("capabilities") or {}).get("role_cards"):   # D46 P2: an older Worker refuses the field
                 contract.pop("role", None)
             have = (config.get("capabilities") or {}).get("skills")

@@ -141,6 +141,8 @@ TOOLS = [
                                  ["run_id", "request_id", "expected_version"]),
      "annotations": {"destructiveHint": True}},
     {"name": "octopus_continue", "description": "原 Session 修订并重跑 Task；保留 Workspace；可覆盖模型/Effort/工具与任务契约。"
+                                                "execution.verify 是你写的检查命令，默认全部为必过检查（失败即退回）；"
+                                                "可用 execution.verify_required 只列其中必过的几条，其余为建议检查（失败只记提示）。"
                                                 "rerun 只列出受本次修改影响的后续任务（省略则重跑所选任务之后的全部任务）；"
                                                 "依赖重跑任务的任务与其后的审查 / 测试任务会自动一并重跑，其余沿用上一版结果。",
      "inputSchema": object_schema({"run_id": STRING, "request_id": STRING, "expected_version": {"type": "integer"},

@@ -9,7 +9,8 @@ from .domain import CONTRACT   # one list of contract fields: a new one is recor
 
 FIELDS = ("name", "tool", "model", "effort")
 LABELS = {"name": "名称", "tool": "工具", "model": "模型", "effort": "Effort", "kind": "类别", "role": "角色", "deliverables": "交付物",
-          "acceptance": "验收项", "verify": "验证命令", "depends_on": "依赖", "paths": "可改动路径", "skills": "方法"}
+          "acceptance": "验收项", "verify": "验证命令", "verify_required": "必过检查", "depends_on": "依赖", "paths": "可改动路径",
+          "skills": "方法"}
 
 
 def _task(spec):

@@ -9,7 +9,7 @@ const KINDS: Record<string, string> = { created: "创建", planned: "规划", co
 const STATUS: Record<TaskDiff["status"], string> = { added: "新增", removed: "删除", changed: "修改", same: "未变化" };
 const FIELD: Record<string, string> = {
   name: "名称", tool: "工具", model: "模型", effort: "Effort", kind: "类别", role: "角色", deliverables: "交付物", acceptance: "验收项",
-  verify: "验证命令", depends_on: "依赖", paths: "可改动路径", skills: "方法",
+  verify: "验证命令", verify_required: "必过检查", depends_on: "依赖", paths: "可改动路径", skills: "方法",
 };
 const shown = (value: unknown, key: string) =>
   (Array.isArray(value) ? value.join("；") : key === "role" ? ROLE_LABELS[value as string] ?? value as string : value as string) || "默认";

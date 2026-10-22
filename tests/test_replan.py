@@ -160,10 +160,37 @@ class ReplanTests(ReplanCase):
         self.assertEqual(contexts[:2], [False, True])
 
 
+    def test_a_replan_must_keep_the_required_checks_of_the_tasks_it_replaces(self):   # D57 §13.1
+        steps_with = STEPS[:2] + [{**STEPS[2], "verify": ["npm test", "npm run lint"], "verify_required": ["npm test"]}]
+        self.decisions = [REPLAN, {"action": "wait_for_user", "reason": "规划失败", "instructions": "检查"}]
+        rid = self.start(steps_with)
+        run = self.tick(rid)
+        replan = {t["id"]: t for t in run["tasks"]}["replan-1"]
+        self.assertEqual(replan["status"], "blocked")   # NEW_PLAN carries no "npm test"
+        self.assertIn("被替换任务的必过检查", replan["attempts"][-1]["error"])
+        self.assertIn("npm test", replan["attempts"][-1]["error"])
+        self.assertNotIn("npm run lint", replan["attempts"][-1]["error"])   # an advisory one may go
+        self.assertEqual(run["replan"]["replaced"][-1]["required"], ["npm test"])
+        prompt = self.dispatched("replan-1")[0]["spec"]["prompt"]
+        self.assertIn("被替换任务的必过检查", prompt)
+        self.assertIn("npm test", prompt)
+
+    def test_a_replan_that_keeps_the_required_checks_is_applied(self):
+        steps_with = STEPS[:2] + [{**STEPS[2], "verify": ["npm test"]}]   # the user's: required
+        body = json.loads(NEW_PLAN[NEW_PLAN.index("{"):NEW_PLAN.rindex("}") + 1])
+        body["steps"][0].update(verify=["true", "npm test"], verify_required=["npm test"])   # no quote: carried over
+        self.plan = "```json\n" + json.dumps(body, ensure_ascii=False) + "\n```"
+        rid = self.start(steps_with)
+        run = self.tick(rid, 40)
+        self.assertEqual(run["status"], "completed", run.get("error"))
+        test = {t["id"]: t for t in run["tasks"]}["review-2"]["spec"]
+        self.assertEqual((test["verify"], test["verify_required"], test["origin"]), (["true", "npm test"], ["npm test"], "planner"))
+
+
 
 OLD_CHECK = "find . -name '*.py' -print0 | xargs -0 -r python3 -m py_compile && echo PYOK"
 FIXED_CHECK = "find . -name '*.py' -not -path '*/.venv/*' -print0 | xargs -0 -r python3 -m py_compile && echo PYOK"
-KEPT_STEPS = [{**STEPS[0], "verify": [OLD_CHECK]}] + STEPS[1:]
+KEPT_STEPS = [{**STEPS[0], "verify": [OLD_CHECK], "verify_required": []}] + STEPS[1:]   # an advisory check (D57)
 
 
 def plan_with(fixes):
@@ -195,13 +222,18 @@ class KeptChecksTests(ReplanCase):
         labels = (Path(__file__).resolve().parents[1] / "web/src/lib/labels.ts").read_text()
         self.assertIn('"task.verify_revised":', labels)   # the timeline names it
 
-    def test_a_correction_for_a_task_not_kept_or_emptying_a_check_is_ignored(self):
+    def test_a_correction_for_a_task_not_kept_or_dropping_a_required_check_is_ignored(self):
         self.plan = plan_with([{"task_id": "deliver", "verify": ["true"]}, {"task_id": "code", "verify": []}, "x"])
-        run = self.tick(self.start(KEPT_STEPS), 40)
+        run = self.tick(self.start([{**STEPS[0], "verify": [OLD_CHECK]}] + STEPS[1:]), 40)   # the user's check: required
         self.assertEqual(run["tasks"][0]["spec"]["verify"], [OLD_CHECK])
         notes = "；".join(run["replan"]["notes"])
         self.assertIn("deliver 不是保留的已验收任务", notes)
-        self.assertIn("「实现」须保留至少 1 条检查命令", notes)
+        self.assertIn("「实现」的必过检查不能由重新规划删除或改写", notes)
+
+    def test_a_correction_may_drop_an_advisory_check(self):   # D57 §5.2: a task needs no check of its own
+        self.plan = plan_with([{"task_id": "code", "verify": []}])
+        run = self.tick(self.start(KEPT_STEPS), 40)
+        self.assertEqual((run["tasks"][0]["spec"]["verify"], run["tasks"][0]["spec"]["verify_required"]), ([], []))
 
 class ReplanReviewTests(ReplanCase):
     def test_the_replan_prompt_fits_the_worker_limit(self):
@@ -222,6 +254,14 @@ class ReplanReviewTests(ReplanCase):
                                            "model": "m" * 200} for i in range(30)])
         steps([with_kept])
         self.assertLessEqual(len(with_kept["prompt"]), 7800)   # the kept tasks' checks (D54 §9 a) and preferences (D55) fit too
+        required = planning.replan_step("replan-1", [{"id": "t%d" % i, "name": "任务" * 40, "kind": "implement",
+                                                      "required": ["r" * 400] * 10} for i in range(12)],
+                                        long, {"reason": long, "instructions": long}, {"claude": ["m" * 60] * 60},
+                                        {"kiro": {"available": True, "reason": long}}, [long] * 5,
+                                        {"available": ["c" * 40] * 60, "missing": ["d" * 40] * 60},
+                                        [{**k, "required": k["verify"]} for k in kept])
+        steps([required])   # D57 §13.1: the required checks to carry over, and the kept ones', fit as well
+        self.assertIn("被替换任务的必过检查", required["prompt"])
         self.assertIn("用户的映射偏好", with_kept["prompt"])
         for name in ("test-driven-development", "evaluator"):   # the compact catalogues still name every choice
             self.assertIn(name, spec["prompt"])

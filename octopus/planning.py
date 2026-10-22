@@ -15,6 +15,12 @@ from .workflow_import import import_workflow
 REQUESTED = ("需求明确指定某任务的工具或模型时（如「审查用 codex」「用 sonnet 实现」），照指定写 tool / model，并写 "
              "requested: {\"tool\": …, \"model\": …, \"quote\": \"需求原文片段\"}——即使该工具 available 为 false、该模型未公布，"
              "也不要换成别的，平台会如实告知用户；没有指定时省略 requested。")
+# D57 §5.1–5.2: a check is advisory unless the requirement itself asks for it, in words the planner quotes.
+REQUIRED = ("verify 写实际可执行的检查命令（可不写），默认为建议检查：失败只记提示；需求原文明确要求的验收（如「pytest 全部通过」"
+            "「--check 退出 0」）对应的命令另列入 verify_required，并在 verify_basis 写 {\"命令\": \"需求原文片段\"}"
+            "（逐字摘自需求，否则按建议检查）；")
+REQUIRED_COMPACT = ("verify 默认为建议检查；需求原文明确要求的验收命令另列入 verify_required，并在 verify_basis 写 "
+                    "{\"命令\": \"需求原文片段\"}（逐字摘自需求）；")
 PLAN_ID = "plan"
 REPLAN_PREFIX = "replan-"
 EXAMPLE = {"intent": "一句话：用户真正要完成什么、属于哪类工作（新功能 / 缺陷修复 / 审查 / 原型 / 其他）",
@@ -44,7 +50,7 @@ def rules(count, depends, compact=False):
    后续任务将在同一个 Session、同一份源码检出上依次执行。
 4. 任务契约：每个任务必须给出 kind（implement / review / test / deliver / design）、deliverables、
    至少 1 条可检查的 acceptance（审查与测试任务的验收项取自 summary 的验收标准，不另加要求）；
-   implement 与 test 任务必须给出至少 1 条 verify（实际可执行的验证命令）；{depends}
+   {REQUIRED_COMPACT if compact else REQUIRED}{depends}
    paths 写本任务可改动的路径，便于续作时判断哪些任务受影响。
    平台会检查并记提示（不会因此退回）：test 任务新增的测试应在会话基线（实现之前的源码）上失败；后续任务若要修改此前任务
    交付的文件，应在自己的 paths 中列出这些文件。test 任务只写测试、不改实现，其 verify 不安装依赖（不写 npm install / pip install 等）；
@@ -158,11 +164,10 @@ def expand(db, rid, text, models=None, replan=False, tools=None):
     for step in steps:   # a dependency follows the task it named to its new id
         if step.get("depends_on"):
             step["depends_on"] = list(dict.fromkeys(renames.get(dep, dep) for dep in step["depends_on"]))
-    for step in steps:   # every planned task carries its contract (D34 §6.1)
-        missing = [label for label, ok in (("类别（kind）", "kind" in step), ("验收项（acceptance）", step.get("acceptance")),
-                                           ("验证命令（verify）", step.get("kind") not in {"implement", "test"} or step.get("verify")))
-                   if not ok]
+    for step in steps:   # every planned task carries its contract (D34 §6.1); its checks are its own choice (D57 §5.2)
+        missing = [label for label, ok in (("类别（kind）", "kind" in step), ("验收项（acceptance）", step.get("acceptance"))) if not ok]
         require(not missing, f"任务「{step['name']}」缺少{'、'.join(missing)}", 409, "plan_invalid")
+    _required_checks(db, rid, current, steps, notes, replan)
     if len(plan["steps"]) > limit:
         notes.append(f"规划给出 {len(plan['steps'])} 个任务，只保留前 {limit} 个")
     from .domain import pushing
@@ -228,12 +233,47 @@ def expand(db, rid, text, models=None, replan=False, tools=None):
     return applied
 
 
+def _quoted(quote, requirement):
+    """Whether ``quote`` is the requirement's own words (D57 §13.2): a part of it, whatever the whitespace."""
+    words = "".join(str(quote or "").split())
+    return bool(words) and words in "".join(str(requirement or "").split())
+
+
+def _required_checks(db, rid, current, steps, notes, replan):
+    """D57 §5.1, §13: which of the planned tasks' checks must pass. A planner's mark counts with a quote from the requirement
+    (the Session's input), or — in a replan — for a required check of a task it replaces, carried over as it is; any other
+    is advisory and said so. A replan that drops or rewrites a replaced task's required check is invalid."""
+    requirement = db.execute("SELECT input FROM runs WHERE id=?", (rid,)).fetchone()["input"]
+    inherited = list(dict.fromkeys(command for task in ((current.get("replan") or {}).get("replaced") or []) if replan
+                                   for command in task.get("required") or []))
+    for step in steps:
+        basis, required = step.pop("verify_basis", {}), []
+        for command in step.get("verify_required") or []:
+            if command in inherited or _quoted(basis.get(command), requirement):
+                required.append(command)
+            elif basis.get(command):
+                notes.append(f"任务「{step['name']}」的检查「{command[:80]}」所引的「{basis[command][:60]}」不是需求原文，按建议检查")
+            else:
+                notes.append(f"任务「{step['name']}」的检查「{command[:80]}」没有注明对应的需求原文，按建议检查")
+        step["origin"] = "planner"
+        if step.get("verify"):
+            step["verify_required"] = required
+        else:
+            step.pop("verify_required", None)
+        if kept := {command: basis[command] for command in required if command in basis}:
+            step["verify_basis"] = kept
+    dropped = [command for command in inherited if not any(command in step.get("verify_required", []) for step in steps)]
+    require(not dropped, "重新规划没有承接被替换任务的必过检查（须原样写入新任务的 verify 与 verify_required）："
+            + "、".join(f"「{command[:200]}」" for command in dropped[:5]), 409, "plan_invalid")
+
+
 def _fix_kept_checks(db, rid, kept, fixes, notes):
     """The replan's corrections of kept tasks' checks (D54 §9 a), applied before its revision is written so that the
-    revision shows them; one that names a task not kept, or leaves an implement / test task without a check, is ignored
-    and said so. Returns the ids corrected."""
+    revision shows them; one that names a task not kept, or drops or rewrites one of its required checks (D57 §13.1:
+    only the user changes those), is ignored and said so. Returns the ids corrected."""
     from . import journal
-    from .domain import LIMITS, strings
+    from .domain import LIMITS, required_checks, strings
+    run = db.execute("SELECT snapshot FROM runs WHERE id=?", (rid,)).fetchone()
     fixed = []
     for fix in fixes if isinstance(fixes, list) else []:
         tid = fix.get("task_id") if isinstance(fix, dict) else None
@@ -247,13 +287,18 @@ def _fix_kept_checks(db, rid, kept, fixes, notes):
         except Error as exc:
             notes.append(f"检查命令的修正（「{spec.get('name', tid)}」）无效，已忽略：{exc}")
             continue
-        if not verify and spec.get("kind") in {"implement", "test"}:
-            notes.append(f"检查命令的修正：「{spec.get('name', tid)}」须保留至少 1 条检查命令，已忽略")
+        required = required_checks(run, spec)
+        lost = [command for command in required if command not in verify]
+        if lost:
+            notes.append(f"检查命令的修正：「{spec.get('name', tid)}」的必过检查不能由重新规划删除或改写"
+                         f"（{'、'.join(command[:80] for command in lost[:3])}），已忽略")
             continue
         if verify == (spec.get("verify") or []):
             continue
+        # which must pass is written down: what the replan adds is advisory, whoever wrote the task
+        revised = {**spec, "verify": verify, "verify_required": required}
         journal.change(db, "tasks", (rid, tid), journal.KIROCREW, "task.verify_revised", "重新规划修正了保留任务的检查命令",
-                       event={"task_id": tid, "verify": verify}, spec=dumps({**spec, "verify": verify}))
+                       event={"task_id": tid, "verify": verify}, spec=dumps(revised))
         notes.append(f"保留任务「{spec.get('name', tid)}」的检查命令由重新规划修正")
         fixed.append(tid)
     return fixed
@@ -296,7 +341,7 @@ def kept_section(kept):
 {_clip(dumps(kept), 600)}
 这些已验收的任务不重跑，但以后返工时仍按上面的 verify 检查。若其中有检查会因会话后来的变化而误判（例如扫描到项目内的依赖目录
 .venv / node_modules，或用了本环境没有的命令），在计划 JSON 顶层写 "verify_fixes": [{{"task_id": "…", "verify": ["修正后的命令"]}}]：
-只修正检查的范围与可执行性，不放宽它要证明的事；没有问题时省略。
+只修正检查的范围与可执行性，不放宽它要证明的事，required 中的必过检查原样保留；没有问题时省略。
 
 """
 
@@ -306,16 +351,19 @@ def replan_step(task_id, replaced, failure, decision, models=None, tools=None, l
     """The Coordinator's replan (D41 §3.2): a Kiro task that plans only the remaining work, under the first plan's rules
     (D46). What the dispatch carries anyway is referred to, not copied — the requirement, the first plan's completion and
     the accepted tasks' conclusions — so the prompt stays within the Worker's 8000 characters whatever the Session holds."""
+    required = list(dict.fromkeys(command for r in replaced for command in r.get("required") or []))   # D57 §13.1
     replaced = [{"id": r.get("id"), "name": _clip(r.get("name"), 60), "kind": r.get("kind")} for r in replaced][:12]
+    carry = f"被替换任务的必过检查（新任务须原样写入 verify 与 verify_required，否则计划不合法）：{_clip(dumps(required), 300)}\n" \
+        if required else ""
     prompt = f"""你是此 Session 的 KiroCrew 规划者。协调者判断原计划有问题，请重新规划剩余的工作。
 用户需求见上方「本次研发任务」与「需求与验收标准（KiroCrew 规划补全）」；已完成并验收的任务及其结论见「前序交接」，它们保留，不要重复。
 失败任务已有的改动仍在会话分支上（工作区中），可在其基础上继续。保留用户只做分析、只审查、离线、标准库等明确约束。
 
 ## 被替换的任务（原计划的剩余部分，不再执行）
 {_clip(dumps(replaced), 600)}
-
+{carry}
 ## 失败与协调者的判断
-失败：{_clip(failure, 500)}
+失败：{_clip(failure, 400)}
 协调者的原因：{_clip(decision.get("reason"), 400)}
 协调者的要求：{_clip(decision.get("instructions"), 900)}
 

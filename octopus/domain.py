@@ -51,9 +51,11 @@ def name(value):
 
 
 # Optional task structure (D34 §6.1): what a task delivers and how it is checked, kept in its spec only when given.
-CONTRACT = ("kind", "role", "deliverables", "acceptance", "verify", "depends_on", "paths", "skills")
+# verify_required (D57 §5): those of the checks that must pass, named by their text; the others only report.
+CONTRACT = ("kind", "role", "deliverables", "acceptance", "verify", "verify_required", "depends_on", "paths", "skills")
 KINDS = ("implement", "review", "test", "deliver", "design")
-LIMITS = {"deliverables": (20, 500), "acceptance": (20, 500), "verify": (10, 500), "paths": (20, 500), "depends_on": (8, 48)}
+LIMITS = {"deliverables": (20, 500), "acceptance": (20, 500), "verify": (10, 500), "verify_required": (10, 500),
+          "paths": (20, 500), "depends_on": (8, 48)}
 
 
 def strings(value, field, items, chars):
@@ -74,14 +76,38 @@ def requested(value, tool):
     return {k: value[k].strip() for k in ("tool", "model", "quote") if k in value}
 
 
+def basis(value, required):
+    """The requirement's words a required check stands on (D57 §13.2), ``{command: quote}`` as the planner quoted them;
+    kept for the checks still required."""
+    require(isinstance(value, dict) and all(isinstance(k, str) and isinstance(v, str) and v.strip() and len(v) <= 200
+                                            for k, v in value.items()), "verify_basis 须为 {检查命令: 需求原文片段}")
+    return {k.strip(): v.strip() for k, v in value.items() if k.strip() in required}
+
+
+def required_checks(run, spec):
+    """The checks of ``spec`` that must pass (D57 §5): its ``verify_required``; without one (a task from before D57) none of
+    a planner's — an agent-planned Session's or a replan's task — and all of a person's (steps given, a saved workflow).
+    ``run`` is a Session's row (its snapshot as JSON) or its view."""
+    if "verify_required" in spec:
+        return list(spec["verify_required"] or [])
+    run = dict(run)
+    snapshot = run.get("snapshot")
+    snapshot = json.loads(snapshot or "{}") if isinstance(snapshot, str) else snapshot if isinstance(snapshot, dict) else run
+    planner = spec.get("origin") == "planner" or snapshot.get("match_mode") == "agent" or \
+        spec.get("id") in ((snapshot.get("replan") or {}).get("tasks") or [])
+    return [] if planner else list(spec.get("verify") or [])
+
+
 def steps(value, known=(), planned=False):
     """Validated tasks; ``known`` are the ids of tasks before ``value`` (a continued task depends on them). ``planned``: the
-    KiroCrew planner's tasks (or a continue of one), the only ones that may carry ``requested`` (D45) — anywhere else it is
-    dropped, so a saved workflow or a given plan never claims an old requirement's choice."""
+    KiroCrew planner's tasks (or a continue of one), the only ones that may carry ``requested`` (D45), ``origin`` and
+    ``verify_basis`` (D57) — anywhere else they are dropped, so a saved workflow or a given plan never claims an old
+    requirement's choice. A person's checks (not ``planned``) must all pass unless ``verify_required`` names some (D57 §5.3)."""
     require(isinstance(value, list) and 1 <= len(value) <= 8, "流程须包含 1–8 个顺序任务")
     seen, earlier, result = set(), set(known), []
     for step in value:
-        require(isinstance(step, dict) and set(step) <= {"id", "name", "prompt", "tool", "model", "effort", "requested", *CONTRACT},
+        require(isinstance(step, dict) and set(step) <= {"id", "name", "prompt", "tool", "model", "effort", "requested",
+                                                         "origin", "verify_basis", *CONTRACT},
                 "不支持的 Task 字段")
         sid = step.get("id")
         require(isinstance(sid, str) and re.fullmatch(r"[a-z][a-z0-9-]{0,47}", sid)
@@ -109,6 +135,17 @@ def steps(value, known=(), planned=False):
         for field, (items, chars) in LIMITS.items():
             if field in step:
                 item[field] = strings(step[field], field, items, chars)
+        if "verify_required" in item:   # D57 §5: by their text, wherever they stand among the checks
+            require(set(item["verify_required"]) <= set(item.get("verify", [])), "verify_required 的每条检查须在 verify 中")
+        elif not planned and item.get("verify"):   # a person's own checks must pass (D57 §5.3)
+            item["verify_required"] = list(item["verify"])
+        if "origin" in step and planned:   # D57: the planner wrote this task (and its checks)
+            require(step["origin"] == "planner", "origin 只能是 planner")
+            item["origin"] = "planner"
+        if "verify_basis" in step and planned:
+            kept = basis(step["verify_basis"], item.get("verify_required", []))
+            if kept:
+                item["verify_basis"] = kept
         if "skills" in step:   # D50: methods from the platform's skill pack the task's Agent works by
             from . import skills as pack
             chosen = step["skills"]
@@ -2429,6 +2466,8 @@ class Service:
                     # D45: the user's own new tool or model for the task takes the place of what the requirement named
                     changed = any(key in override and override[key] != before.get(key) for key in ("tool", "model"))
                     merged = {**{k: v for k, v in before.items() if not (changed and k == "requested")}, **override}
+                    if "verify" in override and "verify_required" not in override:   # D57 §5.3: the user's own checks
+                        merged["verify_required"] = override["verify"]
                     if override.get("role", "x") in (None, ""):   # the user takes the role away; the kind stays
                         merged.pop("role")
                     current = steps([merged], known=[t["id"] for t in ordered[:index]], planned=True)[0]

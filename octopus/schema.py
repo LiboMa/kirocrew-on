@@ -20,10 +20,13 @@ def openapi():
     contract = {"kind": {"enum": ["implement", "review", "test", "deliver", "design"]}, "role": {"enum": list(roles.KINDS)},
                 "deliverables": listed(20),
                 "acceptance": listed(20), "verify": listed(10), "depends_on": listed(8), "paths": listed(20),
-                "skills": {"type": "array", "items": {"enum": list(skills.CATALOG)}, "maxItems": skills.LIMIT}}
+                "skills": {"type": "array", "items": {"enum": list(skills.CATALOG)}, "maxItems": skills.LIMIT},
+                # D57 §5: those of verify that must pass; omitted, every check a person writes must pass
+                "verify_required": {**listed(10), "description": "Checks of verify (by their text) that must pass; the "
+                                    "others only report a warning. Omitted in steps or a continue's verify: all of them."}}
     schemas = {
         "Step": obj({"id": text, "name": text, **execution, **contract}, ["id", "name", "tool", "prompt"]),
-        "Execution": obj({"name": text, **execution}),
+        "Execution": obj({"name": text, **execution, **contract}),   # a continue may change the task contract too
         "Source": obj({"type": {"enum": ["new", "git"]}, "url": text, "ref": text}, ["type"]),
         "Login": obj({"username": text, "password": {"type": "string", "format": "password"}}, ["username", "password"]),
         "User": obj({"username": text, "password": {"type": "string", "format": "password"}, "admin": {"type": "boolean"},

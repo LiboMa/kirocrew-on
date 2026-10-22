@@ -4,7 +4,7 @@ import time
 
 from . import journal
 from .db import dumps, uid
-from .domain import SETTLED, TOOLS, steps, unserved
+from .domain import SETTLED, TOOLS, required_checks, steps, unserved
 from .security import Error, require
 
 LIVE = {"pending", "dispatching", "dispatch_unknown", "running", "waiting_approval"}
@@ -260,7 +260,9 @@ def switch(db, run, failed, decision, context):
                     f"其后的审查「{later.get('name') or later['id']}」使用 {tool}，审查须与被审查代码的工具不同；请换用其他工具")
     earlier = [r["id"] for r in db.execute("SELECT id FROM tasks WHERE run_id=? AND ordinal<? ORDER BY ordinal",
                                           (run["id"], failed["ordinal"]))]
-    return steps([{**spec, "tool": tool, "model": model, "effort": effort}], known=earlier)[0], before
+    switched = steps([{**spec, "tool": tool, "model": model, "effort": effort}], known=earlier)[0]
+    switched.pop("verify_required", None)   # D57 §5: which checks must pass, and who wrote them, stay as they were
+    return {**switched, **{key: spec[key] for key in ("verify_required", "verify_basis", "origin") if key in spec}}, before
 
 
 def widen(decision, context, failed, target):
@@ -686,13 +688,18 @@ class Coordinator:
         environment = context.get("environment") or {}
         later = [dict(row) for row in db.execute("SELECT * FROM tasks WHERE run_id=? AND ordinal>=? ORDER BY ordinal",
                                                  (rid, failed["ordinal"]))]
-        replaced = [{"id": row["id"], "name": json.loads(row["spec"]).get("name", row["id"]),
-                     "kind": json.loads(row["spec"]).get("kind")} for row in later]
+        # D57 §13.1: the checks of these tasks that must pass, for the new tasks to carry over as they are (the platform
+        # runs none of a review's or a design's)
+        replaced = [{"id": row["id"], "name": spec.get("name", row["id"]), "kind": spec.get("kind"),
+                     **({"required": required} if spec.get("kind") not in ("review", "design")
+                        and (required := required_checks(fresh, spec)) else {})}
+                    for row in later for spec in [json.loads(row["spec"])]]
         failure = f"任务「{replaced[0]['name']}」：{str(context.get('error') or '')[:1500]}"
         used = {row[0] for row in db.execute("SELECT id FROM tasks WHERE run_id=? UNION SELECT task_id FROM attempts WHERE run_id=?",
                                              (rid, rid))}
         task_id = next(planning.REPLAN_PREFIX + str(n) for n in range(1, 100) if planning.REPLAN_PREFIX + str(n) not in used)
-        kept = [{"id": row["id"], "name": spec.get("name", row["id"]), "verify": spec["verify"]} for row in db.execute(
+        kept = [{"id": row["id"], "name": spec.get("name", row["id"]), "verify": spec["verify"],
+                 **({"required": required} if (required := required_checks(fresh, spec)) else {})} for row in db.execute(
             "SELECT id, spec FROM tasks WHERE run_id=? AND status='accepted' AND ordinal<? ORDER BY ordinal", (rid, failed["ordinal"]))
             if (spec := json.loads(row["spec"])).get("verify")]   # D54 §9 a: their checks are reviewed with the plan
         spec = planning.replan_step(task_id, replaced, failure, decision, environment.get("models"), environment.get("tools"),

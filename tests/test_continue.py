@@ -7,6 +7,7 @@ import unittest
 from octopus import mcp
 from octopus.db import dumps
 from octopus.engine import continuation
+from octopus.security import Error
 from octopus import report
 from tests.test_confirmation import ConfirmationCase
 
@@ -115,6 +116,41 @@ class FlowTests(ContinueCase):
         self.assertEqual([p["task_id"] for p in refused], ["code", "review"])   # both reworked tasks asked to continue
         for event in refused:
             self.assertEqual(event.get("reason"), "未能续接上一轮对话（not_this_session），本轮从新对话开始")
+
+class ContinuedChecksTests(ContinueCase):
+    def continued(self, rid, request, execution):
+        run = self.service.run(self.actor, rid)
+        self.service.operate(self.actor, rid, "continue", {"request_id": request, "expected_version": run["version"],
+                                                           "task_id": "code", "execution": execution})
+        run = self.tick(rid)
+        self.assertEqual(run["status"], "completed", run.get("error"))
+        return run["tasks"][0]["spec"]
+
+    def test_checks_given_in_a_continue_are_required(self):   # D57 §5.3: what the user writes in a continue must pass
+        rid = self.start()
+        self.assertEqual(self.tick(rid)["status"], "completed")
+        with self.db.transaction() as db:   # the task as a planner gave it: an advisory check
+            spec = json.loads(db.execute("SELECT spec FROM tasks WHERE run_id=? AND id='code'", (rid,)).fetchone()[0])
+            spec.update(verify=["npm test"], verify_required=[], origin="planner")
+            db.execute("UPDATE tasks SET spec=? WHERE run_id=? AND id='code'", (dumps(spec), rid))
+        spec = self.continued(rid, "continue-checks-1", {"prompt": "实现（补充说明）"})
+        self.assertEqual((spec["verify"], spec["verify_required"], spec["origin"]), (["npm test"], [], "planner"))
+        spec = self.continued(rid, "continue-checks-2", {"verify": ["npm test", "npm run lint"]})
+        self.assertEqual(spec["verify_required"], ["npm test", "npm run lint"])   # all of them, unmarked
+        spec = self.continued(rid, "continue-checks-3", {"verify": ["npm test", "npm run lint"], "verify_required": ["npm run lint"]})
+        self.assertEqual(spec["verify_required"], ["npm run lint"])
+        spec = self.continued(rid, "continue-checks-4", {"verify_required": []})   # the user may make them all advisory
+        self.assertEqual((spec["verify"], spec["verify_required"]), (["npm test", "npm run lint"], []))
+        for number, execution in enumerate(({"verify_required": ["make check"]},
+                                            {"verify": ["npm test"], "verify_required": ["npm run lint"]},
+                                            {"verify": ["npm test"], "verify_required": "npm test"})):
+            with self.subTest(execution=execution), self.assertRaises(Error) as caught:
+                self.service.operate(self.actor, rid, "continue", {
+                    "request_id": f"continue-checks-bad-{number}", "expected_version": self.service.run(self.actor, rid)["version"],
+                    "task_id": "code", "execution": execution})
+            self.assertEqual(caught.exception.status, 400)
+        self.assertEqual(self.service.run(self.actor, rid)["tasks"][0]["spec"]["verify_required"], [])
+
 
 class RuleTests(unittest.TestCase):
     PREVIOUS = {"id": "attempt-" + "a" * 32, "native_id": "aaaa1111", "spec": json.dumps({"tool": "claude", "model": "auto", "effort": ""}),
