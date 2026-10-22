@@ -1,6 +1,8 @@
 """D37 §5 (G1): the platform runs a task's verify commands itself — in order, every one of them even after a failure
 (D57 §13.3), each and all of them time-limited with their whole process group ended, the output's tail kept with
-credentials hidden; a commit a check makes has an identity, and a failure the environment caused is told apart (D57 §5)."""
+credentials masked; a commit a check makes has an identity, and a failure the environment caused is told apart (D57 §5)."""
+import hashlib
+import json
 import os
 from pathlib import Path
 import subprocess
@@ -10,7 +12,6 @@ import time
 import unittest
 from unittest.mock import patch
 
-from octopus import sources
 from octopus import checks as checks_module
 from octopus.checks import Checks
 from octopus.security import Error
@@ -129,14 +130,20 @@ class CheckTests(unittest.TestCase):
         self.assertIn(str(self.project.resolve()), value["results"][1]["tail"])   # runs in the project
 
     def test_output_tail_is_kept_and_scrubbed(self):
+        # D57 §3.3: a credential in the output is shown by its first four and last two characters only, and what was
+        # masked is listed in the result (kind, line in the tail, masked form, hash) — its text nowhere
         token = "ghp_" + "A1b2C3d4" * 5
         checks = Checks()
         value = finished(checks, checks.start("run-a", "attempt-1", self.project,
                                               [f"head -c 10000 /dev/zero | tr '\\0' x; echo; echo token={token}"])["job"])
-        tail = value["results"][0]["tail"]
-        self.assertLessEqual(len(tail.encode()), 4096)
-        self.assertNotIn(token, tail)
-        self.assertIn(sources.HIDDEN, tail)
+        result = value["results"][0]
+        self.assertLessEqual(len(result["tail"].encode()), 4096)
+        self.assertTrue(result["tail"].endswith("\ntoken=ghp_…d4\n"), result["tail"][-60:])
+        self.assertEqual(result["findings"], [{"kind": "github", "line": 2, "masked": "ghp_…d4",
+                                               "hash": hashlib.sha256(token.encode()).hexdigest()}])
+        self.assertNotIn(token[4:-2], json.dumps([result["tail"], result["findings"]]))   # the command is the plan's
+        clean = finished(checks, checks.start("run-a", "attempt-2", self.project, ["echo fine"])["job"])
+        self.assertNotIn("findings", clean["results"][0])
 
     def test_a_hanging_command_and_its_children_are_ended(self):
         checks = Checks(per_command=1)

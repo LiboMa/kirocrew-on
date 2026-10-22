@@ -8,6 +8,7 @@ from __future__ import annotations
 
 from contextlib import contextmanager
 import fcntl
+import hashlib
 import json
 import os
 from pathlib import Path
@@ -26,9 +27,80 @@ HIDDEN = "[凭证已隐去]"
 SKIP_DIRS = {"node_modules", ".venv", "venv", "__pycache__", ".pytest_cache", ".mypy_cache", "target", ".gradle",
              ".turbo", ".parcel-cache", ".cache"}
 ENV_KEPT = {".env.example", ".env.sample"}
-# What a credential looks like in a diff: GitHub (fine-grained, classic, OAuth, app), GitLab, AWS keys, private keys.
-SUSPICIOUS = re.compile(rb"github_pat_[A-Za-z0-9_]{20,}|gh[pousr]_[A-Za-z0-9]{30,}|glpat-[A-Za-z0-9_-]{20,}|AKIA[0-9A-Z]{16}"
-                        rb"|-----BEGIN [A-Z ]*PRIVATE KEY-----")
+# What a credential looks like (D57 §3.2), by kind, in the order a span is named by: at one place the first kind that
+# matches wins (anthropic before openai), and one span is reported once. A rule with a group reports only the group (the
+# AWS Secret Key, not its label). Prefixes that also occur inside words or longer runs (AKIA/ASIA, sk-, xox, oct_) count
+# only at the start of one.
+SECRET_RULES = [
+    ("github", re.compile(rb"github_pat_[A-Za-z0-9_]{20,}|gh[pousr]_[A-Za-z0-9]{30,}")),
+    ("gitlab", re.compile(rb"glpat-[A-Za-z0-9_-]{20,}")),
+    ("aws_access_key", re.compile(rb"(?<![A-Za-z0-9])(?:AKIA|ASIA)[0-9A-Z]{16}(?![A-Za-z0-9])")),
+    ("aws_secret_key", re.compile(rb"(?i:aws_secret_access_key)[\"']?\s*[:=]\s*[\"']?([A-Za-z0-9/+]{40})"
+                                  rb"(?![A-Za-z0-9/+=])")),
+    ("anthropic", re.compile(rb"(?<![A-Za-z0-9_-])sk-ant-[A-Za-z0-9_-]{32,}")),
+    ("openai", re.compile(rb"(?<![A-Za-z0-9_-])sk-(?:(?:proj|svcacct|admin)-[A-Za-z0-9_-]{32,}|[A-Za-z0-9]{32,})")),
+    ("slack", re.compile(rb"(?<![A-Za-z0-9_-])xox[abprs]-[0-9]+-[A-Za-z0-9-]{10,}")),
+    # The platform's own API Token, as security.create_token makes it: "oct_" and token_urlsafe(32).
+    ("octopus_token", re.compile(rb"(?<![A-Za-z0-9_-])oct_[A-Za-z0-9_-]{43}(?![A-Za-z0-9_-])")),
+    # The whole block when its end comes before any other "-----", so masking leaves none of the key; else the header
+    # and the base64 lines after it.
+    ("private_key", re.compile(rb"-----BEGIN [A-Z ]*PRIVATE KEY(?: BLOCK)?-----(?:(?:[A-Za-z0-9+/=\s:,.]|-(?!----))*?"
+                               rb"-----END [A-Z ]*PRIVATE KEY(?: BLOCK)?-----|(?:\s+[A-Za-z0-9+/=]{16,})*)")),
+]
+# Any of them, for the scans that only ask whether something is there (a publish, a candidate, a Knowledge item).
+SUSPICIOUS = re.compile(b"|".join(b"(?:" + pattern.pattern + b")" for _, pattern in SECRET_RULES))
+
+
+def _masked(value):
+    """A credential as it may be shown (D57 §3.3): its first four and last two characters; a value too short to keep
+    most of it hidden that way is shown as the ellipsis alone."""
+    text = value.decode(errors="replace")
+    return text[:4] + "…" + text[-2:] if len(text) >= 12 else "…"
+
+
+def find_secrets(data, extra=()):
+    """Where ``data`` (bytes) holds what looks like a credential, in order: ``{kind, start, end, line, masked, hash}``,
+    ``start``/``end`` the span in ``data``, ``line`` from 1, ``hash`` the span's SHA-256 (hex). ``extra`` are values to
+    be found as they are (a Worker Token, which has no prefix to know it by): kind ``worker_token``, named before any
+    rule."""
+    data = bytes(data)
+    spans = []   # (start, priority, end, kind)
+    for value in extra:
+        value = value.encode() if isinstance(value, str) else bytes(value or b"")
+        at = data.find(value) if value else -1   # an empty (or unset) value is never "found" everywhere
+        while at >= 0:
+            spans.append((at, -1, at + len(value), "worker_token"))
+            at = data.find(value, at + len(value))
+    for priority, (kind, pattern) in enumerate(SECRET_RULES):
+        for match in pattern.finditer(data):
+            start, end = match.span(1) if pattern.groups else match.span()
+            spans.append((start, priority, end, kind))
+    found, last, line, counted = [], 0, 1, 0
+    for start, _, end, kind in sorted(spans):
+        if start < last:
+            continue   # within a span already named
+        line += data.count(b"\n", counted, start)
+        counted, last = start, end
+        found.append({"kind": kind, "start": start, "end": end, "line": line, "masked": _masked(data[start:end]),
+                      "hash": hashlib.sha256(data[start:end]).hexdigest()})
+    return found
+
+
+def mask_text(text, extra=()):
+    """``text`` with every credential ``find_secrets`` finds replaced by its masked form, and what was found (``start``/
+    ``end`` in characters of ``text``). Masking masked text changes nothing."""
+    data = text.encode(errors="surrogatepass")
+    found = find_secrets(data, [v.encode(errors="surrogatepass") if isinstance(v, str) else v for v in extra or ()])
+    pieces, at, chars = [], 0, 0
+    for hit in found:
+        start, end = hit["start"], hit["end"]
+        between = data[at:start].decode(errors="surrogatepass")
+        secret = len(data[start:end].decode(errors="surrogatepass"))
+        pieces += [between, hit["masked"]]
+        chars += len(between)
+        hit["start"], hit["end"] = chars, chars + secret
+        chars, at = chars + secret, end
+    return "".join(pieces) + data[at:].decode(errors="surrogatepass"), found
 
 
 def env_file(name):
@@ -49,7 +121,8 @@ LEFT_OUT = tuple(f":(exclude,glob)**/{name}/**" for name in sorted(SKIP_DIRS)) +
     ":(exclude,glob)**/.env.*", ":(exclude,glob)**/.env.*/**")
 KEPT = tuple(f":(glob)**/{name}" for name in sorted(ENV_KEPT))
 COMMITTER = ("-c", "user.name=KiroCrew ON", "-c", "user.email=kirocrew-on@localhost", "-c", "commit.gpgsign=false")
-OVERLAP = 4096   # longer than any match SUSPICIOUS needs, so a match across two read chunks is still found
+OVERLAP = 4096   # longer than what SUSPICIOUS needs to know any kind by (a private key by its header line alone), so
+                 # a credential across two read chunks is still found
 
 
 def publish_candidate(project, message, branch, scratch):

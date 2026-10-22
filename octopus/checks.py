@@ -2,10 +2,10 @@
 (the execution user the Agent runs as, so no new privilege), one after another, every one of them even after a failure
 (D57 §13.3: a failing advisory check must not keep a required one from running). Each command and all of them together
 are time-limited; a command that overruns has its whole process group ended, and what the total limit leaves is skipped.
-What remains is the exit code, the time and the output's tail with credentials hidden; ``unrunnable`` tells a failure
-the environment caused (a missing command or module, no git identity) from one of what the command checks, and the
-Worker records its answer in each failed result (D57 §5). A commit a check makes has the platform's identity only where
-git finds none of its own."""
+What remains is the exit code, the time and the output's tail with credentials masked (D57 §3.3: what was masked is
+listed in the result's ``findings``, never its text); ``unrunnable`` tells a failure the environment caused (a missing
+command or module, no git identity) from one of what the command checks, and the Worker records its answer in each
+failed result (D57 §5). A commit a check makes has the platform's identity only where git finds none of its own."""
 import os
 import re
 import shutil
@@ -135,6 +135,26 @@ def _remove(path):
         pass
 
 
+def masked_tail(raw):
+    """The last TAIL bytes of a command's output (``raw``: the bytes kept of it) as they are shown and stored, every
+    credential masked (D57 §3.3), and what was masked: ``[{kind, line, masked, hash}]``, ``line`` counted in the tail.
+    Masked before it is cut, so a credential across the cut is masked whole; and nothing from before the cut is shown,
+    so the masks' shorter text never makes room for the head of ``raw``, which may be the rest of a credential whose
+    start was already dropped and so is not recognised."""
+    cut = max(len(raw) - TAIL, 0)
+    before = raw.count(b"\n", 0, cut)
+    pieces, at, found = [], cut, []
+    for hit in sources.find_secrets(raw):
+        if hit["end"] <= cut:
+            continue   # in the part kept only so that one across the cut is still recognised
+        pieces += [raw[at:hit["start"]], hit["masked"].encode()]   # nothing between for the one across the cut
+        at = hit["end"]
+        found.append({"kind": hit["kind"], "line": max(hit["line"] - before, 1), "masked": hit["masked"],
+                      "hash": hit["hash"]})
+    tail = sources.scrub(b"".join(pieces + [raw[at:]]).decode(errors="replace"))
+    return tail.encode()[-TAIL:].decode(errors="ignore"), found
+
+
 class Checks:
     def __init__(self, path_prepend=(), per_command=600, total=1200):
         self.path_prepend, self.per_command, self.total = tuple(str(p) for p in path_prepend), per_command, total
@@ -261,7 +281,7 @@ class Checks:
         def read():
             for chunk in iter(lambda: proc.stdout.read(8192), b""):
                 output.extend(chunk)
-                del output[:-2 * TAIL]   # enough to hide a credential cut at the edge, little to hold
+                del output[:-2 * TAIL]   # enough to mask a credential across the tail's edge, little to hold
         reader = threading.Thread(target=read, daemon=True)
         reader.start()
         timeout = False
@@ -276,10 +296,11 @@ class Checks:
         if not reader.is_alive():
             proc.stdout.close()
         value["current"] = None
-        hidden = sources.SUSPICIOUS.sub(sources.HIDDEN.encode(), bytes(output))
-        tail = sources.scrub(hidden[-TAIL:].decode(errors="replace"))
+        tail, findings = masked_tail(bytes(output))
         result = {"command": command, "exit": None if timeout or value["cancelled"] else proc.returncode,
-                  "seconds": round(time.monotonic() - began, 1), "tail": tail.encode()[-TAIL:].decode(errors="ignore")}
+                  "seconds": round(time.monotonic() - began, 1), "tail": tail}
+        if findings:
+            result["findings"] = findings
         if timeout:
             result["timeout"] = True
         elif value["cancelled"]:
