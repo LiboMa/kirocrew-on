@@ -103,6 +103,21 @@ class ClientTests(unittest.TestCase):
         self.assertEqual(next(b for _, p, b in calls if p == "/v1/tokens")["expires_in"], "365d")
         self.assertIsNone(result["expires"])
 
+    def test_an_older_platform_gets_the_chosen_days_at_most_thirty(self):   # final review minor: 7d gave 30 days there
+        calls = []
+        connect.issue_token(self.fake(calls), "https://p", "claude", "bob", "pw", expires="7d")
+        self.assertEqual(next(b for _, p, b in calls if p == "/v1/tokens")["ttl"], 7 * DAY)
+        calls = []
+        with tempfile.TemporaryDirectory() as home, mock.patch.object(cli, "Client", self.fake(calls)):
+            cli.login("https://p", "bob", "pw", home=home, expires="365d")
+        self.assertEqual(next(b for _, p, b in calls if p == "/v1/tokens")["ttl"], 30 * DAY)
+
+    def test_expires_with_a_given_token_is_refused(self):   # it issues nothing: --expires would be ignored
+        from octopus.__main__ import main
+        with self.assertRaises(SystemExit) as caught:
+            main(["connect", "claude", "--url", "https://p", "--token", "oct_given", "--expires", "7d", "--dry-run"])
+        self.assertIn("--expires", str(caught.exception.code))
+
     def test_the_commands_take_expires(self):
         self.assertEqual(cli.parser().parse_args(["login", "--expires", "never"]).expires, "never")
         self.assertEqual(cli.parser().parse_args(["login"]).expires, "30d")

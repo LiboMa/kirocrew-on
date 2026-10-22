@@ -48,7 +48,9 @@ def issue_token(client_factory, url, client, username, password, admin=False, ex
         issued = session.request("POST", "/v1/tokens", {
             "label": f"{client} MCP" + (" admin" if admin else ""),
             "scopes": ["read", "execute", "manage"] + (["admin"] if admin else []),
-            "ttl": (7 if admin else 30) * 86400, **({"expires_in": expires} if expires else {})})
+            # a platform from before D62 reads ttl only: the chosen days, at most its 30
+            "ttl": (min(TTL_DAYS[expires], 30) if expires else 7 if admin else 30) * 86400,
+            **({"expires_in": expires} if expires else {})})
         return {"token": issued["token"], "id": issued.get("id"), "expires": issued.get("expires")}
     finally:
         try:
@@ -57,6 +59,9 @@ def issue_token(client_factory, url, client, username, password, admin=False, ex
             if issued is not None:
                 return {"token": issued["token"], "id": issued.get("id"), "expires": issued.get("expires"),
                         "warning": f"临时登录未能登出（{exc}），可在控制台撤销名为 Web login 的 Token"}
+
+
+TTL_DAYS = {"7d": 7, "30d": 30, "365d": 365, "never": 30}
 
 
 def lifetime(expires):

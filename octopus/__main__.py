@@ -59,7 +59,7 @@ def build_parser(settings, environ=None):
     link.add_argument("--token", help="已有 API Token（也可用环境变量 OCTOPUS_API_TOKEN）；都没有时用 --username 登录并创建一枚 30 天 Token")
     link.add_argument("--username", help="你的平台用户名（未指定时交互询问）")
     link.add_argument("--admin", action="store_true",
-                      help="管理员：Token 额外含 admin scope（可调用管理员工具），7 天有效；只在本人设备上使用")
+                      help="管理员：Token 额外含 admin scope（可调用管理员工具），默认 7 天（--expires 30d 最长 30 天）；只在本人设备上使用")
     link.add_argument("--expires", choices=["7d", "30d", "365d", "never"],
                       help="新 Token 的有效期（D62）：默认 30 天（--admin 为 7 天）；never 永不过期；--admin 最长 30d")
     link.add_argument("--password-env", default="OCTOPUS_PASSWORD", help="读取密码的环境变量；未设置时交互输入")
@@ -232,6 +232,8 @@ def main(argv=None):
         token = args.token or os.environ.get("OCTOPUS_API_TOKEN")
         if token and args.admin:
             raise SystemExit("--admin 只用于以账号登录签发新 Token：不能与 --token 或环境变量 OCTOPUS_API_TOKEN 同时使用")
+        if token and args.expires:
+            raise SystemExit("--expires 只用于以账号登录签发新 Token：不能与 --token 或环境变量 OCTOPUS_API_TOKEN 同时使用")
         if token and not args.token:
             print("使用环境变量 OCTOPUS_API_TOKEN 中的 Token")
         issued = None

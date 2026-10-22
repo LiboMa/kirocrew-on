@@ -81,7 +81,9 @@ def login(url, username, password, home=None, expires="30d"):
     answer = Client(url, "").request("POST", "/v1/login", {"username": username, "password": password})
     signed = Client(url, answer["token"])
     scopes = [s for s in answer.get("scopes", ["read", "execute", "manage"]) if s != "admin"]
-    token = signed.request("POST", "/v1/tokens", {"label": CLI_LABEL, "scopes": scopes, "ttl": 30 * 86400, "expires_in": expires})
+    from .connect import TTL_DAYS
+    token = signed.request("POST", "/v1/tokens", {"label": CLI_LABEL, "scopes": scopes, "expires_in": expires,
+                                                  "ttl": min(TTL_DAYS[expires], 30) * 86400})   # before D62: ttl, ≤ 30 days
     signed.request("DELETE", "/v1/tokens/" + answer["id"])
     path = config_path(home)
     path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)

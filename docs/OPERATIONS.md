@@ -848,7 +848,7 @@ Draft PR（GitHub）/ Draft MR（GitLab）。
 - **Token 有效期（D62）**：签发时选 7 天、30 天、365 天或永不过期——控制台「API 与 Coding Agent 接入」的「有效期」（默认 30 天）、
   `POST /v1/tokens` 的 `expires_in`（`7d` / `30d` / `365d` / `never`）、`octopus connect … --expires`、`octopus login --expires`。
   永不过期的 Token 列表中显示「永不过期」（API 的 `expires` 为 `null`），只能撤销或随停用 / 重置密码失效。带 `admin` 的 Token 最长 30 天（403）。
-  旧客户端只发 `ttl`（秒）时照旧，最长 30 天；新的 `connect` / `login` 同时发 `ttl`，连到旧平台时得到 30 天。
+  旧客户端只发 `ttl`（秒）时照旧，最长 30 天；新的 `connect` / `login` 同时发 `ttl`（所选天数，最长 30 天；未选时 connect 为 30 天、`--admin` 为 7 天），连到旧平台时按它签发。`--expires` 不能与 `--token` 同用（不签发新 Token）。
 - **错误语义**：看不到返回 404，看得到但不能做返回 403 并说明原因（例如普通成员删除他人创建的 Team 会话）。
 - **预览链接** 10 分钟有效，每次取文件都核对持有人仍能查看该会话。
 

@@ -48,6 +48,33 @@ describe("limits on running tasks (D61)", () => {
     await waitFor(() => expect(posted(calls)).toContainEqual({ scope: "user", id: "u2", running: null }));
   });
 
+  test("a person's own limit is checked before it is sent, and a refusal keeps the choice (D61 minors)", async () => {
+    const { calls, dialog } = await openQuotas({ "POST /quotas": new Response(JSON.stringify({ error: "用户不存在或已停用", code: "not_found" }),
+      { status: 404 }) });
+    await userEvent.selectOptions(within(dialog).getByLabelText("为某人单独设上限"), "u1");
+    await userEvent.clear(within(dialog).getByLabelText("单独的上限"));
+    await userEvent.type(within(dialog).getByLabelText("单独的上限"), "0");
+    expect(within(dialog).getByRole("button", { name: "单独设置" })).toBeDisabled();
+    await userEvent.clear(within(dialog).getByLabelText("单独的上限"));
+    await userEvent.type(within(dialog).getByLabelText("单独的上限"), "3");
+    await userEvent.click(within(dialog).getByRole("button", { name: "单独设置" }));
+    await waitFor(() => expect(posted(calls)).toEqual([{ scope: "user", id: "u1", running: 3 }]));
+    expect((within(dialog).getByLabelText("为某人单独设上限") as HTMLSelectElement).value).toBe("u1");
+  });
+
+  test("an administrator sees other Teams apart from their own, and a failed read says why", async () => {
+    const teams = [...QUOTAS.teams, { id: "team-9", name: "别的组", limit: 2, used: 0, manage: true }];
+    const { dialog } = await openQuotas({ "GET /teams": [{ id: "team-1", name: "平台组", role: "owner", created: 1, members: [] }],
+      "GET /quotas": { ...QUOTAS, teams } });
+    expect(within(within(dialog).getByRole("region", { name: "我和我的 Team" })).queryByText("Team「别的组」")).toBeNull();
+    expect(within(within(dialog).getByRole("region", { name: "其他 Team" })).getByText("Team「别的组」")).toBeInTheDocument();
+  });
+
+  test("a failed read is shown, not an endless loading line", async () => {
+    const { dialog } = await openQuotas({ "GET /quotas": new Response(JSON.stringify({ error: "服务暂不可用", code: "x" }), { status: 503 }) });
+    expect(await within(dialog).findByText(/服务暂不可用/)).toBeInTheDocument();
+  });
+
   test("a member only reads", async () => {
     const member = { ...QUOTAS, teams: [{ ...QUOTAS.teams[0], limit: 4, manage: false }], default: undefined, users: undefined };
     const { dialog } = await openQuotas({ "GET /me": { ...ME, admin: 0, scopes: ["read", "execute"] }, "GET /quotas": member });

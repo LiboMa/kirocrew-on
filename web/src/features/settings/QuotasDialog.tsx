@@ -1,4 +1,4 @@
-import { type ReactNode, useState } from "react";
+import { type ReactNode, useEffect, useState } from "react";
 import { useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
 import { api } from "@/api/client";
@@ -16,23 +16,31 @@ const usage = (used: number, limit: number | null) => `运行中 ${used} / ${lim
 
 function useSave() {
   const client = useQueryClient();
-  return async (scope: Scope, id: string | undefined, running: number | null) => {
+  return async (scope: Scope, id: string | undefined, running: number | null): Promise<boolean> => {
     try {
       const answer = await api<Quotas>("/quotas", "POST", { scope, ...(id ? { id } : {}), running });
       client.setQueryData(keys.quotas, answer);
       toast.success(running == null ? "已取消上限" : "上限已保存");
+      return true;
     } catch (error) {
       toast.error((error as Error).message);
+      return false;
     }
   };
+}
+
+const inRange = (text: string) => {
+  const n = Number(text);
+  return Number.isInteger(n) && n >= 1 && n <= 50;
 }
 
 /** One limit someone may change: a number 1–50, saved; or removed (no limit). */
 function Editor({ label, scope, id, value }: { label: string; scope: Scope; id?: string; value: number | null }) {
   const save = useSave();
   const [text, setText] = useState(value == null ? "" : String(value));
+  useEffect(() => setText(value == null ? "" : String(value)), [value]);   // what was read again (D61 minor)
   const running = Number(text);
-  const valid = Number.isInteger(running) && running >= 1 && running <= 50;
+  const valid = inRange(text);
   return (
     <div className="flex items-center gap-2">
       <Input type="number" min={1} max={50} className="h-8 w-20" aria-label={`${label}的上限`} value={text}
@@ -57,26 +65,36 @@ function Row({ quota, label, detail, editor }: { quota: string; label: string; d
 
 /** Settings → 并发上限 (D61): how many tasks one runs at once, one's Teams too; administrators and Team owners set them. */
 export function QuotasDialog() {
-  const { close, users } = useConsole();
-  const { data } = useQuotas();
+  const { close, users, teams: mine } = useConsole();
+  const { data, error } = useQuotas();
   const save = useSave();
   const [person, setPerson] = useState("");
   const [limit, setLimit] = useState("2");
   const admin = data?.default !== undefined;
   const limited = new Set((data?.users ?? []).map((u) => u.id));
+  const member = new Set(mine.map((t) => t.id));
+  const own = (data?.teams ?? []).filter((t) => !admin || member.has(t.id));
+  const others = admin ? (data?.teams ?? []).filter((t) => !member.has(t.id)) : [];
+  const teamRow = (team: Quotas["teams"][number]) => (
+    <Row key={team.id} quota={`team:${team.id}`} label={`Team「${team.name}」`} detail={usage(team.used, team.limit)}
+      editor={team.manage ? <Editor label={`Team「${team.name}」`} scope="team" id={team.id} value={team.limit} /> : undefined} />
+  );
 
   return (
     <FormDialog title="并发上限" kicker="QUOTAS" wide onClose={close}
       description="同时运行的任务数上限。到了上限，会话的下一个任务按排队先后等待，有任务结束后自动开始，不必重新提交。没有设的范围不限制。每人默认与个人的上限由平台管理员设置，Team 的上限由 Team owner 或平台管理员设置。">
-      {!data ? <p className="text-sm text-muted-foreground">读取中…</p> : (
+      {error ? <p className="text-sm text-destructive">读取失败：{error.message}</p> : !data ? <p className="text-sm text-muted-foreground">读取中…</p> : (
         <div className="space-y-4">
           <section className="space-y-2" aria-label="我和我的 Team">
             <Row quota="mine" label="我" detail={usage(data.mine.used, data.mine.limit)} />
-            {data.teams.map((team) => (
-              <Row key={team.id} quota={`team:${team.id}`} label={`Team「${team.name}」`} detail={usage(team.used, team.limit)}
-                editor={team.manage ? <Editor label={`Team「${team.name}」`} scope="team" id={team.id} value={team.limit} /> : undefined} />
-            ))}
+            {own.map(teamRow)}
           </section>
+          {others.length > 0 && (
+            <section className="space-y-2 border-t pt-4" aria-label="其他 Team">
+              <h3 className="text-xs font-semibold text-muted-foreground">其他 Team（你不是成员，以管理员身份设置）</h3>
+              {others.map(teamRow)}
+            </section>
+          )}
           {admin && (
             <section className="space-y-2 border-t pt-4" aria-label="每人的上限">
               <Row quota="default" label="每人默认" detail={data.default == null ? "不限" : `上限 ${data.default}`}
@@ -92,8 +110,8 @@ export function QuotasDialog() {
                 </NativeSelect>
                 <Input type="number" min={1} max={50} className="h-8 w-20" aria-label="单独的上限" value={limit}
                   onChange={(e) => setLimit(e.target.value)} />
-                <Button type="button" size="sm" variant="outline" disabled={!person}
-                  onClick={() => save("user", person, Number(limit)).then(() => setPerson(""))}>单独设置</Button>
+                <Button type="button" size="sm" variant="outline" disabled={!person || !inRange(limit)}
+                  onClick={() => save("user", person, Number(limit)).then((ok) => { if (ok) setPerson(""); })}>单独设置</Button>
               </div>
             </section>
           )}
