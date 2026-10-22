@@ -296,7 +296,8 @@ class Engine:
         with self.db.transaction() as db:
             journal.change(db, "attempts", attempt_id, actor, "attempt.state", "Knowledge 沉淀未完成",
                            event={"id": attempt_id, "status": "accepted", "skipped": reason},
-                           status="accepted", error=None, evidence=dumps({**evidence, "knowledge_skipped": reason}),
+                           status="accepted", error=None, evidence=dumps({**evidence, "knowledge_skipped": reason,
+                                                                          "warnings": gates.warnings(evidence.get("gates"))}),
                            updated=time.time())
             journal.change_rows(db, "tasks", "current_attempt=?", (attempt_id,), actor, "task.state", status="accepted")
         self.update(run["id"], "ready", None, actor=actor)

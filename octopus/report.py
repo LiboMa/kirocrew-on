@@ -146,6 +146,8 @@ def model(view, now=None):
             "request": {"input": _clip(view.get("input"), INPUT), "intent": _line(planning.get("intent"), 500),
                         "summary": _clip(planning.get("summary"), PLAN)},
             "tasks": tasks, "recovery": recovery, "budget": budget,
+            # D57 §4: what each task's final Attempt noted without blocking
+            "warnings": sum(g["status"] == "warn" for t in tasks if t["final"] for g in t["final"]["gates"]),
             "verified": str((view.get("verified") or {}).get("sha") or "")[:7] or None,
             "publish": publish and {"branch": _line(publish.get("branch"), 200), "url": str(publish.get("url") or ""),
                                     "commit": str(publish.get("commit") or "")[:7],
@@ -187,8 +189,9 @@ def markdown(view, now=None):
     out = [f"# {_md(m['title'])}", "",
            f"- 会话：`{m['id']}` · 状态：{_md(m['status'])} · 创建者：{_md(m['creator'])}"
            + (f" · 准入：{_md(m['admission'])}" if m["admission"] else "")
-           + (f" · 计划确认：{_md(m['confirmed'])}" if m["confirmed"] else "") + f" · 生成：{m['generated']}",
-           "", "## 需求", ""] + (_block(m["request"]["input"]) if m["request"]["input"] else ["—"])
+           + (f" · 计划确认：{_md(m['confirmed'])}" if m["confirmed"] else "") + f" · 生成：{m['generated']}"]
+    out += [f"- 提示 {m['warnings']} 项"] if m["warnings"] else []
+    out += ["", "## 需求", ""] + (_block(m["request"]["input"]) if m["request"]["input"] else ["—"])
     if m["request"]["intent"]:
         out += ["", f"**意图**：{_md(m['request']['intent'])}"]
     if m["request"]["summary"]:
@@ -288,8 +291,9 @@ def html(view, now=None):
            f"<h1>{e(m['title'])}</h1>",
            f"<p class=\"meta\">会话 <code>{e(m['id'])}</code> · 状态 {e(m['status'])} · 创建者 {e(m['creator'])}"
            + (f" · 准入：{e(m['admission'])}" if m["admission"] else "")
-           + (f" · 计划确认 {e(m['confirmed'])}" if m["confirmed"] else "") + f" · 生成 {e(m['generated'])}</p>",
-           "<h2>需求</h2>", f"<pre>{e(m['request']['input'] or '—')}</pre>"]
+           + (f" · 计划确认 {e(m['confirmed'])}" if m["confirmed"] else "") + f" · 生成 {e(m['generated'])}</p>"]
+    out += [f"<p class=\"warn\">提示 {m['warnings']} 项</p>"] if m["warnings"] else []
+    out += ["<h2>需求</h2>", f"<pre>{e(m['request']['input'] or '—')}</pre>"]
     if m["request"]["intent"]:
         out.append(f"<p><strong>意图</strong>：{e(m['request']['intent'])}</p>")
     if m["request"]["summary"]:

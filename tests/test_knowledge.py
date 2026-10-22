@@ -303,7 +303,9 @@ class NeverHoldsTests(KnowledgeCase):
         with self.db.read() as db:
             self.assertEqual(db.execute("SELECT count(*) FROM recoveries WHERE run_id=?", (run["id"],)).fetchone()[0], 0)
         self.assertIn(why, run["knowledge"]["note"])
-        self.assertEqual(next(t for t in run["tasks"] if t["id"] == "knowledge")["status"], "accepted")
+        task = next(t for t in run["tasks"] if t["id"] == "knowledge")
+        self.assertEqual(task["status"], "accepted")
+        self.assertEqual(task["attempts"][-1]["evidence"]["warnings"], [])   # D57: every accepted Attempt carries them
 
     def test_a_blocked_knowledge_outcome_completes_the_session(self):
         self.knowledge_outcome = {"decision": "blocked", "failure_type": "input", "summary": "没有可读的交接"}
