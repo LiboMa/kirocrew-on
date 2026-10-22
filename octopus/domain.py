@@ -1068,7 +1068,7 @@ class Service:
             # The planner sees which tools this environment can start and its known limits, and chooses (D38 A5).
             body = {**{k: v for k, v in body.items() if k != "plan"},
                     "steps": [plan_step(capabilities.get("models", {}), capabilities.get("tools"), capabilities.get("limitations"),
-                                       capabilities.get("commands"), preferences)]}
+                                       capabilities.get("commands"), preferences, general=general(body.get("source")))]}
         resolved = self.resolve_workflow(actor, {k: v for k, v in body.items() if k != "plan"})
         with self.db.transaction() as db:
             wid = resolved["selection"].get("workflow_id")

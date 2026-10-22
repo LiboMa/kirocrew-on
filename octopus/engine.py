@@ -11,7 +11,7 @@ from .db import dumps, uid
 from .transport import worker_request
 from . import crew_entry, evaluation, gates, journal, knowledge, phases, planning, quotas, recovery, waiting
 from .security import Error
-from .domain import (CONTRACT, GENERAL_KINDS, release_confirmations, required_checks, runs_checks, unserved,
+from .domain import (CONTRACT, GENERAL_KINDS, general, release_confirmations, required_checks, runs_checks, unserved,
                      worker_source)
 from .gates import BLOCKED
 
@@ -1171,6 +1171,9 @@ class Engine:
                    if plan.get("applied") else {}),
                 # D46: planning is analysis — its instructions do not tell it to develop
                 **({"stage": "planning"} if planning.planner_task(task["id"], snapshot) else {}),
+                # D65 §6a: general work (no repository, or research / write) reads as a task in a working directory
+                **({"work": "general"} if not planning.planner_task(task["id"], snapshot) and (
+                    spec.get("kind") in GENERAL_KINDS or general(json.loads(run["source"] or "{}"))) else {}),
                 **({"quality": True} if snapshot.get("execution_contract", 1) >= 2 else {}),
                 **({"repair": repair} if repair else {}),
                 **({"continue": resume} if resume else {}),   # D46 P5a: the rework resumes its conversation

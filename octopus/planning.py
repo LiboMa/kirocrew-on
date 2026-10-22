@@ -48,6 +48,7 @@ GENERAL_KINDS_LINE = "；一般任务用 research 调研、write 撰写"
 GENERAL_KINDS_COMPACT = " / research / write"
 PHASE_LINE = "可写 phase：diverge（发散：头脑风暴、调研、多方案，只查安全底线）/ design（设计，阶段末把关）/ converge（实现、撰写、测试、交付）；不写按 kind 推断。"
 PHASE_COMPACT = "phase：diverge 发散 / design 设计 / converge 收敛（可不写）。"
+GENERAL_CONTRACT = "一般任务（research / write）：deliverables 写产出文件名，acceptance 写阅读即可核对的标准，不必写 paths 与 verify。"
 
 
 def rules(count, depends, compact=False):
@@ -61,6 +62,7 @@ def rules(count, depends, compact=False):
    {REQUIRED_COMPACT if compact else REQUIRED}{depends}
    paths 写本任务可改动的路径，便于续作时判断哪些任务受影响。
    {PHASE_COMPACT if compact else PHASE_LINE}
+   {"" if compact else GENERAL_CONTRACT}
    平台会检查并记提示（不会因此退回）：test 任务新增的测试应在会话基线（实现之前的源码）上失败；后续任务若要修改此前任务
    交付的文件，应在自己的 paths 中列出这些文件。test 任务只写测试、不改实现，其 verify 不安装依赖（不写 npm install / pip install 等）；
    检查与测试生成的文件（覆盖率、报告、构建产物）应写入 .gitignore。审查与测试的结论：缺陷用 changes_requested，
@@ -112,8 +114,16 @@ def preference_section(preferences, limit):
 """
 
 
-def plan_step(models=None, tools=None, limitations=None, commands=None, preferences=None):
-    """The first task of an Agent-planned Session (always Kiro; it plans and does not change business code)."""
+NO_REPOSITORY = """## 本会话没有代码仓库
+所有任务在同一个空的工作目录中完成，产出是其中的文件（报告、方案、数据等），用户在会话页下载；不安排检出、.gitignore、
+preview.json、PR 或「改代码」的 evaluator。
+
+"""
+
+
+def plan_step(models=None, tools=None, limitations=None, commands=None, preferences=None, general=False):
+    """The first task of an Agent-planned Session (always Kiro; it plans and does not change business code). ``general``:
+    the Session has no repository (D65)."""
     prompt = intent_prompt(dumps(EXAMPLE), "（见上方完整用户需求）", "本任务的工作目录（即本 Session 的源码检出）", prepared=True) + f"""
 
 ## 本任务的交付
@@ -124,7 +134,7 @@ def plan_step(models=None, tools=None, limitations=None, commands=None, preferen
 
 {environment(models, tools, limitations, commands)}
 
-{preference_section(preferences, 600)}最终回复必须包含且仅包含一个 JSON 代码块（字段：intent、summary、name、steps）；不要加入第二个 JSON/YAML 代码块。
+{NO_REPOSITORY if general else ""}{preference_section(preferences, 600)}最终回复必须包含且仅包含一个 JSON 代码块（字段：intent、summary、name、steps）；不要加入第二个 JSON/YAML 代码块。
 同时按本任务要求写交接文件，说明规划依据与待用户核实的条件。
 """
     return {"id": PLAN_ID, "name": "需求分析与任务规划（KiroCrew）", "tool": "kiro", "model": "auto", "effort": "",

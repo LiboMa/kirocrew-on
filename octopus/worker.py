@@ -89,6 +89,9 @@ TAILS = {
                  "只产出不提交的补丁或报告也可以。",
     "deliver": "依据需求完成交付并真实验证，按项目既有依赖与规范工作；交付涉及代码时，改动应留在源码目录中；"
                "只产出不提交的补丁或报告也可以。",
+    # D65: general work — what it produces is files in the working directory, and its handoff says what and on what basis
+    "research": "收集、阅读并核实资料与数据，把发现、依据与取舍写成工作目录中的文件；交接写产出、依据与未完成项。",
+    "write": "按需求产出成品（报告、方案、文档、清单等），写成工作目录中的文件；交接写产出、依据与未完成项。",
 }
 DEFAULT_TAIL = "依据需求进行开发和真实验证，按项目既有依赖与规范工作。"
 COMMON_TAIL = ("记录具体修改、测试命令、结果和限制。若不能完成，最终回答单独一行写 BLOCKED 并说明恢复条件"
@@ -113,7 +116,7 @@ PREVIEW = ("\n\n## 可运行产出的声明\n交付物是可以运行的应用�
            'install 至多 4 条；远程预览要求入口进程的 port 为 "$PORT"。')
 
 
-def envelope(task_input, requirement, contract, prompt, upstream, project, handoff, stage=None, extra=""):
+def envelope(task_input, requirement, contract, prompt, upstream, project, handoff, stage=None, extra="", work=None):
     """The instructions an Attempt reads (D46): the requirement, the contract and the task, the upstream handoffs, then
     what this kind of work does — planning, design and diagnosis are not told to develop — and the handoff it writes."""
     from . import roles
@@ -122,10 +125,11 @@ def envelope(task_input, requirement, contract, prompt, upstream, project, hando
     common = STAGE_TAILS.get(stage, COMMON_TAIL)
     role = (contract or {}).get("role")   # D46 P2: the role card comes first
     card = f"# 你的角色：{roles.LABELS[role]}\n{roles.card(role)}\n\n" if role in roles.KINDS else ""
-    return (card + "# 本次研发任务\n\n" + task_input + briefing(requirement, contract) + "\n\n## 任务\n" + prompt +
+    title, folder = ("本次任务", "工作目录") if work == "general" else ("本次研发任务", "源码目录")   # D65 §6a
+    return (card + f"# {title}\n\n" + task_input + briefing(requirement, contract) + "\n\n## 任务\n" + prompt +
             "\n\n## 前序交接\n前序任务的结论、发现、候选与检查；handoff 是其完整交接文件的路径，需要细节时读取；"
             "执行者没有写交接时，handoff_text 是平台根据其结果生成的交接。\n" +
-            dumps(upstream) + f"\n\n源码目录：{project}\n交接文件：{handoff}\n" + tail + common + HANDOFF + extra)
+            dumps(upstream) + f"\n\n{folder}：{project}\n交接文件：{handoff}\n" + tail + common + HANDOFF + extra)
 
 
 def briefing(requirement, contract):
@@ -1322,14 +1326,15 @@ class Worker:
                                              health["models"], health["tools"])
             stage = ("coordination" if body.get("coordination") else "workflow_design" if body.get("design")
                      else body.get("stage") if body.get("stage") in {"planning"} else None)
+            work = "general" if body.get("work") == "general" else None   # D65: said by the platform
             instructions = envelope(body["input"], requirement, contract, spec["prompt"], body.get("upstream", []),
                                     workspace.project_dir(run), handoff, stage=stage,
-                                    extra=extra_prompt + ("\n\n" + design_prompt if design_prompt else ""))
+                                    extra=extra_prompt + ("\n\n" + design_prompt if design_prompt else ""), work=work)
             (folder / "instructions.md").write_text(instructions)
             write(folder / "context.json", context)
             context_hash = hashlib.sha256(dumps(context).encode()).hexdigest()
             marker = "[OCTOPUS-ATTEMPT:" + attempt + "]"
-            prompt = f"{marker}\n完整阅读 {folder / 'instructions.md'}，在指定源码目录完成本次任务。"
+            prompt = f"{marker}\n完整阅读 {folder / 'instructions.md'}，在指定{'工作' if work else '源码'}目录完成本次任务。"
             value = {"request_hash": hashlib.sha256(dumps(body).encode()).hexdigest(),
                      "status": "dispatching", "attempt_id": attempt, "context_hash": context_hash}
             if given:
