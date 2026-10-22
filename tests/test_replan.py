@@ -120,6 +120,24 @@ class ReplanTests(ReplanCase):
         summaries = [r["summary"] for r in self.service.revisions(self.actor, rid)]
         self.assertIn("重新规划：追加 2 个任务", summaries)
 
+    def test_a_replans_reason_keeps_no_workers_token(self):
+        # D57 §3.3: the Coordinator's words are stored masked wherever the replan quotes them (events, the decision, the
+        # revisions, the plan's step and the Session's record of it); the replan goes on as before
+        import hashlib
+        token = "wt-" + hashlib.sha256(b"task-7-replan").hexdigest()[:37]
+        with self.db.transaction() as db:
+            db.execute("UPDATE workers SET config=? WHERE id='worker'",
+                       (dumps({"url": "fixture", "token": token, "capabilities": {}}),))
+        self.decisions[0] = {**REPLAN, "reason": f"计划缺少测试步骤（{token}）", "instructions": f"加入测试任务，勿打印 {token}"}
+        rid = self.start()
+        run = self.tick(rid, 40)
+        self.assertEqual((run["status"], [t["id"] for t in run["tasks"]]), ("completed", ["code", "replan-1", "review-2", "check"]))
+        with self.db.read() as db:
+            stored = "\n".join(json.dumps([dict(r) for r in db.execute(f"SELECT * FROM {table}")], ensure_ascii=False)
+                               for table in ("runs", "tasks", "attempts", "events", "recoveries", "revisions"))
+        self.assertNotIn(token, stored)
+        self.assertIn(f"计划缺少测试步骤（{token[:4]}…{token[-2:]}）", self.dispatched("replan-1")[0]["spec"]["prompt"])
+
     def test_new_tasks_do_not_take_the_ids_of_replaced_ones(self):
         rid = self.start()
         run = self.tick(rid, 40)

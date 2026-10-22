@@ -84,6 +84,23 @@ class JournalTests(unittest.TestCase):
         self.assertEqual((second["reason"], second["detail"]), (f"说明 {shown(ANT)}", [{"text": shown(AKIA)}]))
         self.assertEqual(first["actor"], {"kind": "engine"})   # what holds no credential stays as it was
 
+    def test_a_writer_names_what_no_rule_knows(self):
+        # the Session's Worker token, where the writer has it: every way of writing an event masks it too
+        token = "wt-" + "Z" * 37
+        shown = token[:4] + "…" + token[-2:]
+        with self.db.transaction() as db:
+            journal.change(db, "runs", "run-1", journal.ENGINE, "run.state", f"原因 {token}", event={"error": token},
+                           mask=[token], error=f"失败 {token}")
+            journal.change_rows(db, "tasks", "run_id=?", ("run-1",), journal.ENGINE, "task.reset", f"返工 {token}",
+                                mask=[token], status="running")
+            journal.remove_rows(db, "tasks", "run_id=?", ("run-1",), journal.ENGINE, "task.replaced", f"替换 {token}",
+                                mask=[token])
+            journal.record(db, "run-1", "run.note", journal.ENGINE, reason=token, mask=[token])
+        payloads = [event["payload"] for event in self.events()]
+        self.assertNotIn(token, json.dumps(payloads))
+        self.assertEqual([p["reason"] for p in payloads], [f"原因 {shown}", f"返工 {shown}", f"替换 {shown}", shown])
+        self.assertEqual(payloads[0]["changes"]["error"], [None, f"失败 {shown}"])
+
     def test_clients_from_token_labels(self):
         self.assertEqual([journal.client(x) for x in ("Web login", "claude MCP", "kiro MCP", "API", None)],
                          ["console", "mcp", "mcp", "api", "api"])

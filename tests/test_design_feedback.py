@@ -102,6 +102,17 @@ class EngineRepairTests(unittest.TestCase):
             engine.tick()
         self.assertTrue(designs.status(self.service, self.a, created["id"]).get("repairing"))
 
+    def test_a_repairs_reason_keeps_no_workers_token(self):
+        # D57 §3.3: the reason quotes the recommendation; with the Worker's token in it, every record keeps it masked
+        token = "x" * 40   # the design Worker's (test_mvp.design_worker)
+        status = self.run_design([reply([step(0, tool=token)]), reply(test_mvp.SPEC, "退款接口工作流")])
+        self.assertEqual(status["status"], "ready")
+        self.assertIn("xxxx…xx", self.dispatched[1]["design"]["repair"]["error"])
+        with self.db.read() as db:
+            stored = "\n".join(json.dumps([dict(r) for r in db.execute(f"SELECT * FROM {table}")], ensure_ascii=False)
+                               for table in ("runs", "tasks", "attempts", "events", "recoveries", "revisions"))
+        self.assertNotIn(token, stored)
+
     def test_once_only_and_then_the_person_reads_why_and_what_to_do(self):
         status = self.run_design([reply([step(i) for i in range(13)])])
         self.assertEqual(len(self.dispatched), 2)   # the first and the one repair, no more

@@ -229,6 +229,22 @@ class WatchdogReviewTests(WatchdogCase):
         self.assertEqual((len(attempts), attempts[0]["status"]), (1, "running"))
         self.assertFalse((attempts[0]["evidence"].get("watchdog") or {}).get("reason"))
 
+    def test_a_failed_stops_error_is_stored_masked(self):
+        # D57 §3.3: the Worker's error is its text; with the Worker's own token in it, the mark keeps it masked
+        import hashlib
+        token = "wt-" + hashlib.sha256(b"task-7-watchdog").hexdigest()[:37]
+        with self.db.transaction() as db:
+            db.execute("UPDATE workers SET config=? WHERE id='worker'",
+                       (dumps({"url": "fixture", "token": token, "capabilities": {}}),))
+        self.stop_error, self.keep_failing = Error(500, "worker_error", f"Gateway 出错：Bearer {token}"), True
+        rid = self.start()
+        run = self.later(rid, 1)
+        mark = run["tasks"][0]["attempts"][0]["evidence"]["watchdog"]
+        self.assertEqual((mark["stop_errors"], mark["stop_error"]), (1, f"Gateway 出错：Bearer {token[:4]}…{token[-2:]}"))
+        with self.db.read() as db:
+            stored = json.dumps([dict(r) for r in db.execute("SELECT * FROM attempts")], ensure_ascii=False)
+        self.assertNotIn(token, stored)
+
     def test_a_failing_stop_is_never_doubled_and_backs_off(self):
         self.stop_error, self.keep_failing = Error(500, "worker_error", "Gateway 出错"), True
         rid = self.start()

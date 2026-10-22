@@ -605,6 +605,9 @@ class Coordinator:
             return
         context = json.loads(item["context"])
         config = json.loads(run["worker_config"])
+        # D57 §3.3: what the diagnosis stores is masked, the Worker's token too (opened here, outside any transaction)
+        extra = (worker_token(config),)
+        mask = lambda value: sources.mask_value(value, extra)[0]
         body = {"run_id": run["id"], "attempt_id": item["attempt_id"], "input": context["input"],
                 "spec": {"id": "diagnose", "name": "协调者诊断与纠错", "tool": "kiro", "model": "auto", "effort": "",
                          "prompt": "分析失败证据，提出可执行的重试、上游返工或等待输入决定。"},
@@ -617,29 +620,28 @@ class Coordinator:
                     self.finish(run, item, error="协调者启动请求被拒绝：" + str(exc))
                     return
                 raise
-            state = result["status"]
+            state, error = result["status"], mask(result.get("error"))
             with self.db.transaction() as db:
                 journal.change(db, "recoveries", item["id"], journal.WORKER, "recovery.state", event={"id": item["id"]},
-                               status=state, native_id=result.get("native_id"), context_hash=result.get("context_hash"),
-                               error=result.get("error"), updated=time.time())
+                               mask=extra, status=state, native_id=result.get("native_id"),
+                               context_hash=result.get("context_hash"), error=error, updated=time.time())
             if state == "blocked":
-                self.finish(run, item, error="协调者未能启动：" + (result.get("error") or "请检查原生环境"))
+                self.finish(run, item, error="协调者未能启动：" + (error or "请检查原生环境"))
             return
         result = self.engine.request(config, "/inspect", {"run_id": run["id"], "attempt_id": item["attempt_id"]})
         native, evidence = result.get("native") or {}, result.get("evidence") or {}
-        # D57 §3.3: the diagnosis is stored masked (copies: the decision below is read as the Coordinator wrote it)
-        mask = lambda value: sources.mask_value(value, (worker_token(config),))[0]
+        # stored masked: copies, the decision below is read as the Coordinator wrote it
         if not native.get("done"):
             state = "waiting_approval" if native.get("awaiting_approval") else "running"
             with self.db.transaction() as db:
                 journal.change(db, "recoveries", item["id"], journal.WORKER, "recovery.state", event={"id": item["id"]},
-                               status=state, evidence=dumps(mask(evidence)), updated=time.time())
+                               mask=extra, status=state, evidence=dumps(mask(evidence)), updated=time.time())
             return
         # D57 §6.3: the platform's fault, not the Coordinator's — its runtime, its sandbox, KiroCrew's teardown
         kind = fault(native, self._entered(run, item) if native.get("stopped") else True)
         with self.db.transaction() as db:
             journal.change(db, "recoveries", item["id"], journal.WORKER, "recovery.state", event={"id": item["id"]},
-                           result=mask(native.get("result")),
+                           mask=extra, result=mask(native.get("result")),
                            evidence=dumps(mask({**evidence, **({"platform_fault": kind} if kind else {})})),
                            updated=time.time())
         if kind and self._retry(run, item, context, kind):
@@ -762,30 +764,33 @@ class Coordinator:
             if error or decision["action"] == "wait_for_user":
                 message = sources.mask_text(error or (decision["reason"] + "；" + decision["instructions"]), extra)[0]
                 journal.change(db, "recoveries", item["id"], journal.RECOVERY, "recovery.state", event={"id": item["id"]},
-                               status="blocked", decision=dumps(stored) if stored else None, error=message, updated=now)
+                               mask=extra, status="blocked", decision=dumps(stored) if stored else None, error=message,
+                               updated=now)
                 journal.change(db, "runs", run["id"], journal.RECOVERY, "recovery.blocked",
-                               event={"id": item["id"], "error": message}, status="blocked", error=message, updated=now)
+                               event={"id": item["id"], "error": message}, mask=extra, status="blocked", error=message,
+                               updated=now)
                 return
             invalidated = [row["id"] for row in db.execute(
                 "SELECT id FROM tasks WHERE run_id=? AND ordinal>=? ORDER BY ordinal", (run["id"], target["ordinal"]))]
             journal.change_rows(db, "tasks", "run_id=? AND ordinal>=?", (run["id"], target["ordinal"]), journal.RECOVERY,
-                                "task.reset", decision.get("reason"), status="pending", current_attempt=None)
+                                "task.reset", stored.get("reason"), mask=extra, status="pending", current_attempt=None)
             if widened:   # D54: the revision below records the wider paths
                 spec = json.loads(db.execute("SELECT spec FROM tasks WHERE run_id=? AND id=?", (run["id"], target["id"])).fetchone()[0])
-                journal.change(db, "tasks", (run["id"], target["id"]), journal.RECOVERY, "task.paths_added", decision.get("reason"),
+                journal.change(db, "tasks", (run["id"], target["id"]), journal.RECOVERY, "task.paths_added", stored.get("reason"),
                                event={"task_id": target["id"], "added": decision["paths_add"], "recovery": item["number"]},
-                               spec=dumps({**spec, "paths": widened}))
+                               mask=extra, spec=dumps({**spec, "paths": widened}))
             if decision["action"] == "switch_tool":
-                journal.change(db, "tasks", (run["id"], target["id"]), journal.RECOVERY, "task.tool_switched", decision["reason"],
+                journal.change(db, "tasks", (run["id"], target["id"]), journal.RECOVERY, "task.tool_switched", stored["reason"],
                                event={"task_id": target["id"], "from": decision["switched_from"],
                                       "to": {k: switched[k] for k in ("tool", "model", "effort")}},
-                               spec=dumps(switched))
+                               mask=extra, spec=dumps(switched))
             version = fresh["version"] + 1
             journal.change(db, "recoveries", item["id"], journal.RECOVERY, "recovery.state", event={"id": item["id"]},
-                           status="applied", decision=dumps(stored), error=None, updated=now)
-            journal.change(db, "runs", run["id"], journal.RECOVERY, "recovery.applied", decision.get("reason"),
+                           mask=extra, status="applied", decision=dumps(stored), error=None, updated=now)
+            journal.change(db, "runs", run["id"], journal.RECOVERY, "recovery.applied", stored.get("reason"),
                            event={"id": item["id"], "number": item["number"], "target_task_id": target["id"],
-                                  "invalidated": invalidated}, status="ready", error=None, version=version, updated=now)
+                                  "invalidated": invalidated}, mask=extra, status="ready", error=None, version=version,
+                           updated=now)
             from .revisions import record
             name = json.loads(target["spec"]).get("name", target["id"])
             reason = stored.get("reason")
@@ -832,24 +837,26 @@ class Coordinator:
                  **({"required": required} if (required := required_checks(fresh, spec)) else {})} for row in db.execute(
             "SELECT id, spec FROM tasks WHERE run_id=? AND status='accepted' AND ordinal<? ORDER BY ordinal", (rid, failed["ordinal"]))
             if (spec := json.loads(row["spec"])).get("verify")]   # D54 §9 a: their checks are reviewed with the plan
-        spec = planning.replan_step(task_id, replaced, failure, decision, environment.get("models"), environment.get("tools"),
+        # D57 §3.3: decided on as written (finish), the Coordinator's words go on masked — to the planner as well
+        stored = sources.mask_value(decision, extra)[0]
+        spec = planning.replan_step(task_id, replaced, failure, stored, environment.get("models"), environment.get("tools"),
                                     environment.get("limitations"), environment.get("commands"), kept, snapshot.get("preferences"))
         journal.remove_rows(db, "tasks", "run_id=? AND ordinal>=?", (rid, failed["ordinal"]), journal.RECOVERY, "task.replaced",
-                            decision.get("reason"), event={"tasks": replaced})
+                            stored.get("reason"), event={"tasks": replaced}, mask=extra)
         db.execute("INSERT INTO tasks(run_id,id,ordinal,spec) VALUES(?,?,?,?)", (rid, spec["id"], failed["ordinal"], dumps(spec)))
         if snapshot.get("replan"):   # the earlier replans stay known: their tasks, and the ids they replaced
             snapshot["replan_history"] = [*(snapshot.get("replan_history") or []), snapshot["replan"]]
-        snapshot["replan"] = {"task": spec["id"], "applied": False, "replaced": replaced, "reason": decision.get("reason"),
-                              "instructions": decision.get("instructions"), "recovery": item["number"],
+        snapshot["replan"] = {"task": spec["id"], "applied": False, "replaced": replaced, "reason": stored.get("reason"),
+                              "instructions": stored.get("instructions"), "recovery": item["number"],
                               **({"exempt": True} if exempt else {})}
         snapshot["steps"] = snapshot.get("steps", []) + [spec]
-        version, stored = fresh["version"] + 1, sources.mask_value(decision, extra)[0]   # D57 §3.3: stored masked
+        version = fresh["version"] + 1
         journal.change(db, "recoveries", item["id"], journal.RECOVERY, "recovery.state", event={"id": item["id"]},
-                       status="applied", decision=dumps(stored), error=None, updated=now)
-        journal.change(db, "runs", rid, journal.RECOVERY, "recovery.applied", decision.get("reason"),
+                       mask=extra, status="applied", decision=dumps(stored), error=None, updated=now)
+        journal.change(db, "runs", rid, journal.RECOVERY, "recovery.applied", stored.get("reason"),
                        event={"id": item["id"], "number": item["number"], "replan": True,
                               "invalidated": [r["id"] for r in replaced]},
-                       status="ready", error=None, version=version, snapshot=dumps(snapshot), updated=now)
+                       mask=extra, status="ready", error=None, version=version, snapshot=dumps(snapshot), updated=now)
         names = "、".join(r["name"] for r in replaced)
         reason = stored.get("reason")
         record(db, rid, version, "recovered", f"自动纠错：重新规划，替换「{names}」" + (f"（{reason}）" if reason else ""),

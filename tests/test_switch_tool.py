@@ -203,6 +203,24 @@ class SwitchTests(SwitchCase):
         self.assertEqual(revisions[-1]["summary"], "自动纠错：「实现」由 opencode / auto 换为 claude / auto（原工具在此执行环境不可用）")
         self.assertIn("task.tool_switched", [e["kind"] for e in self.service.events(self.actor, rid)])
 
+    def test_a_switchs_reason_keeps_no_workers_token(self):
+        # D57 §3.3: the reason the switch's events, revision and the new Attempt's label quote is stored masked
+        import hashlib
+        token = "wt-" + hashlib.sha256(b"task-7-switch").hexdigest()[:37]
+        with self.db.transaction() as db:
+            db.execute("UPDATE workers SET config=? WHERE id='worker'",
+                       (dumps({"url": "fixture", "token": token, "capabilities": self.capabilities}),))
+        self.decisions = [self.switch(reason=f"原工具不可用（{token}）")]
+        rid = self.start([step("code", "opencode", "implement"), step("review", "codex", "review")])["id"]
+        run = self.tick(rid)
+        self.assertEqual((run["status"], run["tasks"][0]["spec"]["tool"]), ("completed", "claude"))
+        with self.db.read() as db:
+            stored = "\n".join(json.dumps([dict(r) for r in db.execute(f"SELECT * FROM {table}")], ensure_ascii=False)
+                               for table in ("runs", "tasks", "attempts", "events", "recoveries", "revisions"))
+        self.assertNotIn(token, stored)
+        self.assertEqual(run["tasks"][0]["attempts"][-1]["evidence"]["switched_from"]["reason"],
+                         f"原工具不可用（{token[:4]}…{token[-2:]}）")
+
     def test_a_refused_model_is_fixed_on_the_same_tool(self):
         self.decisions, self.refuse_models = [self.switch(model="auto")], {"unpublished-x"}
         run = self.tick(self.start([step("code", "claude", "implement", model="unpublished-x")])["id"])

@@ -170,6 +170,43 @@ class RecoveryTests(RecoveryCase):
         self.assertEqual((row["error"], error), (f"需要新的 Key；旧 Key {shown} 已失效，请提供新的",) * 2)
         self.assertNotIn(ANT[4:-2], row["decision"] + events)
 
+    def use_token(self):
+        """A Worker token as long as a real one (40 characters): no rule knows it, the platform masks it as it is."""
+        token = "wt-" + hashlib.sha256(b"task-7-recovery").hexdigest()[:37]
+        with self.db.transaction() as db:
+            db.execute("UPDATE workers SET config=? WHERE id='worker'", (dumps({"url": "fixture", "token": token}),))
+        return token
+
+    def stored(self):
+        with self.db.read() as db:
+            return "\n".join(json.dumps([dict(r) for r in db.execute(f"SELECT * FROM {table}")], ensure_ascii=False)
+                             for table in ("runs", "tasks", "attempts", "events", "recoveries", "revisions"))
+
+    def test_the_workers_token_in_a_decision_is_kept_out_of_every_record(self):
+        # the Coordinator's own words (the reason every event of the rework quotes, the revision's title) included
+        token = self.use_token()
+        self.decision = {**self.decision, "reason": f"日志里有 {token}", "instructions": f"不要再打印 {token}，修复后复跑"}
+        result = self.tick()
+        self.assertEqual((result["status"], self.rounds), ("completed", {"code": 2, "review": 2}))
+        self.assertNotIn(token, self.stored())
+        self.assertIn(f"日志里有 {token[:4]}…{token[-2:]}", self.service.revisions(self.actor, result["id"])[-1]["summary"])
+
+    def test_a_coordinator_that_cannot_start_is_stored_masked(self):
+        token = self.use_token()
+        plain = self.request
+
+        def request(config, path, body, **kwargs):
+            if path == "/dispatch" and body.get("coordination"):
+                return {"status": "blocked", "error": f"原生环境拒绝：{token}"}
+            return plain(config, path, body, **kwargs)
+        self.engine.request = request
+        result = self.tick()
+        self.assertEqual(result["status"], "blocked")
+        with self.db.read() as db:
+            error = db.execute("SELECT error FROM recoveries WHERE run_id=?", (self.run["id"],)).fetchone()[0]
+        self.assertEqual(error, f"协调者未能启动：原生环境拒绝：{token[:4]}…{token[-2:]}")
+        self.assertNotIn(token, self.stored())
+
     def test_cycle_limit_stops_without_infinite_dispatch(self):
         self.always_fail = True
         result = self.tick(40)

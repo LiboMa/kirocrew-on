@@ -208,9 +208,9 @@ def mask_text(text, extra=()):
 
 
 def mask_value(value, extra=()):
-    """``value`` as JSON holds it (dicts, lists, strings, numbers) with every string masked as ``mask_text`` masks it, and
-    what was found, in order. A copy: the value itself, which verdicts read, is left as it was (D57 §3.3). Keys stay as
-    they are: they are the writer's names for what it stores."""
+    """``value`` as JSON holds it (dicts, lists, strings, numbers) with every string masked as ``mask_text`` masks it —
+    a dict's keys too (an Agent's outcome names its own) — and what was found, in order. A copy: the value itself, which
+    verdicts read, is left as it was (D57 §3.3)."""
     found = []
 
     def walk(item):
@@ -219,7 +219,7 @@ def mask_value(value, extra=()):
             found.extend(hits)
             return text
         if isinstance(item, dict):
-            return {key: walk(child) for key, child in item.items()}
+            return {(walk(key) if isinstance(key, str) else key): walk(child) for key, child in item.items()}
         if isinstance(item, (list, tuple)):
             return [walk(child) for child in item]
         return item

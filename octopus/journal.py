@@ -28,11 +28,12 @@ def shown(value):
     return value
 
 
-def record(db, rid, kind, actor, changes=None, reason=None, **extra):
+def record(db, rid, kind, actor, changes=None, reason=None, mask=(), **extra):
     """An event, every string in it masked (D57 §3.3): whatever a writer passes — its reason, its own fields, the values
-    it changed — never keeps a credential's text."""
+    it changed — never keeps a credential's text; ``mask``: what no rule knows that the writer does (the Session's Worker
+    token), masked too."""
     payload = {**extra, "actor": actor, **({"changes": changes} if changes else {}), **({"reason": reason} if reason else {})}
-    payload = mask_value(payload)[0]
+    payload = mask_value(payload, mask)[0]
     db.execute("INSERT INTO events(run_id,kind,payload,created) VALUES(?,?,?,?)", (rid, kind, dumps(payload), time.time()))
 
 
@@ -44,9 +45,10 @@ def _run(table, row):
     return row["id"] if table == "runs" else row["run_id"]
 
 
-def change(db, table, key, actor, kind, reason=None, event=None, quiet=(), **fields):
+def change(db, table, key, actor, kind, reason=None, event=None, quiet=(), mask=(), **fields):
     """Write ``fields`` to one row (``tasks`` keyed by (run_id, id)) and record what changed; returns the changes.
-    ``quiet`` fields are written but not recorded (a running task's partial reply would otherwise log every poll)."""
+    ``quiet`` fields are written but not recorded (a running task's partial reply would otherwise log every poll);
+    ``mask`` as for ``record`` (the fields are written as given: the writer masks what it stores)."""
     columns = KEYS[table]
     where = " AND ".join(f"{column}=?" for column in columns)
     params = tuple(key) if isinstance(key, tuple) else (key,)
@@ -56,11 +58,11 @@ def change(db, table, key, actor, kind, reason=None, event=None, quiet=(), **fie
     db.execute(f"UPDATE {table} SET " + ",".join(f"{k}=?" for k in fields) + f" WHERE {where}", (*fields.values(), *params))
     diff = _diff(row, fields, quiet)
     if diff:
-        record(db, _run(table, row), kind, actor, diff, reason, **(event or {}))
+        record(db, _run(table, row), kind, actor, diff, reason, mask, **(event or {}))
     return diff
 
 
-def change_rows(db, table, where, params, actor, kind, reason=None, event=None, **fields):
+def change_rows(db, table, where, params, actor, kind, reason=None, event=None, mask=(), **fields):
     """Write ``fields`` to every row matching ``where``; one event per Session lists each row's changes."""
     rows = db.execute(f"SELECT * FROM {table} WHERE {where}", params).fetchall()
     if not rows:
@@ -72,11 +74,11 @@ def change_rows(db, table, where, params, actor, kind, reason=None, event=None, 
         if diff:
             by_run.setdefault(_run(table, row), []).append({"id": row["id"], "changes": diff})
     for rid, items in by_run.items():
-        record(db, rid, kind, actor, items, reason, **(event or {}))
+        record(db, rid, kind, actor, items, reason, mask, **(event or {}))
     return [item for items in by_run.values() for item in items]
 
 
-def remove_rows(db, table, where, params, actor, kind, reason=None, event=None):
+def remove_rows(db, table, where, params, actor, kind, reason=None, event=None, mask=()):
     """Delete the rows matching ``where`` and record which went (D41: tasks replaced by a replan; their Attempts stay)."""
     rows = db.execute(f"SELECT * FROM {table} WHERE {where}", params).fetchall()
     if not rows:
@@ -87,5 +89,5 @@ def remove_rows(db, table, where, params, actor, kind, reason=None, event=None):
     for row in rows:
         by_run.setdefault(_run(table, row), []).append(row["id"])
     for rid, ids in by_run.items():
-        record(db, rid, kind, actor, None, reason, **{"removed": ids, **(event or {})})
+        record(db, rid, kind, actor, None, reason, mask, **{"removed": ids, **(event or {})})
     return gone

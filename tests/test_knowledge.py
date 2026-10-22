@@ -228,6 +228,23 @@ class WriteTests(KnowledgeCase):
         self.assertNotIn(github[4:-2], stored)
         self.assertNotIn(OPENAI[4:-2], stored)
 
+    def test_masking_never_changes_which_items_are_written(self):
+        # each is judged on its text as written: one too long only because of its key is still too long, two that differ
+        # only in their keys are still two, and a mark an Agent writes itself means nothing
+        from octopus.knowledge import MARK, RULE
+        from tests.test_secret_rules import chars
+        first, second = ("sk-" + "Q" + chars(seed, 45, "alnum") + "zz" for seed in ("one", "two"))
+        self.assertEqual((first[:4], first[-2:]), (second[:4], second[-2:]))   # masked alike
+        long = "约定 " + "长" * (RULE - 40) + " " + first   # over RULE as written, within it masked
+        self.knowledge = [{"rule": long}, {"rule": f"用 {first} 调用"}, {"rule": f"用 {second} 调用"},
+                          {"rule": "干净的约定", MARK: {"suspicious": True, "too_long": True}}, "构建用 make build"]
+        _, run = self.run_()
+        shown = f"用 {first[:4]}…{first[-2:]} 调用"
+        self.assertEqual([i["rule"] for i in self.writes[0]["items"]], [shown, shown, "干净的约定", "构建用 make build"])
+        skipped = [i for i in run["knowledge"]["items"] if i["result"] == "skipped"]
+        self.assertEqual([i["reason"] for i in skipped], [f"超过长度（rule 至多 {RULE}、avoid 至多 200 字符），未写入"])
+        self.assertTrue(all(MARK not in item for item in self.writes[0]["items"]))
+
     def test_nothing_listed_writes_nothing(self):
         self.knowledge = []
         _, run = self.run_()

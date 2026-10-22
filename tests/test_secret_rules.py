@@ -491,16 +491,16 @@ class SecretRuleTests(unittest.TestCase):
                          [("worker_token", line, worker[:4] + "…" + worker[-2:]) for line in (1, 2)])
 
     def test_mask_value_masks_every_string_and_keeps_the_rest(self):
-        # what the platform stores as JSON (an Attempt's evidence, an event): its strings, at any depth; keys, numbers,
-        # booleans and None as they are
+        # what the platform stores as JSON (an Attempt's evidence, an event): its strings at any depth, keys too (an
+        # Agent's outcome names its own); numbers, booleans and None as they are
         value = {"outcome": {"summary": f"见 {ANT}", "findings": [f"a {AKIA}", {"issue": OCT}], "score": 3, "ok": True},
-                 "list": [None, 1.5, "fine"], f"{AKIA}": "key stays"}
+                 "list": [None, 1.5, "fine"], f"{AKIA}": "a key"}
         masked, hits = sources.mask_value(value)
         self.assertEqual(masked, {"outcome": {"summary": f"见 {ANT[:4]}…{ANT[-2:]}",
                                               "findings": [f"a {AKIA[:4]}…{AKIA[-2:]}", {"issue": f"{OCT[:4]}…{OCT[-2:]}"}],
                                               "score": 3, "ok": True},
-                                  "list": [None, 1.5, "fine"], f"{AKIA}": "key stays"})
-        self.assertEqual([h["kind"] for h in hits], ["anthropic", "aws_access_key", "octopus_token"])
+                                  "list": [None, 1.5, "fine"], f"{AKIA[:4]}…{AKIA[-2:]}": "a key"})
+        self.assertEqual([h["kind"] for h in hits], ["anthropic", "aws_access_key", "octopus_token", "aws_access_key"])
         self.assertEqual(value["outcome"]["summary"], f"见 {ANT}")   # a copy: the value read for verdicts is untouched
         self.assertEqual(sources.mask_value("plain"), ("plain", []))
 

@@ -1230,6 +1230,23 @@ class SecretMaskingTests(TeamsWorkersCase):
         self.assertEqual([(s["kind"], s["location"]) for s in evidence["secrets"]], [("worker_token", "result:task-1")])
         self.assertEqual(attempt["status"], "accepted")
 
+    def test_a_dispatch_error_is_stored_masked(self):
+        # what the Worker answers a dispatch with is its text, not the platform's: masked on the Attempt and the Session
+        token = json.loads(TeamsWorkersCase.config("b-p"))["token"]
+        worker, rid = FakeWorker(), self.session([TASK])
+
+        def call(config, path, body=None, **kwargs):
+            if path == "/dispatch":
+                return {"status": "blocked", "error": f"KiroCrew 拒绝：Bearer {token}"}
+            return worker(config, path, body, **kwargs)
+        self.run_engine(call, ticks=3)
+        with self.db.read() as db:
+            error = db.execute("SELECT error FROM attempts WHERE run_id=?", (rid,)).fetchone()[0]
+            run = db.execute("SELECT status, error FROM runs WHERE id=?", (rid,)).fetchone()
+        self.assertEqual(error, f"KiroCrew 拒绝：Bearer {token[:4]}…{token[-2:]}")
+        self.assertEqual(tuple(run), ("blocked", error))
+        self.assertNotIn(token, self.stored())
+
     def test_masking_twice_lists_once(self):
         # the result is stored while the checks run and again when they end: one finding, one record
         worker, rid = FakeWorker(), self.session([TASK])
