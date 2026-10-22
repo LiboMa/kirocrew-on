@@ -12,7 +12,7 @@ import threading
 import time
 import unicodedata
 
-from . import journal, policies, remote_preview, requests as submissions
+from . import journal, policies, quotas, remote_preview, requests as submissions
 from .db import dumps, uid
 from .security import Error, check_password, elevated, password_hash, require
 
@@ -1898,6 +1898,27 @@ class Service:
             audit(db, actor, "policy.delete", "policy", policy_id, {"kind": row["kind"], "team_id": row["team_id"],
                                                                      "rule": json.loads(row["rule"])})
             return {"id": policy_id, "deleted": True}
+
+    def quotas(self, actor):
+        """The actor's limit on running tasks and their Teams' (D61); an administrator also sees the default and each person's."""
+        with self.db.read() as db:
+            return quotas.view(db, actor, elevated(actor))
+
+    def set_quota(self, actor, body):
+        """The default per person or a person's own (administrators), a Team's (its owner or an administrator); audited."""
+        scope, subject, running = quotas.parse(body)
+        with self.db.transaction() as db:
+            if scope == "team":
+                require(self._team_role(db, actor, subject) == "owner" or elevated(actor),
+                        "只有 Team owner 或平台管理员可以设 Team 的并发上限", 403, "forbidden")
+                active_team(db, subject)
+            else:
+                require(elevated(actor), "只有平台管理员可以设每人默认与个人的并发上限", 403, "forbidden")
+                require(scope == "default" or db.execute("SELECT 1 FROM users WHERE id=?", (subject,)).fetchone(),
+                        "用户不存在", 404, "not_found")
+            quotas.store(db, actor, scope, subject, running)
+            audit(db, actor, "quota.set", "quota", f"{scope}:{subject}" if subject else scope, {"running": running})
+            return quotas.view(db, actor, elevated(actor))
 
     @staticmethod
     def _team_role(db, actor, team):

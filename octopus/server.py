@@ -841,6 +841,9 @@ def server(database, port=8918, host="127.0.0.1", allowed_hosts=(), origin_secre
                 if len(segments) == 6 and segments[:2] == ["v1", "runs"] and segments[3] == "attempts" and segments[5] == "diff":
                     require(method == "GET", "Method not allowed", 405)   # D56: what a candidate changed
                     return self.respond(service.attempt_diff(actor, segments[2], segments[4]))
+                if segments == ["v1", "quotas"]:   # D61: how many tasks a person or a Team runs at once
+                    require(method in {"GET", "POST"}, "Method not allowed", 405)
+                    return self.respond(service.set_quota(actor, body) if method == "POST" else service.quotas(actor))
                 if segments[:2] == ["v1", "requests"] and len(segments) in {2, 3}:   # D55: submissions as made
                     require(method == "GET", "Method not allowed", 405)
                     if len(segments) == 3:

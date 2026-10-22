@@ -170,10 +170,18 @@ ALTER TABLE runs ADD COLUMN request_id TEXT REFERENCES requests(id);
 CREATE INDEX IF NOT EXISTS runs_request ON runs(request_id);
 """
 
+# D61: how many tasks a person or a Team runs at once — the default per person (subject ''), a person's, a Team's.
+QUOTAS = """
+CREATE TABLE IF NOT EXISTS quotas(
+ scope TEXT NOT NULL CHECK(scope IN ('default','user','team')), subject TEXT NOT NULL DEFAULT '',
+ running INTEGER NOT NULL CHECK(running BETWEEN 1 AND 50), updated_by TEXT NOT NULL REFERENCES users(id),
+ updated REAL NOT NULL, PRIMARY KEY(scope,subject));
+"""
+
 MIGRATIONS = [(1, "baseline", BASELINE), (2, "environments", ENVIRONMENTS), (3, "access", ACCESS),
               (4, "teams_workers", TEAMS_WORKERS), (5, "apps", APPS), (6, "credentials", CREDENTIALS),
               (7, "knowledge", KNOWLEDGE), (8, "knowledge_kept", KNOWLEDGE_KEPT),
-              (9, "requests_policies", REQUESTS_POLICIES)]
+              (9, "requests_policies", REQUESTS_POLICIES), (10, "quotas", QUOTAS)]
 
 
 def _statements(script):

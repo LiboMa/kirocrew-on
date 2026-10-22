@@ -93,6 +93,8 @@ def openapi():
         # D55: {"repos": "github.com/o/*", "mode": "auto|confirm"} (admission) or a mapping preference
         "Policy": obj({"kind": {"enum": ["admission", "mapping"]}, "scope": {"enum": ["personal", "team"]}, "team_id": text,
                        "rule": {"type": "object"}}, ["kind", "scope", "rule"]),
+        "Quota": obj({"scope": {"enum": ["default", "user", "team"]}, "id": text,
+                      "running": {"type": ["integer", "null"], "minimum": 1, "maximum": 50}}, ["scope", "running"]),   # D61
         "KnowledgeForget": obj({"id": text}, ["id"]),   # D46 P4: one item of the Session's knowledge.items
         "Steer": obj({"task_id": text, "message": text, "mode": {"enum": ["interrupt"]}},
                      ["task_id", "message"]),   # D46 P5b: into the running turn only
@@ -151,6 +153,7 @@ def openapi():
         "/v1/runs": {"get": None, "post": "Start"}, "/v1/runs/{id}": {"get": None},
         "/v1/requests": {"get": None}, "/v1/requests/{id}": {"get": None},
         "/v1/policies": {"get": None, "post": "Policy"}, "/v1/policies/{id}": {"delete": "Empty"},
+        "/v1/quotas": {"get": None, "post": "Quota"},
         "/v1/runs/{id}/events": {"get": None}, "/v1/runs/{id}/export": {"get": None},
         "/v1/runs/{id}/crew-entry": {"post": "Empty"}, "/v1/runs/{id}/preview": {"post": "Empty"},
         "/v1/runs/{id}/observe": {"get": None},
@@ -322,6 +325,13 @@ def openapi():
                     ("/v1/policies/{id}", "delete"): "Manage scope. Remove one of the caller's rules, or a Team's as its owner or an administrator. Audited."}[(path, method)]
                 if path == "/v1/policies":
                     op["parameters"] = [{"in": "query", "name": "team_id", "schema": text}] if method == "get" else op.get("parameters", [])
+            if path == "/v1/quotas":
+                op["description"] = {
+                    "get": "Read scope. The caller's limit on running tasks and how many run (mine), their Teams' (teams; manage says "
+                           "whether the caller may change it); an administrator also sees the default per person and each person's own.",
+                    "post": "Manage scope. Set or remove (running null) a limit on running tasks: the default per person or a person's "
+                            "own (administrators), a Team's (its owner or an administrator). Over a limit, a Session's next task waits "
+                            "its turn. Audited."}[method]
             if path.startswith("/v1/requests"):
                 op["description"] = {
                     "/v1/requests": "Read scope. Every submission with a Session the caller can read, newest first: client (console / claude / kiro / codex / kiro-ide / api), requirement, source, explicit choices, the policy it started under (admission mode and basis) and its Sessions; status is its latest Session's.",
