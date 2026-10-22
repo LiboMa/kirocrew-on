@@ -40,7 +40,7 @@ def parse_recommendation(content):
 
 def status(service, actor, rid):
     with service.db.read() as db:
-        run = run_access(db, actor, rid)
+        run = run_access(db, actor, rid, read=True)
         snapshot = json.loads(run["snapshot"])
         require(snapshot.get("purpose") == "workflow_design", "工作流建议不存在", 404, "not_found")
         data = service._view(db, run, actor)

@@ -484,7 +484,7 @@ def run_permissions(db, actor, run):
             return True
         except Error:
             return False
-    native, reason = allowed(admin=False), None
+    native, reason = allowed(admin=False, shares=False), None
     if native and run["worker_id"]:
         worker = db.execute("SELECT scope,owner_id,team_id FROM workers WHERE id=?", (run["worker_id"],)).fetchone()
         native = worker is None or worker["scope"] != "shared" or worker["owner_id"] == actor["id"]
@@ -497,8 +497,9 @@ def run_permissions(db, actor, run):
     archived = bool(run["team_id"]) and bool(
         (db.execute("SELECT archived FROM teams WHERE id=?", (run["team_id"],)).fetchone() or {"archived": 0})["archived"])
     instruct = directs(db, actor, run)   # D49 R10
-    return {"operate": True, "delete": allowed(owner=True), "native": native, "resume": not archived,
-            "publish": may_publish(db, actor, run), **({"native_reason": reason} if reason else {}),
+    return {"operate": allowed(), "delete": allowed(owner=True), "native": native, "resume": not archived,
+            "publish": may_publish(db, actor, run), "share": may_publish(db, actor, run),   # D64: a viewer only reads
+            "assign": allowed(shares=False), **({"native_reason": reason} if reason else {}),
             "direct": instruct is None, **({"direct_reason": instruct} if instruct else {})}
 
 
@@ -1084,7 +1085,7 @@ class Service:
         answer the console and Coding Agents show, so neither keeps its own copy of the rule."""
         with self.db.read() as db:
             if rid:
-                run = run_access(db, actor, rid)
+                run = run_access(db, actor, rid, read=True)
                 user, team = run["owner_id"], run["team_id"]
                 options = space_workers(db, user, team)   # the Session's creator's, not the operator's (R4)
                 placed = json.loads(run["snapshot"]).get("placement") or {}
@@ -1115,7 +1116,7 @@ class Service:
     def preview_entry(self, actor, rid):
         """The file the preview opens first (e.g. index.html), asked from the run's Worker."""
         with self.db.read() as db:
-            run = run_access(db, actor, rid)
+            run = run_access(db, actor, rid, read=True)
             require(run["worker_id"], "此 Session 尚未分配 Worker，没有可预览的产出", 409, "no_preview")
             worker = db.execute("SELECT config FROM workers WHERE id=?", (run["worker_id"],)).fetchone()
         from .transport import worker_request
@@ -1127,7 +1128,7 @@ class Service:
         """Whether the actor may download the run's source and how large it is: a dry run on the Worker, so a
         refusal (too large, Worker offline) is an answer here rather than a page the browser opens (D36 §4.1)."""
         with self.db.read() as db:
-            run = run_access(db, actor, rid)
+            run = run_access(db, actor, rid, read=True)
             require(run["worker_id"] and run["workspace"], "此会话尚未准备源码，没有可下载的内容", 409, "no_archive")
             config = json.loads(db.execute("SELECT config FROM workers WHERE id=?", (run["worker_id"],)).fetchone()["config"])
         from .transport import worker_request
@@ -1148,7 +1149,7 @@ class Service:
                       "scopes": ["read"] + (["admin"] if user and user["admin"] else [])}
             try:
                 require(user is not None, "下载不可用", 404, "not_found")
-                run_access(db, reader, rid)
+                run_access(db, reader, rid, read=True)
             except Error:
                 raise Error(403, "archive_forbidden", "下载权限已撤销，请在控制台重新下载") from None
             config = json.loads(db.execute("SELECT config FROM workers WHERE id=?", (run["worker_id"],)).fetchone()["config"])
@@ -1212,7 +1213,7 @@ class Service:
     def approvals(self, actor, rid):
         """The Session's pending native approvals as its Worker reports them (D38 §4.2)."""
         with self.db.read() as db:
-            run = run_access(db, actor, rid)
+            run = run_access(db, actor, rid, read=True)
             config, retired = self._app_worker(db, run["worker_id"])
         if not config or retired or not run["native_parent"]:
             return {"approvals": [], "supported": bool(config) and not retired}
@@ -1626,7 +1627,7 @@ class Service:
     def app(self, actor, rid):
         """The Session's remote preview as the Worker reports it, with the last lines of its log."""
         with self.db.read() as db:
-            run = run_access(db, actor, rid)
+            run = run_access(db, actor, rid, read=True)
             row = db.execute("SELECT * FROM apps WHERE run_id=?", (rid,)).fetchone()
             config, retired = self._app_worker(db, run["worker_id"])
             users = dict(db.execute("SELECT id,username FROM users").fetchall())
@@ -1735,7 +1736,7 @@ class Service:
             try:
                 require(user is not None, "预览不可用", 404, "not_found")
                 run = run_access(db, {"id": user["id"], "admin": user["admin"],
-                                      "scopes": ["read"] + (["admin"] if user["admin"] else [])}, rid)
+                                      "scopes": ["read"] + (["admin"] if user["admin"] else [])}, rid, read=True)
             except Error:
                 raise Error(403, "app_forbidden", "无权查看此会话的远程预览") from None
             row = db.execute("SELECT * FROM apps WHERE run_id=?", (rid,)).fetchone()
@@ -1794,7 +1795,7 @@ class Service:
             try:
                 require(user is not None, "预览不可用", 404, "not_found")
                 run_access(db, {"id": user["id"], "admin": user["admin"],
-                                "scopes": ["read"] + (["admin"] if user["admin"] else [])}, rid)
+                                "scopes": ["read"] + (["admin"] if user["admin"] else [])}, rid, read=True)
             except Error:
                 raise Error(403, "preview_forbidden", "预览权限已撤销，请在控制台重新打开") from None
             worker = db.execute("SELECT config FROM workers WHERE id=?", (run["worker_id"],)).fetchone()
@@ -1802,7 +1803,8 @@ class Service:
         result = worker_request(json.loads(worker["config"]), "/files", {"run_id": rid, "path": relative})
         return base64.b64decode(result["content"])
 
-    def runs(self, actor, all=False, status=None, q=None, limit=None, view=None, page=False, cursor=None, **filters):
+    def runs(self, actor, all=False, status=None, q=None, limit=None, view=None, page=False, cursor=None, shared=False,
+             **filters):
         """The actor's own and Team Sessions, newest first; with all=True an elevated admin gets every Session (B5).
         Filtered on the server (M3-5): ``status`` (one or a list), ``q`` (full text, every word) and ``limit``, and D56's
         ``lifecycle``, ``space``, ``repo``, ``branch``, ``stage``, ``tool``, ``client``, ``submitter``, ``since``, ``until``
@@ -1819,7 +1821,12 @@ class Service:
             items, total, more = [], 0, False
             for row in db.execute(sql, params):
                 try:
-                    run = run_access(db, actor, row["id"], admin=oversee)
+                    if shared:   # D64 「共享给我」: only what a share brings
+                        run = run_access(db, actor, row["id"], admin=False, read=True)
+                        if access_of(db, actor, run)["via"] != "share":
+                            continue
+                    else:
+                        run = run_access(db, actor, row["id"], admin=oversee, shares=False)
                 except Error:
                     continue
                 if not listing.matches(db, run, found):
@@ -2091,7 +2098,7 @@ class Service:
     def bundle_entry(self, actor, rid):
         """Whether the actor may pull the Session's branch (D58 §5): read access and a prepared workspace."""
         with self.db.read() as db:
-            run = run_access(db, actor, rid)
+            run = run_access(db, actor, rid, read=True)
             require(run["worker_id"] and run["workspace"], "此会话尚未准备源码，没有可拉回的分支", 409, "no_workspace")
         self.audit_read(actor, rid, "pull")
         return run
@@ -2101,7 +2108,7 @@ class Service:
         Session's own access check (and its admin audit). A candidate the secret check kept off the branch is never shown."""
         from . import diffs
         with self.db.read() as db:
-            run = run_access(db, actor, rid)
+            run = run_access(db, actor, rid, read=True)
             row = db.execute("SELECT evidence FROM attempts WHERE id=? AND run_id=?", (attempt_id, rid)).fetchone()
             require(row is not None, "Attempt 不存在或无权限", 404, "not_found")
             candidate = json.loads(row["evidence"] or "{}").get("candidate") or {}
@@ -2116,7 +2123,7 @@ class Service:
     @staticmethod
     def _readable(db, actor, rid, admin=True):
         try:
-            run_access(db, actor, rid, admin=admin)
+            run_access(db, actor, rid, admin=admin, shares=False)   # D64: a share does not show the Request
             return True
         except Error:
             return False
@@ -2129,7 +2136,7 @@ class Service:
 
     def run(self, actor, rid):
         with self.db.read() as db:
-            value = self._view(db, run_access(db, actor, rid), actor)
+            value = self._view(db, run_access(db, actor, rid, read=True), actor)
         self.audit_read(actor, rid, "view")
         return value
 
@@ -2163,6 +2170,7 @@ class Service:
             if run.get("request_id") else None
         value["request"] = dict(request) if request else None   # D55; Sessions from before have none
         value["permissions"] = run_permissions(db, actor, run)
+        value["access"] = access_of(db, actor, run)   # D64
         snapshot = json.loads(run["snapshot"])
         value.update({key: snapshot.get(key) for key in ("name", "workflow_name", "workflow_version",
                                                        "selection", "match_mode", "match_reason", "purpose", "planning", "replan",
@@ -2362,9 +2370,10 @@ class Service:
         require(action in {"continue", "recover", "stop", "close", "reopen", "delete", "assign-worker", "confirm", "accept"},
                 "不支持的操作")
         with self.db.transaction() as db:
-            run = run_access(db, actor, rid, owner=action == "delete")
+            # D64: a collaborator does what an ordinary Team member does, except move the Session to another environment
+            run = run_access(db, actor, rid, owner=action == "delete", shares=action != "assign-worker")
             try:
-                run_access(db, actor, rid, owner=action == "delete", admin=False)
+                run_access(db, actor, rid, owner=action == "delete", admin=False, shares=action != "assign-worker")
                 oversight = False
             except Error:
                 oversight = True   # allowed only as an elevated admin (A2): audited
@@ -2577,7 +2586,7 @@ class Service:
         try:
             with self.db.transaction() as db:
                 try:
-                    run_access(db, actor, rid, admin=False)
+                    run_access(db, actor, rid, admin=False, read=True)
                     return
                 except Error:
                     pass
@@ -2665,7 +2674,7 @@ class Service:
         """Every revision of a run, oldest first, without snapshots (see revision())."""
         from .revisions import history
         with self.db.read() as db:
-            run_access(db, actor, rid)
+            run_access(db, actor, rid, read=True)
             entries = history(db, rid)
         self.audit_read(actor, rid, "view")
         return [{k: v for k, v in entry.items() if k not in {"snapshot", "content"}} for entry in entries]
@@ -2684,7 +2693,7 @@ class Service:
             sql += " AND kind LIKE ? ESCAPE '\\'"
             params.append(kind.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_") + "%")
         with self.db.read() as db:
-            run_access(db, actor, rid)
+            run_access(db, actor, rid, read=True)
             users = dict(db.execute("SELECT id,username FROM users").fetchall())
             rows = db.execute(sql + " ORDER BY id DESC LIMIT ?", (*params, limit)).fetchall()
         if audited:   # the export audits itself once
@@ -2702,7 +2711,7 @@ class Service:
     def revision(self, actor, rid, version):
         from .revisions import history
         with self.db.read() as db:
-            run_access(db, actor, rid)
+            run_access(db, actor, rid, read=True)
             entry = next((e for e in history(db, rid) if e["version"] == version), None)
         require(entry is not None, "修订不存在", 404, "not_found")
         self.audit_read(actor, rid, "view")
@@ -2712,7 +2721,7 @@ class Service:
         """Differences between two revisions; by default the latest and the one before it."""
         from .revisions import diff, history
         with self.db.read() as db:
-            run_access(db, actor, rid)
+            run_access(db, actor, rid, read=True)
             entries = {e["version"]: e for e in history(db, rid)}
         versions = sorted(entries)
         after = versions[-1] if after is None else after
@@ -2740,6 +2749,6 @@ class Service:
 
     def events(self, actor, rid, after=0):
         with self.db.read() as db:
-            run_access(db, actor, rid)
+            run_access(db, actor, rid, read=True)
             return [{**dict(row), "payload": json.loads(row["payload"])} for row in db.execute(
                 "SELECT * FROM events WHERE run_id=? AND id>? ORDER BY id LIMIT 200", (rid, after))]

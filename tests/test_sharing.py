@@ -179,5 +179,92 @@ class ManageTests(ShareCase):
             self.assertEqual(call("GET", f"/v1/runs/{self.rid}/shares", self.tokens["bob"])[1], [])
 
 
+
+class EntryTests(ShareCase):
+    """Every way in, for a viewer, a collaborator and the company (D64 Task 2)."""
+    def outcome(self, call):
+        try:
+            call()
+            return "ok"
+        except Error as exc:
+            if exc.status == 403 or (exc.status == 404 and "Session 不存在" in str(exc)):
+                return "denied"
+            return "ok"   # past the access check (a missing candidate, a Worker not reached, …)
+
+    def reads(self, actor):
+        service, rid = self.service, self.rid
+        return {name: self.outcome(call) for name, call in {
+            "run": lambda: service.run(actor, rid), "events": lambda: service.events(actor, rid),
+            "revisions": lambda: service.revisions(actor, rid), "revision": lambda: service.revision(actor, rid, 1),
+            "changes": lambda: service.changes(actor, rid), "approvals": lambda: service.approvals(actor, rid),
+            "attempt_diff": lambda: service.attempt_diff(actor, rid, "attempt-" + "0" * 32)}.items()}
+
+    def stop(self, actor):
+        version = self.service.run(self.b, self.rid)["version"]
+        return self.outcome(lambda: self.service.operate(actor, self.rid, "stop", {"request_id": "share-stop-" + actor["id"][-8:],
+                                                                                  "expected_version": version}))
+
+    def test_a_viewer_reads_everything_and_operates_nothing(self):
+        self.share(kind="user", username="eve")
+        self.assertEqual(set(self.reads(self.e).values()), {"ok"}, self.reads(self.e))
+        self.assertEqual(self.stop(self.e), "denied")
+        view = self.service.run(self.e, self.rid)
+        self.assertEqual({k: view["permissions"][k] for k in ("operate", "delete", "native", "share", "publish")},
+                         {"operate": False, "delete": False, "native": False, "share": False, "publish": False})
+        self.assertEqual(view["access"], {"via": "share", "role": "viewer", "by": "bob"})
+
+    def test_a_collaborator_operates_like_a_member_and_never_moves_or_deletes(self):
+        self.share(kind="user", username="eve", role="collaborator")
+        self.assertEqual(set(self.reads(self.e).values()), {"ok"})
+        view = self.service.run(self.e, self.rid)
+        self.assertEqual({k: view["permissions"][k] for k in ("operate", "delete", "native", "assign", "share")},
+                         {"operate": True, "delete": False, "native": False, "assign": False, "share": False})
+        version = view["version"]
+        for action in ("assign-worker", "delete"):
+            with self.subTest(action):
+                self.assertEqual(self.outcome(lambda: self.service.operate(
+                    self.e, self.rid, action, {"request_id": "share-" + action, "expected_version": version,
+                                               "confirmation": self.rid, "worker_id": "env"})), "denied")
+        self.assertEqual(self.stop(self.e), "ok")
+
+    def test_the_company_reads(self):
+        self.share(kind="everyone")
+        self.assertEqual(set(self.reads(self.c).values()), {"ok"})
+        self.assertEqual(self.stop(self.c), "denied")
+
+    def test_the_native_entry_is_never_shared(self):
+        from octopus import crew_entry
+        self.share(kind="user", username="eve", role="collaborator")
+        self.assertEqual(self.outcome(lambda: crew_entry.create(self.service, self.e, self.rid)), "denied")
+
+    def test_lists_show_shared_sessions_only_where_asked(self):
+        self.share(kind="user", username="eve")
+        self.assertEqual([r["id"] for r in self.service.runs(self.e)], [])
+        self.assertEqual([r["id"] for r in self.service.runs(self.e, shared=True)], [self.rid])
+        self.assertEqual([r["id"] for r in self.service.runs(self.b, shared=True)], [])   # one's own is not "shared with me"
+
+    def test_a_request_is_not_shared_with_its_session(self):   # D55
+        self.share(kind="everyone")
+        self.assertEqual(self.service.requests(self.c), [])
+
+    def test_removing_closes_an_open_event_stream(self):
+        import threading
+        import urllib.request
+        shared = self.share(kind="user", username="eve")
+        with self.http() as call:
+            status, _ = call("GET", f"/v1/runs/{self.rid}", self.tokens["eve"])
+            self.assertEqual(status, 200)
+            url = call.base + f"/v1/runs/{self.rid}/events?stream=1"
+            request = urllib.request.Request(url, headers={"Authorization": "Bearer " + self.tokens["eve"]})
+            seen = []
+            with urllib.request.urlopen(request, timeout=10) as stream:
+                threading.Timer(1.5, lambda: self.service.unshare_run(self.b, self.rid, shared["id"])).start()
+                for line in stream:
+                    seen.append(line.decode().strip())
+                    if "access_revoked" in seen[-1]:
+                        break
+        self.assertIn("event: access_revoked", seen)
+
+
 if __name__ == "__main__":
     unittest.main()

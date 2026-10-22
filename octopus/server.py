@@ -830,7 +830,8 @@ def server(database, port=8918, host="127.0.0.1", allowed_hosts=(), origin_secre
                                                          "submitter", "since", "until") if one(key)}
                     return self.respond(service.runs(actor, all=query.get("all") == ["1"], status=status, q=one("q"),
                                                      limit=int(limit) if limit else None, view=one("view"),
-                                                     page=one("page") == "1", cursor=one("cursor"), **filters))
+                                                     page=one("page") == "1", cursor=one("cursor"),
+                                                     shared=one("shared") == "1", **filters))   # D64
                 if segments[:2] == ["v1", "policies"] and len(segments) in {2, 3}:   # D55: admission rules, mapping preferences
                     if len(segments) == 3:
                         require(method == "DELETE", "Method not allowed", 405)

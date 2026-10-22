@@ -37,7 +37,7 @@ def observe(service, actor, rid, before=None, limit=50):
     require(type(limit) is int and 1 <= limit <= 100, "limit 须为 1–100 的整数")
     require(before is None or type(before) is int and before >= 0, "before 须为非负整数")
     with service.db.read() as db:
-        run = run_access(db, actor, rid)
+        run = run_access(db, actor, rid, read=True)   # D64: the native conversation, read only
         require(run["lifecycle"] != "deleted", "Session 已删除", 409, "invalid_state")
         require(run["native_parent"] and run["worker_id"], "原生 Session 尚未建立，请等待 Worker 准备完成", 409, "not_prepared")
         worker = db.execute("SELECT config,enabled FROM workers WHERE id=?", (run["worker_id"],)).fetchone()
@@ -55,7 +55,7 @@ def observe(service, actor, rid, before=None, limit=50):
 def create(service, actor, rid):
     with service.db.read() as db:
         try:
-            run = run_access(db, actor, rid, admin=False)
+            run = run_access(db, actor, rid, admin=False, shares=False)   # D64: never through a share (K03)
         except Error as exc:
             # An admin can see the Session through oversight, but the native login would cover its whole Gateway.
             if exc.status == 404 and elevated(actor) and db.execute("SELECT 1 FROM runs WHERE id=?", (rid,)).fetchone():
@@ -95,7 +95,7 @@ def create(service, actor, rid):
             "Worker 返回的原生会话入口与当前 Session 不一致", 409, "entry_mismatch")
     # Membership, closure and Worker changes during the network request take effect.
     with service.db.read() as db:
-        current = run_access(db, actor, rid, admin=False)
+        current = run_access(db, actor, rid, admin=False, shares=False)
         available(current)
         current_worker = service._worker(db, actor["id"], current["worker_id"], current["team_id"])
         require(current["native_parent"] == run["native_parent"] and
