@@ -1,10 +1,14 @@
 """Bearer-authenticated Team API; native browser login is an explicit no-store exchange."""
+from http.client import HTTPException
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 import json
+import logging
 import hashlib
 import hmac
+import html
 import os
 import re
+import shutil
 from pathlib import Path
 import socket
 import threading
@@ -12,12 +16,13 @@ import time
 import base64
 import secrets
 import sqlite3
-from urllib.parse import parse_qs, unquote, urlsplit
+import struct
+from urllib.parse import parse_qs, quote, unquote, urlsplit
 
-from . import __version__
+from . import __version__, remote_preview, workers
 from .db import dumps, uid
-from .domain import Service, name, team_environment
-from .security import Error, authenticate, check_password, create_user, elevated, issue_token, require, scope
+from .domain import Service, audit, name, team_environment
+from .security import Error, authenticate, check_password, create_user, elevated, expiry, issue_token, require, scope
 from .transport import validate_worker, worker_request
 from .schema import openapi
 
@@ -48,6 +53,7 @@ TYPES = {".html": "text/html; charset=utf-8", ".js": "text/javascript; charset=u
 # Preview links carry their own short-lived capability: an iframe or new tab cannot send the console's bearer token.
 # The signing key is kept in the platform data directory, so links stay valid across API restarts and deploys.
 PREVIEW_TTL = 600  # B6: ten minutes; every file it serves re-checks its holder's access
+SYNC_LIMIT = 20 * 1024 * 1024   # D58: the local commits one sync brings in (as the Worker's)
 PREVIEW_POLICY = ("sandbox allow-scripts allow-forms allow-popups allow-modals allow-downloads; "
                   "default-src * data: blob: 'unsafe-inline' 'unsafe-eval'; frame-ancestors 'self'")
 
@@ -86,6 +92,55 @@ def preview_run(ticket, key, now=None):
     return parts[0], parts[1]
 
 
+def archive_ticket(rid, user, client, key, now=None):
+    """A download link (D36 §4.1): like a preview ticket, signed for the archive purpose only, and naming the client
+    the link was asked from (for the change journal)."""
+    payload = f"{rid}.{user}.{client}.{int((now or time.time()) + PREVIEW_TTL)}"
+    return f"{payload}.{preview_signature(key, 'archive.' + payload)}"
+
+
+def bundle_ticket(rid, user, client, key, now=None):
+    """A pull link (D58 §5): an archive ticket signed for the bundle purpose only."""
+    payload = f"{rid}.{user}.{client}.{int((now or time.time()) + PREVIEW_TTL)}"
+    return f"{payload}.{preview_signature(key, 'bundle.' + payload)}"
+
+
+def bundle_run(ticket, key, now=None):
+    parts = ticket.split(".")
+    require(len(parts) == 5 and parts[3].isdigit() and hmac.compare_digest(
+        parts[4].encode(), preview_signature(key, "bundle." + ".".join(parts[:4])).encode()),
+        "拉回链接无效，请重新拉回", 403, "bundle_invalid")
+    require(int(parts[3]) >= (now or time.time()), "拉回链接已过期（10 分钟有效），请重新拉回", 403, "bundle_expired")
+    return parts[0], parts[1], parts[2]
+
+
+def archive_run(ticket, key, now=None):
+    parts = ticket.split(".")
+    require(len(parts) == 5 and parts[3].isdigit() and hmac.compare_digest(
+        parts[4].encode(), preview_signature(key, "archive." + ".".join(parts[:4])).encode()),
+        "下载链接无效，请在控制台重新下载", 403, "archive_invalid")
+    require(int(parts[3]) >= (now or time.time()), "下载链接已过期（10 分钟有效），请重新下载", 403, "archive_expired")
+    return parts[0], parts[1], parts[2]
+
+
+def zip_complete(tail, total):
+    """Whether a zip stream of ``total`` bytes ending in ``tail`` (its last 256 bytes or more) was written to its end:
+    the end record closes the stream (no comment) and the central directory it names ends right before it, or right
+    before the zip64 records. An archive nested in the stream has the signature too, but not at offsets that fit."""
+    end = tail[-22:]
+    if len(end) < 22 or end[:4] != b"PK\x05\x06" or end[20:22] != b"\0\0":
+        return False
+    size, offset = struct.unpack("<II", end[12:20])
+    if offset + size + 22 == total:
+        return True
+    locator, record = tail[-42:-22], tail[-98:-42]
+    if len(record) < 56 or locator[:4] != b"PK\x06\x07" or record[:4] != b"PK\x06\x06":
+        return False
+    start = struct.unpack("<Q", locator[8:16])[0]
+    size, offset = struct.unpack("<QQ", record[40:56])
+    return start == total - 98 and offset + size == start
+
+
 READ_POSTS = {"/v1/workflows/resolve", "/v1/workflows/parse"}
 
 
@@ -94,12 +149,28 @@ def required_scope(method, path):
     need manage; Session and design writes need execute; reads need read."""
     segments = path.strip("/").split("/")
     if path.startswith("/v1/admin/") or (segments[:2] == ["v1", "workers"] and method != "GET") or \
+            (segments[:2] == ["v1", "credentials"] and len(segments) == 4 and segments[3] == "grants") or \
             (segments[:2] == ["v1", "users"] and (method != "GET" or len(segments) > 2)) or \
-            (path == "/v1/teams" and method == "POST"):
+            (path == "/v1/teams" and method == "POST") or \
+            (segments[:2] == ["v1", "teams"] and len(segments) == 4 and segments[3] in {"archive", "environment"}):
         return "admin"
-    if method == "GET" or path in READ_POSTS or path.endswith("/preview"):
+    # A download is a read; /v1/workflows/<id>/archive (archiving a workflow) is not, hence no endswith() here.
+    if method == "GET" or path in READ_POSTS or path.endswith("/preview") or \
+            (segments[:2] == ["v1", "runs"] and len(segments) == 4 and segments[3] == "archive") or \
+            (segments[:2] == ["v1", "runs"] and len(segments) == 5 and segments[3:] == ["app", "open"]):
         return "read"
     return "execute" if path.startswith(("/v1/runs", "/v1/designs")) else "manage"
+
+
+def every_change(service, actor, rid):
+    """The whole change journal of a Session, newest first, for its export (the query API pages by 200)."""
+    result, before = [], None
+    while True:
+        page = service.changes(actor, rid, before=before, limit=200, audited=False)
+        result += page
+        if len(page) < 200:
+            return result
+        before = page[-1]["id"]
 
 
 def console_file(path):
@@ -120,14 +191,37 @@ def console_file(path):
     return (file, TYPES[file.suffix]) if file.is_file() else None
 
 
-def server(database, port=8918, host="127.0.0.1", allowed_hosts=(), origin_secret=None):
+# The preview domain's own pages (D36 §5.2): plain HTML, no script, nothing of the console.
+PREVIEW_PAGE = ("<!doctype html><html lang=\"zh-CN\"><head><meta charset=\"utf-8\"><title>KiroCrew ON 远程预览</title>{head}"
+                "<style>body{{font:15px/1.6 system-ui,sans-serif;max-width:36rem;margin:18vh auto;padding:0 1.5rem;color:#333}}"
+                "</style></head><body><h1 style=\"font-size:1.2rem\">KiroCrew ON 远程预览</h1><p>{text}</p></body></html>")
+
+
+def server(database, port=8918, host="127.0.0.1", allowed_hosts=(), origin_secret=None, preview_url="", preview_domain="",
+           credentials_key_file=None, credentials_private_hosts=(), default_admission="auto"):
     if origin_secret is not None and len(origin_secret) < 32:
         # An empty or truncated secret file must fail closed instead of turning origin enforcement off.
         raise ValueError("源站密钥为空或过短（至少 32 个字符）；检查 origin_secret_file")
-    service = Service(database)
+    service = Service(database, default_admission)
+    service.credentials.configured = credentials_key_file
+    from . import transport
+    try:   # D59: Worker tokens are stored sealed with the D35 key
+        key = service.credentials.key
+    except Error as exc:   # fail closed without taking the API down (as worker_ca_file): sealed tokens answer worker_secret
+        logging.warning("Worker tokens cannot be opened or sealed: %s", exc)
+        transport.configure_key(None)
+    else:
+        transport.configure_key(key)
+        with database.transaction() as db:
+            sealed = workers.seal_stored(db, key)   # plaintext from before D59, once
+        if sealed:
+            logging.info("Sealed %d stored Worker token(s)", sealed)
+    service.credentials.private_hosts = frozenset(credentials_private_hosts)
     signing_key = preview_key(database.root)
     hosts, local_hosts = set(), set()
     failures, limiter_lock = {}, threading.Lock()
+
+    shared = remote_preview.plain_host(urlsplit(preview_url).hostname) if preview_url else ""   # the preview distribution's own name
 
     class Handler(BaseHTTPRequestHandler):
         protocol_version = "HTTP/1.1"
@@ -149,6 +243,94 @@ def server(database, port=8918, host="127.0.0.1", allowed_hosts=(), origin_secre
             self.end_headers()
             self.wfile.write(data)
 
+        def respond_status(self, status, headers=()):
+            self.send_response(status)
+            for key, value in headers:
+                self.send_header(key, value)
+            self.send_header("Content-Length", "0")
+            self.send_header("Cache-Control", "no-store")
+            self.end_headers()
+
+        def respond_page(self, text, status=200, head="", headers=()):
+            data = PREVIEW_PAGE.format(head=head, text=html.escape(text)).encode()
+            self.send_response(status)
+            for key, value in headers:
+                self.send_header(key, value)
+            self.send_header("Content-Type", "text/html; charset=utf-8")
+            self.send_header("Content-Length", str(len(data)))
+            self.send_header("Cache-Control", "no-store")
+            self.send_header("X-Content-Type-Options", "nosniff")
+            self.send_header("Referrer-Policy", "no-referrer")
+            self.send_header("Content-Security-Policy", "default-src 'none'; style-src 'unsafe-inline'")
+            self.end_headers()
+            self.wfile.write(data)
+
+        def preview_gate(self, path):
+            """The preview domain's nginx (on this host) asking: who may see the app (auth_request), opening links, and
+            the page shown when it may not."""
+            try:   # a per-session host (phase 3) names its Session; the distribution's own name names none
+                own = remote_preview.session_host(self.headers.get("X-Preview-Host"), preview_domain)
+                # With per-session hosts configured, the shared mode is for the distribution's own name alone: no
+                # other spelling, unknown host or missing header falls back to it.
+                require(own or not preview_domain or remote_preview.plain_host(self.headers.get("X-Preview-Host")) == shared,
+                        "预览地址无效", 404, "not_found")
+            except Error as exc:
+                return self.respond_status(403) if path == "/v1/preview-auth" else self.respond_page(str(exc), 404)
+            mine = lambda rid: require(own is None or rid == own, "此链接或 Cookie 属于另一个会话的远程预览", 403, "app_other_session")
+            if path == "/v1/preview-auth":
+                try:
+                    rid, holder = remote_preview.cookie_run(remote_preview.cookie_value(self.headers.get("Cookie")),
+                                                            signing_key)
+                    mine(rid)
+                    target = service.app_auth(rid, holder)
+                except Error as exc:
+                    return self.respond_status(401 if exc.status == 401 else 403)
+                headers = [("X-Preview-Upstream", target["url"]), ("X-Preview-Port", str(target["port"]))]
+                if target.get("name"):
+                    headers += [("X-Preview-Name", target["name"]), ("X-Preview-Verify", target["verify"])]
+                return self.respond_status(204, headers)
+            try:
+                if path.startswith("/_kirocrew/open/"):
+                    ticket = path[len("/_kirocrew/open/"):]
+                    mine(remote_preview.open_run(ticket, signing_key)[0])   # checked here, spent on the next step
+                    # On the shared origin another Session's app may have used it before: its cookies, storage (service
+                    # workers included), cached responses and open pages go first. A Session's own origin keeps its app's.
+                    target = "/_kirocrew/enter/" + ticket
+                    return self.respond_page("正在打开远程预览…", head=f'<meta http-equiv="refresh" content="0;url={html.escape(target)}">',
+                                             headers=[] if own else [("Clear-Site-Data", '"cache", "cookies", "storage", "executionContexts"')])
+                if path.startswith("/_kirocrew/enter/"):
+                    rid, holder, nonce = remote_preview.open_run(path[len("/_kirocrew/enter/"):], signing_key)
+                    mine(rid)
+                    entry = service.app_enter(rid, holder, nonce)
+                    value = remote_preview.cookie(rid, holder, signing_key)
+                    self.send_response(302)
+                    self.send_header("Location", entry)
+                    self.send_header("Set-Cookie", f"{remote_preview.COOKIE}={value}; Path=/; Secure; HttpOnly; "
+                                                   f"SameSite=Lax; Max-Age={remote_preview.COOKIE_TTL}")
+                    self.send_header("Content-Length", "0")
+                    self.send_header("Cache-Control", "no-store")
+                    self.end_headers()
+                    return
+                if path == "/_kirocrew/denied":
+                    return self.respond_page("远程预览未打开、已停止，或你无权查看此会话：请回到控制台会话页，点「打开远程预览」。",
+                                             403)
+            except Error as exc:
+                return self.respond_page(str(exc), exc.status if exc.status in (401, 403, 404, 409) else 403)
+            return self.respond_page("页面不存在", 404)
+
+        def respond_report(self, data, rid, fmt):
+            """A Session's Feature report (D37 phase 2): HTML shown as a page with nothing it may load or run, Markdown as
+            a file."""
+            self.send_response(200)
+            self.send_header("Content-Type", "text/html; charset=utf-8" if fmt == "html" else "text/markdown; charset=utf-8")
+            self.send_header("Content-Disposition", f'{"inline" if fmt == "html" else "attachment"}; filename="{rid}-report.{fmt}"')
+            self.send_header("Content-Length", str(len(data)))
+            self.send_header("Cache-Control", "no-store")
+            self.send_header("X-Content-Type-Options", "nosniff")
+            self.send_header("Content-Security-Policy", "default-src 'none'; style-src 'unsafe-inline'; img-src data:")
+            self.end_headers()
+            self.wfile.write(data)
+
         def respond_preview(self, data, kind, status=200):
             # The previewed app runs sandboxed in an opaque origin: it cannot read the console's storage or call its API
             # as the user. Module scripts from that origin are cross-origin requests, hence the CORS header.
@@ -162,6 +344,56 @@ def server(database, port=8918, host="127.0.0.1", allowed_hosts=(), origin_secre
             self.send_header("Content-Security-Policy", PREVIEW_POLICY)
             self.end_headers()
             self.wfile.write(data)
+
+        def stream_bundle(self, rid, config, full):
+            """Relay the Worker's pull bundle (D58 §5) with what it is: the head, the base and whether it is whole."""
+            from .transport import worker_stream
+            response = worker_stream(config, "/pull/bundle", {"run_id": rid, "full": full}, timeout=120)
+            with response:
+                self.send_response(200)
+                self.send_header("Content-Type", "application/x-git-bundle")
+                self.send_header("Content-Disposition", f'attachment; filename="{rid}.bundle"')
+                for header in ("X-Pull-Head", "X-Pull-Base", "X-Pull-Branch", "X-Pull-Full", "Content-Length"):
+                    if response.headers.get(header):   # not "name": that is the validator
+                        self.send_header(header, response.headers[header])
+                self.send_header("Cache-Control", "no-store")
+                self.end_headers()
+                try:
+                    shutil.copyfileobj(response, self.wfile, 1 << 20)
+                except (OSError, HTTPException):
+                    self.close_connection = True
+
+        def stream_archive(self, rid, config, meta, reader, client):
+            """Relay the Worker's zip as it arrives (chunked, nothing on disk). Only a stream that reached the end of the
+            archive is completed and recorded; otherwise the connection is cut so no partial file looks finished."""
+            from .transport import worker_stream
+            response = worker_stream(config, "/archive", {"run_id": rid, "meta": meta})
+            self.send_response(200)
+            self.send_header("Content-Type", "application/zip")
+            self.send_header("Content-Disposition", f'attachment; filename="{rid}.zip"; '
+                                                    f"filename*=UTF-8''{quote((meta.get('name') or rid) + '.zip')}")
+            self.send_header("Cache-Control", "no-store")
+            self.send_header("X-Content-Type-Options", "nosniff")
+            self.send_header("Transfer-Encoding", "chunked")
+            self.end_headers()
+            total, tail = 0, b""
+            try:
+                with response:
+                    while chunk := response.read(65536):
+                        self.wfile.write(b"%X\r\n%s\r\n" % (len(chunk), chunk))
+                        total, tail = total + len(chunk), (tail + chunk)[-256:]
+            except (OSError, HTTPException):   # HTTPException: a chunked upstream (a Worker host's nginx) cut short
+                self.close_connection = True
+                return
+            if not zip_complete(tail, total):   # the Worker stopped before the end of the archive
+                self.close_connection = True
+                return
+            self.wfile.write(b"0\r\n\r\n")
+            try:   # the download is complete; a failed record must not write a second response into it
+                service.record_download(rid, reader, client, total)
+            except Exception as exc:
+                self.close_connection = True
+                logging.error("Download of %s not recorded (%s)", rid, type(exc).__name__)
 
         def identity(self):
             header = self.headers.get("Authorization", "")
@@ -187,6 +419,9 @@ def server(database, port=8918, host="127.0.0.1", allowed_hosts=(), origin_secre
         def do_DELETE(self):
             self.dispatch("DELETE")
 
+        def do_PATCH(self):
+            self.dispatch("PATCH")
+
         def dispatch(self, method):
             try:
                 require(self.headers.get("Host", "") in hosts, "Host 不在允许列表；隧道或代理地址需写入 allowed_hosts",
@@ -205,8 +440,14 @@ def server(database, port=8918, host="127.0.0.1", allowed_hosts=(), origin_secre
                     origin = self.headers.get("Origin")
                     require(not origin or urlsplit(origin).netloc == self.headers.get("Host"), "跨站写入被拒绝", 403, "origin")
                     size = int(self.headers.get("Content-Length", "0"))
+                    raw = None
+                    if method == "POST" and re.fullmatch(r"/v1/runs/[^/]+/sync", path):   # D58: a git bundle, as it is
+                        require(self.headers.get("Content-Type", "").split(";")[0] == "application/octet-stream",
+                                "需要 application/octet-stream")
+                        require(0 < size <= SYNC_LIMIT, f"同步的内容须为 1 字节到 {SYNC_LIMIT // 1048576} MB", 413, "sync_too_large")
+                        raw = self.rfile.read(size)
                     # A cross-site DELETE always needs a CORS preflight, so it may come without a JSON body.
-                    if not (method == "DELETE" and size == 0):
+                    elif not (method == "DELETE" and size == 0):
                         require(self.headers.get("Content-Type", "").split(";")[0] == "application/json", "需要 application/json")
                         require(0 < size <= 1_000_000, "请求体过大或为空")
                         body = json.loads(self.rfile.read(size))
@@ -227,6 +468,26 @@ def server(database, port=8918, host="127.0.0.1", allowed_hosts=(), origin_secre
                         ".ttf": "font/ttf", ".glb": "model/gltf-binary", ".gltf": "model/gltf+json",
                     }.get(Path(relative).suffix.lower(), "application/octet-stream")
                     return self.respond_preview(data, kind)
+                if path == "/v1/preview-auth" or path.startswith("/_kirocrew/"):
+                    # Only the preview domain's nginx on this host: through the console's distribution these are absent,
+                    # and with an origin secret the nginx proves itself with the gate (other local processes cannot).
+                    gate = self.headers.get("X-Preview-Gate", "")
+                    require(method == "GET" and local and not self.origin_verified and (
+                        not origin_secret or hmac.compare_digest(gate, remote_preview.gate_value(origin_secret))),
+                        "Not found", 404, "not_found")
+                    return self.preview_gate(path)
+                if method == "GET" and path.startswith("/bundle/"):   # D58: the pull bundle, for the link's holder
+                    ticket, _, filename = path[len("/bundle/"):].partition("/")
+                    rid, holder, _ = bundle_run(ticket, signing_key)
+                    require(filename == rid + ".bundle", "下载链接无效", 404, "not_found")
+                    config, _, _ = service.archive_source(rid, holder)
+                    return self.stream_bundle(rid, config, query.get("full") == ["1"])
+                if method == "GET" and path.startswith("/archive/"):
+                    ticket, _, filename = path[len("/archive/"):].partition("/")   # not "name": that is the validator
+                    rid, holder, client = archive_run(ticket, signing_key)
+                    require(filename == rid + ".zip", "下载链接无效", 404, "not_found")
+                    config, meta, reader = service.archive_source(rid, holder)
+                    return self.stream_archive(rid, config, meta, reader, client)
                 if method == "GET" and path == "/health":
                     return self.respond({"version": __version__, "service": "octopus-team", "stage": "MVP development"})
                 if method == "GET" and path == "/v1/openapi.json":
@@ -264,7 +525,6 @@ def server(database, port=8918, host="127.0.0.1", allowed_hosts=(), origin_secre
                         if method == "POST":
                             require(elevated(actor), "需要平台管理员", 403, "forbidden")
                             created = create_user(db, body.get("username"), body.get("password"), body.get("admin", False))
-                            from .domain import audit
                             audit(db, actor, "user.create", "user", created["id"], {"admin": created["admin"]})
                             if body.get("worker_id"):
                                 # The new user's personal space runs on a shared execution environment (D28).
@@ -276,14 +536,32 @@ def server(database, port=8918, host="127.0.0.1", allowed_hosts=(), origin_secre
                             return self.respond(created, 201)
                         require(method == "GET", "Method not allowed", 405)
                         return self.respond([dict(r) for r in db.execute("SELECT id,username FROM users WHERE active=1 ORDER BY username")])
+                if segments[:2] == ["v1", "credentials"]:
+                    store = service.credentials
+                    if len(segments) == 2:
+                        require(method in {"GET", "POST"}, "Method not allowed", 405)
+                        if method == "POST":
+                            return self.respond(store.create(actor, body), 201)
+                        return self.respond(store.list(actor, query.get("host", [None])[0], query.get("scope", [None])[0]))
+                    cid = segments[2]
+                    if len(segments) == 3 and method == "PATCH":
+                        return self.respond(store.update(actor, cid, body))
+                    if len(segments) == 3 and method == "DELETE":
+                        return self.respond(store.delete(actor, cid))
+                    if segments[3:] == ["test"] and method == "POST":
+                        return self.respond(store.test(actor, cid))
+                    if segments[3:] == ["grants"] and method in {"POST", "DELETE"}:
+                        return self.respond(store.grant(actor, cid, body) if method == "POST" else store.revoke(actor, cid, body))
+                    raise Error(404, "not_found", "接口不存在")
                 if path == "/v1/tokens":
                     require(method in {"GET", "POST"}, "Method not allowed", 405)
                     with database.transaction() as db:
                         if method == "POST":
                             requested = body.get("scopes", actor["scopes"])
                             require(isinstance(requested, list) and set(requested) <= set(actor["scopes"]), "不能扩大 Token scope", 403, "forbidden")
-                            return self.respond(issue_token(db, actor["id"], requested, body.get("label", "API"), body.get("ttl", 86400)), 201)
-                        return self.respond([dict(r) for r in db.execute(
+                            return self.respond(issue_token(db, actor["id"], requested, body.get("label", "API"),
+                                                            body.get("ttl", 86400), body.get("expires_in")), 201)
+                        return self.respond([{**dict(r), "expires": expiry(r["expires"])} for r in db.execute(
                             "SELECT id,label,scopes,expires,last_used FROM tokens WHERE user_id=? AND expires>? "
                             "ORDER BY expires DESC", (actor["id"], time.time()))])
                 if len(segments) == 3 and segments[:2] == ["v1", "tokens"] and method == "DELETE":
@@ -293,6 +571,15 @@ def server(database, port=8918, host="127.0.0.1", allowed_hosts=(), origin_secre
                 if path == "/v1/teams":
                     require(method in {"GET", "POST"}, "Method not allowed", 405)
                     return self.respond(service.teams(actor) if method == "GET" else service.create_team(actor, body))
+                if len(segments) == 3 and segments[:2] == ["v1", "teams"]:
+                    require(method == "PATCH", "Method not allowed", 405)
+                    return self.respond(service.rename_team(actor, segments[2], body))
+                if len(segments) == 4 and segments[:2] == ["v1", "teams"] and segments[3] == "archive":
+                    require(method == "POST", "Method not allowed", 405)
+                    return self.respond(service.archive_team(actor, segments[2], body))
+                if len(segments) == 4 and segments[:2] == ["v1", "teams"] and segments[3] == "environment":
+                    require(method == "POST", "Method not allowed", 405)
+                    return self.respond(service.change_environment(actor, segments[2], body))
                 if len(segments) == 4 and segments[:2] == ["v1", "teams"] and segments[3] == "members":
                     require(method in {"POST", "DELETE"}, "Method not allowed", 405)
                     return self.respond(service.membership(actor, segments[2], body, remove=method == "DELETE"))
@@ -306,6 +593,61 @@ def server(database, port=8918, host="127.0.0.1", allowed_hosts=(), origin_secre
                 if path == "/v1/workflows/resolve":
                     require(method == "POST", "Method not allowed", 405)
                     return self.respond(service.resolve_workflow(actor, body))
+                if len(segments) == 4 and segments[:2] == ["v1", "runs"] and segments[3] == "publish":
+                    require(method == "POST", "Method not allowed", 405)
+                    return self.respond(service.publish(actor, segments[2], body))
+                if len(segments) == 4 and segments[:2] == ["v1", "runs"] and segments[3] == "steer":
+                    require(method == "POST", "Method not allowed", 405)
+                    return self.respond(service.steer(actor, segments[2], body))
+                if len(segments) == 5 and segments[:2] == ["v1", "runs"] and segments[3:] == ["knowledge", "forget"]:
+                    require(method == "POST", "Method not allowed", 405)
+                    return self.respond(service.forget_knowledge(actor, segments[2], body))
+                if len(segments) == 4 and segments[:2] == ["v1", "runs"] and segments[3] == "publish-policy":
+                    require(method == "POST", "Method not allowed", 405)
+                    return self.respond(service.set_publish_policy(actor, segments[2], body))
+                if len(segments) in (4, 5) and segments[:2] == ["v1", "runs"] and segments[3] == "approvals":
+                    if len(segments) == 4:
+                        require(method == "GET", "Method not allowed", 405)
+                        return self.respond(service.approvals(actor, segments[2]))
+                    require(segments[4] == "answer" and method == "POST", "Method not allowed", 405)
+                    return self.respond(service.answer_approval(actor, segments[2], body))
+                if len(segments) == 4 and segments[:2] == ["v1", "runs"] and segments[3] == "credentials":
+                    require(method == "POST", "Method not allowed", 405)
+                    return self.respond(service.rebind(actor, segments[2], body))
+                if len(segments) in (4, 5) and segments[:2] == ["v1", "runs"] and segments[3] == "app":
+                    rid = segments[2]
+                    if len(segments) == 4 and method == "GET":
+                        return self.respond(service.app(actor, rid))
+                    if len(segments) == 4 and method == "POST":
+                        require(body.get("action") in {"start", "stop"}, "action 只能是 start 或 stop")
+                        return self.respond(service.app_start(actor, rid) if body["action"] == "start"
+                                            else service.app_stop(actor, rid))
+                    require(segments[4:] == ["open"] and method == "POST", "接口不存在", 404, "not_found")
+                    require(preview_url or preview_domain, "平台尚未配置预览域名（preview_url / preview_domain），远程预览暂不可用",
+                            409, "app_preview_unconfigured")
+                    service.app_ready(actor, rid)
+                    ticket = remote_preview.open_ticket(rid, actor["id"], signing_key)
+                    origin = remote_preview.session_url(preview_domain, rid) if preview_domain else preview_url.rstrip("/")
+                    return self.respond({"url": origin + "/_kirocrew/open/" + ticket,
+                                         "expires_in": remote_preview.TICKET_TTL})
+                if len(segments) == 4 and segments[:2] == ["v1", "runs"] and segments[3] == "sync":
+                    require(method == "POST" and raw is not None, "Method not allowed", 405)
+                    one = lambda key: (query.get(key) or [None])[-1]
+                    version = one("expected_version")
+                    require(version is not None and version.isdigit(), "需要 expected_version")
+                    return self.respond(service.sync(actor, segments[2], raw, one("head"), one("request_id"), int(version),
+                                                     one("note"), old=one("old")))
+                if len(segments) == 4 and segments[:2] == ["v1", "runs"] and segments[3] == "bundle":   # D58: a local pull
+                    require(method == "POST", "Method not allowed", 405)
+                    service.bundle_entry(actor, segments[2])
+                    ticket = bundle_ticket(segments[2], actor["id"], actor.get("client", "api"), signing_key)
+                    return self.respond({"url": f"/bundle/{ticket}/{segments[2]}.bundle", "expires_in": PREVIEW_TTL})
+                if len(segments) == 4 and segments[:2] == ["v1", "runs"] and segments[3] == "archive":
+                    require(method == "POST", "Method not allowed", 405)
+                    estimate = service.archive_entry(actor, segments[2])
+                    ticket = archive_ticket(segments[2], actor["id"], actor.get("client", "api"), signing_key)
+                    return self.respond({"url": f"/archive/{ticket}/{segments[2]}.zip", "expires_in": PREVIEW_TTL,
+                                         "bytes_estimate": estimate["bytes"], "files": estimate["files"]})
                 if len(segments) == 4 and segments[:2] == ["v1", "runs"] and segments[3] == "preview" and method == "POST":
                     entry = service.preview_entry(actor, segments[2])
                     return self.respond({"url": "/preview/" + preview_ticket(segments[2], actor["id"], signing_key) + "/" + entry,
@@ -357,6 +699,12 @@ def server(database, port=8918, host="127.0.0.1", allowed_hosts=(), origin_secre
                 if path == "/v1/admin/environments":
                     require(method == "GET", "Method not allowed", 405)
                     return self.respond(service.environments(actor))
+                if len(segments) == 3 and segments[:2] == ["v1", "workers"]:
+                    require(method == "PATCH", "Method not allowed", 405)
+                    return self.respond(service.rename_worker(actor, segments[2], body))
+                if len(segments) == 4 and segments[:2] == ["v1", "workers"] and segments[3] == "retire":
+                    require(method == "POST", "Method not allowed", 405)
+                    return self.respond(service.retire_worker(actor, segments[2]))
                 if len(segments) == 4 and segments[:2] == ["v1", "workers"] and segments[3] == "dedicate":
                     require(method == "POST", "Method not allowed", 405)
                     return self.respond(service.dedicate_worker(actor, segments[2]))
@@ -373,8 +721,7 @@ def server(database, port=8918, host="127.0.0.1", allowed_hosts=(), origin_secre
                     config = body.get("connection")
                     health = validate_worker(config)
                     with database.transaction() as db:
-                        row = db.execute("SELECT * FROM workers WHERE id=?", (segments[2],)).fetchone()
-                        require(row is not None, "Worker 不存在", 404, "not_found")
+                        row = Service._live_worker(db, segments[2])
                         personal = row["scope"] == "dedicated" and not row["team_id"]
                         require(health.get("isolation") == "dedicated" or personal or row["scope"] == "shared",
                                 "Team 与空闲执行环境须为专属隔离（dedicated）", 409, "isolation_required")
@@ -391,25 +738,27 @@ def server(database, port=8918, host="127.0.0.1", allowed_hosts=(), origin_secre
                             if (other["team_id"], other["owner_id"]) != (row["team_id"], row["owner_id"]):
                                 require(previous.get("host_principal") != health.get("host_principal"),
                                         "不同执行空间不能复用同一宿主账户；请使用独立账号/容器/主机", 409, "isolation_required")
-                        db.execute("UPDATE workers SET config=? WHERE id=?",
-                                   (dumps({**config, "capabilities": health}), row["id"]))
+                        moved = json.loads(row["config"]).get("capabilities", {}).get("boundary") != health.get("boundary")
+                        # A new boundary is a redeployed host: what an earlier Team left there is gone (P2).
+                        db.execute("UPDATE workers SET config=?, last_team=CASE WHEN ? THEN NULL ELSE last_team END "
+                                   "WHERE id=?", (dumps(workers.seal({**config, "capabilities": health}, service.credentials.key)),
+                                                  int(moved), row["id"]))
+                        audit(db, actor, "worker.connection", "worker", row["id"], {"boundary_changed": moved})
                     return self.respond({"id": row["id"], "capabilities": health})
                 if len(segments) == 4 and segments[:2] == ["v1", "workers"] and segments[3] == "enabled":
                     require(method == "POST" and elevated(actor), "需要平台管理员", 403, "forbidden")
                     require(isinstance(body.get("enabled"), bool), "enabled 必须为布尔值")
                     with database.transaction() as db:
-                        require(db.execute("SELECT 1 FROM workers WHERE id=?", (segments[2],)).fetchone(),
-                                "Worker 不存在", 404, "not_found")
+                        Service._live_worker(db, segments[2])
                         db.execute("UPDATE workers SET enabled=? WHERE id=?", (int(body["enabled"]), segments[2]))
+                        audit(db, actor, "worker.enabled", "worker", segments[2], {"enabled": body["enabled"]})
                     return self.respond({"ok": True, "enabled": body["enabled"]})
                 if len(segments) == 4 and segments[:2] == ["v1", "workers"] and segments[3] == "capabilities":
                     require(method == "GET", "Method not allowed", 405)
+                    # Everyone the environment serves may refresh its model catalogue (spec §6.1), shared ones included.
+                    require(any(w["id"] == segments[2] for w in service.workers(actor)), "Worker 不存在或无权限", 404, "not_found")
                     with database.read() as db:
-                        row = db.execute("SELECT * FROM workers WHERE id=?", (segments[2],)).fetchone()
-                        require(row and (elevated(actor) or row["owner_id"] == actor["id"] or db.execute(
-                            "SELECT 1 FROM members WHERE user_id=? AND team_id=?", (actor["id"], row["team_id"])).fetchone()),
-                                "Worker 不存在或无权限", 404, "not_found")
-                        config = json.loads(row["config"])
+                        config = json.loads(db.execute("SELECT config FROM workers WHERE id=?", (segments[2],)).fetchone()["config"])
                     health = worker_request(config, "/health")
                     require(health.get("boundary") == config["capabilities"]["boundary"],
                             "Worker 执行边界发生变化，请由管理员核查", 409, "worker_changed")
@@ -458,14 +807,94 @@ def server(database, port=8918, host="127.0.0.1", allowed_hosts=(), origin_secre
                                         "不同执行空间不能复用同一宿主账户；请使用独立账号/容器/主机", 409, "isolation_required")
                         wid = uid("worker")
                         db.execute("INSERT INTO workers(id,name,owner_id,team_id,config,scope) VALUES(?,?,?,?,?,?)",
-                                   (wid, name(body.get("name")), actor["id"] if spare else user, team, dumps(config),
+                                   (wid, name(body.get("name")), actor["id"] if spare else user, team,
+                                    dumps(workers.seal(config, service.credentials.key)),   # D59: never plaintext
                                     "spare" if spare else "dedicated"))
+                        audit(db, actor, "worker.register", "worker", wid, {"scope": "spare" if spare else "dedicated",
+                                                                            "team_id": team, "owner_id": None if spare else user})
                     return self.respond({"id": wid, "name": body["name"], "scope": "spare" if spare else "dedicated",
                                          "capabilities": health}, 201)
+                if path == "/v1/placement":   # D49: where a new Session would run, or where a Session may move
+                    require(method == "GET", "Method not allowed", 405)
+                    return self.respond(service.placement(actor, query.get("team_id", [None])[0] or None,
+                                                          query.get("run_id", [None])[0] or None))
                 if path == "/v1/runs":
                     require(method in {"GET", "POST"}, "Method not allowed", 405)
-                    return self.respond(service.runs(actor, all=query.get("all") == ["1"]) if method == "GET"
-                                        else service.start(actor, body))
+                    if method == "POST":
+                        return self.respond(service.start(actor, body))
+                    one = lambda key: (query.get(key) or [None])[-1]
+                    limit = one("limit")
+                    require(limit is None or limit.isdigit(), "limit 须为 1–200 的整数")
+                    status = [s for s in (one("status") or "").split(",") if s] or None   # D56: one or several
+                    filters = {key: one(key) for key in ("lifecycle", "space", "repo", "branch", "stage", "tool", "client",
+                                                         "submitter", "since", "until") if one(key)}
+                    return self.respond(service.runs(actor, all=query.get("all") == ["1"], status=status, q=one("q"),
+                                                     limit=int(limit) if limit else None, view=one("view"),
+                                                     page=one("page") == "1", cursor=one("cursor"),
+                                                     shared=one("shared") == "1", **filters))   # D64
+                if segments[:2] == ["v1", "policies"] and len(segments) in {2, 3}:   # D55: admission rules, mapping preferences
+                    if len(segments) == 3:
+                        require(method == "DELETE", "Method not allowed", 405)
+                        return self.respond(service.delete_policy(actor, segments[2]))
+                    require(method in {"GET", "POST"}, "Method not allowed", 405)
+                    if method == "POST":
+                        return self.respond(service.create_policy(actor, body), 201)
+                    return self.respond(service.policies(actor, (query.get("team_id") or [None])[-1] or None))
+                if len(segments) == 6 and segments[:2] == ["v1", "runs"] and segments[3] == "attempts" and segments[5] == "diff":
+                    require(method == "GET", "Method not allowed", 405)   # D56: what a candidate changed
+                    return self.respond(service.attempt_diff(actor, segments[2], segments[4]))
+                if segments == ["v1", "quotas"]:   # D61: how many tasks a person or a Team runs at once
+                    require(method in {"GET", "POST"}, "Method not allowed", 405)
+                    return self.respond(service.set_quota(actor, body) if method == "POST" else service.quotas(actor))
+                if segments[:2] == ["v1", "requests"] and len(segments) in {2, 3}:   # D55: submissions as made
+                    require(method == "GET", "Method not allowed", 405)
+                    if len(segments) == 3:
+                        return self.respond(service.request(actor, segments[2]))
+                    one = lambda key: (query.get(key) or [None])[-1]
+                    limit = one("limit")
+                    require(limit is None or limit.isdigit(), "limit 须为 1–200 的整数")
+                    return self.respond(service.requests(actor, status=one("status"), q=one("q"), client=one("client"),
+                                                         limit=int(limit) if limit else None))
+                if len(segments) in {4, 5} and segments[:2] == ["v1", "runs"] and segments[3] == "shares":   # D64
+                    rid = segments[2]
+                    if len(segments) == 5:
+                        require(method == "DELETE", "Method not allowed", 405)
+                        scope(self.identity(), "manage")
+                        return self.respond(service.unshare_run(actor, rid, segments[4]))
+                    require(method in {"GET", "POST"}, "Method not allowed", 405)
+                    if method == "POST":
+                        scope(self.identity(), "manage")
+                        return self.respond(service.share_run(actor, rid, body), 201)
+                    return self.respond(service.run_shares(actor, rid))
+                if len(segments) in {4, 5} and segments[:2] == ["v1", "runs"] and segments[3] == "revisions":
+                    require(method == "GET", "Method not allowed", 405)
+                    rid = segments[2]
+                    if len(segments) == 4:
+                        return self.respond(service.revisions(actor, rid))
+                    if segments[4] == "diff":
+                        versions = {}
+                        for key in ("from", "to"):
+                            if key in query:
+                                require(query[key][0].isdigit(), f"{key} 须为修订版本号")
+                                versions[key] = int(query[key][0])
+                        return self.respond(service.revision_diff(actor, rid, versions.get("from"), versions.get("to")))
+                    require(segments[4].isdigit(), "修订版本号无效", 404, "not_found")
+                    return self.respond(service.revision(actor, rid, int(segments[4])))
+                if len(segments) == 4 and segments[:2] == ["v1", "runs"] and segments[3] == "report":
+                    require(method == "GET", "Method not allowed", 405)
+                    fmt = query.get("format", ["md"])[0]
+                    require(fmt in {"md", "html"}, "format 只能是 md 或 html")
+                    text = service.report(actor, segments[2], fmt).encode()
+                    return self.respond_report(text, segments[2], fmt)
+                if len(segments) == 4 and segments[:2] == ["v1", "runs"] and segments[3] == "changes":
+                    require(method == "GET", "Method not allowed", 405)
+                    paging = {}
+                    for key in ("before", "limit"):
+                        if key in query:
+                            require(query[key][0].isdigit(), f"{key} 须为非负整数")
+                            paging[key] = int(query[key][0])
+                    return self.respond(service.changes(actor, segments[2], who=query.get("who", [None])[0],
+                                                        kind=query.get("kind", [None])[0], **paging))
                 if len(segments) in {3, 4} and segments[:2] == ["v1", "runs"]:
                     rid = segments[2]
                     if len(segments) == 3 and method == "GET":
@@ -494,6 +923,7 @@ def server(database, port=8918, host="127.0.0.1", allowed_hosts=(), origin_secre
                                 revisions = [{**dict(row), "content": json.loads(row["content"])} for row in db.execute(
                                     "SELECT * FROM revisions WHERE run_id=? ORDER BY version", (rid,))]
                             return self.respond({"schema": "octopus.session/1", "session": run, "revisions": revisions,
+                                                 "changes": every_change(service, actor, rid),
                                                  "note": "平台状态及交接记录；源码与原生会话备份保留在授权 Worker。"})
                         if action == "events" and method == "GET":
                             after = int(query.get("after", [self.headers.get("Last-Event-ID", "0")])[0])
@@ -541,4 +971,5 @@ def server(database, port=8918, host="127.0.0.1", allowed_hosts=(), origin_secre
     bound = httpd.server_address[1]
     local_hosts.update({f"127.0.0.1:{bound}", f"localhost:{bound}", f"[::1]:{bound}"})
     hosts.update({*local_hosts, *allowed_hosts})
+    httpd.service = service   # serve sweeps idle remote previews with it
     return httpd

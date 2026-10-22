@@ -3,8 +3,11 @@
 #   deploy/aws/deploy.sh up            # validate, look up CloudFront prefix list and AZ, deploy the stack
 #   deploy/aws/deploy.sh push          # publish the committed HEAD to S3 and install it on the host via SSM
 #   deploy/aws/deploy.sh status        # stack outputs, SSM ping, https://<cloudfront>/health
-#   deploy/aws/deploy.sh tunnel        # SSM port forwarding to the native KiroCrew entry (localhost:15476)
-#   deploy/aws/deploy.sh kiro-login [--host <name>]  # one-time kiro-cli device-flow login as crew-<boundary>
+#   deploy/aws/deploy.sh tunnel [--boundary <name>]  # SSM port forwarding to a boundary's native KiroCrew (localhost:10000+port)
+#   deploy/aws/deploy.sh kiro-login [--host <name> | --boundary <name>]  # one-time kiro-cli device-flow login as crew-<boundary>
+#   deploy/aws/deploy.sh boundary add <name> --owner <user> [--memory <GiB>] [--cpu <%>]  # one person's boundary (D49)
+#   deploy/aws/deploy.sh boundary native <name>      # that boundary's public native entry (D49 phase 3)
+#   deploy/aws/deploy.sh boundaries    # the boundaries on the platform host: ports and service state
 #   deploy/aws/deploy.sh worker-host <add|up|push|tls|native|register|status> <name>  # a Worker host for Teams (D28)
 #   deploy/aws/deploy.sh space <run-id> [stop]  # run a worker run's project on the host and forward it (local = remote + 10000)
 #   deploy/aws/deploy.sh spaces        # list the run projects running on the host
@@ -17,9 +20,12 @@ cd "$(dirname "$0")/../.."
 source deploy/aws/stack.env
 TEMPLATE=deploy/aws/kirocrew-on-ec2.yaml
 WORKER_TEMPLATE=deploy/aws/kirocrew-on-worker.yaml
+NATIVE_TEMPLATE=deploy/aws/kirocrew-on-native.yaml
 WORKER_TLS_PORT="${WORKER_TLS_PORT:-8943}"
 WORKER_GATEWAY_TLS_PORT="${WORKER_GATEWAY_TLS_PORT:-8944}"
 NATIVE_RELAY_END="${NATIVE_RELAY_END:-$((NATIVE_PORT + 10))}"
+PREVIEW_PORT="${PREVIEW_PORT:-$NATIVE_RELAY_END}"
+WORKER_PREVIEW_TLS_PORT="${WORKER_PREVIEW_TLS_PORT:-8945}"
 PARAMS="/kirocrew-on/$STACK_NAME"
 DRY="${DEPLOY_DRY_RUN:-}"
 WORK="$(mktemp -d)"
@@ -101,6 +107,87 @@ change_stack() {  # change_stack STACK TEMPLATE PARAMETERS_FILE CREATE|UPDATE: a
     --stack-name "$stack"
 }
 
+console_zone() {  # console_zone NAME: the public Route 53 zone holding NAME (the longest matching suffix)
+  local zones zone name best="" id=""
+  zones="$(query "/hostedzone/ZDRYRUN"$'\t'"${1#*.}." route53 list-hosted-zones \
+    --query 'HostedZones[?Config.PrivateZone==`false`].[Id,Name]' --output text)" || return 1
+  while read -r zone name; do
+    name="${name%.}"
+    if [ -n "$name" ] && { [ "$1" = "$name" ] || [[ "$1" == *".$name" ]]; } && [ ${#name} -gt ${#best} ]; then
+      best="$name"; id="${zone##*/}"
+    fi
+  done <<<"$zones"
+  [ -n "$id" ] || { echo "Route 53 中没有包含 $1 的公有托管区：先创建托管区，或清空 stack.env 的 CONSOLE_DOMAIN / PREVIEW_SESSION_DOMAIN" >&2; return 1; }
+  echo "$id"
+}
+
+console_certificate() {  # console_certificate NAME: an issued certificate naming NAME or *.<parent>, in us-east-1 (the
+  # only region CloudFront takes certificates from, whatever REGION is)
+  local wildcard="*.${1#*.}" filter arn
+  filter="CertificateSummaryList[?DomainName=='$1' || DomainName=='$wildcard' || contains(SubjectAlternativeNameSummaries || \`[]\`, '$1') || contains(SubjectAlternativeNameSummaries || \`[]\`, '$wildcard')].CertificateArn | [0]"
+  if [ -n "$DRY" ]; then
+    printf 'aws --region us-east-1 acm list-certificates --certificate-statuses ISSUED --query %s\n' "$filter" >&2
+    echo "arn:aws:acm:us-east-1:000000000000:certificate/dry-run"; return
+  fi
+  arn="$(aws --region us-east-1 acm list-certificates --certificate-statuses ISSUED --query "$filter" --output text)" || return 1
+  [[ "$arn" == arn:aws:acm:us-east-1:* ]] || {
+    echo "us-east-1 没有覆盖 $1 的已签发 ACM 证书（${1} 或 ${wildcard}）：先申请证书并完成 DNS 验证" >&2; return 1; }
+  echo "$arn"
+}
+
+preview_certificate() {  # preview_certificate DOMAIN ZONE_ID: the us-east-1 certificate for *.DOMAIN (each Session's
+  # preview host, D36 phase 3) — an issued one, else a pending or newly requested one validated through a CNAME in ZONE_ID
+  local name="*.$1" found arn state record waited=0 limit="${DEPLOY_CERT_WAIT_SECONDS:-2400}"
+  if [ -n "$DRY" ]; then
+    printf 'aws --region us-east-1 acm list-certificates --certificate-statuses ISSUED PENDING_VALIDATION（%s；没有时 request-certificate 并在 %s 写验证记录）\n' \
+      "$name" "$2" >&2
+    echo "arn:aws:acm:us-east-1:000000000000:certificate/dry-run-preview"; return
+  fi
+  # JSON, not text: the CLI applies --query to each page of text output separately.
+  found="$(aws --region us-east-1 acm list-certificates --certificate-statuses ISSUED PENDING_VALIDATION \
+    --query "CertificateSummaryList[?DomainName=='$name'].[CertificateArn,Status]" --output json)" || return 1
+  read -r arn state <<<"$(python3 -c '
+import json, sys
+rows = [r for r in (json.loads(sys.stdin.read() or "[]") or []) if isinstance(r, list) and len(r) == 2]
+rows.sort(key=lambda r: r[1] != "ISSUED")   # an issued certificate before one an earlier run left pending
+print(*(rows[0] if rows else []))' <<<"$found")"
+  if [[ "$arn" != arn:aws:acm:us-east-1:* ]]; then
+    echo "申请 us-east-1 通配证书 ${name}（DNS 验证，记录写入托管区 ${2}）" >&2
+    # One token per domain: ACM returns the same certificate for the same token within an hour.
+    arn="$(aws --region us-east-1 acm request-certificate --domain-name "$name" --validation-method DNS \
+      --idempotency-token "$(python3 -c 'import hashlib, sys; print(hashlib.sha256(sys.argv[1].encode()).hexdigest()[:32])' "$1")" \
+      --query CertificateArn --output text)" || return 1
+    state=PENDING_VALIDATION
+  fi
+  if [ "$state" != ISSUED ]; then
+    for _ in $(seq 1 30); do   # ACM fills in the validation record a few seconds after the request
+      record="$(aws --region us-east-1 acm describe-certificate --certificate-arn "$arn" \
+        --query 'Certificate.DomainValidationOptions[0].ResourceRecord.[Name,Value]' --output text)" || return 1
+      [[ "$record" == *$'\t'* && "$record" != None* ]] && break
+      sleep 2
+    done
+    [[ "$record" == *$'\t'* && "$record" != None* ]] || { echo "ACM 未给出 ${name} 的验证记录" >&2; return 1; }
+    python3 - "${record%%$'\t'*}" "${record##*$'\t'}" > "$WORK/validation.json" <<'PY'
+import json, sys
+name, value = sys.argv[1:]
+print(json.dumps({"Changes": [{"Action": "UPSERT", "ResourceRecordSet": {"Name": name, "Type": "CNAME", "TTL": 300,
+                                                                          "ResourceRecords": [{"Value": value}]}}]}))
+PY
+    aws route53 change-resource-record-sets --hosted-zone-id "$2" --change-batch "file://$WORK/validation.json" >/dev/null || return 1
+    echo "等待证书 ${name} 完成验证（通常几分钟，最多等 $((limit / 60)) 分钟）" >&2
+    while :; do
+      state="$(aws --region us-east-1 acm describe-certificate --certificate-arn "$arn" --query 'Certificate.Status' \
+        --output text)" || return 1
+      [ "$state" = ISSUED ] && break
+      [ "$state" = PENDING_VALIDATION ] || { echo "证书 ${name} 验证失败（${state}）" >&2; return 1; }
+      [ "$waited" -lt "$limit" ] || {
+        echo "证书 ${name} 尚未验证完成：DNS 验证记录已写入，栈未改动；稍后重新运行 up 即可（沿用这张证书）" >&2; return 1; }
+      sleep 20; waited=$((waited + 20))
+    done
+  fi
+  echo "$arn"
+}
+
 up() {
   run cloudformation validate-template --template-body "file://$TEMPLATE" >/dev/null
   local status prefix_list zone="${AVAILABILITY_ZONE:-}" image="${IMAGE_ID:-}" current origin type
@@ -122,13 +209,27 @@ up() {
   [ -n "$image" ] || image="$(query ami-dryrun ssm get-parameter \
     --name /aws/service/ami-amazon-linux-latest/al2023-ami-kernel-default-x86_64 --query Parameter.Value --output text)"
   [ -n "$status" ] || echo "首次创建：可用区 ${zone}，AMI ${image}；创建后写入 deploy/aws/stack.env 的 AVAILABILITY_ZONE 与 IMAGE_ID" >&2
+  # The console's own domain (optional): its zone and certificate are looked up, never kept in the repository.
+  local console="${CONSOLE_DOMAIN:-}" console_zone_id="" console_certificate_arn=""
+  if [ -n "$console" ]; then
+    console_zone_id="$(console_zone "$console")" || exit 2
+    console_certificate_arn="$(console_certificate "$console")" || exit 2
+  fi
+  # Each Session's preview on its own origin (optional, D36 phase 3): one wildcard certificate, found or requested.
+  local session="${PREVIEW_SESSION_DOMAIN:-}" session_zone_id="" session_certificate_arn=""
+  if [ -n "$session" ]; then
+    session_zone_id="$(console_zone "$session")" || exit 2
+    session_certificate_arn="$(preview_certificate "$session" "$session_zone_id")" || exit 2
+  fi
   origin="$(secret origin-secret)"
   # Parameters go through a 0600 file: the origin secret never appears on a command line.
   (umask 077; ORIGIN_VALUE="$origin" python3 - "$INSTANCE_TYPE" "$VOLUME_SIZE_GIB" "$zone" "$image" "$prefix_list" \
-    "$API_PORT" "$NATIVE_PORT" "$NATIVE_RELAY_END" "$ALARM_EMAIL" > "$WORK/parameters.json" <<'PY'
+    "$API_PORT" "$NATIVE_PORT" "$NATIVE_RELAY_END" "$ALARM_EMAIL" "$console" "$console_certificate_arn" "$console_zone_id" \
+    "$PREVIEW_PORT" "$session" "$session_certificate_arn" "$session_zone_id" > "$WORK/parameters.json" <<'PY'
 import json, os, sys
 keys = ["InstanceType", "VolumeSizeGiB", "AvailabilityZone", "ImageId", "CloudFrontPrefixListId", "ApiPort", "NativePort",
-        "NativeRelayEnd", "AlarmEmail"]
+        "NativeRelayEnd", "AlarmEmail", "ConsoleDomain", "ConsoleCertificateArn", "ConsoleHostedZoneId", "PreviewPort",
+        "PreviewSessionDomain", "PreviewCertificateArn", "PreviewHostedZoneId"]
 values = dict(zip(keys, sys.argv[1:]), OriginSecret=os.environ["ORIGIN_VALUE"])
 print(json.dumps([{"ParameterKey": k, "ParameterValue": v} for k, v in values.items()]))
 PY
@@ -142,30 +243,38 @@ PY
 
 push() {
   [ -z "$(git status --porcelain)" ] || { echo "工作区有未提交改动；push 只发布已提交的 commit" >&2; exit 2; }
-  local sha bucket instance domain native archive command_id
+  local sha bucket instance domain native console preview session archive command_id
   sha="$(git rev-parse HEAD)"
   bucket="$(output ArtifactBucket)"; instance="$(output InstanceId)"; domain="$(output CloudFrontDomain)"
-  native="$(output NativeDomain)"
+  native="$(output NativeDomain)"; console="$(output ConsoleDomain)"; preview="$(output PreviewDomain)"
+  session="$(output PreviewSessionDomain)"
+  [ "$console" != "None" ] || console=""   # a stack from before ConsoleDomain
+  [ "$preview" != "None" ] || preview=""   # a stack from before the remote preview (D36): no preview server
+  [ "$session" != "None" ] || session=""   # no per-session preview origins (D36 phase 3)
   archive="$WORK/kirocrew-on-$sha.tar.gz"
   git archive --format=tar.gz --prefix="kirocrew-on-$sha/" -o "$archive" HEAD
   run s3 cp "$archive" "s3://$bucket/releases/$sha.tar.gz" --only-show-errors
-  python3 - "$sha" "$bucket" "$domain" "$PARAMS" "$REGION" "$BOUNDARY" "$native" "$NATIVE_PORT" > "$WORK/commands.json" <<'PY'
+  python3 - "$sha" "$bucket" "$domain" "$PARAMS" "$REGION" "$BOUNDARY" "$native" "$NATIVE_PORT" "$console" "$preview" \
+    "$PREVIEW_PORT" "$session" > "$WORK/commands.json" <<'PY'
 import json, sys
-sha, bucket, domain, params, region, boundary, native, native_port = sys.argv[1:]
+sha, bucket, domain, params, region, boundary, native, native_port, console, preview, preview_port, session = sys.argv[1:]
 d = "/opt/kirocrew-on/incoming"
 script = (f"set -euo pipefail; mkdir -p {d}; aws s3 cp s3://{bucket}/releases/{sha}.tar.gz {d}/{sha}.tar.gz "
           f"--region {region} --only-show-errors; rm -rf {d}/kirocrew-on-{sha}; tar -xzf {d}/{sha}.tar.gz -C {d}; "
-          f"KIROCREW_ON_RELEASE={sha} CF_DOMAIN={domain} NATIVE_DOMAIN={native} NATIVE_PORT={native_port} "
+          f"KIROCREW_ON_RELEASE={sha} CF_DOMAIN={domain} CONSOLE_DOMAIN={console} NATIVE_DOMAIN={native} "
+          f"NATIVE_PORT={native_port} PREVIEW_DOMAIN={preview} PREVIEW_PORT={preview_port} "
+          f"PREVIEW_SESSION_DOMAIN={session} "
           f"ORIGIN_SECRET_PARAM={params}/origin-secret "
           f"AWS_REGION={region} "
           f"bash {d}/kirocrew-on-{sha}/deploy/install/al2023.sh {boundary}")
-print(json.dumps({"commands": [script], "executionTimeout": ["3600"]}))
+# Up to DRAIN_MINUTES per boundary whose Gateway restarts, one after another (D49): more than an hour on a busy host.
+print(json.dumps({"commands": [script], "executionTimeout": ["10800"]}))
 PY
   command_id="$(query cmd-dryrun ssm send-command --instance-ids "$instance" --document-name AWS-RunShellScript \
     --comment "kirocrew-on $sha" --parameters "file://$WORK/commands.json" --query Command.CommandId --output text)"
   [ -n "$DRY" ] && return
   wait_command "$instance" "$command_id"
-  echo "控制台：https://$domain/"
+  echo "控制台：https://${console:-$domain}/"
 }
 
 wait_command() {  # wait_command INSTANCE COMMAND_ID: wait for an install command, print its tail, fail unless it succeeded
@@ -190,9 +299,17 @@ status() {
   [ -n "$DRY" ] || curl -fsS "https://$domain/health" && echo
 }
 
-tunnel() {
-  run ssm start-session --target "$(output InstanceId)" --document-name AWS-StartPortForwardingSession \
-    --parameters '{"portNumber":["5476"],"localPortNumber":["15476"]}'
+tunnel() {  # tunnel [--boundary <name>]: the native KiroCrew of a boundary on localhost:<10000 + its Gateway port>
+  local port=5476 instance
+  instance="$(output InstanceId)"
+  if [ -n "${1:-}" ]; then
+    [ "$1" = --boundary ] && [[ "${2:-}" =~ ^[a-z][a-z0-9-]{1,19}$ ]] || {
+      echo "用法：deploy.sh tunnel [--boundary <边界名称>]" >&2; exit 2; }
+    local script="grep -E '^gateway_port' /etc/kirocrew-on/boundary-$2.toml | grep -oE '[0-9]+'"
+    if [ -n "$DRY" ]; then printf '%s\n' "$script"; port=5481; else port="$(remote "$instance" "$script")"; fi
+  fi
+  run ssm start-session --target "$instance" --document-name AWS-StartPortForwardingSession \
+    --parameters "{\"portNumber\":[\"$port\"],\"localPortNumber\":[\"$((port + 10000))\"]}"
 }
 
 remote() {  # run a shell command on the host through SSM; print its stdout, or its stderr and fail when it fails
@@ -252,8 +369,11 @@ space() {
     if [ -n "$DRY" ]; then printf '%s\n' "$script"; else remote "$instance" "$script"; fi
     return
   fi
-  script="DIR=/var/lib/octopus/boundaries/$BOUNDARY/worker/$run/workspace/project UNIT=$unit CREW=crew-$BOUNDARY"
-  script="$script CREW_HOME=/var/lib/octopus/boundaries/$BOUNDARY/home NODE_BIN=/opt/kirocrew-node/bin"$'\n'"$SPACE_START"
+  # D49: whichever boundary on the host holds the Session
+  script="D=\"\$(ls -d /var/lib/octopus/boundaries/*/worker/$run 2>/dev/null | head -1)\"; B=\"\${D%/worker/$run}\"; B=\"\${B##*/}\""$'\n'
+  script="$script"'[ -n "$D" ] || { echo "主机上没有会话 '"$run"' 的工作区" >&2; exit 3; }'$'\n'
+  script="${script}DIR=\"/var/lib/octopus/boundaries/\$B/worker/$run/workspace/project\" UNIT=$unit CREW=\"crew-\$B\""
+  script="$script CREW_HOME=\"/var/lib/octopus/boundaries/\$B/home\" NODE_BIN=/opt/kirocrew-node/bin"$'\n'"$SPACE_START"
   if [ -n "$DRY" ]; then printf '%s\n' "$script"; port=5173
   else port="$(remote "$instance" "$script" | sed -n 's/^PORT=//p')"; fi
   echo "远端 $unit 监听 127.0.0.1:${port}；本机打开 http://localhost:$((port + 10000))/"
@@ -277,20 +397,25 @@ worker_host() {  # worker-host <add|up|push|tls|native|register|status> <name>: 
   "worker_$action" "$name" "$STACK_NAME-worker-$name"
 }
 
-relay_port() {  # relay_port STACK: the Worker host's relay port on the platform host. A host keeps its port unless another
-  # host has it too (both created at once); otherwise it takes the lowest free one in the platform's deployed range.
+relay_port() {  # relay_port STACK: the relay port on the platform host of a Worker host's or a boundary's native distribution
+  # (D28, D49). One keeps its port unless another has it too (both created at once); otherwise it takes the lowest free one
+  # in the platform's deployed range.
   # Runs in a command substitution, where set -e does not apply: every lookup failure exits explicitly.
-  local own end used port
+  local own end used port preview
   own="$(stack_parameter "$1" RelayPort)" || exit 2
   end="$(stack_parameter "$STACK_NAME" NativeRelayEnd)" || exit 2
+  preview="$(stack_parameter "$STACK_NAME" PreviewPort)" || exit 2   # the remote preview's port is never a relay (D36)
   if [ -n "$DRY" ]; then end="${end:-$NATIVE_RELAY_END}"; else
     [[ "$end" =~ ^[0-9]+$ ]] || { echo "平台栈还没有中转端口范围（NativeRelayEnd）：先执行 deploy.sh up" >&2; exit 2; }
   fi
   used=" $(query "" cloudformation describe-stacks --output text --query \
-    "Stacks[?starts_with(StackName, '$STACK_NAME-worker-') && StackName != '$1'].Parameters[] | [?ParameterKey=='RelayPort'].ParameterValue") " ||
-    { echo "无法读取其他 Worker 主机的中转端口，稍后重试" >&2; exit 2; }
-  if [[ "$own" =~ ^[0-9]+$ ]] && [[ "$used" != *[[:space:]]$own[[:space:]]* ]]; then echo "$own"; return; fi
+    "Stacks[?(starts_with(StackName, '$STACK_NAME-worker-') || starts_with(StackName, '$STACK_NAME-native-')) && StackName != '$1'].Parameters[] | [?ParameterKey=='RelayPort'].ParameterValue") " ||
+    { echo "无法读取其他原生分发的中转端口，稍后重试" >&2; exit 2; }
+  if [[ "$own" =~ ^[0-9]+$ ]] && [ "$own" != "$preview" ] && [[ "$used" != *[[:space:]]$own[[:space:]]* ]]; then
+    echo "$own"; return
+  fi
   for ((port = NATIVE_PORT + 1; port <= end; port++)); do
+    [ "$port" != "$preview" ] || continue
     [[ "$used" == *[[:space:]]$port[[:space:]]* ]] || { echo "$port"; return; }
   done
   echo "平台主机的中转端口 $((NATIVE_PORT + 1))–$end 已用完：调大 stack.env 的 NATIVE_RELAY_END 并先执行 deploy.sh up" >&2
@@ -325,10 +450,10 @@ worker_up() {  # the Worker host stack in the platform's VPC and subnet, admitte
   (umask 077; ORIGIN_VALUE="$origin" python3 - "$(output VpcId)" "$(output SubnetId)" "$(output HostSecurityGroupId)" \
     "${IMAGE_ID:-$(output ImageId)}" "${WORKER_INSTANCE_TYPE:-$INSTANCE_TYPE}" "${WORKER_VOLUME_SIZE_GIB:-$VOLUME_SIZE_GIB}" \
     "$(output ArtifactBucket)" "$WORKER_TLS_PORT" "$STACK_NAME" "$WORKER_GATEWAY_TLS_PORT" "$relay" "$domain" \
-    > "$WORK/worker-parameters.json" <<'PY'
+    "$WORKER_PREVIEW_TLS_PORT" > "$WORK/worker-parameters.json" <<'PY'
 import json, os, sys
 keys = ["VpcId", "SubnetId", "PlatformSecurityGroupId", "ImageId", "InstanceType", "VolumeSizeGiB", "ArtifactBucket",
-        "WorkerPort", "BackupTag", "GatewayTlsPort", "RelayPort", "PlatformOriginDomain"]
+        "WorkerPort", "BackupTag", "GatewayTlsPort", "RelayPort", "PlatformOriginDomain", "PreviewTlsPort"]
 values = dict(zip(keys, sys.argv[1:]), OriginSecret=os.environ["ORIGIN_VALUE"])
 print(json.dumps([{"ParameterKey": k, "ParameterValue": v} for k, v in values.items()]))
 PY
@@ -351,13 +476,14 @@ worker_push() {  # the committed HEAD, installed in Worker host mode (WORKER_HOS
   git archive --format=tar.gz --prefix="kirocrew-on-$sha/" -o "$archive" HEAD
   run s3 cp "$archive" "s3://$bucket/releases/$sha.tar.gz" --only-show-errors
   python3 - "$sha" "$bucket" "$REGION" "$name" "$WORKER_TLS_PORT" "$WORKER_GATEWAY_TLS_PORT" "$native" \
-    > "$WORK/commands.json" <<'PY'
+    "$WORKER_PREVIEW_TLS_PORT" > "$WORK/commands.json" <<'PY'
 import json, sys
-sha, bucket, region, name, port, gateway_port, native = sys.argv[1:]
+sha, bucket, region, name, port, gateway_port, native, preview_port = sys.argv[1:]
 d = "/opt/kirocrew-on/incoming"
 script = (f"set -euo pipefail; mkdir -p {d}; aws s3 cp s3://{bucket}/releases/{sha}.tar.gz {d}/{sha}.tar.gz "
           f"--region {region} --only-show-errors; rm -rf {d}/kirocrew-on-{sha}; tar -xzf {d}/{sha}.tar.gz -C {d}; "
           f"WORKER_HOST=1 WORKER_TLS_PORT={port} GATEWAY_TLS_PORT={gateway_port} NATIVE_DOMAIN={native} "
+          f"WORKER_PREVIEW_TLS_PORT={preview_port} "
           f"KIROCREW_ON_RELEASE={sha} AWS_REGION={region} "
           f"bash {d}/kirocrew-on-{sha}/deploy/install/al2023.sh {name}")
 print(json.dumps({"commands": [script], "executionTimeout": ["3600"]}))
@@ -384,7 +510,7 @@ printf 'subjectAltName=IP:%s,DNS:$name.worker.kirocrew-on\nextendedKeyUsage=serv
   install="set -euo pipefail; cat > /etc/kirocrew-on/worker-tls.crt <<'PEM_END'
 $cert
 PEM_END
-chmod 0644 /etc/kirocrew-on/worker-tls.crt; install -m 0644 /etc/kirocrew-on/nginx-worker.conf /etc/nginx/conf.d/kirocrew-worker.conf; nginx -t -q; systemctl enable nginx >/dev/null; systemctl reload-or-restart nginx; echo 已安装证书"
+chmod 0644 /etc/kirocrew-on/worker-tls.crt; install -m 0644 /etc/kirocrew-on/nginx-worker.conf /etc/nginx/conf.d/kirocrew-worker.conf; [ ! -s /etc/kirocrew-on/nginx-worker-preview.conf ] || install -m 0640 -o root -g nginx /etc/kirocrew-on/nginx-worker-preview.conf /etc/nginx/conf.d/kirocrew-worker-preview.conf; nginx -t -q; systemctl enable nginx >/dev/null; systemctl reload-or-restart nginx; echo 已安装证书"
   if [ -n "$DRY" ]; then printf '%s\n\n' "$request" "$sign" "$install"; return; fi
   remote "$worker" "$install"
   echo "平台经 TLS 访问 Worker（不带 Token，期望 401）：$(remote "$platform" "curl -s -o /dev/null -w '%{http_code}' --cacert /etc/kirocrew-on/worker-ca.pem https://$ip:$WORKER_TLS_PORT/health || true")"
@@ -485,8 +611,13 @@ kiro_login() {
   local login="kiro-cli login --use-device-flow" instance shown="" finished="" boundary="$BOUNDARY" stack="$STACK_NAME"
   local log whoami
   if [ "${1:-}" = "--host" ]; then   # a Worker host (D28): its boundary carries the host's name
-    [[ "${2:-}" =~ ^[a-z][a-z0-9-]{1,19}$ ]] || { echo "用法：deploy.sh kiro-login [--host <Worker 主机名称>]" >&2; exit 2; }
+    [[ "${2:-}" =~ ^[a-z][a-z0-9-]{1,19}$ ]] || { echo "用法：deploy.sh kiro-login [--host <Worker 主机名称> | --boundary <边界名称>]" >&2; exit 2; }
     boundary="$2"; stack="$STACK_NAME-worker-$2"
+  elif [ "${1:-}" = "--boundary" ]; then   # another boundary on the platform host (D49): that person's own account
+    [[ "${2:-}" =~ ^[a-z][a-z0-9-]{1,19}$ ]] || { echo "用法：deploy.sh kiro-login [--host <Worker 主机名称> | --boundary <边界名称>]" >&2; exit 2; }
+    boundary="$2"
+  elif [ -n "${1:-}" ]; then
+    echo "用法：deploy.sh kiro-login [--host <Worker 主机名称> | --boundary <边界名称>]" >&2; exit 2
   fi
   log="/var/lib/octopus/boundaries/$boundary/logs/kiro-login-$(date -u +%Y%m%dT%H%M%SZ).log"
   [ -z "${KIRO_LICENSE:-}" ] || login="$login --license $KIRO_LICENSE"
@@ -494,6 +625,12 @@ kiro_login() {
   instance="$(output InstanceId "$stack")"
   # kiro-cli refuses to log in again over a valid login (worker-host add reruns this step on an existing host).
   if [ -z "$DRY" ]; then
+    # A name that is no boundary of this host fails here, not after a wait for a device code that never comes.
+    local known
+    known="$(remote "$instance" "ls /etc/kirocrew-on | sed -n 's/^boundary-\(.*\)\.toml\$/\1/p' | grep -v '[.]check\$' | tr '\n' ' '" || true)"
+    if [[ " $known " != *" $boundary "* ]]; then
+      echo "主机上没有边界 ${boundary}；现有边界：${known:-（无）}" >&2; exit 2
+    fi
     whoami="$(remote "$instance" "sudo -iu crew-$boundary kiro-cli whoami 2>&1 | head -1" || true)"
     if [[ "$whoami" == "Logged in"* ]]; then
       printf '%s\ncrew-%s 已登录 kiro-cli；更换账号时先在主机上以 crew-%s 执行 kiro-cli logout\n' "$whoami" "$boundary" "$boundary"
@@ -531,6 +668,139 @@ PY
   [[ "$whoami" == "Logged in"* ]] || { echo "kiro-cli login 未完成（${finished:-超时}），日志：$log" >&2; exit 1; }
 }
 
+boundary() {  # boundary add <name> --owner <username> [--memory <GiB>] [--cpu <percent>]: one person's boundary (D49);
+  # boundary native <name>: its public native entry (D49 phase 3)
+  local usage="用法：deploy.sh boundary add <名称> --owner <平台用户名> [--memory <GiB>] [--cpu <百分比>] | boundary native <名称>"
+  if [ "${1:-}" = native ]; then boundary_native "${2:-}"; return; fi
+  [ "${1:-}" = add ] || { echo "$usage" >&2; exit 2; }
+  local name="${2:-}" owner="" memory="" cpu="" sized=""
+  shift 2 || true
+  while [ $# -gt 0 ]; do
+    case "$1" in
+      --owner) owner="${2:-}"; shift 2 || shift ;;
+      --memory) memory="${2:-}"; shift 2 || shift ;;
+      --cpu) cpu="${2:-}"; shift 2 || shift ;;
+      *) echo "$usage" >&2; exit 2 ;;
+    esac
+  done
+  # The values become part of a root shell command on the host: only these forms reach it.
+  [[ "$name" =~ ^[a-z][a-z0-9-]{1,19}$ ]] && [ "$name" != personal ] && [[ "$owner" =~ ^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$ ]] &&
+    [[ "${memory:-8}" =~ ^[1-9][0-9]?$ ]] && [[ "${cpu:-300}" =~ ^[1-9][0-9]{1,3}$ ]] || { echo "$usage" >&2; exit 2; }
+  # Only the limits given: a re-run without them keeps the boundary's own (boundary.sh)
+  [ -z "$memory" ] || sized="$sized --memory $memory"
+  [ -z "$cpu" ] || sized="$sized --cpu $cpu"
+  local script="test -x /opt/kirocrew-on/current/deploy/install/boundary.sh || { echo '当前发布没有 boundary.sh：先 deploy.sh push' >&2; exit 3; }; "
+  script="${script}AWS_REGION=$REGION bash /opt/kirocrew-on/current/deploy/install/boundary.sh $name --owner $owner$sized"
+  if [ -n "$DRY" ]; then printf '%s\n' "$script"; return; fi
+  remote "$(output InstanceId)" "$script"
+}
+
+# Runs as root on the platform host: relays one boundary's native distribution to its loopback Gateway (D49 phase 3),
+# rendered from files only (the origin secret never appears on a command line), then makes that distribution the
+# boundary's crew_url and restarts its Gateway (after draining its tasks) and Worker, which trust and hand it out.
+read -r -d '' BOUNDARY_NATIVE_INSTALL <<'NATIVE_SH' || true
+set -euo pipefail
+TOML=/etc/kirocrew-on/boundary-$NAME.toml
+[ -f "$TOML" ] || { echo "主机上没有边界 ${NAME}：先执行 deploy.sh boundary add ${NAME} --owner <平台用户名>" >&2; exit 3; }
+[[ "$NATIVE" =~ ^[a-z0-9]+\.cloudfront\.net$ ]] || { echo "原生分发的域名无效：${NATIVE}" >&2; exit 3; }
+# Two relays on one port: nginx only warns, and the later distribution would reach the earlier one's Gateway.
+for other in /etc/nginx/conf.d/kirocrew-relay-*.conf; do   # Worker hosts' and boundaries' relays alike
+  if [ -e "$other" ] && [ "$other" != "$CONF" ] && grep -qE "^[[:space:]]*listen $PORT;" "$other"; then
+    echo "中转端口 ${PORT} 已被 ${other} 使用：重新执行 deploy.sh boundary native ${NAME} 换端口；对方已删除时删除此文件" >&2
+    exit 3
+  fi
+done
+[ -s /etc/nginx/conf.d/kirocrew-native.conf ] && [ -f /opt/kirocrew-on/current/deploy/nginx/kirocrew-boundary.conf ] || {
+  echo "平台主机尚未启用原生入口或发布中没有 kirocrew-boundary.conf：先执行 deploy.sh push" >&2; exit 3; }
+GATEWAY="$(grep -E '^gateway_port' "$TOML" | grep -oE '[0-9]+' | head -1)"
+[[ "$GATEWAY" =~ ^[0-9]+$ ]] || { echo "${TOML} 没有 gateway_port" >&2; exit 3; }
+umask 027
+/opt/kirocrew-on/venv/bin/python -I - /opt/kirocrew-on/current/deploy/nginx/kirocrew-boundary.conf /etc/kirocrew-on/origin-secret \
+  "$NAME" "$PORT" "$GATEWAY" > "$CONF.new" <<'RENDER_PY'
+import re, sys
+template, secret_file, name, port, gateway = sys.argv[1:]
+secret = open(secret_file).read().strip()
+if not re.fullmatch(r"[A-Za-z0-9_-]{32,}", secret):
+    sys.exit("源站密钥缺失或格式不符")
+text = open(template).read()
+for key, value in {"__ORIGIN_SECRET__": secret, "__BOUNDARY__": name, "__RELAY_PORT__": port, "__GATEWAY_PORT__": gateway}.items():
+    text = text.replace(key, value)
+print(text, end="")
+RENDER_PY
+umask 022
+install -d -m 0700 /var/log/nginx/kirocrew-relay
+chown root:nginx "$CONF.new"
+chmod 0640 "$CONF.new"
+mv -f "$CONF.new" "$CONF"
+if command -v getenforce >/dev/null 2>&1 && [ "$(getenforce)" = Enforcing ]; then
+  semanage port -a -t http_port_t -p tcp "$PORT" 2>/dev/null || semanage port -m -t http_port_t -p tcp "$PORT"
+fi
+nginx -t -q || { rm -f "$CONF"; exit 1; }
+systemctl reload nginx
+for _ in $(seq 1 20); do ss -Hltn "sport = :$PORT" | grep -q . && break; sleep 0.5; done   # reload returns first
+# The Gateway trusts its crew_url as an origin and the Worker hands it out: both restart, the Gateway once its tasks end.
+sed -i "s#^crew_url = .*#crew_url = \"https://$NATIVE\"#" "$TOML"
+grep -qx "crew_url = \"https://$NATIVE\"" "$TOML" || { echo "未能写入 ${TOML} 的 crew_url" >&2; exit 1; }
+chown "root:crew-$NAME" "$TOML"
+chmod 0640 "$TOML"
+log() { printf '[%s] %s\n' "$(date -u +%H:%M:%S)" "$*"; }
+NODE_ROOT=/opt/kirocrew-node
+trap '[ -z "${BOUNDARY_DRAINING:-}" ] || rm -f "$BOUNDARY_DRAINING"; rm -f "${H:-}"' EXIT   # never a stale drain mark
+# shellcheck source=../install/boundary-lib.sh
+. /opt/kirocrew-on/current/deploy/install/boundary-lib.sh
+boundary_restart "$NAME" "$(readlink -f /opt/kirocrew/current)"
+H="$(mktemp)"
+printf 'X-Origin-Verify: %s\n' "$(tr -d '[:space:]' < /etc/kirocrew-on/origin-secret)" > "$H"
+code="$(curl -s -o /dev/null -w '%{http_code}' -H @"$H" "http://127.0.0.1:$PORT/" || true)"
+echo "中转 :${PORT} → 边界 ${NAME} 的 Gateway 127.0.0.1:${GATEWAY}：HTTP ${code}（000 或 502 表示 Gateway 未就绪）"
+echo "原生入口：https://${NATIVE}/（控制台「在 KiroCrew 中打开」经此打开）"
+NATIVE_SH
+
+boundary_native() {  # boundary native <name>: a boundary on the platform host gets its own public native entry (D49 phase 3)
+  local name="$1" stack status type relay domain origin native script
+  [[ "$name" =~ ^[a-z][a-z0-9-]{1,19}$ ]] && [ "$name" != personal ] || {
+    echo "用法：deploy.sh boundary native <名称>（平台主机上 boundary add 建的边界；personal 用平台自己的原生分发）" >&2; exit 2; }
+  stack="$STACK_NAME-native-$name"
+  run cloudformation validate-template --template-body "file://$NATIVE_TEMPLATE" >/dev/null
+  status="$(query "" cloudformation describe-stacks --stack-name "$stack" --query 'Stacks[0].StackStatus' \
+    --output text 2>/dev/null || true)"
+  type=UPDATE
+  [ -n "$status" ] || type=CREATE
+  relay="$(relay_port "$stack")"
+  domain="$(output HostOriginDomain)"
+  [ -n "$DRY" ] || [[ "$domain" == ec2-* ]] || { echo "平台栈没有输出 HostOriginDomain：先执行 deploy.sh up" >&2; exit 2; }
+  # The distribution injects the platform's origin secret; like up, it only travels in a 0600 file.
+  origin="$(secret origin-secret)"
+  [[ "$origin" =~ ^[A-Za-z0-9_-]{32,}$ ]] || {
+    echo "源站密钥格式不符：平台主机的中转只接受 32 位以上的字母、数字、- 或 _（与 kirocrew-native.conf 相同）" >&2; exit 2; }
+  (umask 077; ORIGIN_VALUE="$origin" python3 - "$relay" "$domain" > "$WORK/native-parameters.json" <<'PARAMS_PY'
+import json, os, sys
+values = dict(zip(["RelayPort", "PlatformOriginDomain"], sys.argv[1:]), OriginSecret=os.environ["ORIGIN_VALUE"])
+print(json.dumps([{"ParameterKey": k, "ParameterValue": v} for k, v in values.items()]))
+PARAMS_PY
+  )
+  [ -z "$DRY" ] || python3 -c 'import json, sys
+print(json.dumps([dict(p, ParameterValue="****") if p["ParameterKey"] == "OriginSecret" else p for p in json.load(open(sys.argv[1]))]))' \
+    "$WORK/native-parameters.json"
+  change_stack "$stack" "$NATIVE_TEMPLATE" "$WORK/native-parameters.json" "$type"
+  native="$(output NativeDomain "$stack")"
+  [ -n "$DRY" ] || [[ "$native" =~ ^[a-z0-9]+\.cloudfront\.net$ ]] || { echo "原生分发尚未就绪：${native}" >&2; exit 1; }
+  # kirocrew-relay-*: nginx reads conf.d in name order, after kirocrew-native.conf whose log_format the relay uses
+  script="NAME=$name PORT=$relay NATIVE=$native CONF=/etc/nginx/conf.d/kirocrew-relay-boundary-$name.conf"
+  script="$script"$'\n'"$BOUNDARY_NATIVE_INSTALL"
+  if [ -n "$DRY" ]; then printf '%s\n' "$script"; return; fi
+  remote "$(output InstanceId)" "$script"
+}
+
+boundaries() {  # every boundary on the platform host: its ports and whether its Gateway and Worker run (D49)
+  local script='for f in /etc/kirocrew-on/boundary-*.toml; do n="${f##*/boundary-}"; n="${n%.toml}"
+  case "$n" in *.*) continue ;; esac
+  g="$(grep -E "^gateway_port" "$f" | grep -oE "[0-9]+")"; w="$(grep -E "^worker_port" "$f" | grep -oE "[0-9]+")"
+  echo "$n gateway 127.0.0.1:$g ($(systemctl is-active "octopus-gateway@$n")) worker 127.0.0.1:$w ($(systemctl is-active "octopus-worker@$n"))"
+done'
+  if [ -n "$DRY" ]; then printf '%s\n' "$script"; else remote "$(output InstanceId)" "$script"; fi
+}
+
 admin_password() {  # generated on the host at first install, root-only; never kept in SSM Parameter Store
   local instance
   instance="$(output InstanceId)"
@@ -552,12 +822,14 @@ case "${1:-}" in
   up) up ;;
   push) push ;;
   status) status ;;
-  tunnel) tunnel ;;
+  tunnel) tunnel "${2:-}" "${3:-}" ;;
+  boundary) shift; boundary "$@" ;;
+  boundaries) boundaries ;;
   kiro-login) kiro_login "${2:-}" "${3:-}" ;;
   worker-host) worker_host "${2:-}" "${3:-}" ;;
   space) space "${2:-}" "${3:-}" ;;
   spaces) spaces ;;
   admin-password) admin_password ;;
   down) down "${2:-}" ;;
-  *) sed -n '2,13p' "$0"; exit 2 ;;
+  *) sed -n '2,15p' "$0"; exit 2 ;;
 esac

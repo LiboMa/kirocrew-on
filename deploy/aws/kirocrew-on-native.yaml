@@ -1,0 +1,61 @@
+AWSTemplateFormatVersion: "2010-09-09"
+Description: >-
+  KiroCrew ON - the public native chat of one person's boundary on the platform host (D49 phase 3): a CloudFront
+  distribution only. deploy.sh boundary native <name> creates it, relays it on the platform host to the boundary's
+  loopback Gateway and writes it as the boundary's crew_url.
+
+Parameters:
+  RelayPort:
+    Type: Number
+    MinValue: 1024
+    MaxValue: 65535
+    Description: >-
+      Platform host nginx port that relays this boundary's native chat (deploy.sh allocates one per distribution, between
+      the platform's NativePort + 1 and NativeRelayEnd, shared with the Worker hosts' relays)
+  PlatformOriginDomain:
+    Type: String
+    Description: The platform host's public DNS name (platform stack output HostOriginDomain)
+  OriginSecret:
+    Type: String
+    NoEcho: true
+    MinLength: 32
+    Description: The platform's X-Origin-Verify secret; the relay only forwards requests that carry it
+
+Resources:
+  # Browser -> CloudFront (origin secret) -> platform host nginx :RelayPort -> the boundary's loopback Gateway, which keeps
+  # its own token login, Host and CSRF checks (it trusts this origin as its crew_url, composition/environment.py).
+  NativeDistribution:
+    Type: AWS::CloudFront::Distribution
+    Properties:
+      DistributionConfig:
+        Enabled: true
+        Comment: !Sub "KiroCrew ON native chat (${AWS::StackName})"
+        HttpVersion: http2and3
+        IPV6Enabled: true
+        PriceClass: PriceClass_100
+        Origins:
+          - Id: kirocrew-native-relay
+            DomainName: !Ref PlatformOriginDomain
+            CustomOriginConfig:
+              HTTPPort: !Ref RelayPort
+              OriginProtocolPolicy: http-only
+              OriginReadTimeout: 60
+              OriginKeepaliveTimeout: 5
+            OriginCustomHeaders:
+              - HeaderName: X-Origin-Verify
+                HeaderValue: !Ref OriginSecret
+        DefaultCacheBehavior:
+          TargetOriginId: kirocrew-native-relay
+          ViewerProtocolPolicy: redirect-to-https
+          AllowedMethods: [GET, HEAD, OPTIONS, PUT, PATCH, POST, DELETE]
+          CachedMethods: [GET, HEAD]
+          CachePolicyId: 4135ea2d-6df8-44a3-9df3-4b5a84be39ad        # Managed-CachingDisabled
+          OriginRequestPolicyId: 33f36d7e-f396-46d9-90e0-52428a34d9dc # Managed-AllViewerAndCloudFrontHeaders-2022-06
+          Compress: false
+        ViewerCertificate:
+          CloudFrontDefaultCertificate: true
+      Tags: [{Key: Project, Value: kirocrew-on}]
+
+Outputs:
+  NativeDomain:
+    Value: !GetAtt NativeDistribution.DomainName

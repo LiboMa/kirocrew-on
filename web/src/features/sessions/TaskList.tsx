@@ -1,10 +1,13 @@
+import { usageLine } from "@/lib/usage";
 import { ChevronDown } from "lucide-react";
 import type { Run } from "@/api/types";
 import { Button } from "@/components/ui/button";
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible";
 import { StatusBadge } from "@/components/StatusBadge";
-import { TOOLS, formatTime } from "@/lib/labels";
+import { ROLE_LABELS, TOOLS, formatTime } from "@/lib/labels";
 import { canRetryTask } from "@/lib/session";
+import { SteerControl } from "@/features/sessions/SteerControl";
+import { AttemptDiff } from "@/features/sessions/AttemptDiff";
 
 function Meta({ label, value }: { label: string; value: string | null | undefined }) {
   return (
@@ -13,6 +16,18 @@ function Meta({ label, value }: { label: string; value: string | null | undefine
       <dd className="min-w-0 font-mono break-all">{value || "未报告"}</dd>
     </>
   );
+}
+
+/** D50: the methods the latest Attempt was given (its evidence), the planned ones until one runs — and said so when the
+ * execution environment did not deliver them (a Worker before the skill pack). */
+function methods(planned: string[] | undefined, attempts: NonNullable<Run["tasks"][number]["attempts"]>) {
+  if (!planned?.length) return null;
+  const latest = attempts[attempts.length - 1];
+  const given = latest?.evidence?.skills;
+  const names = Array.isArray(given) ? given.map((s) => (s as { name?: string }).name).filter(Boolean) : [];
+  const ended = !!latest && !["pending", "dispatching", "running"].includes(latest.status);   // the evidence is complete
+  if (!ended || names.length) return <>{" · "}<span>方法：{(names.length ? names : planned).join("、")}</span></>;
+  return <>{" · "}<span>方法（计划，执行环境未交付）：{planned.join("、")}</span></>;
 }
 
 export function TaskList({ run, onContinue }: { run: Run; onContinue: (taskId: string) => void }) {
@@ -32,14 +47,21 @@ export function TaskList({ run, onContinue }: { run: Run; onContinue: (taskId: s
                   <h3 className="text-sm font-semibold">{spec.name}</h3>
                   <p className="mt-0.5 text-xs text-muted-foreground">
                     {TOOLS[spec.tool] ?? spec.tool} · {spec.model} · Effort {spec.effort || "继承默认"}
+                    {spec.role && <>{" · "}<span>角色：{ROLE_LABELS[spec.role] ?? spec.role}</span></>}
+                    {methods(spec.skills, attempts)}
+                    {task.mapping && <>{" · "}<span>来源：{task.mapping.label}</span></>}
                   </p>
                 </div>
+                {run.kept?.tasks.includes(task.id) && (
+                  <span className="rounded bg-muted px-1.5 text-[11px] text-muted-foreground">沿用 v{run.kept.version} 结果</span>
+                )}
                 <StatusBadge status={task.status} />
               </header>
               <p className="mt-3 line-clamp-4 text-sm leading-6 whitespace-pre-wrap text-foreground/85">{spec.prompt}</p>
               <footer className="mt-3 flex flex-wrap items-center gap-3">
                 <Button type="button" size="sm" variant="outline" disabled={!canRetryTask(run, index)}
                   onClick={() => onContinue(task.id)} data-retry={task.id}>配置并续作</Button>
+                <SteerControl run={run} task={task} />
                 <small className="text-xs text-muted-foreground">Task {task.id} · {attempts.length} 次执行</small>
               </footer>
               {attempts.length > 0 && (
@@ -58,6 +80,19 @@ export function TaskList({ run, onContinue }: { run: Run; onContinue: (taskId: s
                         </div>
                         <dl className="grid grid-cols-[7.5rem_1fr] gap-x-3 gap-y-1">
                           <Meta label="请求" value={`${TOOLS[attempt.spec.tool] ?? attempt.spec.tool} / ${attempt.spec.model} / ${attempt.spec.effort || "默认"}`} />
+                          {attempt.evidence.synced && (
+                            <Meta label="本地同步" value={[`${attempt.evidence.synced.commits ?? "?"} 个本地提交`,
+                              attempt.evidence.synced.by?.username, attempt.evidence.synced.note].filter(Boolean).join(" · ")} />
+                          )}
+                          {attempt.evidence.switched_from && (
+                            <Meta label="换工具" value={`由协调者从 ${attempt.evidence.switched_from.tool} / ${attempt.evidence.switched_from.model} `
+                              + `换为 ${attempt.spec.tool} / ${attempt.spec.model}：${attempt.evidence.switched_from.reason ?? "未说明原因"}`} />
+                          )}
+                          {attempt.evidence.watchdog?.reason && <Meta label="看门狗" value={attempt.evidence.watchdog.reason} />}
+                          {attempt.evidence.usage && <Meta label="用量" value={usageLine(attempt.evidence.usage)} />}
+                          {attempt.evidence.continued ? <Meta label="返工" value="续接上一轮的对话（保留上下文）" />
+                            : attempt.evidence.continue_refused
+                              ? <Meta label="返工" value={`续接被拒，已重新派发：${attempt.evidence.continue_refused}`} /> : null}
                           <Meta label="实际后端" value={attempt.evidence.actual_backend} />
                           <Meta label="实际模型" value={attempt.evidence.actual_model} />
                           <Meta label="实际 Effort" value={attempt.evidence.actual_effort} />
@@ -65,7 +100,41 @@ export function TaskList({ run, onContinue }: { run: Run; onContinue: (taskId: s
                           <Meta label="原生 Task" value={attempt.native_id ?? "待核实"} />
                           <Meta label="工具 Session" value={attempt.evidence.native_session_id} />
                           <Meta label="Context SHA-256" value={attempt.context_hash ?? "未形成"} />
+                          {attempt.evidence.candidate && (
+                            <Meta label="候选" value={`${attempt.evidence.candidate.sha.slice(0, 7)} · ${attempt.evidence.candidate.files} 个文件 `
+                              + `+${attempt.evidence.candidate.insertions} −${attempt.evidence.candidate.deletions}`} />
+                          )}
                         </dl>
+                        {attempt.evidence.candidate?.changed && (
+                          <AttemptDiff runId={run.id} attemptId={attempt.id} candidate={attempt.evidence.candidate} />
+                        )}
+                        {attempt.evidence.checks && !("check_results" in attempt.evidence) && (
+                          <p className="mt-2 text-muted-foreground">正在运行检查命令（{attempt.evidence.checks.commands} 条）</p>
+                        )}
+                        {!!attempt.evidence.gates?.length && (
+                          <ul aria-label="门禁" className="mt-2 space-y-0.5">
+                            {attempt.evidence.gates.map((gate, index) => (
+                              <li key={index} className={gate.status === "fail" ? "text-destructive" : gate.status === "warn" ? "text-amber-600"
+                                : gate.status === "skip" ? "text-muted-foreground" : undefined}>
+                                {{ pass: "✓", warn: "⚠", fail: "✗", skip: "–" }[gate.status]} {gate.name}{gate.detail ? " · " + gate.detail : ""}
+                              </li>
+                            ))}
+                          </ul>
+                        )}
+                        {!!attempt.evidence.outcome?.acceptance?.length && (
+                          <ul aria-label="验收项" className="mt-2 space-y-0.5">
+                            {attempt.evidence.outcome.acceptance.map((check, index) => (
+                              <li key={index} className={check.result === "fail" ? "text-destructive" : undefined}>
+                                {{ pass: "✓", fail: "✗", "n/a": "—" }[check.result]} {check.item}{check.evidence ? " · " + check.evidence : ""}
+                              </li>
+                            ))}
+                          </ul>
+                        )}
+                        {!!attempt.evidence.outcome?.suggestions?.length && (
+                          <ul aria-label="建议" className="mt-2 list-inside list-disc text-muted-foreground">
+                            {attempt.evidence.outcome.suggestions.map((item, index) => <li key={index}>{item}</li>)}
+                          </ul>
+                        )}
                         {attempt.error && <p className="mt-2 text-destructive">{attempt.error}</p>}
                         {attempt.result && (
                           <pre className="mt-2 max-h-72 overflow-auto rounded-md bg-card p-3 font-mono text-[11px] leading-5 whitespace-pre-wrap">

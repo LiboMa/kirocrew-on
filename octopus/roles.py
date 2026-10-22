@@ -1,0 +1,53 @@
+"""Role cards (D46 P2): how a task's Agent works — what it does and delivers, and when it says changes_requested or
+BLOCKED — chosen by the task's ``role``, while ``kind`` keeps deciding the gates. Each card is a KiroCrew-style SKILL.md
+under octopus/roles/<role>/, inlined at the top of the task's instructions (owner 2026-10-18: a KiroCrew skill is fixed
+per agent spec and cannot be chosen per spawn, so the card travels with the task)."""
+from functools import cache
+from pathlib import Path
+import re
+
+ROOT = Path(__file__).with_name("roles")
+KINDS = {"spec": ("design",), "sde": ("implement", "deliver"), "integration_test": ("test",),
+         "security_test": ("review",), "challenge": ("review",), "evaluator": ("review",), "knowledge": ("design",)}
+LABELS = {"spec": "Spec 分析", "sde": "SDE 开发", "integration_test": "集成测试", "security_test": "安全测试",
+          "challenge": "Challenge", "evaluator": "Evaluator", "knowledge": "Knowledge"}
+REVIEWERS = frozenset({"security_test", "challenge", "evaluator"})   # never the tool that wrote the change they look at
+PLATFORM = frozenset({"knowledge"})   # added by the platform when a Session completes (D46 P4), never planned
+
+
+@cache   # the cards ship with the release: read each once
+def _read(role):
+    match = re.match(r"---\n(.*?)\n---\n(.*)", (ROOT / role / "SKILL.md").read_text(), re.S)
+    lines = match.group(1).splitlines() if match else []
+    if not match or not all(": " in line for line in lines):
+        raise ValueError(f"角色卡片 {role} 格式错误：须以 --- 包起的 key: value 头开始")
+    return dict(line.split(": ", 1) for line in lines), match.group(2).strip()
+
+
+def card(role):
+    """The card's text, as the task's instructions carry it."""
+    return _read(role)[1]
+
+
+def description(role):
+    return _read(role)[0]["description"]
+
+
+def catalogue(compact=False):
+    """One line per role for the planner: its id, label, kind and what it is for; ``compact``, without what it is for, on
+    one line (the replan)."""
+    planned = [(role, kinds) for role, kinds in KINDS.items() if role not in PLATFORM]
+    if compact:
+        return "   " + "、".join(f"{role}（{LABELS[role]}，kind {'/'.join(kinds)}）" for role, kinds in planned)
+    return "\n".join(f"   - {role}（{LABELS[role]}，kind {'/'.join(kinds)}）：{description(role)}" for role, kinds in planned)
+
+
+def unindependent(planned):
+    """Reviewing tasks that use the tool of a task before them that wrote the change: [(task, author tool)]."""
+    found, authors = [], set()
+    for item in planned:
+        if item.get("role") in REVIEWERS and item.get("tool") in authors:
+            found.append((item, item["tool"]))
+        if item.get("kind") in ("implement", "deliver"):
+            authors.add(item.get("tool"))
+    return found

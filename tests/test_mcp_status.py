@@ -72,6 +72,73 @@ class CompactStatusTests(unittest.TestCase):
         self.assertNotIn("poc-kiro", text)
         self.assertLess(len(text), 4000)
 
+    def test_gates_candidates_and_the_verified_candidate_are_summarised(self):
+        gated = attempt(5, "blocked", "pass", "实现完成")
+        gated["evidence"].update(candidate={"sha": "abc1234" + "0" * 33, "parent": "b" * 40, "changed": True, "files": 2,
+                                            "insertions": 12, "deletions": 3},
+                                 gates=[{"name": "native_completed", "status": "pass"}, {"name": "diff_present", "status": "pass"},
+                                        {"name": "checks_pass", "status": "fail", "detail": "检查命令失败：npm test（退出码 1）\n" + RAW},
+                                        {"name": "review_bound", "status": "skip", "detail": "此前没有候选"}])
+        session = {**SESSION, "verified": {"sha": "abc1234" + "0" * 33, "task_id": "implement"},
+                   "tasks": [{**SESSION["tasks"][0], "attempts": [gated]}]}
+
+        class One:
+            def request(self, method, path, body=None):
+                return {f"/v1/runs/{RID}": session, f"/v1/runs/{RID}/events": []}[path]
+        view = mcp.call(One(), "octopus_status", {"run_id": RID})
+        latest = view["session"]["tasks"][0]["latest"]
+        self.assertEqual(latest["gates"], {"passed": 2, "failed": [{"name": "checks_pass", "detail": "检查命令失败：npm test（退出码 1）"}],
+                                           "warned": [], "skipped": ["review_bound"]})
+        self.assertEqual(latest["candidate"], {"sha": "abc1234" + "0" * 5, "files": 2, "insertions": 12, "deletions": 3})
+        self.assertEqual(view["session"]["verified"]["task_id"], "implement")
+        self.assertNotIn("原始输出", json.dumps(view, ensure_ascii=False))
+
+    def test_warned_gates_and_the_session_count_are_listed(self):   # D57 §4
+        warn = {"name": "diff_present", "status": "warn", "detail": "本任务没有改动入库文件\n" + RAW}
+        earlier, final = attempt(1, "accepted", "pass", "首版"), attempt(3, "accepted", "pass", "只写了报告")
+        earlier["evidence"]["gates"] = [warn, {**warn, "name": "outcome_valid"}]   # not the latest: not counted
+        final["evidence"]["gates"] = [{"name": "native_completed", "status": "pass"}, warn]
+        session = json.loads(json.dumps({**SESSION, "tasks": [{**SESSION["tasks"][0], "attempts": [earlier, final]},
+                                                              *SESSION["tasks"][1:]]}))
+        view = mcp.compact_status(session, [])["session"]
+        latest = view["tasks"][0]["latest"]
+        self.assertEqual(latest["gates"]["warned"], [{"name": "diff_present", "detail": "本任务没有改动入库文件"}])
+        self.assertEqual((latest["gates"]["passed"], latest["gates"]["failed"]), (1, []))
+        self.assertEqual(view["warnings"], 1)
+        self.assertEqual(mcp.compact_status(SESSION, [])["session"]["warnings"], 0)
+
+    def test_a_generated_handoff_is_flagged_not_inlined(self):   # D57 §4: compact, as a real one's path is
+        session = json.loads(json.dumps(SESSION))
+        evidence = session["tasks"][0]["attempts"][-1]["evidence"]
+        del evidence["handoff_path"]
+        evidence.update(handoff_generated=True, handoff_text="（平台生成：执行者没有写交接文件）\n" + RAW)
+        view = mcp.compact_status(session, [])
+        latest = view["session"]["tasks"][0]["latest"]
+        self.assertEqual((latest["handoff"], latest["handoff_generated"]), (None, True))
+        self.assertNotIn("原始输出", json.dumps(view, ensure_ascii=False))
+        self.assertNotIn("handoff_generated", mcp.compact_status(SESSION, [])["session"]["tasks"][0]["latest"])
+
+    def test_a_switched_attempt_says_what_it_was_switched_from(self):
+        session = json.loads(json.dumps(SESSION))
+        switched = {"tool": "opencode", "model": "auto", "effort": "", "reason": "opencode 不可用", "by": "coordinator", "recovery": 1}
+        session["tasks"][0]["attempts"][-1]["evidence"]["switched_from"] = switched
+        tasks = mcp.compact_status(session, [])["session"]["tasks"]
+        self.assertEqual(tasks[0]["latest"]["switched_from"], switched)
+        self.assertNotIn("switched_from", tasks[1]["latest"])
+
+    def test_a_stopped_stall_says_so(self):
+        session = json.loads(json.dumps(SESSION))
+        watchdog = json.loads('{"reason": "原生任务 31 分钟没有进展（最后工具：npm run build），看门狗已停止", "idle_minutes": 30, "attempt_minutes": 240, "last_progress": 1.0, "turns": 4, "last_tool": "npm run build", "stopped_at": 2.0}')
+        session["tasks"][0]["attempts"][-1]["evidence"]["watchdog"] = watchdog
+        latest = mcp.compact_status(session, [])["session"]["tasks"][0]["latest"]
+        self.assertEqual(latest["watchdog"], watchdog["reason"])
+
+    def test_each_task_says_where_its_tool_came_from(self):
+        session = json.loads(json.dumps(SESSION))
+        session["tasks"][0]["mapping"] = {"source": "planner", "label": "KiroCrew 规划"}
+        tasks = mcp.compact_status(session, [])["session"]["tasks"]
+        self.assertEqual(tasks[0]["mapping"], "KiroCrew 规划")
+
     def test_detail_returns_the_full_record(self):
         view = mcp.call(Client(), "octopus_status", {"run_id": RID, "detail": True})
         self.assertEqual(view, {"session": SESSION, "events": EVENTS})
@@ -79,7 +146,7 @@ class CompactStatusTests(unittest.TestCase):
     def test_the_tool_schema_offers_detail(self):
         tool = next(t for t in mcp.TOOLS if t["name"] == "octopus_status")
         self.assertEqual(tool["inputSchema"]["properties"]["detail"], {"type": "boolean"})
-        self.assertEqual(tool["inputSchema"]["required"], ["run_id"])
+        self.assertEqual(tool["inputSchema"]["required"], [])   # D58: without run_id, the Session the directory is linked to
 
 
 if __name__ == "__main__":

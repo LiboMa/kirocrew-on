@@ -64,13 +64,41 @@ class CrewEntryTests(unittest.TestCase):
 
     def test_entry_uses_saved_identity_without_mutating_or_persisting_credentials(self):
         with self.db.read() as db:
-            before = "\n".join(db.iterdump())
+            before = set(db.iterdump())
         result = self.create()
         self.assertEqual(result["native_parent"], self.parent)
         self.assertEqual(self.calls[-1], ("/crew-entry", {"run_id": self.rid, "native_parent": self.parent}))
         with self.db.read() as db:
-            self.assertEqual(before, "\n".join(db.iterdump()))
+            after = set(db.iterdump())
+        # D57 §6.3: only the record that the entry was opened (its event and audit row) is written, never the link
+        self.assertEqual({line.split(" VALUES")[0] for line in after - before},
+                         {'INSERT INTO "events"', 'INSERT INTO "audit"', 'INSERT INTO "sqlite_sequence"'})
+        self.assertEqual({line.split(" VALUES")[0] for line in before - after} - {'INSERT INTO "sqlite_sequence"'}, set())
+        self.assertNotIn("fixture-link-only", "\n".join(after))
         self.assertNotIn("fixture-link-only", dumps(self.service.run(self.actor, self.rid)))
+
+    def test_opening_the_entry_is_on_the_timeline_and_audited(self):   # D57 §6.3: a stop after it may be a person's
+        self.create()
+        with self.db.read() as db:
+            events = [json.loads(r["payload"]) for r in db.execute(
+                "SELECT payload FROM events WHERE run_id=? AND kind='crew.entry_opened'", (self.rid,))]
+            audit = [dict(r) for r in db.execute("SELECT * FROM audit WHERE action='run.crew_entry'")]
+            self.assertTrue(crew_entry.entered(db, "worker", __import__("time").time()))
+            self.assertFalse(crew_entry.entered(db, "another-worker", __import__("time").time()))
+        self.assertEqual(len(events), 1)
+        self.assertEqual((events[0]["worker_id"], events[0]["actor"]["id"]), ("worker", self.actor["id"]))
+        self.assertEqual([(a["actor_id"], a["kind"], a["target"], json.loads(a["detail"])) for a in audit],
+                         [(self.actor["id"], "run", self.rid, {"worker_id": "worker"})])
+
+    def test_a_refused_entry_records_nothing(self):
+        with self.assertRaises(Error):
+            self.create(self.actors["bob"])
+        self.reply = {**self.reply, "native_parent": "another-session"}   # the Worker's answer does not match the Session
+        with self.assertRaises(Error):
+            self.create()
+        with self.db.read() as db:
+            self.assertIsNone(db.execute("SELECT 1 FROM events WHERE kind='crew.entry_opened'").fetchone())
+            self.assertIsNone(db.execute("SELECT 1 FROM audit WHERE action='run.crew_entry'").fetchone())
 
     def test_private_session_closed_missing_and_disabled_worker(self):
         with self.assertRaises(Error) as denied:
@@ -110,7 +138,7 @@ class CrewEntryTests(unittest.TestCase):
     def test_team_session_on_a_shared_environment_opens_for_its_boundary_owner_only(self):
         # Observed on EC2: the owner of the shared personal Worker was refused with "Team 原生入口需要该 Team 的专属 Worker".
         with self.db.transaction() as db:
-            db.execute("INSERT INTO teams VALUES('team-shared','Shared Team',0)")
+            db.execute("INSERT INTO teams(id,name,created) VALUES('team-shared','Shared Team',0)")
             db.execute("INSERT INTO members VALUES('team-shared',?,'owner')", (self.actor["id"],))
             db.execute("INSERT INTO members VALUES('team-shared',?,'member')", (self.actors["bob"]["id"],))
             db.execute("UPDATE workers SET scope='shared' WHERE id='worker'")
@@ -128,7 +156,7 @@ class CrewEntryTests(unittest.TestCase):
     def test_team_membership_and_revocation_during_entry(self):
         team = {"id": "team-entry"}   # a Team created before execution environments (D28)
         with self.db.transaction() as db:
-            db.execute("INSERT INTO teams VALUES('team-entry','Entry Team',0)")
+            db.execute("INSERT INTO teams(id,name,created) VALUES('team-entry','Entry Team',0)")
             db.execute("INSERT INTO members VALUES('team-entry',?,'owner')", (self.actor["id"],))
         self.service.membership(self.actor, team["id"], {"username": "bob"})
         self.health["isolation"] = "dedicated"
@@ -164,9 +192,8 @@ class CrewEntryTests(unittest.TestCase):
         with self.assertRaises(Error) as caught:
             self.create()
         self.assertEqual(caught.exception.code, "crew_origin_required")
-        # crew_url is written by worker-host push; native only adds the relay (both are steps of worker-host add).
-        self.assertIn("deploy.sh worker-host add", str(caught.exception))
-        self.assertIn("push", str(caught.exception))
+        # D53: the user is told to ask the administrator; worker-host add (push, then native) is in OPERATIONS
+        self.assertIn("请平台管理员为它开通", str(caught.exception))
         self.assertTrue(all(path == "/health" for path, _ in self.calls))
 
     def test_wrong_redirect_and_changed_lifecycle_never_return_link(self):

@@ -91,7 +91,107 @@ CREATE TABLE IF NOT EXISTS audit(
 CREATE INDEX IF NOT EXISTS audit_at ON audit(at);
 """
 
-MIGRATIONS = [(1, "baseline", BASELINE), (2, "environments", ENVIRONMENTS), (3, "access", ACCESS)]
+# Access management phase 2: an archived Team takes no new Sessions or members; a retired Worker leaves every listing;
+# last_team is the Team a spare Worker host last served (its code and memories may remain there, P2).
+TEAMS_WORKERS = """
+ALTER TABLE teams ADD COLUMN archived INTEGER NOT NULL DEFAULT 0;
+ALTER TABLE workers ADD COLUMN retired INTEGER NOT NULL DEFAULT 0;
+ALTER TABLE workers ADD COLUMN last_team TEXT REFERENCES teams(id);
+"""
+
+# Remote preview (D36 §5): the app each Session runs in its execution environment, how the platform reaches it, and
+# the last access its idle stop counts from. The Worker owns the processes; this is the platform's record of them.
+APPS = """
+CREATE TABLE IF NOT EXISTS apps(
+ run_id TEXT PRIMARY KEY REFERENCES runs(id), worker_id TEXT NOT NULL REFERENCES workers(id), status TEXT NOT NULL,
+ port INTEGER, path TEXT NOT NULL DEFAULT '/', upstream TEXT NOT NULL DEFAULT '{}', error TEXT,
+ started_by TEXT REFERENCES users(id), started REAL, last_access REAL, stopped REAL);
+CREATE INDEX IF NOT EXISTS apps_worker ON apps(worker_id,status);
+"""
+
+# Repository credentials (D35 §3): sealed secrets (octopus/vault.py) of a person, a Team or the platform, grants of
+# platform credentials, and the default a workflow version names for its Sessions' source.
+CREDENTIALS = """
+CREATE TABLE IF NOT EXISTS credentials(
+ id TEXT PRIMARY KEY, name TEXT NOT NULL, kind TEXT NOT NULL CHECK(kind IN ('github_pat','gitlab_token','github_app')),
+ host TEXT NOT NULL, scope TEXT NOT NULL CHECK(scope IN ('user','team','platform')), owner_id TEXT,
+ repos TEXT NOT NULL DEFAULT '[]', access TEXT NOT NULL DEFAULT 'read' CHECK(access IN ('read','write')),
+ inject INTEGER NOT NULL DEFAULT 0, hint TEXT NOT NULL, secret TEXT NOT NULL, expires REAL,
+ created_by TEXT NOT NULL REFERENCES users(id), created REAL NOT NULL, updated REAL NOT NULL, last_used REAL,
+ disabled INTEGER NOT NULL DEFAULT 0, CHECK((scope = 'platform') = (owner_id IS NULL)));
+CREATE INDEX IF NOT EXISTS credentials_owner ON credentials(scope,owner_id);
+CREATE TABLE IF NOT EXISTS credential_grants(
+ credential_id TEXT NOT NULL REFERENCES credentials(id), team_id TEXT REFERENCES teams(id), user_id TEXT REFERENCES users(id),
+ CHECK((team_id IS NULL) != (user_id IS NULL)), UNIQUE(credential_id,team_id), UNIQUE(credential_id,user_id));
+ALTER TABLE workflow_versions ADD COLUMN credentials TEXT NOT NULL DEFAULT '{}';
+"""
+
+# Knowledge (D46 P4): each item a Session's Knowledge task listed, what became of it in the execution environment's
+# KiroCrew lessons (written / refused / superseded, or skipped by the platform's checks) and who removed it.
+KNOWLEDGE = """
+CREATE TABLE IF NOT EXISTS knowledge(
+ id TEXT PRIMARY KEY, run_id TEXT NOT NULL REFERENCES runs(id), task_id TEXT NOT NULL,
+ worker_id TEXT NOT NULL REFERENCES workers(id), repo TEXT NOT NULL, rule TEXT NOT NULL, avoid TEXT,
+ result TEXT NOT NULL CHECK(result IN ('written','refused','superseded','skipped')), reason TEXT, created REAL NOT NULL,
+ removed REAL, removed_by TEXT REFERENCES users(id));
+CREATE INDEX IF NOT EXISTS knowledge_run ON knowledge(run_id);
+CREATE INDEX IF NOT EXISTS knowledge_repo ON knowledge(worker_id,repo);
+"""
+
+# D52 R4: an item gathered on a shared environment is kept for the repository's reviewed knowledge only ('kept'); SQLite
+# cannot widen a CHECK in place, so the table is rebuilt with its rows and indexes.
+KNOWLEDGE_KEPT = """
+CREATE TABLE knowledge_next(
+ id TEXT PRIMARY KEY, run_id TEXT NOT NULL REFERENCES runs(id), task_id TEXT NOT NULL,
+ worker_id TEXT NOT NULL REFERENCES workers(id), repo TEXT NOT NULL, rule TEXT NOT NULL, avoid TEXT,
+ result TEXT NOT NULL CHECK(result IN ('written','refused','superseded','skipped','kept')), reason TEXT, created REAL NOT NULL,
+ removed REAL, removed_by TEXT REFERENCES users(id));
+INSERT INTO knowledge_next SELECT id,run_id,task_id,worker_id,repo,rule,avoid,result,reason,created,removed,removed_by FROM knowledge;
+DROP TABLE knowledge;
+ALTER TABLE knowledge_next RENAME TO knowledge;
+CREATE INDEX IF NOT EXISTS knowledge_run ON knowledge(run_id);
+CREATE INDEX IF NOT EXISTS knowledge_repo ON knowledge(worker_id,repo);
+"""
+
+# D55: every submission is a Request (its client, explicit choices and the policy it started under) and its Session
+# names it; policies are a person's or a Team's admission rules by repository and mapping preferences.
+REQUESTS_POLICIES = """
+CREATE TABLE IF NOT EXISTS requests(
+ id TEXT PRIMARY KEY, owner_id TEXT NOT NULL REFERENCES users(id), team_id TEXT REFERENCES teams(id), key TEXT NOT NULL,
+ client TEXT NOT NULL, input TEXT NOT NULL, source TEXT NOT NULL, explicit TEXT NOT NULL, policy TEXT NOT NULL,
+ created REAL NOT NULL, UNIQUE(owner_id,key));
+CREATE INDEX IF NOT EXISTS requests_created ON requests(created);
+CREATE TABLE IF NOT EXISTS policies(
+ id TEXT PRIMARY KEY, kind TEXT NOT NULL CHECK(kind IN ('admission','mapping')), owner_id TEXT REFERENCES users(id),
+ team_id TEXT REFERENCES teams(id), rule TEXT NOT NULL, created_by TEXT NOT NULL REFERENCES users(id), created REAL NOT NULL,
+ CHECK((owner_id IS NULL) != (team_id IS NULL)));
+CREATE INDEX IF NOT EXISTS policies_scope ON policies(kind,owner_id,team_id);
+ALTER TABLE runs ADD COLUMN request_id TEXT REFERENCES requests(id);
+CREATE INDEX IF NOT EXISTS runs_request ON runs(request_id);
+"""
+
+# D61: how many tasks a person or a Team runs at once — the default per person (subject ''), a person's, a Team's.
+QUOTAS = """
+CREATE TABLE IF NOT EXISTS quotas(
+ scope TEXT NOT NULL CHECK(scope IN ('default','user','team')), subject TEXT NOT NULL DEFAULT '',
+ running INTEGER NOT NULL CHECK(running BETWEEN 1 AND 50), updated_by TEXT NOT NULL REFERENCES users(id),
+ updated REAL NOT NULL, PRIMARY KEY(scope,subject));
+"""
+
+# D64: a Session shared with a person (subject: user id), a Team (team id) or the whole company (subject '').
+SHARES = """
+CREATE TABLE IF NOT EXISTS shares(
+ id TEXT PRIMARY KEY, run_id TEXT NOT NULL REFERENCES runs(id), kind TEXT NOT NULL CHECK(kind IN ('user','team','everyone')),
+ subject TEXT NOT NULL DEFAULT '', role TEXT NOT NULL CHECK(role IN ('viewer','collaborator')),
+ created_by TEXT NOT NULL REFERENCES users(id), created REAL NOT NULL, UNIQUE(run_id,kind,subject),
+ CHECK(kind != 'everyone' OR role = 'viewer'));
+CREATE INDEX IF NOT EXISTS shares_subject ON shares(kind,subject);
+"""
+
+MIGRATIONS = [(1, "baseline", BASELINE), (2, "environments", ENVIRONMENTS), (3, "access", ACCESS),
+              (4, "teams_workers", TEAMS_WORKERS), (5, "apps", APPS), (6, "credentials", CREDENTIALS),
+              (7, "knowledge", KNOWLEDGE), (8, "knowledge_kept", KNOWLEDGE_KEPT),
+              (9, "requests_policies", REQUESTS_POLICIES), (10, "quotas", QUOTAS), (12, "shares", SHARES)]   # 11: D57's (another branch)
 
 
 def _statements(script):
@@ -135,7 +235,10 @@ def apply(path, migrations=MIGRATIONS, *, backup_dir, clock=time.time):
         latest = max(number for number, _, _ in migrations)
         if found > latest:
             raise RuntimeError(f"数据库 schema 版本 {found} 高于程序支持的 {latest}；请使用更新的版本或从备份恢复")
-        pending = sorted(m for m in migrations if m[0] > found)
+        # D64: every number not applied yet, not only those above the highest — two branches each add one, and the one
+        # that lands second is not skipped for good (their migrations are independent by rule).
+        applied = {row[0] for row in db.execute("SELECT version FROM schema_version")}
+        pending = sorted(m for m in migrations if m[0] not in applied)
         backup = _backup(db, backup_dir, found, clock) if pending and found > 0 else None
         for number, name, script in pending:
             db.execute("BEGIN IMMEDIATE")

@@ -1,6 +1,6 @@
 """A stand-in for the aws CLI that lets tests run deploy.sh without DEPLOY_DRY_RUN (tests/test_deploy_assets.py).
 
-State (FAKE_AWS_STATE, JSON): {"stacks": {name: {"params": {...}, "outputs": {...}}}, "whoami": str,
+State (FAKE_AWS_STATE, JSON): {"stacks": {name: {"params": {...}, "outputs": {...}}}, "whoami": str, "boundaries": [name],
 "throttle": [stack name, or "*list*" for the stack listing]}. Every call is appended to FAKE_AWS_LOG; a change set's
 parameters file is logged as "PARAMS <json>" and an SSM command as "COMMAND <script>".
 """
@@ -72,5 +72,6 @@ elif "get-command-invocation" in args:
     if query == "Status":
         print("Success")
     elif query == "StandardOutputContent":
-        print(state.get("whoami", "") if "kiro-cli whoami" in last else "")
+        print(state.get("whoami", "") if "kiro-cli whoami" in last
+              else " ".join(state.get("boundaries", [])) if "ls /etc/kirocrew-on" in last else "")
 log.close()

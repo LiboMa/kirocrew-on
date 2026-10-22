@@ -56,29 +56,51 @@ def elevated(actor):
     return bool(actor.get("admin")) and "admin" in actor.get("scopes", ())
 
 
-def issue_token(db, user, scopes=None, label="API", ttl=86400):
+# D62: how long an API token lasts, chosen when it is issued; one that never expires is kept with this far date (the
+# column stays NOT NULL and every check stays expires > now) and reads expires: null.
+EXPIRIES = {"7d": 7 * 86400, "30d": 30 * 86400, "365d": 365 * 86400, "never": None}
+NEVER = 253402300799.0   # 9999-12-31T23:59:59Z
+ADMIN_EXPIRIES = ("7d", "30d")   # a token that carries admin: at most 30 days (the security floor)
+
+
+def expiry(value):
+    """A token's expiry as the API shows it: None for one that never expires."""
+    return None if value is not None and value >= NEVER else value
+
+
+def issue_token(db, user, scopes=None, label="API", ttl=86400, expires_in=None):
+    """``expires_in`` (7d / 30d / 365d / never) when given; else ``ttl`` seconds as before D62, at most 30 days."""
     if scopes is None:  # everything the account may hold: administrators also get admin
         row = db.execute("SELECT admin FROM users WHERE id=?", (user,)).fetchone()
         scopes = ["read", "execute", "manage"] + (["admin"] if row and row["admin"] else [])
     require(isinstance(scopes, list) and bool(scopes) and set(scopes) <= set(SCOPES), "不支持的 Token scope")
+    if expires_in is None:
+        expires = time.time() + min(max(int(ttl), 60), 30 * 86400)
+    else:
+        require(isinstance(expires_in, str) and expires_in in EXPIRIES, "有效期 expires_in 须为 7d、30d、365d 或 never")
+        require("admin" not in scopes or expires_in in ADMIN_EXPIRIES, "带 admin 权限的 Token 最长 30 天（7d 或 30d）",
+                403, "forbidden")
+        expires = NEVER if EXPIRIES[expires_in] is None else time.time() + EXPIRIES[expires_in]
     raw = "oct_" + secrets.token_urlsafe(32)
-    value = {"id": uid("token"), "token": raw, "scopes": scopes,
-             "expires": time.time() + min(max(int(ttl), 60), 30 * 86400)}
+    value = {"id": uid("token"), "token": raw, "scopes": scopes, "expires": expiry(expires)}
     db.execute("INSERT INTO tokens(hash,id,user_id,scopes,expires,label) VALUES(?,?,?,?,?,?)",
                (hashlib.sha256(raw.encode()).hexdigest(), value["id"], user,
-                dumps(scopes), value["expires"], str(label)[:80]))
+                dumps(scopes), expires, str(label)[:80]))
     return value
 
 
 def authenticate(db, raw):
     require(isinstance(raw, str) and raw.startswith("oct_"), "需要 API Token", 401, "unauthorized")
     row = db.execute(
-        "SELECT u.id,u.username,u.admin,t.id token_id,t.scopes,t.last_used FROM tokens t JOIN users u ON u.id=t.user_id "
+        "SELECT u.id,u.username,u.admin,t.id token_id,t.scopes,t.last_used,t.label FROM tokens t JOIN users u ON u.id=t.user_id "
         "WHERE t.hash=? AND t.expires>? AND u.active=1",
         (hashlib.sha256(raw.encode()).hexdigest(), time.time())).fetchone()
     require(row is not None, "Token 已失效或撤销", 401, "unauthorized")
+    from .journal import client
     value = dict(row)
     value["scopes"] = json.loads(value["scopes"])
+    value["token_label"] = value.pop("label")   # which client a Request came from (D55)
+    value["client"] = client(value["token_label"])   # console / Coding Agent (MCP) / API, for the change journal (D34)
     return value
 
 

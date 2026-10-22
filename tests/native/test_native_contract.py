@@ -5,11 +5,15 @@ Run under the KiroCrew interpreter, from the repo root:
 Not part of tools/regress.sh: it needs a real KiroCrew install and ACP adapters, but starts no models.
 """
 import copy
+import dataclasses
+import json
 import os
+from pathlib import Path
 import tempfile
 import unittest
+from unittest.mock import patch
 
-from composition import environment
+from composition import environment, templates
 from composition.registry import BACKENDS, PocProviderRegistry
 from octopus.config import load
 
@@ -92,6 +96,68 @@ class NativeContractTests(unittest.TestCase):
             print(f"\nKiroCrew {__version__}: bracket qualifier accepted by spawn_run")
         except ValidationError:
             print(f"\nKiroCrew {__version__}: bracket qualifier rejected by spawn_run")
+
+
+CONTRACT = json.loads((Path(__file__).resolve().parents[1] / "kirocrew_contract.json").read_text())
+
+
+class ConfigContractTests(unittest.TestCase):
+    """The keys the platform writes into config.json, against the KiroCrew being installed (tests/kirocrew_contract.json)."""
+
+    def test_the_contract_is_for_this_kirocrew(self):
+        self.assertEqual(CONTRACT["kirocrew_version"], __version__)
+
+    def test_every_listed_key_is_a_field_kirocrew_reads(self):
+        cfg = KiroCrewConfig()
+        names = lambda value: {f.name for f in dataclasses.fields(value)}
+        self.assertEqual(sorted(set(CONTRACT["config"][""]) - names(KiroCrewConfig)), [])
+        for section, keys in CONTRACT["config"].items():
+            if section:
+                self.assertEqual(sorted(set(keys) - names(getattr(cfg, section))), [], section)
+
+    def test_the_seeded_config_reads_back_with_no_key_left_over(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            templates.seed(crew_home=root / "crew", kiro_home=root / "kiro", allowed_roots=[root / "w"], legacy_pipeline=False)
+            with patch.dict(os.environ, {"KIROCREW_HOME": str(root / "crew")}):
+                cfg = KiroCrewConfig.load()
+            self.assertEqual((cfg._extra_keys, cfg._extra_sections), ({}, {}))
+            self.assertEqual(cfg.agent.adaptive_concurrency_mode, "fixed")   # and what was written is what it reads
+
+    def test_the_boundarys_own_config_keeps_none_of_the_keys_the_platform_once_wrote(self):
+        # the deploy's --check seeds this boundary first: the keys KiroCrew never read are gone from its config
+        extra = KiroCrewConfig.load()._extra_keys
+        self.assertNotIn("enabled", extra.get("memory") or {})
+        self.assertFalse({"host", "port"} & set(extra.get("dashboard") or {}))
+        self.assertNotIn("path", (extra.get("workspaces") or {}).get("default") or {})
+
+
+
+class RuntimeErrorContractTests(unittest.TestCase):
+    """The installed KiroCrew still words its runtime failures the way the platform's L0 retry reads them
+    (tests/kirocrew_contract.json runtime_errors)."""
+
+    def test_every_runtime_failure_phrase_is_in_the_installed_kirocrew(self):
+        import kiro_crew
+        sources = "\n".join(path.read_text(errors="replace") for path in Path(kiro_crew.__file__).parent.rglob("*.py"))
+        missing = [item["phrase"] for item in CONTRACT["runtime_errors"] if item["phrase"] not in sources]
+        self.assertEqual(missing, [], "KiroCrew no longer says these: update octopus/engine.py transient and the contract")
+
+
+
+class HttpContractTests(unittest.TestCase):
+    """Each handler module the platform's request bodies go to still reads every key the contract lists for it
+    (tests/kirocrew_contract.json http): a renamed or removed field fails the deploy instead of being ignored."""
+
+    def test_every_listed_key_is_read_by_its_handler_module(self):
+        import kiro_crew
+        package = Path(kiro_crew.__file__).parent
+        for endpoint, entry in CONTRACT["http"].items():
+            with self.subTest(endpoint):
+                module = package / entry["module"]
+                self.assertTrue(module.is_file(), f"{entry['module']} is no longer in KiroCrew")
+                text = module.read_text()
+                self.assertEqual([k for k in entry["reads"] if f'"{k}"' not in text and f"'{k}'" not in text], [])
 
 
 if __name__ == "__main__":

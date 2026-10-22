@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Idempotent host preparation for Amazon Linux 2023 x86_64. deploy/aws/deploy.sh runs it as root through SSM:
-#   KIROCREW_ON_RELEASE=<commit> CF_DOMAIN=<dxxxx.cloudfront.net> ORIGIN_SECRET_PARAM=/kirocrew-on/<stack>/origin-secret \
+#   KIROCREW_ON_RELEASE=<commit> CF_DOMAIN=<dxxxx.cloudfront.net> [CONSOLE_DOMAIN=<控制台自定义域名>] ORIGIN_SECRET_PARAM=/kirocrew-on/<stack>/origin-secret \
 #   AWS_REGION=us-east-1 bash <release>/deploy/install/al2023.sh <boundary>
 # Writes no tool credentials: Claude Code and Codex use Amazon Bedrock through the instance role; kiro-cli needs a
 # one-time device-flow login as crew-<boundary> (docs/OPERATIONS.md). Every download is pinned or checksum-verified.
@@ -18,12 +18,17 @@ REGION="${AWS_REGION:-us-east-1}"
 # shellcheck source=../versions.env
 source "$SOURCE/deploy/versions.env"
 log() { printf '[%s] %s\n' "$(date -u +%H:%M:%S)" "$*"; }
+# The steps of each boundary on this host (D49: one per person; the platform host may carry several).
+# shellcheck source=boundary-lib.sh
+. "$SOURCE/deploy/install/boundary-lib.sh"
 SCRATCH="$(mktemp -d)"
-cleanup() { rm -rf "$SCRATCH"; }
+cleanup() { rm -rf "$SCRATCH"; [ -z "${BOUNDARY_DRAINING:-}" ] || rm -f "$BOUNDARY_DRAINING"; }   # never a stale mark
 trap cleanup EXIT
 
 log "系统依赖"
 dnf install -y -q git tar gzip xz jq unzip make gcc gcc-c++ nginx "$PYTHON_PACKAGE" "$PYTHON_PACKAGE-pip" "$PYTHON_PACKAGE-devel"
+# What the Agents' Playwright Chromium needs to open a page (reviews, frontend checks; EC2 2026-10-19 lacked all 16).
+dnf install -y -q nss nspr libdrm libX11 libXcomposite libXdamage libXext libXfixes libXrandr alsa-lib atk at-spi2-atk at-spi2-core cairo cups-libs mesa-libgbm pango libxcb libxkbcommon
 PYTHON="$(command -v "$PYTHON_PACKAGE")"
 merge_hosts() {  # add hosts to platform.toml allowed_hosts, keeping the entries already there
   "$PYTHON" - "$@" <<'PY'
@@ -31,10 +36,45 @@ import re, sys, tomllib
 path, *required = sys.argv[1:]
 text = open(path).read()
 hosts = tomllib.loads(text).get("allowed_hosts", [])
-line = "allowed_hosts = [" + ", ".join('"%s"' % h for h in hosts + [h for h in required if h not in hosts]) + "]"
+line = "allowed_hosts = [" + ", ".join('"%s"' % h for h in dict.fromkeys(hosts + required)) + "]"
 text = re.sub(r"(?m)^allowed_hosts[ \t]*=.*$", lambda _: line, text, count=1) if re.search(r"(?m)^allowed_hosts", text) \
     else line + "\n" + text
 open(path, "w").write(text)
+PY
+}
+render_preview() {  # render_preview TEMPLATE SECRET_FILE PREVIEW_PORT API_PORT: the platform's remote preview server (D36);
+  # the origin secret comes from its file, never a command line, and the gate from it as the API derives it
+  "$PYTHON" -I - "$TARGET" "$@" <<'PY'
+import re, sys
+release, template, secret_file, preview_port, api_port = sys.argv[1:]
+sys.path.insert(0, release)
+from octopus.remote_preview import gate_value
+secret = open(secret_file).read().strip()
+if not re.fullmatch(r"[A-Za-z0-9_-]{32,}", secret):
+    sys.exit("源站密钥缺失或格式不符")
+print(open(template).read().replace("__ORIGIN_SECRET__", secret).replace("__PREVIEW_GATE__", gate_value(secret))
+      .replace("__PREVIEW_PORT__", preview_port).replace("__API_PORT__", api_port), end="")
+PY
+}
+render_worker_preview() {  # render_worker_preview TEMPLATE TOKEN_FILE PORT: a Worker host's preview server; its check header
+  # comes from the boundary's Worker token exactly as the platform derives it (octopus.remote_preview.verify_value)
+  "$PYTHON" -I - "$TARGET" "$@" <<'PY'
+import sys
+release, template, token_file, port = sys.argv[1:]
+sys.path.insert(0, release)
+from octopus.remote_preview import verify_value
+token = open(token_file).read().strip()
+if len(token) < 32:
+    sys.exit("Worker Token 缺失或过短")
+print(open(template).read().replace("__PREVIEW_VERIFY__", verify_value(token)).replace("__PREVIEW_TLS_PORT__", port), end="")
+PY
+}
+toml_unset() {  # toml_unset FILE KEY: remove a top-level key (an older release rejects keys it does not know)
+  "$PYTHON" - "$1" "$2" <<'PY'
+import re, sys
+path, key = sys.argv[1:]
+text = open(path).read()
+open(path, "w").write(re.sub(rf"(?m)^{re.escape(key)}[ \t]*=.*\n?", "", text, count=1))
 PY
 }
 toml_set() {  # top-level TOML key: replace its line, or insert it before the first table so it never lands in [tools]
@@ -85,6 +125,8 @@ install -d -m 0755 /etc/kirocrew-on /opt/kirocrew-on/releases /opt/kirocrew /opt
 
 log "KiroCrew ON 发布 $RELEASE"
 TARGET="/opt/kirocrew-on/releases/$RELEASE"
+prune_releases /opt/kirocrew-on/releases "$(readlink -f /opt/kirocrew-on/current || true)" "$TARGET" 3
+find /opt/kirocrew-on/incoming -mindepth 1 -maxdepth 1 -mmin +1440 ! -name "*$RELEASE*" -exec rm -rf {} +
 if [ ! -f "$TARGET/.installed" ]; then
   rm -rf "$TARGET"
   cp -a "$SOURCE" "$TARGET"
@@ -150,17 +192,8 @@ npm install --global --no-audit --no-fund --prefix /opt/kirocrew-tools \
   "@anthropic-ai/claude-code@$CLAUDE_CODE_VERSION" "@openai/codex@$CODEX_VERSION" "opencode-ai@$OPENCODE_VERSION"
 
 log "执行边界 $BOUNDARY 的环境（Bedrock 经实例角色）"
-cat > "/etc/kirocrew-on/boundary-$BOUNDARY.env" <<EOF
-CLAUDE_CODE_USE_BEDROCK=1
-AWS_REGION=$REGION
-PATH=/opt/kirocrew-tools/bin:$NODE_ROOT/bin:/usr/local/bin:/usr/bin:/bin
-EOF
-chmod 0644 "/etc/kirocrew-on/boundary-$BOUNDARY.env"
-if [ ! -f "$BASE/home/.codex/config.toml" ]; then
-  install -d -m 0700 -o "$CREW" -g "$CREW" "$BASE/home/.codex"
-  printf 'model_provider = "amazon-bedrock"\nmodel = "openai.gpt-6-astra"\n' > "$BASE/home/.codex/config.toml"
-  chown "$CREW:$CREW" "$BASE/home/.codex/config.toml"
-fi
+boundary_env "$BOUNDARY"
+boundary_codex "$BOUNDARY"
 
 log "平台与边界配置"
 if [ -z "$WORKER_HOST" ]; then
@@ -181,7 +214,7 @@ if [ ! -f /etc/kirocrew-on/platform.toml ]; then
   install -m 0640 -o root -g octopus "$TARGET/deploy/config/platform.toml.example" /etc/kirocrew-on/platform.toml
 fi
 if [ -n "${CF_DOMAIN:-}" ]; then
-  merge_hosts /etc/kirocrew-on/platform.toml "$CF_DOMAIN" localhost:18918
+  merge_hosts /etc/kirocrew-on/platform.toml "$CF_DOMAIN" ${CONSOLE_DOMAIN:+"$CONSOLE_DOMAIN"} localhost:18918
 fi
 # Private CA for Worker hosts (D28): the key never leaves this host (root 0600); the platform trusts only its certificate.
 if [ ! -s /etc/kirocrew-on/worker-ca.key ]; then
@@ -189,6 +222,14 @@ if [ ! -s /etc/kirocrew-on/worker-ca.key ]; then
       -keyout /etc/kirocrew-on/worker-ca.key -out /etc/kirocrew-on/worker-ca.pem 2>/dev/null )
 fi
 chmod 0600 /etc/kirocrew-on/worker-ca.key
+# Master key of the sealed repository credentials (D35 §3.3): made here once and never leaves the host (not in SSM, not in
+# backups); the API reads it, the execution users cannot. A database restored elsewhere needs this same file.
+if [ ! -s /etc/kirocrew-on/credentials.key ]; then
+  ( umask 077; openssl rand -base64 32 > /etc/kirocrew-on/credentials.key.new )
+  mv -f /etc/kirocrew-on/credentials.key.new /etc/kirocrew-on/credentials.key
+fi
+chown root:octopus /etc/kirocrew-on/credentials.key
+chmod 0640 /etc/kirocrew-on/credentials.key
 chmod 0644 /etc/kirocrew-on/worker-ca.pem
   # platform:end
 fi
@@ -258,24 +299,45 @@ PY
   systemctl reload-or-restart nginx
 fi
 
-log "原生契约检查（以 $CREW 身份，隔离边界配置）"
-CREW_ENV=(env HOME="$BASE/home" PATH="/opt/kirocrew-tools/bin:$NODE_ROOT/bin:/usr/local/bin:/usr/bin:/bin"
-          PYTHONPATH="$TARGET")
-# The check runs against the release being installed: before the switch, current points at the previous release, or
-# (on a fresh host) does not exist yet. The boundary config with its current paths rewritten is used for the check only.
-CHECK_TOML="/etc/kirocrew-on/boundary-$BOUNDARY.check.toml"
-sed -e "s#/opt/kirocrew-on/current/#$TARGET/#g" -e "s#/opt/kirocrew/current/#$KC/#g" "$BOUNDARY_TOML" > "$CHECK_TOML"
-chown "root:$CREW" "$CHECK_TOML"
-chmod 0640 "$CHECK_TOML"
-# --check seeds the poc-* templates into KIRO_HOME and verifies every route before the native tests read them.
-runuser -u "$CREW" -- "${CREW_ENV[@]}" "$KC/venv/bin/python" -s \
-  -m composition.gateway --config "$CHECK_TOML" --check
-runuser -u "$CREW" -- "${CREW_ENV[@]}" OCTOPUS_CONFIG="$CHECK_TOML" \
-  "$KC/venv/bin/python" -s -m unittest discover -s "$TARGET/tests/native"
-rm -f "$CHECK_TOML"
-if [ "$KIROCREW_VERSION" = "$KIROCREW_ACCEPTED_VERSION" ]; then
-  sed -i "s#^kirocrew_versions = .*#kirocrew_versions = [\"$KIROCREW_VERSION\"]#" "$BOUNDARY_TOML"
+if [ -z "$WORKER_HOST" ]; then
+  # platform:begin
+if [ -n "${PREVIEW_DOMAIN:-}" ]; then
+  log "远程预览入口 https://$PREVIEW_DOMAIN/（CloudFront → nginx auth_request → 会话应用，D36）"
+  PREVIEW_PORT="${PREVIEW_PORT:-8929}"
+  API_PORT="$(grep -E '^api_port' /etc/kirocrew-on/platform.toml | grep -oE '[0-9]+' || echo 8918)"
+  umask 027
+  render_preview "$TARGET/deploy/nginx/kirocrew-preview.conf" /etc/kirocrew-on/origin-secret "$PREVIEW_PORT" "$API_PORT" \
+    > /etc/nginx/conf.d/kirocrew-preview.conf.new
+  umask 022
+  chown root:nginx /etc/nginx/conf.d/kirocrew-preview.conf.new
+  chmod 0640 /etc/nginx/conf.d/kirocrew-preview.conf.new
+  mv -f /etc/nginx/conf.d/kirocrew-preview.conf.new /etc/nginx/conf.d/kirocrew-preview.conf
+  if command -v getenforce >/dev/null 2>&1 && [ "$(getenforce)" = Enforcing ]; then
+    setsebool -P httpd_can_network_connect 1
+    semanage port -a -t http_port_t -p tcp "$PREVIEW_PORT" 2>/dev/null || semanage port -m -t http_port_t -p tcp "$PREVIEW_PORT"
+  fi
+  if ! nginx -t -q; then   # never leave a configuration nginx rejects for its next restart
+    rm -f /etc/nginx/conf.d/kirocrew-preview.conf
+    echo "远程预览的 nginx 配置未通过 nginx -t，已移除" >&2
+    exit 1
+  fi
+  systemctl enable nginx >/dev/null
+  systemctl reload-or-restart nginx
 fi
+  # platform:end
+fi
+
+log "原生契约检查（以 $CREW 身份，隔离边界配置）"
+boundary_check "$BOUNDARY" "$TARGET" "$KC"
+for OTHER in $(other_boundaries "$BOUNDARY"); do   # D49: every boundary on this host passes before the release switches
+  # one an administrator stopped (systemctl disable) stays stopped: neither checked nor brought back by a push
+  systemctl is-enabled --quiet "octopus-worker@$OTHER" || { log "边界 ${OTHER}：已停用，跳过检查"; continue; }
+  log "原生契约检查：边界 $OTHER"
+  boundary_check "$OTHER" "$TARGET" "$KC"
+done
+for NAME in "$BOUNDARY" $(other_boundaries "$BOUNDARY"); do
+  boundary_versions "$NAME" "$KIROCREW_VERSION" "$KIROCREW_ACCEPTED_VERSION"
+done
 log "切换到已通过检查的发布 $RELEASE 与 KiroCrew $KIROCREW_VERSION"
 ln -sfn "$TARGET" /opt/kirocrew-on/current
 ln -sfn "$KC" /opt/kirocrew/current
@@ -284,6 +346,17 @@ if [ -z "$WORKER_HOST" ]; then
   # platform:begin
 # After the switch: a release before worker_ca_file would refuse to load platform.toml with the key (unknown keys fail).
 toml_set /etc/kirocrew-on/platform.toml worker_ca_file '"/etc/kirocrew-on/worker-ca.pem"'
+toml_set /etc/kirocrew-on/platform.toml credentials_key_file '"/etc/kirocrew-on/credentials.key"'
+# Each Session's preview on its own origin, https://<run-id>.<PREVIEW_SESSION_DOMAIN>/ (empty: the shared origin only;
+# the key is then removed, so a rollback to a release before D36 phase 3 still starts).
+if [ -n "${PREVIEW_SESSION_DOMAIN:-}" ]; then
+  toml_set /etc/kirocrew-on/platform.toml preview_domain "\"$PREVIEW_SESSION_DOMAIN\""
+else
+  toml_unset /etc/kirocrew-on/platform.toml preview_domain
+fi
+if [ -n "${PREVIEW_DOMAIN:-}" ]; then
+  toml_set /etc/kirocrew-on/platform.toml preview_url "\"https://$PREVIEW_DOMAIN\""
+fi
 OCTO=(/opt/kirocrew-on/venv/bin/python -m octopus --config /etc/kirocrew-on/platform.toml)
 log "平台管理员（首次初始化；已有用户时跳过）"
 # Generated here and readable by root only: the instance role (usable by every process on the host, the execution
@@ -298,8 +371,9 @@ fi
 chown root:root "$ADMIN_FILE"
 chmod 0600 "$ADMIN_FILE"
 ADMIN_PASSWORD="$(cat "$ADMIN_FILE")"
-if ! INIT_OUT="$(cd /opt/kirocrew-on/current && runuser -u octopus -- env PYTHONPATH=/opt/kirocrew-on/current \
-    OCTOPUS_ADMIN_PASSWORD="$ADMIN_PASSWORD" "${OCTO[@]}" init --username admin --password-env OCTOPUS_ADMIN_PASSWORD 2>&1)"; then
+# The password reaches the platform in its environment only (runuser -u keeps it), never a command line others can read
+if ! INIT_OUT="$(cd /opt/kirocrew-on/current && OCTOPUS_ADMIN_PASSWORD="$ADMIN_PASSWORD" runuser -u octopus -- \
+    env PYTHONPATH=/opt/kirocrew-on/current "${OCTO[@]}" init --username admin --password-env OCTOPUS_ADMIN_PASSWORD 2>&1)"; then
   case "$INIT_OUT" in
     *已有用户*)
       if [ -n "$NEW_ADMIN" ]; then
@@ -314,23 +388,62 @@ fi
   # platform:end
 fi
 
+if [ -n "$WORKER_HOST" ] && [ -n "${WORKER_PREVIEW_TLS_PORT:-}" ]; then
+  # After the switch (an older release rejects unknown keys): the platform reaches this host's apps through its preview
+  # port (D36 §5.2); the Worker reports it with the name in this host's certificate.
+  toml_set "$BOUNDARY_TOML" preview_tls_port "$WORKER_PREVIEW_TLS_PORT"
+  toml_set "$BOUNDARY_TOML" preview_tls_name "\"$BOUNDARY.worker.kirocrew-on\""
+fi
+
 log "systemd"
 install -m 0644 /opt/kirocrew-on/current/deploy/systemd/*.service /etc/systemd/system/
 systemctl daemon-reload
 systemctl enable "octopus-gateway@$BOUNDARY" "octopus-worker@$BOUNDARY" >/dev/null
-systemctl restart "octopus-gateway@$BOUNDARY"
-systemctl restart "octopus-worker@$BOUNDARY"
+boundary_restart "$BOUNDARY" "$KC"
+if [ -n "$WORKER_HOST" ] && [ -n "${WORKER_PREVIEW_TLS_PORT:-}" ] && [ -s "$BASE/worker.token" ]; then
+  log "远程预览端口 $WORKER_PREVIEW_TLS_PORT（TLS；只转发到回环 47000–47999，校验头由 Worker Token 派生）"
+  ( umask 077; render_worker_preview "$TARGET/deploy/nginx/kirocrew-worker-preview.conf" "$BASE/worker.token" \
+      "$WORKER_PREVIEW_TLS_PORT" > /etc/kirocrew-on/nginx-worker-preview.conf.new )
+  mv -f /etc/kirocrew-on/nginx-worker-preview.conf.new /etc/kirocrew-on/nginx-worker-preview.conf
+  if command -v getenforce >/dev/null 2>&1 && [ "$(getenforce)" = Enforcing ]; then
+    semanage port -a -t http_port_t -p tcp "$WORKER_PREVIEW_TLS_PORT" 2>/dev/null ||
+      semanage port -m -t http_port_t -p tcp "$WORKER_PREVIEW_TLS_PORT"
+  fi
+  # Loaded once deploy.sh worker-host tls has installed the certificate (it installs this file too).
+  if [ -s /etc/kirocrew-on/worker-tls.crt ]; then
+    install -m 0640 -o root -g nginx /etc/kirocrew-on/nginx-worker-preview.conf /etc/nginx/conf.d/kirocrew-worker-preview.conf
+    if ! nginx -t -q; then
+      rm -f /etc/nginx/conf.d/kirocrew-worker-preview.conf
+      echo "远程预览的 nginx 配置未通过 nginx -t，已移除" >&2
+      exit 1
+    fi
+    systemctl reload-or-restart nginx
+  fi
+fi
 if [ -z "$WORKER_HOST" ]; then
   # platform:begin
 systemctl enable octopus-api >/dev/null
 systemctl restart octopus-api
 log "注册执行边界 Worker（已注册时跳过）"
 WORKER_PORT="$(grep -E '^worker_port' "$BOUNDARY_TOML" | grep -oE '[0-9]+')"
-(cd /opt/kirocrew-on/current && env PYTHONPATH=/opt/kirocrew-on/current OCTOPUS_ADMIN_PASSWORD="$ADMIN_PASSWORD" \
+(cd /opt/kirocrew-on/current && OCTOPUS_ADMIN_PASSWORD="$ADMIN_PASSWORD" PYTHONPATH=/opt/kirocrew-on/current \
   "${OCTO[@]}" bootstrap-worker --worker-url "http://127.0.0.1:$WORKER_PORT" \
   --token-file "$BASE/worker.token" --name "$BOUNDARY")
   # platform:end
 fi
+# others:begin
+# D49: then every other boundary on this host, one at a time — after the platform is up, so one person's drain or a
+# Gateway that does not restart never holds up the API, personal or the others; failures are reported at the end.
+FAILED_BOUNDARIES=""
+for OTHER in $(other_boundaries "$BOUNDARY"); do
+  systemctl is-enabled --quiet "octopus-worker@$OTHER" || { log "边界 ${OTHER}：已停用（systemctl disable），不重启"; continue; }
+  log "边界 ${OTHER}：升级"
+  boundary_env "$OTHER"
+  systemctl enable "octopus-gateway@$OTHER" "octopus-worker@$OTHER" >/dev/null
+  boundary_restart "$OTHER" "$KC" || FAILED_BOUNDARIES="$FAILED_BOUNDARIES $OTHER"
+done
+[ -z "$FAILED_BOUNDARIES" ] || { echo "这些边界未能重启：${FAILED_BOUNDARIES}（其余已完成）" >&2; exit 1; }
+# others:end
 if [ -n "$WORKER_HOST" ]; then
   log "完成：Worker 主机 $BOUNDARY（KiroCrew $KIROCREW_VERSION）；下一步 deploy.sh worker-host tls / register，并以 $CREW 登录 kiro-cli"
 else

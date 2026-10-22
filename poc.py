@@ -35,7 +35,7 @@ def prepare_environment():
 
 
 def seed():
-    _templates.seed(crew_home=CREW, kiro_home=KIRO, allowed_roots=[STATE / "runs"], port=PORT, legacy_pipeline=True)
+    _templates.seed(crew_home=CREW, kiro_home=KIRO, allowed_roots=[STATE / "runs"], legacy_pipeline=True)
 
 
 class PocProviderRegistry(_Registry):

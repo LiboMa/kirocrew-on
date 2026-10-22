@@ -1,5 +1,7 @@
 import { describe, expect, test } from "vitest";
 import type { Run, RunTask } from "@/api/types";
+import { EMPTY_FILTERS, filtersFromUrl, listParams, type RunListFilters } from "@/lib/runList";
+import { previewReason } from "@/features/sessions/AppPreviewPanel";
 import {
   canContinue,
   canDelete,
@@ -8,7 +10,8 @@ import {
   canStop,
   closeAction,
   crewEntryReason,
-  filterRuns,
+  deleteReason,
+  rerunPlan,
   statusText,
 } from "@/lib/session";
 
@@ -27,6 +30,17 @@ const run = (overrides: Partial<Run> = {}): Run => ({
   native_parent: "octopus-run-1", workspace: "/w", purpose: null, error: null, source: { type: "new" },
   progress: { accepted: 0, total: 2 }, tasks: [task("code", "blocked", 1), task("review", "pending")], created: 1, updated: 2,
   ...overrides,
+});
+
+describe("a shared Session (D64)", () => {
+  test("a share is told it cannot delete, and a viewer cannot start or stop the preview", () => {
+    const shared = run({ access: { via: "share", role: "collaborator", by: "bob" },
+      permissions: { operate: true, delete: false } });
+    expect(deleteReason(shared)).toBe("共享的会话不能删除");
+    expect(deleteReason(run({ permissions: { operate: true, delete: false } }))).toBe("只有 Team owner 可以删除他人创建的会话");
+    expect(previewReason(run({ status: "completed", worker_id: "w1", workspace: "/w", permissions: { operate: false, delete: false } })))
+      .toBe("你以查看身份访问此会话，不能启动或停止预览。");
+  });
 });
 
 describe("session actions follow the classic console rules", () => {
@@ -77,29 +91,52 @@ describe("session actions follow the classic console rules", () => {
   });
 });
 
-describe("session list search and filters", () => {
-  const runs = [
-    run({ id: "run-a", name: "修复登录", status: "blocked" }),
-    run({ id: "run-b", name: "退款幂等", input: "订单退款", status: "running", workflow_name: "完整研发链" }),
-    run({ id: "run-c", name: "团队看板", status: "completed", team_id: "team-1" }),
-    run({ id: "run-d", name: "已删除", lifecycle: "deleted" }),
-    run({ id: "run-e", name: "已关闭的会话", lifecycle: "closed", status: "stopped" }),
-  ];
+describe("session list query (D56)", () => {
+  const params = (filters: Partial<RunListFilters>, space: string | null = "") =>
+    Object.fromEntries(new URLSearchParams(listParams({ ...EMPTY_FILTERS, ...filters }, space)));
 
-  test("only the current space and never deleted sessions", () => {
-    expect(filterRuns(runs, { space: "", query: "", filter: "all" }).map((r) => r.id)).toEqual(["run-a", "run-b", "run-e"]);
-    expect(filterRuns(runs, { space: "team-1", query: "", filter: "all" }).map((r) => r.id)).toEqual(["run-c"]);
+  test("the space, the page and the list view", () => {
+    expect(params({})).toEqual({ page: "1", view: "list", limit: "50", space: "personal" });
+    expect(params({}, "team-1").space).toBe("team-1");
+    expect(params({}, null).space).toBeUndefined();
   });
 
-  test("search matches name, requirement, workflow and id", () => {
-    expect(filterRuns(runs, { space: "", query: "订单", filter: "all" }).map((r) => r.id)).toEqual(["run-b"]);
-    expect(filterRuns(runs, { space: "", query: "研发链", filter: "all" }).map((r) => r.id)).toEqual(["run-b"]);
-    expect(filterRuns(runs, { space: "", query: "RUN-A", filter: "all" }).map((r) => r.id)).toEqual(["run-a"]);
+  test("a state group is statuses and the lifecycle", () => {
+    expect(params({ group: "attention" }).status?.split(",")).toContain("blocked");
+    expect(params({ group: "attention" }).lifecycle).toBe("open");
+    expect(params({ group: "done" })).toMatchObject({ status: "completed", lifecycle: "open" });
+    expect(params({ group: "closed" })).toMatchObject({ lifecycle: "closed" });
+    expect(params({ group: "closed" }).status).toBeUndefined();
   });
 
-  test("status filters group the lifecycle", () => {
-    expect(filterRuns(runs, { space: "", query: "", filter: "active" }).map((r) => r.id)).toEqual(["run-b"]);
-    expect(filterRuns(runs, { space: "", query: "", filter: "attention" }).map((r) => r.id)).toEqual(["run-a"]);
-    expect(filterRuns(runs, { space: "", query: "", filter: "closed" }).map((r) => r.id)).toEqual(["run-e"]);
+  test("the search and the filters, trimmed; empty ones are left out", () => {
+    expect(params({ q: " 订单 缓存 ", tool: "codex", repo: "github.com/o/r", since: "2026-10-20" }))
+      .toMatchObject({ q: "订单 缓存", tool: "codex", repo: "github.com/o/r", since: String(new Date(2026, 9, 20).getTime() / 1000) });
+    expect(params({ tool: "" }).tool).toBeUndefined();
+  });
+
+  test("the filters come back from the address bar", () => {
+    expect(filtersFromUrl("?run=run-a&q=%E8%AE%A2%E5%8D%95&group=attention&tool=codex&group2=x"))
+      .toEqual({ ...EMPTY_FILTERS, q: "订单", group: "attention", tool: "codex" });
+    expect(filtersFromUrl("?group=nope").group).toBe("all");
+  });
+});
+
+describe("rerunPlan", () => {
+  const spec = (id: string, extra: Record<string, unknown> = {}) => ({ id, name: id, tool: "claude" as const, model: "auto", effort: "", prompt: "p", ...extra });
+  const run = { tasks: [
+    { ...task("design", "accepted"), spec: spec("design", { kind: "design" }) },
+    { ...task("backend", "accepted"), spec: spec("backend", { kind: "implement", depends_on: ["design"] }) },
+    { ...task("frontend", "accepted"), spec: spec("frontend", { kind: "implement", depends_on: ["design"] }) },
+    { ...task("check", "accepted"), spec: spec("check", { kind: "test", depends_on: ["backend"] }) },
+    { ...task("deliver", "pending"), spec: spec("deliver", { kind: "deliver" }) },
+  ] } as unknown as Run;
+
+  test("dependents, later review / test tasks and unaccepted tasks always rerun", () => {
+    const { rerun, forced } = rerunPlan(run, "frontend", new Set());
+    expect([...rerun]).toEqual(["frontend", "check", "deliver"]);
+    expect(Object.fromEntries(forced)).toEqual({ check: "审查 / 测试在改动后必须复验", deliver: "尚未验收" });
+    const fromDesign = rerunPlan(run, "design", new Set());
+    expect(fromDesign.forced.get("backend")).toBe("依赖重跑的任务");
   });
 });

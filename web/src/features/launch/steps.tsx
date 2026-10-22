@@ -1,6 +1,7 @@
-import { useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { ChevronDown, FileUp } from "lucide-react";
 import { api } from "@/api/client";
+import { useCredentials, usePlacement } from "@/api/hooks";
 import type { ParsedWorkflow, Step, Template, Workflow } from "@/api/types";
 import { AgentFields } from "@/components/AgentFields";
 import { TaskEditor } from "@/components/TaskEditor";
@@ -11,9 +12,10 @@ import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/component
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
-import { spaceWorkers, useConsole } from "@/features/console/context";
+import { useConsole } from "@/features/console/context";
 import { generationActive, type MatchStatus } from "@/features/launch/hooks";
-import { PLAN_METHODS, editTasks, fingerprint, nameFrom, type Draft } from "@/features/launch/state";
+import { PLAN_METHODS, editTasks, fingerprint, nameFrom, withSource, type Draft } from "@/features/launch/state";
+import { SCOPE_LABELS, credentialLabel, httpsHost, usableIn } from "@/lib/credentials";
 import { STATES, TOOLS } from "@/lib/labels";
 import { cn } from "@/lib/utils";
 
@@ -28,8 +30,9 @@ const EXAMPLES = [
 const REPOSITORY = /https:\/\/(?:github\.com|gitlab\.com)\/[\w.-]+\/[\w.-]+(?:\.git)?/;
 
 export function NeedStep({ draft, update, workflowMode }: { draft: Draft; update: Update; workflowMode: boolean }) {
-  const { teams, workers, me } = useConsole();
-  const choices = spaceWorkers(workers, draft.space, me);
+  const { teams } = useConsole();
+  const placement = usePlacement(draft.space).data;   // D49: the platform's choice and the alternatives
+  const choices = placement?.options ?? [];
   const setInput = (input: string) => update((d) => {
     const next = { ...d, input, name: d.nameTouched ? d.name : nameFrom(input) };
     const url = !d.source && input.match(REPOSITORY);
@@ -58,16 +61,16 @@ export function NeedStep({ draft, update, workflowMode }: { draft: Draft; update
           <Label htmlFor="new-space">执行空间</Label>
           <NativeSelect id="new-space" value={draft.space} onChange={(e) => {
             const space = e.target.value;
-            update((d) => ({ ...d, space, worker: spaceWorkers(workers, space, me).some((w) => w.id === d.worker) ? d.worker : "" }));
+            update((d) => ({ ...d, space, worker: "" }));   // D49: the new space's own answer, from the platform
           }}>
             <option value="">我的私有空间</option>
-            {teams.map((team) => <option key={team.id} value={team.id}>{team.name} · Team 共同可见</option>)}
+            {teams.filter((team) => !team.archived).map((team) => <option key={team.id} value={team.id}>{team.name} · Team 共同可见</option>)}
           </NativeSelect>
-          {(() => {
-            const environment = teams.find((t) => t.id === draft.space)?.environment;
-            if (environment === null || environment?.enabled === false)
-              return <p id="space-environment" className="text-xs text-destructive">该 Team 当前没有可用的执行环境（未分配或已停用），请联系平台管理员。</p>;
-            if (environment?.scope === "shared")
+          {(() => {   // D49: as it will run — the member's own boundary may stand in for a Team without an environment
+            if (!draft.space || !placement) return null;
+            if (!placement.default && !placement.options.length)
+              return <p id="space-environment" className="text-xs text-destructive">该 Team 当前没有可用的执行环境（未分配或已停用），你也还没有自己的执行边界，请联系平台管理员。</p>;
+            if (placement.default?.scope === "shared")
               return <p id="space-environment" className="text-xs text-muted-foreground">共享执行环境：环境内会话的 Agent 互相可读，记忆未分隔。</p>;
             return null;
           })()}
@@ -75,7 +78,7 @@ export function NeedStep({ draft, update, workflowMode }: { draft: Draft; update
         {!workflowMode && (
           <div className="space-y-1.5">
             <Label htmlFor="new-source">代码来源</Label>
-            <NativeSelect id="new-source" value={draft.source} onChange={(e) => update((d) => ({ ...d, source: e.target.value as Draft["source"] }))}>
+            <NativeSelect id="new-source" value={draft.source} onChange={(e) => update((d) => withSource(d, e.target.value as Draft["source"]))}>
               <option value="">请选择目标源码，不能默认使用空项目</option>
               <option value="new">明确创建一个全新项目</option>
               <option value="git">开发已有 Git 仓库</option>
@@ -85,9 +88,10 @@ export function NeedStep({ draft, update, workflowMode }: { draft: Draft; update
         <div className="space-y-1.5">
           <Label htmlFor="new-worker">执行 Worker</Label>
           <NativeSelect id="new-worker" value={draft.worker} onChange={(e) => update((d) => ({ ...d, worker: e.target.value }))}>
-            <option value="">稍后分配 Worker</option>
-            {choices.map((w) => <option key={w.id} value={w.id}>{w.name} · {w.capabilities.isolation === "dedicated" ? "专属环境" : "个人本机"}</option>)}
+            <option value="">{placement?.default ? `自动：将在 ${placement.default.name} 执行` : "稍后分配 Worker"}</option>
+            {choices.map((w) => <option key={w.id} value={w.id}>{w.name} · {w.isolation === "dedicated" ? "专属环境" : "个人本机"}</option>)}
           </NativeSelect>
+          {!draft.worker && placement?.hint && <p id="placement-hint" className="text-xs text-muted-foreground">{placement.hint}</p>}
         </div>
       </div>
       {!workflowMode && draft.source === "git" && (
@@ -101,6 +105,36 @@ export function NeedStep({ draft, update, workflowMode }: { draft: Draft; update
             <Label htmlFor="new-ref">分支 / Tag / Commit（可选）</Label>
             <Input id="new-ref" value={draft.ref} placeholder="默认分支" onChange={(e) => update((d) => ({ ...d, ref: e.target.value }))} />
           </div>
+          <CredentialChoice draft={draft} update={update} />
+        </div>
+      )}
+      {!workflowMode && draft.source === "new" && <NewRepositoryChoice draft={draft} update={update} />}
+    </div>
+  );
+}
+
+/** D48: publish a new project to a new repository once it completes (private; the credential must be able to create it). */
+function NewRepositoryChoice({ draft, update }: { draft: Draft; update: Update }) {
+  const { data = [] } = useCredentials(draft.autoPublish);
+  const writers = data.filter((c) => c.access === "write" && usableIn(c, draft.space));
+  return (
+    <div className="space-y-1.5 text-xs">
+      <label className="flex items-center gap-2">
+        <input type="checkbox" id="new-repo-publish" checked={draft.autoPublish}
+          onChange={(e) => update((d) => ({ ...d, autoPublish: e.target.checked }))} />
+        完成后发布到新仓库（平台新建私有仓库，基线进 main，工作走 Draft PR；凭证须能建仓库）
+      </label>
+      {draft.autoPublish && (
+        <div className="grid gap-2 sm:grid-cols-3">
+          <Input aria-label="新仓库 owner" placeholder="owner（账户或组织）" value={draft.newRepoOwner}
+            onChange={(e) => update((d) => ({ ...d, newRepoOwner: e.target.value }))} />
+          <Input aria-label="新仓库名" placeholder="仓库名" value={draft.newRepoName}
+            onChange={(e) => update((d) => ({ ...d, newRepoName: e.target.value }))} />
+          <NativeSelect aria-label="新仓库凭证" value={draft.newRepoCredential}
+            onChange={(e) => update((d) => ({ ...d, newRepoCredential: e.target.value }))}>
+            <option value="">选择有写权限的凭证</option>
+            {writers.map((c) => <option key={c.id} value={c.id}>{credentialLabel(c)}</option>)}
+          </NativeSelect>
         </div>
       )}
     </div>
@@ -222,13 +256,12 @@ const GENERATION_LABELS: Record<string, string> = {
   submitting: "正在提交生成任务", preparing: "正在准备设计工作区", ready: "建议已生成并通过格式校验，采用后可继续编辑。",
   submitted: "KiroCrew 已收到生成任务", running: "后台 Kiro Agent 正在设计任务与提示词", ready_to_dispatch: "等待派发",
   waiting_approval: "等待原生工具权限批准", dispatch_unknown: "原生派发待核实，不重复发送", blocked: "生成任务需要处理",
-  invalid: "返回内容格式无效", stopping: "正在停止生成任务", stopped: "生成任务已停止", uncertain: "提交回执不明确；可安全核实同一请求",
+  invalid: "推荐未通过平台校验", stopping: "正在停止生成任务", stopped: "生成任务已停止", uncertain: "提交回执不明确；可安全核实同一请求",
   failed: "生成失败",
 };
 
-function RecommendPanel({ draft, recommendWorker, setRecommendWorker, recommendation, onOpenGeneration, setError }: PlanProps) {
-  const { workers, me } = useConsole();
-  const choices = spaceWorkers(workers, draft.space, me);
+function RecommendPanel({ draft, update, recommendWorker, setRecommendWorker, recommendation, onOpenGeneration, setError }: PlanProps) {
+  const choices = usePlacement(draft.space).data?.options ?? [];
   const job = draft.generation;
   const active = generationActive(job);
   const stale = !!job && job.fingerprint !== fingerprint(draft.input, draft.tasks, draft.space);
@@ -244,9 +277,12 @@ function RecommendPanel({ draft, recommendWorker, setRecommendWorker, recommenda
       setBusy(false);
     }
   };
+  // D66: an invalid recommendation is told by its reason alone (it already says what was wrong and what to do)
+  const label = job?.status === "invalid" && job.error ? job.error
+    : job?.repairing && active ? "上一版未通过平台校验，KiroCrew 正在按原因修正（自动一次）。"
+    : job ? (GENERATION_LABELS[job.status] ?? STATES[job.status] ?? job.status) + (job.error ? " " + job.error : "") : "";
   const status = !job ? "后台生成会实际调用 Kiro Agent；生成结果先供你审阅。" : job.applied ? "已采用建议，可继续修改各 Task 和提示词。"
-    : (GENERATION_LABELS[job.status] ?? STATES[job.status] ?? job.status) + (stale ? " 当前需求或任务已变化，旧建议不会覆盖当前草稿。" : "")
-      + (job.error ? " " + job.error : "") + (job.poll_error ? " " + job.poll_error : "");
+    : label + (stale ? " 当前需求或任务已变化，旧建议不会覆盖当前草稿。" : "") + (job.poll_error ? " " + job.poll_error : "");
   return (
     <section className="space-y-4 rounded-xl border bg-card p-5">
       <div className="flex items-baseline justify-between gap-3">
@@ -289,6 +325,27 @@ function RecommendPanel({ draft, recommendWorker, setRecommendWorker, recommenda
             </pre>
           </CollapsibleContent>
         </Collapsible>
+      )}
+      {job?.status === "invalid" && !!job.raw_result && (
+        <div id="recommend-invalid" className="space-y-2 rounded-md border border-warning/40 bg-warning/5 p-3">
+          <p className="text-xs leading-5">
+            KiroCrew 已给出方案，但它没有通过工作流校验（原因见上）。可以导入后在下一步修改，或重新推荐。
+          </p>
+          <div className="flex flex-wrap gap-2">
+            <Button type="button" size="sm" variant="outline" id="recommend-import"
+              onClick={() => update((d) => ({ ...d, method: "import", importContent: job.raw_result ?? "" }))}>导入并修改</Button>
+          </div>
+          <Collapsible>
+            <CollapsibleTrigger className="group flex items-center gap-1 text-xs font-medium text-primary">
+              查看 KiroCrew 返回的原始内容 <ChevronDown className="size-3.5 group-data-[state=open]:rotate-180" />
+            </CollapsibleTrigger>
+            <CollapsibleContent>
+              <pre id="recommend-raw" className="mt-2 max-h-72 overflow-auto rounded-md bg-muted/50 p-3 text-xs leading-5 whitespace-pre-wrap">
+                {job.raw_result}
+              </pre>
+            </CollapsibleContent>
+          </Collapsible>
+        </div>
       )}
       <p className="text-xs leading-5 text-muted-foreground">以当前匹配到的任务为基础，由真实 Kiro Agent 重新设计任务与提示词。关闭窗口后可重新打开查看；采用前不会执行。</p>
     </section>
@@ -353,7 +410,8 @@ function ImportPanel({ draft, update, onImported }: PlanProps) {
   );
 }
 
-export function TasksStep({ draft, update, origin, models }: { draft: Draft; update: Update; origin: string; models?: Parameters<typeof AgentFields>[0]["models"] }) {
+export function TasksStep({ draft, update, origin, models, defaults }: { draft: Draft; update: Update; origin: string;
+  models?: Parameters<typeof AgentFields>[0]["models"]; defaults?: Parameters<typeof AgentFields>[0]["defaults"] }) {
   if (draft.method === "agent") {
     return (
       <p className="rounded-xl border bg-card p-5 text-sm leading-7 text-muted-foreground">
@@ -363,7 +421,7 @@ export function TasksStep({ draft, update, origin, models }: { draft: Draft; upd
   }
   return (
     <div className="space-y-3">
-      <TaskEditor tasks={draft.tasks} models={models} idPrefix="launch" title="本次任务列表"
+      <TaskEditor tasks={draft.tasks} models={models} defaults={defaults} idPrefix="launch" title="本次任务列表"
         hint={<p id="launch-origin" className="text-xs text-muted-foreground">{origin}</p>}
         onChange={(tasks) => update((d) => editTasks(d, tasks))} />
     </div>
@@ -372,12 +430,14 @@ export function TasksStep({ draft, update, origin, models }: { draft: Draft; upd
 
 export function ConfirmStep({ draft, update, workflowMode }: { draft: Draft; update: Update; workflowMode: boolean }) {
   const { teams, workers } = useConsole();
+  const placement = usePlacement(draft.space).data;
   const source = draft.source === "git" ? `已有 Git 仓库 · ${draft.url.trim()}${draft.ref.trim() ? " @ " + draft.ref.trim() : ""}` : "全新项目";
   const rows: [string, string][] = [
     ["需求", draft.input.trim()], [workflowMode ? "工作流名称" : "Session 名称", draft.name],
     ...(workflowMode ? [] : [["代码来源", source] as [string, string]]),
     ["执行空间", teams.find((t) => t.id === draft.space)?.name ?? "我的私有空间"],
-    ["执行 Worker", workers.find((w) => w.id === draft.worker)?.name ?? "稍后分配"],
+    ["执行 Worker", workers.find((w) => w.id === draft.worker)?.name ??
+      (placement?.default ? `自动（${placement.default.name}）` : "稍后分配")],
     ["编排方式", PLAN_METHODS.find(([m]) => m === draft.method)![1]],
   ];
   return (
@@ -404,6 +464,34 @@ export function ConfirmStep({ draft, update, workflowMode }: { draft: Draft; upd
         {workflowMode ? "保存为可重复使用的工作流；已有工作流保存新版本，不影响正在运行的 Session。"
           : "提交时保存本次需求和任务快照，不修改工作流库或已有 Session。未选择 Worker 时先登记需求，稍后分配。"}
       </p>
+    </div>
+  );
+}
+
+/** The source credential for an HTTPS repository (D35 §4): matched by the platform unless the user names one. */
+function CredentialChoice({ draft, update }: { draft: Draft; update: Update }) {
+  const host = httpsHost(draft.url);
+  const { data = [] } = useCredentials(!!host);
+  const options = data.filter((c) => c.host === host && usableIn(c, draft.space));
+  const known = options.some((c) => c.id === draft.credential);
+  useEffect(() => {
+    if (draft.credential && !known) update((d) => ({ ...d, credential: "" }));
+  }, [draft.credential, known, update]);
+  if (!host) return null;
+  return (
+    <div className="space-y-1.5 sm:col-span-2">
+      <Label htmlFor="new-credential">仓库凭证</Label>
+      <NativeSelect id="new-credential" value={known ? draft.credential : ""}
+        onChange={(e) => update((d) => ({ ...d, credential: e.target.value }))}>
+        <option value="">自动匹配（按仓库选择可用凭证）</option>
+        {options.map((c) => <option key={c.id} value={c.id}>{c.name} · {SCOPE_LABELS[c.scope]} · {c.hint}</option>)}
+      </NativeSelect>
+      <p className="text-xs text-muted-foreground">私有仓库需要凭证：在「设置 → 代码仓库凭证」中添加；公开仓库可以不选。</p>
+      <label className="flex items-center gap-2 text-xs">
+        <input type="checkbox" id="new-auto-publish" checked={draft.autoPublish}
+          onChange={(e) => update((d) => ({ ...d, autoPublish: e.target.checked }))} />
+        完成后自动发布 Draft PR（需要有写权限的凭证；不勾选时完成后由你确认发布）
+      </label>
     </div>
   );
 }

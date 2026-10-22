@@ -44,7 +44,7 @@ flowchart LR
 
 | 层 | 是什么 | 负责 | 不负责 |
 |---|---|---|---|
-| **Octopus 平台**（API + Service + Engine） | 平台进程，OS 用户 `octopus` | 身份、角色与权限；空间与执行环境；会话状态机与版本；按 Session 并发调度；质量判定（交接、outcome、规划校验）；纠错决定的应用；事件与审计 | 不运行 Agent；不直接访问任何 Gateway |
+| **Octopus 平台**（API + Service + Engine） | 平台进程，OS 用户 `octopus` | 身份、角色与权限；空间与执行环境（每次派发前核对会话的 Worker 仍服务其空间）；会话状态机与版本、每次写入的变更记录；按 Session 并发调度；质量判定（交接、outcome、规划校验）；纠错决定的应用；事件与审计 | 不运行 Agent；不直接访问任何 Gateway |
 | **Worker** | 平台派驻在每个执行边界内的代理 | 源码准备；会话 ↔ 原生父会话的绑定；把平台操作翻译成 Gateway 调用；派发幂等与核对；收集证据（原生状态、路由日志、交接文件）；预览文件、观察、原生入口链接 | 不做权限判断（信任平台的 Worker Token 调用）；不保存平台数据 |
 | **KiroCrew Gateway** | KiroCrew 原生后端，每个边界一个 | 原生会话（slot）与协调者 `poc-coordinator`；派生子 Agent（`poc-kiro` / `poc-claude` / `poc-codex` / `poc-opencode` / `poc-diagnose`）；批准、记忆、ACP 路由（composition 的 `PocProviderRegistry`） | 不知道 Octopus 的用户、Team 与权限；**从不调用 Octopus API** |
 | **Agents** | Gateway 派生的 Coding Agent 进程 | 在源码目录开发与验证；写交接文件 `handoff.md` 与结论 `outcome.json` | 不读平台凭据；不派生其他子任务（指令约束） |

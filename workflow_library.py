@@ -274,7 +274,7 @@ def _generate(path, job):
                               "model": "auto", "effort": "", "prompt": "明确任务、交付物与验证方式"}]}
         design_workspace = path / "workspace"
         design_workspace.mkdir(exist_ok=True)
-        prompt = development.intent_prompt(
+        prompt = development.legacy_intent_prompt(
             json.dumps(example, ensure_ascii=False), job["intent"], design_workspace)
         receipt = api.request("/api/chat?ws=1", {"slot": job["slot"], "message": prompt})
         core.require(receipt.get("ok"), "KiroCrew 未确认生成请求。")

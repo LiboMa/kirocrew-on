@@ -29,6 +29,14 @@ export interface Draft {
   source: "" | "new" | "git";
   url: string;
   ref: string;
+  /** A source credential named by the user (D35); "" leaves it to matching by repository. */
+  credential: string;
+  /** D47: publish a Draft PR / MR on its own once the Session completes (a git source; a new project with newRepo*). */
+  autoPublish: boolean;
+  /** D48: a new project's new repository to publish to on completion (with autoPublish). */
+  newRepoOwner: string;
+  newRepoName: string;
+  newRepoCredential: string;
   method: PlanMethod;
   choice: string; // "auto" | "custom" | "workflow:<id>" | "template:<id>"
   tasks: Step[];
@@ -52,7 +60,7 @@ export function initialDraft(seed: LaunchSeed, { worker, space = "" }: { worker:
   const workflowMode = seed.mode === "workflow";
   return {
     input: seed.input ?? "", name: seed.name ?? "", nameTouched: !!seed.workflow?.id, space, worker,
-    source: workflowMode ? "new" : "", url: "", ref: "",
+    source: workflowMode ? "new" : "", url: "", ref: "", credential: "", autoPublish: false, newRepoOwner: "", newRepoName: "", newRepoCredential: "",
     method: explicit && !workflowMode ? "template" : workflowMode ? "recommend" : "agent",
     choice: seed.workflow_id ? "workflow:" + seed.workflow_id : seed.template_id ? "template:" + seed.template_id : seed.steps ? "custom" : "auto",
     tasks: structuredClone(seed.steps ?? []), resolution: null, imported: null, importContent: "", generation: null,
@@ -99,22 +107,38 @@ export function nameFrom(input: string): string {
 }
 
 /** The first problem that keeps the user on this step, or "" when the step is complete. */
+/** A repository owner or name the platform accepts (octopus/publish.py check_repository). */
+const REPOSITORY_PART = /^[A-Za-z0-9_][A-Za-z0-9_.-]{0,99}$/;
+
+/** A source change starts its publish choice afresh: the git and new-project options share the flag (final review). */
+export function withSource(draft: Draft, source: Draft["source"]): Draft {
+  return { ...draft, source, autoPublish: draft.source === source ? draft.autoPublish : false };
+}
+
 export function validateStep(step: number, draft: Draft,
-  { workflowMode, teamWithoutEnvironment }: { workflowMode: boolean; teamWithoutEnvironment?: string }): string {
+  { workflowMode, teamWithoutEnvironment, archivedTeam }: { workflowMode: boolean; teamWithoutEnvironment?: string; archivedTeam?: string }): string {
   const input = draft.input.trim();
   if (step === 0) {
     if (input.length < 3) return "请填写这次要完成什么（至少 3 个字符）。";
+    if (archivedTeam) return `Team「${archivedTeam}」已归档，不能提交新会话；请选择其他执行空间。`;
     if (!workflowMode && teamWithoutEnvironment)
-      return `Team「${teamWithoutEnvironment}」当前没有可用的执行环境（未分配或已停用），请联系平台管理员。`;
+      return `Team「${teamWithoutEnvironment}」当前没有可用的执行环境（未分配或已停用），你也还没有自己的执行边界，请联系平台管理员。`;
     if (!draft.name.trim()) return "请填写名称。";
     if (!workflowMode && !draft.source) return "请明确选择新建项目或目标 Git 仓库，避免把空工作区当作已有项目。";
     if (!workflowMode && draft.source === "git" && !draft.url.trim()) return "请填写 Git URL。";
+    if (!workflowMode && draft.source === "new" && draft.autoPublish) {   // D48: never dropped without a word
+      if (!draft.newRepoOwner.trim() || !draft.newRepoName.trim() || !draft.newRepoCredential)
+        return "完成后发布到新仓库：请填写新仓库的 owner、仓库名并选择凭证，或取消勾选。";
+      if (![draft.newRepoOwner.trim(), draft.newRepoName.trim()].every((part) => REPOSITORY_PART.test(part) && !part.includes("..")))
+        return "新仓库的 owner 与仓库名只能含字母、数字、. _ -（以字母、数字或 _ 开头）。";
+    }
     return "";
   }
   if (draft.method === "agent" && (step === 1 || step === 2)) return workflowMode ? "保存工作流需要任务列表，请选择其他编排方式。" : "";
   if (step === 1) {
-    if (draft.method === "recommend" && !draft.generation?.applied)
-      return "请先让 KiroCrew 推荐并采用方案；也可以改用参考模板或导入已生成的工作流。";
+    if (draft.method === "recommend" && !draft.generation?.applied)   // D66: say why when there is nothing to adopt
+      return draft.generation?.status === "invalid" && draft.generation.error ? draft.generation.error
+        : "请先让 KiroCrew 推荐并采用方案；也可以改用参考模板或导入已生成的工作流。";
     if (draft.method === "import" && !draft.imported) return "请先解析并采用导入的工作流。";
     if (!draft.tasks.length || (draft.choice !== "custom" && draft.resolution?.input !== input))
       return "请等待当前需求匹配完成，或选择一个模板 / 工作流。";
@@ -141,6 +165,11 @@ export function submitBody(draft: Draft) {
     : { type: "new" as const };
   return {
     ...plan, input: draft.input.trim(), name: draft.name, source, recovery: draft.recovery,
+    ...(draft.source === "git" && draft.credential ? { credentials: { source: draft.credential } } : {}),
+    ...(draft.source === "git" && draft.autoPublish ? { publish: { auto: true } } : {}),
+    ...(draft.source === "new" && draft.autoPublish && draft.newRepoOwner.trim() && draft.newRepoName.trim() && draft.newRepoCredential
+      ? { publish: { auto: true, repository: { owner: draft.newRepoOwner.trim(), name: draft.newRepoName.trim(), private: true },
+                     credential: draft.newRepoCredential } } : {}),
     ...(draft.space ? { team_id: draft.space } : {}), ...(draft.worker ? { worker_id: draft.worker } : {}),
   };
 }

@@ -1,0 +1,463 @@
+"""D41: the Coordinator may decide the plan itself is wrong (replan): the failed task and those after it are replaced by
+what a KiroCrew planning task plans for the remaining work; accepted tasks stay; once per session."""
+import copy
+import json
+from pathlib import Path
+import tempfile
+import unittest
+
+from octopus import planning, recovery
+from octopus.db import Database, dumps
+from octopus.domain import Service, steps
+from octopus.security import Error
+from octopus.engine import Engine
+from octopus.security import authenticate, create_user, issue_token
+from tests.old_worker import as_old_worker
+
+STEPS = [{"id": "code", "name": "实现", "tool": "claude", "prompt": "实现", "kind": "implement", "acceptance": ["可运行"]},
+         {"id": "review", "name": "审查", "tool": "codex", "prompt": "审查", "kind": "review", "acceptance": ["无阻断问题"]},
+         {"id": "deliver", "name": "交付", "tool": "claude", "prompt": "交付", "kind": "deliver", "acceptance": ["可交付"]}]
+NEW_PLAN = """重新规划如下：
+```json
+{"intent": "补上缺少的测试", "summary": "剩余工作", "name": "剩余工作", "steps": [
+ {"id": "review", "name": "补测试", "tool": "claude", "prompt": "补测试", "kind": "test", "acceptance": ["测试覆盖"], "verify": ["true"]},
+ {"id": "check", "name": "复审", "tool": "codex", "prompt": "复审", "kind": "review", "acceptance": ["无阻断问题"]}]}
+```"""
+REPLAN = {"action": "replan", "reason": "计划缺少测试步骤，审查无法通过", "instructions": "加入测试任务后复审"}
+
+
+class ReplanCase(unittest.TestCase):
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)
+        self.db = Database(self.tmp.name)
+        self.service = Service(self.db)
+        with self.db.transaction() as db:
+            user = create_user(db, "owner", "Fixture-password-123!", True)
+            self.actor = authenticate(db, issue_token(db, user["id"])["token"])
+            db.execute("INSERT INTO workers(id,name,owner_id,config) VALUES('worker','W',?,?)",
+                       (user["id"], dumps({"url": "fixture", "token": "fixture", "capabilities": {}})))
+        self.calls, self.bodies, self.plan = [], {}, NEW_PLAN
+        self.decisions = [REPLAN] + [{"action": "wait_for_user", "reason": "等待", "instructions": "检查"}] * 3
+        self.failing = {("review", 1)}
+        self.engine = Engine(self.db, self.request)
+
+    def start(self, steps=STEPS, **body):
+        return self.service.start(self.actor, {"request_id": "replan-fixture-1", "input": "实现登录并验证", "steps": steps,
+                                               "source": {"type": "new"}, "worker_id": "worker", **body})["id"]
+
+    def request(self, config, path, body, **kwargs):
+        self.calls.append((path, copy.deepcopy(body)))
+        if path == "/prepare":
+            return {"native_parent": "parent", "workspace": "/w"}
+        if path == "/dispatch":
+            if not body.get("coordination"):
+                try:   # what the real Worker checks before anything is spawned
+                    steps([body["spec"]])
+                except Error as exc:
+                    raise Error(400, "invalid_request", str(exc)) from None
+            self.bodies.setdefault(body["attempt_id"], copy.deepcopy(body))
+            return {"status": "running", "native_id": body["attempt_id"][-8:], "context_hash": "h"}
+        as_old_worker(path)
+        record = self.bodies[body["attempt_id"]]
+        spec = record["spec"]
+        result = {"native": {"done": True, "result": "完成"}, "evidence": {"actual_backend": spec["tool"],
+                  "handoff_path": "/w/" + spec["id"] + "/handoff.md"}, "handoff": "交接"}
+        if record.get("coordination"):
+            result["decision"] = dumps(self.decisions.pop(0))
+            return result
+        number = sum(1 for b in self.bodies.values() if not b.get("coordination") and b["spec"]["id"] == spec["id"])
+        failed = (spec["id"], number) in self.failing
+        if spec["id"].startswith("replan-"):
+            result["native"]["result"] = self.plan
+        result["outcome"] = dumps({"decision": "changes_requested" if failed else "pass",
+                                   "summary": spec["id"] + " 的结论" + ("：空输入用例失败" if failed else ""),
+                                   "failure_type": "implementation" if failed else "none", "findings": ["缺少测试"] if failed else []})
+        return result
+
+    def tick(self, rid, count=30):
+        for _ in range(count):
+            self.engine.tick()
+        return self.service.run(self.actor, rid)
+
+    def dispatched(self, task):
+        return [b for b in self.bodies.values() if not b.get("coordination") and b["spec"]["id"] == task]
+
+
+class ReplanTests(ReplanCase):
+    def test_a_replan_replaces_the_failed_and_later_tasks(self):
+        self.plan = "没有计划"            # stop after the replan task, to look at what it was told
+        rid = self.start()
+        run = self.tick(rid)
+        ids = [t["id"] for t in run["tasks"]]
+        self.assertEqual(ids[:2], ["code", "replan-1"])
+        code = run["tasks"][0]
+        self.assertEqual((code["status"], len(code["attempts"])), ("accepted", 1))   # accepted work stays as it was
+        prompt = self.dispatched("replan-1")[0]["spec"]["prompt"]
+        for words in ("审查", "交付", "空输入用例失败", "计划缺少测试步骤", "只规划剩余的工作"):
+            self.assertIn(words, prompt)
+        dispatch = self.dispatched("replan-1")[0]
+        self.assertEqual(dispatch["input"], "实现登录并验证")                      # the requirement travels as input,
+        self.assertEqual([u["id"] for u in dispatch["upstream"]], ["code"])        # the accepted work as upstream
+        self.assertEqual(dispatch["upstream"][0]["summary"], "code 的结论")
+        summaries = [r["summary"] for r in self.service.revisions(self.actor, rid)]
+        self.assertTrue(any(s.startswith("自动纠错：重新规划，替换「审查、交付」") for s in summaries), summaries)
+        snapshot_replan = run.get("replan") or {}
+        self.assertEqual([r["id"] for r in snapshot_replan.get("replaced", [])], ["review", "deliver"])
+        replaced = [e["payload"] for e in self.service.events(self.actor, rid) if e["kind"] == "task.replaced"]
+        self.assertEqual(replaced[0]["removed"], ["review", "deliver"])   # the change log says which tasks went
+
+    def test_the_replan_adds_its_tasks_and_the_session_completes(self):
+        rid = self.start()
+        run = self.tick(rid, 40)
+        self.assertEqual(run["status"], "completed")
+        self.assertEqual([t["id"] for t in run["tasks"]], ["code", "replan-1", "review-2", "check"])
+        self.assertTrue(run["replan"]["applied"])
+        summaries = [r["summary"] for r in self.service.revisions(self.actor, rid)]
+        self.assertIn("重新规划：追加 2 个任务", summaries)
+
+    def test_new_tasks_do_not_take_the_ids_of_replaced_ones(self):
+        rid = self.start()
+        run = self.tick(rid, 40)
+        new = {t["id"]: t for t in run["tasks"]}["review-2"]
+        self.assertEqual([a["spec"]["name"] for a in new["attempts"]], ["补测试"])   # the old review's Attempts are not here
+
+    def test_an_invalid_replan_blocks_the_replan_task(self):
+        self.plan, self.decisions = "没有计划", [REPLAN, {"action": "wait_for_user", "reason": "规划失败", "instructions": "检查"}]
+        rid = self.start()
+        run = self.tick(rid)
+        replan = {t["id"]: t for t in run["tasks"]}["replan-1"]
+        self.assertEqual(replan["status"], "blocked")
+        self.assertEqual([t["id"] for t in run["tasks"]], ["code", "replan-1"])
+
+    def test_a_second_replan_is_refused(self):
+        self.decisions = [REPLAN, REPLAN]
+        self.failing = {("review", 1), ("check", 1)}
+        rid = self.start(recovery={"enabled": True, "max_cycles": 3})
+        run = self.tick(rid, 50)
+        self.assertEqual(run["status"], "blocked")
+        self.assertIn("已重新规划过", run["error"])
+
+    def test_the_planning_task_itself_is_not_replanned(self):
+        rid = self.service.start(self.actor, {"request_id": "replan-fixture-plan", "input": "实现登录并验证",
+                                              "source": {"type": "new"}, "worker_id": "worker"})["id"]   # Kiro plans it
+        run = self.tick(rid)            # the plan task answers "完成": no plan, blocked; the Coordinator asks to replan
+        self.assertEqual(run["status"], "blocked")
+        self.assertIn("规划任务本身", run["error"])
+
+    def test_a_task_named_like_a_replan_is_an_ordinary_task(self):
+        self.failing = {("replan-x", 1)}
+        rid = self.start([{**STEPS[0], "id": "replan-x", "name": "用户的任务"}] + STEPS[1:])
+        run = self.tick(rid, 40)
+        self.assertEqual(run["replan"]["replaced"][0]["id"], "replan-x")   # replaced like any other task
+
+    def test_the_coordinator_is_told_whether_it_has_replanned(self):
+        self.decisions = [REPLAN, {"action": "wait_for_user", "reason": "再看", "instructions": "检查"}]
+        self.failing = {("review", 1), ("check", 1)}
+        rid = self.start(recovery={"enabled": True, "max_cycles": 3})
+        self.tick(rid, 50)
+        contexts = [b["coordination"]["environment"].get("replanned") for b in self.bodies.values() if b.get("coordination")]
+        self.assertEqual(contexts[:2], [False, True])
+
+
+    def replan_with(self, plan_steps, last=None, request_steps=None):
+        """A Session whose deliver task has a required check (and an advisory one), replanned into ``plan_steps``."""
+        last = last or {**STEPS[2], "verify": ["npm test", "npm run lint"], "verify_required": ["npm test"]}
+        self.plan = "```json\n" + json.dumps({"intent": "i", "summary": "s", "name": "n", "steps": plan_steps},
+                                                ensure_ascii=False) + "\n```"
+        self.decisions = [REPLAN, {"action": "wait_for_user", "reason": "规划失败", "instructions": "检查"}]
+        rid = self.start(request_steps or STEPS[:2] + [last])
+        run = self.tick(rid, 40)
+        return run, {t["id"]: t for t in run["tasks"]}
+
+    def test_a_replan_that_omits_a_required_check_has_it_placed_by_the_platform(self):   # D57 §13.1
+        run, tasks = self.replan_with([
+            {"id": "deliver", "name": "重新交付", "tool": "claude", "prompt": "交付", "kind": "deliver", "acceptance": ["可交付"]},
+            {"id": "extra", "name": "补测试", "tool": "claude", "prompt": "补测试", "kind": "test", "acceptance": ["a"], "verify": ["true"]},
+            {"id": "check", "name": "复审", "tool": "codex", "prompt": "复审", "kind": "review", "acceptance": ["无阻断问题"]}])
+        self.assertEqual(run["status"], "completed", run.get("error"))
+        self.assertEqual(run["replan"]["replaced"][-1]["required"], ["npm test"])
+        placed = tasks["deliver-2"]["spec"]   # the task that takes the replaced one's id, not the last one
+        self.assertEqual((placed["verify"], placed["verify_required"]), (["npm test"], ["npm test"]))
+        self.assertEqual((tasks["extra"]["spec"]["verify"], tasks["extra"]["spec"]["verify_required"]), (["true"], []))
+        self.assertIn("平台把原任务「交付」的必过检查补到了 deliver-2：npm test", run["replan"]["notes"])
+        self.assertFalse(any("npm run lint" in json.dumps(t["spec"]) for t in run["tasks"][1:]))   # an advisory one may go
+        prompt = self.dispatched("replan-1")[0]["spec"]["prompt"]
+        self.assertIn("被替换任务的必过检查", prompt)
+        self.assertIn("npm test", prompt)
+
+    def test_a_check_carried_only_into_a_review_is_not_counted(self):   # its checks never run (domain.runs_checks)
+        run, tasks = self.replan_with([
+            {"id": "notes", "name": "整理说明", "tool": "claude", "prompt": "整理", "kind": "deliver", "acceptance": ["a"]},
+            {"id": "check", "name": "复审", "tool": "codex", "prompt": "复审", "kind": "review", "acceptance": ["无阻断问题"],
+             "verify": ["npm test"], "verify_required": ["npm test"]}])
+        self.assertEqual(run["status"], "completed", run.get("error"))
+        self.assertEqual((tasks["notes"]["spec"]["verify"], tasks["notes"]["spec"]["verify_required"]), (["npm test"], ["npm test"]))
+        self.assertIn("平台把原任务「交付」的必过检查补到了 notes：npm test", run["replan"]["notes"])
+
+    def test_a_replan_whose_tasks_run_no_checks_cannot_keep_a_required_one(self):
+        run, tasks = self.replan_with([{"id": "check", "name": "复审", "tool": "codex", "prompt": "复审", "kind": "review",
+                                        "acceptance": ["无阻断问题"], "verify": ["npm test"], "verify_required": ["npm test"]}])
+        replan = tasks["replan-1"]
+        self.assertEqual(replan["status"], "blocked")
+        self.assertIn("被替换任务必过检查", replan["attempts"][-1]["error"])
+        self.assertIn("「npm test」", replan["attempts"][-1]["error"])
+        self.assertNotIn("npm run lint", replan["attempts"][-1]["error"])
+        self.assertNotIn("check", tasks)
+
+    def test_a_long_required_check_is_placed_as_it_is_where_there_is_room(self):
+        long = "python3 -m pytest tests/ -q " + " ".join(f"--deselect tests/test_slow.py::test_{i:03d}" for i in range(11))
+        self.assertEqual(len(long[:450]), 450)
+        long = long[:450].rstrip()
+        full = [f"echo check-{i}" for i in range(10)]   # the task taking the replaced id has no room left
+        run, tasks = self.replan_with(
+            [{"id": "deliver", "name": "重新交付", "tool": "claude", "prompt": "交付", "kind": "deliver", "acceptance": ["a"],
+              "verify": full},
+             {"id": "extra", "name": "补测试", "tool": "claude", "prompt": "补测试", "kind": "test", "acceptance": ["a"]},
+             {"id": "check", "name": "复审", "tool": "codex", "prompt": "复审", "kind": "review", "acceptance": ["a"]}],
+            last={**STEPS[2], "verify": [long]})
+        self.assertEqual(run["status"], "completed", run.get("error"))
+        self.assertEqual((tasks["deliver-2"]["spec"]["verify"], tasks["deliver-2"]["spec"]["verify_required"]), (full, []))
+        self.assertEqual((tasks["extra"]["spec"]["verify"], tasks["extra"]["spec"]["verify_required"]), ([long], [long]))
+        self.assertTrue(any(note.startswith("平台把原任务「交付」的必过检查补到了 extra：python3 -m pytest") for note in run["replan"]["notes"]))
+
+    def test_a_replan_that_keeps_the_required_checks_is_applied(self):
+        steps_with = STEPS[:2] + [{**STEPS[2], "verify": ["npm test"]}]   # the user's: required
+        body = json.loads(NEW_PLAN[NEW_PLAN.index("{"):NEW_PLAN.rindex("}") + 1])
+        body["steps"][0].update(verify=["true", "npm test"], verify_required=["npm test"])   # no quote: carried over
+        self.plan = "```json\n" + json.dumps(body, ensure_ascii=False) + "\n```"
+        rid = self.start(steps_with)
+        run = self.tick(rid, 40)
+        self.assertEqual(run["status"], "completed", run.get("error"))
+        test = {t["id"]: t for t in run["tasks"]}["review-2"]["spec"]
+        self.assertEqual((test["verify"], test["verify_required"], test["origin"]), (["true", "npm test"], ["npm test"], "planner"))
+        self.assertFalse(any(note.startswith("平台把") for note in run["replan"]["notes"]))   # nothing for the platform to place
+
+
+
+OLD_CHECK = "find . -name '*.py' -print0 | xargs -0 -r python3 -m py_compile && echo PYOK"
+FIXED_CHECK = "find . -name '*.py' -not -path '*/.venv/*' -print0 | xargs -0 -r python3 -m py_compile && echo PYOK"
+KEPT_STEPS = [{**STEPS[0], "verify": [OLD_CHECK], "verify_required": []}] + STEPS[1:]   # an advisory check (D57)
+
+
+def plan_with(fixes):
+    body = json.loads(NEW_PLAN[NEW_PLAN.index("{"):NEW_PLAN.rindex("}") + 1])
+    return "```json\n" + json.dumps({**body, "verify_fixes": fixes}, ensure_ascii=False) + "\n```"
+
+
+class KeptChecksTests(ReplanCase):
+    """Owner 2026-10-21 (D54 §9 a): the replan reviews the kept tasks' checks; a correction is part of the plan."""
+
+    def test_the_replan_is_shown_the_kept_tasks_checks(self):
+        self.plan = "没有计划"
+        self.tick(self.start(KEPT_STEPS))
+        prompt = self.dispatched("replan-1")[0]["spec"]["prompt"]
+        for words in ("保留任务的检查命令", "echo PYOK", "verify_fixes"):
+            self.assertIn(words, prompt)
+
+    def test_a_replan_corrects_a_kept_tasks_checks(self):
+        self.plan = plan_with([{"task_id": "code", "verify": [FIXED_CHECK]}])
+        rid = self.start(KEPT_STEPS)
+        run = self.tick(rid, 40)
+        code = run["tasks"][0]
+        self.assertEqual((code["spec"]["verify"], code["status"], len(code["attempts"])), ([FIXED_CHECK], "accepted", 1))   # not rerun
+        self.assertIn("保留任务「实现」的检查命令由重新规划修正", run["replan"]["notes"])
+        diff = self.service.revision_diff(self.actor, rid)   # the replan's revision against the one before
+        change = next(t for t in diff["tasks"] if t["id"] == "code")
+        self.assertEqual(change["fields"]["verify"], [[OLD_CHECK], [FIXED_CHECK]])
+        self.assertIn("task.verify_revised", [e["kind"] for e in self.service.events(self.actor, rid)])
+        labels = (Path(__file__).resolve().parents[1] / "web/src/lib/labels.ts").read_text()
+        self.assertIn('"task.verify_revised":', labels)   # the timeline names it
+
+    def test_a_correction_for_a_task_not_kept_or_dropping_a_required_check_is_ignored(self):
+        self.plan = plan_with([{"task_id": "deliver", "verify": ["true"]}, {"task_id": "code", "verify": []}, "x"])
+        run = self.tick(self.start([{**STEPS[0], "verify": [OLD_CHECK]}] + STEPS[1:]), 40)   # the user's check: required
+        self.assertEqual(run["tasks"][0]["spec"]["verify"], [OLD_CHECK])
+        notes = "；".join(run["replan"]["notes"])
+        self.assertIn("deliver 不是保留的已验收任务", notes)
+        self.assertIn("「实现」的必过检查不能由重新规划删除或改写", notes)
+
+    def test_a_correction_may_drop_an_advisory_check(self):   # D57 §5.2: a task needs no check of its own
+        self.plan = plan_with([{"task_id": "code", "verify": []}])
+        run = self.tick(self.start(KEPT_STEPS), 40)
+        self.assertEqual((run["tasks"][0]["spec"]["verify"], run["tasks"][0]["spec"]["verify_required"]), ([], []))
+
+WAIT = {"action": "wait_for_user", "reason": "等待", "instructions": "检查"}
+
+
+class ExemptReplanTests(ReplanCase):
+    """D57 §6.1: a replan for a problem in a task's contract — as the failed Attempt's evidence shows, not as the Coordinator
+    says — does not use the Session's one replan; at most two such."""
+
+    def setUp(self):
+        super().setUp()
+        self.contract = set()   # (task, number) whose failure is its contract's
+
+    def request(self, config, path, body, **kwargs):
+        result = super().request(config, path, body, **kwargs)
+        record = self.bodies.get(body.get("attempt_id"), {})
+        if path == "/inspect" and not record.get("coordination"):
+            spec = record["spec"]
+            number = sum(1 for b in self.bodies.values() if not b.get("coordination") and b["spec"]["id"] == spec["id"])
+            if (spec["id"], number) in self.contract:
+                result["outcome"] = dumps({**json.loads(result["outcome"]), "failure_type": "contract"})
+        return result
+
+    def snapshot(self, rid):
+        with self.db.read() as db:
+            return json.loads(db.execute("SELECT snapshot FROM runs WHERE id=?", (rid,)).fetchone()[0])
+
+    def environments(self):
+        return [(b["coordination"]["environment"]["replanned"], b["coordination"]["environment"].get("replan_exempt", False))
+                for b in self.bodies.values() if b.get("coordination")]
+
+    def test_a_contract_replan_does_not_use_the_quota(self):
+        self.failing, self.contract = {("review", 1), ("check", 1)}, {("review", 1)}
+        self.decisions = [REPLAN, REPLAN, WAIT, WAIT]
+        rid = self.start(recovery={"enabled": True, "max_cycles": 3})
+        run = self.tick(rid, 80)
+        self.assertEqual(run["status"], "completed", run.get("error"))
+        self.assertEqual(self.environments(), [(False, True), (False, False)])   # what the Coordinator was told
+        snapshot = self.snapshot(rid)
+        self.assertEqual([(r["task"], bool(r.get("exempt"))) for r in planning.replans(snapshot)],
+                         [("replan-1", True), ("replan-2", False)])
+        self.assertTrue(planning.planning_task("replan-1", snapshot))   # the earlier one is still a planning task
+        tasks = {t["id"]: t for t in run["tasks"]}
+        self.assertEqual((tasks["replan-1"]["mapping"]["source"], tasks["review-2"]["mapping"]["label"]),
+                         ("platform", "KiroCrew 重新规划"))
+
+    def test_the_coordinators_word_does_not_make_a_replan_exempt(self):
+        self.failing = {("review", 1), ("check", 1)}   # implementation failures, whatever the reason says
+        self.decisions = [{**REPLAN, "reason": "合同问题：检查命令在环境中不可执行"}, REPLAN, WAIT]
+        rid = self.start(recovery={"enabled": True, "max_cycles": 3})
+        run = self.tick(rid, 80)
+        self.assertEqual(run["status"], "blocked")
+        self.assertIn("已重新规划过", run["error"])
+        self.assertFalse(planning.replans(self.snapshot(rid))[0].get("exempt"))
+
+    def test_at_most_two_contract_replans_are_exempt(self):
+        self.failing = self.contract = {("review", 1), ("check", 1), ("check-2", 1), ("check-3", 1)}
+        self.decisions = [REPLAN] * 4 + [WAIT] * 2
+        rid = self.start(recovery={"enabled": True, "max_cycles": 5})
+        run = self.tick(rid, 160)
+        self.assertEqual(run["status"], "blocked")
+        self.assertIn("已重新规划过", run["error"])
+        self.assertEqual([bool(r.get("exempt")) for r in planning.replans(self.snapshot(rid))], [True, True, False])
+        self.assertEqual(self.environments(), [(False, True), (False, True), (False, False), (True, False)])
+
+    def test_a_rework_after_two_replans_reruns_neither_planner(self):
+        self.failing, self.contract = {("review", 1), ("check", 1), ("check-2", 1)}, {("review", 1)}
+        self.decisions = [REPLAN, REPLAN, {"action": "rework", "target_task_id": "code", "reason": "实现有缺陷",
+                                           "instructions": "修复"}, WAIT, WAIT]
+        rid = self.start(recovery={"enabled": True, "max_cycles": 4})
+        run = self.tick(rid, 120)
+        self.assertEqual(run["status"], "completed", run.get("error"))
+        self.assertEqual((len(self.dispatched("replan-1")), len(self.dispatched("replan-2"))), (1, 1))
+        self.assertEqual(len(self.dispatched("code")), 2)
+
+
+class ReplanReviewTests(ReplanCase):
+    def test_the_replan_prompt_fits_the_worker_limit(self):
+        long = "很长的内容" * 3000
+        spec = planning.replan_step("replan-1",
+                                    [{"id": "t%d" % i, "name": "任务" * 40, "kind": "implement"} for i in range(12)], long,
+                                    {"reason": long, "instructions": long}, {"claude": ["m" * 60] * 60},
+                                    {"kiro": {"available": True, "reason": long}}, [long] * 5,
+                                    {"available": ["c" * 40] * 60, "missing": ["d" * 40] * 60})   # every input at its clip
+        steps([spec])   # the Worker refuses prompts over 8000 characters
+        self.assertLessEqual(len(spec["prompt"]), 7400)   # room for a few more skills or roles (BACKLOG D50)
+        kept = [{"id": f"task-{i}", "name": "很长的任务名" * 10, "verify": ["c" * 400] * 10} for i in range(8)]
+        with_kept = planning.replan_step("replan-1", [{"id": "t%d" % i, "name": "任务" * 40, "kind": "implement"} for i in range(12)],
+                                         long, {"reason": long, "instructions": long}, {"claude": ["m" * 60] * 60},
+                                         {"kiro": {"available": True, "reason": long}}, [long] * 5,
+                                         {"available": ["c" * 40] * 60, "missing": ["d" * 40] * 60}, kept,
+                                         [{"id": "policy-%d" % i, "scope": "team", "role": "security_test", "tool": "opencode",
+                                           "model": "m" * 200} for i in range(30)])
+        steps([with_kept])
+        self.assertLessEqual(len(with_kept["prompt"]), 7800)   # the kept tasks' checks (D54 §9 a) and preferences (D55) fit too
+        required = planning.replan_step("replan-1", [{"id": "t%d" % i, "name": "任务" * 40, "kind": "implement",
+                                                      "required": [f"r{j}" * 200 for j in range(10)]} for i in range(12)],
+                                        long, {"reason": long, "instructions": long}, {"claude": ["m" * 60] * 60},
+                                        {"kiro": {"available": True, "reason": long}}, [long] * 5,
+                                        {"available": ["c" * 40] * 60, "missing": ["d" * 40] * 60},
+                                        [{**k, "required": k["verify"]} for k in kept],
+                                        [{"id": "policy-%d" % i, "scope": "team", "role": "security_test", "tool": "opencode",
+                                          "model": "m" * 200} for i in range(30)])
+        steps([required])   # D57 §13.1: the required checks to carry over, and the kept ones', fit as well
+        self.assertIn("被替换任务的必过检查", required["prompt"])
+        self.assertIn("用户的映射偏好", with_kept["prompt"])
+        for name in ("test-driven-development", "evaluator"):   # the compact catalogues still name every choice
+            self.assertIn(name, spec["prompt"])
+
+    def test_the_planners_are_told_which_commands_a_check_can_run(self):
+        commands = {"available": ["python3", "git"], "missing": ["python", "npm"]}
+        for spec in (planning.plan_step(commands=commands), planning.replan_step("replan-1", [], "审查未通过", REPLAN, commands=commands)):
+            self.assertIn("可用：python3、git", spec["prompt"])
+            self.assertIn("没有：python、npm", spec["prompt"])
+        self.assertNotIn("没有：", planning.plan_step()["prompt"])   # an older Worker that does not say
+
+    def test_the_replan_prompt_shows_every_field_a_planned_task_carries(self):
+        # EC2: without the example the planner left out each task's prompt and the plan failed validation
+        prompt = planning.replan_step("replan-1", [], "审查未通过", REPLAN)["prompt"]
+        for field in planning.EXAMPLE["steps"][0]:
+            self.assertIn(f'"{field}"', prompt, field)
+
+    def test_depends_on_follows_a_renamed_task_and_may_name_a_kept_one(self):
+        self.plan = """```json
+{"intent": "i", "summary": "s", "name": "n", "steps": [
+ {"id": "review", "name": "补测试", "tool": "claude", "prompt": "补测试", "kind": "test", "acceptance": ["a"], "verify": ["true"],
+  "depends_on": ["code"]},
+ {"id": "check", "name": "复审", "tool": "codex", "prompt": "复审", "kind": "review", "acceptance": ["a"], "depends_on": ["review"]}]}
+```"""
+        rid = self.start()
+        run = self.tick(rid, 40)
+        tasks = {t["id"]: t for t in run["tasks"]}
+        self.assertEqual(tasks["review-2"]["spec"]["depends_on"], ["code"])        # a kept, accepted task
+        self.assertEqual(tasks["check"]["spec"]["depends_on"], ["review-2"])       # the renamed one
+        self.assertEqual([u["id"] for u in self.dispatched("check")[0]["upstream"]], ["review-2"])
+
+    def test_tasks_after_a_replan_are_not_told_to_repair(self):
+        rid = self.start()
+        self.tick(rid, 40)
+        for task in ("replan-1", "review-2", "check"):
+            with self.subTest(task):
+                self.assertNotIn("repair", self.dispatched(task)[0])
+
+    def test_a_rework_after_a_replan_does_not_rerun_the_planner(self):
+        self.failing = {("review", 1), ("check", 1)}
+        self.decisions = [REPLAN, {"action": "rework", "target_task_id": "code", "reason": "实现有缺陷", "instructions": "修复"}] + \
+            [{"action": "wait_for_user", "reason": "等待", "instructions": "检查"}] * 2
+        rid = self.start(recovery={"enabled": True, "max_cycles": 3})
+        run = self.tick(rid, 60)
+        self.assertEqual(len(self.dispatched("replan-1")), 1)
+        self.assertEqual({t["id"]: t["status"] for t in run["tasks"]}["replan-1"], "accepted")
+        self.assertEqual(run["status"], "completed")
+
+    def test_a_new_task_reusing_a_replaced_id_is_labelled_replanned(self):
+        self.plan = """```json
+{"intent": "i", "summary": "s", "name": "n", "steps": [
+ {"id": "deliver", "name": "新的交付", "tool": "codex", "prompt": "交付", "kind": "deliver", "acceptance": ["a"]}]}
+```"""
+        rid = self.start()
+        run = self.tick(rid, 40)
+        new = [t for t in run["tasks"] if t["spec"]["name"] == "新的交付"][0]
+        self.assertNotEqual(new["id"], "deliver")                                  # the replaced deliver never ran, but was there
+        self.assertEqual(new["mapping"]["label"], "KiroCrew 重新规划")
+
+    def test_the_review_after_a_replan_is_judged_against_the_codes_backend(self):
+        rid = self.start()
+        self.tick(rid, 40)
+        with self.db.read() as db:
+            check = db.execute("SELECT ordinal FROM tasks WHERE run_id=? AND id='check'", (rid,)).fetchone()[0]
+            self.assertEqual(recovery.reviewed_backend(db, rid, check), "claude")   # not the planner's kiro
+
+    def test_a_user_task_named_replan_1_does_not_break_the_replan(self):
+        steps_with = [{**STEPS[0], "id": "replan-1", "name": "用户的任务"}] + STEPS[1:]
+        rid = self.start(steps_with)
+        run = self.tick(rid, 40)
+        self.assertEqual(run["replan"]["task"], "replan-2")
+        self.assertEqual(run["status"], "completed")
+
+
+if __name__ == "__main__":
+    unittest.main()

@@ -18,7 +18,7 @@ export function validateCrewEntry(result: CrewEntry, parent: string, pageHost = 
       target.searchParams.get("sid") !== parent || keys !== "sid,token" || !target.searchParams.get("token"))
     throw new Error("原生入口与所选 Session 不一致，请刷新后重试。");
   if (LOCAL.has(target.hostname) && !LOCAL.has(pageHost))
-    throw new Error("此 Worker 的入口指向本机。远程访问时，请为 Worker 配置可访问的 KiroCrew 地址。");
+    throw new Error("这个执行环境的原生 KiroCrew 入口还没有对外开通（只能在平台主机上经隧道打开）：请平台管理员为它开通。会话照常执行，不受影响。");
   return target;
 }
 

@@ -1,8 +1,11 @@
 import {
-  CircleStop, Copy, Download, Eye, ExternalLink, ListRestart, MoreHorizontal, Power, RotateCcw, Stethoscope, Trash2, UserCog,
+  CircleStop, Copy, Download, Eye, ExternalLink, FolderDown, ListRestart, MonitorPlay, MoreHorizontal, Play, Power, RotateCcw, Stethoscope,
+  Share2,
+  Trash2,
+  UserCog,
 } from "lucide-react";
 import { toast } from "sonner";
-import { useRun, useRunEvents } from "@/api/hooks";
+import { useRun, useRunApp, useRunEvents } from "@/api/hooks";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
 import {
@@ -15,10 +18,24 @@ import { StatusBadge } from "@/components/StatusBadge";
 import { useConsole } from "@/features/console/context";
 import { EventTimeline } from "@/features/sessions/EventTimeline";
 import { NativeSessionPanel } from "@/features/sessions/NativeSessionPanel";
+import { AppPreviewPanel } from "@/features/sessions/AppPreviewPanel";
+import { ChangesPanel } from "@/features/sessions/ChangesPanel";
+import { CredentialControl } from "@/features/sessions/CredentialControl";
+import { PublishControl } from "@/features/sessions/PublishControl";
+import { RevisionsPanel } from "@/features/sessions/RevisionsPanel";
+import { KnowledgePanel } from "@/features/sessions/KnowledgePanel";
+import { ApprovalsCard } from "@/features/sessions/ApprovalsCard";
 import { RecoveryPanel } from "@/features/sessions/RecoveryPanel";
+import { ReportButton } from "@/features/sessions/ReportDialog";
 import { TaskList } from "@/features/sessions/TaskList";
 import { useSessionActions } from "@/features/sessions/useSessionActions";
-import { canContinue, canDelete, canRecover, canStop, closeAction, crewEntryReason, deleteReason, statusText } from "@/lib/session";
+import { bindingLabel } from "@/lib/credentials";
+import { usageLine } from "@/lib/usage";
+import { basisText, clientLabel } from "@/lib/policies";
+import {
+  canContinue, canDelete, canRecover, canStop, closeAction, crewEntryReason, deleteReason, directReason, resumeReason, rework,
+  shareAccess, statusText,
+} from "@/lib/session";
 
 export function SessionView({ id }: { id: string }) {
   const { allTeams, workflows, workers, me, open } = useConsole();
@@ -26,6 +43,7 @@ export function SessionView({ id }: { id: string }) {
   const { events, stream } = useRunEvents(id);
   const run = query.data;
   const actions = useSessionActions(run);
+  const app = useRunApp(id, !!run?.worker_id).data;   // shared with the panel: one request
 
   if (!run) {
     return (
@@ -44,10 +62,16 @@ export function SessionView({ id }: { id: string }) {
   const crewReason = crewEntryReason(run) ||
     (environment?.scope === "shared" && environment.owner_id !== me.id
       ? "共享执行环境不开放原生 KiroCrew 入口；可在本页「KiroCrew 会话」查看。"
-      : run.permissions?.native === false ? "原生 KiroCrew 入口不因管理员身份开放；可在本页「KiroCrew 会话」查看。" : "");
+      : run.permissions?.native === false
+        ? run.permissions.native_reason ?? "原生 KiroCrew 入口不因管理员身份开放；可在本页「KiroCrew 会话」查看。" : "");
   const close = closeAction(run);
   const design = run.purpose === "workflow_design";
   const percent = run.progress.total ? (100 * run.progress.accepted) / run.progress.total : 0;
+  // D57 §4: what the tasks' latest Attempts noted without blocking
+  const warnings = run.tasks.reduce((sum, task) => {
+    const latest = task.attempts?.[task.attempts.length - 1];
+    return sum + (latest?.evidence?.gates ?? []).filter((gate) => gate.status === "warn").length;
+  }, 0);
 
   return (
     <div className="mx-auto max-w-6xl space-y-5 px-4 py-6 sm:px-8" id="run-view">
@@ -64,9 +88,29 @@ export function SessionView({ id }: { id: string }) {
               <p id="run-goal" className="line-clamp-3 text-sm leading-6 whitespace-pre-wrap text-muted-foreground">{run.input}</p>
             )}
             <p id="run-id" className="font-mono text-[11px] text-muted-foreground">{run.id} · revision {run.version}</p>
+            {(run.request || basisText(run.admission_basis)) && (
+              <p id="run-request" className="text-xs text-muted-foreground">
+                {run.request && <>来自请求 {run.request.id.slice(0, 14)} · {clientLabel(run.request.client)}</>}
+                {run.request && basisText(run.admission_basis) && "；"}
+                {basisText(run.admission_basis)}
+              </p>
+            )}
+            {run.created_by && (
+              <p id="run-owner" className="text-xs text-muted-foreground" title={run.credentials?.source?.name}>
+                创建者 {run.created_by.username ?? run.created_by.id}
+                {run.credentials?.source && (
+                  <> · 凭证：{bindingLabel(run.credentials.source)}
+                    {run.credentials.source.unavailable && <span className="text-destructive">（已停用或删除，请更换后续作）</span>}</>
+                )}
+                {run.credentials?.removed && <> · <span className="text-destructive">凭证「{run.credentials.removed.name}」已撤下</span></>}
+                <CredentialControl run={run} />
+              </p>
+            )}
+            <PublishControl run={run} />
           </div>
           <div className="flex flex-col items-end gap-2">
-            <StatusBadge status={run.lifecycle === "closed" ? "stopped" : run.status} label={statusText(run)} className="text-xs" />
+            <StatusBadge status={run.lifecycle === "closed" ? "stopped" : run.status} className="text-xs"
+              label={run.lifecycle !== "closed" && run.status === "completed" && warnings ? `完成 · ${warnings} 项提示` : statusText(run)} />
             <div className="w-44 space-y-1 text-right">
               <span className="text-xs text-muted-foreground">交接进度 {run.progress.accepted} / {run.progress.total}</span>
               <Progress value={percent} aria-label="交接进度" />
@@ -92,6 +136,22 @@ export function SessionView({ id }: { id: string }) {
             </TooltipTrigger>
             <TooltipContent>{crewReason || "在新标签页打开此 Session 对应的 KiroCrew 原生父会话"}</TooltipContent>
           </Tooltip>
+          <Button size="sm" variant="outline" onClick={actions.downloadSource} id="run-download"
+            disabled={!run.worker_id || !run.workspace || !!actions.busy}
+            title={!run.worker_id || !run.workspace ? "源码尚未准备，暂无可下载的内容" : "下载源码（含 .git，不含依赖目录与 .env）"}>
+            <FolderDown /> 下载源码
+          </Button>
+          <ReportButton run={run} />
+          {run.permissions?.share && (
+            <Button size="sm" variant="outline" onClick={() => open({ kind: "run-share", run })} id="run-share">
+              <Share2 /> 共享
+            </Button>
+          )}
+          {app?.openable && (
+            <Button size="sm" onClick={actions.openApp} id="run-open-app">
+              <MonitorPlay /> 打开远程预览
+            </Button>
+          )}
           <Button size="sm" variant="outline" onClick={actions.preview} disabled={!run.worker_id} id="run-preview">
             <Eye /> 预览产出
           </Button>
@@ -120,13 +180,46 @@ export function SessionView({ id }: { id: string }) {
             </DropdownMenuContent>
           </DropdownMenu>
         </div>
+        {resumeReason(run) && <p id="resume-hint" className="text-xs text-muted-foreground">{resumeReason(run)}</p>}
         {crewReason && <p id="crew-entry-hint" className="text-xs text-muted-foreground">{crewReason}</p>}
+        {run.placement?.hint && <p id="placement-hint" className="text-xs text-muted-foreground">{run.placement.hint}</p>}
+        {directReason(run) && <p id="direct-hint" className="text-xs text-muted-foreground">{directReason(run)}</p>}
+        {shareAccess(run) && <p id="share-access" className="text-xs text-muted-foreground">{shareAccess(run)}</p>}
         {workers.find((w) => w.id === run.worker_id)?.scope === "shared" && (
           <p id="shared-environment" className="text-xs text-muted-foreground">共享执行环境：环境内会话的 Agent 互相可读，记忆未分隔。</p>
         )}
       </header>
 
-      {run.attention && run.status !== "waiting_worker" && (
+      {run.status === "awaiting_confirmation" && (
+        <Alert id="confirm-notice" className="border-warning/30 bg-warning/5">
+          <AlertTitle id="confirm-notice-title">{run.attention?.title ?? "计划待确认"}</AlertTitle>
+          <AlertDescription className="flex flex-wrap items-center gap-3">
+            <span>{[run.attention?.detail, run.attention?.action].filter(Boolean).join(" ")}</span>
+            <Button size="sm" onClick={actions.confirm} id="run-confirm"
+              disabled={!!actions.busy || run.permissions?.operate === false || !!resumeReason(run) || !!directReason(run)}>
+              <Play /> 确认并开始
+            </Button>
+          </AlertDescription>
+        </Alert>
+      )}
+      {run.status === "awaiting_acceptance" && (
+        <Alert id="accept-notice" className="border-warning/30 bg-warning/5">
+          <AlertTitle id="accept-notice-title">{run.attention?.title ?? "验收待确认"}</AlertTitle>
+          <AlertDescription className="flex flex-wrap items-center gap-3">
+            <span>{[run.attention?.detail, run.attention?.action].filter(Boolean).join(" ")}</span>
+            <Button size="sm" onClick={actions.accept} id="run-accept"
+              disabled={!!actions.busy || run.permissions?.publish === false || !!resumeReason(run)}>
+              <Play /> 确认通过
+            </Button>
+            <Button size="sm" variant="outline" onClick={() => open({ kind: "continue", run, ...rework(run) })} id="run-rework"
+              disabled={!!actions.busy || !canContinue(run)}>
+              <RotateCcw /> 不通过，返工…
+            </Button>
+          </AlertDescription>
+        </Alert>
+      )}
+      {run.attention && run.status !== "waiting_worker" && run.status !== "awaiting_confirmation"
+        && run.status !== "awaiting_acceptance" && (
         <Alert variant="destructive" id="run-attention" className="border-destructive/30 bg-destructive/5">
           <AlertTitle id="attention-title">{run.attention.title}</AlertTitle>
           <AlertDescription className="space-y-1">
@@ -148,7 +241,8 @@ export function SessionView({ id }: { id: string }) {
               ? <span id="worker-notice-detail">{[run.attention.detail, run.attention.action].filter(Boolean).join(" ")}</span>
               : "需求已保存。请选择此开发空间的 Worker 后开始执行。"}
             {run.attention?.workers !== 0 && (
-              <Button size="sm" variant="outline" onClick={() => open({ kind: "assign", run })} id="assign-worker"><UserCog /> 分配 Worker</Button>
+              <Button size="sm" variant="outline" onClick={() => open({ kind: "assign", run })} id="assign-worker"
+                disabled={!!resumeReason(run) || run.permissions?.assign === false}><UserCog /> 分配 Worker</Button>
             )}
           </AlertDescription>
         </Alert>
@@ -173,11 +267,17 @@ export function SessionView({ id }: { id: string }) {
           ) : <p className="text-sm text-muted-foreground">Kiro Agent 正在识别意图、补全需求并拆分任务；规划完成后任务会自动出现在下方。</p>}
         </section>
       )}
+      {run.usage && (
+        <p id="run-usage" className="text-xs text-muted-foreground">本会话用量：{usageLine(run.usage)}</p>
+      )}
       {run.recovery && (
         <p id="recovery-policy" className="text-xs text-muted-foreground">
-          {run.recovery.policy.enabled ? `自动纠错已开启 · 最多 ${run.recovery.policy.max_cycles} 轮` : "自动纠错未开启 · 可手动诊断"}
+          {run.recovery.policy.enabled
+            ? `自动纠错已开启 · 最多 ${run.recovery.policy.max_cycles} 轮${run.recovery.policy.switch_tools === false ? " · 不换工具" : ""}`
+            : "自动纠错未开启 · 可手动诊断"}
         </p>
       )}
+      <ApprovalsCard run={run} canAnswer={run.permissions?.publish !== false && run.permissions?.direct !== false} />
       <RecoveryPanel run={run} />
 
       <div className="grid gap-5 lg:grid-cols-[minmax(0,1fr)_22rem]">
@@ -185,8 +285,12 @@ export function SessionView({ id }: { id: string }) {
           <h2 className="text-sm font-semibold">开发任务</h2>
           <TaskList run={run} onContinue={(taskId) => open({ kind: "continue", run, taskId })} />
           <NativeSessionPanel run={run} />
+          <RevisionsPanel run={run} />
+          <ChangesPanel run={run} />
+          <KnowledgePanel run={run} />
         </section>
         <aside className="space-y-4">
+          {!design && <AppPreviewPanel run={run} onOpen={actions.openApp} />}
           <EventTimeline events={events} stream={stream} />
           <section className="space-y-2 rounded-xl border bg-card p-4 text-xs" id="native-details">
             <h2 className="text-sm font-semibold">Workspace 与原生会话</h2>
@@ -196,13 +300,13 @@ export function SessionView({ id }: { id: string }) {
               <div><dt className="text-muted-foreground">来源</dt><dd className="font-mono break-all">{run.source.url ? `${run.source.url}${run.source.ref ? " @ " + run.source.ref : ""}` : "新建项目"}</dd></div>
             </dl>
             <p className="text-muted-foreground">运行与源码由此空间的 Worker 保管。</p>
-            <div className="space-y-1 border-t pt-2">
-              <p className="text-muted-foreground">需要开发服务器的项目，在本机仓库目录运行后打开 localhost:&lt;远端端口+10000&gt;：</p>
+            {!!me.admin && <div className="space-y-1 border-t pt-2">
+              <p className="text-muted-foreground">管理员：在本机 kirocrew-on 仓库目录运行后打开 localhost:&lt;远端端口+10000&gt;：</p>
               <button type="button" className="flex w-full items-center gap-2 rounded-md bg-muted px-2 py-1.5 text-left font-mono text-[11px] hover:bg-accent"
                 onClick={() => navigator.clipboard?.writeText(`deploy/aws/deploy.sh space ${run.id}`).then(() => toast.success("已复制本地预览命令"))}>
                 <span className="min-w-0 flex-1 break-all">deploy/aws/deploy.sh space {run.id}</span><Copy className="size-3.5 shrink-0" />
               </button>
-            </div>
+            </div>}
           </section>
         </aside>
       </div>

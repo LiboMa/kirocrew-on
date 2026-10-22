@@ -1,5 +1,6 @@
 import { createContext, useContext } from "react";
 import type { Me, Run, Step, Team, Template, User, Worker, Workflow } from "@/api/types";
+import type { RunListFilters } from "@/lib/runList";
 
 export interface LaunchSeed {
   mode?: "workflow";
@@ -17,12 +18,16 @@ export type Dialog =
   | { kind: "share"; flowId: string }
   | { kind: "team" }
   | { kind: "tokens" }
+  | { kind: "credentials" }
+  | { kind: "policies" }
+  | { kind: "run-share"; run: Run }
+  | { kind: "quotas" }
   | { kind: "workers" }
   | { kind: "users" }
   | { kind: "password" }
   // Session dialogs carry the Session as it was when they opened: commands then send that expected_version, and a
   // concurrent change is rejected by the server instead of silently retargeting the dialog.
-  | { kind: "continue"; run: Run; taskId?: string }
+  | { kind: "continue"; run: Run; taskId?: string; note?: string }
   | { kind: "assign"; run: Run }
   | { kind: "control"; run: Run; action: "close" | "reopen" | "delete" };
 
@@ -36,12 +41,26 @@ export interface ConsoleState {
   workers: Worker[];
   workflows: Workflow[];
   templates: Template[];
+  /** D56: the loaded pages of the list as filtered on the server, newest first. */
   runs: Run[];
+  /** How many Sessions match the filters, and how many the space (or every space) holds. */
+  runTotal: number;
+  spaceTotal: number;
+  hasMore: boolean;
+  /** Why the list could not be read (a refused filter, the API down): shown, not mistaken for an empty list. */
+  listError: string | null;
+  loadMore: () => void;
+  loadingMore: boolean;
+  filters: RunListFilters;
+  setFilters: (filters: RunListFilters) => void;
   space: string;
   setSpace: (space: string) => void;
   /** An administrator's view of every Session, in every space (B5). */
   allSessions: boolean;
   setAllSessions: (all: boolean) => void;
+  /** D64: the list shows only what others shared with the user. */
+  sharedSessions: boolean;
+  setSharedSessions: (shared: boolean) => void;
   selected: string | null;
   select: (id: string | null) => void;
   open: (dialog: Dialog) => void;

@@ -16,7 +16,7 @@ export function ShareDialog({ flowId }: { flowId: string }) {
   const { workflows, teams, users, me, close } = useConsole();
   const client = useQueryClient();
   const flow = workflows.find((f) => f.id === flowId);
-  const candidates = [...teams.map((t) => ["team:" + t.id, "Team · " + t.name]), ...users.filter((u) => u.id !== me.id).map((u) => ["user:" + u.id, "用户 · " + u.username])];
+  const candidates = [...teams.filter((t) => !t.archived).map((t) => ["team:" + t.id, "Team · " + t.name]), ...users.filter((u) => u.id !== me.id).map((u) => ["user:" + u.id, "用户 · " + u.username])];
   const [target, setTarget] = useState(candidates[0]?.[0] ?? "");
   const [role, setRole] = useState("runner");
   if (!flow) return null;

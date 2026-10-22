@@ -3,11 +3,11 @@ import { Check } from "lucide-react";
 import { useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
 import { api, command } from "@/api/client";
-import { keys } from "@/api/hooks";
+import { keys, usePlacement } from "@/api/hooks";
 import type { Run } from "@/api/types";
 import { Button } from "@/components/ui/button";
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
-import { spaceWorkers, useConsole, type LaunchSeed } from "@/features/console/context";
+import { useConsole, type LaunchSeed } from "@/features/console/context";
 import { useDraft, useMatch, useRecommendation } from "@/features/launch/hooks";
 import { STEPS, draftKey, initialDraft, loadDraft, restoreDraft, submitBody, validateStep } from "@/features/launch/state";
 import { ConfirmStep, NeedStep, PlanStep, TasksStep } from "@/features/launch/steps";
@@ -16,28 +16,35 @@ import { cn } from "@/lib/utils";
 
 export function LaunchWizard({ seed }: { seed: LaunchSeed }) {
   const { me, space, selected, workers, teams, templates, workflows, close, select } = useConsole();
-  // A Team without an execution environment takes no new Sessions (D28); null means none, absent means an older platform.
+  // A Team with neither an environment nor the submitter's own boundary takes no new Sessions (D28, D49 R2): the platform's
+  // placement says so; until it has answered, the server's own refusal stands.
   const unassigned = (target: string) =>
-    teams.find((t) => t.id === target && (t.environment === null || t.environment?.enabled === false))?.name;
+    target && target === draft.space && placement && !placement.default && !placement.options.length
+      ? teams.find((t) => t.id === target)?.name : undefined;
+  const archived = (target: string) => teams.find((t) => t.id === target && !!t.archived)?.name;
   const client = useQueryClient();
   const workflowMode = seed.mode === "workflow";
   const key = draftKey(me.id, space, selected, seed);
   const { draft, ref, update, storageError } = useDraft(key, () => {
-    const eligible = spaceWorkers(workers, space, me);
-    return restoreDraft(seed, loadDraft(key), initialDraft(seed, { worker: eligible.length === 1 ? eligible[0].id : "", space }));
+    // D49: where it runs is the platform's choice unless one is picked (no preselection)
+    return restoreDraft(seed, loadDraft(key), initialDraft(seed, { worker: "", space }));
   });
   const { status: matchStatus, schedule, settle, describe } = useMatch(ref, update, { templates, workflows });
   const recommendation = useRecommendation(ref, update);
   const [step, setStep] = useState(0);
   const [error, setError] = useState("");
   const [busy, setBusy] = useState(false);
-  const eligible = spaceWorkers(workers, draft.space, me);
-  const [recommendWorker, setRecommendWorker] = useState(() => draft.generation?.request?.worker_id ?? draft.worker ?? eligible[0]?.id ?? "");
-  const models = workers.find((w) => w.id === (draft.worker || recommendWorker))?.capabilities.models;
+  const placement = usePlacement(draft.space).data;
+  const [recommendWorker, setRecommendWorker] = useState(() => draft.generation?.request?.worker_id ?? draft.worker ?? "");
+  // The models of where it will run: the chosen environment, else the platform's default (D49)
+  const target = draft.worker || placement?.default?.id || recommendWorker;
+  const environment = placement?.options.find((o) => o.id === target);
+  const models = environment?.models ?? workers.find((w) => w.id === target)?.capabilities.models;
 
-  useEffect(() => {
-    if (!recommendWorker && eligible[0]) setRecommendWorker(eligible[0].id);
-  }, [recommendWorker, eligible]);
+  useEffect(() => {   // the recommendation runs where the Session would (D49)
+    const first = placement?.default?.id ?? placement?.options[0]?.id;
+    if (!recommendWorker && first) setRecommendWorker(first);
+  }, [recommendWorker, placement]);
 
   // Matching follows the requirement, the choice and the space; a custom plan is never re-matched.
   useEffect(() => {
@@ -67,7 +74,8 @@ export function LaunchWizard({ seed }: { seed: LaunchSeed }) {
     if (target <= step) { setStep(target); return; }
     if (target > 1 && ref.current.method !== "agent") await settle();
     for (let index = step; index < target; index++) {
-      const problem = validateStep(index, ref.current, { workflowMode, teamWithoutEnvironment: unassigned(ref.current.space) });
+      const problem = validateStep(index, ref.current, { workflowMode, teamWithoutEnvironment: unassigned(ref.current.space),
+        archivedTeam: archived(ref.current.space) });
       if (problem) {
         setStep(index);
         setError(problem);
@@ -80,7 +88,8 @@ export function LaunchWizard({ seed }: { seed: LaunchSeed }) {
   async function submit() {
     if (ref.current.method !== "agent") await settle();
     for (let index = 0; index < STEPS.length - 1; index++) {
-      const problem = validateStep(index, ref.current, { workflowMode, teamWithoutEnvironment: unassigned(ref.current.space) });
+      const problem = validateStep(index, ref.current, { workflowMode, teamWithoutEnvironment: unassigned(ref.current.space),
+        archivedTeam: archived(ref.current.space) });
       if (problem) { setStep(index); throw new Error(problem); }
     }
     const current = ref.current;
@@ -156,7 +165,7 @@ export function LaunchWizard({ seed }: { seed: LaunchSeed }) {
                   if (job?.id && job.native_parent) openCrewSession(job.id, job.native_parent).catch((e: Error) => toast.error(e.message));
                 }} />
             )}
-            {step === 2 && <TasksStep draft={draft} update={update} origin={origin} models={models} />}
+            {step === 2 && <TasksStep draft={draft} update={update} origin={origin} models={models} defaults={environment?.defaults} />}
             {step === 3 && <ConfirmStep draft={draft} update={update} workflowMode={workflowMode} />}
           </div>
           {error && <p role="alert" className="px-6 pb-2 text-sm text-destructive" id="wizard-error">{error}</p>}

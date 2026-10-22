@@ -43,7 +43,8 @@ export function TopBar({ onMenu }: { onMenu: () => void }) {
         </SelectTrigger>
         <SelectContent>
           <SelectItem value={PERSONAL}>我的开发空间</SelectItem>
-          {teams.map((team) => <SelectItem key={team.id} value={team.id}>{team.name} · Team</SelectItem>)}
+          {/* An archived Team stays here so its Sessions can still be read (P3). */}
+          {teams.map((team) => <SelectItem key={team.id} value={team.id}>{team.name} · Team{team.archived ? " · 已归档" : ""}</SelectItem>)}
         </SelectContent>
       </Select>
       <div className="ml-auto flex items-center gap-1.5 sm:gap-2">
@@ -57,6 +58,9 @@ export function TopBar({ onMenu }: { onMenu: () => void }) {
           <DropdownMenuContent align="end" className="w-52">
             <DropdownMenuItem onSelect={() => open({ kind: "team" })}>团队与成员</DropdownMenuItem>
             <DropdownMenuItem onSelect={() => open({ kind: "tokens" })}>API 与 Coding Agent 接入</DropdownMenuItem>
+            <DropdownMenuItem onSelect={() => open({ kind: "credentials" })}>代码仓库凭证</DropdownMenuItem>
+            <DropdownMenuItem onSelect={() => open({ kind: "policies" })}>准入与映射偏好</DropdownMenuItem>
+            <DropdownMenuItem onSelect={() => open({ kind: "quotas" })}>并发上限</DropdownMenuItem>
             <DropdownMenuItem onSelect={() => open({ kind: "workers" })}>执行环境 · Worker</DropdownMenuItem>
             {elevated(me) && <DropdownMenuItem onSelect={() => open({ kind: "users" })}>用户管理</DropdownMenuItem>}
             <DropdownMenuSeparator />

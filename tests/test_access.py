@@ -50,7 +50,7 @@ class AccessCase(unittest.TestCase):
         """alice owns the Team, bob is a member, eve is not."""
         tid = "team-" + name.encode().hex()[:12]
         with self.db.transaction() as db:
-            db.execute("INSERT INTO teams VALUES(?,?,0)", (tid, name))
+            db.execute("INSERT INTO teams(id,name,created) VALUES(?,?,0)", (tid, name))
             db.execute("INSERT INTO members VALUES(?,?,'owner')", (tid, self.a["id"]))
             db.execute("INSERT INTO members VALUES(?,?,'member')", (tid, self.b["id"]))
             if environment:
@@ -71,9 +71,9 @@ class AccessCase(unittest.TestCase):
         thread.start()
         base = f"http://127.0.0.1:{app.server_address[1]}"
 
-        def call(method, path, token=None, body=None, headers=None):
-            request = urllib.request.Request(
-                base + path, method=method, data=dumps(body).encode() if body is not None else None,
+        def call(method, path, token=None, body=None, headers=None, raw=None):
+            request = urllib.request.Request(   # raw: a body sent as it is (D58 sync's bundle)
+                base + path, method=method, data=raw if raw is not None else dumps(body).encode() if body is not None else None,
                 headers={**({"Authorization": "Bearer " + token} if token else {}),
                          **({"Content-Type": "application/json"} if body is not None else {}), **(headers or {})})
             try:
@@ -82,6 +82,7 @@ class AccessCase(unittest.TestCase):
             except urllib.error.HTTPError as response:
                 with response:
                     return response.code, json.load(response)
+        call.base = base   # for a client of its own (D64: an event stream)
         try:
             yield call
         finally:
@@ -153,12 +154,16 @@ class SemanticsTests(AccessCase):
             self.assertIn("只有 Team owner 可以删除他人创建的会话", result["error"])
             self.assertEqual(call("POST", f"/v1/runs/{rid}/delete", self.tokens["eve"], body)[0], 404)
             # native: False — the Team's shared environment belongs to alice (K03).
+            # publish: False on alice's Session (a member, not its creator or a Team owner), True on his own (D38 A3).
             self.assertEqual(call("GET", f"/v1/runs/{rid}", self.tokens["bob"])[1]["permissions"],
-                             {"operate": True, "delete": False, "native": False})
+                             {"operate": True, "delete": False, "native": False, "resume": True, "publish": False, "direct": True,
+                              "share": False, "assign": True})   # D64: who shares is who publishes
             self.assertEqual(call("GET", f"/v1/runs/{mine}", self.tokens["bob"])[1]["permissions"],
-                             {"operate": True, "delete": True, "native": False})
+                             {"operate": True, "delete": True, "native": False, "resume": True, "publish": True, "direct": True,
+                              "share": True, "assign": True})
             listed = {r["id"]: r["permissions"] for r in call("GET", "/v1/runs", self.tokens["bob"])[1]}
-            self.assertEqual(listed[rid], {"operate": True, "delete": False, "native": False})
+            self.assertEqual(listed[rid], {"operate": True, "delete": False, "native": False, "resume": True, "publish": False, "direct": True,
+                                           "share": False, "assign": True})
 
     def test_viewer_cannot_edit_a_workflow_and_is_told_why(self):
         from octopus.security import Error
@@ -214,7 +219,7 @@ class OversightTests(AccessCase):
                 db.execute("UPDATE runs SET native_parent='octopus-x' WHERE id=?", (self.rid,))
             self.assertEqual(crew_entry.observe(self.service, self.a, self.rid), {"messages": []})
         events = self.service.events(self.a, self.rid)
-        self.assertEqual(next(e for e in events if e["kind"] == "command.stop")["payload"]["actor"], self.a["id"])
+        self.assertEqual(next(e for e in events if e["kind"] == "command.stop")["payload"]["actor"]["id"], self.a["id"])
 
     def test_bobs_own_operations_are_not_audited(self):
         self.service.operate(self.b, self.rid, "stop", {"request_id": "stop-0000000002", "expected_version": 1})
@@ -281,7 +286,7 @@ class UserLifecycleTests(AccessCase):
 
     def test_last_active_owner_and_last_admin_are_protected(self):
         with self.db.transaction() as db:
-            db.execute("INSERT INTO teams VALUES('team-bob','bob 的 Team',0)")
+            db.execute("INSERT INTO teams(id,name,created) VALUES('team-bob','bob 的 Team',0)")
             db.execute("INSERT INTO members VALUES('team-bob',?,'owner')", (self.b["id"],))
         with self.http() as call:
             status, result = call("POST", f"/v1/users/{self.b['id']}/active", self.tokens["alice"], {"active": False})
@@ -425,7 +430,7 @@ class ReviewFixTests(AccessCase):
         from octopus.security import Error
         with self.db.transaction() as db:
             carol = create_user(db, "carol", PASSWORD)
-            db.execute("INSERT INTO teams VALUES('team-bc','BC',0)")
+            db.execute("INSERT INTO teams(id,name,created) VALUES('team-bc','BC',0)")
             db.execute("INSERT INTO members VALUES('team-bc',?,'owner')", (self.b["id"],))
             db.execute("INSERT INTO members VALUES('team-bc',?,'owner')", (carol["id"],))
         self.service.set_active(self.a, carol["id"], {"active": False})       # bob is still an active owner
@@ -504,7 +509,7 @@ class PermissionMatrixTests(AccessCase):
         with self.db.transaction() as db:
             self.carol = create_user(db, "carol", PASSWORD)
             self.tokens["carol"] = issue_token(db, self.carol["id"])["token"]
-            db.execute("INSERT INTO teams VALUES('team-m','矩阵 Team',0)")
+            db.execute("INSERT INTO teams(id,name,created) VALUES('team-m','矩阵 Team',0)")
             db.execute("INSERT INTO members VALUES('team-m',?,'owner')", (self.carol["id"],))
             db.execute("INSERT INTO members VALUES('team-m',?,'member')", (self.b["id"],))
             db.execute("INSERT INTO workers(id,name,owner_id,config,scope) VALUES('env-m','env',?,?,'shared')",
@@ -534,8 +539,12 @@ class PermissionMatrixTests(AccessCase):
             ("GET", "/v1/admin/users", None, (200, 403, 403, 403, 403)),
             ("GET", "/v1/admin/audit", None, (200, 403, 403, 403, 403)),
             ("POST", f"/v1/users/{self.b['id']}/active", {"active": True}, (200, 403, 403, 403, 403)),
-            # Admin hosting of Team members is phase 2: today an admin who is not a member is told nothing.
-            ("POST", "/v1/teams/team-m/members", {"username": "eve", "role": "bogus"}, (404, 404, 400, 403, 404)),
+            ("POST", "/v1/teams/team-m/members", {"username": "eve", "role": "bogus"}, (400, 404, 400, 403, 404)),
+            ("PATCH", "/v1/teams/team-m", {"name": ""}, (400, 404, 400, 403, 404)),
+            ("POST", "/v1/teams/team-m/archive", {"archived": "x"}, (400, 403, 403, 403, 403)),
+            ("POST", "/v1/teams/team-m/environment", {"worker_id": "env-m"}, (409, 403, 403, 403, 403)),
+            ("PATCH", "/v1/workers/env-m", {"name": ""}, (400, 403, 403, 403, 403)),
+            ("POST", "/v1/workers/env-m/retire", {}, (409, 403, 403, 403, 403)),
             ("POST", f"/v1/workflows/{self.flow['id']}/versions", {"name": "矩阵流程", "steps": steps, "expected_version": 999},
              (404, 404, 409, 403, 404)),
         ]

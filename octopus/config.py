@@ -18,11 +18,15 @@ ISOLATION = ("trusted-local", "dedicated")
 MAC_KIROCREW_PYTHON = Path("/Applications/KiroCrew.app/Contents/Resources/backend-dist/"
                            "kirocrew-backend-arm64/bin/python3.12")
 PATHS = {"data_dir", "worker_data_dir", "worker_token_file", "crew_home", "kiro_home", "routing_log",
-         "log_dir", "gateway_runtime_file", "kirocrew_python", "adapters_dir", "origin_secret_file", "worker_ca_file"}
-INTS = {"api_port": (1, 65535), "worker_port": (1, 65535), "gateway_port": (1, 65535), "engine_workers": (1, 32)}
+         "log_dir", "gateway_runtime_file", "kirocrew_python", "adapters_dir", "origin_secret_file", "worker_ca_file",
+         "credentials_key_file"}
+INTS = {"api_port": (1, 65535), "worker_port": (1, 65535), "gateway_port": (1, 65535), "engine_workers": (1, 32),
+        "preview_tls_port": (1, 65535)}
 FLOATS = {"retry_unavailable": (0.0, 600.0), "shutdown_grace": (0.0, 300.0)}
-STRINGS = {"api_host", "worker_host", "public_url", "crew_url", "worker_isolation", "approval_mode", "crew_entry_ttl"}
+STRINGS = {"api_host", "worker_host", "public_url", "crew_url", "worker_isolation", "approval_mode", "crew_entry_ttl",
+           "preview_tls_name", "preview_url", "preview_domain", "default_admission"}
 APPROVAL = ("", "auto", "interactive")
+BOOLS = {"crew_yolo"}
 # Lifetime of the native browser login minted for "open in KiroCrew": 1–480 minutes or 1–8 hours (K03).
 ENTRY_TTL = re.compile(r"(?:[1-9]|[1-9][0-9]|[1-3][0-9]{2}|4[0-7][0-9]|480)m|[1-8]h")
 HOST = re.compile(r"^[A-Za-z0-9.\-]+(:\d{1,5})?$|^\[[0-9A-Fa-f:]+\](:\d{1,5})?$")
@@ -45,7 +49,13 @@ class Settings:
     api_host: str = "127.0.0.1"
     api_port: int = 8918
     allowed_hosts: tuple[str, ...] = ()
+    disabled_tools: tuple[str, ...] = ("opencode",)   # K01: OpenCode returns no result on EC2; disabled until it is fixed
+    # Self-hosted Git instances on a private network that repository credentials may name (D35; others are refused).
+    credentials_private_hosts: tuple[str, ...] = ()
     public_url: str = ""
+    # The remote preview's own distribution (D36 §5.2), e.g. https://dxxxx.cloudfront.net; empty: no remote preview.
+    preview_url: str = ""
+    preview_domain: str = ""   # D36 phase 3: each Session's preview at https://<run-id>.<preview_domain>/ (wildcard certificate)
     engine_workers: int = 4
     retry_unavailable: float = 2.0
     shutdown_grace: float = 30.0
@@ -56,13 +66,22 @@ class Settings:
     crew_url: str = ""
     # KiroCrew native tool/spawn approval for this boundary; "" keeps the legacy seed default.
     approval_mode: str = ""
+    default_admission: str = "confirm"   # D44 / D55: a Session without `admission` or a matching rule waits for its plan's confirmation
+    # KiroCrew's standing YOLO on this boundary (agent.dangerously_skip_permissions, re-applied at every Gateway start):
+    # on by the owner's direction (2026-10-15); false returns to approving each tool request (D38 phase 2 then has work).
+    crew_yolo: bool = True
     crew_entry_ttl: str = "8h"
+    # A Worker host's nginx preview port and the name its certificate carries (D36 §5.2); unset on the platform host.
+    preview_tls_port: int = 0
+    preview_tls_name: str = ""
     kirocrew_python: Path | None = None
     adapters_dir: Path | None = None
     # Secret CloudFront adds as X-Origin-Verify; when set, only verified (or host-local) requests are served.
     origin_secret_file: Path | None = None
     # Private CA that signs remote Worker hosts' TLS certificates (D28); the platform trusts only it for HTTPS Workers.
     worker_ca_file: Path | None = None
+    # Master key of the sealed repository credentials (D35 §3.3); unset: <data_dir>/credentials.key, created on first use.
+    credentials_key_file: Path | None = None
     path_prepend: tuple[Path, ...] = ()
     # KiroCrew releases accepted beyond the verified set, only after their contract check passed.
     kirocrew_versions: tuple[str, ...] = ()
@@ -76,7 +95,8 @@ def _path(value, base):
 
 def _layer(values, base):
     """Validate one layer's raw values and resolve its relative paths against ``base``."""
-    known = PATHS | set(INTS) | set(FLOATS) | STRINGS | {"allowed_hosts", "path_prepend", "tools", "kirocrew_versions"}
+    known = PATHS | set(INTS) | set(FLOATS) | STRINGS | BOOLS | {"allowed_hosts", "path_prepend", "tools", "kirocrew_versions",
+                                                         "credentials_private_hosts", "disabled_tools"}
     unknown = set(values) - known
     if unknown:
         raise ConfigError("未知配置项：" + ", ".join(sorted(unknown)))
@@ -104,11 +124,24 @@ def _layer(values, base):
             if not low <= number <= high:
                 raise ConfigError(f"{key} 须在 {low}–{high} 之间")
             result[key] = number
-        elif key == "allowed_hosts":
+        elif key in BOOLS:
+            words = {"true": True, "1": True, "yes": True, "on": True, "false": False, "0": False, "no": False, "off": False}
+            if isinstance(value, bool):
+                result[key] = value
+            elif isinstance(value, str) and value.strip().lower() in words:
+                result[key] = words[value.strip().lower()]
+            else:
+                raise ConfigError(f"{key} 必须为 true 或 false")
+        elif key in ("allowed_hosts", "credentials_private_hosts"):
             hosts = tuple(h.strip() for h in (value.split(",") if isinstance(value, str) else value) if h.strip())
             if not all(HOST.match(h) for h in hosts):
-                raise ConfigError("allowed_hosts 只能包含 host[:port]")
+                raise ConfigError(f"{key} 只能包含 host[:port]")
             result[key] = hosts
+        elif key == "disabled_tools":   # Coding tools this boundary reports as unavailable (K01: OpenCode for now)
+            names = tuple(v.strip() for v in (value.split(",") if isinstance(value, str) else value) if str(v).strip())
+            if not set(names) <= {"kiro", "claude", "codex", "opencode"}:
+                raise ConfigError("disabled_tools 只能包含 kiro、claude、codex、opencode")
+            result[key] = names
         elif key == "kirocrew_versions":
             versions = tuple(v.strip() for v in (value.split(",") if isinstance(value, str) else value) if str(v).strip())
             if not all(re.fullmatch(r"[0-9][0-9A-Za-z.+-]*", v) for v in versions):
@@ -128,8 +161,15 @@ def _layer(values, base):
                 raise ConfigError("worker_isolation 只能是 trusted-local 或 dedicated")
             if key == "approval_mode" and value not in APPROVAL:
                 raise ConfigError("approval_mode 只能是 auto 或 interactive（留空表示不指定）")
+            if key == "default_admission" and value not in ("auto", "confirm"):
+                raise ConfigError("default_admission 只能是 auto 或 confirm")
             if key == "crew_entry_ttl" and not ENTRY_TTL.fullmatch(value):
                 raise ConfigError("crew_entry_ttl 只能是 1–480m 或 1–8h")
+            if key == "preview_url" and value and not re.fullmatch(r"https?://[A-Za-z0-9.\-]+(:\d{1,5})?/?", value):
+                raise ConfigError("preview_url 只能是 https://<域名>[:端口]")
+            if key == "preview_domain" and value and not re.fullmatch(
+                    r"[a-z0-9]([a-z0-9-]*[a-z0-9])?(\.[a-z0-9]([a-z0-9-]*[a-z0-9])?)+", value):
+                raise ConfigError("preview_domain 只能是小写域名，如 preview.example.com（会话的预览在 <run-id>.<preview_domain>）")
             result[key] = value
     return result
 
@@ -137,7 +177,8 @@ def _layer(values, base):
 def _environment(environ):
     # Only known settings are read: the OCTOPUS_ namespace is shared with secrets passed by name
     # (e.g. `init --password-env OCTOPUS_ADMIN_PASSWORD`). Unknown keys are still errors in files.
-    known = PATHS | set(INTS) | set(FLOATS) | STRINGS | {"allowed_hosts", "path_prepend", "kirocrew_versions"}
+    known = PATHS | set(INTS) | set(FLOATS) | STRINGS | BOOLS | {"allowed_hosts", "path_prepend", "kirocrew_versions",
+                                                         "credentials_private_hosts", "disabled_tools"}
     values, tools = {}, {}
     for key, value in environ.items():
         if key.startswith("OCTOPUS_TOOL_"):

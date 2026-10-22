@@ -66,8 +66,10 @@ class BootstrapTests(unittest.TestCase):
         self.assertEqual((again["id"], again["created"], again["updated"]), (first["id"], False, True))
         with self.db.read() as c:
             config = json.loads(c.execute("SELECT config FROM workers WHERE id=?", (first["id"],)).fetchone()[0])
-        self.assertEqual((config["url"], config["token"], config["capabilities"]["boundary"]),
-                         ("https://10.0.0.7:8943", "n" * 40, "b-new"))
+        from octopus import vault   # D59: the token is stored sealed
+        self.assertEqual((config["url"], vault.open_(vault.key_file(None, self.db.root), config["token_sealed"]),
+                          config["capabilities"]["boundary"]), ("https://10.0.0.7:8943", "n" * 40, "b-new"))
+        self.assertNotIn("token", config)
 
     def test_re_registering_a_worker_host_an_admin_has_shared_updates_it(self):
         # Observed on EC2: w1 had been shared from the console, and worker-host register then tried to create it (409).

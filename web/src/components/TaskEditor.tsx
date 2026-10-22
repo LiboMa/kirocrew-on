@@ -14,8 +14,9 @@ export function newStep(): Step {
 }
 
 /** Ordered tasks (at most 8): name, prompt and agent per task; reorder, add and remove. */
-export function TaskEditor({ tasks, onChange, models, idPrefix, title, hint, readOnly = false }: {
-  tasks: Step[]; onChange: (tasks: Step[]) => void; models?: Partial<Record<Tool, string[]>>; idPrefix: string;
+export function TaskEditor({ tasks, onChange, models, defaults, idPrefix, title, hint, readOnly = false }: {
+  tasks: Step[]; onChange: (tasks: Step[]) => void; models?: Partial<Record<Tool, string[]>>;
+  defaults?: Partial<Record<Tool, string>>; idPrefix: string;
   title: string; hint?: ReactNode; readOnly?: boolean;
 }) {
   const change = (index: number, patch: Partial<Step>) => onChange(tasks.map((t, i) => (i === index ? { ...t, ...patch } : t)));
@@ -29,7 +30,7 @@ export function TaskEditor({ tasks, onChange, models, idPrefix, title, hint, rea
       <div className="flex items-center justify-between">
         <h3 className="text-sm font-semibold">{title} <span className="font-normal text-muted-foreground">· {tasks.length} Tasks</span></h3>
         {!readOnly && (
-          <Button type="button" size="sm" variant="outline" id={idPrefix + "-add"} disabled={tasks.length >= 8}
+          <Button type="button" size="sm" variant="outline" id={idPrefix + "-add"} disabled={tasks.length >= 12}
             onClick={() => onChange([...tasks, newStep()])}><Plus /> 添加任务</Button>
         )}
       </div>
@@ -64,7 +65,7 @@ export function TaskEditor({ tasks, onChange, models, idPrefix, title, hint, rea
                     <Label htmlFor={`${idPrefix}-${index}-prompt`}>Agent 提示词 / 任务说明</Label>
                     <Textarea id={`${idPrefix}-${index}-prompt`} rows={5} value={task.prompt} onChange={(e) => change(index, { prompt: e.target.value })} />
                   </div>
-                  <AgentFields idPrefix={`${idPrefix}-${index}`} models={models} value={task}
+                  <AgentFields idPrefix={`${idPrefix}-${index}`} models={models} defaults={defaults} value={task}
                     onChange={(agent) => change(index, { ...agent, effort: agent.tool === "opencode" ? "" : agent.effort })} />
                 </fieldset>
               </CollapsibleContent>

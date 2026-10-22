@@ -63,6 +63,14 @@ class ConfigTests(unittest.TestCase):
         s = load(path, environ={**self.env, "OCTOPUS_TOOL_CODEX": "/opt/tools/codex"}, cwd=self.cwd)
         self.assertEqual(s.tools, {"claude": Path("/opt/tools/claude"), "codex": Path("/opt/tools/codex")})
 
+    def test_crew_yolo_is_on_unless_turned_off(self):
+        self.assertIs(load(environ=self.env, cwd=self.cwd).crew_yolo, True)
+        self.assertIs(load(self.write("crew_yolo = false\n"), environ=self.env, cwd=self.cwd).crew_yolo, False)
+        self.assertIs(load(environ={**self.env, "OCTOPUS_CREW_YOLO": "false"}, cwd=self.cwd).crew_yolo, False)
+        self.assertIs(load(environ={**self.env, "OCTOPUS_CREW_YOLO": "1"}, cwd=self.cwd).crew_yolo, True)
+        with self.assertRaises(ConfigError):
+            load(self.write('crew_yolo = "maybe"\n'), environ=self.env, cwd=self.cwd)
+
     def test_invalid_values_are_rejected(self):
         for text in ('api_port = 0\n', 'unknown_key = 1\n', 'worker_isolation = "shared"\n',
                      'engine_workers = 99\n', '[tools]\ngemini = "/x"\n', 'allowed_hosts = ["bad host"]\n'):
@@ -76,6 +84,21 @@ class ConfigTests(unittest.TestCase):
         s = load(environ=env, cwd=self.cwd)
         self.assertEqual(s.api_port, 9300)
         self.assertNotIn("secret-value-123", repr(s))
+
+    def test_disabled_tools_default_to_opencode_and_are_validated(self):
+        self.assertEqual(load(environ=self.env, cwd=self.cwd).disabled_tools, ("opencode",))   # K01
+        self.assertEqual(load(self.write('disabled_tools = []\n'), environ=self.env, cwd=self.cwd).disabled_tools, ())
+        self.assertEqual(load(self.write('disabled_tools = ["codex"]\n'), environ=self.env, cwd=self.cwd).disabled_tools, ("codex",))
+        with self.assertRaises(ConfigError):
+            load(self.write('disabled_tools = ["gemini"]\n'), environ=self.env, cwd=self.cwd)
+
+    def test_default_admission_is_confirm_and_validated(self):
+        # D55 (owner 2026-10-21): a plan is shown first; repository rules let trusted repositories start at once
+        self.assertEqual(load(environ=self.env, cwd=self.cwd).default_admission, "confirm")
+        self.assertEqual(load(self.write('default_admission = "auto"\n'), environ=self.env, cwd=self.cwd).default_admission,
+                         "auto")
+        with self.assertRaises(ConfigError):
+            load(self.write('default_admission = "later"\n'), environ=self.env, cwd=self.cwd)
 
     def test_approval_mode_is_optional_and_validated(self):
         self.assertEqual(load(environ=self.env, cwd=self.cwd).approval_mode, "")

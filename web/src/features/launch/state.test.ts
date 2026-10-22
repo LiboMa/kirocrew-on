@@ -1,6 +1,6 @@
 import { describe, expect, test } from "vitest";
 import type { Resolution, Step } from "@/api/types";
-import { draftKey, initialDraft, nameFrom, restoreDraft, selectionOf, submitBody, validateStep, type Draft } from "@/features/launch/state";
+import { draftKey, initialDraft, nameFrom, restoreDraft, selectionOf, submitBody, validateStep, withSource, type Draft } from "@/features/launch/state";
 
 const steps: Step[] = [{ id: "code", name: "实现", tool: "claude", model: "auto", effort: "", prompt: "实现" }];
 const resolved = (input: string): Resolution => ({ input, name: "修复登录", workflow_name: "Bug 修复", reason: "匹配", steps,
@@ -37,7 +37,7 @@ describe("wizard validation", () => {
     expect(validateStep(0, draft({ source: "git", url: "" }), { workflowMode: false })).toContain("Git URL");
     expect(validateStep(0, draft({ source: "" }), { workflowMode: true })).toBe("");
     expect(validateStep(0, draft({}), { workflowMode: false, teamWithoutEnvironment: "Web 组" }))
-      .toBe("Team「Web 组」当前没有可用的执行环境（未分配或已停用），请联系平台管理员。");
+      .toBe("Team「Web 组」当前没有可用的执行环境（未分配或已停用），你也还没有自己的执行边界，请联系平台管理员。");
     expect(validateStep(0, draft({}), { workflowMode: true, teamWithoutEnvironment: "Web 组" })).toBe("");
   });
 
@@ -103,5 +103,33 @@ describe("reopening the wizard", () => {
   test("without a seed the whole draft resumes", () => {
     const saved = draft({ choice: "custom", tasks: steps, method: "import" as const });
     expect(restoreDraft({}, saved, initialDraft({}, { worker: "" }))).toMatchObject({ method: "import", tasks: steps });
+  });
+  test("a git Session may ask to be published on completion (D47)", () => {
+    const body = submitBody(draft({ method: "agent", tasks: [], source: "git", url: "https://x/y.git", autoPublish: true }));
+    expect(body.publish).toEqual({ auto: true });
+    expect(submitBody(draft({ method: "agent", tasks: [], source: "git", url: "https://x/y.git" })).publish).toBeUndefined();
+    expect(submitBody(draft({ method: "agent", tasks: [], autoPublish: true })).publish).toBeUndefined();   // a new project has no repository
+  });
+  test("publishing a new project to a new repository needs its owner, name and credential (D48)", () => {
+    const base = { method: "agent" as const, tasks: [], source: "new" as const, autoPublish: true };
+    expect(validateStep(0, draft(base), { workflowMode: false })).toContain("新仓库");
+    expect(validateStep(0, draft({ ...base, newRepoOwner: "LiboMa", newRepoName: "../x", newRepoCredential: "c" }),
+      { workflowMode: false })).toContain("仓库名");
+    expect(validateStep(0, draft({ ...base, newRepoOwner: "LiboMa", newRepoName: "demo", newRepoCredential: "c" }),
+      { workflowMode: false })).toBe("");
+    expect(validateStep(0, draft({ ...base, autoPublish: false }), { workflowMode: false })).toBe("");
+  });
+
+  test("switching the source does not carry 「完成后自动发布」 over (D48)", () => {
+    const git = draft({ source: "git", url: "https://x/y.git", autoPublish: true });
+    expect(withSource(git, "new").autoPublish).toBe(false);
+    expect(withSource(git, "git").autoPublish).toBe(true);
+  });
+
+  test("a new project can be published to a new repository on completion (D48)", () => {
+    const body = submitBody(draft({ method: "agent", tasks: [], source: "new", autoPublish: true,
+      newRepoOwner: "LiboMa", newRepoName: "demo", newRepoCredential: "cred-w" }));
+    expect(body.publish).toEqual({ auto: true, repository: { owner: "LiboMa", name: "demo", private: true }, credential: "cred-w" });
+    expect(submitBody(draft({ method: "agent", tasks: [], source: "new", autoPublish: true })).publish).toBeUndefined();
   });
 });

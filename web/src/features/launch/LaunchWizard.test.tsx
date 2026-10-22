@@ -4,7 +4,7 @@ import userEvent from "@testing-library/user-event";
 import { App } from "@/App";
 import { setToken } from "@/api/client";
 import type { Resolution, Step } from "@/api/types";
-import { makeRun, mockApi, workspaceRoutes } from "@/test/api";
+import { makeRun, mockApi, runPage, workspaceRoutes } from "@/test/api";
 
 const bugfix: Step[] = [
   { id: "reproduce", name: "复现与定位", tool: "kiro", model: "auto", effort: "", prompt: "复现问题" },
@@ -32,7 +32,7 @@ function start(extra: Record<string, unknown> = {}) {
   const calls = mockApi(workspaceRoutes([], {
     "GET /workflow-templates": templates,
     "POST /workflows/resolve": (body: unknown) => resolve(body as { input: string }),
-    "GET /runs": () => (submitted ? [created] : []),
+    "GET /runs": (_body: unknown, url: URL) => runPage(submitted ? [created] : [], url),
     "POST /runs": () => { submitted = true; return created; },
     [`GET /runs/${created.id}`]: created,
     ...extra,
@@ -58,7 +58,41 @@ afterEach(() => {
   window.history.replaceState(null, "", "/");
 });
 
+const credentials = [
+  { id: "cred-1", name: "bob 的 GitHub", kind: "github_pat", host: "github.com", scope: "user", access: "read", hint: "…1a2b",
+    owner: { id: "u1", username: "fixture-owner" }, repos: [], disabled: false, can_manage: true },
+  { id: "cred-2", name: "GitLab", kind: "gitlab_token", host: "gitlab.example.com", scope: "user", access: "read", hint: "…0000",
+    owner: { id: "u1", username: "fixture-owner" }, repos: [], disabled: false, can_manage: true },
+];
+
+async function submitGit(dialog: HTMLElement, calls: { method: string; path: string; body: unknown }[], credential?: string) {
+  await userEvent.type(within(dialog).getByLabelText("这次要完成什么？"), "修复私有仓库里的登录 Bug。");
+  await userEvent.selectOptions(within(dialog).getByLabelText("代码来源"), "git");
+  await userEvent.type(within(dialog).getByLabelText("Git URL"), "https://github.com/kirocrew/app.git");
+  const select = await within(dialog).findByLabelText("仓库凭证");
+  expect(within(select).getAllByRole("option").map((o) => o.textContent)).toEqual(["自动匹配（按仓库选择可用凭证）", "bob 的 GitHub · 个人 · …1a2b"]);
+  if (credential) await userEvent.selectOptions(select, credential);
+  await next(dialog);
+  await next(dialog);
+  await next(dialog);
+  await userEvent.click(within(dialog).getByRole("button", { name: "确认任务并提交" }));
+  await waitFor(() => expect(calls.some((c) => c.method === "POST" && c.path === "/v1/runs")).toBe(true));
+  return calls.find((c) => c.method === "POST" && c.path === "/v1/runs")?.body as Record<string, unknown>;
+}
+
 describe("launch wizard", () => {
+  test("a Git source can name the credential for its host", async () => {
+    const calls = start({ "GET /credentials": credentials });
+    const body = await submitGit(await openWizard(), calls, "cred-1");
+    expect(body).toMatchObject({ source: { type: "git", url: "https://github.com/kirocrew/app.git" }, credentials: { source: "cred-1" } });
+  });
+
+  test("left to matching, no credential is named", async () => {
+    const calls = start({ "GET /credentials": credentials });
+    const body = await submitGit(await openWizard(), calls);
+    expect(body.credentials).toBeUndefined();
+  });
+
   test("each step explains what is missing before moving on", async () => {
     start();
     const dialog = await openWizard();
@@ -89,6 +123,81 @@ describe("launch wizard", () => {
     const body = calls.find((c) => c.method === "POST" && c.path === "/v1/runs")?.body as Record<string, unknown>;
     expect(body).toMatchObject({ plan: "agent", input: "修复登录失败的 Bug，并补充回归测试。", source: { type: "new" } });
     expect(body.steps).toBeUndefined();
+  });
+
+  test("the platform chooses where the Session runs unless one is picked (D49)", async () => {
+    const own = { ...worker, id: "b-own", name: "owner", scope: "dedicated", capabilities: { ...worker.capabilities, isolation: "dedicated" } };
+    const calls = start({ "GET /workers": [own, { ...worker, id: "w-shared", scope: "shared" }], "GET /placement": {
+      space: "personal", hint: "你还没有自己的执行边界：示例提示",
+      default: { id: "b-own", name: "owner", scope: "dedicated", placement: "own" },
+      options: [{ id: "b-own", name: "owner", scope: "dedicated", own: true, isolation: "dedicated", models: {} },
+        { id: "w-shared", name: "personal", scope: "shared", own: false, isolation: "trusted-local", models: {} }] } });
+    const dialog = await openWizard();
+    const select = await within(dialog).findByLabelText("执行 Worker");
+    await waitFor(() => expect(within(select).getAllByRole("option").map((o) => o.textContent))
+      .toEqual(["自动：将在 owner 执行", "owner · 专属环境", "personal · 个人本机"]));
+    expect(select).toHaveValue("");
+    expect(dialog.querySelector("#placement-hint")).toHaveTextContent("示例提示");
+    await fillNeed(dialog);
+    await next(dialog);
+    await next(dialog);
+    await next(dialog);
+    await userEvent.click(within(dialog).getByRole("button", { name: "确认任务并提交" }));
+    await waitFor(() => expect(calls.some((c) => c.method === "POST" && c.path === "/v1/runs")).toBe(true));
+    expect(calls.find((c) => c.method === "POST" && c.path === "/v1/runs")?.body).not.toHaveProperty("worker_id");
+  });
+
+  test("a Team without an environment still takes a member who has an own boundary (D49 R2, final review)", async () => {
+    const calls = start({ "GET /teams": [{ id: "team-1", name: "平台组", role: "owner", created: 1, members: [], environment: null }],
+      "GET /placement": (_b: unknown, url: URL) => url.searchParams.get("team_id") === "team-1"
+        ? { space: "team-1", hint: null, default: { id: "b-own", name: "owner", scope: "dedicated", placement: "own" },
+          options: [{ id: "b-own", name: "owner", scope: "dedicated", own: true, isolation: "dedicated", models: {} }] }
+        : { space: "personal", hint: null, default: null, options: [] } });
+    const dialog = await openWizard();
+    await userEvent.selectOptions(within(dialog).getByLabelText("执行空间"), "team-1");
+    await waitFor(() => expect(within(within(dialog).getByLabelText("执行 Worker")).getAllByRole("option")[0])
+      .toHaveTextContent("自动：将在 owner 执行"));
+    expect(dialog.querySelector("#space-environment")).toBeNull();
+    await fillNeed(dialog);
+    await next(dialog);
+    expect(within(dialog).queryByRole("alert")).toBeNull();
+    expect(within(dialog).getByRole("radio", { name: /KiroCrew 自动规划/ })).toBeInTheDocument();
+    expect(calls.some((c) => c.path === "/v1/placement")).toBe(true);
+  });
+
+  test("changing the space leaves the choice to the platform again (D49)", async () => {
+    start({ "GET /workers": [worker] });
+    const dialog = await openWizard();
+    const select = await within(dialog).findByLabelText("执行 Worker");
+    await waitFor(() => expect(within(select).getAllByRole("option")[0]).toHaveTextContent("自动：将在 personal 执行"));
+    await userEvent.selectOptions(select, "w1");
+    await userEvent.selectOptions(within(dialog).getByLabelText("执行空间"), "team-1");
+    expect(select).toHaveValue("");
+    await waitFor(() => expect(within(select).getAllByRole("option")[0]).toHaveTextContent("稍后分配 Worker"));   // the Team's own answer
+  });
+
+  test("the task models are those of where it will run: the platform's default, then the one picked (D49)", async () => {
+    const cold = { ...worker, id: "b-own", name: "owner", scope: "dedicated", capabilities: { models: { claude: ["auto"] } } };
+    const warm = { ...worker, id: "w-shared", name: "personal", scope: "shared" };
+    start({ "GET /workers": [cold, warm], "GET /placement": { space: "personal", hint: null,
+      default: { id: "b-own", name: "owner", scope: "dedicated", placement: "own" },
+      options: [{ id: "b-own", name: "owner", scope: "dedicated", own: true, isolation: "dedicated", models: { claude: ["auto", "opus-from-placement"] } },
+        { id: "w-shared", name: "personal", scope: "shared", own: false, isolation: "trusted-local", models: { claude: ["auto", "sonnet"] } }] } });
+    const dialog = await openWizard();
+    await fillNeed(dialog);
+    await next(dialog);
+    await userEvent.click(within(dialog).getByRole("radio", { name: /参考模板/ }));
+    await userEvent.click(await within(dialog).findByRole("button", { name: /最小实现与审查/ }));
+    await next(dialog);
+    const model = () => within(dialog).getAllByLabelText("模型")[0];
+    // the platform's own answer for the default environment, not a copy kept elsewhere in the console
+    expect(within(model()).getAllByRole("option").map((o) => o.getAttribute("value"))).toEqual(["auto", "opus-from-placement"]);
+    await userEvent.click(within(dialog).getByRole("button", { name: "上一步" }));
+    await userEvent.click(within(dialog).getByRole("button", { name: "上一步" }));
+    await userEvent.selectOptions(within(dialog).getByLabelText("执行 Worker"), "w-shared");
+    await next(dialog);
+    await next(dialog);
+    expect(within(model()).getAllByRole("option").map((o) => o.getAttribute("value"))).toEqual(["auto", "sonnet"]);
   });
 
   test("reference template: a picked card is submitted as that template", async () => {
@@ -141,6 +250,45 @@ describe("launch wizard", () => {
     expect(body.steps.map((s) => s.tool)).toEqual(["kiro", "claude"]);
     expect(body.steps[1].prompt).toBe("修复并覆盖会话过期");
     expect(calls.find((c) => c.path === "/v1/workflows/parse")?.body).toEqual({ content: "```json\n{\"steps\": []}\n```" });
+  });
+
+  test("an invalid recommendation says why and can be imported to fix (D66)", async () => {
+    const raw = "说明\n```json\n{\"name\": \"建议\", \"steps\": []}\n```";
+    const calls = start({
+      "GET /workers": [worker],
+      "POST /designs": { id: "run-design", version: 1, status: "preparing" },
+      "GET /designs/run-design": { id: "run-design", version: 1, status: "invalid", raw_result: raw,
+        error: "KiroCrew 生成内容尚未通过工作流校验：流程须包含 1–12 个顺序任务" },
+    });
+    const dialog = await openWizard();
+    await fillNeed(dialog);
+    await next(dialog);
+    await userEvent.click(within(dialog).getByRole("radio", { name: /KiroCrew 推荐/ }));
+    await waitFor(() => expect(within(dialog).getByRole("button", { name: "让 KiroCrew 推荐" })).toBeEnabled());
+    await waitFor(() => expect(calls.some((c) => c.path === "/v1/workflows/resolve")).toBe(true));
+    await userEvent.click(within(dialog).getByRole("button", { name: "让 KiroCrew 推荐" }));
+    expect(await within(dialog).findByText(/流程须包含 1–12 个顺序任务/)).toBeInTheDocument();
+    expect(within(dialog).queryByText(/返回内容格式无效/)).toBeNull();   // the reason, not a vague label before it
+    await next(dialog);   // the step's own message names the reason too
+    expect(within(dialog).getAllByText(/流程须包含 1–12 个顺序任务/).length).toBeGreaterThan(0);
+    await userEvent.click(within(dialog).getByRole("button", { name: "导入并修改" }));
+    expect(await within(dialog).findByLabelText(/工作流内容/)).toHaveValue(raw);
+  });
+
+  test("while KiroCrew fixes its recommendation the wizard says so (D66)", async () => {
+    const calls = start({
+      "GET /workers": [worker],
+      "POST /designs": { id: "run-design", version: 1, status: "preparing" },
+      "GET /designs/run-design": { id: "run-design", version: 1, status: "running", repairing: true },
+    });
+    const dialog = await openWizard();
+    await fillNeed(dialog);
+    await next(dialog);
+    await userEvent.click(within(dialog).getByRole("radio", { name: /KiroCrew 推荐/ }));
+    await waitFor(() => expect(within(dialog).getByRole("button", { name: "让 KiroCrew 推荐" })).toBeEnabled());
+    await waitFor(() => expect(calls.some((c) => c.path === "/v1/workflows/resolve")).toBe(true));
+    await userEvent.click(within(dialog).getByRole("button", { name: "让 KiroCrew 推荐" }));
+    expect(await within(dialog).findByText(/上一版未通过平台校验，KiroCrew 正在按原因修正/)).toBeInTheDocument();
   });
 
   test("KiroCrew recommendation: the Agent's tasks replace the draft only when adopted", async () => {
