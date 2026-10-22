@@ -1,16 +1,16 @@
 # 进度与完成记录
 
-> 由 `tools/progress.py` 生成（2026-10-22 11:00 CST）：任务状态取自 `docs/progress.json`，提交记录取自 git。看板：`docs/progress-dashboard.html`；实时看板：`python3 tools/progress.py --serve --ec2`（http://127.0.0.1:8765/）。
+> 由 `tools/progress.py` 生成（2026-10-22 11:30 CST）：任务状态取自 `docs/progress.json`，提交记录取自 git。看板：`docs/progress-dashboard.html`；实时看板：`python3 tools/progress.py --serve --ec2`（http://127.0.0.1:8765/）。
 
-- **本轮完成度**：87%　**MVP 完成度**：56%
-- **分支**：HEAD `117e2fb`；自 `origin/main` 起 397 个提交——已推送 335、已部署 EC2 57、仅本机 5；EC2 运行 `30ca5b7`
+- **本轮完成度**：87%　**MVP 完成度**：55%
+- **分支**：HEAD `3d2bd37`；自 `origin/main` 起 402 个提交——已推送 335、已部署 EC2 64、仅本机 3；EC2 运行 `290718f`
 - **回归**：1412 后端 + 92 + 205 控制台（connect codex / kiro-ide 本机）；EC2 运行 95e5aa9
 
 ## 模块
 
 | 模块 | 完成度 | 已验收 | 已部署 · 待验收 | 本机完成 · 待部署 | 进行中 | 卡点 · 等外部 | 未开始 |
 |---|---|---|---|---|---|---|---|
-| MVP 里程碑（M1–M5） | 56% | 10 | 5 | 1 | 1 | 0 | 10 |
+| MVP 里程碑（M1–M5） | 55% | 10 | 5 | 0 | 2 | 0 | 10 |
 | D46 Agent 角色与提示体系 | 87% | 8 | 3 | 0 | 0 | 1 | 0 |
 | D49 每人一个执行边界 | 80% | 2 | 2 | 0 | 1 | 0 | 0 |
 | D50 编码技能包 | 100% | 2 | 0 | 0 | 0 | 0 | 0 |
@@ -43,16 +43,24 @@
 
 ## 完成记录（按决策，最近的在前）
 
-### D60（5 个提交：仅本机 5）
+### D61（3 个提交：仅本机 3）
 
-- `117e2fb` 2026-10-22 〔仅本机〕 docs: D60 排队可见——运维说明（排队、不计、没有开始、处理）；MVP-RELEASE 与进度看板 M4-4 第 1 期
-- `ef0e4b2` 2026-10-22 〔仅本机〕 feat(engine): 排队可见（D60 Task 2）——KiroCrew 推迟的原生任务在会话显示「排队：等待执行环境资源（原因类别）」，事件 attempt.queued / attempt.dequeued；看门狗不计排队，从排队结束起计时；排队时间不计时间预算；never started 自动重新派发（不占自动重试与预算，连续第 3 次交给协调者，排队前已开始过的照旧交给协调者）
-- `ea26a8a` 2026-10-22 〔仅本机〕 feat(worker): inspect 认出被 KiroCrew 推迟的原生任务（D60）——列表与状态文件都没有时改问 GET /api/spawn/{id}，排队中且任务文字带本 Attempt 标记的回 queued（原因、说明、已等待、是否 resuming），不再报「原生任务归属当前不可核实」
-- `8c8bbe3` 2026-10-22 〔仅本机〕 docs(plan): D60 排队可见的实施计划（3 个任务）
-- `c943720` 2026-10-22 〔仅本机〕 docs(spec): D60 M4-4 第 1 期——排队可见、看门狗不计排队、never started 自动重派（MVP 1.1.0 调研报告任务一；以 EC2 上 KiroCrew 0.10.0 的 spawn 回执与 GET /api/spawn/{id} 为准）
+- `3d2bd37` 2026-10-22 〔仅本机〕 feat(engine): 按并发上限排队（D61 Task 2）——会话的下一个任务开始前，在创建 Attempt 的同一写事务里数个人与 Team 的占用；满了就等待（run.quota_wait 只记一次，「需要处理」写明哪个范围、上限与占用，无需操作），有空位按等待先后开始（run.quota_go，等待不计时长预算）；久未被看到的等待不挡别人；自动重试照常不等待
+- `c76ca8d` 2026-10-22 〔仅本机〕 feat(quotas): 并发上限的存储与接口（D61 Task 1）——迁移 10 quotas（每人默认 / 某人 / 某 Team，1–50）；占用按仍在推进的会话中运行的 Attempt 与协调者诊断计（执行环境停用留下的不计）；GET / POST /v1/quotas（管理员设默认与个人、Team owner 设本 Team），写审计 quota.set；OpenAPI
+- `02198d3` 2026-10-22 〔仅本机〕 docs(spec,plan): D61 M4-4 第 2 期——每人 / 每 Team 的并发上限（设计稿与 4 个任务的实施计划；默认不设、到了上限按等待先后排队）
 
-### D59（9 个提交：已部署 EC2 9）
+### D60（6 个提交：已部署 EC2 6）
 
+- `290718f` 2026-10-22 〔已部署 EC2〕 fix(queue): 终审修正（D60）——已开始过又排队的任务（有 state.json、resuming）也认作排队；排队文字被别的错误盖住后恢复；排队中每 20 秒才看一次；会话的「需要处理」显示排队（无需操作），不再是红色错误
+- `117e2fb` 2026-10-22 〔已部署 EC2〕 docs: D60 排队可见——运维说明（排队、不计、没有开始、处理）；MVP-RELEASE 与进度看板 M4-4 第 1 期
+- `ef0e4b2` 2026-10-22 〔已部署 EC2〕 feat(engine): 排队可见（D60 Task 2）——KiroCrew 推迟的原生任务在会话显示「排队：等待执行环境资源（原因类别）」，事件 attempt.queued / attempt.dequeued；看门狗不计排队，从排队结束起计时；排队时间不计时间预算；never started 自动重新派发（不占自动重试与预算，连续第 3 次交给协调者，排队前已开始过的照旧交给协调者）
+- `ea26a8a` 2026-10-22 〔已部署 EC2〕 feat(worker): inspect 认出被 KiroCrew 推迟的原生任务（D60）——列表与状态文件都没有时改问 GET /api/spawn/{id}，排队中且任务文字带本 Attempt 标记的回 queued（原因、说明、已等待、是否 resuming），不再报「原生任务归属当前不可核实」
+- `8c8bbe3` 2026-10-22 〔已部署 EC2〕 docs(plan): D60 排队可见的实施计划（3 个任务）
+- `c943720` 2026-10-22 〔已部署 EC2〕 docs(spec): D60 M4-4 第 1 期——排队可见、看门狗不计排队、never started 自动重派（MVP 1.1.0 调研报告任务一；以 EC2 上 KiroCrew 0.10.0 的 spawn 回执与 GET /api/spawn/{id} 为准）
+
+### D59（10 个提交：已部署 EC2 10）
+
+- `6243bb5` 2026-10-22 〔已部署 EC2〕 docs: D59 EC2 核对（30ca5b7）——Worker 只剩 token_sealed、数据库文件无明文、3 个 Worker 能力刷新与一个会话走通
 - `30ca5b7` 2026-10-22 〔已部署 EC2〕 fix(workers): 终审修正（D59）——远程预览的校验头从密封的 Token 计算（升级后远程 Worker 不再 500）；主密钥文件丢失或不可读时一律 503 worker_secret；主密钥不可读时平台照常启动（使用密封 Token 的调用 503，跳过本次密封）；每个进程只解开一次（不再每次调用都运行 openssl）；OPERATIONS 写明恢复步骤与 D59 之前的备份含明文
 - `69eaec6` 2026-10-22 〔已部署 EC2〕 fix(transport): 密封 Token 的密钥改由 configure_key 设定，不再覆盖 Worker TLS 证书的 configure（D59，部署前发现）
 - `324e3e7` 2026-10-22 〔已部署 EC2〕 docs: D59 Worker Token 密封——OPERATIONS 主密钥说明、MVP-RELEASE K10、进度
