@@ -54,13 +54,22 @@ def _settled(service, actor, rid, version=None):
 def _changed(config, rid, head):
     """Whether the workspace holds what no candidate has: files changed against the branch's candidate, or commits on it.
     False when the Worker cannot say (before D37, or no workspace)."""
+    state = _check(config, rid, head)
+    return state is not None and bool(state["files"] or state["commits"])
+
+
+def _check(config, rid, head):
+    """What the workspace holds beyond the branch's candidate: changed tracked files, files created since the platform last
+    looked (a Worker before this fix leaves those out) and whether commits were made on it; None when it cannot say."""
     try:
-        state = worker_request(config, "/candidate", {"run_id": rid, "mode": "check", "expected": head["sha"]}, timeout=60)
+        state = worker_request(config, "/candidate", {"run_id": rid, "mode": "check", "expected": head["sha"], "untracked": True},
+                               timeout=60)
     except Error as exc:
         if exc.status == 404 or exc.code in SKIPPED:
-            return False
+            return None
         raise
-    return not (state.get("clean") and state.get("head") == head["sha"])
+    files = list(dict.fromkeys([*(state.get("changed_files") or []), *(state.get("untracked") or [])]))
+    return {"files": files, "commits": state.get("head") != head["sha"]}
 
 
 def collect(service, actor, rid, body):

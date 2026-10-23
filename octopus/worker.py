@@ -697,6 +697,21 @@ class Worker:
                 pass
         return {**state, "created": [], "tracked_only": True}
 
+    @staticmethod
+    def _new_untracked(run, project):
+        """D73: the untracked files the workspace has beyond those its newest review started with (untracked.json, D57 §4):
+        created after the platform last looked — a review moves out what it creates itself, so what the platform's checks
+        left before it is in that list. Every untracked file when no review has run."""
+        snapshots = sorted((p for p in (run / "attempts").glob("attempt-*/untracked.json") if p.is_file() and not p.is_symlink()),
+                           key=lambda p: p.stat().st_mtime)
+        seen = set()
+        if snapshots:
+            try:
+                seen = set(json.loads(snapshots[-1].read_text()).get("paths") or [])
+            except (OSError, ValueError, AttributeError, TypeError):
+                seen = set()
+        return [name for name in workspace.untracked(project) if name not in seen][:200]
+
     def candidate(self, body):
         """A task's candidate commit (D37 §3, ``mode: commit``), a review's check that the workspace is still the
         candidate it reviewed (§6, ``mode: check``), or putting back what a read-only platform task changed in tracked
@@ -725,7 +740,10 @@ class Worker:
             keep = self._review_snapshot(run, body.get("attempt_id")) if mode in {"check", "rewind"} else None
             if mode == "check":
                 require(body.get("expected"), "check 需要 expected")
-                return self._created(workspace.clean_against(project, body["expected"]), project, keep)
+                state = self._created(workspace.clean_against(project, body["expected"]), project, keep)
+                if body.get("untracked") is True:   # D73: what a chat created since the platform last looked
+                    state["untracked"] = self._new_untracked(run, project)
+                return state
             if mode == "restore":
                 require(body.get("expected"), "restore 需要 expected")
                 state = workspace.clean_against(project, body["expected"])
