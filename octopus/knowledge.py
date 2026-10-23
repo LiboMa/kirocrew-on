@@ -123,8 +123,7 @@ def items(report, known=None):
     keep, rest, kept = [], [], set()
     for entry in raw[:30]:
         rule, avoid = _fields(entry)
-        mark = entry.get(MARK) if isinstance(entry, dict) else None
-        verdict = mark if isinstance(mark, dict) else judged(entry)   # D57 §3.3: as written, for an entry stored masked
+        verdict = marked(entry) or judged(entry)   # D57 §3.3: as written, for an entry stored masked
         if not rule:
             rest.append({"rule": "（空条目）", "result": "skipped", "reason": "条目缺少 rule"})
         elif verdict.get("suspicious"):
@@ -148,6 +147,27 @@ def _fields(entry):
     rule = entry.get("rule") if isinstance(entry, dict) else entry
     avoid = entry.get("avoid") if isinstance(entry, dict) else None
     return (rule.strip() if isinstance(rule, str) else ""), (avoid.strip() if isinstance(avoid, str) else "")
+
+
+def unmarked(report):
+    """An Agent's outcome as it is read: its knowledge entries without a MARK of their own (only the platform writes
+    one, when it stores them masked: engine._judged)."""
+    entries = report.get("knowledge")
+    if not isinstance(entries, list):
+        return report
+    return {**report, "knowledge": [{k: v for k, v in entry.items() if k != MARK} if isinstance(entry, dict) else entry
+                                    for entry in entries]}
+
+
+def marked(entry):
+    """The MARK the platform put on an entry it stored masked (engine._judged), when it has exactly the shape the
+    platform writes ({suspicious, too_long, key}: two booleans and a SHA-256); None for anything else there."""
+    mark = entry.get(MARK) if isinstance(entry, dict) else None
+    shaped = isinstance(mark, dict) and set(mark) == {"suspicious", "too_long", "key"}
+    if shaped and type(mark["suspicious"]) is bool and type(mark["too_long"]) is bool and isinstance(mark["key"], str) \
+            and re.fullmatch(r"[0-9a-f]{64}", mark["key"]):
+        return mark
+    return None
 
 
 def judged(entry):

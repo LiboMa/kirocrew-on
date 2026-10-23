@@ -53,6 +53,12 @@ def discovery_loop(worker, stop, first=60, every=900):
             return
 
 
+def said(text, limit, extra=()):
+    """What KiroCrew said, as the platform is told it: masked (the rules, and ``extra``: this Worker's own token, D57
+    §3.3), then cut to ``limit``: no part of a credential the cut runs through is left where no rule knows it."""
+    return workspace.mask_text(str(text), extra)[0][:limit]
+
+
 def write(path, value):
     path.parent.mkdir(parents=True, exist_ok=True)
     temporary = path.with_name("." + path.name + ".tmp")
@@ -343,7 +349,8 @@ class Worker:
             try:
                 return self.native(path) or []
             except crew_api.GatewayError as exc:
-                raise Error(502, "native_error", "读取 KiroCrew 待批准项失败：" + str(exc).splitlines()[0][:200]) from None
+                raise Error(502, "native_error",
+                            "读取 KiroCrew 待批准项失败：" + said(str(exc).splitlines()[0], 200, (self.token,))) from None
         items = []
         for view in read("/api/chat/slots"):
             info = view.get("pending_approval_info") if isinstance(view, dict) and view.get("key") == slot else None
@@ -393,7 +400,8 @@ class Worker:
         except crew_api.GatewayError as exc:   # the platform reads a Worker 404 as "not supported": never pass one on
             if exc.status == 404:
                 raise Error(409, "approval_not_pending", "该批准请求已不在等待中（已被答复或过期）") from None
-            raise Error(502, "native_error", "KiroCrew 未接受答复：" + str(exc).splitlines()[0][:200]) from None
+            raise Error(502, "native_error",
+                        "KiroCrew 未接受答复：" + said(str(exc).splitlines()[0], 200, (self.token,))) from None
         return {"ok": True, "origin": origin, "request_id": wanted[1], "decision": decision}
 
     def native(self, path, body=None, method=None, timeout=None, headers=None):
@@ -431,14 +439,15 @@ class Worker:
                     code = json.loads(text).get("code")
                 except (ValueError, AttributeError):
                     code = None
-                results.append({"rule": item["rule"], "result": "refused", "reason": f"HTTP {exc.status} " + (code or text[:200])})
+                results.append({"rule": item["rule"], "result": "refused",
+                                "reason": f"HTTP {exc.status} " + said(code or text, 200, (self.token,))})
                 continue
             if not answer.get("ok"):
-                results.append({"rule": item["rule"], "result": "refused",
-                                "reason": str(answer.get("reason") or answer.get("outcome") or "未写入")[:200]})
+                reason = said(answer.get("reason") or answer.get("outcome") or "未写入", 200, (self.token,))
+                results.append({"rule": item["rule"], "result": "refused", "reason": reason})
             elif answer.get("superseded"):
-                results.append({"rule": item["rule"], "result": "superseded",
-                                "reason": "替代了：" + "；".join(str(r)[:100] for r in answer["superseded"][:3])})
+                replaced = "；".join(said(r, 100, (self.token,)) for r in answer["superseded"][:3])
+                results.append({"rule": item["rule"], "result": "superseded", "reason": "替代了：" + replaced})
             else:
                 results.append({"rule": item["rule"], "result": "written"})
         return {"results": results}
@@ -453,9 +462,11 @@ class Worker:
         except crew_api.GatewayError as exc:   # the platform reads a Worker 404 as "not supported": never pass one on
             if exc.status == 404:
                 return {"ok": True, "absent": True}   # KiroCrew holds no such lesson (deleted there already)
-            raise Error(502, "native_error", "KiroCrew 未删除：" + str(exc).splitlines()[0][:200]) from None
+            raise Error(502, "native_error",
+                        "KiroCrew 未删除：" + said(str(exc).splitlines()[0], 200, (self.token,))) from None
         if isinstance(answer, dict) and answer.get("ok") is False:
-            raise Error(409, "forget_refused", "KiroCrew 未删除：" + str(answer.get("reason") or "原因未报告")[:200])
+            raise Error(409, "forget_refused",
+                        "KiroCrew 未删除：" + said(answer.get("reason") or "原因未报告", 200, (self.token,)))
         return {"ok": True}
 
     def path(self, rid):
@@ -1404,7 +1415,7 @@ class Worker:
                 # counted:true. Only a recognized JSON client refusal is definitive.
                 refused = exc.status in {400, 401, 403, 404, 409, 422} and "error" in failure and not failure.get("counted")
                 value.update(status="blocked" if refused else "dispatch_unknown",
-                             error=("原生拒绝：" + str(failure["error"])[:1000]) if refused
+                             error=("原生拒绝：" + said(failure["error"], 1000, (self.token,))) if refused
                              else f"Native HTTP {exc.status}; inspect before retry")
             except Exception:
                 value.update(status="dispatch_unknown", error="原生派发回执未确认")
@@ -1557,7 +1568,8 @@ class Worker:
         if not owned and "[OCTOPUS-ATTEMPT:" + attempt + "]" not in str(row.get("task") or ""):
             return None
         elapsed = row.get("elapsed")
-        return {"reason": str(row.get("reason") or "")[:40], "detail": str(row.get("reason_detail") or "")[:300],
+        return {"reason": said(row.get("reason") or "", 40, (self.token,)),
+                "detail": said(row.get("reason_detail") or "", 300, (self.token,)),
                 "elapsed": elapsed if isinstance(elapsed, (int, float)) and not isinstance(elapsed, bool) else None,
                 "resuming": bool(row.get("resuming"))}
 
@@ -1665,7 +1677,8 @@ class Worker:
             # (the platform's may differ), and the /api/spawn row's turns and redacted last tool (state.json's is raw).
             updated = state.get("updated_at") if state else None
             signal = {"turns": native.get("turns", state.get("turns") if state else None),
-                      "last_tool": str(native.get("last_tool") or "")[:200], "status": state.get("status") if state else None}
+                      "last_tool": said(native.get("last_tool") or "", 200, (self.token,)),   # masked, then cut
+                      "status": state.get("status") if state else None}
             if isinstance(updated, (int, float)) and not isinstance(updated, bool):
                 signal.update(updated_at=updated, idle_seconds=max(0.0, time.time() - updated))
             progress = {"progress": signal}
@@ -1722,7 +1735,8 @@ class Worker:
                 raise Error(409, "not_running", "任务已不在运行，补充说明未送达") from None
             if detail.startswith("steer_unsupported"):   # a backend KiroCrew cannot steer (codex)
                 raise Error(409, "steer_unsupported", "该任务的后端不支持补充说明") from None
-            raise Error(502, "native_error", "KiroCrew 未接受补充说明：" + str(exc).splitlines()[0][:200]) from None
+            raise Error(502, "native_error",
+                        "KiroCrew 未接受补充说明：" + said(str(exc).splitlines()[0], 200, (self.token,))) from None
         return {"ok": True, "status": str(answer.get("status") or "steered")}
 
     def _release(self, run):

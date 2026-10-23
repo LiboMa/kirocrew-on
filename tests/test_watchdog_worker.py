@@ -52,6 +52,17 @@ class WatchdogWorkerTests(unittest.TestCase):
         self.assertEqual(progress["last_tool"], "npm test --token=[REDACTED]")   # KiroCrew's redacted row, not state.json's raw title
         self.assertGreater(progress["idle_seconds"], 1e9 - 2000)                # measured on the Worker's own clock
 
+    def test_the_last_tool_is_masked_before_it_is_cut(self):
+        # D57 §3.3: KiroCrew's last tool, cut to 200 characters for the platform, is masked first (its own token too)
+        token = self.node.token
+        self.row["last_tool"] = "curl -H 'Authorization: Bearer " + token + "' " + "y" * 200
+        progress = self.node.inspect({"run_id": RID, "attempt_id": self.attempt})["progress"]
+        self.assertEqual(progress["last_tool"], ("curl -H 'Authorization: Bearer " + token[:4] + "…" + token[-2:] + "' "
+                                                 + "y" * 200)[:200])
+        self.row["last_tool"] = "y" * 180 + " Bearer " + token
+        self.assertEqual(self.node.inspect({"run_id": RID, "attempt_id": self.attempt})["progress"]["last_tool"],
+                         "y" * 180 + " Bearer " + token[:4] + "…" + token[-2:])
+
     def test_without_state_there_is_no_idle_signal(self):
         (self.node.home / "subagents/aabb1234/state.json").unlink()
         progress = self.node.inspect({"run_id": RID, "attempt_id": self.attempt}).get("progress") or {}

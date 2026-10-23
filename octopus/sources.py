@@ -91,16 +91,59 @@ SECRET_RULES = [
 ]
 _PRIVATE_KEY = [kind for kind, _ in SECRET_RULES].index("private_key")
 _KEY_BEGINS, _KEY_ENDS = re.compile(_KEY_BEGIN), re.compile(_KEY_END)
+# Where a text holds a private key's BEGIN or END (owner's ruling, D57 6b), every run of 40 or more base64 characters in
+# it ("\/" as JSON may write "/") is masked as private_key, whatever shape the key's lines are printed in (a diff of an
+# indented key, a summary that repeats it after another prefix): display only, as verdicts are judged on the text as
+# written, so a SHA or a digest next to a key is masked too. A run begins after no base64 (but may after a backslash),
+# so each is tried once; what it begins with that is no key's text is left out of its mask (_NOT_KEY_TEXT), and the
+# rest of it is masked however short.
+_KEY_MARKER = re.compile(rb"-----(?:BEGIN|END) [A-Z ]*PRIVATE KEY(?: BLOCK)?-----")
+_NEAR_A_KEY = re.compile(rb"(?<![A-Za-z0-9+/=])[A-Za-z0-9+/=](?:[A-Za-z0-9+/=]|\\+/){39,}")
+# The letter of an escaped line break right before it ("\n", "\r"), and a label's tail (AWS_SECRET_ACCESS_KEY= is read
+# "KEY=", aws_session_token= "token="): base64 has an "=" only at its end, so what is before one inside a run is a
+# label, shown, and its value is what the precise rules name (aws_secret_key, aws_session_token).
+_NOT_KEY_TEXT = re.compile(rb"(?:(?<=\\)[nr])?(?:[A-Za-z][A-Za-z0-9]{0,31}=(?=[A-Za-z0-9+/]|\\+/))?")
+# A key's lines are one span (one mask, one finding) where what is between two private_key spans is where a line ends
+# and the next line's prefix: 32 bytes at most, the whole chain 8 KB at most (about a diff of two 4096-bit keys). A
+# line ends after spaces, its string's closing quote and a list's comma, in a line break, a shell's backslash and line
+# break, or an escaped one (JSON, repr; "\r\n" as one) — and when a string literal ends there (pprint, pytest -vv's
+# diff of a dict, adjacent literals in Python or C, "…\n" + in Java or JavaScript), its closing quote, a "," "+" or "\"
+# and the line break too (the quote is needed, so that an escaped blank line still splits) — or in what separates a
+# list's strings on one line (', ', ","); the next line's prefix is spaces, pytest's "E", a diff's marker, a string's
+# opening quote, or what the line before had before its text but for its digits (docker compose's "web-1  | ", cat -n,
+# grep -n's "key.pem-26-", a log's timestamps: _PREFIX_SHAPE). Never across a key's END or BEGIN, a blank line or any
+# other line in between, and never for a hex digest (a SHA, sha256sum's), which no key's line is: each of those is its
+# own.
+_CHAIN = 8192
+_KEY_LINE_END = re.compile(rb"[ \t]*(?:\\*['\"],?[ \t]*)?(?:\r?\n|\\\r?\n|\\+(?:r\\+)?[nr]"
+                           rb"(?:[ \t]*\\*['\"][ \t]*[,+\\]?[ \t]*\r?\n|\\\r?\n)?)|\\*['\"], ?\\*['\"]")
+_KEY_LINE_PREFIX = re.compile(rb"(?:E[ \t]+)?[ \t]*(?:[-+?][ \t]*)?(?:\\*['\"])?[ \t]*")
+_ANY_LINE_END = re.compile(rb"\n|\\+[nr]|\\*['\"], ?\\*['\"]")
+_DIGEST = re.compile(rb"[0-9a-f]+|[0-9A-F]+")
 # The lines of base64 right before a private key's END, read backwards from it (so that finding where they begin costs
 # what they are long): whole lines, each with the END line's own prefix "q" (docker compose's "web-1  | ", pytest's
 # "E         + ", grep's "key.pem-" / "key.pem-26-", an indent; captured from the prefix put before a NUL), or, when the
-# END follows an escaped line break, JSON-escaped lines ("\/" reads "/\" backwards).
+# END follows an escaped line break, JSON-escaped lines ("\/" reads "/\" backwards), the first of them after a line
+# break, the string's quote (", ', \") or an ellipsis's "."; above at least one of those, also after a label's "=" or
+# after a space (": ", "the key ").
 _BACKWARDS_BASE64 = rb"(?:[A-Za-z0-9+=]|/\\*)+"
 _LINES_BEFORE = re.compile(rb"(?P<q>[^\0]*)\0(?:\n\r?[ \t]*" + _BACKWARDS_BASE64 + rb"(?P=q)(?=\n|\Z))+")
-_ESCAPED_LINES_BEFORE = re.compile(rb"[ \t]*(?:(?:n\\+(?:r\\+)?|r\\+)[ \t]*" + _BACKWARDS_BASE64
-                                   + rb"[ \t]*(?=[nr]\\|\Z))+")
+_ESCAPED_LINE = rb"(?:n\\+(?:r\\+)?|r\\+)[ \t]*" + _BACKWARDS_BASE64
+_ESCAPED_LINES_BEFORE = re.compile(rb"[ \t]*(?:" + _ESCAPED_LINE + rb"[ \t]*(?=[nr]\\|[\"'.]|\Z))+(?:" + _ESCAPED_LINE
+                                   + rb"(?:[ \t]*(?==)|[ \t]+))?")
+# A diff's lines, whose prefix is the END line's but for the diff's marker column: pytest's ndiff after its
+# "E         " ("- ", "+ ", "  ", and "? " lines of ^ - + under a changed line), a unified diff's "-", "+", " ". Read
+# backwards too, the END line's prefix put before two NULs as "a" (after the column) and "b" (before it).
+_DIFF_MARKS = b"-+ ?"
+_DIFF_LINES_BEFORE = re.compile(rb"(?P<a>[^\0]*)\0(?P<b>[^\0]*)\0(?:(?:\n\r?[-+^][-+^ \t]*\?(?P=b))?\n\r?[ \t]*"
+                                + _BACKWARDS_BASE64 + rb"(?P=a)[-+ ?](?P=b)(?=\n|\Z))+")
+# The line git heads a hunk with ("@@ -16,7 +16,7 @@ <the last line above it that starts with a letter>"): in a key,
+# one of its lines.
+_HUNK_HEADER = re.compile(rb"@@ -[0-9]+(?:,[0-9]+)? \+[0-9]+(?:,[0-9]+)? @@ ")
+_NO_WORD = re.compile(rb"[0-9+/=]")   # what base64 has and a word does not
 _PREFIX_SHAPE = bytes.maketrans(b"0123456789:", b"0000000000-")   # grep: "key.pem:26:" heads its lines "key.pem-25-"
 _BASE64 = frozenset(b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/=")
+_BASE64_BYTES = bytes(sorted(_BASE64))
 
 
 def _masked(value):
@@ -132,6 +175,9 @@ def find_secrets(data, extra=(), cut=None, dropped=True):
         for match in pattern.finditer(data):
             start, end = match.span("secret") if "secret" in pattern.groupindex else match.span()
             spans.append((start, priority, end, kind))
+    if _KEY_MARKER.search(data):   # a key's marker in view: every long run of base64 around it
+        spans += [(_NOT_KEY_TEXT.match(data, match.start()).end(), _PRIVATE_KEY, match.end(), "private_key")
+                  for match in _NEAR_A_KEY.finditer(data)]
     floor = 0
     for match in _KEY_ENDS.finditer(data):   # the lines of a key right before its END, whether or not its BEGIN is there
         start = _lines_before(data, floor, match.start())
@@ -144,19 +190,58 @@ def find_secrets(data, extra=(), cut=None, dropped=True):
                 if not _KEY_BEGINS.search(data, cut, match.start()) and (dropped or _open_key(data, match.start())):
                     spans.append((cut, _PRIVATE_KEY, match.end(), "private_key"))
                 break
-    merged = []   # [start, end, kind]: spans that overlap or touch become their union, named by the first
+    # spans that overlap or touch become their union, named by the first; so do a key's lines (_key_line_after)
+    merged = []   # [start, end, kind, the shape of its last line's prefix, where that line's text begins]
     for start, _, end, kind in sorted(spans):
         if merged and start <= merged[-1][1]:
             merged[-1][1] = max(merged[-1][1], end)
+            continue
+        prefix = _key_line_after(data, merged[-1], start, end) if merged and kind == merged[-1][2] == "private_key" \
+            else None
+        if prefix is not None:
+            merged[-1][1:] = [end, kind, prefix, start]
         else:
-            merged.append([start, end, kind])
+            merged.append([start, end, kind, _prefix_before(data, start) if kind == "private_key" else None, start])
     found, line, counted = [], 1, 0
-    for start, end, kind in merged:
+    for start, end, kind, _, _ in merged:
         line += data.count(b"\n", counted, start)
         counted = start
         found.append({"kind": kind, "start": start, "end": end, "line": line, "masked": _masked(data[start:end]),
                       "hash": hashlib.sha256(data[start:end]).hexdigest()})
     return found
+
+
+def _key_line_after(data, chain, start, end):
+    """The shape (_PREFIX_SHAPE) of the prefix of the line the private_key span ``data[start:end]`` begins after, when
+    it is the next of the key's lines in ``chain`` (a private_key span, as ``find_secrets`` merges them); else None.
+    See _CHAIN."""
+    gap = data[chain[1]:start]
+    if len(gap) > 32 or end - chain[0] > _CHAIN or data.startswith(b"-----", start) or _ends_a_key(data, chain[1]) \
+            or _DIGEST.fullmatch(data, start, end) or _DIGEST.fullmatch(data, chain[4], chain[1]):
+        return None
+    line_end = _KEY_LINE_END.match(gap)
+    if line_end is None:
+        return None
+    prefix = gap[line_end.end():]
+    shape = prefix.translate(_PREFIX_SHAPE)
+    return shape if _KEY_LINE_PREFIX.fullmatch(prefix) or shape == chain[3] else None
+
+
+def _ends_a_key(data, at):
+    """Whether ``data[:at]`` ends with a private key's END (not its BEGIN)."""
+    window = max(at - 256, 0)
+    return data.endswith(b"-----", 0, at) \
+        and data.rfind(b"-----END ", window, at) > data.rfind(b"-----BEGIN ", window, at)
+
+
+def _prefix_before(data, start):
+    """The shape (_PREFIX_SHAPE) of what comes before ``start`` on its line (after a line break, an escaped one, a
+    list's separator), when the line begins at most 32 bytes before it; else None."""
+    last = None
+    for last in _ANY_LINE_END.finditer(data, max(start - 33, 0), start):
+        pass
+    prefix = data[last.end():start] if last else data[:start] if start <= 32 else None
+    return None if prefix is None else prefix.translate(_PREFIX_SHAPE)
 
 
 def _lines_before(data, floor, at):
@@ -170,16 +255,71 @@ def _lines_before(data, floor, at):
     if before[-2:-1] == b"\\" and before[-1:] in (b"n", b"r"):   # in an escaped string: its lines, escaped
         found = _ESCAPED_LINES_BEFORE.match(data[start:at][::-1])
         start = at - found.end() if found else None
-    elif line >= floor and b"\0" not in data[line:at] and (at == line or data[at - 1] not in _BASE64):
-        # (a prefix that ends in base64 could not be told from the line's own characters)
-        prefix = data[line:at].translate(_PREFIX_SHAPE)
-        found = _LINES_BEFORE.match(prefix[::-1] + b"\0" + data[floor:line].translate(_PREFIX_SHAPE)[::-1])
-        start = line - (found.end() - len(prefix) - 1) + len(prefix) if found else None
+    elif line >= floor and b"\0" not in data[line:at]:
+        prefix, heads = _line_prefix(data[line:at].translate(_PREFIX_SHAPE))
+        lines, took = data[floor:line].translate(_PREFIX_SHAPE)[::-1], 0
+        for head in heads:   # where a diff's marker column may be: the one whose lines go furthest back
+            found = (_DIFF_LINES_BEFORE if head.count(b"\0") == 2 else _LINES_BEFORE).match(head + lines)
+            took = max(took, found.end() - len(head) if found else 0)
+        top = line - took   # where the first of the lines begins
+        start = top + len(prefix) if took else None
+        if took and top > floor:   # the first of them may be a value at the end of the line above
+            newline = data.rfind(b"\n", floor, top - 1)
+            value = _value_above(data, newline + 1, top - 1) if newline >= 0 or floor == 0 else None
+            start = start if value is None else value
     else:
         start = None
     while start is not None and data[start:start + 1] in (b" ", b"\t"):
         start += 1
     return start
+
+
+def _line_prefix(prefix):
+    """What each line before an END whose line starts with ``prefix`` (its shape) starts with: (that prefix, the heads
+    to put before the lines read backwards, one for each place a diff's marker column may be — or the prefix as it is).
+    Base64 glued to the END is the key's own, so the prefix ends in none — but for a unified diff's "+" alone or after
+    no base64, which marks the line. The marker column may differ from the END line's: ndiff's when the prefix ends in
+    "- ", "+ ", "  " or "? "; a unified diff's when it ends in "-", "+", " " or "?", or when it is one of "-", "+", " "
+    and an indent (indented text: a YAML Secret, a test fixture); pytest's ndiff of indented text after its
+    "E         ". Only where a line's own characters begin is never in doubt (what comes right before them is no
+    base64), so each is read in linear time."""
+    glued = prefix[-1:] == b"+" and (len(prefix) == 1 or prefix[-2] not in _BASE64)
+    if not glued:
+        prefix = prefix.rstrip(_BASE64_BYTES)
+    columns = []
+    if len(prefix) >= 2 and prefix[-2] in _DIFF_MARKS and prefix[-1:] == b" ":
+        columns.append(len(prefix) - 2)   # ndiff: "- ", "+ ", "  ", "? "
+    if prefix[-1:] and prefix[-1] in _DIFF_MARKS:
+        columns.append(len(prefix) - 1)   # a unified diff's whole prefix: "-", "+", " "
+    if len(prefix) >= 2 and prefix[0] in b"-+ " and not prefix[1:].strip(b" \t"):
+        columns.append(0)   # a unified diff of indented text: the marker, then the indent
+    if len(prefix) > 10 and prefix[:10] == b"E" + b" " * 9 and prefix[10] in _DIFF_MARKS:
+        columns.append(10)   # pytest's ndiff of indented text: "E", nine spaces, the marker, a space, the indent
+    heads = []
+    for column in dict.fromkeys(columns):
+        after, before = prefix[column + 1:][::-1], prefix[:column][::-1]
+        first = (after or before)[:1]   # what comes right before a line's own characters, read backwards
+        if not first or first[0] not in _BASE64:
+            heads.append(after + b"\0" + before + b"\0")
+    return prefix, heads or [prefix[::-1] + b"\0"]
+
+
+def _value_above(data, start, end):
+    """Where the value that ends the line ``data[start:end]`` begins, when it is base64 after a label's "=" or ": ",
+    quoted or not (PRIVATE_KEY=…, PRIVATE_KEY="…, key: '…), after a bare space when it is 10 characters or more with a
+    digit, "+", "/" or "=" in it (using key MIIE…; not a word: "Loading configuration"), or after the header git heads a
+    hunk with (the last line above the hunk that starts with a letter: in a key, one of its lines); None when it ends in
+    none."""
+    row = data[start:end].rstrip(b" \t\r")
+    at = len(row.rstrip(_BASE64_BYTES))
+    label = row.find(b"=", at, len(row.rstrip(b"=")))   # an "=" before the value's own characters ends a label
+    at = label + 1 if label >= 0 else at
+    head = row[:at]
+    unquoted = head[:-1] if head[-1:] in (b'"', b"'") else head
+    named = unquoted.rstrip(b" \t")[-1:] == b"=" or (unquoted.rstrip(b" \t")[-1:] == b":"
+                                                      and unquoted[-1:] in (b" ", b"\t"))
+    spaced = head[-1:] in (b" ", b"\t") and len(row) - at >= 10 and _NO_WORD.search(row, at) is not None
+    return start + at if at < len(row) and (named or spaced or _HUNK_HEADER.fullmatch(head)) else None
 
 
 def _open_key(data, before):

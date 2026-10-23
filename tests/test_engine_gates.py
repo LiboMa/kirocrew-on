@@ -1262,6 +1262,99 @@ class SecretMaskingTests(TeamsWorkersCase):
         self.assertEqual([w["name"] for w in evidence["warnings"]], ["secrets_masked"])
         self.assertEqual(attempt["status"], "accepted")
 
+    def test_an_entry_too_long_only_because_of_a_token_stays_too_long_when_masked_again(self):
+        # Knowledge judges an entry as it was written (knowledge.MARK): the platform's mark outlives the Attempt being
+        # masked again — while its checks run, then when they end — and an Agent's own mark is dropped when it is read
+        from octopus import knowledge
+        from octopus.engine import masked
+        token = json.loads(TeamsWorkersCase.config("b-p"))["token"]
+        long = "约定 " + "长" * (knowledge.RULE - 20) + " " + token   # over RULE as written, within it masked
+        reason = f"超过长度（rule 至多 {knowledge.RULE}、avoid 至多 {knowledge.AVOID} 字符），未写入"
+        evidence = {"outcome": {"decision": "pass", "summary": "完成", "knowledge": [{"rule": long}, "构建用 make build"]}}
+        for _ in range(2):
+            masked(evidence, "task-1", (token,))
+        self.assertNotIn(token, json.dumps(evidence, ensure_ascii=False))
+        keep, rest = knowledge.items(evidence["outcome"])
+        self.assertEqual((keep, [r["reason"] for r in rest]), ([{"rule": "构建用 make build"}], [reason]))
+        worker, rid = FakeWorker(), self.session([TASK])
+        worker.outcomes["task-1"] = {"decision": "pass", "summary": "完成", "knowledge": [
+            {"rule": long}, {"rule": "干净的约定", knowledge.MARK: {"suspicious": True, "too_long": True}}]}
+        worker.verify = [{"state": "running", "passed": None, "failed": None, "results": []},
+                         {"state": "done", "passed": True, "failed": None,
+                          "results": [{"command": "npm test", "exit": 0, "seconds": 1.0, "tail": "ok"}]}]
+        self.run_engine(worker)
+        attempt, evidence = self.attempt(rid, "task-1")
+        self.assertEqual(attempt["status"], "accepted")
+        self.assertNotIn(token, self.stored())
+        keep, rest = knowledge.items(evidence["outcome"])
+        self.assertEqual((keep, [r["reason"] for r in rest]), ([{"rule": "干净的约定"}], [reason]))
+
+    def test_what_the_worker_answers_a_poll_or_a_stop_with_keeps_no_workers_token(self):
+        # what the Worker says of the Session (a dispatch it cannot confirm, its answer to a stop): masked with its token
+        token = json.loads(TeamsWorkersCase.config("b-p"))["token"]
+        worker, rid = FakeWorker(), self.session([TASK])
+
+        def call(config, path, body=None, **kwargs):
+            if path == "/inspect":
+                return {"status": "dispatch_unknown", "error": f"派发未确认：Bearer {token}"}
+            if path == "/control":
+                return {"status": "stopped", "lifecycle": "open", "detail": f"已停止：Bearer {token}"}
+            return worker(config, path, body, **kwargs)
+        engine = self.run_engine(call, ticks=3)
+        with self.db.read() as db:
+            run = db.execute("SELECT status, error, version FROM runs WHERE id=?", (rid,)).fetchone()
+        self.assertEqual(tuple(run)[:2], ("dispatch_unknown", f"派发未确认：Bearer {token[:4]}…{token[-2:]}"))
+        self.assertNotIn(token, self.stored())
+        self.service.operate(self.c, rid, "stop", {"request_id": "stop-0000000071", "expected_version": run["version"]})
+        engine.tick()
+        with self.db.read() as db:
+            events = [json.loads(row[0]) for row in db.execute("SELECT payload FROM events WHERE run_id=? AND kind=?",
+                                                               (rid, "session.stop"))]
+        self.assertEqual([e["detail"] for e in events], [f"已停止：Bearer {token[:4]}…{token[-2:]}"])
+        self.assertNotIn(token, self.stored())
+
+    def test_a_queue_keeps_no_workers_token(self):
+        # D60: what KiroCrew says of a queue (its reason and detail, as the Worker reports them) is masked with the
+        # token, in the event and in evidence.queued
+        token = json.loads(TeamsWorkersCase.config("b-p"))["token"]
+        shown = f"{token[:4]}…{token[-2:]}"
+        worker, rid = FakeWorker(), self.session([TASK])
+
+        def call(config, path, body=None, **kwargs):
+            if path == "/inspect":
+                return {"status": "running", "native": {"done": False, "queued": True}, "evidence": {}, "queued": {
+                    "reason": token, "detail": f"等待内存：Bearer {token}", "elapsed": 3, "resuming": False}}
+            return worker(config, path, body, **kwargs)
+        self.run_engine(call, ticks=3)
+        with self.db.read() as db:
+            evidence = json.loads(db.execute("SELECT evidence FROM attempts WHERE run_id=?", (rid,)).fetchone()[0])
+            events = [json.loads(row[0]) for row in db.execute("SELECT payload FROM events WHERE run_id=? AND kind=?",
+                                                               (rid, "attempt.queued"))]
+        self.assertEqual(evidence["queued"]["reason"], shown)
+        self.assertEqual([(e["cause"], e["detail"]) for e in events], [(shown, f"等待内存：Bearer {shown}")])
+        self.assertNotIn(token, self.stored())
+
+    def test_only_the_platforms_own_mark_is_kept(self):
+        # knowledge.MARK as the platform writes it — {suspicious, too_long, key} and nothing else — is kept when the
+        # outcome is masked again; any other value there is dropped, and the entry is judged by its text
+        from octopus import knowledge
+        from octopus.engine import masked
+        token = json.loads(TeamsWorkersCase.config("b-p"))["token"]
+        evidence = {"outcome": {"decision": "pass", "summary": "完成", "knowledge": [{"rule": f"用 {token} 调用"}]}}
+        masked(evidence, "task-1", (token,))
+        mark = evidence["outcome"]["knowledge"][0][knowledge.MARK]
+        self.assertEqual(mark, knowledge.judged({"rule": f"用 {token} 调用"}))
+        forged = [{"suspicious": True}, {**mark, "suspicious": True, "extra": 1}, {**mark, "too_long": "yes"},
+                  {**mark, "key": 3}, {**mark, "key": "k"}, ["suspicious"], "too_long"]
+        for value in forged:
+            with self.subTest(value):
+                evidence = {"outcome": {"decision": "pass", "summary": "完成", "knowledge": [
+                    {"rule": "干净的约定", knowledge.MARK: value}, "构建用 make build"]}}
+                masked(evidence, "task-1", (token,))
+                self.assertEqual(evidence["outcome"]["knowledge"], [{"rule": "干净的约定"}, "构建用 make build"])
+                self.assertEqual(knowledge.items({"knowledge": [{"rule": "干净的约定", knowledge.MARK: value}]})[0],
+                                 [{"rule": "干净的约定"}])
+
 
 class WorkerReviewTests(unittest.TestCase):
     def test_a_review_is_told_which_commit_to_review(self):

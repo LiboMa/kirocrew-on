@@ -245,6 +245,30 @@ class WatchdogReviewTests(WatchdogCase):
             stored = json.dumps([dict(r) for r in db.execute("SELECT * FROM attempts")], ensure_ascii=False)
         self.assertNotIn(token, stored)
 
+    def test_the_last_tool_is_masked_before_it_is_cut(self):
+        # D57 §3.3: what the Worker reports as the last tool is its text; the platform cuts it to 80 characters for the
+        # reason, after masking it (an older Worker sends it as KiroCrew wrote it)
+        import hashlib
+        token = "wt-" + hashlib.sha256(b"task-7b-last-tool").hexdigest()[:37]
+        with self.db.transaction() as db:
+            db.execute("UPDATE workers SET config=? WHERE id='worker'",
+                       (dumps({"url": "fixture", "token": token, "capabilities": {}}),))
+        original = self.request
+
+        def request(config, path, body, **kwargs):
+            answer = original(config, path, body, **kwargs)
+            if path == "/inspect" and "progress" in answer:
+                answer["progress"]["last_tool"] = "y" * 60 + " Bearer " + token
+            return answer
+        self.engine.request = request
+        rid = self.start()
+        run = self.later(rid, 3)
+        first = sorted(run["tasks"][0]["attempts"], key=lambda a: a["number"])[0]
+        self.assertIn(f"（最后工具：{'y' * 60} Bearer {token[:4]}…{token[-2:]}）", first["error"])
+        with self.db.read() as db:
+            stored = json.dumps([dict(r) for r in db.execute("SELECT * FROM attempts")], ensure_ascii=False)
+        self.assertNotIn(token[4:12], stored)   # the 12 characters an 80-character cut would leave
+
     def test_a_failing_stop_is_never_doubled_and_backs_off(self):
         self.stop_error, self.keep_failing = Error(500, "worker_error", "Gateway 出错"), True
         rid = self.start()
