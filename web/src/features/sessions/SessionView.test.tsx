@@ -214,7 +214,16 @@ describe("session detail", () => {
     expect(within(first).getAllByRole("listitem").map((item) => item.textContent))
       .toEqual(["必过检查：npm test", "建议检查：npm run lint"]);
     expect(within(second).getAllByRole("listitem").map((item) => item.textContent))
-      .toEqual(["必过检查：pytest -q", "审查与设计任务的检查平台不运行"]);
+      .toEqual(["必过检查：pytest -q", "以上检查不会运行（审查与设计任务）"]);
+  });
+
+  test("a diverge task says its checks will not run (D69)", async () => {
+    const [code, review] = blocked.tasks;
+    const research = { ...code, spec: { ...code.spec, kind: "research" as const, verify: ["npm test"], verify_required: [] } };
+    open({ ...blocked, tasks: [research, review] } as Run);
+    const [checks] = await screen.findAllByRole("list", { name: "检查" });
+    expect(within(checks).getAllByRole("listitem").map((item) => item.textContent))
+      .toEqual(["建议检查：npm test", "以上检查不会运行（发散阶段）"]);
   });
 
   test("a task from before D57 shows its checks without saying which must pass", async () => {

@@ -2399,10 +2399,11 @@ class Service:
                 title, detail = f"{where}没有可用 Worker", "尚未为你登记执行环境。"
                 action = "请平台管理员为你登记执行环境后分配 Worker。"
             return {"title": title, "detail": detail, "action": action, "workers": space["workers"], "task_id": None}
+        approve = ("在会话页「待批准」中查看工具与命令后批准或拒绝；Coding Agent 可用 octopus_approvals 查看、"
+                   "经用户同意后用 octopus_approve 答复。")
         if run["status"] == "waiting_approval":
             return {"title": "等待批准", "detail": run["error"] or "原生任务正在等待批准一次工具调用。",
-                    "action": "在会话页「待批准」中查看工具与命令后批准或拒绝；Coding Agent 可用 octopus_approvals 查看、"
-                              "经用户同意后用 octopus_approve 答复。", "task_id": task["id"] if task else None}
+                    "action": approve, "task_id": task["id"] if task else None}
         if run["status"] == "completed" and (run.get("publish_auto") or {}).get("ok") is False:
             return {"title": "自动发布未完成", "detail": run["publish_auto"].get("error"),
                     "action": "处理后在会话页点「发布到仓库」（例如绑定一枚有写权限的凭证）；会话的工作已完成。"
@@ -2421,15 +2422,18 @@ class Service:
             return {"title": "即将开始", "detail": "计划确认已取消，平台正在直接开始。", "action": "无需操作。", "task_id": None}
         if run["status"] == "diagnosing":
             from .recovery import LIVE, WHY, unfinished
+            told = "缺少凭证或需求信息时会告诉你缺什么。也可以停止本会话。"   # D71: the only waits a diagnosis ends in
+            if (latest or {}).get("status") == "waiting_approval":   # the diagnosis's own tool call (ApprovalsCard)
+                return {"title": "诊断在等待批准一次工具调用", "detail": "协调者的诊断请求执行一次需要批准的工具调用，答复之前诊断不会继续。",
+                        "action": approve, "task_id": task["id"] if task else None}
             fault = (((latest or {}).get("context") or {}).get("retry") or {}).get("transient")
             if fault in WHY and latest["status"] in LIVE:   # D57 §6.3: the platform's fault, dispatched again on its own
                 return {"title": unfinished(fault) + "，正在自动重试",
                         "detail": f"平台临时故障：{WHY[fault]}。平台已自动重试 1 次，正在等结果。"
                                   "这是平台的问题，不是你的任务；你的任务结果都在。",
-                        "action": "无需操作：诊断完成后自动按结果修复；也可以停止本会话。",
-                        "task_id": task["id"] if task else None}
+                        "action": "无需操作：诊断完成后自动按结果修复；" + told, "task_id": task["id"] if task else None}
             return {"title": "协调者正在诊断与安排修复", "detail": run["error"] or "正在读取失败证据，等待原生诊断结果。",
-                    "action": "无需操作：诊断完成后自动按结果修复（重试、返工或换工具）；也可以停止本会话。",
+                    "action": "无需操作：诊断完成后自动按结果修复（重试、返工或换工具）；" + told,
                     "task_id": task["id"] if task else None}
         if run["status"] != "blocked":
             from .waiting import queue_attention, quota_attention
@@ -2495,7 +2499,7 @@ class Service:
             action = ("任务报告认证、权限或模型有问题（详情中是原因），平台不会自动重跑。缺少的登录或权限由你或平台管理员在原生 KiroCrew "
                       "中处理；模型不可用时在该任务上「配置并续作」改用可用的模型。")
         elif latest and latest["status"] == "blocked" and latest.get("failed_attempt_id") == attempt.get("id"):
-            title, detail, action = Service._diagnosis_stop(latest, error)
+            title, detail, action = Service._diagnosis_stop(latest, error, run["recovery"].get("budget"))
         elif failure == "native_error":
             title = "原生任务出错，没有完成"
             action = ("这通常是工具或执行环境的问题，不是你的需求（详情中是原生错误）。点「请求协调者诊断」让协调者判断重试还是换工具，"
@@ -2517,11 +2521,11 @@ class Service:
                 "task_name": task["spec"]["name"] if task else None}
 
     @staticmethod
-    def _diagnosis_stop(latest, error):
+    def _diagnosis_stop(latest, error, budget=None):
         """(title, detail, action) of a Session its latest diagnosis stopped (Task 15, D57 §8): what it waits for and who
         supplies it (D71 recovery.WAIT_FOR), the platform's fault, a diagnosis that never started, or one that was
         stopped."""
-        from .recovery import WHY, unfinished
+        from .recovery import WHY, limit_reached, unfinished
         said = latest.get("error") or error
         missing = (latest.get("decision") or {}).get("missing")
         fault = (latest.get("evidence") or {}).get("platform_fault")
@@ -2531,8 +2535,10 @@ class Service:
                                           "点「请求协调者诊断」，或在该任务上「配置并续作」。")
         if missing == "input":
             return "需要你补充需求信息", error, "缺少：只有你能提供的需求信息。由你补充：在该任务上「配置并续作」写入需求后继续同一会话。"
-        if fault in WHY:   # D57 §6.3: retried once, or the retry budget refused it
-            again = "已自动重试 1 次，仍未成功。" if (latest.get("context") or {}).get("retry_of") else "自动重试次数已用完，没有再试。"
+        if fault in WHY:   # D57 §6.3: retried once, or the budget refused it (which limit: recovery.Coordinator._retry)
+            key = (latest.get("evidence") or {}).get("budget_refused")
+            again = "已自动重试 1 次，仍未成功。" if (latest.get("context") or {}).get("retry_of") else \
+                (limit_reached(budget, key) + "，" if key and budget else "") + "没有再试。"
             return (unfinished(fault), f"平台临时故障：{WHY[fault]}。{again}这是平台的问题，不是你的任务；你的任务结果都在。",
                     "点「请求协调者诊断」重新诊断；" + look)
         if said.startswith(("协调者启动请求被拒绝：", "协调者未能启动：")):   # recovery.Coordinator.advance: never dispatched
