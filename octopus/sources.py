@@ -725,10 +725,13 @@ def restore(project, paths):
 def rewind(project, expected, keep=None, into=None):
     """A review's changes put back (D57 §4): commits made on top of the candidate ``expected`` dropped — the candidate and
     what came before it, the implementer's, are never touched — and what remains changed in tracked files restored: what a
-    check counts (``clean_against``), and nothing else. ``reverted`` lists those tracked files. Then, given ``keep`` (the
-    untracked files the review started with), the untracked files it created are moved into ``into`` (outside the project),
-    never deleted: ``removed`` lists them (``_move_out``); ``listing_failed`` when they could not be listed (none moved, the
-    tracked files put back all the same). Its limits:
+    check counts (``clean_against``), and nothing else. ``reverted`` lists those tracked files. Given ``into`` (outside
+    the project), what they had — staged, in the working tree, in the dropped commits — is first kept in a patch there
+    (``_keep_patch``) that ``git apply`` restores on the candidate, named by ``patch`` ("review-removed/tracked.patch"):
+    D73 puts people in the same workspace, and their edits during a review are never lost. Then, given ``keep`` (the
+    untracked files the review started with), the untracked files it created are moved into ``into``, never deleted:
+    ``removed`` lists them (``_move_out``); ``listing_failed`` when they could not be listed (none moved, the tracked
+    files put back all the same). Its limits:
 
     - without ``keep`` the untracked files the reviewer created (and never committed) are kept: the next candidate's
       ``git add -A`` takes them; an untracked file in ``keep`` the reviewer changed stays as it is;
@@ -739,7 +742,7 @@ def rewind(project, expected, keep=None, into=None):
 
     ``ValueError``, with nothing moved, when HEAD is not ``expected`` or a commit on top of it, or ``into`` is in the
     project."""
-    if keep is not None and Path(into).resolve().is_relative_to(Path(project).resolve()):
+    if into is not None and Path(into).resolve().is_relative_to(Path(project).resolve()):
         raise ValueError("移出审查新建文件的目录不能在项目中")
     head = _git(project, "rev-parse", "--verify", "HEAD^{commit}")
     rewound = 0
@@ -749,14 +752,42 @@ def rewind(project, expected, keep=None, into=None):
         rewound = int(_git(project, "rev-list", "--count", f"{expected}..{head}", env=SAFE_GIT_ENV))
         # HEAD only: the dropped commits' changes become staged changes, put back below like any other
         _git(project, "-c", "core.hooksPath=" + os.devnull, "reset", "-q", "--soft", expected, env=SAFE_GIT_ENV)
-    reverted = clean_against(project, expected)["changed_files"]
+    reverted, kept = clean_against(project, expected)["changed_files"], None
+    if reverted and into is not None:   # a copy of what is put back, before it is
+        kept = _keep_patch(project, expected, reverted, Path(into))
     if reverted:
         restore(project, reverted)
     if rewound:   # what is left staged (a left-out file a dropped commit added) back to untracked; files untouched
         _git(project, "-c", "core.hooksPath=" + os.devnull, "reset", "-q", env=SAFE_GIT_ENV)
     removed = [] if keep is None else _move_out(project, keep, into)
     return {**clean_against(project, expected), "reverted": reverted, "rewound": rewound, "removed": removed or [],
-            **({"listing_failed": True} if removed is None else {})}
+            **({"listing_failed": True} if removed is None else {}),
+            **({"patch": f"{Path(into).name}/{kept}"} if kept else {})}
+
+
+def _keep_patch(project, expected, paths, into):
+    """``paths``' changes from ``expected`` (the index, the working tree and the commits after it alike) written to a
+    new ``tracked.patch`` in ``into`` (``tracked-2.patch``… when taken), as ``git apply`` takes it on ``expected``:
+    binary, no renames, no external diff or text conversion, a/ and b/ whatever the configuration says. Its name; None
+    when the diff is empty."""
+    diff = _git_bytes(project, "-c", "diff.noprefix=false", "-c", "diff.mnemonicPrefix=false", "--literal-pathspecs",
+                      "diff", "--binary", "--no-color", "--no-ext-diff", "--no-textconv", "--no-renames", expected,
+                      "--", *paths, env=SAFE_GIT_ENV)
+    if not diff:
+        return None
+    try:   # never put back what could not be kept: the rewind fails instead (review_bound's fail), the edits stay
+        into.mkdir(parents=True, exist_ok=True)
+        for number in range(1, 1000):
+            name = "tracked.patch" if number == 1 else f"tracked-{number}.patch"
+            try:
+                with open(into / name, "xb") as stream:
+                    stream.write(diff)
+                return name
+            except FileExistsError:
+                continue
+    except OSError as exc:
+        raise ValueError(f"审查改动的副本未能保存，未撤回：{exc.strerror or exc}") from None
+    raise ValueError("审查改动的副本无处保存，未撤回")
 
 
 def _move_out(project, keep, into):

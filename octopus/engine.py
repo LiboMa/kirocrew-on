@@ -793,12 +793,15 @@ class Engine:
     @staticmethod
     def _reverted(rewound, sha):
         """What a Worker's rewind put back (D57 §4), as the notes a review_bound record shows, and the files: the tracked
-        files put back, then the files the review created, moved out (an older Worker names none)."""
+        files put back (and where what they had was kept), then the files the review created, moved out (an older
+        Worker names none)."""
         listed = lambda key: [str(name) for name in rewound.get(key) or []]
         names = lambda files: "、".join(files[:10]) + (f" 等 {len(files)} 个" if len(files) > 10 else "")
         reverted, removed, left, notes = listed("reverted"), listed("removed"), listed("created"), []
         if reverted:
             notes.append("审查改动的已跟踪文件已由平台撤回：" + names(reverted))
+        if rewound.get("patch"):   # what was put back, kept (sources.rewind)
+            notes.append(f"撤回前的改动另存在该次尝试的 {rewound['patch']}（git apply 可恢复）")
         if removed:
             notes += ["审查新建的文件已由平台移出：" + names(removed), "移出的文件保存在该次尝试的 review-removed 目录"]
         if rewound.get("listing_failed"):   # e.g. a large workspace past git's time: the tracked files were put back

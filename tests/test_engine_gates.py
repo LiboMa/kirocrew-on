@@ -645,6 +645,11 @@ class EngineGateTests(TeamsWorkersCase):
                  ("warn", {"changed_files": ["src/a.js"], "created": ["review.md"]}, put_back(["src/a.js"], ["review.md"]),
                   "审查改动的已跟踪文件已由平台撤回：src/a.js；审查新建的文件已由平台移出：review.md；"
                   "移出的文件保存在该次尝试的 review-removed 目录", ["src/a.js", "review.md"]),
+                 # (final review 4) what was put back of tracked files is kept as a patch, and said where
+                 ("warn", {"changed_files": ["src/a.js"], "created": []},
+                  lambda body: {**put_back(["src/a.js"], [])(body), "patch": "review-removed/tracked.patch"},
+                  "审查改动的已跟踪文件已由平台撤回：src/a.js；撤回前的改动另存在该次尝试的 review-removed/tracked.patch"
+                  "（git apply 可恢复）", ["src/a.js"]),
                  ("skip", {"changed_files": [], "created": []}, None, "审查没有改动文件", None),
                  # a folder the reviewer made a repository, holding files it started with: left in place, and said
                  ("warn", {"changed_files": [], "created": ["tools/"]}, put_back([], [], ["tools/"]),
@@ -670,7 +675,8 @@ class EngineGateTests(TeamsWorkersCase):
                 gate = self.review_bound(evidence)
                 self.assertEqual((gate["status"], gate.get("files")), (status, files))
                 self.assertIn(words, gate["detail"])
-                self.assertEqual(gate["detail"].count("review-removed"), 1 if "已由平台移出" in words else 0)
+                self.assertEqual(gate["detail"].count("review-removed"), 1 if "已由平台移出" in words or "patch" in words
+                                 else 0)
                 modes = [b["mode"] for p, b in worker.calls if p == "/candidate" and b["attempt_id"] == attempt["id"]]
                 self.assertEqual(modes, ["check", "rewind"] if rewind else ["check"])
 

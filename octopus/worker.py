@@ -781,7 +781,10 @@ class Worker:
                             f"会话分支不在候选 {body['expected'][:7]} 之上，不能撤回", 409, "conflict")
                     current = workspace._git(project, "rev-parse", "--abbrev-ref", "HEAD")
                     require(current == branch, f"工作区不在会话分支 {branch}（当前 {current}），不能撤回", 409, "conflict")
-                into = None if keep is None else run / "attempts" / body["attempt_id"] / "review-removed"
+                # what it puts back is kept there too (tracked.patch), with or without a snapshot
+                attempt = body.get("attempt_id")
+                into = run / "attempts" / attempt / "review-removed" \
+                    if isinstance(attempt, str) and re.fullmatch(r"attempt-[a-f0-9]{32}", attempt) else None
                 return self._created(workspace.rewind(project, body["expected"], keep=keep, into=into), project, keep)
             message = str(body.get("message") or "KiroCrew ON：任务候选")[:300]
             made = workspace.task_candidate(project, message, branch, run, body.get("parent"), base, body.get("since"))
