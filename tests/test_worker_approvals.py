@@ -78,6 +78,30 @@ class WorkerApprovalsTests(unittest.TestCase):
                        {"origin": "native", "request_id": "7", "request_mid": "mid-7", "action": "approved"}, None),
                       self.gateway.calls)
 
+    def test_kirocrews_errors_are_masked_before_they_are_cut(self):
+        # D57 §3.3: a Gateway error is cut to 200 characters for the platform, after masking (its own token too)
+        token = self.node.token
+        shown = "500: " + "y" * 175 + f" Bearer {token[:4]}…{token[-2:]}"
+        failing = gateway_client.GatewayError(500, "y" * 175 + " Bearer " + token)
+        original = self.gateway.__call__
+
+        def gateway(path, body=None, method=None):
+            if path == "/api/approvals" or path.endswith("/approve"):
+                raise failing
+            return original(path, body, method)
+        self.gateway.slots = [{"key": SLOT, "pending_approval": True, "pending_approval_info": self.native}]
+        self.node.native = gateway
+        with self.assertRaises(Error) as caught:
+            self.node.approvals({"run_id": RID})
+        self.assertEqual(str(caught.exception), "读取 KiroCrew 待批准项失败：" + shown)
+        answer = "/api/chat/slots/" + SLOT + "/approve"
+        self.node.native = lambda path, body=None, method=None: (
+            gateway if path == answer else original)(path, body, method)
+        with self.assertRaises(Error) as caught:
+            self.node.approvals_answer({"run_id": RID, "origin": "native", "request_id": "7", "request_mid": "mid-7",
+                                        "decision": "approve"})
+        self.assertEqual(str(caught.exception), "KiroCrew 未接受答复：" + shown)
+
     def test_a_coordinator_answer_names_its_slot_and_instance(self):
         self.gateway.records = [self.record]
         self.node.approvals_answer({"run_id": RID, "origin": "coordinator", "request_id": "spawn:42", "instance": "inst-42",

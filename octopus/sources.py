@@ -98,6 +98,9 @@ _KEY_BEGINS, _KEY_ENDS = re.compile(_KEY_BEGIN), re.compile(_KEY_END)
 # the "n" of an escaped line break), so each is tried once.
 _KEY_MARKER = re.compile(rb"-----(?:BEGIN|END) [A-Z ]*PRIVATE KEY(?: BLOCK)?-----")
 _NEAR_A_KEY = re.compile(rb"(?<![A-Za-z0-9+/=])[A-Za-z0-9+/=](?:[A-Za-z0-9+/=]|\\+/){39,}")
+# Where one of a key's lines ends and the next begins: a line break, an escaped one (JSON, repr), or what separates the
+# strings of a list (['…', '…'], ["…","…"]).
+_LINE_END = re.compile(rb"\n|\\[nr]|['\"], ?['\"]")
 # The lines of base64 right before a private key's END, read backwards from it (so that finding where they begin costs
 # what they are long): whole lines, each with the END line's own prefix "q" (docker compose's "web-1  | ", pytest's
 # "E         + ", grep's "key.pem-" / "key.pem-26-", an indent; captured from the prefix put before a NUL), or, when the
@@ -118,6 +121,7 @@ _DIFF_LINES_BEFORE = re.compile(rb"(?P<a>[^\0]*)\0(?P<b>[^\0]*)\0(?:(?:\n\r?[-+^
 # The line git heads a hunk with ("@@ -16,7 +16,7 @@ <the last line above it that starts with a letter>"): in a key,
 # one of its lines.
 _HUNK_HEADER = re.compile(rb"@@ -[0-9]+(?:,[0-9]+)? \+[0-9]+(?:,[0-9]+)? @@ ")
+_NO_WORD = re.compile(rb"[0-9+/=]")   # what base64 has and a word does not
 _PREFIX_SHAPE = bytes.maketrans(b"0123456789:", b"0000000000-")   # grep: "key.pem:26:" heads its lines "key.pem-25-"
 _BASE64 = frozenset(b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/=")
 _BASE64_BYTES = bytes(sorted(_BASE64))
@@ -166,9 +170,12 @@ def find_secrets(data, extra=(), cut=None, dropped=True):
                 if not _KEY_BEGINS.search(data, cut, match.start()) and (dropped or _open_key(data, match.start())):
                     spans.append((cut, _PRIVATE_KEY, match.end(), "private_key"))
                 break
-    merged = []   # [start, end, kind]: spans that overlap or touch become their union, named by the first
+    merged = []   # [start, end, kind]: spans that overlap or touch become their union, named by the first; so do
+    # private_key spans apart only by where a line ends and the next line's prefix (32 bytes at most: pytest's
+    # "E         -   ", a summary's "  -     ", a diff's "+"), so that a key's lines are one mask and one finding
     for start, _, end, kind in sorted(spans):
-        if merged and start <= merged[-1][1]:
+        if merged and (start <= merged[-1][1] or kind == merged[-1][2] == "private_key"
+                       and start - merged[-1][1] <= 32 and _LINE_END.search(data, merged[-1][1], start)):
             merged[-1][1] = max(merged[-1][1], end)
         else:
             merged.append([start, end, kind])
@@ -243,9 +250,10 @@ def _line_prefix(prefix):
 
 def _value_above(data, start, end):
     """Where the value that ends the line ``data[start:end]`` begins, when it is base64 after a label's "=" or ": ",
-    quoted or not (PRIVATE_KEY=…, PRIVATE_KEY="…, key: '…), after a bare space when it is 10 characters or more
-    (using key MIIE…: no word that short), or after the header git heads a hunk with (the last line above the hunk that
-    starts with a letter: in a key, one of its lines); None when it ends in none."""
+    quoted or not (PRIVATE_KEY=…, PRIVATE_KEY="…, key: '…), after a bare space when it is 10 characters or more with a
+    digit, "+", "/" or "=" in it (using key MIIE…; not a word: "Loading configuration"), or after the header git heads a
+    hunk with (the last line above the hunk that starts with a letter: in a key, one of its lines); None when it ends in
+    none."""
     row = data[start:end].rstrip(b" \t\r")
     at = len(row.rstrip(_BASE64_BYTES))
     label = row.find(b"=", at, len(row.rstrip(b"=")))   # an "=" before the value's own characters ends a label
@@ -254,7 +262,7 @@ def _value_above(data, start, end):
     unquoted = head[:-1] if head[-1:] in (b'"', b"'") else head
     named = unquoted.rstrip(b" \t")[-1:] == b"=" or (unquoted.rstrip(b" \t")[-1:] == b":"
                                                       and unquoted[-1:] in (b" ", b"\t"))
-    spaced = head[-1:] in (b" ", b"\t") and len(row) - at >= 10
+    spaced = head[-1:] in (b" ", b"\t") and len(row) - at >= 10 and _NO_WORD.search(row, at) is not None
     return start + at if at < len(row) and (named or spaced or _HUNK_HEADER.fullmatch(head)) else None
 
 

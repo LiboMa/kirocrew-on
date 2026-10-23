@@ -449,6 +449,7 @@ class SecretRuleTests(unittest.TestCase):
             "after a space, escaped": ('{"log": "using the key ', escaped, '"}', last),
             # on lines, after a bare space when what follows is long enough to be no word, or after a label's quote
             "after a space": ("$ deploy\nusing key ", "\n".join(last + [end]) + "\n", "done\n", last),
+            "a word above them": ("Loading configuration\n", "\n".join(last + [end]) + "\n", "", last),   # no value
             ".env, quoted": ("PRIVATE_KEY=\"", "\n".join(last + [end]), '"\n', last),
             "export, quoted": ("export PRIVATE_KEY='", "\n".join(last + [end]), "'\n", last),
             "a label and a quote": ('tls:\n  key: "', "\n".join(last + [end]), '"\n', last),
@@ -463,7 +464,7 @@ class SecretRuleTests(unittest.TestCase):
                         shown, found = checks.masked_tail(text.encode())
                     # the lines and their END are one span of the rules above (the marker rule below would take
                     # each line apart)
-                    self.assertEqual([f["kind"] for f in found], ["private_key"] * (2 if "END changed" in name else 1),
+                    self.assertEqual([f["kind"] for f in found], ["private_key"],
                                      shown[:300])
                     self.assertEqual([row[i:i + 10] for row in rows for i in range(len(row) - 9)
                                       if row[i:i + 10] in shown], [], shown[:600])
@@ -492,6 +493,11 @@ class SecretRuleTests(unittest.TestCase):
             self.assertIn("Skipping", failure)
             text = "=== FAILURES ===\n" + failure + "=== short test summary info ===\n" + summary
             outputs[f"pytest CI, indent {indent}"] = (text, lines[1:] + others[1:])
+            for part, block in (("failure", failure), ("summary", summary)):   # a key's lines are one mask, each side
+                with self.subTest(part, indent=indent):
+                    shown, found = sources.mask_text(block)
+                    self.assertLessEqual(len(found), 2, [f["masked"] for f in found])
+                    self.assertLessEqual(shown.count("…"), 2, shown[:600])   # (saferepr's "..." is not one)
         with tempfile.TemporaryDirectory() as folder:
             for indent in (2, 4):
                 old, lines = pkcs8_key("git-a", indent)
@@ -518,6 +524,19 @@ class SecretRuleTests(unittest.TestCase):
                     self.assertLess(longest(shown), 40, shown[:600])
                     self.assertEqual([row for row in rows if any(row[i:i + 10] in shown for i in range(len(row) - 9))],
                                      [], shown[:600])
+        # the lines of a key are one span, however each is prefixed: what is between two runs is a line break (or an
+        # escaped one, or what separates the strings of a list) and the next line's prefix, 32 bytes at most; anything
+        # else keeps them apart
+        runs = [chars(f"merge-{n}", 64, "std") for n in range(3)]
+        named = "hint: expected -----END RSA PRIVATE" + " KEY-----\n"
+        for gap, count in (("\nE         -   ", 1), ("\n  -     ", 1), ("\r\n+", 1), ("\n" + " " * 31, 1),
+                           ("\\n  ", 1), ("\\r\\n", 1), ("', '    ", 1), ('", "', 1), ('","', 1),
+                           ("\n" + " " * 32, 3), (", ", 3), (" " * 20, 3)):
+            with self.subTest(gap=gap):
+                self.assertEqual(len(sources.find_secrets((named + gap.join(runs) + "\n").encode())), count)
+        github = "ghp" + "_" + chars("next-to-a-key", 36, "alnum")   # another kind on the next line: its own finding
+        self.assertEqual([f["kind"] for f in sources.find_secrets((named + runs[0] + "\n" + github + "\n").encode())],
+                         ["private_key", "github"])
         # no marker, nothing masked: ordinary output with git SHAs and digests
         sha = hashlib.sha1(b"a commit").hexdigest()
         plain = (f"commit {sha}\nMerge: {sha[:7]} {sha[-7:]}\n    Bump the parser\n\n$ git rev-parse HEAD\n{sha}\n"

@@ -347,7 +347,8 @@ class Worker:
             try:
                 return self.native(path) or []
             except crew_api.GatewayError as exc:
-                raise Error(502, "native_error", "读取 KiroCrew 待批准项失败：" + str(exc).splitlines()[0][:200]) from None
+                raise Error(502, "native_error",
+                            "读取 KiroCrew 待批准项失败：" + said(str(exc).splitlines()[0], 200, (self.token,))) from None
         items = []
         for view in read("/api/chat/slots"):
             info = view.get("pending_approval_info") if isinstance(view, dict) and view.get("key") == slot else None
@@ -397,7 +398,8 @@ class Worker:
         except crew_api.GatewayError as exc:   # the platform reads a Worker 404 as "not supported": never pass one on
             if exc.status == 404:
                 raise Error(409, "approval_not_pending", "该批准请求已不在等待中（已被答复或过期）") from None
-            raise Error(502, "native_error", "KiroCrew 未接受答复：" + str(exc).splitlines()[0][:200]) from None
+            raise Error(502, "native_error",
+                        "KiroCrew 未接受答复：" + said(str(exc).splitlines()[0], 200, (self.token,))) from None
         return {"ok": True, "origin": origin, "request_id": wanted[1], "decision": decision}
 
     def native(self, path, body=None, method=None, timeout=None, headers=None):
@@ -1712,7 +1714,8 @@ class Worker:
                 raise Error(409, "not_running", "任务已不在运行，补充说明未送达") from None
             if detail.startswith("steer_unsupported"):   # a backend KiroCrew cannot steer (codex)
                 raise Error(409, "steer_unsupported", "该任务的后端不支持补充说明") from None
-            raise Error(502, "native_error", "KiroCrew 未接受补充说明：" + str(exc).splitlines()[0][:200]) from None
+            raise Error(502, "native_error",
+                        "KiroCrew 未接受补充说明：" + said(str(exc).splitlines()[0], 200, (self.token,))) from None
         return {"ok": True, "status": str(answer.get("status") or "steered")}
 
     def _release(self, run):
