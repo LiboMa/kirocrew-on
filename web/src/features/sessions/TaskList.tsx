@@ -37,14 +37,23 @@ function unchecked(spec: Step): string | null {
   return null;
 }
 
+/** Which of a task's checks must pass, as the platform judges them (octopus/domain.py required_checks): its
+ * verify_required; a task from before D57 names none — then none of a planner's (its origin, an agent-planned Session, a
+ * replan's task) and all of a person's. */
+function requiredChecks(run: Run, spec: Step): string[] {
+  if (spec.verify_required !== undefined) return spec.verify_required;
+  const planner = spec.origin === "planner" || run.match_mode === "agent" || !!run.replan?.tasks?.includes(spec.id);
+  return planner ? [] : spec.verify ?? [];
+}
+
 /** D57 §5: a task's checks, those that must pass (「必过检查」, as in the revision history) and the others that only note
- * (「建议检查」). A task from before D57 names none as required: its checks are shown as they are. */
-function Checks({ spec }: { spec: Step }) {
+ * (「建议检查」). */
+function Checks({ run, spec }: { run: Run; spec: Step }) {
   const verify = spec.verify ?? [];
   if (!verify.length) return null;
-  const required = spec.verify_required;
-  const rows: [string, string[]][] = required === undefined ? [["检查命令", verify]]
-    : [["必过检查", verify.filter((c) => required.includes(c))], ["建议检查", verify.filter((c) => !required.includes(c))]];
+  const required = requiredChecks(run, spec);
+  const rows: [string, string[]][] = [["必过检查", verify.filter((c) => required.includes(c))],
+    ["建议检查", verify.filter((c) => !required.includes(c))]];
   const note = unchecked(spec);
   return (
     <ul aria-label="检查" className="mt-2 space-y-0.5 text-xs text-muted-foreground">
@@ -85,7 +94,7 @@ export function TaskList({ run, onContinue }: { run: Run; onContinue: (taskId: s
                 <StatusBadge status={task.status} />
               </header>
               <p className="mt-3 line-clamp-4 text-sm leading-6 whitespace-pre-wrap text-foreground/85">{spec.prompt}</p>
-              <Checks spec={spec} />
+              <Checks run={run} spec={spec} />
               <footer className="mt-3 flex flex-wrap items-center gap-3">
                 <Button type="button" size="sm" variant="outline" disabled={!canRetryTask(run, index)}
                   onClick={() => onContinue(task.id)} data-retry={task.id}>配置并续作</Button>
