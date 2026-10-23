@@ -1,10 +1,10 @@
 import { usageLine } from "@/lib/usage";
 import { ChevronDown } from "lucide-react";
-import type { Run } from "@/api/types";
+import type { Run, Step } from "@/api/types";
 import { Button } from "@/components/ui/button";
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible";
 import { StatusBadge } from "@/components/StatusBadge";
-import { ROLE_LABELS, TOOLS, formatTime, phaseText } from "@/lib/labels";
+import { GATE_LABELS, ROLE_LABELS, TOOLS, formatTime, phaseText } from "@/lib/labels";
 import { canRetryTask } from "@/lib/session";
 import { SteerControl } from "@/features/sessions/SteerControl";
 import { AttemptDiff } from "@/features/sessions/AttemptDiff";
@@ -28,6 +28,32 @@ function methods(planned: string[] | undefined, attempts: NonNullable<Run["tasks
   const ended = !!latest && !["pending", "dispatching", "running"].includes(latest.status);   // the evidence is complete
   if (!ended || names.length) return <>{" · "}<span>方法：{(names.length ? names : planned).join("、")}</span></>;
   return <>{" · "}<span>方法（计划，执行环境未交付）：{planned.join("、")}</span></>;
+}
+
+/** Why the platform runs none of a task's checks (octopus/domain.py runs_checks, planning._unchecked), or null. */
+function unchecked(spec: Step): string | null {
+  if (spec.kind === "review" || spec.kind === "design") return "审查与设计任务的检查平台不运行";
+  if ((spec.phase ?? (spec.kind === "research" ? "diverge" : null)) === "diverge") return "发散阶段不运行检查命令";
+  return null;
+}
+
+/** D57 §5: a task's checks, those that must pass (「必过检查」, as in the revision history) and the others that only note
+ * (「建议检查」). A task from before D57 names none as required: its checks are shown as they are. */
+function Checks({ spec }: { spec: Step }) {
+  const verify = spec.verify ?? [];
+  if (!verify.length) return null;
+  const required = spec.verify_required;
+  const rows: [string, string[]][] = required === undefined ? [["检查命令", verify]]
+    : [["必过检查", verify.filter((c) => required.includes(c))], ["建议检查", verify.filter((c) => !required.includes(c))]];
+  const note = unchecked(spec);
+  return (
+    <ul aria-label="检查" className="mt-2 space-y-0.5 text-xs text-muted-foreground">
+      {rows.filter(([, list]) => list.length).map(([label, list]) => (
+        <li key={label}>{label}：<span className="font-mono break-all text-foreground/85">{list.join("；")}</span></li>
+      ))}
+      {note && <li>{note}</li>}
+    </ul>
+  );
 }
 
 export function TaskList({ run, onContinue }: { run: Run; onContinue: (taskId: string) => void }) {
@@ -59,6 +85,7 @@ export function TaskList({ run, onContinue }: { run: Run; onContinue: (taskId: s
                 <StatusBadge status={task.status} />
               </header>
               <p className="mt-3 line-clamp-4 text-sm leading-6 whitespace-pre-wrap text-foreground/85">{spec.prompt}</p>
+              <Checks spec={spec} />
               <footer className="mt-3 flex flex-wrap items-center gap-3">
                 <Button type="button" size="sm" variant="outline" disabled={!canRetryTask(run, index)}
                   onClick={() => onContinue(task.id)} data-retry={task.id}>配置并续作</Button>
@@ -117,7 +144,9 @@ export function TaskList({ run, onContinue }: { run: Run; onContinue: (taskId: s
                             {attempt.evidence.gates.map((gate, index) => (
                               <li key={index} className={gate.status === "fail" ? "text-destructive" : gate.status === "warn" ? "text-amber-600"
                                 : gate.status === "skip" ? "text-muted-foreground" : undefined}>
-                                {{ pass: "✓", warn: "⚠", fail: "✗", skip: "–" }[gate.status]} {gate.name}{gate.detail ? " · " + gate.detail : ""}
+                                {{ pass: "✓", warn: "⚠", fail: "✗", skip: "–" }[gate.status]}{" "}
+                                <span title={gate.name}>{GATE_LABELS[gate.name] ?? gate.name}</span>
+                                {gate.detail ? " · " + gate.detail : ""}
                               </li>
                             ))}
                           </ul>
