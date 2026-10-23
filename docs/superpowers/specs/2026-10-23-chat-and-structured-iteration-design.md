@@ -1,6 +1,6 @@
 # 在 KiroCrew 聊天里直接和父会话对话，也能回到平台续作（D73）
 
-状态：设计，待负责人确认；确认前不实现。
+状态：负责人 2026-10-23 确认（「是的，这就是我想要的，要技术实现点落成文档，并实现」），实现中。
 
 负责人原话（2026-10-23）：
 - 「让用户可以继续在 KiroCrew chat sessions 中继续聊天；如果不想聊了，也可以通过目前最新的状态，继续由 KiroCrew ON 这个平台记录的 Session 继续创作。」
@@ -71,7 +71,77 @@
 
 第 2 步需要 Agent 能动手。可以在测试会话里先用一条用户消息说明「这是测试，允许你修改」，不用为此先改提示。
 
-## 5. 待负责人决定
+## 5. 技术实现点
 
-1. 这个做法是否就是你要的？
-2. 同意先在 owner 边界上的一个测试会话里做第 4 节的验证吗？会用掉几轮 Kiro / Claude。
+### 5.1 父会话 Agent：由观察员改为协作者
+
+| 文件 | 改动 |
+|---|---|
+| `octopus/prompts.py` `COORDINATOR` | Gateway 模板里 `poc-coordinator` 的系统提示，改为「会话协作者」。要点见 §2.1。另写明：派子 Agent 用 `spawn_run`，`agent` 只从 `poc-kiro` / `poc-claude` / `poc-codex` 中选，`cwd` 用工作区，`keep: true`；不派 `poc-opencode`（已停用）和 `poc-diagnose`（平台诊断专用） |
+| `octopus/worker.py` `OBSERVER_CONTEXT` | Worker 建父会话时写入的背景，改为同样的协作者说明，只对新会话生效 |
+| `tests/test_prompts_p1.py` | 改写两条旧测试：它们固定的是「观察员不派发」的旧约定 |
+
+- 派发白名单（`composition/templates.py` 的 `availableAgents`）不改：它同时管着平台在这个父会话下的派发，去掉 `poc-opencode` 会挡住重新启用 OpenCode 的环境。
+- 改 `COORDINATOR` 会改变 Gateway 的指纹，部署时 Gateway 会在空闲后重启。
+
+### 5.2 平台开始执行时在聊天里写一行
+
+Agent 和用户要知道平台什么时候在跑。
+
+- **时机**：Worker 每次派发成功之后（新建子 Agent，或续接原对话）。
+- **写什么**：「KiroCrew ON 开始执行：<任务名>（<工具>，Attempt <id>）。完成前请不要修改工作区；完成后这里会出现结果说明。」
+- **怎么写**：父会话的 `POST /api/chat/slots/{slot}/note`，`source: "octopus-start"`。与已有的结果说明相同，可见、不触发模型。
+- **失败处理**：尽力而为，写不成不影响派发。
+- **去重**：同一个 Attempt 只写一次，靠 `start-note.json` 标记。
+
+### 5.3 续作时提交聊天里的改动（新模块 `octopus/chat_changes.py`）
+
+**续作之前**，在服务的 `operate("continue")` 进入数据库事务之前，按顺序：
+1. 先做只读的预检，与续作自身的检查相同：版本号、会话已停下且打开、执行环境仍为这个空间服务。任何一项不过，就交给续作自己报错，不调用 Worker。
+2. 取会话分支上最新的候选，与 `Engine._head_candidate` 相同。没有候选（还没有任务提交过）就跳过。
+3. 调用 Worker `/candidate`，`mode: "check"`，`expected` 为最新候选。
+   - 干净、且 HEAD 就是这个候选：没有对话中的改动，照常续作。
+   - 返回 404（旧 Worker）或 409 `workspace_missing`：跳过。
+4. 否则调用 Worker `/candidate`，`mode: "commit"`，`parent` 为最新候选，`message` 为「KiroCrew ON：对话中的改动（<会话>）」。这一步提交工作区现状，包括 Agent 自己做的提交。
+   - 有疑似凭证或 `.env`（`secrets` 非空）：分支不动，续作以 `409 chat_secret` 拒绝，并列出文件，请用户先在聊天里移除。
+   - 树没有变化：不记录，照常续作。
+5. 找出会话里最后一个写代码的任务（kind 为 implement / deliver），没有就取最后一个任务，与 D58 同步相同。
+   这个任务不会被这次续作重置，且有检查命令时，就为它启动检查（`/verify/start`）。
+
+**续作的事务里**：续作的原有逻辑全部照旧（检查依赖、重置从目标开始的任务、改任务），然后：
+- 为写代码的任务插入一次尝试：
+  - `evidence.chat = {"by", "files", "head"}`；
+  - `evidence.candidate` 为新候选，`moved: true`；
+  - 门禁：`native_completed` 为 skip（「对话中的改动」）、`diff_present` 为 pass、`no_secrets` 为 pass。
+- 这个任务被续作重置时：这次尝试记为已交接，检查命令为 skip（「任务将重新执行」）。任务照常重跑，它的改动从新候选算起。
+- 这个任务没被重置时：任务的当前尝试指向这一次。
+  - 有检查命令：状态为运行中，会话为运行中，引擎照现有逻辑轮询检查（`_poll_checks`）后判定；
+  - 没有检查命令：直接记为已交接。
+- 这个任务之后、仍标为已交接的任务，一律重置为待执行。它们的结论基于旧状态；审查会针对新候选重跑。
+- 事件 `run.chat_changes`，内容为文件数、任务、Attempt、提交。
+- 续作的修订摘要前面加上「对话中的改动：N 个文件」。
+
+**请求诊断**（`operate("recover")`）：同样做第 3 步。工作区有对话中的改动时，以 `409 chat_changes` 拒绝，说明「请用续作：续作会先把它们提交为新的候选」。
+原因是诊断针对的是旧的失败，已经过时。
+
+不改的：
+- 引擎：轮询检查、审查绑定最新候选、已验收文件的提示，都已能处理这次尝试；
+- KiroCrew：不用新接口；
+- 对外 API 与 MCP：续作与请求诊断的请求格式不变，只多了两个错误码。
+
+### 5.4 测试
+
+- `tests/test_chat_changes.py`：
+  - 续作目标在写代码的任务之后时：新尝试在运行中、检查后判定；审查以新候选重跑；修订与事件。
+  - 续作目标就是写代码的任务时：这次尝试为已交接，任务重跑，候选的父提交是对话中的改动。
+  - 工作区干净：不记录。
+  - 有凭证：`409 chat_secret`，版本不变，分支不动。
+  - 旧 Worker：跳过。
+  - 版本冲突：不调用 Worker。
+  - 请求诊断：`409 chat_changes`。
+- `tests/test_prompts_p1.py`：协作者提示的要点。
+- Worker：派发成功后写一行开始执行的说明，写不成不影响派发；同一个 Attempt 不重复写。
+
+## 6. 待负责人决定
+
+已确认（2026-10-23）。实现后，在 owner 边界上的一个测试会话里按第 4 节验证。
