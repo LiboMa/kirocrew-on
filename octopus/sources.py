@@ -99,10 +99,11 @@ _KEY_BEGINS, _KEY_ENDS = re.compile(_KEY_BEGIN), re.compile(_KEY_END)
 # rest of it is masked however short.
 _KEY_MARKER = re.compile(rb"-----(?:BEGIN|END) [A-Z ]*PRIVATE KEY(?: BLOCK)?-----")
 _NEAR_A_KEY = re.compile(rb"(?<![A-Za-z0-9+/=])[A-Za-z0-9+/=](?:[A-Za-z0-9+/=]|\\+/){39,}")
-# The letter of an escaped line break right before it ("\n", "\r"), and a label's tail (AWS_SECRET_ACCESS_KEY= is read
-# "KEY=", aws_session_token= "token="): base64 has an "=" only at its end, so what is before one inside a run is a
+# The letter of an escaped line break right before it ("\n", "\r") or the rest of an escaped character ("\u94a5",
+# JSON's ensure_ascii: a mask after its backslash would break the escape), and a label's tail (AWS_SECRET_ACCESS_KEY= is
+# read "KEY=", aws_session_token= "token="): base64 has an "=" only at its end, so what is before one inside a run is a
 # label, shown, and its value is what the precise rules name (aws_secret_key, aws_session_token).
-_NOT_KEY_TEXT = re.compile(rb"(?:(?<=\\)[nr])?(?:[A-Za-z][A-Za-z0-9]{0,31}=(?=[A-Za-z0-9+/]|\\+/))?")
+_NOT_KEY_TEXT = re.compile(rb"(?:(?<=\\)(?:[nr]|u[0-9A-Fa-f]{4}))?(?:[A-Za-z][A-Za-z0-9]{0,31}=(?=[A-Za-z0-9+/]|\\+/))?")
 # A key's lines are one span (one mask, one finding) where what is between two private_key spans is where a line ends
 # and the next line's prefix: 32 bytes at most, the whole chain 8 KB at most (about a diff of two 4096-bit keys). A
 # line ends after spaces, its string's closing quote and a list's comma, in a line break, a shell's backslash and line
@@ -146,11 +147,41 @@ _BASE64 = frozenset(b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz012345
 _BASE64_BYTES = bytes(sorted(_BASE64))
 
 
+_ESCAPE = re.compile(r"\\(?:u[0-9A-Fa-f]{4}|.)|.", re.S)   # a character as JSON (or repr) writes it: \/, \n, 钥
+# A key's run of characters may take the first ones of a key glued to it ("sk-…sk-…": the first run takes the second's
+# "sk"): a rule's next match is looked for from this many bytes before the end of the one before (or right after its
+# start), so the second is found too, and both are one span. Longer than any prefix a rule's run may take.
+_GLUE = 32
+
+
 def _masked(value):
     """A credential as it may be shown (D57 §3.3): its first four and last two characters; a value too short to keep
-    most of it hidden that way is shown as the ellipsis alone."""
+    most of it hidden that way is shown as the ellipsis alone. Its characters as written, escapes whole: what is shown
+    never ends or begins inside one (``abc\\/…`` shows ``abc``, a ``\\u00e9`` at its end is not shown), so JSON text
+    that held a credential still parses."""
     text = value.decode(errors="replace")
-    return text[:4] + "…" + text[-2:] if len(text) >= 12 else "…"
+    if len(text) < 12:
+        return "…"
+    pieces, head, tail = _ESCAPE.findall(text), "", ""
+    for piece in pieces:
+        if len(head) + len(piece) > 4:
+            break
+        head += piece
+    for piece in reversed(pieces):
+        if len(tail) + len(piece) > 2:
+            break
+        tail = piece + tail
+    return head + "…" + tail
+
+
+def _matches(pattern, data):
+    """``pattern``'s matches in ``data``, each looked for from ``_GLUE`` bytes before the end of the one before (never
+    before its start): one that begins inside the one before (a key glued to it) is found too. Linear: each match is
+    looked through again for at most ``_GLUE`` bytes."""
+    at = 0
+    while (match := pattern.search(data, at)) is not None:
+        yield match
+        at = max(match.start() + 1, match.end() - _GLUE)
 
 
 def find_secrets(data, extra=(), cut=None, dropped=True):
@@ -172,7 +203,7 @@ def find_secrets(data, extra=(), cut=None, dropped=True):
             spans.append((at, -1, at + len(value), "worker_token"))
             at = data.find(value, at + len(value))
     for priority, (kind, pattern) in enumerate(SECRET_RULES):
-        for match in pattern.finditer(data):
+        for match in _matches(pattern, data):
             start, end = match.span("secret") if "secret" in pattern.groupindex else match.span()
             spans.append((start, priority, end, kind))
     if _KEY_MARKER.search(data):   # a key's marker in view: every long run of base64 around it
