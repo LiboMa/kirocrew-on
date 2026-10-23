@@ -1,0 +1,389 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>KiroCrew ON 的派发机制，与本机 KiroCrew、原版 PoC 的比较</title>
+<style>
+  :root {
+    --ink: #172033; --muted: #5b6577; --line: #e3e7ef; --bg: #f6f8fb; --card: #ffffff;
+    --engine: #5b4bdb; --engine-soft: #eeebff;
+    --native: #0e6f86; --native-soft: #e2f3f7;
+    --poc: #4a5568; --poc-soft: #edf0f5;
+    --ok: #16794c; --ok-soft: #e3f5ec; --part: #9a6700; --part-soft: #fff4d6; --no: #b42318; --no-soft: #fdecea;
+    --sans: -apple-system, BlinkMacSystemFont, "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", "Noto Sans CJK SC", sans-serif;
+    --mono: "SF Mono", Menlo, Consolas, monospace;
+  }
+  * { box-sizing: border-box; }
+  html { -webkit-text-size-adjust: 100%; }
+  body { margin: 0; background: var(--bg); color: var(--ink); font: 16px/1.75 var(--sans); }
+  a { color: var(--engine); }
+  a:focus-visible, summary:focus-visible { outline: 3px solid var(--engine); outline-offset: 2px; border-radius: 4px; }
+  .page { max-width: 1120px; margin: 0 auto; padding: 56px 28px 96px; }
+  .prose { max-width: 42em; }
+  header h1 { font-size: 34px; line-height: 1.3; letter-spacing: -0.01em; margin: 0 0 14px; font-weight: 700; }
+  header .meta { color: var(--muted); font-size: 14px; margin: 0 0 28px; }
+  .lead { font-size: 18px; line-height: 1.8; margin: 0 0 16px; }
+  h2 { font-size: 24px; line-height: 1.4; margin: 64px 0 8px; padding-top: 22px; border-top: 1px solid var(--line); }
+  h3 { font-size: 18px; margin: 32px 0 8px; }
+  p { margin: 0 0 14px; }
+  code { font-family: var(--mono); font-size: 0.86em; background: #eef1f6; padding: 1px 5px; border-radius: 4px; }
+  pre { font-family: var(--mono); font-size: 13px; line-height: 1.6; background: #101828; color: #e7ecf5; padding: 16px 18px;
+        border-radius: 8px; overflow-x: auto; margin: 0 0 18px; }
+  pre code { background: none; padding: 0; color: inherit; font-size: inherit; }
+  ul, ol { padding-left: 1.4em; margin: 0 0 14px; }
+  li { margin: 4px 0; }
+  .note { font-size: 14px; color: var(--muted); }
+
+  /* The three answers to "who decides the next step" */
+  .who { margin: 28px 0 8px; display: grid; gap: 14px; }
+  .lane { display: grid; grid-template-columns: 200px 1fr; background: var(--card); border: 1px solid var(--line);
+          border-radius: 10px; overflow: hidden; }
+  .lane .name { padding: 16px 18px; color: #fff; display: flex; flex-direction: column; gap: 4px; }
+  .lane .name strong { font-size: 17px; }
+  .lane .name span { font-size: 13px; opacity: 0.92; line-height: 1.5; }
+  .lane.engine .name { background: var(--engine); }
+  .lane.native .name { background: var(--native); }
+  .lane.poc .name { background: var(--poc); }
+  .steps { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 6px; padding: 14px 16px; list-style: none; margin: 0; }
+  .steps li { margin: 0; display: flex; align-items: center; gap: 6px; font-size: 14px; line-height: 1.4; }
+  .steps li + li::before { content: ""; width: 14px; height: 1px; background: #b8c0cf; }
+  .chip { padding: 6px 10px; border-radius: 6px; border: 1px solid transparent; }
+  .chip.code { background: var(--engine-soft); border-color: #cfc8f7; }
+  .chip.model { background: var(--native-soft); border: 1px dashed var(--native); }
+  .chip.check { background: var(--poc-soft); border-color: #cfd5df; }
+  .chip.agent { background: #fff; border-color: var(--line); }
+  .legend { display: flex; flex-wrap: wrap; gap: 8px 18px; font-size: 13px; color: var(--muted); margin: 6px 0 0; }
+  .legend .chip { font-size: 12px; padding: 2px 8px; color: var(--ink); }
+
+  .table-wrap { overflow-x: auto; margin: 16px 0 20px; background: var(--card); border: 1px solid var(--line); border-radius: 10px; }
+  table { border-collapse: collapse; width: 100%; font-size: 14px; line-height: 1.65; }
+  th, td { text-align: left; vertical-align: top; padding: 11px 14px; border-bottom: 1px solid var(--line); }
+  tr:last-child td { border-bottom: none; }
+  thead th { background: #f0f3f8; font-weight: 600; white-space: nowrap; }
+  tbody th { font-weight: 600; white-space: nowrap; color: var(--ink); background: #fafbfd; }
+  .compare thead th:nth-child(2) { color: var(--engine); }
+  .compare thead th:nth-child(3) { color: var(--native); }
+  .compare thead th:nth-child(4) { color: var(--poc); }
+  td.yes::before, td.partly::before, td.no::before { content: ""; display: inline-block; width: 8px; height: 8px; border-radius: 50%;
+    margin-right: 7px; vertical-align: 1px; }
+  td.yes::before { background: var(--ok); } td.partly::before { background: #d4a017; } td.no::before { background: var(--no); }
+
+  .cols { display: grid; grid-template-columns: repeat(3, 1fr); gap: 16px; margin: 16px 0; }
+  .col { background: var(--card); border: 1px solid var(--line); border-top: 4px solid var(--c); border-radius: 10px; padding: 18px 20px; }
+  .col h3 { margin: 0 0 10px; color: var(--c); }
+  .col ol { padding-left: 1.3em; font-size: 14.5px; }
+  .col.engine { --c: var(--engine); } .col.native { --c: var(--native); } .col.poc { --c: var(--poc); }
+
+  .seq-wrap { overflow-x: auto; margin: 16px 0 20px; background: var(--card); border: 1px solid var(--line); border-radius: 10px; }
+  .seq { --line-c: #c9d1de; min-width: 760px; display: grid; grid-template-columns: repeat(4, 1fr); row-gap: 10px; padding: 18px 8px 22px;
+         font-size: 13.5px; line-height: 1.4;
+         background: linear-gradient(to right,
+           transparent calc(12.5% - 0.5px), var(--line-c) calc(12.5% - 0.5px), var(--line-c) calc(12.5% + 0.5px), transparent calc(12.5% + 0.5px),
+           transparent calc(37.5% - 0.5px), var(--line-c) calc(37.5% - 0.5px), var(--line-c) calc(37.5% + 0.5px), transparent calc(37.5% + 0.5px),
+           transparent calc(62.5% - 0.5px), var(--line-c) calc(62.5% - 0.5px), var(--line-c) calc(62.5% + 0.5px), transparent calc(62.5% + 0.5px),
+           transparent calc(87.5% - 0.5px), var(--line-c) calc(87.5% - 0.5px), var(--line-c) calc(87.5% + 0.5px), transparent calc(87.5% + 0.5px))
+           0 54px / 100% calc(100% - 54px) no-repeat; }
+  .seq .head { text-align: center; font-weight: 600; padding: 6px 4px; margin: 0 6px 6px; background: #f0f3f8; border-radius: 6px; }
+  .seq .head:nth-child(1) { color: var(--ink); } .seq .head:nth-child(2) { color: var(--native); }
+  .seq .head:nth-child(3) { color: var(--engine); } .seq .head:nth-child(4) { color: var(--poc); }
+  .seq .msg { grid-row: auto; margin: 0 calc(50% / var(--n)); position: relative; text-align: center; padding-bottom: 6px;
+              border-bottom: 1.5px solid var(--ink); }
+  .seq .msg span { background: var(--card); padding: 0 6px; }
+  .seq .msg::after { content: ""; position: absolute; bottom: -5px; border: 4.5px solid transparent; }
+  .seq .msg.r::after { right: -2px; border-left: 8px solid var(--ink); border-right: none; }
+  .seq .msg.l::after { left: -2px; border-right: 8px solid var(--ink); border-left: none; }
+  .seq .act { margin: 0 10px; padding: 5px 8px; text-align: center; background: var(--engine-soft); border: 1px solid #cfc8f7;
+              border-radius: 6px; position: relative; }
+  .callout { background: var(--card); border: 1px solid var(--line); border-left: 4px solid var(--engine); border-radius: 8px;
+             padding: 16px 20px; margin: 18px 0; max-width: 46em; }
+  .callout.warn { border-left-color: var(--part); }
+  .callout p:last-child, .callout ul:last-child { margin-bottom: 0; }
+  .decide { counter-reset: d; list-style: none; padding: 0; max-width: 46em; }
+  .decide li { counter-increment: d; background: var(--card); border: 1px solid var(--line); border-radius: 8px; padding: 14px 18px 14px 52px;
+               position: relative; margin: 10px 0; }
+  .decide li::before { content: counter(d); position: absolute; left: 16px; top: 13px; width: 24px; height: 24px; border-radius: 50%;
+                       background: var(--engine); color: #fff; font-size: 13px; font-weight: 700; display: grid; place-items: center; }
+  .decide strong { display: block; margin-bottom: 2px; }
+  details { background: var(--card); border: 1px solid var(--line); border-radius: 8px; padding: 10px 16px; margin: 12px 0; max-width: 46em; }
+  summary { cursor: pointer; font-weight: 600; }
+  footer { margin-top: 72px; padding-top: 18px; border-top: 1px solid var(--line); font-size: 13px; color: var(--muted); }
+
+  @media (max-width: 860px) {
+    .page { padding: 32px 18px 72px; }
+    header h1 { font-size: 26px; }
+    .lane { grid-template-columns: 1fr; }
+    .cols { grid-template-columns: 1fr; }
+  }
+  @media (prefers-reduced-motion: reduce) { * { scroll-behavior: auto !important; } }
+  @media print { body { background: #fff; } .lane, .col, .table-wrap, .callout, details { break-inside: avoid; } }
+</style>
+</head>
+<body>
+<div class="page">
+
+<header>
+  <h1>KiroCrew ON 的派发机制，与本机 KiroCrew、原版 PoC 的比较</h1>
+  <p class="meta">2026-10-23。EC2 上运行 a183d84，KiroCrew 0.10.0；本机为 KiroCrew 桌面版 0.8.0（Gateway 127.0.0.1:5476）。</p>
+  <div class="prose">
+    <p class="lead">三者用的是同一套 KiroCrew 子 Agent，差别在于由谁决定下一步。KiroCrew ON 由平台代码按任务表决定，并对每一步把关；本机 KiroCrew 由聊天里的模型决定；原版 PoC 由 KiroCrew 里的协调者模型按一段固定流程的提示决定，用一个脚本做检查。</p>
+    <p>报告后半部分回答两个问题：a183d84 之后父会话为什么不再逐个任务回复，以及用户能否在聊天里继续和各个子 Agent 对话。后者现在不支持，第 6 节是补上它的设计，等你确认后再实现。</p>
+  </div>
+</header>
+
+<h2 id="who">1. 谁决定下一步</h2>
+<div class="who" role="list">
+  <div class="lane engine" role="listitem">
+    <div class="name"><strong>KiroCrew ON</strong><span>平台 Engine（代码）决定</span></div>
+    <ol class="steps">
+      <li><span class="chip agent">Kiro 规划一次</span></li>
+      <li><span class="chip code">平台按任务表派 task-1</span></li>
+      <li><span class="chip agent">子 Agent 执行</span></li>
+      <li><span class="chip code">平台把关：交接、改动、秘密、检查命令</span></li>
+      <li><span class="chip code">失败：自动重试或诊断返工</span></li>
+      <li><span class="chip code">派下一个任务</span></li>
+      <li><span class="chip code">追加 Evaluator，完成、发布</span></li>
+    </ol>
+  </div>
+  <div class="lane native" role="listitem">
+    <div class="name"><strong>本机 KiroCrew 0.8.0</strong><span>聊天里的模型决定</span></div>
+    <ol class="steps">
+      <li><span class="chip agent">你在聊天里说</span></li>
+      <li><span class="chip model">模型决定派不派、派谁、派几个</span></li>
+      <li><span class="chip agent">子 Agent 执行（可并行）</span></li>
+      <li><span class="chip model">结果回到对话，模型读后决定下一步</span></li>
+      <li><span class="chip model">模型自己判断是否完成</span></li>
+    </ol>
+  </div>
+  <div class="lane poc" role="listitem">
+    <div class="name"><strong>原版 PoC 流水线</strong><span>协调者模型按提示决定，脚本检查</span></div>
+    <ol class="steps">
+      <li><span class="chip model">协调者按提示派 plan（Kiro）</span></li>
+      <li><span class="chip check">checkpoint 脚本校验</span></li>
+      <li><span class="chip model">派 code（Claude Code）</span></li>
+      <li><span class="chip check">checkpoint</span></li>
+      <li><span class="chip model">派 review（Codex）</span></li>
+      <li><span class="chip check">checkpoint</span></li>
+      <li><span class="chip model">派 deliver（OpenCode）</span></li>
+    </ol>
+  </div>
+</div>
+<div class="legend">
+  <span><span class="chip code">实底</span> 平台代码</span>
+  <span><span class="chip model">虚线</span> 模型判断</span>
+  <span><span class="chip check">灰底</span> 确定性脚本</span>
+  <span><span class="chip agent">白底</span> 子 Agent 干活</span>
+</div>
+
+<h2 id="compare">2. 对比</h2>
+<p class="note">色点：<span style="color:var(--ok)">●</span> 有且完整，<span style="color:#d4a017">●</span> 部分，<span style="color:var(--no)">●</span> 没有。</p>
+<div class="table-wrap">
+<table class="compare">
+  <thead><tr><th></th><th>KiroCrew ON（现在）</th><th>本机 KiroCrew 0.8.0</th><th>原版 PoC 流水线</th></tr></thead>
+  <tbody>
+    <tr><th>在哪执行</th><td>EC2 上每人一个执行边界（你的是 <code>owner</code>），各有一个 KiroCrew Gateway</td><td>你的 Mac，桌面版内置的 Gateway</td><td>本机或单台主机上的 KiroCrew App</td></tr>
+    <tr><th>谁决定下一步</th><td>平台 Engine 按任务表，代码决定</td><td>聊天 Agent，模型决定</td><td>协调者 Agent 按提示，模型决定</td></tr>
+    <tr><th>任务从哪来</th><td>Kiro 规划成 1–7 个任务，或规则匹配、工作流、手写步骤</td><td>模型临时拆分，不留任务表</td><td>固定四步：plan、code、review、deliver</td></tr>
+    <tr><th>工具与 Agent</th><td>每个任务选 <code>poc-kiro</code> / <code>poc-claude</code> / <code>poc-codex</code>；审查与作者不同工具；用户指定优先</td><td>模型从已注册的 Agent 里挑</td><td>写死：Kiro、Claude Code、Codex、OpenCode</td></tr>
+    <tr><th>并行</th><td class="partly">同一会话一次一个任务；多个会话同时跑（每轮最多 4 个推进）</td><td class="yes">可以：<code>spawn_sub_agents</code> 并行，超过上限自动分批</td><td class="no">严格顺序</td></tr>
+    <tr><th>把关</th><td class="yes">每次尝试：交接、结果文件、改动、秘密、已验收文件、检查命令（必过 / 建议）、测试是否针对改动、审查对象、Evaluator</td><td class="no">没有平台把关，靠模型自查</td><td class="partly">checkpoint：归属、实际后端、文件、diff、测试、哈希；只在协调者调用时才跑</td></tr>
+    <tr><th>失败了</th><td class="yes">瞬时故障自动重试一次；看门狗停掉卡住的；诊断 Agent 选重试、返工、换工具、重新规划；有轮数、次数与时长预算</td><td class="partly">模型自己决定重试或放弃</td><td class="partly">同一工作者续接补齐，最多两次；审查发现缺陷退回编码会话</td></tr>
+    <tr><th>续接原对话</th><td>平台安排的返工续接原子 Agent 对话；用户续作重新起</td><td>模型调 <code>spawn_continue</code></td><td>协调者调 <code>spawn_continue</code></td></tr>
+    <tr><th>什么时候停下等人</th><td>只在缺凭证或缺输入、指定的工具不可用、预算用完、原生权限审批、没有执行环境时</td><td>模型想问就问</td><td>协调者想问就问</td></tr>
+    <tr><th>记录</th><td class="yes">数据库：会话、任务、每次尝试、证据、事件、修订历史、用量、审计</td><td class="partly">KiroCrew 的会话与子 Agent 记录</td><td class="partly">运行目录里的 manifest 与 report.md</td></tr>
+    <tr><th>多人与权限</th><td class="yes">个人与 Team 空间、会话共享、按人隔离的执行边界</td><td class="no">单人</td><td class="no">单人</td></tr>
+    <tr><th>多跑的模型轮次</th><td class="yes">无：a183d84 起子 Agent 结束不再触发父会话的一轮</td><td>每次 <code>spawn_run</code> 结束触发一轮；<code>spawn_sub_agents</code> 不触发</td><td>每个阶段结束触发协调者一轮（它靠这一轮推进）</td></tr>
+    <tr><th>主要风险</th><td>一个会话内不能并行；KiroCrew 原生的编排能力用得少</td><td>质量与进度全看模型；没有可审计的记录</td><td>模型可能漏步或跳过检查；链路写死；只做零依赖的本地网页</td></tr>
+  </tbody>
+</table>
+</div>
+
+<h2 id="chains">3. 三条链路的细节</h2>
+<div class="cols">
+  <section class="col engine">
+    <h3>KiroCrew ON</h3>
+    <ol>
+      <li>控制台、CLI 或 MCP 提交，平台登记 Request 与会话。</li>
+      <li>选执行环境：先选你自己的边界，再看 Team；并发上限满了就排队。</li>
+      <li>Worker 准备工作目录，建立父会话 <code>octopus-run-&lt;id&gt;</code>（Agent 为 Owner 观察员）。</li>
+      <li>Engine 每秒一轮，取会话里第一个未完成的任务。</li>
+      <li>Worker 写本轮 <code>instructions.md</code>（角色卡片、需求、契约、前序交接摘要、技能、结尾要求），调用 <code>POST /api/spawn</code>，再调用 <code>mark-collected</code>。</li>
+      <li>查看进度：运行 2 分钟内每 2 秒，之后 5、10、20 秒；Gateway 推迟时每 20 秒。</li>
+      <li>结束后按证据把关，记下提示与失败；失败进入纠错。</li>
+      <li>全部完成后追加 Evaluator（与作者不同的工具）和 Knowledge，然后完成；需要时自动发布 Draft PR。</li>
+    </ol>
+  </section>
+  <section class="col native">
+    <h3>本机 KiroCrew 0.8.0</h3>
+    <ol>
+      <li>你在桌面版的聊天里提需求。</li>
+      <li>聊天 Agent 自己判断：简单的自己做，两个以上独立任务才派子 Agent。</li>
+      <li><code>spawn_run</code>：后台派出、立即返回；子 Agent 结束时，结果以「完成事件」注入对话，触发一轮。</li>
+      <li><code>spawn_sub_agents</code>：并行派出、等全部结束、收齐结果再继续；同时标记已收取，不再注入。</li>
+      <li>还可以 <code>spawn_continue</code>、<code>spawn_steer</code>、<code>spawn_release</code>、<code>spawn_list</code>、<code>spawn_status</code>。</li>
+      <li>Conductor：与目标、流水线、台账、安全 Conductor 对话即可启动，它们驱动其他会话。</li>
+      <li>限制：并发上限自动（最多 32）；空闲内存低于 4 GB 时推迟；子 Agent 最长 3 小时、1000 轮。</li>
+    </ol>
+  </section>
+  <section class="col poc">
+    <h3>原版 PoC 流水线</h3>
+    <ol>
+      <li><code>pipeline.py</code> 建立聊天，Agent 为 <code>poc-pipeline-coordinator</code>，把需求发进去。</li>
+      <li>协调者按提示用 <code>spawn_run</code> 派 plan，指定 Agent、阶段标记、cwd、<code>keep=true</code>。</li>
+      <li>派完结束本轮，等完成消息。</li>
+      <li>收到后调用 <code>pipeline.py checkpoint</code>（不用模型：归属、后端、文件、diff、测试、哈希）。</li>
+      <li>退出码为 0 才进入下一阶段；不过就续接同一个工作者补齐，最多两次。</li>
+      <li>审查发现缺陷：把审查结论交回原编码会话修复，再让原审查会话复审，最多两轮。</li>
+      <li>最后写 report.md，把各阶段任务 ID 与验收结果交回父会话。</li>
+    </ol>
+  </section>
+</div>
+
+<h3>KiroCrew ON 每次派发发给 KiroCrew 的内容</h3>
+<pre><code>POST /api/spawn
+{
+  "task": "[OCTOPUS-ATTEMPT:attempt-…]\n完整阅读 …/instructions.md，在指定源码目录完成本次任务。",
+  "parent_session": "dashboard:octopus-run-&lt;id&gt;",
+  "agent": "poc-claude",              // 或 poc-kiro / poc-codex；诊断用 poc-diagnose
+  "model": "auto", "reasoning_effort": "",
+  "cwd": "&lt;会话的项目目录&gt;",
+  "keep": true,                        // 保留对话，返工可以续接
+  "include_memory": false, "include_project": false,
+  "include_lessons": false,            // 只在专属环境、有仓库知识时为 true
+  "silent": true                       // 只关通知
+}
+POST /api/spawn/mark-collected  {"ids": ["&lt;原生 ID&gt;"], "parent_session": "dashboard:octopus-run-&lt;id&gt;"}</code></pre>
+<p class="note prose">边界上 KiroCrew 的配置：<code>default_agent</code> 为 <code>poc-coordinator</code>，<code>max_subagents</code> 为 3，并发固定，不预先起会话（<code>eager_spawn</code> 关），YOLO 按边界设置。</p>
+
+<h2 id="diff">4. 差异与取舍</h2>
+<div class="prose">
+  <p><strong>可预测，换来的是灵活性。</strong>平台按任务表推进，同一个需求每次的路径一样，每一步都有记录和检查；代价是一个会话里任务只能一个一个跑，不能像本机那样让模型临时并行派出好几个。</p>
+  <p><strong>把关放在平台，不放在提示里。</strong>原版 PoC 已经有确定性检查，但要靠协调者记得去调用；现在由 Engine 在每次尝试结束后强制执行，模型跳不过去。</p>
+  <p><strong>纠错有边界。</strong>自动重试、看门狗、诊断返工都有预算（默认纠错 2 轮、自动重试 4 次、720 分钟），用完就停下说明原因，不会无限循环；本机和 PoC 都没有这层兜底。</p>
+  <p><strong>原生能力用得少。</strong>平台没有用 KiroCrew 的 Conductor、动态工作流、成员和并行波次（见第 7 节）。这是刻意的：平台只认自己派出、能核实归属的子 Agent。要用这些能力，需要先想清楚平台怎样记录和把关它们。</p>
+</div>
+
+<h2 id="quiet">5. a183d84 之后，父会话为什么不再逐个任务回复</h2>
+<div class="prose">
+  <p>KiroCrew 的默认行为是：子 Agent 结束时，<code>_subagent_done</code> 把一条「子 Agent 完成」注入它的父会话；父会话空闲就立即跑一轮（起一个 kiro 进程、消耗 Kiro credits，由观察员写一段回复），忙就排队，一批的最后一个还会再排一轮汇总。派发时的 <code>silent: true</code> 只关 Slack 和 Dashboard 的通知，不影响这一轮。</p>
+  <p>平台从 <code>GET /api/spawn/{id}</code> 自己读结果，不需要这一轮。KiroCrew 自己的 <code>spawn_sub_agents</code> 遇到同样的问题，用的办法是 <code>mark-collected</code>：把子 Agent 的 ID 记进父会话内存里的「已收取」集合；结束时 KiroCrew 在注入前、等待后各查一次，在集合里就记为已交付、直接返回，不注入、不跑这一轮，也取消汇总轮。a183d84 让 Worker 每次派发、续接、模型探测之后立刻这样标记。</p>
+</div>
+<div class="table-wrap" style="max-width:46em">
+<table>
+  <thead><tr><th>父会话里的内容</th><th>之前</th><th>之后</th></tr></thead>
+  <tbody>
+    <tr><td>平台的建立说明</td><td>有</td><td>有</td></tr>
+    <tr><td>每个尝试结束时平台写的结果说明（任务结果摘要，最长 3800 字）</td><td>有</td><td class="yes">有</td></tr>
+    <tr><td>KiroCrew 注入的「子 Agent 完成」</td><td>有</td><td>无</td></tr>
+    <tr><td>观察员读完结果写的回复（一轮模型）</td><td>每个任务一段</td><td>无</td></tr>
+    <tr><td>一批结束后的汇总回复</td><td>可能有</td><td>无</td></tr>
+  </tbody>
+</table>
+</div>
+<div class="callout">
+  <p>所以聊天里仍能逐个看到每个任务的结果。结果说明走 <code>POST /api/chat/slots/{slot}/note</code>：记录里写一行可见的说明，同时成为下一轮的背景，但不触发模型。你接着提问时，观察员能看到这些说明并回答。</p>
+  <p>EC2 核对（run-d62631d5）：父会话 4 行记录，其中 2 条结果说明，0 段模型回复；Gateway 日志 2 次「skipping injection」。部署前同样两个任务的 run-656be0a4 跑了 2 轮。限制：「已收取」只存在 Gateway 内存里，任务运行中 Gateway 重启，它结束时照旧跑一轮。</p>
+</div>
+
+<h2 id="follow-up">6. 在聊天里继续和子 Agent 对话（D72，待你确认）</h2>
+<h3>现在支持到哪一步</h3>
+<div class="table-wrap">
+<table>
+  <thead><tr><th>想做的事</th><th>KiroCrew 原生</th><th>平台现在</th></tr></thead>
+  <tbody>
+    <tr><td>子 Agent 运行中插话</td><td>聊天 Agent 调 <code>spawn_steer</code></td><td class="partly">控制台「补充说明」，只支持 Kiro 任务（0.10.0 只对 kiro 后端生效）</td></tr>
+    <tr><td>子 Agent 结束后在它的对话上继续</td><td>聊天 Agent 调 <code>spawn_continue</code></td><td class="partly">只有平台安排的自动返工会续接；你点续作是新起子 Agent</td></tr>
+    <tr><td>界面上直接给某个子 Agent 发消息</td><td class="no">没有：原生页面对子 Agent 只有列表、状态、停止、重试</td><td class="no">没有</td></tr>
+    <tr><td>在父会话聊天里让平台去做</td><td>—</td><td class="no">不支持：观察员被要求不派发，平台不读聊天</td></tr>
+  </tbody>
+</table>
+</div>
+<div class="callout warn">
+  <p>能绕过去吗：在原生页面用 <code>/agent</code> 把父会话换成会派发的 Agent，它可以续接平台的子 Agent。但平台完全看不到：没有尝试记录、不跑检查与审查、不进时间线与用量；它改过的文件会被下一个平台任务的候选提交带走，还可能让下一个任务报出不是它造成的提示。不建议。</p>
+</div>
+
+<h3>补上的机制：对话续接</h3>
+<div class="prose">
+  <p>原则：平台仍是唯一的派发者，聊天只是入口。每一次和子 Agent 的交互，都是这个任务的一次尝试，照常检查、记录、计入预算，在控制台看得到；子 Agent 带着它上一轮的上下文继续；不加任何确认或等待。</p>
+</div>
+<div class="table-wrap">
+<table>
+  <thead><tr><th>入口</th><th>写法</th></tr></thead>
+  <tbody>
+    <tr><td>原生父会话聊天</td><td><code>@task-1 再补一段关于 checkpoint 的说明</code>（任务 ID 在每条结果说明和控制台任务卡片上）</td></tr>
+    <tr><td>控制台</td><td>任务卡片上的「继续对话」</td></tr>
+    <tr><td>API / MCP</td><td><code>POST /v1/runs/&lt;id&gt;/tasks/&lt;任务&gt;/follow-up</code>；<code>octopus_follow_up</code></td></tr>
+  </tbody>
+</table>
+</div>
+<div class="table-wrap">
+<table>
+  <thead><tr><th>任务状态</th><th>平台做什么</th></tr></thead>
+  <tbody>
+    <tr><td>运行中，Kiro</td><td>作为补充说明送入正在跑的这一轮</td></tr>
+    <tr><td>运行中，Claude Code / Codex</td><td>不执行，说明「任务结束后再发」（KiroCrew 0.10.0 不支持给它们插话）</td></tr>
+    <tr><td>已结束，会话已停下</td><td>对话续接：新的一次尝试，续接这个任务原来的子 Agent 对话，把你写的内容作为「用户在对话中的追加要求」；照常把关；之后的任务重新执行</td></tr>
+    <tr><td>会话正在跑别的任务</td><td>不执行，说明它在跑哪个任务</td></tr>
+    <tr><td>规划任务、平台的 Knowledge 任务、还没运行过的任务、已关闭的会话</td><td>不执行，说明原因与可行的做法（例如改需求用续作）</td></tr>
+  </tbody>
+</table>
+</div>
+
+<div class="seq-wrap"><div class="seq" role="img" aria-label="对话续接的时序：你在聊天里发 @task-1，平台读到后续接该任务的子 Agent 对话，结果说明回到聊天">
+  <div class="head">你（原生聊天）</div>
+  <div class="head">KiroCrew 父会话</div>
+  <div class="head">平台 Engine / Worker</div>
+  <div class="head">task-1 的子 Agent 对话</div>
+  <div class="msg r" style="grid-column:1/3;--n:2"><span><code>@task-1 再补一段</code></span></div>
+  <div class="act" style="grid-column:2/3">观察员回一句（原有的一轮）</div>
+  <div class="msg l" style="grid-column:2/4;--n:2"><span>每 5 秒读最近 20 条消息</span></div>
+  <div class="act" style="grid-column:3/4">认定是谁、查权限、登记续接</div>
+  <div class="msg l" style="grid-column:2/4;--n:2"><span>说明「已转交 task-1」</span></div>
+  <div class="msg r" style="grid-column:3/5;--n:2"><span>新尝试：续接原对话 + 追加要求</span></div>
+  <div class="act" style="grid-column:4/5">在原上下文里修改</div>
+  <div class="msg l" style="grid-column:3/5;--n:2"><span>结束（不注入父会话）</span></div>
+  <div class="act" style="grid-column:3/4">把关；之后的任务重新执行</div>
+  <div class="msg l" style="grid-column:2/4;--n:2"><span>结果说明</span></div>
+  <div class="msg l" style="grid-column:1/3;--n:2"><span>在聊天里看到结果</span></div>
+</div></div>
+
+<details>
+  <summary>聊天入口如何认定是谁发的</summary>
+  <p>原生登录覆盖整个 Gateway（K03），消息本身不带身份。平台只读「8 小时内有人为它打开过原生入口」的会话，并把最近 8 小时内为这个会话打开原生入口的人当作发送者，按控制台同样的权限检查（能续作的人；个人边界上只有边界的主人；Team 未归档；执行环境仍为这个空间服务）。</p>
+  <p>这段时间里如果还有别人打开过同一执行环境的原生入口，平台无法确定是谁发的：不执行，在聊天里说明请到控制台操作。宁可不执行，也不冒用身份。</p>
+</details>
+<details>
+  <summary>成本</summary>
+  <p>只对 8 小时内打开过原生入口的会话，每 5 秒读一次最近 20 条消息；不新增模型轮次：续接本身就是你要的那一轮，观察员对你消息的回复是 KiroCrew 原有的行为。之后的任务会重新执行，与自动返工相同。</p>
+</details>
+
+<h2 id="unused">7. 平台还没用到的 KiroCrew 能力</h2>
+<div class="table-wrap">
+<table>
+  <thead><tr><th>能力</th><th>是什么</th><th>可能的用处</th></tr></thead>
+  <tbody>
+    <tr><td>并行波次（<code>batch_id</code>）</td><td>一次派出多个子 Agent，结束时汇总</td><td>同一会话里并行跑互不依赖的任务，例如几个只读审查同时进行</td></tr>
+    <tr><td>Conductor</td><td>目标、流水线、台账、安全四种，驱动其他会话</td><td>长周期目标；要先解决平台怎样核实它派出的会话</td></tr>
+    <tr><td>动态工作流（<code>/api/workflows/run</code>）</td><td>KiroCrew 自己的工作流，带预算与超时</td><td>与平台工作流的关系待定</td></tr>
+    <tr><td>成员与小组（<code>/api/members</code>、<code>/api/teams</code>）</td><td>固定成员和常驻线程，按成员委派</td><td>把任务交给某个常驻成员</td></tr>
+    <tr><td>会话分叉、旁路问答、导出导入</td><td><code>fork</code>、<code>side</code>、<code>export</code> / <code>import</code></td><td>从一个会话分出一份自由探索的副本；只读地问问题</td></tr>
+    <tr><td>补充说明的 <code>follow_up</code> 模式</td><td>本轮结束后再接着跑一轮</td><td>平台目前只用 <code>interrupt</code>，因为另起的一轮平台看不到</td></tr>
+  </tbody>
+</table>
+</div>
+
+<h2 id="confirm">8. 需要你确认</h2>
+<ol class="decide">
+  <li><strong>第 6 节的对话续接按这个设计做吗？</strong>四个入口；续接这个任务原来的子 Agent 对话；照常把关；做不了就当场说明原因。</li>
+  <li><strong>续接之后，之后的任务重新执行？</strong>我的建议是重跑，因为它们基于旧的输出。代价是多跑几个任务。</li>
+  <li><strong>聊天发送者的认定规则？</strong>无法确定是谁时不执行，改用控制台。代价是多人共用一个执行环境时聊天入口不可用。</li>
+  <li><strong>运行中的 Claude Code / Codex 任务：直接说明，还是排队等它结束再续接？</strong>我的建议是直接说明，因为排队等于新增一种等待。</li>
+  <li><strong>部署 5fd7976 与 2c3206e？</strong>即响应压缩与写入时打码，回归全部通过；只重启 API 与 Worker。</li>
+</ol>
+
+<footer>
+  <p>依据：<code>octopus/engine.py</code>、<code>octopus/worker.py</code>、<code>octopus/domain.py</code>、<code>octopus/recovery.py</code>、<code>octopus/gates.py</code>、<code>composition/templates.py</code>、<code>pipeline_spec.py</code>、<code>pipeline.py</code>；EC2 上的 KiroCrew 0.10.0（<code>slack/gateway.py</code>、<code>dashboard/messaging_api/run_control.py</code>、<code>dashboard/chat_handlers.py</code>、界面脚本）；本机桌面版 0.8.0 的 <code>mcp_tools/spawn.py</code>。设计全文：<code>docs/superpowers/specs/2026-10-23-chat-follow-up-design.md</code>。</p>
+</footer>
+</div>
+</body>
+</html>
