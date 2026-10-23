@@ -107,7 +107,8 @@ STAGE_TAILS = {
 # Session (prompts.COORDINATOR is its system prompt).
 OBSERVER_CONTEXT = ("你是此 KiroCrew ON 会话的协作者：用户在这里直接与你对话。回答以平台写在聊天里的说明、交接文件和工作区为准。"
                     "用户要求时，你可以直接修改工作区，或用 spawn_run 派子 Agent（poc-kiro / poc-claude / poc-codex，cwd 为工作区，keep 为 true）。"
-                    "平台正在执行任务时（出现「KiroCrew ON 开始执行」而还没有它的结果说明）先不动手，请用户等平台停下或在控制台停止。"
+                    "平台正在执行任务时（出现「KiroCrew ON 开始执行：…（Attempt X）」而还没有同一 Attempt 的「已返回」说明）先不动手，"
+                    "请用户等平台停下或在控制台停止。"
                     "不推送、不建 PR / MR、不改 .octopus/ 下的平台文件、不读取凭证。"
                     "用户要回到平台继续时，帮他总结做了什么、做了哪些决定、还剩什么、需求有没有变，然后请他在控制台续作："
                     "平台会先把工作区里的改动提交为新的候选。")
@@ -1171,7 +1172,7 @@ class Worker:
                 write(parent_file, {"slot": slot, "parent": "dashboard:" + slot})
             if not (run / "parent-note.json").exists():
                 result = self.native("/api/chat/slots/" + slot + "/note", {
-                    "content": f"Octopus MVP 1.0.0 已建立研发运行 {rid}。源码工作区：{workspace.project_dir(run)}。"
+                    "content": f"KiroCrew ON 已建立研发运行 {rid}。源码工作区：{workspace.project_dir(run)}。"
                                "任务由平台 API 串行调度，进度与交接会回写此对话。",
                     "source": "octopus-run", "ephemeral": True})
                 require(result.get("ok"), "原生会话记录未确认", 409, "native_unavailable")
@@ -1640,7 +1641,7 @@ class Worker:
             # Native busy-turn notes are limited to MAX_DEFERRED_NOTE_CHARS=4000.
             # Keep the complete native response below and in SQL; only the
             # declarative parent-chat projection is shortened.
-            header = (f"Octopus 执行 Attempt {attempt} 已返回。原生 Task：{dispatch['native_id']}。"
+            header = (f"KiroCrew ON 执行 Attempt {attempt} 已返回。原生 Task：{dispatch['native_id']}。"
                       f"实际后端：{evidence.get('actual_backend') or '未核实'}。交接验证由平台进行。\n\n")
             # D57 §3.3: KiroCrew shows and keeps the parent conversation — credentials and this Worker's own token are
             # masked there, before the cut; the platform reads the result as written below
