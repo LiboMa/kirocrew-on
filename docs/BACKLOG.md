@@ -25,7 +25,7 @@
 
 ## 共享与组织（原 M4）
 - 组织层，Session 共享给个人 / Team / 公司；Team 执行隔离。
-- **KiroCrew 回收未认领的父会话时杀掉子 Agent**（EC2 2026-10-22，run-16848466…）：Worker 建的 chat slot 被 KiroCrew 急切起了 coordinator 会话但从未认领；内存吃紧（posture=tight）时预取上限为 0，同一边界上新会话建 slot 就回收最旧的未认领父会话（parent-end teardown），正在运行的子 Agent 被 SIGKILL（「killed by Crew (forced stop)」），平台记 native_stopped、不重试。平台把这种停止视为瞬时失败：D57 Task 13。根因：KiroCrew 0.10 的 `session.eager_spawn` 默认开启（sections.py:2216）——D63 在边界的 KiroCrew 配置里关掉它（新配置与已有配置都写 false，明确开启的保留）。
+- **KiroCrew 回收未认领的父会话时杀掉子 Agent**（EC2 2026-10-22，run-16848466…）：Worker 建的 chat slot 被 KiroCrew 急切起了 coordinator 会话但从未认领；内存吃紧（posture=tight）时预取上限为 0，同一边界上新会话建 slot 就回收最旧的未认领父会话（parent-end teardown），正在运行的子 Agent 被 SIGKILL（「killed by Crew (forced stop)」），平台记 native_stopped、不重试。平台把这种停止视为瞬时失败：D57 Task 13（已做：没人经平台打开原生入口时自动重试一次，见 OPERATIONS「门禁与安全底线（D57）」）。根因：KiroCrew 0.10 的 `session.eager_spawn` 默认开启（sections.py:2216）——D63 在边界的 KiroCrew 配置里关掉它（新配置与已有配置都写 false，明确开启的保留）。
 - ~~**子 Agent 结束时父会话仍跑一轮 coordinator**~~（EC2 2026-10-22，D63 之后的核对）：Worker 派发时已带 `silent: true`，但 KiroCrew 0.10 只按它关 Slack / Dashboard 通知（slack/gateway.py:10820 起），结果照样注入父 chat slot（`Subagent … → _run_chat in octopus-run-…`，gateway.py:10457），为平台的 slot 起一个 poc-coordinator（kiro 后端）进程并跑一轮——每个任务结束都多一轮 Kiro 用量，进程留到 TTL。待：查 KiroCrew 有无不回报父会话的派发方式（平台以 parent_session 证明归属，须一起设计），或向上游提需求。
   2026-10-23 修复：KiroCrew 0.10 已有 `POST /api/spawn/mark-collected {ids, parent_session}`（它自己的阻塞式 spawn 工具用来表示父会话已拿到结果），Worker 每次派发、续接与模型探测拿到原生 ID 后立即调用，结束时不再注入父会话、不跑这一轮，波次的汇总轮也不再触发；结果照旧从 `GET /api/spawn/{id}` 读取，交付标记与保留时长不变。标记只在 Gateway 内存中：运行中 Gateway 重启后，结束时会照旧跑一轮。
 - 用量上限（M4-4 第 3 期）：每人 / 每 Team 按周期（月）的 Kiro credits、token 或分钟数上限（D46 P6a 已有用量记录）；D61 只限同时运行的任务数。
@@ -191,9 +191,21 @@
 
 ## EC2 现场发现的 Harness 问题（2026-10-21）
 
-- 执行环境内存不足时用户看不见：owner 边界的 KiroCrew Gateway 因可用内存低于派发门槛推迟所有子 Agent 启动约 40 分钟，会话只显示「运行中」与「原生任务归属当前不可核实」。根因：`/tmp`（tmpfs 7.7 GB）被 Agent 遗留的下载（Playwright / Chrome 库、venv）占 4.7 GB，另有 7 个空闲的 kiro-cli-chat 进程链（约 2.3 GB）未被回收（均经负责人同意清理）。待做：Agent 临时文件改放磁盘或定期清理 `/tmp`；回收空闲运行时；spawn 回执为低内存时显示「等待主机内存」；Gateway 的「可用」与 MemAvailable 口径不一致需核对。
-- 交付任务只产出不入库的产物（patch、预览页、本地分支）时 `diff_present` 必然失败（run-9dce9610，负责人以 kind=test 绕过）：给 deliver 加「不入库产物」的存在性验收，候选自动提交时排除这些产物；或在规划阶段就按门禁校验契约。
-- 评审任务把评审写成仓库文件，`review_bound` 连续三次拦下（run-b0b3d23c）：重试时明确要求写进交接、删除文件，或由平台撤销评审任务的文件改动后按结论判定。
+- ~~执行环境内存不足时用户看不见~~（D60 已做：排队时「需要处理」写「排队：等待执行环境资源（执行环境内存不足）」）：owner 边界的 KiroCrew Gateway 因可用内存低于派发门槛推迟所有子 Agent 启动约 40 分钟，会话只显示「运行中」与「原生任务归属当前不可核实」。根因：`/tmp`（tmpfs 7.7 GB）被 Agent 遗留的下载（Playwright / Chrome 库、venv）占 4.7 GB，另有 7 个空闲的 kiro-cli-chat 进程链（约 2.3 GB）未被回收（均经负责人同意清理）。仍未做：Agent 临时文件改放磁盘（D57 Task 16，暂缓，见下）；回收空闲运行时；Gateway 的「可用」与 MemAvailable 口径不一致需核对。
+- ~~交付任务只产出不入库的产物（patch、预览页、本地分支）时 `diff_present` 必然失败~~（D57 已做：没有入库改动只记提示）（run-9dce9610，负责人以 kind=test 绕过）：给 deliver 加「不入库产物」的存在性验收，候选自动提交时排除这些产物；或在规划阶段就按门禁校验契约。
+- ~~评审任务把评审写成仓库文件，`review_bound` 连续三次拦下~~（D57 已做：平台撤回审查改的文件、移出新建的文件，记提示，审查结论照常采用）（run-b0b3d23c）：重试时明确要求写进交接、删除文件，或由平台撤销评审任务的文件改动后按结论判定。
+
+## D57 门禁减负与安全底线的延后项（2026-10-23）
+
+已做的与已知局限见 OPERATIONS「门禁与安全底线（D57）」。
+- **暂缓，等负责人决定**（负责人 2026-10-22：新增的拦截、等待或确认须先经负责人同意，不能卡用户）：安全阻塞状态与人的判断（Task 8）、误报记忆（Task 9，迁移 11 `secret_allowances` 留给它）、判断后复扫（Task 10）、预览 / 下载 / 不入库交付物的扫描与拒绝（Task 11，含合同的 `untracked` 字段与候选排除）、有提示就不自动发布（Task 12）。需要先出一版不卡用户的方案，经负责人同意再做。
+- **Task 16 执行边界的临时目录改放磁盘**：在分支 `park/d57-t16-tmpdir`，未部署。2026-10-23 EC2 实测 `/tmp` 31 GB 只用了 687 MB，部署要重启每个 Gateway，暂不值得。部署前必须先改：`deploy.sh space` 在 crew 安装失败时也设了 `TMPDIR`，应只在成功时设。
+- **打码的展示局限**（Task 6b / 7b 之后仍在，判定不受影响）：看不到私钥 BEGIN / END 时正文不认（pytest 截断的 diff、`git diff -U0`）；不足 40 个字符的片段；一行里的列表 repr 与 PHP / Perl `.` 拼接逐行打码；行号宽度变化处拆成两处；`docker compose -t` 约 40 字节的前缀与交错的容器日志；`cat -n` 下 BEGIN 片段里的 END 被一并打码（此前就有）。
+- **Task 15b 提示文案**：恢复被拒的原因改成写给人看的话（RecoveryPanel 里的 `paths_add`、retry / rework）；报告（`report.py`）的门禁用中文名；不合法结果的提示把「要求修改」和英文决定列表混在一起；TaskList 的说明改为「平台不会运行以上检查（…）」；停止提示的上限取自当前预算；`gates.py` 结论词列表漏了 fail / rejected；ApprovalsCard 的升级提示只在会话 `waiting_approval` 时出现。
+- **Task 3b 的嵌套仓库情形**：快照把嵌套仓库记为一项 `sub/`，审查又删了 `sub/.git` 时，其中的文件被逐个当作新建文件移出（可以拷回）。`review-removed` 也不自动清理，每个审查 Attempt 都可能留下一份。
+- 终审延后的次要项：
+  - 检查：环境失败的识别只看输出尾部，断言里引用的「Committer identity unknown」也会被当作环境原因；Worker 中途退出会留下临时 gitconfig；只有项目根与 `src/` 下的模块算项目自己的；建议检查较慢时可能占满 20 分钟总时限，挤掉必过检查；`verify_basis` 只引一个字也算需求原文。
+  - 重试与审查：重试后的诊断丢了第一次的原生错误；Agent 自报的 `failure_type: contract` 也能拿到重新规划豁免（至多 2 次）；撤回成功但回执丢失时没有 ⚠；会话停止时取消的审查 Attempt 不撤回审查改动。
 
 ## D55 M2 剩余（Request、准入规则、映射偏好）的延后项（2026-10-21）
 
