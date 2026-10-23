@@ -1,0 +1,241 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>KiroCrew ON 控制台改版：三个方案</title>
+<style>
+  * { box-sizing: border-box; }
+  body { margin: 0; font: 15px/1.6 -apple-system, BlinkMacSystemFont, "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", sans-serif; background: #eef1f4; color: #0f172a; }
+  .page { max-width: 1240px; margin: 0 auto; padding: 40px 24px 80px; }
+  .page > h1 { font-size: 28px; margin: 0 0 8px; }
+  .page > p { max-width: 46em; color: #475569; margin: 0 0 8px; }
+  .option { margin-top: 44px; }
+  .option > header { display: grid; grid-template-columns: 1fr auto; gap: 8px 24px; align-items: end; margin-bottom: 14px; }
+  .option > header h2 { margin: 0; font-size: 22px; }
+  .option > header p { margin: 4px 0 0; color: #475569; max-width: 52em; }
+  .swatches { display: flex; gap: 6px; }
+  .swatches span { width: 34px; height: 34px; border: 1px solid rgba(0,0,0,.12); }
+  .facts { display: flex; flex-wrap: wrap; gap: 6px 18px; font-size: 13px; color: #334155; margin: 8px 0 0; padding: 0; list-style: none; }
+  .facts li::before { content: "· "; color: #94a3b8; }
+
+  /* the mock: one console screen per option */
+  .mock { display: grid; grid-template-columns: 228px 1fr; min-height: 560px; border: 1px solid var(--line); background: var(--bg); color: var(--ink); overflow: hidden; }
+  .side { background: var(--side); border-right: 1px solid var(--line); padding: 16px 12px; display: flex; flex-direction: column; gap: 2px; color: var(--side-ink); }
+  .brand { display: flex; align-items: center; gap: 10px; padding: 0 6px 14px; margin-bottom: 8px; border-bottom: 1px solid var(--line); }
+  .brand b { font-size: 15px; letter-spacing: .01em; }
+  .brand small { display: block; font: 11px/1.2 var(--mono); color: var(--muted); }
+  .group { font: 600 11px/1 var(--mono); color: var(--muted); letter-spacing: .08em; margin: 14px 8px 6px; }
+  .nav { display: flex; align-items: center; gap: 10px; padding: 7px 10px; font-size: 14px; border-radius: var(--r); color: inherit; }
+  .nav i { width: 14px; height: 14px; border: 1.5px solid currentColor; opacity: .7; }
+  .nav.on { background: var(--active-bg); color: var(--active-ink); font-weight: 600; box-shadow: var(--active-bar); }
+  .side .spacer { flex: 1; }
+  .side .foot { border-top: 1px solid var(--line); padding-top: 8px; font-size: 13px; color: var(--muted); }
+  .main { display: flex; flex-direction: column; min-width: 0; }
+  .top { display: flex; align-items: center; justify-content: space-between; padding: 14px 24px; border-bottom: 1px solid var(--line); background: var(--top); }
+  .top h3 { margin: 0; font-size: 18px; }
+  .top p { margin: 0; font-size: 12.5px; color: var(--muted); }
+  .who { display: flex; align-items: center; gap: 10px; font-size: 13px; color: var(--muted); }
+  .who span.av { width: 30px; height: 30px; display: grid; place-items: center; background: var(--primary); color: var(--on-primary); font: 700 12px/1 var(--mono); border-radius: var(--r); }
+  .body { padding: 20px 24px; display: grid; gap: 16px; }
+  .stats { display: grid; grid-template-columns: repeat(4, 1fr); gap: 12px; }
+  .stat { background: var(--card); border: 1px solid var(--line); border-radius: var(--r-card); padding: 12px 14px; display: flex; gap: 12px; align-items: center; box-shadow: var(--shadow); }
+  .tile { width: 36px; height: 36px; display: grid; place-items: center; border-radius: var(--r); font: 700 13px/1 var(--mono); }
+  .stat small { display: block; font-size: 12px; color: var(--muted); }
+  .stat b { font-size: 20px; line-height: 1.2; }
+  .stat em { display: block; font-style: normal; font-size: 12px; color: var(--ok); }
+  .box { background: var(--card); border: 1px solid var(--line); border-radius: var(--r-card); box-shadow: var(--shadow); }
+  .box-head { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 14px 16px; border-bottom: 1px solid var(--line); }
+  .box-head h4 { margin: 0; font-size: 16px; }
+  .box-head h4 span { color: var(--muted); font-weight: 400; }
+  .tools { display: flex; align-items: center; gap: 8px; }
+  .search { width: 220px; height: 32px; border: 1px solid var(--line); background: var(--field); border-radius: var(--r); padding: 0 10px; font-size: 13px; color: var(--muted); display: flex; align-items: center; }
+  .seg { display: flex; border: 1px solid var(--line); border-radius: var(--r); overflow: hidden; font-size: 13px; }
+  .seg span { padding: 5px 10px; } .seg span.on { background: var(--active-bg); color: var(--active-ink); font-weight: 600; }
+  .btn { height: 32px; padding: 0 12px; display: inline-flex; align-items: center; gap: 6px; font-size: 13px; font-weight: 600; border-radius: var(--r); border: 1px solid var(--line); background: var(--field); color: var(--ink); }
+  .btn.primary { background: var(--primary-fill); border-color: transparent; color: var(--on-primary); }
+  table { width: 100%; border-collapse: collapse; font-size: 13.5px; }
+  th { text-align: left; font: 600 11.5px/1 var(--head-font); letter-spacing: var(--head-track); text-transform: var(--head-case); color: var(--muted); padding: 10px 16px; border-bottom: 1px solid var(--line); }
+  td { padding: 11px 16px; border-bottom: 1px solid var(--line); }
+  tr:last-child td { border-bottom: none; }
+  tr.sel td { background: var(--row-sel); }
+  td code { font: 12px var(--mono); color: var(--muted); }
+  .status { display: inline-flex; align-items: center; gap: 6px; color: var(--ok); font-weight: 600; font-size: 13px; }
+  .status::before { content: ""; width: 7px; height: 7px; background: currentColor; border-radius: var(--dot); }
+  .acts { display: flex; gap: 14px; color: var(--muted); font-size: 12.5px; }
+  .acts b { color: var(--active-ink); font-weight: 600; }
+  .acts .danger { color: var(--danger); }
+  .foot-row { display: flex; justify-content: space-between; padding: 10px 16px; font-size: 12.5px; color: var(--muted); border-top: 1px solid var(--line); }
+
+  /* option A: 青岩 — light, flat teal, 4px corners */
+  .a { --bg: #f6f8f9; --side: #ffffff; --side-ink: #1e293b; --top: #ffffff; --card: #ffffff; --field: #ffffff; --ink: #0f172a;
+       --muted: #64748b; --line: #e2e8f0; --primary: #0d9488; --primary-fill: #0d9488; --on-primary: #ffffff;
+       --active-bg: #e6f6f4; --active-ink: #0f766e; --active-bar: inset 3px 0 0 #0d9488; --row-sel: #f0fbf9; --ok: #059669; --danger: #dc2626;
+       --r: 4px; --r-card: 6px; --dot: 50%; --shadow: none; --mono: "SF Mono", Menlo, monospace;
+       --head-font: -apple-system, "PingFang SC", sans-serif; --head-track: .02em; --head-case: none; }
+  /* option B: 夜航 — dark-first slate, square corners, mono data */
+  .b { --bg: #020617; --side: #0b1222; --side-ink: #cbd5e1; --top: #020617; --card: #0b1222; --field: #0f172a; --ink: #e2e8f0;
+       --muted: #94a3b8; --line: #1e293b; --primary: #2dd4bf; --primary-fill: #14b8a6; --on-primary: #021a17;
+       --active-bg: rgba(45,212,191,.10); --active-ink: #5eead4; --active-bar: inset 2px 0 0 #2dd4bf; --row-sel: rgba(45,212,191,.06); --ok: #34d399; --danger: #f87171;
+       --r: 0; --r-card: 0; --dot: 0; --shadow: none; --mono: "SF Mono", Menlo, monospace;
+       --head-font: "SF Mono", Menlo, monospace; --head-track: .08em; --head-case: uppercase; }
+  /* option C: 工程台 — dark rail + light content, 2px corners, dense tables */
+  .c { --bg: #f4f5f7; --side: #0f172a; --side-ink: #cbd5e1; --top: #ffffff; --card: #ffffff; --field: #ffffff; --ink: #0f172a;
+       --muted: #64748b; --line: #dfe3e8; --primary: #0f766e; --primary-fill: #0f172a; --on-primary: #ffffff;
+       --active-bg: #134e4a; --active-ink: #99f6e4; --active-bar: none; --row-sel: #eef8f6; --ok: #0f766e; --danger: #b91c1c;
+       --r: 2px; --r-card: 2px; --dot: 50%; --shadow: 0 1px 0 rgba(15,23,42,.04); --mono: "SF Mono", Menlo, monospace;
+       --head-font: -apple-system, "PingFang SC", sans-serif; --head-track: 0; --head-case: none; }
+  .c .side .group { color: #64748b; } .c .side .brand { border-color: #1e293b; } .c .side .foot { border-color: #1e293b; color: #94a3b8; }
+  .c .nav.on { color: #ccfbf1; }
+  .c .acts b { color: #0f766e; }
+
+  .note { margin-top: 10px; font-size: 13px; color: #475569; }
+  @media (max-width: 900px) { .mock { grid-template-columns: 1fr; } .side { display: none; } .stats { grid-template-columns: repeat(2, 1fr); } }
+</style>
+</head>
+<body>
+<div class="page">
+  <h1>KiroCrew ON 控制台改版：三个方案</h1>
+  <p>三个方案都用 Sub2API 的青绿色系，功能与布局参考它：分组侧边栏、带副标题的页头、统计卡片、「工具栏 + 表格 + 分页」的列表页、深色模式切换。
+     差别在风格、形状与密度。Logo 一律是方形、扁平、科技感，不做圆角效果。下面的示意页都是「我的设置 › API Token」，已含「重新生成」。</p>
+
+  <section class="option">
+    <header>
+      <div><h2>方案一 · 青岩（浅色、扁平、4 像素小圆角）</h2>
+        <p>最接近参考：浅色底、白色容器、实心青绿主色，没有阴影和渐变；统计卡片的图标是方形色块；左侧导航用细竖线标出当前项。日常使用最轻松。</p>
+        <ul class="facts"><li>默认浅色，另有深色</li><li>圆角 4 / 6 像素</li><li>中文正文 + 等宽数字</li><li>密度适中</li></ul></div>
+      <div class="swatches" aria-label="色板"><span style="background:#0d9488"></span><span style="background:#e6f6f4"></span><span style="background:#f6f8f9"></span><span style="background:#64748b"></span><span style="background:#0f172a"></span></div>
+    </header>
+    <div class="mock a">
+      <aside class="side">
+        <div class="brand">
+          <svg width="30" height="30" viewBox="0 0 30 30" aria-label="Logo 方案一"><rect width="30" height="30" fill="#0d9488"/><rect x="7" y="6" width="4" height="18" fill="#fff"/><polygon points="11,15 19,6 23.5,6 15.5,15" fill="#fff"/><polygon points="13.5,13 23.5,24 19,24 11,15.5" fill="#99f6e4"/></svg>
+          <div><b>KiroCrew ON</b><small>dev workspace</small></div>
+        </div>
+        <div class="group">工作台</div>
+        <div class="nav"><i></i>会话</div><div class="nav"><i></i>工作流</div>
+        <div class="group">管理</div>
+        <div class="nav"><i></i>概览</div><div class="nav"><i></i>用户</div><div class="nav"><i></i>执行环境</div><div class="nav"><i></i>Team</div>
+        <div class="group">我的设置</div>
+        <div class="nav on"><i></i>API Token</div><div class="nav"><i></i>仓库凭证</div><div class="nav"><i></i>映射偏好</div>
+        <div class="spacer"></div><div class="foot">◐ 深色模式　　« 收起</div>
+      </aside>
+      <div class="main">
+        <div class="top"><div><h3>API 与 Coding Agent 接入</h3><p>为 Claude Code、Codex、Kiro CLI 等客户端各创建一枚 Token</p></div><div class="who">🔔<span class="av">FO</span>fixture-owner</div></div>
+        <div class="body">
+          <div class="stats">
+            <div class="stat"><span class="tile" style="background:#e0f2fe;color:#0369a1">TK</span><div><small>有效 Token</small><b>3</b><em>1 枚 7 天内到期</em></div></div>
+            <div class="stat"><span class="tile" style="background:#ede9fe;color:#6d28d9">AG</span><div><small>已接入客户端</small><b>2</b><em>Claude Code · Kiro CLI</em></div></div>
+            <div class="stat"><span class="tile" style="background:#dcfce7;color:#15803d">RQ</span><div><small>今日请求</small><b>148</b><em>全部成功</em></div></div>
+            <div class="stat"><span class="tile" style="background:#fef3c7;color:#b45309">EX</span><div><small>最近使用</small><b>3 分钟前</b><em>Claude Code（本机）</em></div></div>
+          </div>
+          <div class="box">
+            <div class="box-head"><h4>Token <span>(3)</span></h4><div class="tools"><div class="search">⌕ 按名称查找</div><div class="seg"><span class="on">有效</span><span>已过期</span></div><span class="btn">↻</span><span class="btn primary">＋ 新建 Token</span></div></div>
+            <table><thead><tr><th>名称</th><th>权限</th><th>状态</th><th>到期</th><th>最近使用</th><th>操作</th></tr></thead>
+              <tbody>
+                <tr class="sel"><td>Claude Code（本机）</td><td><code>read · execute</code></td><td><span class="status">有效</span></td><td>2026-11-22</td><td>3 分钟前</td><td><div class="acts"><b>重新生成</b><span class="danger">撤销</span></div></td></tr>
+                <tr><td>Kiro CLI（CI）</td><td><code>read</code></td><td><span class="status">有效</span></td><td>2026-10-30</td><td>昨天</td><td><div class="acts"><b>重新生成</b><span class="danger">撤销</span></div></td></tr>
+                <tr><td>Web 登录</td><td><code>read · execute · manage</code></td><td><span class="status">有效</span></td><td>2026-11-22</td><td>正在使用</td><td><div class="acts"><span>当前登录</span></div></td></tr>
+              </tbody></table>
+            <div class="foot-row"><span>共 3 枚</span><span>‹ 1 ›</span></div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <section class="option">
+    <header>
+      <div><h2>方案二 · 夜航（深色为主、直角、等宽数据）</h2>
+        <p>深色优先的运维台：石板深底、青绿高亮、零圆角；表头、ID、时间用等宽字，像终端。适合长时间盯进度的人，信息密度最高。另有浅色模式。</p>
+        <ul class="facts"><li>默认深色，另有浅色</li><li>直角</li><li>等宽表头与数据</li><li>密度高</li></ul></div>
+      <div class="swatches"><span style="background:#14b8a6"></span><span style="background:#5eead4"></span><span style="background:#020617"></span><span style="background:#0b1222"></span><span style="background:#94a3b8"></span></div>
+    </header>
+    <div class="mock b">
+      <aside class="side">
+        <div class="brand">
+          <svg width="30" height="30" viewBox="0 0 30 30" aria-label="Logo 方案二"><rect x="1" y="1" width="28" height="28" fill="none" stroke="#2dd4bf" stroke-width="2"/><g fill="#2dd4bf"><rect x="7" y="7" width="4" height="4"/><rect x="7" y="13" width="4" height="4"/><rect x="7" y="19" width="4" height="4"/><rect x="13" y="13" width="4" height="4"/><rect x="19" y="7" width="4" height="4"/><rect x="19" y="19" width="4" height="4"/></g><rect x="13" y="7" width="4" height="4" fill="#5eead4" opacity=".35"/><rect x="13" y="19" width="4" height="4" fill="#5eead4" opacity=".35"/></svg>
+          <div><b>KiroCrew ON</b><small>&gt;_ ops console</small></div>
+        </div>
+        <div class="group">WORKSPACE</div>
+        <div class="nav"><i></i>会话</div><div class="nav"><i></i>工作流</div>
+        <div class="group">ADMIN</div>
+        <div class="nav"><i></i>概览</div><div class="nav"><i></i>用户</div><div class="nav"><i></i>执行环境</div><div class="nav"><i></i>Team</div>
+        <div class="group">ACCOUNT</div>
+        <div class="nav on"><i></i>API Token</div><div class="nav"><i></i>仓库凭证</div><div class="nav"><i></i>映射偏好</div>
+        <div class="spacer"></div><div class="foot">☀ 浅色模式　　« 收起</div>
+      </aside>
+      <div class="main">
+        <div class="top"><div><h3>API 与 Coding Agent 接入</h3><p>为 Claude Code、Codex、Kiro CLI 等客户端各创建一枚 Token</p></div><div class="who">🔔<span class="av">FO</span>fixture-owner</div></div>
+        <div class="body">
+          <div class="stats">
+            <div class="stat"><span class="tile" style="background:rgba(56,189,248,.12);color:#7dd3fc">TK</span><div><small>有效 Token</small><b>3</b><em>1 枚 7 天内到期</em></div></div>
+            <div class="stat"><span class="tile" style="background:rgba(167,139,250,.12);color:#c4b5fd">AG</span><div><small>已接入客户端</small><b>2</b><em>claude · kiro</em></div></div>
+            <div class="stat"><span class="tile" style="background:rgba(52,211,153,.12);color:#6ee7b7">RQ</span><div><small>今日请求</small><b>148</b><em>100% ok</em></div></div>
+            <div class="stat"><span class="tile" style="background:rgba(251,191,36,.12);color:#fcd34d">EX</span><div><small>最近使用</small><b>3m</b><em>claude-code-local</em></div></div>
+          </div>
+          <div class="box">
+            <div class="box-head"><h4>Token <span>(3)</span></h4><div class="tools"><div class="search">⌕ find tokens</div><div class="seg"><span class="on">有效</span><span>已过期</span></div><span class="btn">↻</span><span class="btn primary">＋ 新建 Token</span></div></div>
+            <table><thead><tr><th>名称</th><th>权限</th><th>状态</th><th>到期</th><th>最近使用</th><th>操作</th></tr></thead>
+              <tbody>
+                <tr class="sel"><td>Claude Code（本机）</td><td><code>read,execute</code></td><td><span class="status">ACTIVE</span></td><td><code>2026-11-22</code></td><td><code>3m ago</code></td><td><div class="acts"><b>重新生成</b><span class="danger">撤销</span></div></td></tr>
+                <tr><td>Kiro CLI（CI）</td><td><code>read</code></td><td><span class="status">ACTIVE</span></td><td><code>2026-10-30</code></td><td><code>1d ago</code></td><td><div class="acts"><b>重新生成</b><span class="danger">撤销</span></div></td></tr>
+                <tr><td>Web 登录</td><td><code>read,execute,manage</code></td><td><span class="status">ACTIVE</span></td><td><code>2026-11-22</code></td><td><code>now</code></td><td><div class="acts"><span>当前登录</span></div></td></tr>
+              </tbody></table>
+            <div class="foot-row"><span>3 / 3</span><span>‹ 1 ›</span></div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <section class="option">
+    <header>
+      <div><h2>方案三 · 工程台（深色导航 + 浅色内容、2 像素直角、紧凑表格）</h2>
+        <p>参考 AWS 控制台的结构：深色侧栏、浅色内容区；容器标题带数量，表格上方是一排工具栏，主按钮是深色实心，青绿只用于状态与当前项。最「专业工具」的感觉。</p>
+        <ul class="facts"><li>深色侧栏 + 浅色内容，另有全深色</li><li>2 像素</li><li>表格紧凑、带选中行</li><li>密度高</li></ul></div>
+      <div class="swatches"><span style="background:#0f172a"></span><span style="background:#134e4a"></span><span style="background:#0f766e"></span><span style="background:#f4f5f7"></span><span style="background:#ffffff"></span></div>
+    </header>
+    <div class="mock c">
+      <aside class="side">
+        <div class="brand">
+          <svg width="30" height="30" viewBox="0 0 30 30" aria-label="Logo 方案三"><rect width="14" height="14" fill="#14b8a6"/><rect x="16" width="14" height="14" fill="#334155"/><rect y="16" width="14" height="14" fill="#14b8a6"/><rect x="16" y="16" width="14" height="14" fill="#5eead4"/><polygon points="16,14 30,0 30,6 22,14" fill="#0f172a"/><polygon points="16,16 22,16 30,24 30,30" fill="#0f172a"/></svg>
+          <div><b style="color:#f1f5f9">KiroCrew ON</b><small>crew workspace</small></div>
+        </div>
+        <div class="group">工作台</div>
+        <div class="nav"><i></i>会话</div><div class="nav"><i></i>工作流</div>
+        <div class="group">管理</div>
+        <div class="nav"><i></i>概览</div><div class="nav"><i></i>用户</div><div class="nav"><i></i>执行环境</div><div class="nav"><i></i>Team</div>
+        <div class="group">我的设置</div>
+        <div class="nav on"><i></i>API Token</div><div class="nav"><i></i>仓库凭证</div><div class="nav"><i></i>映射偏好</div>
+        <div class="spacer"></div><div class="foot">◐ 深色模式　　« 收起</div>
+      </aside>
+      <div class="main">
+        <div class="top"><div><h3>API 与 Coding Agent 接入</h3><p>为 Claude Code、Codex、Kiro CLI 等客户端各创建一枚 Token</p></div><div class="who">🔔<span class="av" style="background:#0f172a">FO</span>fixture-owner</div></div>
+        <div class="body">
+          <div class="stats">
+            <div class="stat"><span class="tile" style="background:#e0f2fe;color:#0369a1">TK</span><div><small>有效 Token</small><b>3</b><em>1 枚 7 天内到期</em></div></div>
+            <div class="stat"><span class="tile" style="background:#ede9fe;color:#6d28d9">AG</span><div><small>已接入客户端</small><b>2</b><em>Claude Code · Kiro CLI</em></div></div>
+            <div class="stat"><span class="tile" style="background:#dcfce7;color:#15803d">RQ</span><div><small>今日请求</small><b>148</b><em>全部成功</em></div></div>
+            <div class="stat"><span class="tile" style="background:#fef3c7;color:#b45309">EX</span><div><small>最近使用</small><b>3 分钟前</b><em>Claude Code（本机）</em></div></div>
+          </div>
+          <div class="box">
+            <div class="box-head"><h4>Token <span>(3)</span></h4><div class="tools"><div class="search">⌕ 查找 Token</div><div class="seg"><span class="on">有效</span><span>已过期</span></div><span class="btn">↻</span><span class="btn">操作 ▾</span><span class="btn primary">新建 Token</span></div></div>
+            <table><thead><tr><th>　</th><th>名称</th><th>权限</th><th>状态</th><th>到期</th><th>最近使用</th></tr></thead>
+              <tbody>
+                <tr class="sel"><td>◉</td><td>Claude Code（本机）</td><td><code>read · execute</code></td><td><span class="status">有效</span></td><td>2026-11-22</td><td>3 分钟前</td></tr>
+                <tr><td>○</td><td>Kiro CLI（CI）</td><td><code>read</code></td><td><span class="status">有效</span></td><td>2026-10-30</td><td>昨天</td></tr>
+                <tr><td>○</td><td>Web 登录</td><td><code>read · execute · manage</code></td><td><span class="status">有效</span></td><td>2026-11-22</td><td>当前登录</td></tr>
+              </tbody></table>
+            <div class="foot-row"><span>选中 1 枚 ·「操作」里可重新生成或撤销</span><span>‹ 1 ›</span></div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <p class="note">三个方案的交互一致：新建、修改、危险操作都在对话框里完成；新行高亮、删除的行淡出；「减少动态效果」时不播放动画。
+    改版只换视觉与布局，不改功能与后端接口（除了新增「重新生成 Token」）。</p>
+</div>
+</body>
+</html>
