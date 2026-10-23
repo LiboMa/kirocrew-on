@@ -68,8 +68,7 @@ describe("settings", () => {
     let listed = [{ id: "t1", label: "claude MCP", scopes: "[\"read\"]", expires: null, last_used: null }];
     const calls = start({ "GET /tokens": () => listed, "DELETE /tokens/t1": () => { listed = []; return { ok: true }; } });
     const section = await openSection("我的设置", "API 与 Coding Agent 接入");
-    await userEvent.click(await within(section).findByRole("button", { name: "Token 操作：claude MCP" }));
-    await userEvent.click(await screen.findByRole("menuitem", { name: "撤销…" }));
+    await userEvent.click(await within(section).findByRole("button", { name: "撤销 Token：claude MCP" }));
     const confirm = await screen.findByRole("dialog", { name: "撤销 Token" });
     expect(confirm).toHaveTextContent("使用它的客户端会立即失去访问");
     expect(calls.some((c) => c.method === "DELETE")).toBe(false);   // nothing happens before the confirmation
@@ -77,6 +76,67 @@ describe("settings", () => {
     await waitFor(() => expect(within(section).queryByText("claude MCP")).toBeNull());
     expect(calls.some((c) => c.method === "DELETE" && c.path === "/v1/tokens/t1")).toBe(true);
     expect(await screen.findByText("已撤销 Token claude MCP")).toBeInTheDocument();
+  });
+
+  // Owner 2026-10-24: a token that exists can be regenerated — the same entry, a new value shown once, the old one void.
+  test("regenerating a token keeps its expiry by default and shows the new value once", async () => {
+    const listed = [{ id: "t1", label: "claude MCP", scopes: "[\"read\",\"execute\"]", expires: 1_900_000_000, last_used: 1_790_000_000 }];
+    const calls = start({ "GET /tokens": () => listed,
+      "POST /tokens/t1/regenerate": { id: "t1", token: "oct_new_value", label: "claude MCP", scopes: ["read", "execute"], expires: 1_900_000_000 } });
+    const section = await openSection("我的设置", "API 与 Coding Agent 接入");
+    await userEvent.click(await within(section).findByRole("button", { name: "重新生成 Token：claude MCP" }));
+    const dialog = await screen.findByRole("dialog", { name: "重新生成 Token" });
+    expect(dialog).toHaveTextContent("旧值立即失效");
+    const lifetime = within(dialog).getByLabelText("有效期") as HTMLSelectElement;
+    expect(lifetime.value).toBe("");
+    expect(lifetime.options[0].textContent).toMatch(/^保持原到期时间/);
+    expect(calls.some((c) => c.path === "/v1/tokens/t1/regenerate")).toBe(false);
+    await userEvent.click(within(dialog).getByRole("button", { name: "重新生成" }));
+    const issued = await screen.findByRole("dialog", { name: "Token 已重新生成" });
+    expect(within(issued).getByText("oct_new_value")).toBeInTheDocument();
+    expect(calls.find((c) => c.path === "/v1/tokens/t1/regenerate")?.body).toEqual({});
+    await userEvent.click(within(issued).getByRole("button", { name: "我已保存" }));
+    await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
+    expect(screen.queryByText("oct_new_value")).toBeNull();
+    expect((await within(section).findByText("claude MCP")).closest("[data-token-row]")).toHaveAttribute("data-fresh", "true");
+    expect(await screen.findByText("已重新生成 Token claude MCP")).toBeInTheDocument();
+  });
+
+  test("a regenerated token may be given a new lifetime; one with admin lasts at most 30 days", async () => {
+    const calls = start({ "GET /tokens": [{ id: "t1", label: "ops", scopes: "[\"read\",\"admin\"]", expires: 1_900_000_000, last_used: null }],
+      "POST /tokens/t1/regenerate": { id: "t1", token: "oct_new_value", label: "ops", scopes: ["read", "admin"], expires: 1_800_000_000 } });
+    const section = await openSection("我的设置", "API 与 Coding Agent 接入");
+    await userEvent.click(await within(section).findByRole("button", { name: "重新生成 Token：ops" }));
+    const dialog = await screen.findByRole("dialog", { name: "重新生成 Token" });
+    const lifetime = within(dialog).getByLabelText("有效期") as HTMLSelectElement;
+    expect([...lifetime.options].slice(1).map((o) => o.value)).toEqual(["7d", "30d"]);
+    await userEvent.selectOptions(lifetime, "7d");
+    await userEvent.click(within(dialog).getByRole("button", { name: "重新生成" }));
+    await screen.findByRole("dialog", { name: "Token 已重新生成" });
+    expect(calls.find((c) => c.path === "/v1/tokens/t1/regenerate")?.body).toEqual({ expires_in: "7d" });
+  });
+
+  test("the token this login uses is marked and offers neither regenerating nor revoking", async () => {
+    start({ "GET /tokens": [{ id: "t0", label: "Web login", scopes: "[\"read\"]", expires: 1_900_000_000, last_used: 1_790_000_000, current: true },
+      { id: "t1", label: "claude MCP", scopes: "[\"read\"]", expires: null, last_used: null }] });
+    const section = await openSection("我的设置", "API 与 Coding Agent 接入");
+    const row = (await within(section).findByText("Web login")).closest("[data-token-row]") as HTMLElement;
+    expect(row).toHaveTextContent("当前登录");
+    expect(within(row).queryByRole("button")).toBeNull();
+    expect(within(section).getByRole("button", { name: "重新生成 Token：claude MCP" })).toBeInTheDocument();
+  });
+
+  test("the token list is searched by name", async () => {
+    start({ "GET /tokens": [{ id: "t1", label: "claude MCP", scopes: "[\"read\"]", expires: null, last_used: null },
+      { id: "t2", label: "Kiro CLI", scopes: "[\"read\"]", expires: null, last_used: null }] });
+    const section = await openSection("我的设置", "API 与 Coding Agent 接入");
+    await within(section).findByText("Kiro CLI");
+    await userEvent.type(within(section).getByRole("searchbox", { name: "搜索 Token 名称" }), "kiro");
+    expect(within(section).queryByText("claude MCP")).toBeNull();
+    expect(within(section).getByText("Kiro CLI")).toBeInTheDocument();
+    await userEvent.clear(within(section).getByRole("searchbox", { name: "搜索 Token 名称" }));
+    await userEvent.type(within(section).getByRole("searchbox", { name: "搜索 Token 名称" }), "nothing");
+    expect(section).toHaveTextContent("没有名称含「nothing」的 Token。");
   });
 
   test("an administrator creates a Team with its owner and an execution environment", async () => {

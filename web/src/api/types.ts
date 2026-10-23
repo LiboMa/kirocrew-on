@@ -486,6 +486,8 @@ export interface ApiToken {
   scopes: string;
   expires: number | null;   // D62: null never expires
   last_used?: number | null;
+  /** The token this login itself uses: it cannot be regenerated from here; absent from older platforms. */
+  current?: boolean;
 }
 
 /** GET /v1/admin/users (elevated administrators). */
