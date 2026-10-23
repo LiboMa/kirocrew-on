@@ -6,6 +6,7 @@ import difflib
 import hashlib
 import json
 import os
+import pprint
 import re
 import secrets
 import subprocess
@@ -92,6 +93,23 @@ def pytest_ci(left, right, node="tests/test_k.py::test_key"):
     explanation += [line.strip("\n") for line in difflib.ndiff(right.splitlines(True), left.splitlines(True))]
     lines = [header, "  ", *("  " + line for line in explanation)]
     return "".join("E       " + line + "\n" for line in lines), f"FAILED {node} - " + "\n".join(lines) + "\n"
+
+
+def pytest_vv_dict(left, right):
+    """What pytest 9.1 prints at -vv of a failed ``assert left == right`` of two dicts of strings: the assertion with
+    both dicts' repr, and its "Full diff" (the "Differing items" between them left out) — ndiff of its PrettyPrinter's
+    lines, each item on its own line after 4 spaces, a string of several lines one repr a line, the next ones under the
+    item's indent. Both are byte for byte what pytest 9.1.1 prints."""
+    def pformat(mapping):
+        rows = ["{"]
+        for key, value in mapping.items():
+            chunks = [repr(line) for line in value.splitlines(True)]
+            rows += [f"    {key!r}: {chunks[0]}", *("    " + chunk for chunk in chunks[1:])]
+            rows[-1] += ","
+        return rows + ["}"]
+    diff = [line.rstrip() for line in difflib.ndiff(pformat(right), pformat(left))]
+    return (f"E       AssertionError: assert {left!r} == {right!r}\n", "E         Full diff:\n"
+            + "".join(f"E         {line}\n" for line in diff))
 
 
 AWS_SECRET = chars("aws-secret", 40, "std").replace("=", "A")
@@ -532,6 +550,8 @@ class SecretRuleTests(unittest.TestCase):
         for gap, count in (("\nE         -   ", 1), ("\n  -     ", 1), ("\r\n+", 1), ("\n" + " " * 31, 1),
                            ("\\n  ", 1), ("\\r\\n", 1), ("', '    ", 1), ('", "', 1), ('","', 1),
                            ("',\nE         -     '", 1), ('",\n    "', 1),   # pytest -vv's list diff, a JSON list
+                           ("\\n'\n '", 1), ('\\n" +\r\n    "', 1), ("\\\n", 1),   # pprint, Java, a shell's \
+                           ("\\n\n", 3),   # an escaped break and a line break with no literal's quote: a blank line
                            ("\n" + " " * 32, 3), (", ", 3), (" " * 20, 3), ("\n\n", 3), ("\\n\\n", 3),
                            ("  a.txt\n", 3), ("\nok\n", 3)):
             with self.subTest(gap=gap):
@@ -671,6 +691,67 @@ class SecretRuleTests(unittest.TestCase):
         with self.subTest("another prefix"):
             self.assertEqual(sources.mask_text(text)[0], hint + "".join(f"{name} | {own(row)}\n"
                                                                         for name, row in zip("abcd", rows)))
+
+    def test_a_keys_lines_as_string_literals_or_after_numbered_prefixes_are_one_mask(self):
+        # (6b round 5) a key written one string literal a line, its line breaks escaped inside them — pprint, pytest
+        # -vv's diff of a dict holding it, Python's and C's adjacent literals, Java's and JavaScript's "…\n" +, a shell
+        # string continued with a backslash — and a key's lines after a prefix that differs only in its digits (cat -n,
+        # nl, grep -n -A, a log's timestamps) are one mask; a blank line between them still splits them
+        key, body = private_key("RSA", 1280)
+        rows, lines, end = body.splitlines(), key.splitlines(), key.splitlines()[-1]
+        windows = lambda shown, kept=rows: [row[i:i + 10] for row in kept for i in range(len(row) - 9)
+                                            if row[i:i + 10] in shown]
+        layouts = {
+            "pprint": "key = " + pprint.pformat(key + "\n") + "\n",
+            "python, adjacent literals": "KEY = (\n" + "".join(f'    "{line}\\n"\n' for line in lines) + ")\n",
+            "python, continued": 'KEY = "' + '\\n" \\\n      "'.join(lines) + '\\n"\n',
+            "c, adjacent literals": "static const char *key =\n" + "\n".join(f'    "{line}\\n"' for line in lines)
+                                    + ";\n",
+            "java": 'String key = "' + '\\n" +\n    "'.join(lines) + '\\n";\n',
+            "javascript, crlf": ("const key = '" + "\\n' +\n  '".join(lines) + "\\n';\n").replace("\n", "\r\n"),
+            "shell, continued": 'export KEY="' + "\\\n".join(lines) + '"\n',
+            "shell, escaped and continued": 'printf %s "' + "\\n\\\n".join(lines) + '"\n',
+        }
+        for name, text in layouts.items():
+            for how in ("mask_text", "masked_tail"):
+                with self.subTest(name, how=how):
+                    shown, found = sources.mask_text(text) if how == "mask_text" else checks.masked_tail(text.encode())
+                    self.assertEqual(len(found), 1, shown)
+                    self.assertEqual(windows(shown), [], shown)
+                    self.assertIn(end, shown)   # the END is no secret
+        (left, left_rows), (right, right_rows) = pkcs8_key("vv-a"), pkcs8_key("vv-b")
+        header, diff = pytest_vv_dict({"private_key": left}, {"private_key": right})
+        self.assertIn("E         ?", diff)   # the first lines are alike: ndiff marks them
+        for name, text, most in (("pytest -vv, a dict's full diff", diff, 3), ("its assertion", header, 2)):
+            with self.subTest(name):
+                shown, found = sources.mask_text(text)
+                self.assertLessEqual(len(found), most, shown)
+                self.assertEqual(windows(shown, left_rows + right_rows), [], shown)
+        # a blank line between them is a blank line still: pprint's '\n', an empty literal
+        hint = "hint: expected " + end + "\n"
+        for name, text in (("pprint", pprint.pformat("\n".join(rows[:3]) + "\n\n" + "\n".join(rows[3:6]) + "\n")),
+                           ("c", "".join(f'    "{row}\\n"\n' for row in rows[:3]) + '    "\\n"\n'
+                            + "".join(f'    "{row}\\n"\n' for row in rows[3:6]))):
+            with self.subTest("a blank line", layout=name):
+                self.assertEqual(len(sources.find_secrets((hint + text).encode())), 2)
+        # after a prefix that differs only in its digits, with the END out of view
+        numbered = {
+            "cat -n": lambda n: f"{n:6d}\t",
+            "grep -n -A": lambda n: f"key.pem-{n}-",
+            "kubectl --timestamps": lambda n: f"2026-10-23T10:00:{n:02d}.{123456780 + n}Z ",
+            "journalctl": lambda n: f"Oct 23 10:00:{n:02d} web app[1234]: ",
+            "github actions": lambda n: f"2026-10-23T10:00:{n:02d}.{1234560 + n}Z ",
+        }
+        for name, prefix in numbered.items():
+            text = hint + "".join(prefix(n) + row + "\n" for n, row in enumerate(rows[:8], 11))
+            with self.subTest(name):
+                shown, found = sources.mask_text(text)
+                self.assertEqual(len(found), 1, shown)
+                self.assertEqual(windows(shown, rows[:8]), [], shown)
+                self.assertEqual(shown, hint + prefix(11) + found[0]["masked"] + "\n")
+        text = "key.pem:10:" + lines[0] + "\n" + "".join(f"key.pem-{n}-{row}\n" for n, row in enumerate(rows[:8], 11))
+        with self.subTest("grep -n -A, from the BEGIN"):   # grep heads its hit "key.pem:10:", its context "key.pem-11-"
+            self.assertEqual(len(sources.find_secrets(text.encode())), 1)
 
     def test_a_key_whose_begin_was_cut_off_is_masked_up_to_its_end(self):
         # the check's output keeps only its last 8 KB: a key longer than that tail lost its BEGIN with the head

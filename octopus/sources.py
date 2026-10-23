@@ -105,13 +105,18 @@ _NEAR_A_KEY = re.compile(rb"(?<![A-Za-z0-9+/=])[A-Za-z0-9+/=](?:[A-Za-z0-9+/=]|\
 _NOT_KEY_TEXT = re.compile(rb"(?:(?<=\\)[nr])?(?:[A-Za-z][A-Za-z0-9]{0,31}=(?=[A-Za-z0-9+/]|\\+/))?")
 # A key's lines are one span (one mask, one finding) where what is between two private_key spans is where a line ends
 # and the next line's prefix: 32 bytes at most, the whole chain 8 KB at most (about a diff of two 4096-bit keys). A
-# line ends after spaces, its string's closing quote and a list's comma, in a line break or an escaped one (JSON, repr;
-# "\r\n" as one), or in what separates a list's strings on one line (', ', ","); the next line's prefix is spaces,
-# pytest's "E", a diff's marker, a string's opening quote, or what the line before had before its text (docker
-# compose's "web-1  | "). Never across a key's END or BEGIN, a blank line or any other line in between, and never for a
-# hex digest (a SHA, sha256sum's), which no key's line is: each of those is its own.
+# line ends after spaces, its string's closing quote and a list's comma, in a line break, a shell's backslash and line
+# break, or an escaped one (JSON, repr; "\r\n" as one) — and when a string literal ends there (pprint, pytest -vv's
+# diff of a dict, adjacent literals in Python or C, "…\n" + in Java or JavaScript), its closing quote, a "," "+" or "\"
+# and the line break too (the quote is needed, so that an escaped blank line still splits) — or in what separates a
+# list's strings on one line (', ', ","); the next line's prefix is spaces, pytest's "E", a diff's marker, a string's
+# opening quote, or what the line before had before its text but for its digits (docker compose's "web-1  | ", cat -n,
+# grep -n's "key.pem-26-", a log's timestamps: _PREFIX_SHAPE). Never across a key's END or BEGIN, a blank line or any
+# other line in between, and never for a hex digest (a SHA, sha256sum's), which no key's line is: each of those is its
+# own.
 _CHAIN = 8192
-_KEY_LINE_END = re.compile(rb"[ \t]*(?:\\*['\"],?[ \t]*)?(?:\r?\n|\\+(?:r\\+)?[nr])|\\*['\"], ?\\*['\"]")
+_KEY_LINE_END = re.compile(rb"[ \t]*(?:\\*['\"],?[ \t]*)?(?:\r?\n|\\\r?\n|\\+(?:r\\+)?[nr]"
+                           rb"(?:[ \t]*\\*['\"][ \t]*[,+\\]?[ \t]*\r?\n|\\\r?\n)?)|\\*['\"], ?\\*['\"]")
 _KEY_LINE_PREFIX = re.compile(rb"(?:E[ \t]+)?[ \t]*(?:[-+?][ \t]*)?(?:\\*['\"])?[ \t]*")
 _ANY_LINE_END = re.compile(rb"\n|\\+[nr]|\\*['\"], ?\\*['\"]")
 _DIGEST = re.compile(rb"[0-9a-f]+|[0-9A-F]+")
@@ -186,7 +191,7 @@ def find_secrets(data, extra=(), cut=None, dropped=True):
                     spans.append((cut, _PRIVATE_KEY, match.end(), "private_key"))
                 break
     # spans that overlap or touch become their union, named by the first; so do a key's lines (_key_line_after)
-    merged = []   # [start, end, kind, the prefix of its last line, where that line's text begins]
+    merged = []   # [start, end, kind, the shape of its last line's prefix, where that line's text begins]
     for start, _, end, kind in sorted(spans):
         if merged and start <= merged[-1][1]:
             merged[-1][1] = max(merged[-1][1], end)
@@ -207,15 +212,19 @@ def find_secrets(data, extra=(), cut=None, dropped=True):
 
 
 def _key_line_after(data, chain, start, end):
-    """The prefix of the line the private_key span ``data[start:end]`` begins after, when it is the next of the key's
-    lines in ``chain`` (a private_key span, as ``find_secrets`` merges them); else None. See _CHAIN."""
+    """The shape (_PREFIX_SHAPE) of the prefix of the line the private_key span ``data[start:end]`` begins after, when
+    it is the next of the key's lines in ``chain`` (a private_key span, as ``find_secrets`` merges them); else None.
+    See _CHAIN."""
     gap = data[chain[1]:start]
     if len(gap) > 32 or end - chain[0] > _CHAIN or data.startswith(b"-----", start) or _ends_a_key(data, chain[1]) \
             or _DIGEST.fullmatch(data, start, end) or _DIGEST.fullmatch(data, chain[4], chain[1]):
         return None
     line_end = _KEY_LINE_END.match(gap)
-    prefix = gap[line_end.end():] if line_end else None
-    return prefix if prefix is not None and (_KEY_LINE_PREFIX.fullmatch(prefix) or prefix == chain[3]) else None
+    if line_end is None:
+        return None
+    prefix = gap[line_end.end():]
+    shape = prefix.translate(_PREFIX_SHAPE)
+    return shape if _KEY_LINE_PREFIX.fullmatch(prefix) or shape == chain[3] else None
 
 
 def _ends_a_key(data, at):
@@ -226,12 +235,13 @@ def _ends_a_key(data, at):
 
 
 def _prefix_before(data, start):
-    """What comes before ``start`` on its line (after a line break, an escaped one, a list's separator), when the line
-    begins at most 32 bytes before it; else None."""
+    """The shape (_PREFIX_SHAPE) of what comes before ``start`` on its line (after a line break, an escaped one, a
+    list's separator), when the line begins at most 32 bytes before it; else None."""
     last = None
     for last in _ANY_LINE_END.finditer(data, max(start - 33, 0), start):
         pass
-    return data[last.end():start] if last else data[:start] if start <= 32 else None
+    prefix = data[last.end():start] if last else data[:start] if start <= 32 else None
+    return None if prefix is None else prefix.translate(_PREFIX_SHAPE)
 
 
 def _lines_before(data, floor, at):
