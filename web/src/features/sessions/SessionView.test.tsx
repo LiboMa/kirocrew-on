@@ -226,11 +226,19 @@ describe("session detail", () => {
       .toEqual(["建议检查：npm test", "以上检查不会运行（发散阶段）"]);
   });
 
-  test("a task from before D57 shows its checks without saying which must pass", async () => {
-    const [code, review] = blocked.tasks;
-    open({ ...blocked, tasks: [{ ...code, spec: { ...code.spec, verify: ["npm test"] } }, review] } as Run);
+  // (final review 8) a task from before D57 has no verify_required: its checks shown as the platform judges them
+  // (domain.required_checks) — a planner's advisory, a person's required
+  const checked = { ...blocked.tasks[0], spec: { ...blocked.tasks[0].spec, verify: ["npm test"] } };
+  test.each([
+    ["a person's", { ...blocked, tasks: [checked, blocked.tasks[1]] }, "必过检查：npm test"],
+    ["the planner's (origin)", { ...blocked, tasks: [{ ...checked, spec: { ...checked.spec, origin: "planner" } },
+      blocked.tasks[1]] }, "建议检查：npm test"],
+    ["an agent-planned Session's", { ...blocked, match_mode: "agent", tasks: [checked, blocked.tasks[1]] }, "建议检查：npm test"],
+    ["a replan's", { ...blocked, replan: { tasks: ["code"] }, tasks: [checked, blocked.tasks[1]] }, "建议检查：npm test"],
+  ])("a task from before D57 shows %s checks as the platform judges them", async (_, run, shown) => {
+    open(run as Run);
     const [checks] = await screen.findAllByRole("list", { name: "检查" });
-    expect(within(checks).getAllByRole("listitem").map((item) => item.textContent)).toEqual(["检查命令：npm test"]);
+    expect(within(checks).getAllByRole("listitem").map((item) => item.textContent)).toEqual([shown]);
   });
 
   test("a warned gate is marked ⚠ and a completed Session counts its latest attempts' warnings (D57)", async () => {
