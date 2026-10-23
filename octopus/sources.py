@@ -94,13 +94,24 @@ _KEY_BEGINS, _KEY_ENDS = re.compile(_KEY_BEGIN), re.compile(_KEY_END)
 # The lines of base64 right before a private key's END, read backwards from it (so that finding where they begin costs
 # what they are long): whole lines, each with the END line's own prefix "q" (docker compose's "web-1  | ", pytest's
 # "E         + ", grep's "key.pem-" / "key.pem-26-", an indent; captured from the prefix put before a NUL), or, when the
-# END follows an escaped line break, JSON-escaped lines ("\/" reads "/\" backwards).
+# END follows an escaped line break, JSON-escaped lines ("\/" reads "/\" backwards), the first of them after a line
+# break, the string's quote (", ', \") or an ellipsis's ".".
 _BACKWARDS_BASE64 = rb"(?:[A-Za-z0-9+=]|/\\*)+"
 _LINES_BEFORE = re.compile(rb"(?P<q>[^\0]*)\0(?:\n\r?[ \t]*" + _BACKWARDS_BASE64 + rb"(?P=q)(?=\n|\Z))+")
 _ESCAPED_LINES_BEFORE = re.compile(rb"[ \t]*(?:(?:n\\+(?:r\\+)?|r\\+)[ \t]*" + _BACKWARDS_BASE64
-                                   + rb"[ \t]*(?=[nr]\\|\Z))+")
+                                   + rb"[ \t]*(?=[nr]\\|[\"'.]|\Z))+")
+# A diff's lines, whose prefix is the END line's but for the diff's marker column: pytest's ndiff after its
+# "E         " ("- ", "+ ", "  ", and "? " lines of ^ - + under a changed line), a unified diff's "-", "+", " ". Read
+# backwards too, the END line's prefix put before two NULs as "a" (after the column) and "b" (before it).
+_DIFF_MARKS = b"-+ ?"
+_DIFF_LINES_BEFORE = re.compile(rb"(?P<a>[^\0]*)\0(?P<b>[^\0]*)\0(?:(?:\n\r?[-+^][-+^ \t]*(?P=a)\?(?P=b))?\n\r?[ \t]*"
+                                + _BACKWARDS_BASE64 + rb"(?P=a)[-+ ?](?P=b)(?=\n|\Z))+")
+# The line git heads a hunk with ("@@ -16,7 +16,7 @@ <the last line above it that starts with a letter>"): in a key,
+# one of its lines.
+_HUNK_HEADER = re.compile(rb"@@ -[0-9]+(?:,[0-9]+)? \+[0-9]+(?:,[0-9]+)? @@ (?P<text>[A-Za-z0-9+/=]+)[ \t]*\r?")
 _PREFIX_SHAPE = bytes.maketrans(b"0123456789:", b"0000000000-")   # grep: "key.pem:26:" heads its lines "key.pem-25-"
 _BASE64 = frozenset(b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/=")
+_BASE64_BYTES = bytes(sorted(_BASE64))
 
 
 def _masked(value):
@@ -170,16 +181,38 @@ def _lines_before(data, floor, at):
     if before[-2:-1] == b"\\" and before[-1:] in (b"n", b"r"):   # in an escaped string: its lines, escaped
         found = _ESCAPED_LINES_BEFORE.match(data[start:at][::-1])
         start = at - found.end() if found else None
-    elif line >= floor and b"\0" not in data[line:at] and (at == line or data[at - 1] not in _BASE64):
-        # (a prefix that ends in base64 could not be told from the line's own characters)
-        prefix = data[line:at].translate(_PREFIX_SHAPE)
-        found = _LINES_BEFORE.match(prefix[::-1] + b"\0" + data[floor:line].translate(_PREFIX_SHAPE)[::-1])
-        start = line - (found.end() - len(prefix) - 1) + len(prefix) if found else None
+    elif line >= floor and b"\0" not in data[line:at]:
+        prefix, head = _line_prefix(data[line:at].translate(_PREFIX_SHAPE))
+        diff = head.count(b"\0") == 2
+        found = (_DIFF_LINES_BEFORE if diff else _LINES_BEFORE).match(
+            head + data[floor:line].translate(_PREFIX_SHAPE)[::-1])
+        top = line - (found.end() - len(head)) if found else None   # where the first of the lines begins
+        start = top + len(prefix) if found else None
+        if found and diff and head[:1] == b"\0" and top > floor:   # a unified diff: git heads a hunk with a line
+            newline = data.rfind(b"\n", floor, top - 1)
+            header = _HUNK_HEADER.fullmatch(data, newline + 1, top - 1) if newline >= 0 or floor == 0 else None
+            start = header.start("text") if header else start
     else:
         start = None
     while start is not None and data[start:start + 1] in (b" ", b"\t"):
         start += 1
     return start
+
+
+def _line_prefix(prefix):
+    """What each line before an END whose line starts with ``prefix`` (its shape) starts with: (that prefix, the head
+    put before the lines read backwards). Base64 glued to the END is the key's own, so the prefix ends in none and where
+    a line's own characters begin is never in doubt — but for a unified diff's "+" alone or after no base64, which
+    marks the line. A diff's marker column may differ from the END line's: ndiff's when the prefix ends in "- ", "+ ",
+    "  " or "? ", a unified diff's when it ends in "-", "+", " " or "?" alone or after no base64."""
+    glued = prefix[-1:] == b"+" and (len(prefix) == 1 or prefix[-2] not in _BASE64)
+    if not glued:
+        prefix = prefix.rstrip(_BASE64_BYTES)
+    if len(prefix) >= 2 and prefix[-2] in _DIFF_MARKS and prefix[-1:] == b" ":
+        return prefix, prefix[-1:] + b"\0" + prefix[-3::-1] + b"\0"
+    if glued or prefix[-1:] and prefix[-1] in _DIFF_MARKS and (len(prefix) == 1 or prefix[-2] not in _BASE64):
+        return prefix, b"\0" + prefix[-2::-1] + b"\0"
+    return prefix, prefix[::-1] + b"\0"
 
 
 def _open_key(data, before):

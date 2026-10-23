@@ -141,13 +141,18 @@ def masked(evidence, task_id, extra=(), **texts):
 def _judged(outcome, shown):
     """``shown`` (the masked outcome) with what Knowledge judges of its entries kept as written: it reads them later, from
     what is stored (D46 P4). An entry masking changed carries knowledge.judged of its text as written under knowledge.MARK,
-    which only the platform writes — an Agent's own value there is dropped from every entry."""
+    which only the platform writes (an Agent's own value there is dropped when its outcome is read, knowledge.unmarked):
+    an entry that has it was masked before, and keeps it however often it is masked again."""
     entries, stored = outcome.get("knowledge"), shown.get("knowledge")
     if not (isinstance(entries, list) and isinstance(stored, list)):
         return shown
     plain = lambda item: {k: v for k, v in item.items() if k != knowledge.MARK} if isinstance(item, dict) else item
-    shown["knowledge"] = [plain(item) if plain(item) == plain(entry) else
-                          {**(plain(item) if isinstance(item, dict) else {"rule": item}), knowledge.MARK: knowledge.judged(entry)}
+
+    def mark(entry, item):   # the platform's own from before, else (when masking changed the entry) its text as written
+        kept = entry.get(knowledge.MARK) if isinstance(entry, dict) else None
+        return kept if isinstance(kept, dict) else None if plain(item) == plain(entry) else knowledge.judged(entry)
+    shown["knowledge"] = [plain(item) if (judged := mark(entry, item)) is None else
+                          {**(plain(item) if isinstance(item, dict) else {"rule": item}), knowledge.MARK: judged}
                           for entry, item in zip(entries, stored)]
     return shown
 
@@ -429,7 +434,7 @@ class Engine:
             skipped = str(evidence.get("knowledge_skipped") or "")[:300] or None
             keep, rest = ((), ()) if skipped else knowledge.items(
                 evidence.get("outcome"), knowledge.known(db, run["worker_id"], repo) if repo else None)
-        results = []
+        results, token = [], self._token(run)   # D57 §3.3: what the Worker says is masked with its token, then cut
         if keep and run.get("worker_scope") == "shared":   # D52 R4: for the repository's reviewed knowledge only
             results = [{"result": "kept", "reason": knowledge.KEPT} for _ in keep]
         elif keep and repo:
@@ -453,14 +458,14 @@ class Engine:
                     return True
                 reason = ("执行环境不支持写入知识（Worker 尚未升级）" if exc.status == 404 and exc.code == "not_found"
                           else ("执行环境暂不可用，未写入" if exc.code in {"worker_unavailable", "native_unavailable"}
-                                else "未写入：" + str(exc)[:160]))
+                                else "未写入：" + sources.mask_text(str(exc), (token,))[0][:160]))
                 results = [{"result": "skipped", "reason": reason} for _ in keep]
         rows = []
         for item, answer in zip(keep, results + [{}] * (len(keep) - len(results))):
             answer = answer if isinstance(answer, dict) else {}
             result = answer.get("result") if answer.get("result") in {"written", "refused", "superseded", "skipped", "kept"} else "skipped"
-            reason = str(answer.get("reason") or ("" if result == "written" else "执行环境未报告结果"))[:200] or None
-            rows.append({**item, "result": result, "reason": reason})
+            reason = str(answer.get("reason") or ("" if result == "written" else "执行环境未报告结果"))
+            rows.append({**item, "result": result, "reason": sources.mask_text(reason, (token,))[0][:200] or None})
         rows += rest
         with self.db.transaction() as db:
             if repo:
@@ -1138,10 +1143,11 @@ class Engine:
             # reaches SQL. Ask the Worker even when SQL has no native_parent yet.
             result = self.request(config, "/control", {"run_id": rid, "action": run["desired"]})
             if result["status"] == "stopped":
-                now = time.time()
+                now, token = time.time(), self._token(run)   # the Worker's answer: its token masked in the event too
                 with self.db.transaction() as db:
                     journal.change(db, "runs", rid, journal.WORKER, "session." + run["desired"], event=result,
-                                   status="stopped", lifecycle=result["lifecycle"], desired="stopped", error=None, updated=now)
+                                   mask=(token,), status="stopped", lifecycle=result["lifecycle"], desired="stopped",
+                                   error=None, updated=now)
                     journal.change_rows(db, "attempts", "run_id=? AND status IN ('dispatching','running','dispatch_unknown','waiting_approval')", (rid,),
                                         journal.WORKER, "attempt.state", status="cancelled", updated=now)
                     journal.change_rows(db, "tasks", "run_id=? AND status IN ('dispatching','running','dispatch_unknown','waiting_approval')", (rid,),
@@ -1312,8 +1318,8 @@ class Engine:
         if prior.get("baseline") and "baseline_results" not in prior:
             return self._poll_baseline(run, config, task, attempt, prior)
         result = self.request(config, "/inspect", {"run_id": rid, "attempt_id": attempt["id"]})
-        if result.get("status") == "dispatch_unknown":
-            self.update(rid, "dispatch_unknown", result.get("error"))
+        if result.get("status") == "dispatch_unknown":   # the Worker's text, with its token masked too (D57 §3.3)
+            self.update(rid, "dispatch_unknown", sources.mask_value(result.get("error"), (self._token(run),))[0])
             return
         native = result.get("native")
         if native and result.get("queued"):
@@ -1357,7 +1363,7 @@ class Engine:
             report, invalid = None, None
             if snapshot.get("execution_contract", 1) >= 2 and not native.get("error") and not native.get("stopped"):
                 try:
-                    report = recovery.outcome(result.get("outcome", ""))
+                    report = knowledge.unmarked(recovery.outcome(result.get("outcome", "")))   # MARK: the platform's
                     evidence["outcome"] = report
                 except (Error, ValueError, TypeError) as exc:
                     invalid = str(exc)

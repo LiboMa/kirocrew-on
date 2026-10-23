@@ -150,6 +150,16 @@ def _fields(entry):
     return (rule.strip() if isinstance(rule, str) else ""), (avoid.strip() if isinstance(avoid, str) else "")
 
 
+def unmarked(report):
+    """An Agent's outcome as it is read: its knowledge entries without a MARK of their own (only the platform writes
+    one, when it stores them masked: engine._judged)."""
+    entries = report.get("knowledge")
+    if not isinstance(entries, list):
+        return report
+    return {**report, "knowledge": [{k: v for k, v in entry.items() if k != MARK} if isinstance(entry, dict) else entry
+                                    for entry in entries]}
+
+
 def judged(entry):
     """What ``items`` judges of an entry by its text: whether it looks like it holds a secret (the publish scan), whether
     it is too long, and its key among the entries of one list. The platform keeps this for an entry it stores masked

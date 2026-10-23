@@ -2,6 +2,7 @@
 its kind, line and a hash; the text itself nowhere. Every sample is put together while the test runs (from fragments
 and generated characters), so no complete credential is written in this file."""
 import base64
+import difflib
 import hashlib
 import json
 import re
@@ -330,6 +331,76 @@ class SecretRuleTests(unittest.TestCase):
                      "Binary file matches\nkey.pem:" + end + "\n",
                      "x = 1\n\n" + end + "\n"]:
             with self.subTest(text[-60:]):
+                self.assertEqual(sources.mask_text(text), (text, []))
+                self.assertEqual(checks.masked_tail(text.encode()), (text, []))
+
+    def test_a_keys_last_lines_in_a_diff_or_in_a_strings_first_segment_are_masked(self):
+        # the same lines when their prefix differs from the END line's only in a diff's marker column (pytest's ndiff
+        # of two keys after its "E         ": "- ", "+ ", "? ", "  "; a git hunk with no BEGIN in it: " ", "-", "+", the
+        # "+" glued to the END; the key line git heads the hunk with), and when the first of them opens a JSON or repr
+        # string (or follows "...")
+        key, body = private_key("RSA", 1280)
+        lines, end = body.splitlines(), key.splitlines()[-1]
+        other, ec_end = body_lines("another key", 640).splitlines()[:6], end.replace("RSA", "EC")
+        changed = lines[-1][:20] + ("A" if lines[-1][20] != "A" else "B") + lines[-1][21:]   # ndiff then adds "?" lines
+
+        def pytest(right, left):   # pytest's diff of left == right: ndiff of their lines, each after "E         "
+            return "".join("E         " + line.rstrip("\n") + "\n" for line in difflib.ndiff(right, left))
+
+        def hunk(old, new, context):   # a git diff of key.pem whose hunk starts after the key's BEGIN
+            return "".join(line + "\n" for line in difflib.unified_diff(
+                context + old, context + new, "a/key.pem", "b/key.pem", lineterm=""))
+        skipping = "E         Skipping 1500 identical leading characters in diff, use -v to show\n"
+        cases = {   # name: (before, the key's tail, after, its lines)
+            "pytest, two keys": (skipping, pytest(lines[-6:] + [end], other + [end]), "\nFAILED tests/test_k.py\n",
+                                 lines[-6:] + other),
+            "pytest, one character changed": (skipping, pytest(lines[-3:] + [end], lines[-3:-1] + [changed, end]), "",
+                                              lines[-3:] + [changed]),
+            "pytest, the END lines differ": (skipping, pytest(lines[-6:] + [end], other + [ec_end]), "",
+                                             lines[-6:] + other),
+            "git diff": ("$ git diff\n", hunk(lines[-3:] + [end], other[:3] + [end], lines[-9:-3]), "$ echo ok\n",
+                         lines[-9:] + other[:3]),
+            "git diff, the END changed": ("", hunk(lines[-3:] + [end], other + [ec_end], lines[-6:-3]), "",
+                                          lines[-6:] + other),
+            "git diff, the END added": ("", hunk([], lines[-2:] + [end], lines[-6:-2]), "", lines[-5:]),
+            # the last line runs into the END (no line break): what is glued to it is the key's, not the prefix
+            "docker compose, no line break": ("web-1  | listening on :8080\n",
+                                              "".join(f"web-1  | {row}\n" for row in lines[-4:-1])
+                                              + f"web-1  | {lines[-1]}{end}\n", "web-1  | done\n", lines[-4:]),
+        }
+        for name in ("git diff", "git diff, the END changed", "git diff, the END added"):   # git's hunk header shown
+            before, tail_of_key, after, rows = cases[name]
+            at = tail_of_key.index("\n", tail_of_key.index("@@")) + 1
+            cases[name] = (before + tail_of_key[:at], tail_of_key[at:], after, rows)
+        before, tail_of_key, after, rows = cases["git diff"]   # git heads the hunk with the last line above it that
+        cases["git diff, a key line in the hunk header"] = (   # starts with a letter: in a key, one of its lines
+            before[:-1] + " ", lines[-10] + "\n" + tail_of_key, after, [lines[-10], *rows])
+        last = lines[-3:]
+        cases.update({   # the escaped lines before an END, the first right after a quote or an ellipsis
+            "json": ('{"stdout": "', json.dumps("\n".join(last + [end]) + "\n")[1:-1], '"}', last),
+            "repr": ("key = '", repr("\n".join(last + [end]) + "\n")[1:-1], "'", last),
+            "json twice": ('"{\\"stdout\\": \\"', json.dumps(json.dumps("\n".join(last + [end]))[1:-1])[1:-1], '\\"}"',
+                           last),
+            "repr cut at an ellipsis": ("E       AssertionError: assert '...", repr("\n".join(
+                [lines[-4][30:], *last, end]))[1:-1], "' == ''", [lines[-4][30:], *last]),
+        })
+        for name, (before, tail_of_key, after, rows) in cases.items():
+            text = before + tail_of_key + after
+            for how in ("mask_text", "masked_tail"):
+                with self.subTest(name, how=how):
+                    if how == "mask_text":
+                        shown, found = sources.mask_text(text)
+                    else:
+                        shown, found = checks.masked_tail(text.encode())
+                    self.assertEqual({f["kind"] for f in found}, {"private_key"}, shown[:300])
+                    self.assertEqual([row[i:i + 10] for row in rows for i in range(len(row) - 9)
+                                      if row[i:i + 10] in shown], [], shown[:600])
+                    self.assertTrue(shown.startswith(before) and shown.endswith(after), shown[:600])
+        # what is no key line stays shown, in a diff as anywhere
+        for text in ["E         - see the README\nE           " + end + "\n",
+                     "@@ -1,2 +1,2 @@\n-see the README\n+" + end + "\n",
+                     "diff --git a/k b/k\n" + end + "\n", "x = '\\n" + end + "'\n"]:
+            with self.subTest(text[:30]):
                 self.assertEqual(sources.mask_text(text), (text, []))
                 self.assertEqual(checks.masked_tail(text.encode()), (text, []))
 
