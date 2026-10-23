@@ -162,12 +162,17 @@ def _masked(value):
     text = value.decode(errors="replace")
     if len(text) < 12:
         return "…"
-    pieces, head, tail = _ESCAPE.findall(text), "", ""
-    for piece in pieces:
-        if len(head) + len(piece) > 4:
+    head, tail = "", ""
+    for piece in _ESCAPE.finditer(text):
+        if len(head) + len(piece.group()) > 4:
             break
-        head += piece
-    for piece in reversed(pieces):
+        head += piece.group()
+    # its last characters, read from a place no escape spans — none of the 6 characters before it is a backslash — so a
+    # long one is never read whole
+    at = len(text) - 8
+    while at > 0 and (backslash := text.rfind("\\", max(at - 6, 0), at)) >= 0:
+        at = backslash
+    for piece in reversed(_ESCAPE.findall(text, max(at, 0))):
         if len(tail) + len(piece) > 2:
             break
         tail = piece + tail
