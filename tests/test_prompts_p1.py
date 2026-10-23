@@ -92,6 +92,11 @@ class SharedPromptTests(unittest.TestCase):
         self.assertIn("KiroCrew ON 开始执行", text)   # how it knows the platform is the writer
         self.assertIn("不推送", text)
         self.assertIn("续作", text)
+        # EC2 run-588bc3d5 (2026-10-23): it called the platform's committed work 「没入库」, and judged 「需求没变」 after the chat
+        # changed the behaviour — the continue then reviewed against the old requirement and put the change back
+        self.assertIn("已提交为会话分支上的候选", text)
+        self.assertIn("attempts/<Attempt>/instructions.md", text)
+        self.assertIn("需求有变化", text)
 
     def test_the_tool_agents_keep_the_executor_prompt(self):
         for name in ("poc-kiro", "poc-claude", "poc-codex"):
@@ -300,7 +305,7 @@ class FixPassTests(unittest.TestCase):
         from octopus.worker import OBSERVER_CONTEXT
         self.assertIn("协作者", OBSERVER_CONTEXT)
         self.assertNotIn("Owner 观察员", OBSERVER_CONTEXT)
-        for words in ("spawn_run", "平台正在执行任务时", "不推送", "续作"):
+        for words in ("spawn_run", "平台正在执行任务时", "不推送", "续作", "已提交为候选", "instructions.md", "需求有变化"):
             self.assertIn(words, OBSERVER_CONTEXT)
 
     def test_template_steps_name_what_they_change(self):

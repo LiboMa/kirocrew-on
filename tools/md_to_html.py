@@ -3,7 +3,7 @@
     python tools/md_to_html.py docs/CONTINUE.md docs/continue.html
 
 Handles what the docs use: headings, paragraphs, **bold**, `code`, fenced code, tables, and lists nested by indentation
-(a list item may hold a table or another list). ``<!-- html: path -->`` on its own line includes a raw HTML fragment
+(a list item may hold a table or another list); `<br>` breaks a line in a table cell. ``<!-- html: path -->`` on its own line includes a raw HTML fragment
 (a figure), resolved beside the Markdown file. Lines of a paragraph are joined without a space between Chinese text,
 with one elsewhere, as a reader expects."""
 import html
@@ -60,7 +60,8 @@ def inline(text):
         if part.startswith("`") and part.endswith("`") and len(part) > 1:
             out.append("<code>" + html.escape(part[1:-1]) + "</code>")
         else:
-            out.append(re.sub(r"\*\*(.+?)\*\*", r"<strong>\1</strong>", html.escape(part)))
+            text = re.sub(r"\*\*(.+?)\*\*", r"<strong>\1</strong>", html.escape(part))
+            out.append(text.replace("&lt;br&gt;", "<br>"))   # a line break inside a table cell
     return "".join(out)
 
 

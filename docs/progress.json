@@ -1,6 +1,6 @@
 {
   "_comment": "进度看板与 docs/PROGRESS.md 的唯一数据源：任务状态在这里维护；提交记录由 tools/progress.py 从 git 生成（负责人 2026-10-20）。",
-  "checks": "1806 后端 + 92 + 控制台 + 7 个浏览器测试（135 项检查）；EC2 运行 a183d84（父会话不再多跑一轮，核对通过）",
+  "checks": "1861 后端 + 92 + 272 控制台 + 7 个浏览器测试；EC2 运行 3af7331（D73、gzip、D57 写入时打码）",
   "status": {
     "accepted": {
       "label": "已验收",
@@ -273,6 +273,13 @@
           "status": "accepted",
           "ref": "64278a1..9ab159d · spec 2026-10-22-phase-gating · EC2 828caee",
           "more": "EC2 828caee 验收 run-3852f436（无仓库，调研 → 撰写 → 审查）：调研任务按要求写 changes_requested，记为「发散阶段不阻断」提示、一次接受、没有诊断；收敛阶段的审查照旧把关，发现报告的真实错误后退回撰写返工，复审通过，会话完成。"
+        },
+        {
+          "id": "m3-d73-chat",
+          "name": "D73 在 KiroCrew 聊天里直接对话，也能回到平台续作",
+          "status": "accepted",
+          "ref": "spec 2026-10-23-chat-and-structured-iteration · EC2 3af7331 run-588bc3d5",
+          "more": "父会话 Agent 由观察员改为协作者；平台开始执行时聊天里写一行；续作前把聊天里的改动提交为新候选（「对话中的改动」，之后的任务重跑）。EC2 验证：问进展、改代码、派 poc-claude、总结都在聊天里完成，续作提交 07fdc05、审查与返工照常。发现两处提示问题（把已提交说成没入库；改了行为却说需求没变）已修正，待部署。报告 docs/reports/2026-10-23-d73-chat-collaboration.md。"
         },
         {
           "id": "m3-preview-pages",

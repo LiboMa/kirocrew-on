@@ -1,0 +1,10 @@
+<figure>
+<ol class="flow" aria-label="一次会话里两种工作方式的交替">
+  <li><b>平台执行</b>写者是平台：Engine 按任务派发子 Agent。聊天里每个任务有「开始执行」与「已返回」两行说明</li>
+  <li class="chat"><b>会话停下</b>写者变为对话：父会话 Agent 可以按你的要求改工作区，或派子 Agent</li>
+  <li class="chat"><b>在聊天里干活</b>改动留在工作区（未提交）；聊天里派的子 Agent 挂在本会话下，不带平台标记</li>
+  <li class="keep"><b>回到平台续作</b>平台先把对话中的改动提交为新的候选，记为「对话中的改动」，再按续作规则继续</li>
+  <li><b>平台执行</b>之后的任务在新候选上重跑：审查针对它，Evaluator 核对验收，按需自动纠错</li>
+</ol>
+<figcaption>两种方式读写同一个工作区与会话分支；平台在运行时，聊天里的 Agent 只回答问题（靠提示约束）。</figcaption>
+</figure>
