@@ -6,6 +6,7 @@ import json
 from pathlib import Path
 import subprocess
 import tempfile
+import time
 import unittest
 
 from octopus import gateway_client
@@ -49,6 +50,27 @@ class UntrackedTests(unittest.TestCase):
     def test_without_a_review_every_untracked_file_counts(self):
         (self.project / "README.md").write_text("# 用法\\n")
         self.assertEqual(self.check(untracked=True)["untracked"], ["README.md"])
+
+    def finished_checks(self, attempt, command):
+        job = self.node.verify_start({"run_id": RID, "attempt_id": attempt, "commands": [command]})["job"]
+        for _ in range(200):
+            state = self.node.verify_status({"job": job})
+            if state["state"] != "running":
+                return state
+            time.sleep(0.05)
+        self.fail("the check never finished")
+
+    def test_files_a_later_check_left_are_the_platforms_not_the_chats(self):
+        """D57 whole-branch review: a check after the newest review (a test task's verify) left .coverage and
+        reports/junit.xml — counted as chat-created, they refused a diagnosis request and were committed as the person's."""
+        review = self.run / "attempts" / ("attempt-" + "2" * 32)
+        review.mkdir(parents=True)
+        (review / "untracked.json").write_text(json.dumps({"paths": []}))
+        self.finished_checks("attempt-" + "3" * 32, "mkdir -p reports && echo x > reports/junit.xml && echo y > .coverage")
+        self.assertEqual(self.check(untracked=True)["untracked"], [])
+        (self.project / "README.md").write_text("# 用法\n")   # what a chat then writes still counts
+        self.assertEqual(self.check(untracked=True)["untracked"], ["README.md"])
+        self.assertEqual(json.loads((review / "untracked.json").read_text()), {"paths": []})   # a review's own baseline stays
 
     def test_a_check_not_asking_says_nothing_of_them(self):
         (self.project / "README.md").write_text("# 用法\\n")

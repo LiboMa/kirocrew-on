@@ -283,6 +283,7 @@ class Worker:
         self.apps = Apps(path_prepend)
         # a task's verify commands (D37 §5); their output shows this Worker's own token masked too (D57 §3.3)
         self.checks = Checks(path_prepend, mask=(token,))
+        self._looked = set()   # D73: the check jobs whose leftovers were recorded as the platform's (untracked-seen.json)
         self.preview_tls_port, self.preview_tls_name = preview_tls_port, preview_tls_name
 
     @staticmethod
@@ -646,7 +647,15 @@ class Worker:
         return {**started, "baseline": True, "base": base}
 
     def verify_status(self, body):
-        return self.checks.status(str(body.get("job", "")))
+        job = str(body.get("job", ""))
+        status = self.checks.status(job)
+        if status["state"] != "running" and job not in self._looked:   # D73: what the checks left is the platform's
+            self._looked.add(job)
+            with self.checks.lock:
+                rid = (self.checks.jobs.get(job) or {}).get("run_id")
+            if rid:
+                self._seen(self.path(rid))
+        return status
 
     def _not_on_baseline(self, rid):
         """While a baseline run has the project on the base (D37 §11.1), what reads or serves its files waits: a download,
@@ -698,12 +707,25 @@ class Worker:
         return {**state, "created": [], "tracked_only": True}
 
     @staticmethod
+    def _seen(run, paths=None):
+        """D73: the untracked files the platform has seen in the workspace, rewritten whole (atomically) each time it looks —
+        a review's start, a candidate commit, a check or baseline job seen done — in run/untracked-seen.json. A review's own
+        untracked.json (its baseline, D57 §4) is kept as it is. Best effort: it never holds the platform's work up."""
+        try:
+            listed = workspace.untracked(workspace.project_dir(run)) if paths is None else list(paths)
+            write(run / "untracked-seen.json", {"paths": listed, "at": time.time()})
+        except Exception:
+            pass
+
+    @staticmethod
     def _new_untracked(run, project):
-        """D73: the untracked files the workspace has beyond those its newest review started with (untracked.json, D57 §4):
-        created after the platform last looked — a review moves out what it creates itself, so what the platform's checks
-        left before it is in that list. Every untracked file when no review has run."""
-        snapshots = sorted((p for p in (run / "attempts").glob("attempt-*/untracked.json") if p.is_file() and not p.is_symlink()),
-                           key=lambda p: p.stat().st_mtime)
+        """D73: the untracked files the workspace has beyond those the platform last saw (untracked-seen.json; before it, the
+        newest review's untracked.json): what a chat created after the platform stopped — what its own checks left is in
+        that list. Every untracked file when the platform has never looked."""
+        seen_file = run / "untracked-seen.json"
+        snapshots = [seen_file] if seen_file.is_file() and not seen_file.is_symlink() else \
+            sorted((p for p in (run / "attempts").glob("attempt-*/untracked.json") if p.is_file() and not p.is_symlink()),
+                   key=lambda p: p.stat().st_mtime)
         seen = set()
         if snapshots:
             try:
@@ -762,7 +784,9 @@ class Worker:
                 into = None if keep is None else run / "attempts" / body["attempt_id"] / "review-removed"
                 return self._created(workspace.rewind(project, body["expected"], keep=keep, into=into), project, keep)
             message = str(body.get("message") or "KiroCrew ON：任务候选")[:300]
-            return workspace.task_candidate(project, message, branch, run, body.get("parent"), base, body.get("since"))
+            made = workspace.task_candidate(project, message, branch, run, body.get("parent"), base, body.get("since"))
+            self._seen(run)   # D73: the platform has looked
+            return made
         except ValueError as exc:
             raise Error(409, "candidate_failed", workspace.scrub(exc)) from None
 
@@ -1385,6 +1409,7 @@ class Worker:
                 (folder / "untracked.json").unlink(missing_ok=True)   # from a dispatch that stopped before it was recorded
                 if listed is not None:
                     write(folder / "untracked.json", {"paths": listed})
+                    self._seen(run, listed)   # D73: the platform has looked
             write(record, value)  # Persist before the native side effect.
             try:
                 spawn = {
