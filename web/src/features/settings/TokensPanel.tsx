@@ -6,7 +6,7 @@ import { api } from "@/api/client";
 import { keys } from "@/api/hooks";
 import type { ApiToken, IssuedToken } from "@/api/types";
 import { FormDialog } from "@/components/FormDialog";
-import { ListCard, ListEmpty, RowAction } from "@/components/ListCard";
+import { ListCard, ListEmpty, RowActions } from "@/components/ListCard";
 import { NativeSelect } from "@/components/NativeSelect";
 import { Panel } from "@/components/Panel";
 import { useRowMotion } from "@/components/rowMotion";
@@ -71,10 +71,10 @@ export function TokensPanel() {
                     <TableCell className="text-muted-foreground tabular-nums">{token.last_used ? "最近使用 " + new Date(token.last_used * 1000).toLocaleString() : "从未使用"}</TableCell>
                     <TableCell className="pr-4 text-right">
                       {token.current ? <span className="text-xs text-muted-foreground">退出登录即失效</span> : (
-                        <span className="inline-flex gap-1">
-                          <RowAction icon={RefreshCw} name={"重新生成 Token：" + token.label} onClick={() => setDialog({ kind: "regenerate", token })}>重新生成</RowAction>
-                          <RowAction icon={Trash2} tone="danger" name={"撤销 Token：" + token.label} onClick={() => setDialog({ kind: "revoke", token })}>撤销</RowAction>
-                        </span>
+                        <RowActions menu={"Token 操作：" + token.label} actions={[
+                          { icon: RefreshCw, label: "重新生成", name: "重新生成 Token：" + token.label, onSelect: () => setDialog({ kind: "regenerate", token }) },
+                          { icon: Trash2, label: "撤销", name: "撤销 Token：" + token.label, tone: "danger", onSelect: () => setDialog({ kind: "revoke", token }) },
+                        ]} />
                       )}
                     </TableCell>
                   </TableRow>

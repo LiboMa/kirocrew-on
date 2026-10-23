@@ -1,6 +1,9 @@
-import type { ComponentProps, ReactNode } from "react";
-import { RefreshCw, Search, type LucideIcon } from "lucide-react";
+import { useSyncExternalStore, type ReactNode } from "react";
+import { MoreHorizontal, RefreshCw, Search, type LucideIcon } from "lucide-react";
 import { Button } from "@/components/ui/button";
+import {
+  DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuSeparator, DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu";
 import { Input } from "@/components/ui/input";
 import { cn } from "@/lib/utils";
 
@@ -46,14 +49,54 @@ export function ListEmpty({ children }: { children: ReactNode }) {
   return <p className="px-4 py-10 text-center text-sm text-muted-foreground">{children}</p>;
 }
 
-/** A row's action: an icon and its word; ``name`` is the full accessible name. */
-export function RowAction({ icon: Icon, children, name, tone, ...props }: ComponentProps<typeof Button> & {
-  icon: LucideIcon; name: string; tone?: "danger";
-}) {
+export interface Action {
+  icon: LucideIcon;
+  /** The word on the button and in the menu (「重新生成」). */
+  label: string;
+  /** The full accessible name of the row's button (「重新生成 Token：claude MCP」). */
+  name: string;
+  onSelect: () => void;
+  tone?: "danger";
+  disabled?: boolean;
+}
+
+const NARROW = "(max-width: 639px)";
+const narrowNow = () => typeof window !== "undefined" && !!window.matchMedia?.(NARROW).matches;
+function watchNarrow(listener: () => void) {
+  const query = window.matchMedia?.(NARROW);
+  query?.addEventListener?.("change", listener);
+  return () => query?.removeEventListener?.("change", listener);
+}
+
+/** A row's actions (PRD 2026-10-23 §3.5): ``actions`` as an icon and its word beside each other on a
+ * wide screen; ``more`` — and on a phone everything — in the row's 「⋯」 menu, named ``menu``. */
+export function RowActions({ actions, more = [], menu }: { actions: Action[]; more?: Action[]; menu: string }) {
+  const narrow = useSyncExternalStore(watchNarrow, narrowNow, () => false);
+  const inline = narrow ? [] : actions;
+  const listed = narrow ? [...actions, ...more] : more;
   return (
-    <Button type="button" size="xs" variant="ghost" aria-label={name}
-      className={cn("text-muted-foreground hover:text-foreground", tone === "danger" && "hover:bg-destructive/10 hover:text-destructive")} {...props}>
-      <Icon />{children}
-    </Button>
+    <span className="inline-flex items-center justify-end gap-1">
+      {inline.map((a) => (
+        <Button key={a.label} type="button" size="xs" variant="ghost" aria-label={a.name} onClick={a.onSelect} disabled={a.disabled}
+          className={cn("text-muted-foreground hover:text-foreground", a.tone === "danger" && "hover:bg-destructive/10 hover:text-destructive")}>
+          <a.icon />{a.label}
+        </Button>
+      ))}
+      {listed.length > 0 && (
+        <DropdownMenu>
+          <DropdownMenuTrigger asChild>
+            <Button type="button" size="icon-sm" variant="ghost" aria-label={menu}><MoreHorizontal /></Button>
+          </DropdownMenuTrigger>
+          <DropdownMenuContent align="end" className="w-44">
+            {listed.map((a, index) => [
+              a.tone === "danger" && index > 0 && <DropdownMenuSeparator key={a.label + "-rule"} />,
+              <DropdownMenuItem key={a.label} onSelect={a.onSelect} disabled={a.disabled} className={cn(a.tone === "danger" && "text-destructive")}>
+                <a.icon />{a.label}…
+              </DropdownMenuItem>,
+            ])}
+          </DropdownMenuContent>
+        </DropdownMenu>
+      )}
+    </span>
   );
 }
