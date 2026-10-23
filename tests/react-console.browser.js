@@ -118,11 +118,16 @@ async page => {
 
     await p.getByRole("button",{name:"我的设置"}).click();
     await p.getByRole("navigation",{name:"我的设置"}).getByRole("link",{name:/API 与 Coding Agent/}).click();
-    await p.getByLabel("新 Token 名称").fill("react-browser-client");
-    await p.getByRole("button",{name:"创建 API Token"}).click();
+    check(await p.getByLabel("Token 名称").count()===0,"Token 页上没有内嵌的输入框（PRD 2026-10-23）");
+    await p.getByRole("button",{name:"新建 Token"}).click();
+    const tokenDialog=p.getByRole("dialog",{name:"新建 Token"});
+    await tokenDialog.getByLabel("Token 名称").fill("react-browser-client");
+    await tokenDialog.getByRole("button",{name:"创建 Token"}).click();
     await p.locator(".secret").waitFor();
-    check((await p.locator(".secret").innerText()).startsWith("oct_"),"API Token 一次性显示");
-    await p.getByRole("button",{name:"完成"}).click();
+    check((await p.locator(".secret").innerText()).startsWith("oct_"),"API Token 在对话框里一次性显示");
+    await p.getByRole("dialog",{name:"Token 已创建"}).getByRole("button",{name:"我已保存"}).click();
+    await p.locator("[data-token-row]",{hasText:"react-browser-client"}).waitFor();
+    check(await p.locator(".secret").count()===0,"关闭后不再显示 Token");
     await p.getByRole("button",{name:"返回会话"}).click();
 
     await p.setViewportSize({width:390,height:844});
