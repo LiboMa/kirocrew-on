@@ -2,10 +2,10 @@
 import json
 from urllib.parse import parse_qs, urlsplit
 
-from . import journal
+from . import journal, sources
 from .domain import audit, run_access
 from .security import Error, elevated, require
-from .transport import worker_request
+from .transport import worker_request, worker_token
 
 # The longest native login an entry gives (the Worker's crew_entry_ttl: at most 8 hours): a page opened that long before a
 # native task began may still be open, and able to stop it.
@@ -54,7 +54,8 @@ def available(run):
 
 def observe(service, actor, rid, before=None, limit=50):
     """Read-only view of the run's native Session through its Worker (D30). Authorised like reading the run, so it also
-    serves Team members on a shared environment, who cannot get the Gateway-wide native login (K03)."""
+    serves Team members on a shared environment, who cannot get the Gateway-wide native login (K03). Masked by the
+    platform too (D57 §3.3: the rules and the Worker's token), as a Worker from before D57 answers unmasked."""
     require(type(limit) is int and 1 <= limit <= 100, "limit 须为 1–100 的整数")
     require(before is None or type(before) is int and before >= 0, "before 须为非负整数")
     with service.db.read() as db:
@@ -65,8 +66,9 @@ def observe(service, actor, rid, before=None, limit=50):
         require(worker is not None and worker["enabled"], "Session 所在的执行环境已停用", 409, "environment_disabled")
     body = {"run_id": rid, "native_parent": run["native_parent"], "before": before, "limit": limit}
     service.audit_read(actor, rid, "observe")
+    config = json.loads(worker["config"])
     try:
-        return worker_request(json.loads(worker["config"]), "/observe", body, timeout=15)
+        return sources.mask_value(worker_request(config, "/observe", body, timeout=15), (worker_token(config),))[0]
     except Error as exc:
         if exc.status == 404 and exc.code == "not_found":
             raise Error(409, "worker_upgrade_required", "此执行环境的 Worker 尚未支持会话观察，请更新 Worker") from None
