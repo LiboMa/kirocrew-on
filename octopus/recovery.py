@@ -50,6 +50,11 @@ def fault(native, entered=True):
     return next((kind for kind, pattern in FAULTS if pattern.search(error)), None)
 
 
+def unfinished(kind):
+    """What a diagnosis the platform failed is called (Task 15, D57 §8): its sandbox never came up, or it ended midway."""
+    return "诊断员没能启动" if kind == "runtime_sandbox" else "诊断员没能完成"
+
+
 def failing_gate(evidence, failure_type=None):
     """What an Attempt failed on, for counting the diagnoses that waited on it (D57 §13.8): the gate it names, else its first
     failed gate record — never the review_bound recorded after it when a failed review was put back — else its failure_type."""
@@ -426,7 +431,7 @@ def budget_note(value, key):
     """Why automatic recovery did not start (``key``: what refused it), for a blocked Session's attention."""
     limit = value[key]["limit"]
     what = {"cycles": f"自动纠错已达到 {limit} 轮上限",
-            "retries": f"自动重试已达到 {limit} 次上限" if limit else "自动重试已关闭（max_retries 为 0）",
+            "retries": f"自动重试已达到 {limit} 次上限" if limit else "自动重试已关闭（上限设为 0 次）",
             "minutes": f"自动纠错时长已超过 {limit} 分钟"}[key]
     return f"{what}（{_origin(value)}）；续作会重新计算预算。"
 
@@ -666,6 +671,9 @@ class Coordinator:
             self.finish(run, item, decision=decision)
         except (Error, ValueError, TypeError) as exc:
             why = "自动诊断未形成可执行决定：" + str(exc)
+            if kind:   # Task 15: the platform's fault again (or one the retry budget refused) — said as the platform's
+                why = (f"{unfinished(kind)}（平台临时故障，" + ("已自动重试 1 次" if context.get("retry_of") else "自动重试次数已用完")
+                       + f"）：{WHY[kind]}")
             if native.get("stopped"):   # a person stopped the diagnosis: theirs to decide
                 self.finish(run, item, error=why)
             else:   # D71: the failed task is retried as it failed
