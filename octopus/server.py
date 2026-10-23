@@ -23,7 +23,8 @@ from urllib.parse import parse_qs, quote, unquote, urlsplit
 from . import __version__, remote_preview, workers
 from .db import dumps, uid
 from .domain import Service, audit, name, team_environment
-from .security import Error, authenticate, check_password, create_user, elevated, expiry, issue_token, require, scope
+from .security import (Error, authenticate, check_password, create_user, elevated, expiry, issue_token, regenerate_token, require,
+                       scope)
 from .transport import validate_worker, worker_request
 from .schema import openapi
 
@@ -621,9 +622,15 @@ def server(database, port=8918, host="127.0.0.1", allowed_hosts=(), origin_secre
                             require(isinstance(requested, list) and set(requested) <= set(actor["scopes"]), "不能扩大 Token scope", 403, "forbidden")
                             return self.respond(issue_token(db, actor["id"], requested, body.get("label", "API"),
                                                             body.get("ttl", 86400), body.get("expires_in")), 201)
-                        return self.respond([{**dict(r), "expires": expiry(r["expires"])} for r in db.execute(
-                            "SELECT id,label,scopes,expires,last_used FROM tokens WHERE user_id=? AND expires>? "
-                            "ORDER BY expires DESC", (actor["id"], time.time()))])
+                        return self.respond([{**dict(r), "expires": expiry(r["expires"]), "current": r["id"] == actor.get("token_id")}
+                                             for r in db.execute("SELECT id,label,scopes,expires,last_used FROM tokens WHERE user_id=? "
+                                                                 "AND expires>? ORDER BY expires DESC", (actor["id"], time.time()))])
+                if len(segments) == 4 and segments[:2] == ["v1", "tokens"] and segments[3] == "regenerate":
+                    require(method == "POST", "Method not allowed", 405)
+                    require(isinstance(body, dict) and set(body) <= {"expires_in"}, "只接受 expires_in")
+                    with database.transaction() as db:
+                        return self.respond(regenerate_token(db, actor["id"], segments[2], body.get("expires_in"),
+                                                             actor.get("token_id")))
                 if len(segments) == 3 and segments[:2] == ["v1", "tokens"] and method == "DELETE":
                     with database.transaction() as db:
                         db.execute("DELETE FROM tokens WHERE id=? AND user_id=?", (segments[2], actor["id"]))
