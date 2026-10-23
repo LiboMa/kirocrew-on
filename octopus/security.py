@@ -89,6 +89,28 @@ def issue_token(db, user, scopes=None, label="API", ttl=86400, expires_in=None):
     return value
 
 
+def regenerate_token(db, user, tid, expires_in=None, current=None):
+    """Owner 2026-10-24: the same token entry (name, scopes) with a new secret, shown once; the old secret stops at once.
+    Its expiry stays unless ``expires_in`` chooses a new lifetime (as issue_token's, admin at most 30 days). The token the
+    request itself signs in with (``current``) is refused: regenerating it would sign the person out."""
+    row = db.execute("SELECT id,label,scopes,expires FROM tokens WHERE id=? AND user_id=? AND expires>?",
+                     (tid, user, time.time())).fetchone()
+    require(row is not None, "Token 不存在或已失效", 404, "not_found")
+    require(tid != current, "这是你当前登录正在使用的 Token：重新生成会让你立刻退出。请退出后重新登录，或在别的客户端里操作", 409,
+            "token_in_use")
+    scopes = json.loads(row["scopes"])
+    expires = row["expires"]
+    if expires_in is not None:
+        require(isinstance(expires_in, str) and expires_in in EXPIRIES, "有效期 expires_in 须为 7d、30d、365d 或 never")
+        require("admin" not in scopes or expires_in in ADMIN_EXPIRIES, "带 admin 权限的 Token 最长 30 天（7d 或 30d）",
+                403, "forbidden")
+        expires = NEVER if EXPIRIES[expires_in] is None else time.time() + EXPIRIES[expires_in]
+    raw = "oct_" + secrets.token_urlsafe(32)
+    db.execute("UPDATE tokens SET hash=?, expires=?, last_used=NULL WHERE id=? AND user_id=?",
+               (hashlib.sha256(raw.encode()).hexdigest(), expires, tid, user))
+    return {"id": tid, "token": raw, "label": row["label"], "scopes": scopes, "expires": expiry(expires)}
+
+
 def authenticate(db, raw):
     require(isinstance(raw, str) and raw.startswith("oct_"), "需要 API Token", 401, "unauthorized")
     row = db.execute(
