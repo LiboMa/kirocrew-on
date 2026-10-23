@@ -142,15 +142,15 @@ def _judged(outcome, shown):
     """``shown`` (the masked outcome) with what Knowledge judges of its entries kept as written: it reads them later, from
     what is stored (D46 P4). An entry masking changed carries knowledge.judged of its text as written under knowledge.MARK,
     which only the platform writes (an Agent's own value there is dropped when its outcome is read, knowledge.unmarked):
-    an entry that has it was masked before, and keeps it however often it is masked again."""
+    an entry that has it (knowledge.marked: exactly as the platform writes it; anything else there is dropped) was
+    masked before, and keeps it however often it is masked again."""
     entries, stored = outcome.get("knowledge"), shown.get("knowledge")
     if not (isinstance(entries, list) and isinstance(stored, list)):
         return shown
     plain = lambda item: {k: v for k, v in item.items() if k != knowledge.MARK} if isinstance(item, dict) else item
 
     def mark(entry, item):   # the platform's own from before, else (when masking changed the entry) its text as written
-        kept = entry.get(knowledge.MARK) if isinstance(entry, dict) else None
-        return kept if isinstance(kept, dict) else None if plain(item) == plain(entry) else knowledge.judged(entry)
+        return knowledge.marked(entry) or (None if plain(item) == plain(entry) else knowledge.judged(entry))
     shown["knowledge"] = [plain(item) if (judged := mark(entry, item)) is None else
                           {**(plain(item) if isinstance(item, dict) else {"rule": item}), knowledge.MARK: judged}
                           for entry, item in zip(entries, stored)]
@@ -591,9 +591,11 @@ class Engine:
             if run["error"] != text:   # another error took its place meanwhile (a failed look): it still waits
                 self.update(run["id"], "running", text, actor=journal.WORKER)
             return
-        mark = {"since": self.wall(), "reason": queued.get("reason"), "resuming": bool(queued.get("resuming"))}
+        token = self._token(run)   # D57 §3.3: KiroCrew's reason and detail, stored and recorded with the token masked
+        mark = {"since": self.wall(), "reason": sources.mask_value(queued.get("reason"), (token,))[0],
+                "resuming": bool(queued.get("resuming"))}
         with self.db.transaction() as db:
-            journal.change(db, "attempts", attempt["id"], journal.WORKER, "attempt.queued", text,
+            journal.change(db, "attempts", attempt["id"], journal.WORKER, "attempt.queued", text, mask=(token,),
                            event={"id": attempt["id"], "task_id": task["id"], "cause": queued.get("reason"),
                                   "detail": queued.get("detail")}, evidence=dumps({**prior, "queued": mark}), updated=time.time())
         self.update(run["id"], "running", text, actor=journal.WORKER)

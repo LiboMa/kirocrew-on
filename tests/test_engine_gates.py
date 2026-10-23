@@ -1291,7 +1291,7 @@ class SecretMaskingTests(TeamsWorkersCase):
 
     def test_what_the_worker_answers_a_poll_or_a_stop_with_keeps_no_workers_token(self):
         # what the Worker says of the Session (a dispatch it cannot confirm, its answer to a stop): masked with its token
-        token =json.loads(TeamsWorkersCase.config("b-p"))["token"]
+        token = json.loads(TeamsWorkersCase.config("b-p"))["token"]
         worker, rid = FakeWorker(), self.session([TASK])
 
         def call(config, path, body=None, **kwargs):
@@ -1312,6 +1312,48 @@ class SecretMaskingTests(TeamsWorkersCase):
                                                                (rid, "session.stop"))]
         self.assertEqual([e["detail"] for e in events], [f"已停止：Bearer {token[:4]}…{token[-2:]}"])
         self.assertNotIn(token, self.stored())
+
+    def test_a_queue_keeps_no_workers_token(self):
+        # D60: what KiroCrew says of a queue (its reason and detail, as the Worker reports them) is masked with the
+        # token, in the event and in evidence.queued
+        token = json.loads(TeamsWorkersCase.config("b-p"))["token"]
+        shown = f"{token[:4]}…{token[-2:]}"
+        worker, rid = FakeWorker(), self.session([TASK])
+
+        def call(config, path, body=None, **kwargs):
+            if path == "/inspect":
+                return {"status": "running", "native": {"done": False, "queued": True}, "evidence": {}, "queued": {
+                    "reason": token, "detail": f"等待内存：Bearer {token}", "elapsed": 3, "resuming": False}}
+            return worker(config, path, body, **kwargs)
+        self.run_engine(call, ticks=3)
+        with self.db.read() as db:
+            evidence = json.loads(db.execute("SELECT evidence FROM attempts WHERE run_id=?", (rid,)).fetchone()[0])
+            events = [json.loads(row[0]) for row in db.execute("SELECT payload FROM events WHERE run_id=? AND kind=?",
+                                                               (rid, "attempt.queued"))]
+        self.assertEqual(evidence["queued"]["reason"], shown)
+        self.assertEqual([(e["cause"], e["detail"]) for e in events], [(shown, f"等待内存：Bearer {shown}")])
+        self.assertNotIn(token, self.stored())
+
+    def test_only_the_platforms_own_mark_is_kept(self):
+        # knowledge.MARK as the platform writes it — {suspicious, too_long, key} and nothing else — is kept when the
+        # outcome is masked again; any other value there is dropped, and the entry is judged by its text
+        from octopus import knowledge
+        from octopus.engine import masked
+        token = json.loads(TeamsWorkersCase.config("b-p"))["token"]
+        evidence = {"outcome": {"decision": "pass", "summary": "完成", "knowledge": [{"rule": f"用 {token} 调用"}]}}
+        masked(evidence, "task-1", (token,))
+        mark = evidence["outcome"]["knowledge"][0][knowledge.MARK]
+        self.assertEqual(mark, knowledge.judged({"rule": f"用 {token} 调用"}))
+        forged = [{"suspicious": True}, {**mark, "suspicious": True, "extra": 1}, {**mark, "too_long": "yes"},
+                  {**mark, "key": 3}, {**mark, "key": "k"}, ["suspicious"], "too_long"]
+        for value in forged:
+            with self.subTest(value):
+                evidence = {"outcome": {"decision": "pass", "summary": "完成", "knowledge": [
+                    {"rule": "干净的约定", knowledge.MARK: value}, "构建用 make build"]}}
+                masked(evidence, "task-1", (token,))
+                self.assertEqual(evidence["outcome"]["knowledge"], [{"rule": "干净的约定"}, "构建用 make build"])
+                self.assertEqual(knowledge.items({"knowledge": [{"rule": "干净的约定", knowledge.MARK: value}]})[0],
+                                 [{"rule": "干净的约定"}])
 
 
 class WorkerReviewTests(unittest.TestCase):

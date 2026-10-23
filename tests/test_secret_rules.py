@@ -375,6 +375,17 @@ class SecretRuleTests(unittest.TestCase):
         before, tail_of_key, after, rows = cases["git diff"]   # git heads the hunk with the last line above it that
         cases["git diff, a key line in the hunk header"] = (   # starts with a letter: in a key, one of its lines
             before[:-1] + " ", lines[-10] + "\n" + tail_of_key, after, [lines[-10], *rows])
+        pad = lambda rows, indent: [" " * indent + row for row in rows]
+        for indent in (2, 4):   # a key indented in what is compared (a YAML Secret, a Helm value, a test fixture)
+            cases[f"pytest, a key indented {indent}"] = (
+                skipping, pytest(pad(lines[-6:] + [end], indent), pad(other + [end], indent)), "", lines[-6:] + other)
+            for context in (3, 1):
+                text = "".join(line + "\n" for line in difflib.unified_diff(
+                    pad(lines[-9:] + [end], indent), pad(lines[-9:-3] + other[:3] + [end], indent), "a/secret.yaml",
+                    "b/secret.yaml", n=context, lineterm=""))
+                at = text.index("\n", text.index("@@")) + 1
+                cases[f"git diff -U{context}, a key indented {indent}"] = (text[:at], text[at:], "",
+                                                                         lines[-9:] + other[:3])
         last = lines[-3:]
         cases.update({   # the escaped lines before an END, the first right after a quote or an ellipsis
             "json": ('{"stdout": "', json.dumps("\n".join(last + [end]) + "\n")[1:-1], '"}', last),
@@ -383,6 +394,16 @@ class SecretRuleTests(unittest.TestCase):
                            last),
             "repr cut at an ellipsis": ("E       AssertionError: assert '...", repr("\n".join(
                 [lines[-4][30:], *last, end]))[1:-1], "' == ''", [lines[-4][30:], *last]),
+        })
+        escaped = json.dumps("\n".join(last + [end]))[1:-1]
+        cases.update({   # the first of them a value: after a label's "=" or ": " (or, escaped, after a space)
+            ".env": ("$ cat .env\nPRIVATE_KEY=", "\n".join(last + [end]) + "\n", "PORT=8080\n", last),
+            "a label and a space": ("tls:\n  key: ", "\n".join(last + [end]) + "\n", "", last),
+            "docker compose, a label": ("web-1  | PRIVATE_KEY=",
+                                        "".join(f"{row}\nweb-1  | " for row in last) + end + "\n", "", last),
+            ".env, escaped": ('{"env": "PRIVATE_KEY=', escaped, '", "port": 8080}', last),
+            "label and a space, escaped": ('{"log": "key: ', escaped, '"}', last),
+            "after a space, escaped": ('{"log": "using the key ', escaped, '"}', last),
         })
         for name, (before, tail_of_key, after, rows) in cases.items():
             text = before + tail_of_key + after
@@ -396,10 +417,13 @@ class SecretRuleTests(unittest.TestCase):
                     self.assertEqual([row[i:i + 10] for row in rows for i in range(len(row) - 9)
                                       if row[i:i + 10] in shown], [], shown[:600])
                     self.assertTrue(shown.startswith(before) and shown.endswith(after), shown[:600])
-        # what is no key line stays shown, in a diff as anywhere
+        # what is no key line stays shown, in a diff as anywhere; and a value right before an END with no key line
+        # between, or one that is not right above them, is no key's either
         for text in ["E         - see the README\nE           " + end + "\n",
                      "@@ -1,2 +1,2 @@\n-see the README\n+" + end + "\n",
-                     "diff --git a/k b/k\n" + end + "\n", "x = '\\n" + end + "'\n"]:
+                     "diff --git a/k b/k\n" + end + "\n", "x = '\\n" + end + "'\n",
+                     "DEBUG_MODE=1\n" + end + "\n", "PORT: 8080\nsee the README\n" + end + "\n",
+                     '{"env": "DEBUG_MODE=1\\n' + end + '"}', '{"log": "key: none\\n\\n' + end + '"}']:
             with self.subTest(text[:30]):
                 self.assertEqual(sources.mask_text(text), (text, []))
                 self.assertEqual(checks.masked_tail(text.encode()), (text, []))

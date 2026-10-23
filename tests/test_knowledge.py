@@ -292,7 +292,9 @@ class WriteTests(KnowledgeCase):
 
     def test_why_the_worker_did_not_write_an_item_is_stored_masked(self):
         # D57 §3.3: the reason the Worker gives, or the error it answers with, is its text: masked (rules and its
-        # token) before it is cut and stored with the item
+        # token) before it is cut and stored with the item. A Worker of this release says it masked and cut to 200
+        # (worker.said); one from before says it as KiroCrew did, cut — the platform masks it again either way
+        from octopus.worker import said
         from tests.test_secret_rules import OPENAI, chars
         token = chars("knowledge-worker-token", 43)
         with self.db.transaction() as db:
@@ -303,8 +305,8 @@ class WriteTests(KnowledgeCase):
         def answer(config, path, body, **kwargs):
             if path == "/knowledge/write":
                 self.writes.append(body)
-                return {"results": [{"result": "refused", "reason": "x" * 170 + f" 含 {OPENAI}"},
-                                    {"result": "superseded", "reason": f"替代了：Bearer {token}"}]}
+                return {"results": [{"result": "refused", "reason": said("x" * 170 + f" 含 {OPENAI}", 200, (token,))},
+                                    {"result": "superseded", "reason": f"替代了：Bearer {token}"[:200]}]}
             return original(config, path, body, **kwargs)
         self.engine.request = answer
         _, run = self.run_()

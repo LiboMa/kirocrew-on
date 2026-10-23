@@ -95,20 +95,22 @@ _KEY_BEGINS, _KEY_ENDS = re.compile(_KEY_BEGIN), re.compile(_KEY_END)
 # what they are long): whole lines, each with the END line's own prefix "q" (docker compose's "web-1  | ", pytest's
 # "E         + ", grep's "key.pem-" / "key.pem-26-", an indent; captured from the prefix put before a NUL), or, when the
 # END follows an escaped line break, JSON-escaped lines ("\/" reads "/\" backwards), the first of them after a line
-# break, the string's quote (", ', \") or an ellipsis's ".".
+# break, the string's quote (", ', \") or an ellipsis's "."; above at least one of those, also after a label's "=" or
+# after a space (": ", "the key ").
 _BACKWARDS_BASE64 = rb"(?:[A-Za-z0-9+=]|/\\*)+"
 _LINES_BEFORE = re.compile(rb"(?P<q>[^\0]*)\0(?:\n\r?[ \t]*" + _BACKWARDS_BASE64 + rb"(?P=q)(?=\n|\Z))+")
-_ESCAPED_LINES_BEFORE = re.compile(rb"[ \t]*(?:(?:n\\+(?:r\\+)?|r\\+)[ \t]*" + _BACKWARDS_BASE64
-                                   + rb"[ \t]*(?=[nr]\\|[\"'.]|\Z))+")
+_ESCAPED_LINE = rb"(?:n\\+(?:r\\+)?|r\\+)[ \t]*" + _BACKWARDS_BASE64
+_ESCAPED_LINES_BEFORE = re.compile(rb"[ \t]*(?:" + _ESCAPED_LINE + rb"[ \t]*(?=[nr]\\|[\"'.]|\Z))+(?:" + _ESCAPED_LINE
+                                   + rb"(?:[ \t]*(?==)|[ \t]+))?")
 # A diff's lines, whose prefix is the END line's but for the diff's marker column: pytest's ndiff after its
 # "E         " ("- ", "+ ", "  ", and "? " lines of ^ - + under a changed line), a unified diff's "-", "+", " ". Read
 # backwards too, the END line's prefix put before two NULs as "a" (after the column) and "b" (before it).
 _DIFF_MARKS = b"-+ ?"
-_DIFF_LINES_BEFORE = re.compile(rb"(?P<a>[^\0]*)\0(?P<b>[^\0]*)\0(?:(?:\n\r?[-+^][-+^ \t]*(?P=a)\?(?P=b))?\n\r?[ \t]*"
+_DIFF_LINES_BEFORE = re.compile(rb"(?P<a>[^\0]*)\0(?P<b>[^\0]*)\0(?:(?:\n\r?[-+^][-+^ \t]*\?(?P=b))?\n\r?[ \t]*"
                                 + _BACKWARDS_BASE64 + rb"(?P=a)[-+ ?](?P=b)(?=\n|\Z))+")
 # The line git heads a hunk with ("@@ -16,7 +16,7 @@ <the last line above it that starts with a letter>"): in a key,
 # one of its lines.
-_HUNK_HEADER = re.compile(rb"@@ -[0-9]+(?:,[0-9]+)? \+[0-9]+(?:,[0-9]+)? @@ (?P<text>[A-Za-z0-9+/=]+)[ \t]*\r?")
+_HUNK_HEADER = re.compile(rb"@@ -[0-9]+(?:,[0-9]+)? \+[0-9]+(?:,[0-9]+)? @@ ")
 _PREFIX_SHAPE = bytes.maketrans(b"0123456789:", b"0000000000-")   # grep: "key.pem:26:" heads its lines "key.pem-25-"
 _BASE64 = frozenset(b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/=")
 _BASE64_BYTES = bytes(sorted(_BASE64))
@@ -182,16 +184,17 @@ def _lines_before(data, floor, at):
         found = _ESCAPED_LINES_BEFORE.match(data[start:at][::-1])
         start = at - found.end() if found else None
     elif line >= floor and b"\0" not in data[line:at]:
-        prefix, head = _line_prefix(data[line:at].translate(_PREFIX_SHAPE))
-        diff = head.count(b"\0") == 2
-        found = (_DIFF_LINES_BEFORE if diff else _LINES_BEFORE).match(
-            head + data[floor:line].translate(_PREFIX_SHAPE)[::-1])
-        top = line - (found.end() - len(head)) if found else None   # where the first of the lines begins
-        start = top + len(prefix) if found else None
-        if found and diff and head[:1] == b"\0" and top > floor:   # a unified diff: git heads a hunk with a line
+        prefix, heads = _line_prefix(data[line:at].translate(_PREFIX_SHAPE))
+        lines, took = data[floor:line].translate(_PREFIX_SHAPE)[::-1], 0
+        for head in heads:   # where a diff's marker column may be: the one whose lines go furthest back
+            found = (_DIFF_LINES_BEFORE if head.count(b"\0") == 2 else _LINES_BEFORE).match(head + lines)
+            took = max(took, found.end() - len(head) if found else 0)
+        top = line - took   # where the first of the lines begins
+        start = top + len(prefix) if took else None
+        if took and top > floor:   # the first of them may be a value at the end of the line above
             newline = data.rfind(b"\n", floor, top - 1)
-            header = _HUNK_HEADER.fullmatch(data, newline + 1, top - 1) if newline >= 0 or floor == 0 else None
-            start = header.start("text") if header else start
+            value = _value_above(data, newline + 1, top - 1) if newline >= 0 or floor == 0 else None
+            start = start if value is None else value
     else:
         start = None
     while start is not None and data[start:start + 1] in (b" ", b"\t"):
@@ -200,19 +203,46 @@ def _lines_before(data, floor, at):
 
 
 def _line_prefix(prefix):
-    """What each line before an END whose line starts with ``prefix`` (its shape) starts with: (that prefix, the head
-    put before the lines read backwards). Base64 glued to the END is the key's own, so the prefix ends in none and where
-    a line's own characters begin is never in doubt — but for a unified diff's "+" alone or after no base64, which
-    marks the line. A diff's marker column may differ from the END line's: ndiff's when the prefix ends in "- ", "+ ",
-    "  " or "? ", a unified diff's when it ends in "-", "+", " " or "?" alone or after no base64."""
+    """What each line before an END whose line starts with ``prefix`` (its shape) starts with: (that prefix, the heads
+    to put before the lines read backwards, one for each place a diff's marker column may be — or the prefix as it is).
+    Base64 glued to the END is the key's own, so the prefix ends in none — but for a unified diff's "+" alone or after
+    no base64, which marks the line. The marker column may differ from the END line's: ndiff's when the prefix ends in
+    "- ", "+ ", "  " or "? "; a unified diff's when it ends in "-", "+", " " or "?", or when it is one of "-", "+", " "
+    and an indent (indented text: a YAML Secret, a test fixture); pytest's ndiff of indented text after its
+    "E         ". Only where a line's own characters begin is never in doubt (what comes right before them is no
+    base64), so each is read in linear time."""
     glued = prefix[-1:] == b"+" and (len(prefix) == 1 or prefix[-2] not in _BASE64)
     if not glued:
         prefix = prefix.rstrip(_BASE64_BYTES)
+    columns = []
     if len(prefix) >= 2 and prefix[-2] in _DIFF_MARKS and prefix[-1:] == b" ":
-        return prefix, prefix[-1:] + b"\0" + prefix[-3::-1] + b"\0"
-    if glued or prefix[-1:] and prefix[-1] in _DIFF_MARKS and (len(prefix) == 1 or prefix[-2] not in _BASE64):
-        return prefix, b"\0" + prefix[-2::-1] + b"\0"
-    return prefix, prefix[::-1] + b"\0"
+        columns.append(len(prefix) - 2)   # ndiff: "- ", "+ ", "  ", "? "
+    if prefix[-1:] and prefix[-1] in _DIFF_MARKS:
+        columns.append(len(prefix) - 1)   # a unified diff's whole prefix: "-", "+", " "
+    if len(prefix) >= 2 and prefix[0] in b"-+ " and not prefix[1:].strip(b" \t"):
+        columns.append(0)   # a unified diff of indented text: the marker, then the indent
+    if len(prefix) > 10 and prefix[:10] == b"E" + b" " * 9 and prefix[10] in _DIFF_MARKS:
+        columns.append(10)   # pytest's ndiff of indented text: "E", nine spaces, the marker, a space, the indent
+    heads = []
+    for column in dict.fromkeys(columns):
+        after, before = prefix[column + 1:][::-1], prefix[:column][::-1]
+        first = (after or before)[:1]   # what comes right before a line's own characters, read backwards
+        if not first or first[0] not in _BASE64:
+            heads.append(after + b"\0" + before + b"\0")
+    return prefix, heads or [prefix[::-1] + b"\0"]
+
+
+def _value_above(data, start, end):
+    """Where the value that ends the line ``data[start:end]`` begins, when it is base64 after a label's "=" or ": "
+    (PRIVATE_KEY=…, key: …) or after the header git heads a hunk with (the last line above the hunk that starts with a
+    letter: in a key, one of its lines); None when it ends in none."""
+    row = data[start:end].rstrip(b" \t\r")
+    at = len(row.rstrip(_BASE64_BYTES))
+    label = row.find(b"=", at, len(row.rstrip(b"=")))   # an "=" before the value's own characters ends a label
+    at = label + 1 if label >= 0 else at
+    head = row[:at]
+    named = head.rstrip(b" \t")[-1:] == b"=" or head.rstrip(b" \t")[-1:] == b":" and head[-1:] in (b" ", b"\t")
+    return start + at if at < len(row) and (named or _HUNK_HEADER.fullmatch(head)) else None
 
 
 def _open_key(data, before):

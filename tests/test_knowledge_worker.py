@@ -117,6 +117,30 @@ class KnowledgeWorkerTests(unittest.TestCase):
         self.assertIn("persistence_disabled", result["results"][1]["reason"])
         self.assertIn("旧规则", result["results"][2]["reason"])
 
+    def test_what_kirocrew_says_is_masked_before_it_is_cut(self):
+        # D57 §3.3: KiroCrew's reasons are cut to what the platform is told — masked first (the rules and this Worker's
+        # own token), so no part of a credential the cut runs through is left where no rule can know it
+        from tests.test_secret_rules import OPENAI
+        self.prepare()
+        token, shown = self.node.token, lambda secret: f"{secret[:4]}…{secret[-2:]}"
+        answers = iter([{"ok": False, "reason": "y" * 180 + " " + OPENAI},
+                        crew_api.GatewayError(409, "y" * 180 + " Bearer " + token),
+                        {"ok": True, "superseded": ["z" * 80 + " " + OPENAI, "旧规则"]}])
+
+        def answer(path, body):
+            value = next(answers)
+            if isinstance(value, Exception):
+                raise value
+            return value
+        self.answer = answer
+        items = [{"rule": "a"}, {"rule": "b"}, {"rule": "c"}]
+        result = self.node.knowledge_write({"run_id": RID, "scope": "h_o_r", "items": items})
+        self.assertEqual([r["reason"] for r in result["results"]],
+                         ["y" * 180 + " " + shown(OPENAI), "HTTP 409 " + "y" * 180 + " Bearer " + shown(token),
+                          "替代了：" + "z" * 80 + " " + shown(OPENAI) + "；旧规则"])
+        self.assertNotIn(token, json.dumps(result))
+        self.assertNotIn(OPENAI[4:20], json.dumps(result))
+
     def test_forgetting_deletes_the_exact_scoped_lesson(self):
         self.prepare()
         self.assertEqual(self.node.knowledge_forget({"run_id": RID, "scope": "h_o_r", "rule": "用 pnpm 安装依赖"}), {"ok": True})

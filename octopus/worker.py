@@ -53,6 +53,12 @@ def discovery_loop(worker, stop, first=60, every=900):
             return
 
 
+def said(text, limit, extra=()):
+    """What KiroCrew said, as the platform is told it: masked (the rules, and ``extra``: this Worker's own token, D57
+    §3.3), then cut to ``limit``: no part of a credential the cut runs through is left where no rule knows it."""
+    return workspace.mask_text(str(text), extra)[0][:limit]
+
+
 def write(path, value):
     path.parent.mkdir(parents=True, exist_ok=True)
     temporary = path.with_name("." + path.name + ".tmp")
@@ -429,14 +435,15 @@ class Worker:
                     code = json.loads(text).get("code")
                 except (ValueError, AttributeError):
                     code = None
-                results.append({"rule": item["rule"], "result": "refused", "reason": f"HTTP {exc.status} " + (code or text[:200])})
+                results.append({"rule": item["rule"], "result": "refused",
+                                "reason": f"HTTP {exc.status} " + said(code or text, 200, (self.token,))})
                 continue
             if not answer.get("ok"):
-                results.append({"rule": item["rule"], "result": "refused",
-                                "reason": str(answer.get("reason") or answer.get("outcome") or "未写入")[:200]})
+                reason = said(answer.get("reason") or answer.get("outcome") or "未写入", 200, (self.token,))
+                results.append({"rule": item["rule"], "result": "refused", "reason": reason})
             elif answer.get("superseded"):
-                results.append({"rule": item["rule"], "result": "superseded",
-                                "reason": "替代了：" + "；".join(str(r)[:100] for r in answer["superseded"][:3])})
+                replaced = "；".join(said(r, 100, (self.token,)) for r in answer["superseded"][:3])
+                results.append({"rule": item["rule"], "result": "superseded", "reason": "替代了：" + replaced})
             else:
                 results.append({"rule": item["rule"], "result": "written"})
         return {"results": results}
@@ -1536,7 +1543,8 @@ class Worker:
         if not owned and "[OCTOPUS-ATTEMPT:" + attempt + "]" not in str(row.get("task") or ""):
             return None
         elapsed = row.get("elapsed")
-        return {"reason": str(row.get("reason") or "")[:40], "detail": str(row.get("reason_detail") or "")[:300],
+        return {"reason": said(row.get("reason") or "", 40, (self.token,)),
+                "detail": said(row.get("reason_detail") or "", 300, (self.token,)),
                 "elapsed": elapsed if isinstance(elapsed, (int, float)) and not isinstance(elapsed, bool) else None,
                 "resuming": bool(row.get("resuming"))}
 
