@@ -291,14 +291,14 @@
         {
           "id": "m3-011-continue-hint",
           "name": "MVP-0.1.1 续作对话框提醒对话中的改动",
-          "status": "done",
+          "status": "local",
           "ref": "feat/mvp-0.1.1 d617f1c",
           "more": "GET /v1/runs/<id>/chat-changes；有改动时列出文件、提示同步修改需求；只提醒、不拦截。"
         },
         {
           "id": "m3-011-untracked",
           "name": "MVP-0.1.1 续作前也认出聊天里新建的文件",
-          "status": "done",
+          "status": "local",
           "ref": "feat/mvp-0.1.1 a95c8eb",
           "more": "Worker /candidate check 可选 untracked：最近一次审查开始时的清单之外的新文件。"
         },
