@@ -427,13 +427,17 @@ def budget_line(value):
     return f"预算（{_origin(value)}）：" + " · ".join(parts)
 
 
+def limit_reached(value, key):
+    """What of the budget ``value`` refused (``key``), in words: the limit reached, or retries switched off."""
+    limit = value[key]["limit"]
+    return {"cycles": f"自动纠错已达到 {limit} 轮上限",
+            "retries": f"自动重试已达到 {limit} 次上限" if limit else "自动重试已关闭",
+            "minutes": f"自动纠错时长已超过 {limit} 分钟"}[key]
+
+
 def budget_note(value, key):
     """Why automatic recovery did not start (``key``: what refused it), for a blocked Session's attention."""
-    limit = value[key]["limit"]
-    what = {"cycles": f"自动纠错已达到 {limit} 轮上限",
-            "retries": f"自动重试已达到 {limit} 次上限" if limit else "自动重试已关闭（上限设为 0 次）",
-            "minutes": f"自动纠错时长已超过 {limit} 分钟"}[key]
-    return f"{what}（{_origin(value)}）；续作会重新计算预算。"
+    return f"{limit_reached(value, key)}（{_origin(value)}）；续作会重新计算预算。"
 
 
 def refused(db, run, kind):
@@ -671,9 +675,10 @@ class Coordinator:
             self.finish(run, item, decision=decision)
         except (Error, ValueError, TypeError) as exc:
             why = "自动诊断未形成可执行决定：" + str(exc)
-            if kind:   # Task 15: the platform's fault again (or one the retry budget refused) — said as the platform's
-                why = (f"{unfinished(kind)}（平台临时故障，" + ("已自动重试 1 次" if context.get("retry_of") else "自动重试次数已用完")
-                       + f"）：{WHY[kind]}")
+            if kind:   # Task 15: the platform's fault again, or one the budget did not retry (_retry says which limit)
+                again = "已自动重试 1 次" if context.get("retry_of") else \
+                    (item["refused_by"] + "，" if item.get("refused_by") else "") + "没有再试"
+                why = f"{unfinished(kind)}（平台临时故障，{again}）：{WHY[kind]}"
             if native.get("stopped"):   # a person stopped the diagnosis: theirs to decide
                 self.finish(run, item, error=why)
             else:   # D71: the failed task is retried as it failed
@@ -700,6 +705,7 @@ class Coordinator:
                 return False
             over = refused(db, fresh, "retry")
             if over:
+                item["refused_by"] = limit_reached(budget(db, fresh), over)   # for advance's words (Task 15)
                 row = db.execute("SELECT evidence FROM recoveries WHERE id=?", (item["id"],)).fetchone()
                 journal.change(db, "recoveries", item["id"], journal.RECOVERY, "recovery.state", quiet=("evidence",),
                                evidence=dumps({**json.loads(row["evidence"] or "{}"), "budget_refused": over}))

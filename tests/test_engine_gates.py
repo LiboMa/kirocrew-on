@@ -335,7 +335,7 @@ class EngineGateTests(TeamsWorkersCase):
                     recovered = db.execute("SELECT COUNT(*) FROM recoveries WHERE run_id=?", (rid,)).fetchone()[0]
                 if status == "blocked":
                     self.assertEqual((self.gates(evidence)["outcome_pass"], evidence["failure_type"]), ("fail", "implementation"))
-                    self.assertIn("changes_requested", attempt["error"])
+                    self.assertIn("结果写明了「要求修改」", attempt["error"])   # Task 15: the verdict in words people read
                     self.assertEqual(recovered, 1)   # an ordinary failure: diagnosed
                     self.assertNotIn("/candidate", worker.paths())
                 else:

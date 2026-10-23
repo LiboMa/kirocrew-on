@@ -30,10 +30,10 @@ function methods(planned: string[] | undefined, attempts: NonNullable<Run["tasks
   return <>{" · "}<span>方法（计划，执行环境未交付）：{planned.join("、")}</span></>;
 }
 
-/** Why the platform runs none of a task's checks (octopus/domain.py runs_checks, planning._unchecked), or null. */
+/** That the platform runs none of the checks listed above, and why (octopus/domain.py runs_checks), or null. */
 function unchecked(spec: Step): string | null {
-  if (spec.kind === "review" || spec.kind === "design") return "审查与设计任务的检查平台不运行";
-  if ((spec.phase ?? (spec.kind === "research" ? "diverge" : null)) === "diverge") return "发散阶段不运行检查命令";
+  if (spec.kind === "review" || spec.kind === "design") return "以上检查不会运行（审查与设计任务）";
+  if ((spec.phase ?? (spec.kind === "research" ? "diverge" : null)) === "diverge") return "以上检查不会运行（发散阶段）";
   return null;
 }
 
