@@ -2489,6 +2489,10 @@ class Service:
     def operate(self, actor, rid, action, body):
         require(action in {"continue", "recover", "stop", "close", "reopen", "delete", "assign-worker"},
                 "不支持的操作")
+        from . import chat_changes   # D73: what the native chat changed, committed before a continue (it calls the Worker)
+        chat = chat_changes.collect(self, actor, rid, body) if action == "continue" and isinstance(body, dict) else None
+        if action == "recover":
+            chat_changes.refuse(self, actor, rid)
         with self.db.transaction() as db:
             # D64: a collaborator does what an ordinary Team member does, except move the Session to another environment
             run = run_access(db, actor, rid, owner=action == "delete", shares=action != "assign-worker")
@@ -2572,20 +2576,22 @@ class Service:
                     journal.change(db, "tasks", (rid, current["id"]), who, "task.spec", spec=dumps(current))
                     reason = unserved(db, run) if run["worker_id"] else None
                     restart_budget(db, rid, who)
+                    note, checking = chat_changes.apply(db, actor, rid, chat) if chat else (None, False)
                     if goal != run["input"]:   # D46: the plan's completion of the requirement no longer matches it
                         fresh = json.loads(db.execute("SELECT snapshot FROM runs WHERE id=?", (rid,)).fetchone()["snapshot"])
                         if (fresh.get("planning") or {}).get("applied"):
                             fresh["planning"]["outdated"] = True
                             journal.change(db, "runs", rid, who, "run.planning", quiet=("snapshot",), snapshot=dumps(fresh))
-                    fields.update(input=goal, desired="active", status="ready" if run["worker_id"] and not reason else "waiting_worker",
-                                  error=reason)
+                    fields.update(input=goal, desired="active", error=reason,
+                                  status=("running" if checking else "ready") if run["worker_id"] and not reason else "waiting_worker")
                     commit()   # before the revision: its snapshot reads the new requirement
                     from .revisions import changes, record
                     detail = "、".join(filter(None, ["需求" if goal != run["input"] else "", changes(before, current)]))
                     names = {row["id"]: json.loads(row["spec"])["name"] for row in ordered}
                     scope = f"重跑 {'、'.join(names[t] for t in reset)}，沿用 {'、'.join(names[t] for t in kept)}" if kept else ""
                     summary = "；".join(filter(None, [detail, scope]))
-                    record(db, rid, version, "continued", f"续作「{current['name']}」" + (f"：{summary}" if summary else ""),
+                    record(db, rid, version, "continued", "；".join(filter(None, [
+                               note, f"续作「{current['name']}」" + (f"：{summary}" if summary else "")])),
                            actor["id"], time.time(), input=goal, task=current, invalidated=reset, rerun=reset, kept=kept,
                            reasons=reasons, **({"recovery": snapshot["recovery"]} if "recovery" in body else {}))
                 elif action == "recover":

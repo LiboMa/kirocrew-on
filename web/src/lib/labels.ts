@@ -50,7 +50,7 @@ export const EVENT_LABELS: Record<string, string> = {
   "app.stopped": "远程预览已停止", "approval.answered": "已答复工具审批", "attempt.checking": "正在运行检查命令",
   "attempt.waiting": "等待条件满足", "attempt.watchdog": "无进展检查", "attempt.budget": "预算用完，未自动处理",
   "task.replaced": "重新规划替换了后续任务", "task.tool_switched": "已切换执行工具", "task.verify_revised": "重新规划修正了检查命令", "task.paths_added": "协调者扩大了可改动路径",
-  "crew.entry_opened": "打开了原生 KiroCrew 页面",
+  "crew.entry_opened": "打开了原生 KiroCrew 页面", "run.chat_changes": "提交了对话中的改动",
 };
 
 /** D46 P2: the roles a task's Agent works in (octopus/roles.py LABELS; kept equal by tests/test_roles.py). */

@@ -103,13 +103,14 @@ STAGE_TAILS = {
     "workflow_design": "只执行当前任务，不派生其他子任务。不读取平台或其他项目的凭据。不要编造结论。",
     "coordination": "只执行当前诊断，不派生其他子任务。不读取平台或其他项目的凭据。需要用户补充或决定时在 decision.json 中用 wait_for_user。",
 }
-# The parent Session's agent (D46): the Owner observer — it explains and points the user to a continue; it does not act.
-OBSERVER_CONTEXT = ("你是此 Octopus 研发会话的 Owner 观察员：向用户解释计划、进度、错误与修复决定。"
-                    "平台 Engine 统一派发已采纳的任务；失败诊断通过原生 poc-diagnose 子任务执行（不能再派生任务）。"
-                    "保持同一 Session 与工作区，使用平台给出的真实交接和纠错记录。"
-                    "不要自行派发子任务、执行旧 next/accept、修改源码或平台数据库。"
-                    "用户要修改需求或任务时，请其在控制台「续作」或经 octopus_continue 提交；需要用户补充项目来源或权限时具体说明；"
-                    "不要把未知原因说成已解决。")
+# The parent Session's agent (D46), a collaborator the person talks to in the native chat (D73): written into each new parent
+# Session (prompts.COORDINATOR is its system prompt).
+OBSERVER_CONTEXT = ("你是此 KiroCrew ON 会话的协作者：用户在这里直接与你对话。回答以平台写在聊天里的说明、交接文件和工作区为准。"
+                    "用户要求时，你可以直接修改工作区，或用 spawn_run 派子 Agent（poc-kiro / poc-claude / poc-codex，cwd 为工作区，keep 为 true）。"
+                    "平台正在执行任务时（出现「KiroCrew ON 开始执行」而还没有它的结果说明）先不动手，请用户等平台停下或在控制台停止。"
+                    "不推送、不建 PR / MR、不改 .octopus/ 下的平台文件、不读取凭证。"
+                    "用户要回到平台继续时，帮他总结做了什么、做了哪些决定、还剩什么、需求有没有变，然后请他在控制台续作："
+                    "平台会先把工作区里的改动提交为新的候选。")
 PREVIEW = ("\n\n## 可运行产出的声明\n交付物是可以运行的应用时，在项目根目录写 .octopus/preview.json："
            '{"processes":[{"name":"web","command":"npm run dev -- --port $PORT","cwd":".","port":"$PORT","entry":true}],'
            '"install":["npm ci"],"ready":{"path":"/","timeout":120}}。1–4 个进程（前后端分开时各一个），恰有一个 entry；'
@@ -1392,6 +1393,7 @@ class Worker:
                 value.update(status="running", native_id=result["id"], receipt=result)
                 if self._quiet_parent(result["id"], parent["parent"]):
                     value["collected"] = True
+                self._start_note(folder, parent, spec, attempt)
             except crew_api.GatewayError as exc:
                 try:
                     failure = json.loads(str(exc).partition(": ")[2])
@@ -1407,6 +1409,24 @@ class Worker:
                 value.update(status="dispatch_unknown", error="原生派发回执未确认")
             write(record, value)
             return value
+
+    TOOL_NAMES = {"kiro": "Kiro CLI", "claude": "Claude Code", "codex": "Codex", "opencode": "OpenCode"}
+
+    def _start_note(self, folder, parent, spec, attempt):
+        """D73: one line in the parent Session's chat as a task starts — the person and the Agent there know the platform is
+        the writer until the task's result note follows (KiroCrew's note: shown, never a turn). Best effort, once an Attempt."""
+        marker = folder / "start-note.json"
+        if marker.exists():
+            return
+        name = workspace.mask_text(str(spec.get("name") or spec.get("id") or ""), (self.token,))[0][:80]
+        content = (f"KiroCrew ON 开始执行：{name}（{self.TOOL_NAMES.get(spec.get('tool'), spec.get('tool'))}，Attempt {attempt}）。"
+                   "完成前请不要修改工作区；完成后这里会出现结果说明。")
+        try:
+            self.native("/api/chat/slots/" + parent["slot"] + "/note", {"content": content, "source": "octopus-start",
+                                                                         "ephemeral": True}, timeout=10)
+            write(marker, {"recorded": True})
+        except Exception:   # never holds the dispatch up
+            pass
 
     def _quiet_parent(self, native_id, parent):
         """Tell KiroCrew the platform collects this run's result itself (GET /api/spawn/{id}), so its end runs no turn
