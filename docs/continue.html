@@ -1,0 +1,110 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>续作是怎么工作的</title>
+<!-- Generated from CONTINUE.md by tools/md_to_html.py; edit the Markdown, then regenerate. -->
+<style>
+  :root { --ink: #172033; --muted: #5b6577; --line: #e3e7ef; --bg: #f6f8fb; --card: #ffffff; --brand: #5b4bdb; --brand-soft: #eeebff;
+          --native: #0e6f86; --native-soft: #e2f3f7; --poc: #4a5568; --poc-soft: #edf0f5;
+          --sans: -apple-system, BlinkMacSystemFont, "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", "Noto Sans CJK SC", sans-serif;
+          --mono: "SF Mono", Menlo, Consolas, monospace; }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--bg); color: var(--ink); font: 16px/1.75 var(--sans); }
+  main { max-width: 1040px; margin: 0 auto; padding: 56px 28px 96px; }
+  main > p, main > ul, main > ol, li > p { max-width: 44em; }
+  h1 { font-size: 32px; line-height: 1.3; margin: 0 0 16px; }
+  h2 { font-size: 23px; margin: 56px 0 10px; padding-top: 20px; border-top: 1px solid var(--line); }
+  h3 { font-size: 18px; margin: 28px 0 8px; }
+  p { margin: 0 0 14px; }
+  ul, ol { padding-left: 1.5em; margin: 0 0 14px; }
+  li { margin: 5px 0; }
+  li > ul, li > ol { margin: 6px 0 4px; }
+  code { font-family: var(--mono); font-size: 0.86em; background: #eef1f6; padding: 1px 5px; border-radius: 4px; }
+  pre { font-family: var(--mono); font-size: 13px; line-height: 1.6; background: #101828; color: #e7ecf5; padding: 16px 18px;
+        border-radius: 8px; overflow-x: auto; margin: 0 0 18px; }
+  pre code { background: none; padding: 0; color: inherit; font-size: inherit; }
+  .table { overflow-x: auto; margin: 14px 0 18px; background: var(--card); border: 1px solid var(--line); border-radius: 10px; }
+  table { border-collapse: collapse; width: 100%; font-size: 14px; line-height: 1.65; }
+  th, td { text-align: left; vertical-align: top; padding: 10px 14px; border-bottom: 1px solid var(--line); }
+  tr:last-child td { border-bottom: none; }
+  thead th { background: #f0f3f8; font-weight: 600; white-space: nowrap; }
+  strong { font-weight: 650; }
+  figure { margin: 18px 0 24px; }
+  .flow { display: flex; flex-wrap: wrap; align-items: stretch; gap: 10px 8px; list-style: none; padding: 0; margin: 0; }
+  .flow li { margin: 0; flex: 1 1 150px; background: var(--card); border: 1px solid var(--line); border-top: 3px solid var(--c, var(--brand));
+             border-radius: 8px; padding: 10px 12px; font-size: 14px; line-height: 1.5; }
+  .flow li b { display: block; font-size: 13px; color: var(--c, var(--brand)); margin-bottom: 2px; }
+  .flow .chat { --c: var(--native); } .flow .keep { --c: var(--poc); }
+  figcaption { font-size: 13px; color: var(--muted); margin-top: 8px; }
+  a:focus-visible { outline: 3px solid var(--brand); outline-offset: 2px; }
+  @media (max-width: 760px) { main { padding: 32px 18px 72px; } h1 { font-size: 26px; } }
+  @media print { body { background: #fff; } .table, .flow li { break-inside: avoid; } }
+</style>
+</head>
+<body>
+<main>
+<h1>续作是怎么工作的</h1>
+<p>续作就是：在<strong>同一个会话、同一个工作区</strong>里，修改需求或某个任务，然后<strong>从这个任务开始往后重新执行</strong>。已经完成、而且不受影响的成果保留；会话分支上的候选提交在原地延续，不会从头再来。</p>
+<p>HTML 版：<code>docs/continue.html</code>（内容相同，带流程图）。以 2026-10-23 的代码为准（<code>octopus/domain.py</code> <code>operate(&quot;continue&quot;)</code>、<code>rerun_plan</code>、 <code>octopus/chat_changes.py</code>、<code>octopus/engine.py</code>）。</p>
+<h2>1. 什么时候用续作</h2>
+<div class="table"><table><thead><tr><th>你想</th><th>用什么</th></tr></thead><tbody><tr><td>结果不满意，改需求或某个任务的说明，从那个任务起重做</td><td><strong>续作</strong></td></tr><tr><td>换一个任务的工具、模型或 Effort</td><td><strong>续作</strong>（改该任务的执行设置）</td></tr><tr><td>在 KiroCrew 聊天里改过之后，回到平台继续</td><td><strong>续作</strong>：平台会先提交聊天里的改动（§5）</td></tr><tr><td>任务正在运行，想插一句话（只限 Kiro 任务）</td><td>补充说明</td></tr><tr><td>会话失败了，想让协调者诊断并自动纠错</td><td>请求诊断</td></tr><tr><td>本机改了代码，想让远端接着检查与审查</td><td>本地同步（<code>octopus sync</code>）</td></tr><tr><td>换一个全新的需求</td><td>新建会话</td></tr></tbody></table></div>
+<h2>2. 从哪里续作</h2>
+<div class="table"><table><thead><tr><th>入口</th><th>写法</th></tr></thead><tbody><tr><td>控制台</td><td>会话页任务卡片上的「续作」，在对话框里填「本次完整需求」「任务名称」「任务说明」、执行设置与契约字段，并勾选要重跑的后续任务</td></tr><tr><td>MCP</td><td><code>octopus_continue</code>（<code>run_id</code>、<code>task_id</code>，可带 <code>input</code>、<code>execution</code>、<code>rerun</code>、<code>recovery</code>）</td></tr><tr><td>CLI</td><td><code>octopus continue &lt;任务&gt; [--input 需求] [--prompt 说明] [--tool 工具] [--model 模型]</code></td></tr><tr><td>API</td><td><code>POST /v1/runs/&lt;id&gt;/continue</code>，见下</td></tr></tbody></table></div>
+<pre><code>{
+  &quot;request_id&quot;: &quot;8–100 字符，重发同一个请求不会重复执行&quot;,
+  &quot;expected_version&quot;: 7,
+  &quot;task_id&quot;: &quot;code&quot;,
+  &quot;input&quot;: &quot;本次完整需求（可选，不写则沿用）&quot;,
+  &quot;execution&quot;: {&quot;tool&quot;: &quot;codex&quot;, &quot;model&quot;: &quot;auto&quot;, &quot;prompt&quot;: &quot;……&quot;, &quot;verify&quot;: [&quot;pytest -q&quot;]},
+  &quot;rerun&quot;: [&quot;review&quot;],
+  &quot;recovery&quot;: {&quot;enabled&quot;: true, &quot;max_cycles&quot;: 2}
+}</code></pre>
+<ul><li><code>execution</code> 可覆盖的字段：<code>name</code>、<code>tool</code>、<code>model</code>、<code>effort</code>、<code>prompt</code>，以及任务契约（kind、role、deliverables、acceptance、verify、paths、skills 等）。</li><li><code>rerun</code> 列出之后的任务里<strong>要</strong>重跑的；不写表示之后的全部重跑。</li></ul>
+<h2>3. 平台收到续作后做什么</h2>
+<figure>
+<ol class="flow" aria-label="续作的步骤">
+  <li class="chat"><b>0 提交聊天里的改动</b>工作区里有不在候选里的改动时，先提交成新的候选</li>
+  <li><b>1 检查</b>版本号、会话已停下、上游已交接、边界主人、审查独立</li>
+  <li><b>2 改任务</b>合并你写的覆盖字段</li>
+  <li class="keep"><b>3 定重跑范围</b>所选任务与必须重跑的；其余沿用</li>
+  <li><b>4 改需求</b>规划补全标为已过时</li>
+  <li><b>5 重算预算</b>纠错轮数、重试次数、时长从此刻起算</li>
+  <li><b>6 回到待执行</b>Engine 从第一个未完成的任务依次执行</li>
+  <li><b>7 记修订</b>改了什么、重跑哪些、沿用哪些</li>
+</ol>
+<figcaption>第 0 步只在 KiroCrew 聊天里改过工作区时发生（D73）；第 1 步不满足时当场拒绝，后面的步骤都不会发生。</figcaption>
+</figure>
+
+<p>按顺序：</p>
+<ol start="0"><li><strong>先提交聊天里的改动</strong>（D73）：工作区里有不在候选提交里的改动时，先把它们提交成新的候选（§5）。</li><li><strong>检查能不能续作</strong>，不满足就当场拒绝并说明原因：
+<div class="table"><table><thead><tr><th>检查</th><th>不满足时</th></tr></thead><tbody><tr><td>版本号等于会话当前版本（防止基于过时的页面续作）</td><td><code>409 version_conflict</code>「Session 版本已更新」</td></tr><tr><td>会话已停下（完成、需要处理、失败、停止）并处于打开状态</td><td><code>409 busy</code>「请先等待结束或停止」</td></tr><tr><td>所选任务之前的任务都已交接</td><td><code>409 dependency</code>「先完成上游 Task」</td></tr><tr><td>D49：个人执行边界上只有边界的主人能续作；Team 未归档</td><td><code>403 boundary_owner_only</code> 等</td></tr><tr><td>审查独立：改完之后，审查任务不能用被审查改动的作者工具</td><td><code>400</code>「审查不独立：……」</td></tr></tbody></table></div></li><li><strong>改任务</strong>：
+<ul><li>把你写的覆盖字段合进所选任务；</li><li>你换了工具或模型时，原计划里「需求原文指定的工具 / 模型」让位给你的选择；</li><li>只写了 <code>verify</code> 时，它同时成为必过检查。</li></ul></li><li><strong>决定重跑哪些任务</strong>：
+<ul><li>所选任务一定重跑；</li><li>没有勾选时，之后的任务全部重跑；</li><li>勾选了一部分时，下面几类仍会重跑，并标明原因：
+<ul><li>还没交接的；</li><li>依赖了某个重跑任务的；</li><li>在重跑任务之后的审查与测试，因为它们的结论基于旧代码；</li><li>Knowledge。</li></ul></li><li>其余标为「沿用」，结论保留。</li></ul></li><li><strong>改需求</strong>：需求变了时，规划阶段补全的需求被标为「已过时」，之后的任务会被告知以新需求为准。</li><li><strong>重新计算纠错预算</strong>：协调者的轮数、自动重试的次数与时长，都从这一刻起算。</li><li><strong>会话回到「待执行」</strong>（执行环境不可用时为「等待执行环境」）。</li><li><strong>记一条修订</strong>：续作「任务名」——改了什么、重跑哪些、沿用哪些。修订历史里可以任选两版对比。</li></ol>
+<h2>4. 之后 Engine 怎么跑</h2>
+<ul><li><strong>顺序</strong>：从第一个未完成的任务开始，一个接一个，与新会话相同。</li><li><strong>新的尝试</strong>：每个重跑的任务是一次新的尝试：
+<ul><li><strong>新开一个子 Agent</strong>：用户的续作不续接原来的子 Agent 对话，因为需求或任务说明可能已经变了。只有平台自动返工时，才在原对话上续接。</li><li><strong>在同一个工作区、最新的候选提交之上工作</strong>；它的改动从这个候选算起，记到它自己名下。</li><li><strong>拿到上游任务的交接摘要</strong>；审查绑定最新的候选。</li><li><strong>照常把关</strong>（交接、改动、秘密、检查命令、Evaluator），失败时照常自动纠错。</li></ul></li><li><strong>沿用的任务</strong>：不再执行，结论保留。</li></ul>
+<h2>5. 与 KiroCrew 聊天的衔接（D73）</h2>
+<p>在 KiroCrew 聊天里，你可以直接让父会话的 Agent 改工作区、派子 Agent。回到平台续作时：</p>
+<ol><li>平台比对工作区与会话分支上的最新候选。有不在候选里的改动，或候选之后的新提交，就把它们提交成新的候选。</li><li>这次提交记为「对话中的改动」：挂在最后一个写代码的任务上，照常做秘密检查。
+<ul><li>这个任务这次不重跑、又有检查命令时，先跑检查命令；</li><li>它之后的任务重新执行，审查针对新的候选；</li><li>修订摘要以「对话中的改动：N 个文件」开头。</li></ul></li><li>有疑似凭证或 <code>.env</code> 时拒绝续作（<code>409 chat_secret</code>），会话分支不动，列出文件，请先在聊天里移除。</li></ol>
+<p><strong>为什么必须先提交：</strong></p>
+<ul><li>审查结束时，平台会把审查期间工作区的变化「放回」到候选，包括未提交的改动和候选之后的提交，所以聊天里的改动会被还原；</li><li>如果下一个是实现任务，聊天里的改动会被算成它的改动。</li></ul>
+<p>先提交成候选，两种情况都不会发生。</p>
+<h2>6. 保留什么、替换什么</h2>
+<div class="table"><table><thead><tr><th>内容</th><th>续作之后</th></tr></thead><tbody><tr><td>工作区与会话分支</td><td>保留，原地延续</td></tr><tr><td>沿用的任务</td><td>结论保留</td></tr><tr><td>重跑的任务</td><td>新的尝试替代当前结论；以前的每次尝试都留在历史里</td></tr><tr><td>子 Agent 对话</td><td>重跑的任务新开；原对话仍可在原生页面查看</td></tr><tr><td>纠错预算</td><td>从续作时重新计算</td></tr><tr><td>修订历史</td><td>新增一条</td></tr><tr><td>已发布的 Draft PR</td><td>开启了自动发布时，续作完成并通过门禁后按新版本再发布一次（每个版本一次）；否则在会话页再发布</td></tr></tbody></table></div>
+<h2>7. 常见问题</h2>
+<p><strong>提示「Session 版本已更新」？</strong> 会话在你打开对话框之后变了，比如平台追加了 Evaluator，或别人刚续作过。刷新后重来。</p>
+<p><strong>为什么不能从第 3 个任务续作？</strong> 它之前有任务还没交接。先续作那个任务。</p>
+<p><strong>我没勾审查，它为什么还是重跑了？</strong> 审查与测试在重跑的任务之后时，旧结论对新代码无效，所以一定重跑，原因会标在对话框里。</p>
+<p><strong>续作会不会覆盖我在聊天里改的？</strong> 不会。续作先把它们提交成新的候选，之后的任务在它之上工作（§5）。</p>
+<p><strong>续作和请求诊断有什么区别？</strong></p>
+<ul><li>请求诊断：不改任务，让协调者读失败证据，自己决定重试、返工、换工具或重新规划。</li><li>续作：由你来改。</li></ul>
+<p><strong>续作要花多少？</strong> 只有重跑的任务会再用模型；沿用的不花。</p>
+<h2>8. 代码位置</h2>
+<div class="table"><table><thead><tr><th>环节</th><th>位置</th></tr></thead><tbody><tr><td>续作的检查、改任务、重跑范围、预算、修订</td><td><code>octopus/domain.py</code> <code>Service.operate</code>（<code>continue</code> 分支）</td></tr><tr><td>重跑规则</td><td><code>octopus/domain.py</code> <code>rerun_plan</code></td></tr><tr><td>提交聊天里的改动</td><td><code>octopus/chat_changes.py</code>（<code>collect</code> 在事务前，<code>apply</code> 在续作事务里）</td></tr><tr><td>何时续接原对话</td><td><code>octopus/engine.py</code> <code>continuation</code>、<code>Engine._continuation</code></td></tr><tr><td>预算重算</td><td><code>octopus/domain.py</code> <code>restart_budget</code></td></tr><tr><td>修订与对比</td><td><code>octopus/revisions.py</code></td></tr><tr><td>控制台对话框</td><td><code>web/src/features/sessions/dialogs.tsx</code> <code>ContinueDialog</code>；<code>web/src/lib/session.ts</code> <code>rerunPlan</code></td></tr></tbody></table></div>
+</main>
+</body>
+</html>
