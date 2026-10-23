@@ -1,0 +1,75 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>管理与「我的设置」：用对话框完成操作（UI PRD）</title>
+<!-- Generated from 2026-10-23-admin-settings-dialogs-prd.md by tools/md_to_html.py; edit the Markdown, then regenerate. -->
+<style>
+  :root { --ink: #172033; --muted: #5b6577; --line: #e3e7ef; --bg: #f6f8fb; --card: #ffffff; --brand: #5b4bdb; --brand-soft: #eeebff;
+          --native: #0e6f86; --native-soft: #e2f3f7; --poc: #4a5568; --poc-soft: #edf0f5;
+          --sans: -apple-system, BlinkMacSystemFont, "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", "Noto Sans CJK SC", sans-serif;
+          --mono: "SF Mono", Menlo, Consolas, monospace; }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--bg); color: var(--ink); font: 16px/1.75 var(--sans); }
+  main { max-width: 1040px; margin: 0 auto; padding: 56px 28px 96px; }
+  main > p, main > ul, main > ol, li > p { max-width: 44em; }
+  h1 { font-size: 32px; line-height: 1.3; margin: 0 0 16px; }
+  h2 { font-size: 23px; margin: 56px 0 10px; padding-top: 20px; border-top: 1px solid var(--line); }
+  h3 { font-size: 18px; margin: 28px 0 8px; }
+  p { margin: 0 0 14px; }
+  ul, ol { padding-left: 1.5em; margin: 0 0 14px; }
+  li { margin: 5px 0; }
+  li > ul, li > ol { margin: 6px 0 4px; }
+  code { font-family: var(--mono); font-size: 0.86em; background: #eef1f6; padding: 1px 5px; border-radius: 4px; }
+  pre { font-family: var(--mono); font-size: 13px; line-height: 1.6; background: #101828; color: #e7ecf5; padding: 16px 18px;
+        border-radius: 8px; overflow-x: auto; margin: 0 0 18px; }
+  pre code { background: none; padding: 0; color: inherit; font-size: inherit; }
+  .table { overflow-x: auto; margin: 14px 0 18px; background: var(--card); border: 1px solid var(--line); border-radius: 10px; }
+  table { border-collapse: collapse; width: 100%; font-size: 14px; line-height: 1.65; }
+  th, td { text-align: left; vertical-align: top; padding: 10px 14px; border-bottom: 1px solid var(--line); }
+  tr:last-child td { border-bottom: none; }
+  thead th { background: #f0f3f8; font-weight: 600; white-space: nowrap; }
+  strong { font-weight: 650; }
+  figure { margin: 18px 0 24px; }
+  .flow { display: flex; flex-wrap: wrap; align-items: stretch; gap: 10px 8px; list-style: none; padding: 0; margin: 0; }
+  .flow li { margin: 0; flex: 1 1 150px; background: var(--card); border: 1px solid var(--line); border-top: 3px solid var(--c, var(--brand));
+             border-radius: 8px; padding: 10px 12px; font-size: 14px; line-height: 1.5; }
+  .flow li b { display: block; font-size: 13px; color: var(--c, var(--brand)); margin-bottom: 2px; }
+  .flow .chat { --c: var(--native); } .flow .keep { --c: var(--poc); }
+  figcaption { font-size: 13px; color: var(--muted); margin-top: 8px; }
+  a:focus-visible { outline: 3px solid var(--brand); outline-offset: 2px; }
+  @media (max-width: 760px) { main { padding: 32px 18px 72px; } h1 { font-size: 26px; } }
+  @media print { body { background: #fff; } .table, .flow li { break-inside: avoid; } }
+</style>
+</head>
+<body>
+<main>
+<h1>管理与「我的设置」：用对话框完成操作（UI PRD）</h1>
+<p>状态：草案，待负责人确认后实现。</p>
+<p>负责人原话（2026-10-23）：「对于新增用户、新增 Worker，新增加 Token，修改 Team 相关的内容，也就是管理及我的设置的操作，多用动画，多用对话窗口和弹窗；少用镶嵌在页面中的 checkbox 和 Input，这样在一级页面，弹窗解决问题，比直接操作 INPUT BAR，体验要好很多。」</p>
+<h2>1. 目标</h2>
+<ul><li><strong>一级页面只放列表和状态。</strong> 每个页面的结构是：标题、一句说明、右上角一个主操作按钮，下面是列表；每一行的次要操作收进行尾的「⋯」菜单。页面里不再有内嵌的编辑表单。</li><li><strong>新增、修改、危险操作一律在对话框里完成。</strong> 一个对话框只做一件事，做完关闭，结果用提示条和列表里的高亮告诉用户。</li><li><strong>用动画表达变化</strong>：打开与关闭、新增与删除、成功与失败。不做装饰性的动画。</li></ul>
+<h2>2. 现状与改法</h2>
+<p>以下是 2026-10-23 控制台的现状：这些面板全部把表单直接嵌在页面里，没有用对话框。</p>
+<div class="table"><table><thead><tr><th>页面</th><th>现在嵌在页面里的</th><th>改成</th></tr></thead><tbody><tr><td>管理 › 用户</td><td>新建用户表单（用户名、初始密码、个人空间的执行环境）；每行展开的重设密码（两个密码框）</td><td>右上「新建用户」→ 对话框；行菜单「重设密码」→ 对话框；停用 / 启用、设为管理员 / 取消 → 确认对话框</td></tr><tr><td>管理 › 执行环境</td><td>登记 Worker 表单（名称、绑定空间、URL、Token）；每行的改名、更换 URL、更换 Token；「分配到」选择框</td><td>右上「登记 Worker」→ 对话框；行菜单「编辑」（名称、URL、Token）、「分配到空间」→ 对话框；退役、停用 → 确认对话框</td></tr><tr><td>我的设置 › Token</td><td>新建 Token 表单（名称、权限、有效期）</td><td>右上「新建 Token」→ 对话框。创建成功后，同一个对话框切到第二屏，只显示一次 Token，带「复制」与「我已保存」；撤销 → 确认对话框</td></tr><tr><td>我的设置 › Team</td><td>Team 选择、新建 Team（名称、owner、执行环境）、改名、添加成员（用户、角色）</td><td>右上「新建 Team」→ 对话框；Team 卡片菜单「改名」「添加成员」→ 对话框；成员行菜单「改角色」→ 对话框、「移出」→ 确认对话框；归档 → 确认对话框。Team 切换保留为页面顶部的选择器，它是导航，不是编辑</td></tr><tr><td>我的设置 › 仓库凭证</td><td>新建凭证表单（名称、类型、主机、归属、仓库范围、权限、Token）；每行的仓库范围、更换 Token</td><td>右上「添加凭证」→ 对话框；行菜单「仓库范围」「更换 Token」→ 对话框；删除 → 确认对话框</td></tr><tr><td>我的设置 › 映射偏好</td><td>新增规则表单（作用域、对应、类别或角色、工具、模型）</td><td>右上「新增规则」→ 对话框；行菜单「编辑」「删除」</td></tr><tr><td>我的设置 › 并发上限</td><td>数字输入框</td><td>显示当前值，旁边「修改」→ 对话框</td></tr><tr><td>我的设置 › 密码</td><td>修改密码表单</td><td>「修改密码」按钮 → 对话框</td></tr></tbody></table></div>
+<p>搜索框与筛选器留在页面上：它们用来找东西，不是编辑。</p>
+<h2>3. 交互规则</h2>
+<ol><li><strong>对话框</strong>
+<ul><li>标题用动词，例如「新建用户」。提交按钮写出结果，例如「创建用户」；成功的提示条用同一个词，例如「已创建用户 alice」。</li><li>打开时，焦点落在第一个输入框；Enter 提交、Esc 取消；关闭后，焦点回到打开它的按钮。</li><li>失败时，对话框不关闭，在框内显示服务器给的原因（<code>FormDialog</code> 已有）；提交中不能关闭。</li><li>字段多的分成小节，例如仓库凭证分「是什么」「能访问哪些仓库」「Token」，不做多步向导。</li></ul></li><li><strong>危险操作</strong>：停用、删除、撤销、退役、移出成员、归档。
+<ul><li>用确认对话框写清后果，例如「停用后，alice 的 Token 立即失效，进行中的会话会停下」；</li><li>不可撤回的操作，要求输入名称确认，沿用会话删除的做法。</li></ul></li><li><strong>一次性秘密</strong>：新 Token、Worker Token。
+<ul><li>只在创建成功的那一屏显示一次，带「复制」按钮，复制后按钮变为「已复制」；</li><li>点「我已保存」后关闭，之后不再显示。</li></ul></li><li><strong>动画</strong>：克制，只用来表达状态的变化。
+<div class="table"><table><thead><tr><th>时刻</th><th>动画</th></tr></thead><tbody><tr><td>对话框打开 / 关闭</td><td>淡入并轻微放大 / 反向（已有）</td></tr><tr><td>新增成功</td><td>对话框关闭；新行出现在列表里，背景高亮约 1.2 秒后淡去；右上角提示条</td></tr><tr><td>删除、移出、撤销</td><td>行淡出并收起高度（约 200 毫秒）</td></tr><tr><td>修改成功</td><td>被改的行高亮一次</td></tr><tr><td>「⋯」菜单</td><td>展开时淡入并缩放（已有）</td></tr><tr><td>失败</td><td>对话框里的错误行淡入；对话框不晃动</td></tr></tbody></table></div>
+<p>系统设置为「减少动态效果」时，全部动画改为无动画的即时切换。</p></li><li><strong>移动端（390 像素宽）</strong>：对话框占满宽度，底部按钮固定；每行只显示「⋯」，不并排放多个按钮。</li></ol>
+<h2>4. 不在范围</h2>
+<ul><li>会话页、启动向导、工作流编辑器：它们已经用对话框或向导。</li><li>后端接口：不改，只改控制台的呈现。</li></ul>
+<h2>5. 验收标准</h2>
+<ul><li>管理与「我的设置」各页上，没有内嵌的编辑输入框、勾选框或选择框（搜索、筛选与 Team 切换除外）；</li><li>每个新增、修改、危险操作，都通过主按钮或行菜单打开对话框完成；</li><li>新增成功：对话框关闭、出现提示条、新行高亮；失败：对话框内显示原因、不关闭；</li><li>一次性 Token 只显示一次；</li><li>「减少动态效果」下没有动画；</li><li>控制台单元测试与浏览器测试同步更新并通过；1280 像素与 390 像素下逐页截图检查。</li></ul>
+<h2>6. 实施方式（我的建议）</h2>
+<ul><li>复用现有部件：
+<ul><li>表单：<code>FormDialog</code>；</li><li>行菜单：<code>DropdownMenu</code>；</li><li>提示条：sonner；</li><li>动画：tw-animate。</li></ul></li><li>新增一个小部件，负责新行与修改行的高亮、删除行的收起，并在「减少动态效果」时关闭动画。</li><li>顺序：先做「我的设置 › Token」一页给负责人看效果，确认后再铺开到用户 → 执行环境 → Team → 仓库凭证 → 映射偏好、并发上限、密码。每页改完都更新测试。</li></ul>
+<h2>7. 待负责人确认</h2>
+<ol><li>范围与规则（§2、§3）。</li><li>并发上限、密码这类只有一个字段的设置，也改成对话框吗？我建议也改，这样全站一致。</li><li>先做 Token 一页看效果，再铺开？</li></ol>
+</main>
+</body>
+</html>
