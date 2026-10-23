@@ -76,7 +76,7 @@ export function SessionView({ id }: { id: string }) {
 
   return (
     <div className="mx-auto max-w-6xl space-y-5 px-4 py-6 sm:px-8" id="run-view">
-      <header className="space-y-4 rounded-xl border bg-card p-5 shadow-xs sm:p-6">
+      <header className="space-y-4 rounded-xl border bg-card p-5 sm:p-6">
         <div className="flex flex-wrap items-start gap-4">
           <div className="min-w-0 flex-1 space-y-1.5">
             <p className="text-[11px] font-semibold tracking-[0.16em] text-muted-foreground uppercase">
