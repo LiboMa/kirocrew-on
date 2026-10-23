@@ -5,9 +5,10 @@ import json
 import unittest
 from unittest.mock import patch
 
-from octopus import designs
+from octopus import designs, sources
 from octopus.db import dumps
 from octopus.engine import Engine
+from tests.test_secret_rules import chars
 from tests import test_mvp   # its methods only: importing the class would run its tests here too
 
 
@@ -112,6 +113,33 @@ class EngineRepairTests(unittest.TestCase):
             stored = "\n".join(json.dumps([dict(r) for r in db.execute(f"SELECT * FROM {table}")], ensure_ascii=False)
                                for table in ("runs", "tasks", "attempts", "events", "recoveries", "revisions"))
         self.assertNotIn(token, stored)
+
+    def test_masking_never_changes_a_recommendations_verdict(self):
+        # (final review 3) a recommendation is judged and parsed from KiroCrew's answer as written, before it is stored
+        # masked: a key in a prompt, or a private key's marker in one (which masks every long run of base64 in the same
+        # text: a long id), leaves its verdict and its tasks as they are; only the strings that hold one are masked
+        key = "sk-" + "ant-" + "api03-" + chars("design-key", 93) + "AA"
+        marker = "-----BEGIN RSA PRIVATE" + " KEY-----"
+        long_id = "securityreviewofthepaymentrefundendpoint"   # 40 letters: a run of base64 to the marker rule
+        answers = {
+            "a key in a prompt": reply([step(0, prompt=f"用 ANTHROPIC_API_KEY={key} 调用退款接口"), step(1)]),
+            "a marker next to a long id": reply([step(0), {**step(1, prompt=f"确认没有提交以 {marker} 开头的文件"),
+                                                           "id": long_id}]),
+        }
+        for name, answer in answers.items():
+            with self.subTest(name):
+                self.setUp()
+                status = self.run_design([answer])
+                self.assertEqual(status["status"], "ready", status.get("error"))
+                self.assertEqual(len(self.dispatched), 1)   # judged valid: no repair
+                expected = designs.parse_recommendation(answer)
+                self.assertEqual(status["config"], sources.mask_value(expected)[0])
+                self.assertEqual([s["id"] for s in status["config"]["steps"]], [s["id"] for s in expected["steps"]])
+                with self.db.read() as db:
+                    rows = {table: [dict(r) for r in db.execute(f"SELECT * FROM {table}")]
+                            for table in ("runs", "tasks", "attempts", "events")}
+                stored = json.dumps(rows, ensure_ascii=False)
+                self.assertNotIn(key[10:40], stored)
 
     def test_once_only_and_then_the_person_reads_why_and_what_to_do(self):
         status = self.run_design([reply([step(i) for i in range(13)])])

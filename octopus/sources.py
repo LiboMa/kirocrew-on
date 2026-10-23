@@ -361,9 +361,13 @@ def _open_key(data, before):
     return begin is not None and not _KEY_ENDS.search(data, begin.end(), before)
 
 
-def mask_text(text, extra=()):
+def mask_text(text, extra=(), memo=None):
     """``text`` with every credential ``find_secrets`` finds replaced by its masked form, and what was found (``start``/
-    ``end`` in characters of ``text``). Masking masked text changes nothing."""
+    ``end`` in characters of ``text``). Masking masked text changes nothing. ``memo``: what ``premask`` made of the
+    texts known before a write transaction, for the same ``extra`` — looked up there, not masked again."""
+    if memo is not None and memo.extra == tuple(extra or ()) and text in memo:
+        shown, found = memo[text]
+        return shown, [dict(hit) for hit in found]
     data = text.encode(errors="surrogatepass")
     found = find_secrets(data, [v.encode(errors="surrogatepass") if isinstance(v, str) else v for v in extra or ()])
     pieces, at, chars = [], 0, 0
@@ -378,15 +382,15 @@ def mask_text(text, extra=()):
     return "".join(pieces) + data[at:].decode(errors="surrogatepass"), found
 
 
-def mask_value(value, extra=()):
+def mask_value(value, extra=(), memo=None):
     """``value`` as JSON holds it (dicts, lists, strings, numbers) with every string masked as ``mask_text`` masks it —
     a dict's keys too (an Agent's outcome names its own) — and what was found, in order. A copy: the value itself, which
-    verdicts read, is left as it was (D57 §3.3)."""
+    verdicts read, is left as it was (D57 §3.3). ``memo`` as for ``mask_text``."""
     found = []
 
     def walk(item):
         if isinstance(item, str):
-            text, hits = mask_text(item, extra)
+            text, hits = mask_text(item, extra, memo)
             found.extend(hits)
             return text
         if isinstance(item, dict):
@@ -395,6 +399,39 @@ def mask_value(value, extra=()):
             return [walk(child) for child in item]
         return item
     return walk(value), found
+
+
+class Premasked(dict):
+    """What ``mask_text`` makes of texts known before a write transaction (``premask``), with its ``extra``."""
+
+    def __init__(self, extra=()):
+        super().__init__()
+        self.extra = tuple(extra or ())
+
+
+def premask(value, extra=()):
+    """Every string in ``value`` (walked as ``mask_value`` walks it) masked, and every mask that changed one masked
+    again (as the journal does with what is stored), for ``mask_text``'s ``memo``: what is stored of an Attempt is
+    masked before its write transaction, which then only writes (D57 §3.3) — the same text as masking it there, as
+    masking is a function of the text and ``extra`` alone."""
+    memo = Premasked(extra)
+
+    def walk(item):
+        if isinstance(item, str):
+            if item not in memo:
+                memo[item] = mask_text(item, extra)
+                shown = memo[item][0]
+                if shown not in memo:   # it held a credential: its mask, as the journal masks it again
+                    memo[shown] = mask_text(shown, extra)
+        elif isinstance(item, dict):
+            for key, child in item.items():
+                walk(key)
+                walk(child)
+        elif isinstance(item, (list, tuple)):
+            for child in item:
+                walk(child)
+    walk(value)
+    return memo
 
 
 def env_file(name):

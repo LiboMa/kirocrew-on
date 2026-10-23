@@ -108,11 +108,21 @@ def status(service, actor, rid):
               # D66: the last recommendation was not a workflow; KiroCrew is fixing it now
               "repairing": bool((attempt.get("evidence") or {}).get("design_repair")) and task["status"] != "accepted"}
     if task["status"] == "accepted" and data["desired"] == "active":
-        try:
-            result.update(config=parse_recommendation(result["raw_result"]), status="ready")
-        except (Error, ValueError, TypeError, KeyError) as exc:   # D66: what was wrong and what to do, in plain words
+        # judged when it ended, on KiroCrew's answer as written (the stored one is masked); an Attempt judged before the
+        # platform kept that is parsed here
+        judged, reason = (attempt.get("evidence") or {}).get("recommendation"), None
+        if isinstance(judged, dict) and "invalid" in judged:
+            reason = str(judged["invalid"])
+        elif isinstance(judged, dict) and "config" in judged:
+            result.update(config=judged["config"], status="ready")
+        else:
+            try:
+                result.update(config=parse_recommendation(result["raw_result"]), status="ready")
+            except (Error, ValueError, TypeError, KeyError) as exc:
+                reason = explain(result["raw_result"], exc)
+        if reason is not None:   # D66: what was wrong and what to do, in plain words
             repaired = bool((attempt.get("evidence") or {}).get("design_repair"))
-            result.update(status="invalid", error="KiroCrew 的推荐未通过平台校验：" + explain(result["raw_result"], exc) + "。"
+            result.update(status="invalid", error="KiroCrew 的推荐未通过平台校验：" + reason + "。"
                           + ("已自动请 KiroCrew 修正过一次。" if repaired else "") + "可以重新推荐，或「导入并修改」后采用。")
     return result
 
