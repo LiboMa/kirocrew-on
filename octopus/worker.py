@@ -458,9 +458,11 @@ class Worker:
         except crew_api.GatewayError as exc:   # the platform reads a Worker 404 as "not supported": never pass one on
             if exc.status == 404:
                 return {"ok": True, "absent": True}   # KiroCrew holds no such lesson (deleted there already)
-            raise Error(502, "native_error", "KiroCrew 未删除：" + str(exc).splitlines()[0][:200]) from None
+            raise Error(502, "native_error",
+                        "KiroCrew 未删除：" + said(str(exc).splitlines()[0], 200, (self.token,))) from None
         if isinstance(answer, dict) and answer.get("ok") is False:
-            raise Error(409, "forget_refused", "KiroCrew 未删除：" + str(answer.get("reason") or "原因未报告")[:200])
+            raise Error(409, "forget_refused",
+                        "KiroCrew 未删除：" + said(answer.get("reason") or "原因未报告", 200, (self.token,)))
         return {"ok": True}
 
     def path(self, rid):
@@ -1408,7 +1410,7 @@ class Worker:
                 # counted:true. Only a recognized JSON client refusal is definitive.
                 refused = exc.status in {400, 401, 403, 404, 409, 422} and "error" in failure and not failure.get("counted")
                 value.update(status="blocked" if refused else "dispatch_unknown",
-                             error=("原生拒绝：" + str(failure["error"])[:1000]) if refused
+                             error=("原生拒绝：" + said(failure["error"], 1000, (self.token,))) if refused
                              else f"Native HTTP {exc.status}; inspect before retry")
             except Exception:
                 value.update(status="dispatch_unknown", error="原生派发回执未确认")
@@ -1652,7 +1654,8 @@ class Worker:
             # (the platform's may differ), and the /api/spawn row's turns and redacted last tool (state.json's is raw).
             updated = state.get("updated_at") if state else None
             signal = {"turns": native.get("turns", state.get("turns") if state else None),
-                      "last_tool": str(native.get("last_tool") or "")[:200], "status": state.get("status") if state else None}
+                      "last_tool": said(native.get("last_tool") or "", 200, (self.token,)),   # masked, then cut
+                      "status": state.get("status") if state else None}
             if isinstance(updated, (int, float)) and not isinstance(updated, bool):
                 signal.update(updated_at=updated, idle_seconds=max(0.0, time.time() - updated))
             progress = {"progress": signal}

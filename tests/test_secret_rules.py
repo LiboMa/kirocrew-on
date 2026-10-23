@@ -5,8 +5,11 @@ import base64
 import difflib
 import hashlib
 import json
+import os
 import re
 import secrets
+import subprocess
+import tempfile
 import unittest
 from urllib.parse import quote
 
@@ -47,6 +50,48 @@ def pgp_key(armour=ARMOUR, size=640, end=True):
     label = "PGP " + "PRIVATE" + " KEY BLOCK"
     tail = f"\n=Ab3d\n-----END {label}-----\n" if end else "\n"
     return f"-----BEGIN {label}-----\n{armour}\n{lines}{tail}", lines
+
+
+PKCS8 = "MIIEvQIBADANBgkqhkiG9w0BAQEFAASCBKcwggSjAgEAAoIBAQ"   # how every 2048-bit PKCS#8 RSA key's body begins
+
+
+def pkcs8_key(seed, indent=0):
+    """A made-up PKCS#8 key, each line indented: its first line begins as a real one does, so two of them compared
+    share their first 80 or so characters (and pytest skips them)."""
+    lines = body_lines(seed, 1600).splitlines()
+    lines[0] = PKCS8 + lines[0][len(PKCS8):]
+    label = "PRIVATE" + " KEY"
+    framed = [f"-----BEGIN {label}-----", *lines, f"-----END {label}-----"]
+    return "".join(" " * indent + line + "\n" for line in framed), lines
+
+
+def pytest_ci(left, right, node="tests/test_k.py::test_key"):
+    """What pytest 9.1 prints of a failed ``assert left == right`` of two strings in CI mode (nothing truncated):
+    the failure's lines, and its line in the short test summary, which repeats the diff after two spaces. Its
+    _diff_text (verbosity 0) and saferepr's ellipsis, as pytest 9.1.1 prints them byte for byte."""
+    def ellipsized(text, size=30):
+        i = max(0, (size - 3) // 2)
+        return text if len(text) <= size else text[:i] + "..." + text[len(text) - max(0, size - 3 - i):]
+    header = f"AssertionError: assert {ellipsized(repr(left))} == {ellipsized(repr(right))}"
+    explanation, i = [], 0
+    for i in range(min(len(left), len(right))):
+        if left[i] != right[i]:
+            break
+    if i > 42:
+        i -= 10
+        explanation.append(f"Skipping {i} identical leading characters in diff, use -v to show")
+        left, right = left[i:], right[i:]
+    if len(left) == len(right):
+        for i in range(len(left)):
+            if left[-i] != right[-i]:
+                break
+        if i > 42:
+            i -= 10
+            explanation.append(f"Skipping {i} identical trailing characters in diff, use -v to show")
+            left, right = left[:-i], right[:-i]
+    explanation += [line.strip("\n") for line in difflib.ndiff(right.splitlines(True), left.splitlines(True))]
+    lines = [header, "  ", *("  " + line for line in explanation)]
+    return "".join("E       " + line + "\n" for line in lines), f"FAILED {node} - " + "\n".join(lines) + "\n"
 
 
 AWS_SECRET = chars("aws-secret", 40, "std").replace("=", "A")
@@ -376,9 +421,7 @@ class SecretRuleTests(unittest.TestCase):
         cases["git diff, a key line in the hunk header"] = (   # starts with a letter: in a key, one of its lines
             before[:-1] + " ", lines[-10] + "\n" + tail_of_key, after, [lines[-10], *rows])
         pad = lambda rows, indent: [" " * indent + row for row in rows]
-        for indent in (2, 4):   # a key indented in what is compared (a YAML Secret, a Helm value, a test fixture)
-            cases[f"pytest, a key indented {indent}"] = (
-                skipping, pytest(pad(lines[-6:] + [end], indent), pad(other + [end], indent)), "", lines[-6:] + other)
+        for indent in (2, 4):   # a key indented in what is compared (a YAML Secret, a Helm value)
             for context in (3, 1):
                 text = "".join(line + "\n" for line in difflib.unified_diff(
                     pad(lines[-9:] + [end], indent), pad(lines[-9:-3] + other[:3] + [end], indent), "a/secret.yaml",
@@ -404,6 +447,11 @@ class SecretRuleTests(unittest.TestCase):
             ".env, escaped": ('{"env": "PRIVATE_KEY=', escaped, '", "port": 8080}', last),
             "label and a space, escaped": ('{"log": "key: ', escaped, '"}', last),
             "after a space, escaped": ('{"log": "using the key ', escaped, '"}', last),
+            # on lines, after a bare space when what follows is long enough to be no word, or after a label's quote
+            "after a space": ("$ deploy\nusing key ", "\n".join(last + [end]) + "\n", "done\n", last),
+            ".env, quoted": ("PRIVATE_KEY=\"", "\n".join(last + [end]), '"\n', last),
+            "export, quoted": ("export PRIVATE_KEY='", "\n".join(last + [end]), "'\n", last),
+            "a label and a quote": ('tls:\n  key: "', "\n".join(last + [end]), '"\n', last),
         })
         for name, (before, tail_of_key, after, rows) in cases.items():
             text = before + tail_of_key + after
@@ -413,7 +461,10 @@ class SecretRuleTests(unittest.TestCase):
                         shown, found = sources.mask_text(text)
                     else:
                         shown, found = checks.masked_tail(text.encode())
-                    self.assertEqual({f["kind"] for f in found}, {"private_key"}, shown[:300])
+                    # the lines and their END are one span of the rules above (the marker rule below would take
+                    # each line apart)
+                    self.assertEqual([f["kind"] for f in found], ["private_key"] * (2 if "END changed" in name else 1),
+                                     shown[:300])
                     self.assertEqual([row[i:i + 10] for row in rows for i in range(len(row) - 9)
                                       if row[i:i + 10] in shown], [], shown[:600])
                     self.assertTrue(shown.startswith(before) and shown.endswith(after), shown[:600])
@@ -427,6 +478,67 @@ class SecretRuleTests(unittest.TestCase):
             with self.subTest(text[:30]):
                 self.assertEqual(sources.mask_text(text), (text, []))
                 self.assertEqual(checks.masked_tail(text.encode()), (text, []))
+
+    def test_next_to_a_private_key_marker_every_long_run_of_base64_is_masked(self):
+        # (owner's ruling, 6b round 2) where a text holds a private key's BEGIN or END, every run of 40 or more base64
+        # characters in it is masked as private_key, whatever shape its lines have: pytest's diff of two indented keys
+        # (its first lines cut where the skipped characters end) and its CI summary that repeats it after two spaces, a
+        # git diff of an indented key; display only (verdicts are judged as written), so a SHA next to a key goes too
+        longest = lambda text: max([len(run) for run in re.findall(r"[A-Za-z0-9+/=]+", text)] or [0])
+        outputs = {}
+        for indent in (0, 2, 4):
+            (left, lines), (right, others) = pkcs8_key("pytest-a", indent), pkcs8_key("pytest-b", indent)
+            failure, summary = pytest_ci(left, right)
+            self.assertIn("Skipping", failure)
+            text = "=== FAILURES ===\n" + failure + "=== short test summary info ===\n" + summary
+            outputs[f"pytest CI, indent {indent}"] = (text, lines[1:] + others[1:])
+        with tempfile.TemporaryDirectory() as folder:
+            for indent in (2, 4):
+                old, lines = pkcs8_key("git-a", indent)
+                whole, others = pkcs8_key("git-b", indent)
+                tail = "".join(old.splitlines(True)[:-4] + whole.splitlines(True)[-4:])
+                for name, new in (("its last lines changed", tail), ("another key", whole)):
+                    for context in (3, 1):
+                        for side, text in (("a", old), ("b", new)):
+                            os.makedirs(os.path.join(folder, side), exist_ok=True)
+                            with open(os.path.join(folder, side, "secret.yaml"), "w") as stream:
+                                stream.write("stringData:\n  tls.key: |\n" + text + "  tls.crt: abc\n")
+                        diff = subprocess.run(
+                            ["git", "diff", "--no-index", "--no-color", "--no-ext-diff", f"-U{context}",
+                             "a/secret.yaml", "b/secret.yaml"], cwd=folder, capture_output=True, text=True,
+                            env={**os.environ, "GIT_CONFIG_GLOBAL": os.devnull, "GIT_CONFIG_NOSYSTEM": "1"}).stdout
+                        self.assertIn("-----END", diff)
+                        outputs[f"git diff -U{context}, indent {indent}, {name}"] = (diff, lines[1:] + others[1:])
+        for name, (text, rows) in outputs.items():
+            for how in ("mask_text", "masked_tail"):
+                with self.subTest(name, how=how):
+                    shown, found = sources.mask_text(text) if how == "mask_text" else checks.masked_tail(text.encode())
+                    self.assertEqual({f["kind"] for f in found}, {"private_key"})
+                    # what is left of a key line: only the ends pytest cut to fewer than 40 characters
+                    self.assertLess(longest(shown), 40, shown[:600])
+                    self.assertEqual([row for row in rows if any(row[i:i + 10] in shown for i in range(len(row) - 9))],
+                                     [], shown[:600])
+        # no marker, nothing masked: ordinary output with git SHAs and digests
+        sha = hashlib.sha1(b"a commit").hexdigest()
+        plain = (f"commit {sha}\nMerge: {sha[:7]} {sha[-7:]}\n    Bump the parser\n\n$ git rev-parse HEAD\n{sha}\n"
+                 f"pip install --require-hashes: --hash=sha256:{hashlib.sha256(b'a wheel').hexdigest()}\n"
+                 f"docker pull app@sha256:{hashlib.sha256(b'an image').hexdigest()}\n"
+                 f"{base64.b64encode(bytes(48)).decode()}\n")
+        self.assertEqual(sources.mask_text(plain), (plain, []))
+        self.assertEqual(checks.masked_tail(plain.encode()), (plain, []))
+        # a marker anywhere, one only named or before the shown tail: the SHA goes too
+        end = "-----END RSA PRIVATE" + " KEY-----"
+        named = "hint: expected " + end + "\n" + plain
+        shown, found = sources.mask_text(named)
+        self.assertNotIn(sha, shown)
+        self.assertEqual({f["kind"] for f in found}, {"private_key"})
+        steps = lambda first: "".join(f"step {n} ok\n" for n in range(first, first + 500))
+        tail = (steps(0) + "key.pem:" + end + "\n" + steps(500) + f"HEAD is {sha}\n").encode()
+        self.assertLess(tail.index(b"-----END"), len(tail) - checks.TAIL)   # the marker is in what is cut off
+        shown, found = checks.masked_tail(tail, dropped=False)
+        self.assertNotIn(sha, shown)
+        self.assertEqual(checks.masked_tail(tail.replace(b"-----END", b"-----end"), dropped=False)[0],
+                         tail.decode()[-checks.TAIL:])
 
     def test_a_key_whose_begin_was_cut_off_is_masked_up_to_its_end(self):
         # the check's output keeps only its last 8 KB: a key longer than that tail lost its BEGIN with the head
@@ -443,7 +555,9 @@ class SecretRuleTests(unittest.TestCase):
         key, body = private_key("RSA", 6400)
         lines = body.splitlines()
         for offset in (-100, -1, 0, 1, 20, 31, 64, 1000, checks.TAIL - 40, checks.TAIL):
-            after = "x" * (checks.TAIL - offset)   # the key's END ends ``offset`` bytes after the cut
+            # the key's END ends ``offset`` bytes after the cut (what follows is no run of base64: next to a key's
+            # marker, one of 40 characters or more is masked too)
+            after = ("x " * checks.TAIL)[:checks.TAIL - offset]
             raw = (key + after).encode()[-2 * checks.TAIL:]
             with self.subTest(offset=offset):
                 self.assertEqual(len(raw) - checks.TAIL + offset, raw.index(b"KEY-----", raw.index(b"-----END")) + 8)
@@ -480,13 +594,13 @@ class SecretRuleTests(unittest.TestCase):
         texts = ["hint: expected " + end + "\nModuleNotFoundError: No module named 'x'\n", "key.pem:" + end + "\n"]
         for size in (0, 1000, 4000, 5000, 7000):   # nothing cut (up to 4 KB), or all of the output kept (4-8 KB)
             for text in texts:
-                raw = ("x" * size + "\n" + text).encode()
+                raw = (("x " * size)[:size] + "\n" + text).encode()   # no run of base64 (masked next to a marker)
                 with self.subTest(size=size, text=text[:12]):
                     self.assertLess(len(raw), 2 * checks.TAIL)
                     tail, found = checks.masked_tail(raw)
                     self.assertEqual((found, tail.encode()), ([], raw[-checks.TAIL:]))
         for text in texts:   # the head dropped (the last 8 KB kept): the END's BEGIN may have gone with it
-            raw = ("x" * 9000 + "\n" + text).encode()[-2 * checks.TAIL:]
+            raw = (("x " * 9000)[:9000] + "\n" + text).encode()[-2 * checks.TAIL:]
             with self.subTest(dropped=text[:12]):
                 self.assertEqual([f["kind"] for f in checks.masked_tail(raw)[1]], ["private_key"])
                 self.assertEqual(checks.masked_tail(raw, dropped=False)[1], [])   # the reader knows best

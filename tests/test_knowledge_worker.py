@@ -149,6 +149,25 @@ class KnowledgeWorkerTests(unittest.TestCase):
                                                                  "repo_scope": ".octopus-kb/h_o_r"}, "DELETE"))
         self.assertEqual(headers["X-Session-Key"], "dashboard:ui")
 
+    def test_why_kirocrew_did_not_forget_is_masked_before_it_is_cut(self):
+        # D57 §3.3: KiroCrew's refusal or error, cut to 200 characters for the platform, is masked first
+        from octopus.security import Error
+        self.prepare()
+        token, body = self.node.token, {"run_id": RID, "scope": "h_o_r", "rule": "用 pnpm 安装依赖"}
+        shown = f"{token[:4]}…{token[-2:]}"
+        for answer, expected in (({"ok": False, "reason": "y" * 180 + " Bearer " + token}, (409, "forget_refused")),
+                                 (crew_api.GatewayError(500, "y" * 175 + " Bearer " + token), (502, "native_error"))):
+            def native(path, value):
+                if isinstance(answer, Exception):
+                    raise answer
+                return answer
+            self.answer = native
+            with self.subTest(expected[1]), self.assertRaises(Error) as refused:
+                self.node.knowledge_forget(body)
+            self.assertEqual((refused.exception.status, refused.exception.code), expected)
+            self.assertNotIn(token[4:-2], str(refused.exception))
+            self.assertTrue(str(refused.exception).endswith("y Bearer " + shown), str(refused.exception))
+
     def test_a_forget_kirocrew_did_not_carry_out_is_not_reported_done(self):
         from octopus.security import Error
         self.prepare()

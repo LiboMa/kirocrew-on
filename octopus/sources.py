@@ -91,6 +91,13 @@ SECRET_RULES = [
 ]
 _PRIVATE_KEY = [kind for kind, _ in SECRET_RULES].index("private_key")
 _KEY_BEGINS, _KEY_ENDS = re.compile(_KEY_BEGIN), re.compile(_KEY_END)
+# Where a text holds a private key's BEGIN or END (owner's ruling, D57 6b), every run of 40 or more base64 characters in
+# it ("\/" as JSON may write "/") is masked as private_key, whatever shape the key's lines are printed in (a diff of an
+# indented key, a summary that repeats it after another prefix): display only, as verdicts are judged on the text as
+# written, so a SHA or a digest next to a key is masked too. A run begins after no base64 (but may after a backslash,
+# the "n" of an escaped line break), so each is tried once.
+_KEY_MARKER = re.compile(rb"-----(?:BEGIN|END) [A-Z ]*PRIVATE KEY(?: BLOCK)?-----")
+_NEAR_A_KEY = re.compile(rb"(?<![A-Za-z0-9+/=])[A-Za-z0-9+/=](?:[A-Za-z0-9+/=]|\\+/){39,}")
 # The lines of base64 right before a private key's END, read backwards from it (so that finding where they begin costs
 # what they are long): whole lines, each with the END line's own prefix "q" (docker compose's "web-1  | ", pytest's
 # "E         + ", grep's "key.pem-" / "key.pem-26-", an indent; captured from the prefix put before a NUL), or, when the
@@ -145,6 +152,8 @@ def find_secrets(data, extra=(), cut=None, dropped=True):
         for match in pattern.finditer(data):
             start, end = match.span("secret") if "secret" in pattern.groupindex else match.span()
             spans.append((start, priority, end, kind))
+    if _KEY_MARKER.search(data):   # a key's marker in view: every long run of base64 around it
+        spans += [(match.start(), _PRIVATE_KEY, match.end(), "private_key") for match in _NEAR_A_KEY.finditer(data)]
     floor = 0
     for match in _KEY_ENDS.finditer(data):   # the lines of a key right before its END, whether or not its BEGIN is there
         start = _lines_before(data, floor, match.start())
@@ -233,16 +242,20 @@ def _line_prefix(prefix):
 
 
 def _value_above(data, start, end):
-    """Where the value that ends the line ``data[start:end]`` begins, when it is base64 after a label's "=" or ": "
-    (PRIVATE_KEY=…, key: …) or after the header git heads a hunk with (the last line above the hunk that starts with a
-    letter: in a key, one of its lines); None when it ends in none."""
+    """Where the value that ends the line ``data[start:end]`` begins, when it is base64 after a label's "=" or ": ",
+    quoted or not (PRIVATE_KEY=…, PRIVATE_KEY="…, key: '…), after a bare space when it is 10 characters or more
+    (using key MIIE…: no word that short), or after the header git heads a hunk with (the last line above the hunk that
+    starts with a letter: in a key, one of its lines); None when it ends in none."""
     row = data[start:end].rstrip(b" \t\r")
     at = len(row.rstrip(_BASE64_BYTES))
     label = row.find(b"=", at, len(row.rstrip(b"=")))   # an "=" before the value's own characters ends a label
     at = label + 1 if label >= 0 else at
     head = row[:at]
-    named = head.rstrip(b" \t")[-1:] == b"=" or head.rstrip(b" \t")[-1:] == b":" and head[-1:] in (b" ", b"\t")
-    return start + at if at < len(row) and (named or _HUNK_HEADER.fullmatch(head)) else None
+    unquoted = head[:-1] if head[-1:] in (b'"', b"'") else head
+    named = unquoted.rstrip(b" \t")[-1:] == b"=" or (unquoted.rstrip(b" \t")[-1:] == b":"
+                                                      and unquoted[-1:] in (b" ", b"\t"))
+    spaced = head[-1:] in (b" ", b"\t") and len(row) - at >= 10
+    return start + at if at < len(row) and (named or spaced or _HUNK_HEADER.fullmatch(head)) else None
 
 
 def _open_key(data, before):

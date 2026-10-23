@@ -746,6 +746,16 @@ class MVPTests(unittest.TestCase):
         self.assertIn("model rejected",result["error"])
         self.assertEqual(node.dispatch(body)["status"],"blocked")
 
+    def test_a_native_refusal_is_masked_before_it_is_cut(self):
+        # D57 §3.3: KiroCrew's refusal is cut to 1000 characters for the platform; masked first (the rules and the
+        # Worker's own token), so no part of a credential the cut runs through is left
+        node,body=self.native_worker()
+        shown=f"{node.token[:4]}…{node.token[-2:]}"
+        def refused(*args,**kwargs):raise crew_api.GatewayError(400,json.dumps({"error":"y"*980+" Bearer "+node.token}))
+        node.native=refused
+        result=node.dispatch(body)
+        self.assertEqual((result["status"],result["error"]),("blocked","原生拒绝："+"y"*980+" Bearer "+shown))
+
     def test_advertised_model_gate_and_requested_not_actual(self):
         node,body=self.native_worker()
         with self.assertRaises(Error):node.dispatch({**body,"spec":{**SPEC[0],"model":"unadvertised"}})

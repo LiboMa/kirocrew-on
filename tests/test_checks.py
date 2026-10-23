@@ -374,7 +374,8 @@ class CheckTests(unittest.TestCase):
         # the reader knows whether it dropped the head of the output: 8 KB exactly is all of it, one byte more is not
         end = "-----END RSA PRIVATE" + " KEY-----\n"
         size = 2 * checks_module.TAIL
-        results = self.run_outputs([("x" * (size - len(end)) + end, 1), ("x" * (size + 1 - len(end)) + end, 1)])
+        filler = lambda n: ("x " * n)[:n]   # no run of base64 (next to a key's marker, one of 40 or more is masked)
+        results = self.run_outputs([(filler(size - len(end)) + end, 1), (filler(size + 1 - len(end)) + end, 1)])
         self.assertNotIn("findings", results[0])
         self.assertTrue(results[0]["tail"].endswith(end))
         self.assertEqual([f["kind"] for f in results[1]["findings"]], ["private_key"])

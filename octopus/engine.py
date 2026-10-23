@@ -640,13 +640,12 @@ class Engine:
             quiet = min(progress["idle_seconds"], now - began)   # the Worker's own clock
         elif isinstance(progress.get("updated_at"), (int, float)):
             quiet = now - max(progress["updated_at"], began)
-        tool = str(progress.get("last_tool") or "")[:80]
-        if now - began > total * 60:
-            reason = f"原生任务运行超过 {total} 分钟，看门狗已停止"
-        elif quiet is not None and quiet > idle * 60:
-            reason = f"原生任务 {int(quiet // 60)} 分钟没有进展" + (f"（最后工具：{tool}）" if tool else "") + "，看门狗已停止"
-        else:
+        if not (now - began > total * 60 or quiet is not None and quiet > idle * 60):
             return False
+        # the Worker's text (an older Worker's as KiroCrew wrote it): masked with the token, then cut (D57 §3.3)
+        tool = sources.mask_text(str(progress.get("last_tool") or ""), (self._token(run),))[0][:80]
+        reason = (f"原生任务运行超过 {total} 分钟，看门狗已停止" if now - began > total * 60 else
+                  f"原生任务 {int(quiet // 60)} 分钟没有进展" + (f"（最后工具：{tool}）" if tool else "") + "，看门狗已停止")
         if mark.get("stop_failed_at") and now - mark["stop_failed_at"] < 60:
             return True   # a stop that failed is tried again a minute later, not on every poll
         info = {"reason": reason, "idle_minutes": idle, "attempt_minutes": total, "turns": progress.get("turns"),
