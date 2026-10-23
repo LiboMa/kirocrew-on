@@ -74,6 +74,8 @@ def relax(evidence, spec, snapshot, error, specs):
         return None
     if evidence.get("gate") == "no_secrets" or evidence.get("failure_type") == "security":   # guard.blocking (D57 T8)
         return None
+    if any(r.get("name") == "review_bound" and r.get("status") == "fail" for r in evidence.get("gates") or []):
+        return None   # a rejecting review's edits that could not be put back stay in the workspace: never let them through
     prefix = relaxed(spec, specs)
     if prefix is None:
         return None
