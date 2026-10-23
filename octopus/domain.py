@@ -2611,7 +2611,10 @@ class Service:
                     # D45: the user's own new tool or model for the task takes the place of what the requirement named
                     changed = any(key in override and override[key] != before.get(key) for key in ("tool", "model"))
                     merged = {**{k: v for k, v in before.items() if not (changed and k == "requested")}, **override}
-                    if "verify" in override and "verify_required" not in override:   # D57 §5.3: the user's own checks
+                    # D57 §5.3: checks the user changed are their own, all required; sent back as they are (a form
+                    # echoes them), they keep which must pass
+                    if "verify" in override and "verify_required" not in override \
+                            and override["verify"] != before.get("verify", []):
                         merged["verify_required"] = override["verify"]
                     if override.get("role", "x") in (None, ""):   # the user takes the role away; the kind stays
                         merged.pop("role")
