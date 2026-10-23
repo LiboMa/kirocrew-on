@@ -300,6 +300,10 @@
   `bootstrap-worker` 不比对已有 Worker 的 URL / Token；记录接受的 KiroCrew commit 而不只是版本号。
 - OpenCode 执行未通过（K01）：EC2 上 shell 写文件被 KiroCrew 工具门禁拒绝，需查明命中的门禁层；替代配置 deliver→claude 可用。
 
+## MVP 0.2.0 输入：KiroCrew 原生能力（负责人 2026-10-23）
+
+- 调研：`docs/research/2026-10-23-kirocrew-native-capabilities.md`（成员与小组为主）。候选：会话内并行（独立 spawn + `/api/spawn/lanes`）、角色成员化试点（先在测试边界核实成员设置是否作用于 `crew=` 派发）、频道用于小规模多 Agent 讨论、导出用于证据归档。不接：Conductor、KiroCrew 动态工作流、并行波次、steer `follow_up`。改变体验的须负责人确认。
+
 ## 稳定性（2026-10-22 发现）
 
 - **会话列表每行过重**（EC2 2026-10-23）：`GET /v1/runs?page=1&view=list` 50 行 199 KB，大头是需求全文（58 KB）、tasks（21 KB）、replan（17 KB）、credentials、knowledge、permissions、usage；侧栏用不到。gzip 之后传输量已降，精简列表视图的字段要先核对 MCP `octopus_runs` 与 CLI `search` 用到哪些。
