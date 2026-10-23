@@ -49,7 +49,7 @@ export function FormDialog({ title, kicker, description, children, submitLabel =
             <DialogTitle className="text-xl">{title}</DialogTitle>
             {description ? <DialogDescription>{description}</DialogDescription> : <DialogDescription className="sr-only">{title}</DialogDescription>}
           </DialogHeader>
-          <div className="min-h-0 flex-1 space-y-4 overflow-y-auto px-6 py-5">{children}</div>
+          {children && <div className="min-h-0 flex-1 space-y-4 overflow-y-auto px-6 py-5">{children}</div>}
           {error && <p role="alert" className="px-6 pb-2 text-sm text-destructive">{error}</p>}
           <DialogFooter className="items-center gap-2 border-t bg-muted/40 px-6 py-4 sm:justify-between">
             <span className="text-xs text-muted-foreground">{note}</span>
