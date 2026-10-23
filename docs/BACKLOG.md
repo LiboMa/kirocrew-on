@@ -300,6 +300,13 @@
   `bootstrap-worker` 不比对已有 Worker 的 URL / Token；记录接受的 KiroCrew commit 而不只是版本号。
 - OpenCode 执行未通过（K01）：EC2 上 shell 写文件被 KiroCrew 工具门禁拒绝，需查明命中的门禁层；替代配置 deliver→claude 可用。
 
+## 延后（负责人 2026-10-23：不是强依赖就之后做）
+
+- 部署 5fd7976（GET 文本响应 gzip）与 2c3206e（D57 写入时打码）：回归已通过，只重启 API 与 Worker；D73 实现时随之一起部署。
+- 上游简报工具：每周列出 KiroCrew 自我们钉的版本以来的发版、P0 变化、与派发 / 子 Agent / 成员 / Gateway 相关的 PR（`docs/research/2026-10-23-kirocrew-release-cadence.md` §5）。
+- 向 KiroCrew #11576（Gateway 事件循环卡住）提交我们在 EC2 的记录：对外操作，须负责人同意。
+- D72 的服务层草稿（`octopus/follow_up.py`、`tests/test_follow_up.py`，未接入）放在本地分支 `park/d72-follow-up-draft`；D73 的 P4 再取用。
+
 ## MVP 0.2.0 输入：KiroCrew 原生能力（负责人 2026-10-23）
 
 - 调研：`docs/research/2026-10-23-kirocrew-native-capabilities.md`（成员与小组为主）。候选：会话内并行（独立 spawn + `/api/spawn/lanes`）、角色成员化试点（先在测试边界核实成员设置是否作用于 `crew=` 派发）、频道用于小规模多 Agent 讨论、导出用于证据归档。不接：Conductor、KiroCrew 动态工作流、并行波次、steer `follow_up`。改变体验的须负责人确认。
