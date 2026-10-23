@@ -25,25 +25,58 @@ async function newTeam() {
 afterEach(() => vi.unstubAllGlobals());
 
 describe("settings", () => {
-  test("a new API token is shown exactly once with the requested scopes", async () => {
-    const calls = start({ "GET /tokens": [], "POST /tokens": { id: "t1", token: "oct_secret_value", scopes: ["read", "execute"], expires: 0 } });
-    const dialog = await openSection("我的设置", "API 与 Coding Agent 接入");
-    await userEvent.type(within(dialog).getByLabelText("新 Token 名称"), "Claude Code");
-    await userEvent.click(within(dialog).getByRole("button", { name: "创建 API Token" }));
-    expect(await screen.findByText("oct_secret_value")).toBeInTheDocument();
-    expect(screen.getByText("仅显示这一次。将它配置到对应客户端的私有环境变量中。")).toBeInTheDocument();
+  // PRD 2026-10-23 (admin & settings in dialogs): the page holds the list; creating and revoking happen in dialogs.
+  async function newToken() {
+    const section = await openSection("我的设置", "API 与 Coding Agent 接入");
+    await userEvent.click(within(section).getByRole("button", { name: "新建 Token" }));
+    return { section, dialog: await screen.findByRole("dialog", { name: "新建 Token" }) };
+  }
+
+  test("a new API token is made in a dialog and shown exactly once", async () => {
+    const made = { id: "t1", label: "Claude Code", scopes: "[\"read\",\"execute\"]", expires: 0, last_used: null };
+    let listed: unknown[] = [];
+    const calls = start({ "GET /tokens": () => listed,
+      "POST /tokens": () => { listed = [made]; return { id: "t1", token: "oct_secret_value", scopes: ["read", "execute"], expires: 0 }; } });
+    const { section, dialog } = await newToken();
+    expect(within(section).queryByLabelText("Token 名称")).toBeNull();   // nothing to type into on the page itself
+    await userEvent.type(within(dialog).getByLabelText("Token 名称"), "Claude Code");
+    await userEvent.click(within(dialog).getByRole("button", { name: "创建 Token" }));
+    const issued = await screen.findByRole("dialog", { name: "Token 已创建" });
+    expect(within(issued).getByText("oct_secret_value")).toBeInTheDocument();
+    expect(within(issued).getByText("只显示这一次。把它配置到对应客户端的私有环境变量中。")).toBeInTheDocument();
     expect(calls.find((c) => c.method === "POST" && c.path === "/v1/tokens")?.body).toEqual({ label: "Claude Code", scopes: ["read", "execute"], expires_in: "30d" });
+    await userEvent.click(within(issued).getByRole("button", { name: "我已保存" }));
+    await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
+    expect(screen.queryByText("oct_secret_value")).toBeNull();   // never shown again
+    const row = await within(section).findByText("Claude Code");
+    expect(row.closest("[data-token-row]")).toHaveAttribute("data-fresh", "true");   // the new row is lit up
+    expect(await screen.findByText("已创建 Token Claude Code")).toBeInTheDocument();
   });
 
   test("a token's lifetime is chosen: 7, 30 or 365 days, or never (D62)", async () => {
     const calls = start({ "GET /tokens": [], "POST /tokens": { id: "t1", token: "oct_secret_value", scopes: ["read", "execute"], expires: null } });
-    const dialog = await openSection("我的设置", "API 与 Coding Agent 接入");
+    const { dialog } = await newToken();
     const lifetime = within(dialog).getByLabelText("有效期");
     expect([...(lifetime as HTMLSelectElement).options].map((o) => o.textContent)).toEqual(["7 天", "30 天", "365 天", "永不过期"]);
     await userEvent.selectOptions(lifetime, "never");
-    await userEvent.click(within(dialog).getByRole("button", { name: "创建 API Token" }));
+    await userEvent.click(within(dialog).getByRole("button", { name: "创建 Token" }));
     expect(await screen.findByText("永不过期，可随时撤销。")).toBeInTheDocument();
     expect(calls.find((c) => c.method === "POST" && c.path === "/v1/tokens")?.body).toMatchObject({ expires_in: "never" });
+  });
+
+  test("revoking a token asks first, then removes it", async () => {
+    let listed = [{ id: "t1", label: "claude MCP", scopes: "[\"read\"]", expires: null, last_used: null }];
+    const calls = start({ "GET /tokens": () => listed, "DELETE /tokens/t1": () => { listed = []; return { ok: true }; } });
+    const section = await openSection("我的设置", "API 与 Coding Agent 接入");
+    await userEvent.click(await within(section).findByRole("button", { name: "Token 操作：claude MCP" }));
+    await userEvent.click(await screen.findByRole("menuitem", { name: "撤销…" }));
+    const confirm = await screen.findByRole("dialog", { name: "撤销 Token" });
+    expect(confirm).toHaveTextContent("使用它的客户端会立即失去访问");
+    expect(calls.some((c) => c.method === "DELETE")).toBe(false);   // nothing happens before the confirmation
+    await userEvent.click(within(confirm).getByRole("button", { name: "撤销 Token" }));
+    await waitFor(() => expect(within(section).queryByText("claude MCP")).toBeNull());
+    expect(calls.some((c) => c.method === "DELETE" && c.path === "/v1/tokens/t1")).toBe(true);
+    expect(await screen.findByText("已撤销 Token claude MCP")).toBeInTheDocument();
   });
 
   test("an administrator creates a Team with its owner and an execution environment", async () => {

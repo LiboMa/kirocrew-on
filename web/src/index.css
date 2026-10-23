@@ -69,3 +69,17 @@
     @apply bg-background text-foreground font-sans antialiased;
   }
 }
+
+/* PRD 2026-10-23: a row the person just made lights up and fades; a removed one fades out (rowMotion.ts). */
+@keyframes row-flash {
+  from { background-color: color-mix(in oklab, var(--primary) 16%, transparent); }
+  to { background-color: transparent; }
+}
+@keyframes row-leave {
+  to { opacity: 0; transform: translateX(6px); }
+}
+.row-flash { animation: row-flash 1.2s ease-out; }
+.row-leave { animation: row-leave 0.2s ease-in forwards; }
+@media (prefers-reduced-motion: reduce) {
+  .row-flash, .row-leave { animation: none; }
+}
