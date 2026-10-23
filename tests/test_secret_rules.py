@@ -986,8 +986,8 @@ class SecretRuleTests(unittest.TestCase):
         # string literals) and every check tail they mask, masked again, is what it was
         original, tail_of, masked = sources.mask_text, checks.masked_tail, []
 
-        def text(value, extra=()):
-            result = original(value, extra)
+        def text(value, extra=(), memo=None):
+            result = original(value, extra, memo)
             masked.append((result[0], extra))
             return result
 

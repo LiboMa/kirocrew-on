@@ -1262,6 +1262,47 @@ class SecretMaskingTests(TeamsWorkersCase):
         self.assertEqual([w["name"] for w in evidence["warnings"]], ["secrets_masked"])
         self.assertEqual(attempt["status"], "accepted")
 
+    def test_the_write_transaction_scans_none_of_the_attempts_texts(self):
+        # (final review 5) an Attempt's result, outcome and checks' output — and the journal's own pass over what is
+        # stored of them — are masked before the write transaction that judges it: inside it, with the write lock held,
+        # only what the transaction itself adds (a reason, a mark, the list of what was masked) is looked through
+        from contextlib import contextmanager
+        from octopus import sources
+        padding = "这是一段很长的输出。" * 3000   # 30 000 characters: the Attempt's result and its checks' output are long
+        find, transaction, scanned, writing = sources.find_secrets, self.db.transaction, [], []
+
+        def spy(data, *args, **kwargs):
+            scanned.append((bool(writing), len(data)))
+            return find(data, *args, **kwargs)
+
+        @contextmanager
+        def tracked():
+            with transaction() as db:
+                writing.append(True)
+                try:
+                    yield db
+                finally:
+                    writing.pop()
+        cases = (("judged when it ends", []), ("judged when its checks end", ["npm test"]))
+        for number, (name, verify) in enumerate(cases):
+            with self.subTest(name):
+                scanned.clear()
+                worker = FakeWorker()
+                rid = self.session([{**TASK, "verify": verify}], request="start-%016d" % (90 + number))
+                worker.results["task-1"] = padding + f"\nGH_TOKEN={SECRET}"
+                worker.outcomes["task-1"] = {"decision": "pass", "summary": f"完成 {SECRET}",
+                                             "findings": [padding[:1500]]}
+                worker.verify = [{"state": "done", "passed": True, "failed": None, "results": [
+                    {"command": "npm test", "exit": 0, "seconds": 1.0, "tail": padding[:3000] + f"\nok {SECRET}"}]}]
+                with patch.object(sources, "find_secrets", spy), patch.object(self.db, "transaction", tracked):
+                    self.run_engine(worker)
+                attempt, evidence = self.attempt(rid, "task-1")
+                self.assertEqual((attempt["status"], self.run_status(rid)), ("accepted", "completed"))
+                self.assertNotIn(SECRET[4:-2], self.stored())
+                self.assertEqual(len(evidence["secrets"]), 3 if verify else 2)
+                self.assertTrue(any(size > 30000 for inside, size in scanned if not inside))   # masked: before the lock
+                self.assertEqual([size for inside, size in scanned if inside and size > 1000], [])
+
     def test_an_entry_too_long_only_because_of_a_token_stays_too_long_when_masked_again(self):
         # Knowledge judges an entry as it was written (knowledge.MARK): the platform's mark outlives the Attempt being
         # masked again — while its checks run, then when they end — and an Agent's own mark is dropped when it is read

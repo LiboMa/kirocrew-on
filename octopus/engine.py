@@ -86,22 +86,23 @@ def generated_handoff(task, attempt, evidence, native):
 # each part was is "<category>:<task_id>"; the platform's own records of commits, files and jobs, which later judging
 # reads, are kept as they are.
 CATEGORIES = {"outcome": "outcome", "evaluation": "outcome", "handoff_text": "handoff", "check_results": "checks",
-              "baseline_results": "checks"}
+              "baseline_results": "checks", "recommendation": "result"}
 CHECK_GATES = frozenset({"checks_pass", "tests_fail_on_baseline"})
 KEPT = frozenset({"secrets", "candidate", "reviewed", "baseline", "checks", "check_artifacts", "baseline_artifacts"})
 SECRETS_NAMED = 5
 
 
-def masked(evidence, task_id, extra=(), **texts):
+def masked(evidence, task_id, extra=(), memo=None, **texts):
     """``texts`` (result=…, error=…) masked as they are stored, and ``evidence`` masked in place — once every verdict was
     made on them as written. What was masked joins ``evidence["secrets"]`` ({kind, location, masked, hash}) once per
     location and hash, and is named by one warn record, secrets_masked, which neither blocks nor sets ``gate`` or
     ``failure_type``. Its 「已打码 N 处」 counts those entries: distinct secrets in each place, not occurrences (the same key
-    printed three times in the result is one; in the result and the checks' output, two)."""
+    printed three times in the result is one; in the result and the checks' output, two). ``memo``: what was masked of
+    them before a write transaction (``sources.premask``)."""
     found = []
 
     def mask(value, category):
-        value, hits = sources.mask_value(value, extra)
+        value, hits = sources.mask_value(value, extra, memo)
         found.extend((category, hit) for hit in hits)
         return value
     shown = {name: mask(text, name) for name, text in texts.items()}
@@ -286,9 +287,9 @@ class Engine:
                            status=status, error=error, updated=time.time(), **rest)
 
     @staticmethod
-    def _mask(token, task_id, evidence, **texts):
+    def _mask(token, task_id, evidence, memo=None, **texts):
         """``masked`` with this Session's Worker token (``_token``) besides the rules."""
-        return masked(evidence, task_id, (token,), **texts)
+        return masked(evidence, task_id, (token,), memo, **texts)
 
     @staticmethod
     def _token(run):
@@ -1124,13 +1125,15 @@ class Engine:
         error = self._mask(token, task["id"], evidence, error=error)["error"]   # judged: the checks' output stored masked
         if state == "accepted":
             evidence["warnings"] = gates.warnings(evidence.get("gates"))   # D57 §4: listed, not blocking
+        memo = sources.premask([evidence, error], (token,))   # the journal's pass over them, before the write lock
         with self.db.transaction() as db:
             current = db.execute("SELECT * FROM tasks WHERE run_id=? AND id=?", (rid, task["id"])).fetchone()
             active = db.execute("SELECT desired FROM runs WHERE id=?", (rid,)).fetchone()[0] == "active"
             journal.change(db, "attempts", attempt["id"], journal.WORKER, "attempt.state",
                            event={"id": attempt["id"], "task_id": task["id"], "status": state, "error": error,
                                   "evidence": evidence},
-                           mask=(token,), status=state, evidence=dumps(evidence), error=error, updated=time.time())
+                           mask=(token,), memo=memo, status=state, evidence=dumps(evidence), error=error,
+                           updated=time.time())
             if current["current_attempt"] == attempt["id"] and active:
                 journal.change(db, "tasks", (rid, task["id"]), journal.WORKER, "task.state", status=state)
         self.update(rid, "ready" if state == "accepted" else state, error, actor=journal.WORKER)
@@ -1423,6 +1426,20 @@ class Engine:
             if state == "accepted" and invalid and knowledge.platform(snapshot, task["id"]):
                 evidence["knowledge_skipped"] = invalid   # D57 §4: accepted with the warning, but its list cannot be read
         token = self._token(run)   # D57 §3.3: before the write transaction (it may open the vault)
+        design = None   # a recommendation judged on KiroCrew's answer as written, never on what is stored (masked)
+        if state == "accepted" and snapshot.get("purpose") == "workflow_design":
+            from .designs import explain, parse_recommendation
+            try:
+                design = {"config": parse_recommendation(native.get("result") or "")}
+            except (Error, ValueError, TypeError, KeyError) as exc:
+                design = {"invalid": explain(native.get("result") or "", exc)}
+        # the reason quotes the recommendation: masked once, for the error, the repair and its event
+        fix = sources.mask_text(design["invalid"], (token,))[0] if design and "invalid" in design else None
+        fixes = [f"推荐未通过平台校验：{fix}（已自动请 KiroCrew 修正一次）", f"推荐未通过平台校验（{fix}），自动请 KiroCrew 修正一次"] \
+            if fix else []   # the Attempt's error, and the repair's reason
+        # D57 §3.3: what is stored of the Attempt — and the journal's pass over it — masked before the write lock is
+        # taken; in the transaction only what it adds itself (a reason, a mark, the list of what was masked) is read
+        memo = sources.premask([native.get("result"), error, evidence, design, *fixes], (token,))
         with self.db.transaction() as db:
             current = db.execute("SELECT * FROM tasks WHERE run_id=? AND id=?", (rid, task["id"])).fetchone()
             # Old observations cannot complete a newly retried task.
@@ -1440,15 +1457,11 @@ class Engine:
                         state, error = "blocked", "KiroCrew 规划结果未通过校验：" + str(exc)
                         evidence["failure_type"] = "contract"
             design_fix = None
-            if state == "accepted" and snapshot.get("purpose") == "workflow_design" and active \
-                    and current["current_attempt"] == attempt["id"] and not prior.get("design_repair"):
-                from .designs import explain, parse_recommendation
-                try:
-                    parse_recommendation(native.get("result") or "")
-                except (Error, ValueError, TypeError, KeyError) as exc:   # D66: KiroCrew fixes its own answer, once
-                    # the reason quotes the recommendation: masked once, for the error, the repair and its event
-                    design_fix = sources.mask_text(explain(native.get("result") or "", exc), (token,))[0]
-                    state, error = "blocked", "推荐未通过平台校验：" + design_fix + "（已自动请 KiroCrew 修正一次）"
+            if design and state == "accepted" and "invalid" in design and active \
+                    and current["current_attempt"] == attempt["id"] and not prior.get("design_repair"):   # D66: once
+                design_fix, (state, error) = fix, ("blocked", fixes[0])
+            elif design and state == "accepted":   # what designs.status shows: its tasks, or why it has none (masked)
+                evidence["recommendation"] = design
             starts = prior.get("never_started", 0)   # how many Attempts before this one in a row did not start
             if not (retry and current["current_attempt"] == attempt["id"] and active):
                 retry = None   # not ours to retry
@@ -1475,14 +1488,14 @@ class Engine:
                     and knowledge.platform(snapshot, task["id"]):   # D46 P4: the platform's side task never holds a Session
                 evidence["knowledge_skipped"] = error
                 state, error = "accepted", None
-            shown = self._mask(token, task["id"], evidence, result=native.get("result"), error=error)   # judged: stored masked
+            shown = self._mask(token, task["id"], evidence, memo, result=native.get("result"), error=error)   # judged
             error = shown["error"]
             if state in {"accepted", "awaiting_acceptance"}:   # D57 §4: listed, not blocking; kept when a person accepts
                 evidence["warnings"] = gates.warnings(evidence.get("gates"))
             journal.change(db, "attempts", attempt["id"], journal.WORKER, "attempt.state",
                            event={"id": attempt["id"], "task_id": task["id"], "status": state, "error": error,
                                   "evidence": evidence},
-                           quiet=() if native.get("done") else ("result",), mask=(token,),
+                           quiet=() if native.get("done") else ("result",), mask=(token,), memo=memo,
                            status=state, evidence=dumps(evidence), result=shown["result"], error=error, updated=time.time())
             if retry:
                 why = {**recovery.WHY, "result_missing": "原生任务没有返回结果",
@@ -1509,8 +1522,8 @@ class Engine:
                            "VALUES(?,?,?,?,?,'dispatching',?,?,?)",
                            (aid, rid, task["id"], attempt["number"] + 1, current["spec"],
                             dumps({"design_repair": {"of": attempt["id"], "error": design_fix}}), now, now))
-                journal.change(db, "tasks", (rid, task["id"]), journal.ENGINE, "attempt.retry",
-                               f"推荐未通过平台校验（{design_fix}），自动请 KiroCrew 修正一次", mask=(token,),
+                journal.change(db, "tasks", (rid, task["id"]), journal.ENGINE, "attempt.retry", fixes[1],
+                               mask=(token,), memo=memo,
                                event={"attempt": attempt["id"], "retry": aid, "transient": "design_invalid"},
                                status="dispatching", current_attempt=aid)
             elif current["current_attempt"] == attempt["id"] and active:
