@@ -403,6 +403,28 @@ describe("session detail", () => {
     await waitFor(() => expect(calls.find((c) => c.path === "/v1/runs/run-k/continue")?.body).toMatchObject({ task_id: "code", rerun: ["check"] }));
   });
 
+  test("continue reminds to update the requirement when the native chat changed the workspace (D73, a reminder only)", async () => {
+    const run = makeRun({ id: "run-chat", status: "completed", worker_id: "w1", tasks: blocked.tasks.map((t) => ({ ...t, status: "accepted" })) });
+    const calls = open(run, { "GET /runs/run-chat/chat-changes": { files: ["hello.py", "README.md"], count: 2, commits: false },
+      "POST /runs/run-chat/continue": { id: "run-chat", version: 3 } });
+    await userEvent.click((await screen.findAllByRole("button", { name: "配置并续作" }))[0]);
+    const dialog = await screen.findByRole("dialog");
+    const reminder = await within(dialog).findByRole("note", { name: "对话中的改动" });
+    expect(reminder).toHaveTextContent("工作区里有对话中的改动（2 个文件：hello.py、README.md）");
+    expect(reminder).toHaveTextContent("请同步修改上面的「本次完整需求」");
+    await userEvent.click(within(dialog).getByRole("button", { name: "保存并续作" }));   // it never stops the continue
+    await waitFor(() => expect(calls.some((c) => c.path === "/v1/runs/run-chat/continue")).toBe(true));
+  });
+
+  test("continue shows no reminder when the workspace holds nothing new", async () => {
+    const run = makeRun({ id: "run-clean", status: "completed", worker_id: "w1", tasks: blocked.tasks.map((t) => ({ ...t, status: "accepted" })) });
+    const calls = open(run, { "GET /runs/run-clean/chat-changes": { files: [], count: 0, commits: false } });
+    await userEvent.click((await screen.findAllByRole("button", { name: "配置并续作" }))[0]);
+    const dialog = await screen.findByRole("dialog");
+    await waitFor(() => expect(calls.some((c) => c.path === "/v1/runs/run-clean/chat-changes")).toBe(true));
+    expect(within(dialog).queryByRole("note", { name: "对话中的改动" })).toBeNull();
+  });
+
   test("tasks the latest continue left as they were say so", async () => {
     const run = makeRun({ id: "run-kept", status: "completed", kept: { version: 3, tasks: ["review"] }, tasks: blocked.tasks.map((t) => ({ ...t, status: "accepted" })) });
     open(run);

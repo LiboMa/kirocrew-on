@@ -932,6 +932,9 @@ def server(database, port=8918, host="127.0.0.1", allowed_hosts=(), origin_secre
                         scope(self.identity(method), "manage")
                         return self.respond(service.share_run(actor, rid, body), 201)
                     return self.respond(service.run_shares(actor, rid))
+                if len(segments) == 4 and segments[:2] == ["v1", "runs"] and segments[3] == "chat-changes":
+                    require(method == "GET", "Method not allowed", 405)
+                    return self.respond(service.chat_changes(actor, segments[2]))
                 if len(segments) in {4, 5} and segments[:2] == ["v1", "runs"] and segments[3] == "revisions":
                     require(method == "GET", "Method not allowed", 405)
                     rid = segments[2]

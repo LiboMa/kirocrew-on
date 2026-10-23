@@ -175,7 +175,7 @@ def openapi():
         "/v1/runs/{id}/shares": {"get": None, "post": "Share"}, "/v1/runs/{id}/shares/{share}": {"delete": "Empty"},
         "/v1/runs/{id}/events": {"get": None}, "/v1/runs/{id}/export": {"get": None},
         "/v1/runs/{id}/crew-entry": {"post": "Empty"}, "/v1/runs/{id}/preview": {"post": "Empty"},
-        "/v1/runs/{id}/observe": {"get": None},
+        "/v1/runs/{id}/observe": {"get": None}, "/v1/runs/{id}/chat-changes": {"get": None},
         "/v1/runs/{id}/revisions": {"get": None}, "/v1/runs/{id}/revisions/diff": {"get": None},
         "/v1/runs/{id}/report": {"get": None}, "/v1/runs/{id}/attempts/{attempt}/diff": {"get": None},
         "/v1/runs/{id}/bundle": {"post": "Empty"}, "/v1/runs/{id}/sync": {"post": None},
@@ -264,6 +264,10 @@ def openapi():
                                      "Coding Agent via MCP, API) or the system (engine, worker receipt, kirocrew planning, "
                                      "recovery) with actor, changes {field: [before, after]} (long text as chars + sha256) "
                                      "and reason. Query: who=user|system, kind=<prefix>, before=<id>, limit=1-200.")
+            if path == "/v1/runs/{id}/chat-changes":
+                op["description"] = ("Read scope (D73). What the workspace holds that the branch's candidate has not — files changed or "
+                                     "created in the native chat since the platform last looked — as {files, count, commits}. It only "
+                                     "looks: a continue commits them first; the console's continue dialog shows a reminder from it.")
             if "/revisions" in path:
                 op["description"] = {
                     "/v1/runs/{id}/revisions": "Read scope. Every revision of the Session, oldest first: kind (created / planned / continued / recovered), summary, actor; older revisions are rebuilt from what they recorded (reconstructed).",

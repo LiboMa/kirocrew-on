@@ -156,6 +156,15 @@ def apply(db, actor, rid, chat):
     return note, bool(chat["job"])
 
 
+def pending(service, actor, rid):
+    """The continue dialog's reminder (owner 2026-10-23: 只提醒、不拦截): the files the workspace holds that the branch's
+    candidate has not, and whether commits were made on it. It only looks; nothing when it cannot say."""
+    state = _settled(service, actor, rid)
+    found = _check(state["config"], rid, state["head"]) if state else None
+    files = (found or {}).get("files") or []
+    return {"files": files[:FILES], "count": len(files), "commits": bool(found and found["commits"])}
+
+
 def refuse(service, actor, rid):
     """A diagnosis request while the workspace holds the chat's uncommitted change: refused, pointing at continue."""
     state = _settled(service, actor, rid)

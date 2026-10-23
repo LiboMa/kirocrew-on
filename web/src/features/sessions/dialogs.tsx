@@ -1,6 +1,7 @@
 import { useState } from "react";
+import { useQuery } from "@tanstack/react-query";
 import { toast } from "sonner";
-import { command } from "@/api/client";
+import { api, command } from "@/api/client";
 import type { Run } from "@/api/types";
 import { AgentFields } from "@/components/AgentFields";
 import { FormDialog } from "@/components/FormDialog";
@@ -27,6 +28,9 @@ export function ContinueDialog({ run, taskId, note }: { run: Run; taskId?: strin
   const later = run.tasks.slice(run.tasks.findIndex((t) => t.id === task.id) + 1);
   const [chosen, setChosen] = useState(() => new Set(later.map((t) => t.id)));
   const plan = rerunPlan(run, task.id, chosen);
+  // D73 (owner 2026-10-23: 只提醒、不拦截): what the native chat changed in the workspace; nothing shown when it cannot say
+  const chat = useQuery({ queryKey: ["chat-changes", run.id], retry: false, staleTime: 0,
+    queryFn: () => api<{ files: string[]; count: number; commits: boolean }>("/runs/" + run.id + "/chat-changes") });
   const toggle = (id: string) => setChosen((current) => {
     const next = new Set(current);
     if (!next.delete(id)) next.add(id);
@@ -51,6 +55,13 @@ export function ContinueDialog({ run, taskId, note }: { run: Run; taskId?: strin
         <Label htmlFor="continue-input">本次完整需求</Label>
         <Textarea id="continue-input" value={input} onChange={(e) => setInput(e.target.value)} required minLength={3} rows={4} />
       </div>
+      {!!chat.data?.count && (
+        <div role="note" aria-label="对话中的改动"
+          className="rounded-lg border border-amber-300 bg-amber-50 px-3 py-2 text-sm text-amber-900 duration-200 animate-in fade-in-0 motion-reduce:animate-none dark:border-amber-700 dark:bg-amber-950/40 dark:text-amber-200">
+          工作区里有对话中的改动（{chat.data.count} 个文件：{chat.data.files.slice(0, 5).join("、")}{chat.data.count > 5 ? " 等" : ""}）。
+          续作时平台会先把它们提交为新的候选；如果改变了行为或范围，请同步修改上面的「本次完整需求」，否则审查会按原需求把它们改回去。
+        </div>
+      )}
       <div className="space-y-1.5">
         <Label htmlFor="continue-name">任务名称</Label>
         <Input id="continue-name" value={name} onChange={(e) => setName(e.target.value)} required maxLength={80} />
