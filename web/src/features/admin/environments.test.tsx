@@ -247,8 +247,7 @@ describe("管理 › 执行环境", () => {
 describe("管理 › 概览", () => {
   test("shows reachable environments, Sessions in progress, active users and Teams; each opens its section", async () => {
     start(ENVIRONMENTS);
-    await userEvent.click(await screen.findByRole("button", { name: "管理" }));
-    const overview = await panel("概览");
+    const overview = await openSection("管理", "概览");
     await waitFor(() => expect(within(overview).getByRole("button", { name: /^执行环境/ })).toHaveTextContent("1 / 2"));
     expect(within(overview).getByRole("button", { name: /^进行中的会话/ })).toHaveTextContent("2");
     await waitFor(() => expect(within(overview).getByRole("button", { name: /^用户/ })).toHaveTextContent("2有效 · 共 3 位"));
@@ -263,8 +262,7 @@ describe("管理 › 概览", () => {
 
   test("a problem opens the environments", async () => {
     start(ENVIRONMENTS);
-    await userEvent.click(await screen.findByRole("button", { name: "管理" }));
-    const overview = await panel("概览");
+    const overview = await openSection("管理", "概览");
     await userEvent.click(await within(overview).findByRole("button", { name: /w1：不可达/ }));
     expect(await within(await panel("执行环境")).findByRole("region", { name: "w1" })).toBeInTheDocument();
   });

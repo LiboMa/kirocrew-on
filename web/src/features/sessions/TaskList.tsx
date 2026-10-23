@@ -73,7 +73,7 @@ export function TaskList({ run, onContinue }: { run: Run; onContinue: (taskId: s
         const spec = task.spec;
         return (
           <li key={task.id}>
-            <article className="rounded-xl border bg-card p-4 shadow-xs sm:p-5" data-task={task.id}>
+            <article className="rounded-xl border bg-card p-4 sm:p-5" data-task={task.id}>
               <header className="flex items-start gap-3">
                 <span className="grid size-7 shrink-0 place-items-center rounded-md bg-muted font-mono text-xs">
                   {String(index + 1).padStart(2, "0")}
