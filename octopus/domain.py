@@ -2209,6 +2209,11 @@ class Service:
         self._stop_app(rid, "session")   # as a continue does: the preview ran the code before it
         return result
 
+    def chat_changes(self, actor, rid):
+        """D73: what the native chat changed in the workspace that no candidate has yet — the continue dialog's reminder."""
+        from . import chat_changes
+        return chat_changes.pending(self, actor, rid)
+
     def bundle_entry(self, actor, rid):
         """Whether the actor may pull the Session's branch (D58 §5): read access and a prepared workspace."""
         with self.db.read() as db:

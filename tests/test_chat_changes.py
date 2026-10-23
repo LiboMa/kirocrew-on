@@ -166,6 +166,25 @@ class ContinueTests(ChatChangesCase):
         self.assertEqual(len(self.attempts(rid, "code")), 1)
 
 
+class PendingTests(ChatChangesCase):
+    """The continue dialog's reminder (owner 2026-10-23: 只提醒、不拦截): what the workspace holds that no candidate has."""
+    def test_it_lists_the_changed_and_the_created_files(self):
+        rid = self.finished()
+        self.assertEqual(self.service.chat_changes(self.c, rid), {"files": [], "count": 0, "commits": False})
+        self.dirty, self.created = True, []
+        self.assertEqual(self.service.chat_changes(self.c, rid), {"files": ["src/chat.js"], "count": 1, "commits": False})
+        self.dirty, self.created = False, ["README.md"]
+        self.assertEqual(self.service.chat_changes(self.c, rid)["files"], ["README.md"])
+        self.assertEqual(len(self.attempts(rid, "code")), 1)   # it only looks: nothing is committed
+
+    def test_the_route(self):
+        rid = self.finished()
+        self.created = ["README.md"]
+        with self.http() as call:
+            status, body = call("GET", f"/v1/runs/{rid}/chat-changes", self.tokens["carol"])
+        self.assertEqual((status, body["count"], body["files"]), (200, 1, ["README.md"]))
+
+
 class RecoverTests(ChatChangesCase):
     def test_a_diagnosis_request_is_refused_while_the_chat_has_uncommitted_changes(self):
         self.worker.outcomes["review"] = {"decision": "changes_requested", "summary": "有缺陷", "failure_type": "implementation",
