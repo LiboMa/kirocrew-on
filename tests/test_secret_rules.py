@@ -463,9 +463,9 @@ class SecretRuleTests(unittest.TestCase):
                     else:
                         shown, found = checks.masked_tail(text.encode())
                     # the lines and their END are one span of the rules above (the marker rule below would take
-                    # each line apart)
-                    self.assertEqual([f["kind"] for f in found], ["private_key"],
-                                     shown[:300])
+                    # each line apart); where the END changed, the old key's and the new one's are two
+                    self.assertEqual([f["kind"] for f in found],
+                                     ["private_key"] * (2 if name == "git diff, the END changed" else 1), shown[:300])
                     self.assertEqual([row[i:i + 10] for row in rows for i in range(len(row) - 9)
                                       if row[i:i + 10] in shown], [], shown[:600])
                     self.assertTrue(shown.startswith(before) and shown.endswith(after), shown[:600])
@@ -531,7 +531,9 @@ class SecretRuleTests(unittest.TestCase):
         named = "hint: expected -----END RSA PRIVATE" + " KEY-----\n"
         for gap, count in (("\nE         -   ", 1), ("\n  -     ", 1), ("\r\n+", 1), ("\n" + " " * 31, 1),
                            ("\\n  ", 1), ("\\r\\n", 1), ("', '    ", 1), ('", "', 1), ('","', 1),
-                           ("\n" + " " * 32, 3), (", ", 3), (" " * 20, 3)):
+                           ("',\nE         -     '", 1), ('",\n    "', 1),   # pytest -vv's list diff, a JSON list
+                           ("\n" + " " * 32, 3), (", ", 3), (" " * 20, 3), ("\n\n", 3), ("\\n\\n", 3),
+                           ("  a.txt\n", 3), ("\nok\n", 3)):
             with self.subTest(gap=gap):
                 self.assertEqual(len(sources.find_secrets((named + gap.join(runs) + "\n").encode())), count)
         github = "ghp" + "_" + chars("next-to-a-key", 36, "alnum")   # another kind on the next line: its own finding
@@ -558,6 +560,117 @@ class SecretRuleTests(unittest.TestCase):
         self.assertNotIn(sha, shown)
         self.assertEqual(checks.masked_tail(tail.replace(b"-----END", b"-----end"), dropped=False)[0],
                          tail.decode()[-checks.TAIL:])
+
+    def test_a_keys_lines_are_one_mask_only_across_a_line_prefix_and_up_to_8_kb(self):
+        # (6b round 4) the runs of a key's lines are one mask only where what is between them is a line's end and the
+        # next line's prefix — spaces, a diff's marker, a quote, pytest's "E", or the line prefix before — up to 8 KB
+        # (about a diff of two 4096-bit keys), never across a key's BEGIN or END, a blank line or another line, and
+        # never into a label: what is shown next to a key stays readable
+        own = lambda value: value[:4] + "…" + value[-2:]   # how a span is shown
+        key, body = private_key("RSA", 1280)
+        rows = body.splitlines()
+        hint = "hint: expected -----END RSA PRIVATE" + " KEY-----\n"
+        windows = lambda shown, lines: [row[i:i + 10] for row in lines for i in range(len(row) - 9)
+                                        if row[i:i + 10] in shown]
+        masks = lambda text, how: sources.mask_text(text) if how == "mask_text" else checks.masked_tail(text.encode())
+        # digests next to a key: each its own mask, the names and the commands around them shown
+        digests = [hashlib.sha256(str(n).encode()).hexdigest() for n in range(2000)]
+        shas = [hashlib.sha1(str(n).encode()).hexdigest() for n in range(5000)]
+        listings = {
+            "sha256sum": ("$ sha256sum files/*\n", [f"{d}  files/f{n:04d}.txt" for n, d in enumerate(digests)],
+                          [f"{own(d)}  files/f{n:04d}.txt" for n, d in enumerate(digests)], "$ echo done\n"),
+            "git rev-list": ("$ git rev-list HEAD\n", shas, [own(sha) for sha in shas], ""),
+        }
+        leads = ((key + "\n", own(key) + "\n"), (hint, hint))
+        for (lead, lead_shown), (name, (command, lines, shown_lines, after)) in (
+                (pair, listing) for pair in leads for listing in listings.items()):
+            text = lead + command + "".join(line + "\n" for line in lines) + after
+            with self.subTest(name, after_a=lead[:4]):
+                shown, found = sources.mask_text(text)
+                self.assertEqual(shown, lead_shown + command + "".join(line + "\n" for line in shown_lines) + after)
+                self.assertLessEqual(max(f["end"] - f["start"] for f in found), 8192)
+                tail, found = checks.masked_tail(text.encode())
+                kept = tail.splitlines()[1:]   # the first may begin inside a line
+                self.assertGreater(len(kept), 40, tail[:200])
+                self.assertEqual(kept, (shown_lines + after.splitlines())[-len(kept):])
+        text = hint + shas[0] + "\n" + rows[0] + "\n" + rows[1] + "\n" + shas[1] + "\n"   # a digest by a key's lines
+        with self.subTest("a digest by a key's lines"):
+            self.assertEqual(sources.mask_text(text)[0], hint + "".join(
+                own(value) + "\n" for value in (shas[0], rows[0] + "\n" + rows[1], shas[1])))
+        # a base64 dump next to a key (76-character lines, no prefix): masked whole, 8 KB at most a mask
+        dump = [chars(f"dump-{n}", 76, "std") for n in range(300)]
+        with self.subTest("a base64 dump"):
+            shown, found = sources.mask_text(hint + "\n".join(dump) + "\n")
+            self.assertEqual(windows(shown, dump), [])
+            self.assertGreaterEqual(len(found), 3)
+            self.assertLessEqual(max(f["end"] - f["start"] for f in found), 8192)
+        # an ordinary line between or after a key's lines stays shown, whatever their prefix
+        for prefix in ("", "E         -     ", "  +     "):
+            for line in ("Error: bad", "E   ValueError: x", "  PASSED [ 50%]", "==> b.pem <=="):
+                text = (hint + prefix + rows[0] + "\n" + line + "\n" + prefix + rows[1] + "\n" + prefix + rows[2] + "\n"
+                        + line + "\n" + prefix + rows[3] + "\n")
+                for how in ("mask_text", "masked_tail"):
+                    with self.subTest(line, prefix=prefix, how=how):
+                        shown, found = masks(text, how)
+                        self.assertEqual(shown.count("\n" + line + "\n"), 2, shown)
+                        self.assertEqual(windows(shown, rows[:4]), [], shown)
+                        self.assertEqual(len(found), 3, shown)
+        # two keys are two: across a line break, a blank line, tail's header, or one's END and the other's BEGIN
+        # written as a diff's lines
+        first, _ = private_key("RSA", 1280)
+        second, _ = private_key("EC", 640)
+        for between in ("\n", "\n\n", "\n\n==> b.pem <==\n"):
+            text = "==> a.pem <==\n" + first + between + second + "\n"
+            with self.subTest(between=between):
+                shown, found = sources.mask_text(text)
+                self.assertEqual(shown, "==> a.pem <==\n" + own(first) + between + own(second) + "\n")
+                self.assertEqual([f["hash"] for f in found], [hashlib.sha256(k.encode()).hexdigest()
+                                                              for k in (first, second)])
+        other = body_lines("the other key", 640).splitlines()
+        begin = "-----BEGIN PRIVATE" + " KEY-----"
+        text = hint + "".join("E         -     " + row + "\n" for row in rows[-3:] + [begin] + other[:3])
+        with self.subTest("a BEGIN between two keys' lines"):
+            shown, found = sources.mask_text(text)
+            self.assertEqual(len(found), 2, shown)
+            self.assertEqual(windows(shown, rows[-3:] + other[:3]), [], shown)
+        # a credential on the line after a key's keeps its kind, and its label stays shown
+        for label, value, kind in (("AWS_SECRET_ACCESS_" + "KEY=", AWS_SECRET, "aws_secret_key"),
+                                   ("aws_session_" + "token=", SESSION, "aws_session_token"),
+                                   ('"SecretAccess' + 'Key": "', AWS_SECRET, "aws_secret_key"),
+                                   ("MY_TOKEN=", chars("my-token", 48, "std"), "private_key")):
+            text = hint + rows[0] + "\n" + rows[1] + "\n" + label + value + "\n"
+            for how in ("mask_text", "masked_tail"):
+                with self.subTest(label, how=how):
+                    shown, found = masks(text, how)
+                    self.assertEqual([f["kind"] for f in found], ["private_key", kind], shown)
+                    self.assertIn("\n" + label + own(value) + "\n", shown)
+        # what a label or an escape leaves of a run is masked however short (a run of 40 was before)
+        for before, value in (("KEY=", chars("short", 36, "std")), ('{"k": "\\n', chars("short", 39, "std"))):
+            with self.subTest("short", before=before):
+                self.assertEqual(sources.mask_text(hint + before + value + "\n")[0], hint + before + own(value) + "\n")
+        # a key's lines joined by an escaped line break (JSON, JSON in JSON, a diff in JSON): one mask, of the lines
+        for joint in ("\\n", "\\\\n", "\\n+", "\\r\\n", "\\n "):
+            text = hint + '{"key": "' + joint.join(rows[:5]) + '", "next": "shown"}\n'
+            for how in ("mask_text", "masked_tail"):
+                with self.subTest(joint=joint, how=how):
+                    shown, found = masks(text, how)
+                    self.assertEqual(shown, hint + '{"key": "' + own(joint.join(rows[:5])) + '", "next": "shown"}\n')
+                    self.assertEqual(len(found), 1)
+            text = hint + '{"key": "' + joint.replace("+", "") + rows[0] + '"}\n'   # one after an escaped break
+            with self.subTest("one line", joint=joint):
+                self.assertEqual(sources.mask_text(text)[0], hint + '{"key": "' + joint.replace("+", "") + own(rows[0])
+                                 + '"}\n')
+        # the same line prefix as the line before, whatever it is (docker compose, kubectl --prefix): one mask
+        for prefix in ("web-1  | ", "[pod/web-1/app] "):
+            text = hint + "".join(prefix + row + "\n" for row in rows[:4]) + prefix + "done\n"
+            with self.subTest(prefix=prefix):
+                shown, found = sources.mask_text(text)
+                self.assertEqual(shown, hint + prefix + own("\n".join(prefix + row for row in rows[:4])[len(prefix):])
+                                 + "\n" + prefix + "done\n")
+        text = hint + "".join(f"{name} | {row}\n" for name, row in zip("abcd", rows))   # another prefix: its own
+        with self.subTest("another prefix"):
+            self.assertEqual(sources.mask_text(text)[0], hint + "".join(f"{name} | {own(row)}\n"
+                                                                        for name, row in zip("abcd", rows)))
 
     def test_a_key_whose_begin_was_cut_off_is_masked_up_to_its_end(self):
         # the check's output keeps only its last 8 KB: a key longer than that tail lost its BEGIN with the head
