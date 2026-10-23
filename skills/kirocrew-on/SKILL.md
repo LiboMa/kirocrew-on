@@ -94,10 +94,19 @@ KiroCrew ON 在远端执行开发任务：KiroCrew 的 Kiro Agent 先识别意�
 - `octopus_revisions`（传 `run_id`）列出修订历史（创建、规划、续作、自动纠错、平台追加的 Evaluator / Knowledge 任务）；加 `to`（以及可选的 `from`）返回两版之间需求与各任务的变化：工具、模型等字段的前后值，以及 Prompt 新增（+）与删除（-）的行。用户问“上一轮改了什么”时用它。
 - `octopus_observe`（传 `run_id`）读取原生 KiroCrew 会话里协调者与子 Agent 的最近对话（默认 20 条，单条超过 4000 字截断；`has_more` 为 true 时传 `before: next_before` 读更早的），用来向用户说明 Agent 正在做什么；不需要打开 KiroCrew。
 
-- 门禁（D37，新会话）：每个任务的 `latest.gates` 给出通过的个数、失败的门禁（`failed`，带原因首行）与跳过的门禁。
-  - 改代码的任务结束后，平台在会话分支上留下候选提交（`latest.candidate`）。
-  - 平台亲自运行任务的 `verify` 检查命令：`checks_pass` 失败时会自动返工，把失败的命令与原因告诉用户。
-  - 审查任务须在 `outcome.json` 写 `reviewed_commit`，且不修改代码（`review_bound`）。
+- 门禁（D37，新会话）：每个任务的 `latest.gates` 给出通过的个数、失败的门禁（`failed`，带原因首行）、提示（`warned`，D57）与跳过的门禁；
+  `session.warnings` 是各任务提示的总数。
+  - **⚠ 提示不会让会话停下**：任务照常验收，会话照常完成。把提示的要点告诉用户，由用户决定要不要处理；不要因为提示停下来问用户，也不要自行续作或重跑。
+  - 改代码的任务结束后，平台在会话分支上留下候选提交（`latest.candidate`）。没有改动入库文件时只记提示。
+  - 平台亲自运行任务的 `verify` 检查命令，分必过检查与建议检查：
+    - 只有必过检查失败才自动返工，把失败的命令与原因告诉用户；
+    - 建议检查失败只记提示；
+    - 因环境无法执行（命令不存在、缺少模块、没有 git 身份）只记提示，必过检查也一样。这时请用户确认环境；用户要改写这条检查时，用 `octopus_continue` 改成可执行的形式。
+  - 审查任务须在 `outcome.json` 写 `reviewed_commit`，不修改代码。审查改了文件时，平台把改动撤回、新建的文件移出，记提示（`review_bound`），审查结论照常采用。
+  - `secrets_masked`（已打码的疑似密钥）：平台保存和展示的结果、交接、检查输出与事件里的疑似密钥已打码，只留首 4 位与末 2 位，会话不会因此停下。
+    - 把提示里写的种类与位置告诉用户，建议用户本人吊销或轮换；
+    - 不要把密钥原文抄进对话，也不要为了找它去读执行环境上的原始文件。
+  - 没有「安全阻塞」状态，也没有误报确认。候选里有疑似凭证或 `.env` 文件时 `no_secrets` 失败、会话分支不动，按普通的失败处理（自动纠错会让 Agent 移除）。
   - `session.verified` 是将被发布的已验证候选。
 
 - `octopus_report`（传 `run_id`）返回会话的 Feature 报告（Markdown）：需求与计划、各任务的工具与结论、门禁、候选、检查命令、
@@ -111,7 +120,7 @@ KiroCrew ON 在远端执行开发任务：KiroCrew 的 Kiro Agent 先识别意�
 | `waiting_worker` | 还没有 Worker 执行，或原来的执行环境已更换、已移出该空间、已停用或已退役（`error` 写明原因）：把 `attention.title` / `attention.action` 告诉用户。`attention.workers` 为 0 时该空间没有可用的执行环境（尚未分配或已停用），请管理员分配或启用，或改在个人空间重新提交；大于 0 时用 `octopus_environments`（传 `run_id`）列出这个会话可分配的环境，直接用 `octopus_assign_worker` 分配 `default: true` 的那个（没有默认时选第一个），告诉用户分配到了哪里，用户要别的再改 分配 |
 | `blocked` / `failed` | 读 `attention.title` / `attention.action` 告诉用户；可用 `octopus_recover` 诊断修复，或用 `octopus_continue` 修改后重跑。`attention.title` 为「需要换用工具或模型」时，向用户说明原因（`attention.detail`）并直接换用一个可用的工具，用 `octopus_continue` 的 `execution.tool` / `execution.model` 续作，告诉用户换成了什么（需求明确指定了工具的除外：说明原因，由用户决定） |
 | `waiting_approval` | 原生任务在等待批准一次工具调用：用 `octopus_approvals` 列出，把工具、完整的命令或文件与用途告诉用户；用户同意后用 `octopus_approve` 答复（approve），不同意则 reject。不要替用户决定 |
-| `completed` | 完成；用 `octopus_preview` 给出预览。`session.knowledge` 列出本次沉淀的项目知识（见下） |
+| `completed` | 完成；用 `octopus_preview` 给出预览。`session.warnings` 大于 0 时，把各任务 `latest.gates.warned` 的要点一并告诉用户。`session.knowledge` 列出本次沉淀的项目知识（见下） |
 
 ## 4．迭代：`octopus_continue` / `octopus_recover`
 
@@ -120,12 +129,15 @@ KiroCrew ON 在远端执行开发任务：KiroCrew 的 Kiro Agent 先识别意�
   更新后的 `input`；可选 `execution`（`name`、`prompt`、`tool`、`model`、`effort`，以及任务契约 `acceptance`、`verify` 等），
   工具本身失败时，自动纠错会请 KiroCrew 协调者推荐换用的工具（`octopus_status` 的 `latest.switched_from` 写明从哪个工具换来、原因）；
   会话关闭了换工具（`recovery.switch_tools: false`）时，按协调者的说明直接续作并告诉用户做了什么；协调者只在缺少仓库凭证或需求信息时等待用户（D71），这时把缺什么告诉用户。
-  `artifacts_locked`（改了此前已验收任务的文件）时，协调者可为失败的任务扩大可改动路径（修订摘要「扩大「X」的可改动路径」）；它没有这样做时，直接用 `octopus_continue` 的 `execution.paths` 补上这些文件并告诉用户。
+  `artifacts_locked`（改了此前已验收任务的文件）现在只记提示，改动保留、交给后续审查，不需要为它扩大 `paths`。
+  `execution.verify` 是用户自己的检查，默认全部为必过；用户明确说只有其中几条必须通过时，用 `execution.verify_required` 列出那几条，其余为建议检查。
+  不要自己把必过检查改成建议检查。
   自动纠错的返工会接着该任务上一轮的原生对话做（保留上下文）：`latest.continued: true` 表示这一次接上了——它与你的 `octopus_continue`（续作）无关；`latest.continue_refused` 是没能接上的原因，这一次从新对话开始。
 - 只重跑受影响的任务：用 `rerun` 列出这次修改会影响的后续任务（例如只改前端时不列后端），省略则重跑之后的全部任务。
   依赖重跑任务的任务、其后的审查 / 测试任务、尚未完成的任务会由平台自动一并重跑；其余沿用上一版结果。
   回复用户时说明重跑了哪些任务、沿用了哪些（`octopus_status` 的修订摘要与 `kept`）。
 - 任务暂停（`blocked` / `failed` / `stopped`）时，可用 `octopus_recover` 请 KiroCrew 协调者按失败证据诊断并安排修复。
+  每次请求都会诊断，没有 `rediagnose` 参数（D71）。诊断员因平台故障没能启动或完成时，平台会先自动重试一次；`attention` 写明是平台的问题时，如实转告用户。
 
 ## 沉淀的项目知识
 
