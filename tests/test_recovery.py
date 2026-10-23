@@ -461,7 +461,7 @@ class DiagnosisRetryTests(RecoveryCase):
         latest = result["recovery"]["latest"]
         self.assertEqual((latest["status"], latest["decision"]["action"], latest["decision"]["fallback_from"]),
                          ("applied", "retry", "none"))
-        self.assertIn("协调者执行失败或已停止", latest["decision"]["instructions"])
+        self.assertIn("诊断员没能启动（平台临时故障，已自动重试 1 次）", latest["decision"]["instructions"])   # Task 15
 
     def test_a_diagnosis_the_runtime_ended_is_retried_too(self):
         self.faults = [{"error": "kiro_crew.acp.client.AcpError: ACP process exited (code=-15, SIGTERM, external)"}]
