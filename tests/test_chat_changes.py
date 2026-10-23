@@ -18,10 +18,10 @@ C2 = "d" * 40
 class ChatChangesCase(TeamsWorkersCase):
     def setUp(self):
         super().setUp()
-        self.worker, self.dirty, self.secrets, self.continues = FakeWorker(), False, [], 0
+        self.worker, self.dirty, self.secrets, self.continues, self.created = FakeWorker(), False, [], 0, []
         clean, made = self.worker.check, self.worker.candidate
         self.worker.check = lambda body: ({"head": body["expected"], "clean": False, "changed_files": ["src/chat.js"]}
-                                          if self.dirty else clean(body))
+                                          if self.dirty else {**clean(body), **({"untracked": list(self.created)} if body.get("untracked") else {})})
 
         def candidate(body):
             if not self.dirty:
@@ -103,6 +103,22 @@ class ContinueTests(ChatChangesCase):
         self.assertEqual(len(code), 3)
         commits = [b for b in self.candidate_calls("commit") if b["attempt_id"] == code[2]["id"]]
         self.assertEqual(commits[0]["parent"], C2)
+
+    def test_a_chat_that_only_created_files_is_committed_too(self):
+        """EC2 review of D73: the check counts tracked files only, so a chat that wrote a new README alone went unseen."""
+        rid = self.finished()
+        self.created = ["README.md"]
+
+        def candidate(body):
+            self.created = []
+            return {"sha": C2, "parent": body["parent"], "changed": True, "files": 1, "insertions": 9, "deletions": 0,
+                    "rewritten": False, "secrets": [], "names": ["README.md"]}
+        self.worker.candidate = candidate
+        self.proceed(rid, "review")
+        chat = self.attempts(rid, "code")[1]
+        self.assertEqual(chat["evidence"]["chat"]["files"], ["README.md"])
+        asked = [b for b in self.candidate_calls("check") if b.get("untracked")]
+        self.assertTrue(asked)   # the platform asks for the files created since it last looked
 
     def test_a_clean_workspace_adds_nothing(self):
         rid = self.finished()
