@@ -152,6 +152,28 @@ class ContinuedChecksTests(ContinueCase):
         self.assertEqual(self.service.run(self.actor, rid)["tasks"][0]["spec"]["verify_required"], [])
 
 
+    def test_checks_echoed_unchanged_keep_their_classification(self):
+        # (final review 7) a continue that sends the task's checks back as they are (the console's form does) changes
+        # nothing about which must pass; only checks that differ from the task's are the user's own, all required
+        rid = self.start()
+        self.assertEqual(self.tick(rid)["status"], "completed")
+        with self.db.transaction() as db:   # a planner's task: one advisory check
+            spec = json.loads(db.execute("SELECT spec FROM tasks WHERE run_id=? AND id='code'", (rid,)).fetchone()[0])
+            spec.update(verify=["npm test", "npm run lint"], verify_required=["npm run lint"], origin="planner")
+            db.execute("UPDATE tasks SET spec=? WHERE run_id=? AND id='code'", (dumps(spec), rid))
+        spec = self.continued(rid, "continue-echo-1", {"prompt": "实现（补充说明）", "verify": ["npm test", "npm run lint"]})
+        self.assertEqual((spec["verify"], spec["verify_required"]), (["npm test", "npm run lint"], ["npm run lint"]))
+        spec = self.continued(rid, "continue-echo-2", {"verify": ["npm test", "npm run lint", "npm run e2e"]})
+        self.assertEqual(spec["verify_required"], ["npm test", "npm run lint", "npm run e2e"])   # edited: all required
+        with self.db.transaction() as db:   # a task from before D57: no verify_required, the planner's by the Session
+            spec = json.loads(db.execute("SELECT spec FROM tasks WHERE run_id=? AND id='code'", (rid,)).fetchone()[0])
+            for key in ("verify_required", "origin"):
+                spec.pop(key, None)
+            db.execute("UPDATE tasks SET spec=? WHERE run_id=? AND id='code'", (dumps(spec), rid))
+        spec = self.continued(rid, "continue-echo-3", {"verify": spec["verify"]})
+        self.assertNotIn("verify_required", spec)   # still judged as before D57 (domain.required_checks)
+
+
 class RuleTests(unittest.TestCase):
     PREVIOUS = {"id": "attempt-" + "a" * 32, "native_id": "aaaa1111", "spec": json.dumps({"tool": "claude", "model": "auto", "effort": ""}),
                 "evidence": "{}"}
