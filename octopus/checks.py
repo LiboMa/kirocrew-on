@@ -2,10 +2,11 @@
 (the execution user the Agent runs as, so no new privilege), one after another, every one of them even after a failure
 (D57 §13.3: a failing advisory check must not keep a required one from running). Each command and all of them together
 are time-limited; a command that overruns has its whole process group ended, and what the total limit leaves is skipped.
-What remains is the exit code, the time and the output's tail with credentials hidden; ``unrunnable`` tells a failure
-the environment caused (a missing command or module, no git identity) from one of what the command checks, and the
-Worker records its answer in each failed result (D57 §5). A commit a check makes has the platform's identity only where
-git finds none of its own."""
+What remains is the exit code, the time and the output's tail with credentials masked (D57 §3.3: what was masked is
+listed in the result's ``findings``, never its text); ``unrunnable`` tells a failure the environment caused (a missing
+command or module, no git identity) from one of what the command checks, and the Worker records its answer in each
+failed result (D57 §5), judged on the output as the command printed it, so that masking never changes it. A commit a
+check makes has the platform's identity only where git finds none of its own."""
 import os
 import re
 import shutil
@@ -64,18 +65,19 @@ UNRUNNABLE = [
 OWN_MODULES = {PYTHON_MODULE: (".py",), NODE_MODULE: (".js", ".mjs", ".cjs", ".jsx", ".ts", ".tsx", ".json")}
 
 
-def unrunnable(result, project=None):
+def unrunnable(result, project=None, output=None):
     """Why a check failed because of where it ran rather than what it checks (D57 §5), in words for the user; None when it
     passed, failed on its own, or never came to an exit code (a timeout, a stop, the total limit, a runner error). A
     script path that is not there is the project's error; with ``project``, so is a module the project has itself;
     without it, what the Worker recorded with the project at hand is the answer (results of an older Worker are judged
-    from the output alone)."""
+    from their stored tail). ``output``: the tail of the output as the command printed it, which the Worker judges (the
+    stored tail is masked, and masking must never change the answer, D57 §3.3)."""
     if "unrunnable" in result:
         return result["unrunnable"]
     code = result.get("exit")
     if code in (0, None):
         return None
-    tail = str(result.get("tail") or "")
+    tail = str(result.get("tail") or "") if output is None else output
     if MISSING_PATH.search(tail):
         return None
     for pattern, reason in UNRUNNABLE:
@@ -135,9 +137,41 @@ def _remove(path):
         pass
 
 
+def masked_tail(raw, dropped=None, extra=()):
+    """The last TAIL bytes of a command's output (``raw``: the bytes kept of it) as they are shown and stored, every
+    credential masked (D57 §3.3) — ``extra`` too, values no rule knows (the Worker's own token) — and what was masked:
+    ``[{kind, line, masked, hash}]``, ``line`` counted in the tail.
+    Masked before it is cut, so a credential across the cut is masked whole; and nothing from before the cut is shown,
+    so the masks' shorter text never makes room for the head of ``raw``, which may be the rest of a credential whose
+    start was already dropped and so is not recognised. A private key whose BEGIN is out of view — dropped with the
+    output's head (``dropped``: whether any was; by default, whether ``raw`` is as long as what is kept of it) or before
+    the cut and not yet ended — is masked from the cut through its END."""
+    cut = max(len(raw) - TAIL, 0)
+    dropped = len(raw) >= 2 * TAIL if dropped is None else dropped
+    before = raw.count(b"\n", 0, cut)
+    pieces, at, found = [], cut, []
+    for hit in sources.find_secrets(raw, extra, cut=cut, dropped=dropped):
+        if hit["end"] <= cut:
+            continue   # in the part kept only so that one across the cut is still recognised
+        pieces += [raw[at:hit["start"]], hit["masked"].encode()]   # nothing between for the one across the cut
+        at = hit["end"]
+        found.append({"kind": hit["kind"], "line": max(hit["line"] - before, 1), "masked": hit["masked"],
+                      "hash": hit["hash"]})
+    tail = sources.scrub(b"".join(pieces + [raw[at:]]).decode(errors="replace"))
+    return tail.encode()[-TAIL:].decode(errors="ignore"), found
+
+
+def _shown(reason, extra=()):
+    """An ``unrunnable`` reason as it is stored and shown: judged on the output as printed, so masked and scrubbed as the
+    tail is (a module name may be a credential)."""
+    return None if reason is None else sources.scrub(sources.mask_text(reason, extra)[0])
+
+
 class Checks:
-    def __init__(self, path_prepend=(), per_command=600, total=1200):
+    def __init__(self, path_prepend=(), per_command=600, total=1200, mask=()):
+        """``mask``: what the output's tail masks besides what the rules know (the Worker's own token, D57 §3.3)."""
         self.path_prepend, self.per_command, self.total = tuple(str(p) for p in path_prepend), per_command, total
+        self.mask = tuple(value for value in mask if value)
         self.jobs, self.by_attempt, self.lock = {}, {}, threading.Lock()
 
     def commands(self):
@@ -219,13 +253,13 @@ class Checks:
                     result = {"command": command, "exit": None, "seconds": 0.0, "tail": "", "skipped": "total_timeout"}
                 else:
                     try:
-                        result = self._one(value, project, command, env, min(self.per_command, left))
+                        result, output = self._one(value, project, command, env, min(self.per_command, left))
                     except Exception as exc:   # e.g. the project is gone: a failed check, never a job left running
                         result = {"command": command, "exit": None, "seconds": 0.0,
                                   "tail": f"无法运行检查命令（{type(exc).__name__}）"}
-                    else:
-                        if result["exit"] not in (0, None):   # judged here, where the project is at hand
-                            result["unrunnable"] = unrunnable(result, project)
+                    else:   # judged here, where the project is at hand, and on the output before it was masked
+                        if result["exit"] not in (0, None):
+                            result["unrunnable"] = _shown(unrunnable(result, project, output), self.mask)
                 with self.lock:
                     value["results"].append(result)
                 passed = passed and result["exit"] == 0
@@ -252,16 +286,20 @@ class Checks:
                              failed=failed, current=None, ended=time.time())
 
     def _one(self, value, project, command, env, limit):
+        """The command's result, and the tail of its output as it printed it (never stored: the Worker judges it)."""
         began = time.monotonic()
         proc = subprocess.Popen(["bash", "-lc", command], cwd=project, stdin=subprocess.DEVNULL, stdout=subprocess.PIPE,
                                 stderr=subprocess.STDOUT, start_new_session=True, env=env)
         value["current"] = proc
-        output = bytearray()
+        output, dropped = bytearray(), False
 
         def read():
+            nonlocal dropped
             for chunk in iter(lambda: proc.stdout.read(8192), b""):
                 output.extend(chunk)
-                del output[:-2 * TAIL]   # enough to hide a credential cut at the edge, little to hold
+                if len(output) > 2 * TAIL:   # enough to mask a credential across the tail's edge, little to hold
+                    dropped = True   # first: a reader still running after GRACE never shows a dropped head as whole
+                    del output[:-2 * TAIL]
         reader = threading.Thread(target=read, daemon=True)
         reader.start()
         timeout = False
@@ -276,15 +314,17 @@ class Checks:
         if not reader.is_alive():
             proc.stdout.close()
         value["current"] = None
-        hidden = sources.SUSPICIOUS.sub(sources.HIDDEN.encode(), bytes(output))
-        tail = sources.scrub(hidden[-TAIL:].decode(errors="replace"))
+        raw = bytes(output)
+        tail, findings = masked_tail(raw, dropped, self.mask)
         result = {"command": command, "exit": None if timeout or value["cancelled"] else proc.returncode,
-                  "seconds": round(time.monotonic() - began, 1), "tail": tail.encode()[-TAIL:].decode(errors="ignore")}
+                  "seconds": round(time.monotonic() - began, 1), "tail": tail}
+        if findings:
+            result["findings"] = findings
         if timeout:
             result["timeout"] = True
         elif value["cancelled"]:
             result["stopped"] = True
-        return result
+        return result, raw[-TAIL:].decode(errors="replace")
 
     @staticmethod
     def _end(proc):

@@ -26,7 +26,8 @@
 ## 共享与组织（原 M4）
 - 组织层，Session 共享给个人 / Team / 公司；Team 执行隔离。
 - **KiroCrew 回收未认领的父会话时杀掉子 Agent**（EC2 2026-10-22，run-16848466…）：Worker 建的 chat slot 被 KiroCrew 急切起了 coordinator 会话但从未认领；内存吃紧（posture=tight）时预取上限为 0，同一边界上新会话建 slot 就回收最旧的未认领父会话（parent-end teardown），正在运行的子 Agent 被 SIGKILL（「killed by Crew (forced stop)」），平台记 native_stopped、不重试。平台把这种停止视为瞬时失败：D57 Task 13。根因：KiroCrew 0.10 的 `session.eager_spawn` 默认开启（sections.py:2216）——D63 在边界的 KiroCrew 配置里关掉它（新配置与已有配置都写 false，明确开启的保留）。
-- **子 Agent 结束时父会话仍跑一轮 coordinator**（EC2 2026-10-22，D63 之后的核对）：Worker 派发时已带 `silent: true`，但 KiroCrew 0.10 只按它关 Slack / Dashboard 通知（slack/gateway.py:10820 起），结果照样注入父 chat slot（`Subagent … → _run_chat in octopus-run-…`，gateway.py:10457），为平台的 slot 起一个 poc-coordinator（kiro 后端）进程并跑一轮——每个任务结束都多一轮 Kiro 用量，进程留到 TTL。待：查 KiroCrew 有无不回报父会话的派发方式（平台以 parent_session 证明归属，须一起设计），或向上游提需求。
+- ~~**子 Agent 结束时父会话仍跑一轮 coordinator**~~（EC2 2026-10-22，D63 之后的核对）：Worker 派发时已带 `silent: true`，但 KiroCrew 0.10 只按它关 Slack / Dashboard 通知（slack/gateway.py:10820 起），结果照样注入父 chat slot（`Subagent … → _run_chat in octopus-run-…`，gateway.py:10457），为平台的 slot 起一个 poc-coordinator（kiro 后端）进程并跑一轮——每个任务结束都多一轮 Kiro 用量，进程留到 TTL。待：查 KiroCrew 有无不回报父会话的派发方式（平台以 parent_session 证明归属，须一起设计），或向上游提需求。
+  2026-10-23 修复：KiroCrew 0.10 已有 `POST /api/spawn/mark-collected {ids, parent_session}`（它自己的阻塞式 spawn 工具用来表示父会话已拿到结果），Worker 每次派发、续接与模型探测拿到原生 ID 后立即调用，结束时不再注入父会话、不跑这一轮，波次的汇总轮也不再触发；结果照旧从 `GET /api/spawn/{id}` 读取，交付标记与保留时长不变。标记只在 Gateway 内存中：运行中 Gateway 重启后，结束时会照旧跑一轮。
 - 用量上限（M4-4 第 3 期）：每人 / 每 Team 按周期（月）的 Kiro credits、token 或分钟数上限（D46 P6a 已有用量记录）；D61 只限同时运行的任务数。
 - 原生入口改为单 Session 票据（K03）；Worker Token 移出数据库（K10）。
 
@@ -294,7 +295,31 @@
 - 向导：导入 / 推荐后切换到模板时来源提示未更新；切换空间未重置推荐 Worker；推荐轮询遇 403 / 404 不停止；提交瞬间在途轮询可能回写草稿。
 - 原生入口弹窗缺少账户切换保护；`crew_url` 公网来源未规范化 `:443` 写法。
 - 导入说明未列出 ID 改写、Effort 大小写、失败任务序号；document 的 `name` 未用于 Session 名称。
-- 构建产物 `no-store`（584 KB 包每次重新下载）；经典版步骤条跳转跳过隐藏任务字段校验。
+- 经典版步骤条跳转跳过隐藏任务字段校验。（构建产物的 no-store 已改：带哈希的 /assets/ 长期缓存，见 test_static_cache；2026-10-23 起 GET 的文本响应 ≥ 1 KB 时按 Accept-Encoding 以 gzip 发送，POST 不压缩，见 test_compression）
 - `default_url` 由 `0.0.0.0` 拼接（应使用 `probe_host`）；systemd 单元可恢复 `NoNewPrivileges` 等加固项；
   `bootstrap-worker` 不比对已有 Worker 的 URL / Token；记录接受的 KiroCrew commit 而不只是版本号。
 - OpenCode 执行未通过（K01）：EC2 上 shell 写文件被 KiroCrew 工具门禁拒绝，需查明命中的门禁层；替代配置 deliver→claude 可用。
+
+## 延后（负责人 2026-10-23：不是强依赖就之后做）
+
+- 部署 5fd7976（GET 文本响应 gzip）与 2c3206e（D57 写入时打码）：回归已通过，只重启 API 与 Worker；D73 实现时随之一起部署。
+- 上游简报工具：每周列出 KiroCrew 自我们钉的版本以来的发版、P0 变化、与派发 / 子 Agent / 成员 / Gateway 相关的 PR（`docs/research/2026-10-23-kirocrew-release-cadence.md` §5）。
+- 向 KiroCrew #11576（Gateway 事件循环卡住）提交我们在 EC2 的记录：对外操作，须负责人同意。
+- D72 的服务层草稿（`octopus/follow_up.py`、`tests/test_follow_up.py`，未接入）放在本地分支 `park/d72-follow-up-draft`；D73 的 P4 再取用。
+
+## MVP 0.2.0 输入：KiroCrew 原生能力（负责人 2026-10-23）
+
+- 调研：`docs/research/2026-10-23-kirocrew-native-capabilities.md`（成员与小组为主）。候选：会话内并行（独立 spawn + `/api/spawn/lanes`）、角色成员化试点（先在测试边界核实成员设置是否作用于 `crew=` 派发）、频道用于小规模多 Agent 讨论、导出用于证据归档。不接：Conductor、KiroCrew 动态工作流、并行波次、steer `follow_up`。改变体验的须负责人确认。
+
+## 稳定性（2026-10-22 发现）
+
+- **会话列表每行过重**（EC2 2026-10-23）：`GET /v1/runs?page=1&view=list` 50 行 199 KB，大头是需求全文（58 KB）、tasks（21 KB）、replan（17 KB）、credentials、knowledge、permissions、usage；侧栏用不到。gzip 之后传输量已降，精简列表视图的字段要先核对 MCP `octopus_runs` 与 CLI `search` 用到哪些。
+
+- **Gateway 事件循环卡住后被看门狗结束**：EC2 2026-10-22 13:25–13:30，owner 边界的 Gateway 事件循环多次卡住（最长 18 秒），KiroCrew 的 loop_watchdog 以 SIGALRM 结束进程，两个子 Agent 中途断开（「Orphaned: gateway_restart」），由自动纠错救回。
+  - 已处理（21495ea）：Worker 检查运行中的尝试改读自己的那一行，不再每次读完整列表（310 KB / 150 ms → 7 KB / 16 ms）。
+  - 仍待：
+    - 持久化记录超过 50 条后，KiroCrew 每次列表都报截断（日志约每 1.5 秒一条），疑似 KiroCrew 原生页面在轮询；
+    - 事件循环其余的阻塞来源在上游 KiroCrew，崩溃转储在 `<边界>/crew/logs/crash-dumps/`。
+  - 2026-10-23 复查（bc651cc）：17:21 部署重启之后两个多小时内没有再卡顿，截断告警只在派发与结束时出现（此前约每 1.5 秒一条）；17:21 的 loopstall 文件是每次启动新开的空转储。
+- ~~**浏览器测试截图写到主仓库的绝对路径**~~（2026-10-23 修复：运行器把 `$BROWSER_ARTIFACTS` 作为 `artifactRoot` 传入，没设就不截图）。
+

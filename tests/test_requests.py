@@ -44,10 +44,10 @@ class RequestTests(ConfirmationCase):
         self.assertEqual(self.actor["token_label"], "API")
 
     def test_explicit_choices_and_the_policy_are_kept(self):
-        rid = self.start(steps=ONE, admission="confirm")
+        rid = self.start(steps=ONE, admission="confirm")   # D70: an older client's confirm is not used
         found = self.service.request(self.actor, self.service.run(self.actor, rid)["request"]["id"])
         self.assertEqual(found["explicit"], {"steps": 1})
-        self.assertEqual(found["policy"]["admission"], {"mode": "confirm", "basis": "submitted"})
+        self.assertEqual(found["policy"]["admission"], {"mode": "auto", "basis": "default"})
         self.assertEqual(found["client"], "api")
         self.assertEqual(found["source"], {"type": "new"})
         rid = self.start(steps=ONE)

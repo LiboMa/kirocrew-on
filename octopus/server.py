@@ -14,6 +14,7 @@ import socket
 import threading
 import time
 import base64
+import gzip
 import secrets
 import sqlite3
 import struct
@@ -28,6 +29,43 @@ from .schema import openapi
 
 UI = Path(__file__).parent / "ui"
 LOOPBACK = {"127.0.0.1", "::1"}
+# D67: a login's session cookie. __Host-: only this host may set it (not a preview subdomain), Secure and Path=/ forced.
+SESSION_COOKIE = "__Host-octopus_session"
+REMEMBER = 30 * 86400   # 「保持登录」: the cookie and its token; otherwise both end with the day (and the cookie with the browser)
+
+
+# Text answers of a GET go gzipped to a client that accepts it (EC2 2026-10-23: the Session list was 199 KB for 50 rows,
+# the console's script 731 KB, and CloudFront caches, so compresses, nothing). Never a POST's: a login's or a new token's
+# answer carries a secret, and a response's length is what BREACH-style attacks read.
+COMPRESSIBLE = re.compile(r"(application/(json|javascript)|text/|image/svg\+xml)")
+COMPRESS_MIN = 1024
+
+
+def accepts_gzip(header):
+    """Whether an Accept-Encoding header takes gzip (or any encoding) with a weight above zero."""
+    for part in (header or "").split(","):
+        coding, _, params = part.partition(";")
+        if coding.strip().lower() in {"gzip", "*"}:
+            weight = re.search(r"q\s*=\s*([0-9.]+)", params)
+            try:
+                return not weight or float(weight.group(1)) > 0
+            except ValueError:
+                return False
+    return False
+
+
+def session_cookie(token, max_age=None):
+    return (f"{SESSION_COOKIE}={token}; Path=/; Secure; HttpOnly; SameSite=Strict"
+            + ("" if max_age is None else f"; Max-Age={max_age}"))
+
+
+def cookie_token(header):
+    """The session token a Cookie header carries, or ""."""
+    for part in (header or "").split(";"):
+        key, _, value = part.strip().partition("=")
+        if key == SESSION_COOKIE:
+            return value
+    return ""
 
 
 def client_ip(handler, verified):
@@ -44,6 +82,7 @@ def loopback_host(value):
         return False
 
 
+HASHED = re.compile(r"-[A-Za-z0-9_-]{8,}\.[a-z0-9]+$")   # a Vite build's file name: name-<content hash>.ext
 CLASSIC = {"/app.js": "app.js", "/launch.js": "launch.js", "/recommend.js": "recommend.js", "/style.css": "style.css",
            "/crew.js": "crew.js", "/crew-entry.html": "crew-entry.html", "/recovery-ui.js": "recovery-ui.js"}
 TYPES = {".html": "text/html; charset=utf-8", ".js": "text/javascript; charset=utf-8", ".css": "text/css; charset=utf-8",
@@ -198,11 +237,11 @@ PREVIEW_PAGE = ("<!doctype html><html lang=\"zh-CN\"><head><meta charset=\"utf-8
 
 
 def server(database, port=8918, host="127.0.0.1", allowed_hosts=(), origin_secret=None, preview_url="", preview_domain="",
-           credentials_key_file=None, credentials_private_hosts=(), default_admission="auto"):
+           credentials_key_file=None, credentials_private_hosts=()):
     if origin_secret is not None and len(origin_secret) < 32:
         # An empty or truncated secret file must fail closed instead of turning origin enforcement off.
         raise ValueError("源站密钥为空或过短（至少 32 个字符）；检查 origin_secret_file")
-    service = Service(database, default_admission)
+    service = Service(database)
     service.credentials.configured = credentials_key_file
     from . import transport
     try:   # D59: Worker tokens are stored sealed with the D35 key
@@ -229,12 +268,20 @@ def server(database, port=8918, host="127.0.0.1", allowed_hosts=(), origin_secre
         def log_message(self, *_):
             pass  # No tokens, request bodies or query strings in access logs.
 
-        def respond(self, value, status=200, kind="application/json; charset=utf-8"):
+        def respond(self, value, status=200, kind="application/json; charset=utf-8", headers=(), cache="no-store"):
             data = value if isinstance(value, bytes) else dumps(value).encode()
+            textual = self.command == "GET" and COMPRESSIBLE.match(kind)
+            if textual and len(data) >= COMPRESS_MIN and accepts_gzip(self.headers.get("Accept-Encoding")):
+                data = gzip.compress(data, compresslevel=5, mtime=0)
+                headers = (*headers, ("Content-Encoding", "gzip"))
             self.send_response(status)
+            for key, header in headers:
+                self.send_header(key, header)
+            if textual:
+                self.send_header("Vary", "Accept-Encoding")
             self.send_header("Content-Type", kind)
             self.send_header("Content-Length", str(len(data)))
-            self.send_header("Cache-Control", "no-store")
+            self.send_header("Cache-Control", cache)
             self.send_header("X-Content-Type-Options", "nosniff")
             self.send_header("Referrer-Policy", "no-referrer")
             self.send_header("Content-Security-Policy",
@@ -395,10 +442,17 @@ def server(database, port=8918, host="127.0.0.1", allowed_hosts=(), origin_secre
                 self.close_connection = True
                 logging.error("Download of %s not recorded (%s)", rid, type(exc).__name__)
 
-        def identity(self):
+        def identity(self, method):
+            # The Authorization header comes first (API clients, the CLI, a console without the cookie); else the
+            # session cookie (D67), whose writes must also say they come from this console: a browser sends Origin
+            # on every non-GET fetch, and dispatch has already refused a foreign one.
             header = self.headers.get("Authorization", "")
+            raw = header.removeprefix("Bearer ") if header.startswith("Bearer ") else ""
+            if not header and (raw := cookie_token(self.headers.get("Cookie"))):
+                require(method == "GET" or bool(self.headers.get("Origin")), "跨站写入被拒绝：登录 Cookie 的写入须来自控制台",
+                        403, "origin")
             with database.read() as db:
-                actor = authenticate(db, header.removeprefix("Bearer ") if header.startswith("Bearer ") else "")
+                actor = authenticate(db, raw)
             now = time.time()
             if actor["last_used"] is None or now - actor["last_used"] >= 60:
                 # At most one write a minute per token, in its own short transaction, and best effort: a busy
@@ -454,7 +508,10 @@ def server(database, port=8918, host="127.0.0.1", allowed_hosts=(), origin_secre
                         require(isinstance(body, dict), "请求体必须是对象")
                 if method == "GET" and (static := console_file(path)):
                     file, kind = static
-                    return self.respond(file.read_bytes(), kind=kind)
+                    # A build asset is named by its content hash (Vite): cached for good; the page itself never is
+                    hashed = path.startswith("/assets/") and HASHED.search(path) is not None
+                    return self.respond(file.read_bytes(), kind=kind,
+                                        cache="public, max-age=31536000, immutable" if hashed else "no-store")
                 require(not path.startswith("/assets/"), "Not found", 404, "not_found")
                 if method == "GET" and path.startswith("/preview/"):
                     ticket, _, relative = path[len("/preview/"):].partition("/")
@@ -493,6 +550,8 @@ def server(database, port=8918, host="127.0.0.1", allowed_hosts=(), origin_secre
                 if method == "GET" and path == "/v1/openapi.json":
                     return self.respond(openapi())
                 if method == "POST" and path == "/v1/login":
+                    remember = body.get("remember", False)   # the console asks by default; octopus login / connect do not
+                    require(isinstance(remember, bool), "remember 须为 true 或 false")
                     address = client_ip(self, self.origin_verified)
                     with limiter_lock:
                         recent = [t for t in failures.get(address, []) if time.time() - t < 60]
@@ -503,18 +562,19 @@ def server(database, port=8918, host="127.0.0.1", allowed_hosts=(), origin_secre
                                           (str(body.get("username", "")).lower(),)).fetchone()
                         require(user is not None and check_password(body.get("password"), user["password"]),
                                 "用户名或密码错误", 401, "unauthorized")
-                        token = issue_token(db, user["id"], label="Web login")
+                        token = issue_token(db, user["id"], label="Web login", ttl=REMEMBER if remember else 86400)
                         db.execute("UPDATE users SET last_login=? WHERE id=?", (time.time(), user["id"]))
                         db.execute("DELETE FROM tokens WHERE expires<?", (time.time(),))
                     with limiter_lock:
                         failures.pop(address, None)
-                    return self.respond(token)
+                    return self.respond(token, headers=[("Set-Cookie", session_cookie(token["token"],
+                                                                                      REMEMBER if remember else None))])
 
-                actor = self.identity()
+                actor = self.identity(method)
                 if path == "/v1/logout" and method == "POST":
                     with database.transaction() as db:
                         db.execute("DELETE FROM tokens WHERE id=? AND user_id=?", (actor["token_id"], actor["id"]))
-                    return self.respond({"ok": True})
+                    return self.respond({"ok": True}, headers=[("Set-Cookie", session_cookie("", 0))])
                 scope(actor, required_scope(method, path))
                 segments = path.strip("/").split("/")
                 if path == "/v1/me":
@@ -649,9 +709,11 @@ def server(database, port=8918, host="127.0.0.1", allowed_hosts=(), origin_secre
                     return self.respond({"url": f"/archive/{ticket}/{segments[2]}.zip", "expires_in": PREVIEW_TTL,
                                          "bytes_estimate": estimate["bytes"], "files": estimate["files"]})
                 if len(segments) == 4 and segments[:2] == ["v1", "runs"] and segments[3] == "preview" and method == "POST":
-                    entry = service.preview_entry(actor, segments[2])
-                    return self.respond({"url": "/preview/" + preview_ticket(segments[2], actor["id"], signing_key) + "/" + entry,
-                                         "entry": entry, "expires_in": PREVIEW_TTL})
+                    entry, pages = service.preview_entry(actor, segments[2])
+                    base = "/preview/" + preview_ticket(segments[2], actor["id"], signing_key) + "/"
+                    # One ticket for the Session: every page it produced (report/, artifacts/<name>/ …) opens with it.
+                    return self.respond({"url": base + quote(entry, safe="/"), "entry": entry, "expires_in": PREVIEW_TTL,
+                                         "pages": [{"path": page, "url": base + quote(page, safe="/")} for page in pages]})
                 if path == "/v1/workflows/parse":
                     require(method == "POST", "Method not allowed", 405)
                     from .workflow_import import import_workflow
@@ -831,7 +893,8 @@ def server(database, port=8918, host="127.0.0.1", allowed_hosts=(), origin_secre
                     return self.respond(service.runs(actor, all=query.get("all") == ["1"], status=status, q=one("q"),
                                                      limit=int(limit) if limit else None, view=one("view"),
                                                      page=one("page") == "1", cursor=one("cursor"),
-                                                     shared=one("shared") == "1", **filters))   # D64
+                                                     shared=one("shared") == "1", pinned=one("pinned") == "1",
+                                                     starred=one("starred") == "1", **filters))   # D64; one's own marks
                 if segments[:2] == ["v1", "policies"] and len(segments) in {2, 3}:   # D55: admission rules, mapping preferences
                     if len(segments) == 3:
                         require(method == "DELETE", "Method not allowed", 405)
@@ -840,6 +903,9 @@ def server(database, port=8918, host="127.0.0.1", allowed_hosts=(), origin_secre
                     if method == "POST":
                         return self.respond(service.create_policy(actor, body), 201)
                     return self.respond(service.policies(actor, (query.get("team_id") or [None])[-1] or None))
+                if len(segments) == 4 and segments[:2] == ["v1", "runs"] and segments[3] == "marks":   # pin and star (one's own)
+                    require(method == "POST", "Method not allowed", 405)
+                    return self.respond(service.mark_run(actor, segments[2], body))
                 if len(segments) == 6 and segments[:2] == ["v1", "runs"] and segments[3] == "attempts" and segments[5] == "diff":
                     require(method == "GET", "Method not allowed", 405)   # D56: what a candidate changed
                     return self.respond(service.attempt_diff(actor, segments[2], segments[4]))
@@ -859,11 +925,11 @@ def server(database, port=8918, host="127.0.0.1", allowed_hosts=(), origin_secre
                     rid = segments[2]
                     if len(segments) == 5:
                         require(method == "DELETE", "Method not allowed", 405)
-                        scope(self.identity(), "manage")
+                        scope(self.identity(method), "manage")
                         return self.respond(service.unshare_run(actor, rid, segments[4]))
                     require(method in {"GET", "POST"}, "Method not allowed", 405)
                     if method == "POST":
-                        scope(self.identity(), "manage")
+                        scope(self.identity(method), "manage")
                         return self.respond(service.share_run(actor, rid, body), 201)
                     return self.respond(service.run_shares(actor, rid))
                 if len(segments) in {4, 5} and segments[:2] == ["v1", "runs"] and segments[3] == "revisions":
@@ -906,7 +972,7 @@ def server(database, port=8918, host="127.0.0.1", allowed_hosts=(), origin_secre
                             require(not body, "原生入口只接受当前 Run，不接受自定义 Session 或 URL")
                             from .crew_entry import create
                             result = create(service, actor, rid)
-                            scope(self.identity(), "execute")
+                            scope(self.identity(method), "execute")
                             return self.respond(result)
                         if action == "observe" and method == "GET":
                             from .crew_entry import observe
@@ -953,7 +1019,7 @@ def server(database, port=8918, host="127.0.0.1", allowed_hosts=(), origin_secre
             self.close_connection = True
             for _ in range(30):
                 try:
-                    actor = self.identity()  # Revocation/membership applies to open streams.
+                    actor = self.identity("GET")  # Revocation/membership applies to open streams.
                     scope(actor, "read")
                     events = service.events(actor, rid, after)
                 except Error:

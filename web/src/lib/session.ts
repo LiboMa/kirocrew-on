@@ -107,9 +107,9 @@ export function statusText(run: Run): string {
   return STATES[run.status] ?? run.status;
 }
 
-export type RunFilter = "all" | "active" | "attention" | "done" | "closed";
+export type RunFilter = "all" | "active" | "attention" | "done" | "closed" | "starred";
 
 export const RUN_FILTERS: [RunFilter, string][] = [
-  ["all", "全部"], ["active", "进行中"], ["attention", "需处理"], ["done", "已完成"], ["closed", "已关闭"],
+  ["all", "全部"], ["active", "进行中"], ["attention", "需处理"], ["done", "已完成"], ["closed", "已关闭"], ["starred", "收藏"],
 ];
 

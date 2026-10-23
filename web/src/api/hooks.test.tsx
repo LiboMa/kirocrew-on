@@ -20,5 +20,6 @@ test("a replay of many events refreshes the Session once, not once per event", a
   const reads = (path: string) => calls.filter((c) => c.method === "GET" && c.path === path).length;
   await waitFor(() => expect(reads("/v1/runs/run-a")).toBeGreaterThanOrEqual(2));
   expect(reads("/v1/runs/run-a")).toBeLessThanOrEqual(3);
-  expect(reads("/v1/runs")).toBeLessThanOrEqual(3);
+  const pages = calls.filter((c) => c.method === "GET" && c.path === "/v1/runs" && !c.query.includes("pinned=1")).length;
+  expect(pages).toBeLessThanOrEqual(3);   // the pinned list is its own query, read once
 });

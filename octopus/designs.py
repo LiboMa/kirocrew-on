@@ -80,6 +80,10 @@ def explain(content, exc):
                 bad.append(str(sid))
             seen.add(sid)
         return f"任务 id「{'、'.join(bad[:3])}」不合规或重复（须以小写字母开头，只含小写字母、数字和短横线，至多 48 个字符）"
+    if "任务类别只能是" in message:
+        from .domain import KINDS
+        bad = [str(t.get("kind")) for t in items if "kind" in t and t.get("kind") not in KINDS]
+        return f"有任务的类别（kind）写成了「{'、'.join(bad[:3])}」（可选：{'、'.join(KINDS)}，或不写）"
     if "不支持的 Task 字段" in message:
         from .domain import CONTRACT
         allowed = {"id", "name", "prompt", "tool", "model", "effort", "requested", *CONTRACT}
@@ -123,7 +127,7 @@ def instructions(intent, design, directory, models, tools=None):
     example = {"name": "针对本次需求的工作流", "steps": [
         {"id": "task-1", "name": "任务名称", "tool": "kiro", "model": "auto", "effort": "",
          "prompt": "本任务的具体目标、输入、实施要求、交付物与验证方法"}]}
-    from .domain import MAX_TASKS
+    from .domain import KINDS, MAX_TASKS
     repair = (design or {}).get("repair")
     basis = {k: v for k, v in (design or {}).items() if k != "repair"}
     return intent_prompt(dumps(example), intent, directory, role="KiroCrew 规划者（工作流设计）") + f"""
@@ -139,7 +143,7 @@ def instructions(intent, design, directory, models, tools=None):
 4. id：小写字母开头，只含小写字母、数字和短横线，至多 48 个字符，互不重复。
 5. name 至多 80 个字符；prompt 至多 8000 个字符。
 6. tool 只能是 {TOOLS_SHOWN}（OpenCode 已停用）；model 写 auto 或下方公布的模型；effort 为空或 low / medium / high / xhigh / max。
-7. depends_on 只能指向前面的任务。
+7. depends_on 只能指向前面的任务；kind 只能是 {"、".join(KINDS)}（可以不写）。
 8. 审查任务的工具与被审查改动的作者不同（例如 claude 实现、codex 审查）。
 
 ## 当前模板 / 用户草稿基线

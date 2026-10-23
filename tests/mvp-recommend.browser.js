@@ -1,5 +1,5 @@
 /* UI-only generation stubs; workflow saves use the real ephemeral HTTP/SQLite fixture. */
-async page => {
+async (page, {artifactRoot} = {}) => {
   const browser=await page.context().browser().browserType().launch({headless:true,channel:"chrome"});
   const context=await browser.newContext({viewport:{width:1480,height:1100},reducedMotion:"reduce"});
   const p=await context.newPage(),checks=[],errors=[],requests=[];
@@ -47,15 +47,16 @@ async page => {
     await p.locator("#new-workflow").selectOption("template:bugfix");
     await p.waitForFunction(()=>document.querySelector("#launch-0-prompt").value!==""&&document.querySelector("#launch-tasks").textContent.includes("复现"));
     check(await p.locator("#launch-0-prompt").inputValue()!==first,"切换模板立即更新对应 Agent 提示词");
-    await p.waitForFunction(()=>document.querySelector("#launch-0-prompt").value.includes("订单退款"));
-    check((await p.locator("#launch-0-prompt").inputValue()).includes("订单退款"),"预设提示词动态带入本次需求");
+    // D46: a preset's prompt names its step, not the requirement (the requirement travels as input)
+    await p.waitForFunction(()=>document.querySelector("#launch-0-prompt").value.includes("当前步骤：1/"));
+    check(!(await p.locator("#launch-0-prompt").inputValue()).includes("订单退款"),"预设提示词标明当前步骤，不重复本次需求");
     await method("recommend");
     await p.locator("#recommend-start").click();
     await p.waitForFunction(()=>document.querySelector("#recommend-native").textContent.includes("fixture-not-native"));
-    check(requests.length===1 && requests[0].steps[0].prompt.includes("订单退款"),"生成请求携带需求和当前提示词基线");
+    check(requests.length===1 && requests[0].input.includes("订单退款") && requests[0].steps[0].prompt.includes("当前步骤：1/"),"生成请求携带需求和当前提示词基线");
     await step(0);
     await p.locator("#new-input").fill("改为设计会议议程");
-    await p.waitForFunction(()=>document.querySelector("#launch-0-prompt").value.includes("会议议程"));
+    await p.waitForFunction(()=>document.querySelector("#recommend-status").textContent.includes("已变化"));
     await step(1);
     jobs.values().next().value.status="ready";
     await p.waitForSelector("#recommend-apply:not([hidden])");
@@ -102,7 +103,7 @@ async page => {
     await p.setViewportSize({width:390,height:844});
     check(await p.locator("#modal").evaluate(n=>n.scrollWidth<=n.clientWidth+1),"推荐控件在窄屏无横向溢出");
     await p.setViewportSize({width:1480,height:1100});
-    await p.screenshot({path:"/Users/malibo/MyDev/Kiro-Family-Spaces/experiments/kirocrew-on/state/browser/recommendation-ui.png"});
+    if(artifactRoot)await p.screenshot({path:`${artifactRoot}/recommendation-ui.png`});
     check(errors.length===0,"推荐流程无浏览器脚本错误");
     return {ok:true,checks,nativeCalls:0,mode:"generation HTTP stubs + real workflow persistence; not native evidence"};
   } finally {if(release)release();await context.close();await browser.close();}

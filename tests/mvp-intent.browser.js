@@ -1,5 +1,5 @@
 /* Real HTTP/SQLite fixture. Never submits to a native Worker. */
-async page => {
+async (page, {artifactRoot} = {}) => {
   const browser=await page.context().browser().browserType().launch({headless:true,channel:"chrome"});
   const context=await browser.newContext({viewport:{width:1480,height:1050},reducedMotion:"reduce"});
   const p=await context.newPage(),checks=[],errors=[];
@@ -106,7 +106,8 @@ async page => {
     check(await p.locator("#modal").evaluate(n=>n.scrollWidth<=n.clientWidth+1),"移动端需求向导无横向溢出");
     await close();
     await p.setViewportSize({width:1480,height:1050});
-    const reader=await context.newPage();await login(reader,"fixture-reader");
+    // Another person, so another browser: a new tab of this one is still the owner's (D67 session cookie).
+    const reader=await (await browser.newContext({viewport:{width:1480,height:1050},reducedMotion:"reduce"})).newPage();await login(reader,"fixture-reader");
     await reader.locator("#new-run").click();
     await reader.locator("#new-input").fill("快速验证一个小函数");
     await reader.waitForFunction(()=>document.querySelector("#match-name").textContent.includes("最小实现"));
@@ -124,7 +125,7 @@ async page => {
     await step(1);await method("template");
     await p.locator("#new-workflow").selectOption("auto");
     await title("Bug 修复");
-    await p.screenshot({path:"/Users/malibo/MyDev/Kiro-Family-Spaces/experiments/kirocrew-on/state/browser/intent-launch.png"});
+    if(artifactRoot)await p.screenshot({path:`${artifactRoot}/intent-launch.png`});
     check(errors.length===0,"新向导无浏览器脚本异常");
     return {ok:true,checks,nativeCalls:0,mode:"ephemeral HTTP/SQLite"};
   } finally {await context.close();await browser.close();}

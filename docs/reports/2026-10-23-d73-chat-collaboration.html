@@ -1,0 +1,98 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>在 KiroCrew 聊天里直接对话，也能回到平台续作（D73）：技术架构、实现与验证报告</title>
+<!-- Generated from 2026-10-23-d73-chat-collaboration.md by tools/md_to_html.py; edit the Markdown, then regenerate. -->
+<style>
+  :root { --ink: #172033; --muted: #5b6577; --line: #e3e7ef; --bg: #f6f8fb; --card: #ffffff; --brand: #5b4bdb; --brand-soft: #eeebff;
+          --native: #0e6f86; --native-soft: #e2f3f7; --poc: #4a5568; --poc-soft: #edf0f5;
+          --sans: -apple-system, BlinkMacSystemFont, "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", "Noto Sans CJK SC", sans-serif;
+          --mono: "SF Mono", Menlo, Consolas, monospace; }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--bg); color: var(--ink); font: 16px/1.75 var(--sans); }
+  main { max-width: 1040px; margin: 0 auto; padding: 56px 28px 96px; }
+  main > p, main > ul, main > ol, li > p { max-width: 44em; }
+  h1 { font-size: 32px; line-height: 1.3; margin: 0 0 16px; }
+  h2 { font-size: 23px; margin: 56px 0 10px; padding-top: 20px; border-top: 1px solid var(--line); }
+  h3 { font-size: 18px; margin: 28px 0 8px; }
+  p { margin: 0 0 14px; }
+  ul, ol { padding-left: 1.5em; margin: 0 0 14px; }
+  li { margin: 5px 0; }
+  li > ul, li > ol { margin: 6px 0 4px; }
+  code { font-family: var(--mono); font-size: 0.86em; background: #eef1f6; padding: 1px 5px; border-radius: 4px; }
+  pre { font-family: var(--mono); font-size: 13px; line-height: 1.6; background: #101828; color: #e7ecf5; padding: 16px 18px;
+        border-radius: 8px; overflow-x: auto; margin: 0 0 18px; }
+  pre code { background: none; padding: 0; color: inherit; font-size: inherit; }
+  .table { overflow-x: auto; margin: 14px 0 18px; background: var(--card); border: 1px solid var(--line); border-radius: 10px; }
+  table { border-collapse: collapse; width: 100%; font-size: 14px; line-height: 1.65; }
+  th, td { text-align: left; vertical-align: top; padding: 10px 14px; border-bottom: 1px solid var(--line); }
+  tr:last-child td { border-bottom: none; }
+  thead th { background: #f0f3f8; font-weight: 600; white-space: nowrap; }
+  strong { font-weight: 650; }
+  figure { margin: 18px 0 24px; }
+  .flow { display: flex; flex-wrap: wrap; align-items: stretch; gap: 10px 8px; list-style: none; padding: 0; margin: 0; }
+  .flow li { margin: 0; flex: 1 1 150px; background: var(--card); border: 1px solid var(--line); border-top: 3px solid var(--c, var(--brand));
+             border-radius: 8px; padding: 10px 12px; font-size: 14px; line-height: 1.5; }
+  .flow li b { display: block; font-size: 13px; color: var(--c, var(--brand)); margin-bottom: 2px; }
+  .flow .chat { --c: var(--native); } .flow .keep { --c: var(--poc); }
+  figcaption { font-size: 13px; color: var(--muted); margin-top: 8px; }
+  a:focus-visible { outline: 3px solid var(--brand); outline-offset: 2px; }
+  @media (max-width: 760px) { main { padding: 32px 18px 72px; } h1 { font-size: 26px; } }
+  @media print { body { background: #fff; } .table, .flow li { break-inside: avoid; } }
+</style>
+</head>
+<body>
+<main>
+<h1>在 KiroCrew 聊天里直接对话，也能回到平台续作（D73）：技术架构、实现与验证报告</h1>
+<p>2026-10-23。已部署 EC2 3af7331，在 owner 边界的会话 run-588bc3d5 上端到端验证。设计稿：<code>docs/superpowers/specs/2026-10-23-chat-and-structured-iteration-design.md</code>；续作的原理：<code>docs/CONTINUE.md</code>。HTML 版：<code>docs/reports/2026-10-23-d73-chat-collaboration.html</code>。</p>
+<h2>1. 结论</h2>
+<ul><li><strong>能用。</strong>
+<ul><li>用户在 KiroCrew 原生聊天里直接和父会话的 Agent 对话：问进展、让它改代码、让它派子 Agent、让它总结，都做到了。</li><li>回到平台续作时，聊天里的 3 处改动被完整提交成新的候选，审查、返工、Evaluator 都在它之上照常进行，没有一处改动丢失。</li></ul></li><li><strong>改动很小。</strong> 核心是父会话 Agent 的提示：由「只解释」改为「会话协作者」。另有两处配合：
+<ul><li>平台开始执行时在聊天里写一行；</li><li>续作前提交聊天里的改动。</li></ul>
+<p>合计约 200 行代码，不新增对外接口，KiroCrew 不改。</p></li><li><strong>验证中发现 3 个问题。</strong> 两个已在提示里修正，待随下次部署生效；一个是用法上要注意的点： &gt; 聊天里改了行为，续作时要同步改需求，否则审查会按原需求把改动改回去。</li></ul>
+<h2>2. 技术架构</h2>
+<figure>
+<ol class="flow" aria-label="一次会话里两种工作方式的交替">
+  <li><b>平台执行</b>写者是平台：Engine 按任务派发子 Agent。聊天里每个任务有「开始执行」与「已返回」两行说明</li>
+  <li class="chat"><b>会话停下</b>写者变为对话：父会话 Agent 可以按你的要求改工作区，或派子 Agent</li>
+  <li class="chat"><b>在聊天里干活</b>改动留在工作区（未提交）；聊天里派的子 Agent 挂在本会话下，不带平台标记</li>
+  <li class="keep"><b>回到平台续作</b>平台先把对话中的改动提交为新的候选，记为「对话中的改动」，再按续作规则继续</li>
+  <li><b>平台执行</b>之后的任务在新候选上重跑：审查针对它，Evaluator 核对验收，按需自动纠错</li>
+</ol>
+<figcaption>两种方式读写同一个工作区与会话分支；平台在运行时，聊天里的 Agent 只回答问题（靠提示约束）。</figcaption>
+</figure>
+
+<div class="table"><table><thead><tr><th>角色</th><th>是谁</th><th>做什么</th></tr></thead><tbody><tr><td>用户</td><td>你</td><td>在原生聊天里直接对话；需要结构化迭代时，回控制台续作</td></tr><tr><td>父会话 Agent</td><td>KiroCrew 的 <code>poc-coordinator</code>，会话的父会话 <code>octopus-run-&lt;id&gt;</code></td><td>回答问题；会话停下时按要求改工作区、派 <code>poc-kiro</code> / <code>poc-claude</code> / <code>poc-codex</code> 子 Agent；帮用户总结</td></tr><tr><td>平台 Engine</td><td>KiroCrew ON</td><td>唯一按任务表派发的一方：每个任务一次尝试，照常把关、纠错、记录</td></tr><tr><td>Worker</td><td>每个执行边界一个</td><td>建父会话、派子 Agent、写聊天里的说明、提交候选、跑检查命令</td></tr><tr><td>工作区与会话分支</td><td><code>&lt;worker&gt;/run-&lt;id&gt;/workspace/project</code>，分支 <code>octopus/&lt;run&gt;</code></td><td>两种方式共用的状态：候选提交加未提交的改动</td></tr></tbody></table></div>
+<p><strong>写者规则</strong>：同一时间只有一个写者。</p>
+<ul><li>平台在运行时，写者是平台；</li><li>会话停下后，写者是对话。</li></ul>
+<p>聊天里的 Agent 靠两行说明判断现在谁是写者：「KiroCrew ON 开始执行：…（Attempt X）」和「KiroCrew ON 执行 Attempt X 已返回」。这一点只靠提示约束。</p>
+<p><strong>状态衔接</strong>：</p>
+<ul><li><strong>平台 → 对话</strong>：聊天里已有完整的历史（建立说明，以及每个任务的开始与结果说明），Agent 从中查找，不需要额外接口。</li><li><strong>对话 → 平台</strong>：续作时，平台先把工作区里不在候选中的改动提交为新的候选，再继续。</li></ul>
+<h2>3. 实现细节</h2>
+<h3>3.1 改了什么</h3>
+<div class="table"><table><thead><tr><th>文件</th><th>改动</th></tr></thead><tbody><tr><td><code>octopus/prompts.py</code> <code>COORDINATOR</code></td><td>父会话 Agent 的系统提示（Gateway 模板），改为「会话协作者」：<br>· 以聊天里的说明、交接、工作区为准回答；<br>· 平台不在执行时可以改工作区或派子 Agent（只从三个工具里选，<code>cwd</code> 为工作区，<code>keep: true</code>）；<br>· 平台在执行时不动手；<br>· 不推送、不建 PR、不改 <code>.octopus/</code>、不读凭证；<br>· 总结时与需求原文对比</td></tr><tr><td><code>octopus/worker.py</code> <code>OBSERVER_CONTEXT</code></td><td>每个新父会话建立时写入的背景，内容同上，只对新会话生效</td></tr><tr><td><code>octopus/worker.py</code> <code>_start_note</code></td><td>派发成功后，往父会话写「KiroCrew ON 开始执行：&lt;任务&gt;（&lt;工具&gt;，Attempt X）」。用 KiroCrew 的 <code>note</code>：可见、不触发模型。同一个 Attempt 只写一次（<code>start-note.json</code>），写不成不影响派发</td></tr><tr><td><code>octopus/worker.py</code> 说明文字</td><td>建立说明与结果说明的前缀，由「Octopus」统一为「KiroCrew ON」</td></tr><tr><td><code>octopus/chat_changes.py</code>（新）</td><td><code>collect</code>：续作事务之前，先检查、再提交对话中的改动。<code>apply</code>：在续作事务里记录这次尝试并重置之后的任务。<code>refuse</code>：工作区有未提交的对话改动时，拒绝「请求诊断」</td></tr><tr><td><code>octopus/domain.py</code> <code>Service.operate</code></td><td>续作前调用 <code>collect</code>；续作事务里调用 <code>apply</code>；请求诊断前调用 <code>refuse</code>；修订摘要前加「对话中的改动：N 个文件」</td></tr><tr><td><code>web/src/lib/labels.ts</code></td><td>事件 <code>run.chat_changes</code> 的中文名称「提交了对话中的改动」</td></tr></tbody></table></div>
+<h3>3.2 续作前提交对话中的改动</h3>
+<ol><li><strong>预检</strong>：与续作自己的检查相同：
+<ul><li>版本号、会话已停下且打开、执行环境为这个空间服务；</li><li>D49 边界主人、Team 未归档、不是工作流建议会话。</li></ul>
+<p>任何一项不过就不调用 Worker，交给续作报错。这样，续作不允许的人不会让对话中的改动先被提交。</p></li><li>取会话分支上最新的候选，再用 Worker <code>/candidate</code>，<code>mode: check</code> 对比。干净且 HEAD 就是候选时，什么都不做。</li><li>用 Worker <code>/candidate</code>，<code>mode: commit</code>、<code>parent</code> 为最新候选，把工作区现状提交为新的候选，包括 Agent 自己做的提交。有疑似凭证或 <code>.env</code> 时分支不动，续作返回 <code>409 chat_secret</code> 并列出文件。</li><li>记为最后一个写代码任务上的一次「对话中的改动」尝试：
+<ul><li>门禁：<code>native_completed</code> 为 skip、<code>diff_present</code> 为 pass、<code>no_secrets</code> 为 pass；</li><li>这个任务这次不重跑、又有检查命令时，先跑检查命令（Engine 照现有逻辑轮询）；</li><li>它之后、仍标为已交接的任务，一律重置；</li><li>事件 <code>run.chat_changes</code>；修订摘要以「对话中的改动：N 个文件」开头。</li></ul></li></ol>
+<p><strong>为什么必须由平台先提交</strong>：</p>
+<ul><li>审查结束时，平台会把工作区「放回」到候选（<code>sources.rewind</code>）：未提交的改动和候选之后的提交都会被撤掉，所以 Agent 在聊天里自己 <code>git commit</code> 也保不住；</li><li>下一个若是实现任务，聊天里的改动又会被算成它的改动。</li></ul>
+<h3>3.3 错误码</h3>
+<div class="table"><table><thead><tr><th>码</th><th>什么时候</th></tr></thead><tbody><tr><td><code>409 chat_secret</code></td><td>续作时，对话中的改动里有疑似凭证或 <code>.env</code>（分支不动）</td></tr><tr><td><code>409 chat_changes</code></td><td>工作区有未提交的对话改动时请求诊断（请改用续作）</td></tr></tbody></table></div>
+<h2>4. 验证（EC2，run-588bc3d5，owner 边界）</h2>
+<div class="table"><table><thead><tr><th>时间（UTC）</th><th>步骤</th><th>结果</th></tr></thead><tbody><tr><td>14:05</td><td>部署 3af7331</td><td>两个 Gateway 在空闲时重启；<code>poc-coordinator</code> 模板为新提示</td></tr><tr><td>14:07–14:10</td><td>新会话：实现（Claude Code，带检查命令）→ 审查（Kiro）→ 平台追加 Evaluator</td><td>约 3 分钟完成；聊天里有 1 条建立说明，3 个任务各有「开始执行」与「已返回」，按 Attempt 对应</td></tr><tr><td>E1</td><td>在聊天里问「做到哪了、改了哪些文件、审查和验收结论」</td><td>答对了文件、测试、三步都通过、检查命令退出码 0；<strong>但说「改动还没入库」</strong>（实际已提交为候选 0b367d6）</td></tr><tr><td>E2</td><td>让它自己把问候改成「你好呀」并改测试，再派一个 <code>poc-claude</code> 写 README.md</td><td>它自己改了 2 个文件并跑测试（退出码 0），用 <code>spawn_run</code> 派出子 Agent，写出了 README.md。工作区：2 个已修改、1 个新文件；HEAD 仍为 0b367d6。父会话下共 4 个子 Agent，3 个带平台标记，聊天里派的那个不带，能区分</td></tr><tr><td>E3</td><td>让它总结当前状态</td><td>做了什么、改了 3 个文件、测试通过、下一步去续作，都对。<strong>但说「需求没变」</strong>，实际行为已改；还编了一句「按你给的 <code>hello.greet(&quot;小明&quot;)</code> 写」</td></tr><tr><td>14:22:36</td><td>控制台续作「审查」，需求原样未改</td><td>「对话中的改动：3 个文件（提交 07fdc05）」记在实现任务上；审查按新候选重跑</td></tr><tr><td>14:23–14:25</td><td>审查判「需要修改」：需求是「你好，」，改动成了「你好呀，」</td><td>协调者诊断为实现缺陷，安排实现任务返工</td></tr><tr><td>14:25–14:28</td><td>返工改回「你好，」（提交 2c5bf39），README 保留并同步修正；复审与 Evaluator 都通过</td><td>会话完成，全程无人干预</td></tr></tbody></table></div>
+<p>同次部署的其他核对：</p>
+<ul><li>控制台脚本 731 KB → 传输 219 KB（gzip，仍长期缓存）；</li><li>会话列表 205 KB → 50.5 KB。</li></ul>
+<h2>5. 发现的问题与处理</h2>
+<div class="table"><table><thead><tr><th>#</th><th>问题</th><th>原因</th><th>处理</th></tr></thead><tbody><tr><td>1</td><td>Agent 把平台已提交的工作说成「没入库」</td><td>提示只说了「续作时平台会先提交工作区里的改动」，它理解成所有工作都没提交</td><td><strong>已改提示</strong>：平台每个任务结束时改动已提交为候选，只有聊天里的改动要等续作。待随下次部署生效</td></tr><tr><td>2</td><td>聊天改了行为，总结却说「需求没变」；续作后审查按原需求把改动改回去</td><td>Agent 看不到会话的需求原文，用「用户的要求做完了」代替了「需求有没有变」</td><td><strong>已改提示</strong>：需求以最近一次尝试的 <code>instructions.md</code> 开头为准（路径写在提示里）；改变了行为或范围时写「需求有变化」，并给出续作时应填的完整新需求</td></tr><tr><td>3</td><td>总结里编了一句用户没说过的话</td><td>模型补全</td><td><strong>已改提示</strong>：「事实以文件与命令输出为准，不替用户补充他没说过的话」</td></tr><tr><td>4</td><td>续作对话框没有提醒「工作区里有对话中的改动」</td><td>设计里没有</td><td><strong>待负责人决定</strong>：在续作对话框里显示「工作区里有对话中的改动（N 个文件）；如果改了行为，请同步修改本次完整需求」。这只是提示，不拦截</td></tr></tbody></table></div>
+<p>第 2 项是这次最重要的用法要点，已写进 <code>docs/CONTINUE.md</code> §5 与常见问题：<strong>聊天里改了行为，续作时要把「本次完整需求」改成新的需求。</strong></p>
+<h2>6. 测试</h2>
+<div class="table"><table><thead><tr><th>测试</th><th>内容</th></tr></thead><tbody><tr><td><code>tests/test_chat_changes.py</code>（8 项）</td><td>目标在写代码任务之后：先跑检查，审查以新候选重跑；目标就是写代码任务：任务在新候选上重跑；工作区干净时不记录；有凭证时拒绝、版本不变；旧 Worker 跳过；版本冲突时不调用 Worker；续作不允许的人不会触发提交；请求诊断被拒绝</td></tr><tr><td><code>tests/test_start_note.py</code>（2 项）</td><td>开始说明只写一次；写不成不影响派发</td></tr><tr><td><code>tests/test_prompts_p1.py</code></td><td>协作者提示与背景的要点，包括第 5 节修正的三条</td></tr><tr><td>完整回归（37c2a43）</td><td>根目录 92、控制台 272、tests/ 1861，全部通过</td></tr></tbody></table></div>
+<h2>7. 待负责人决定</h2>
+<ol><li>第 5 节第 4 项：续作对话框里的提醒（只提示、不拦截），做不做？</li><li>修正后的提示要再部署一次，Gateway 会在空闲时重启。可以随下一批改动一起部署吗？</li></ol>
+</main>
+</body>
+</html>

@@ -13,6 +13,9 @@ from urllib.parse import urlsplit
 ROLE = "knowledge"
 ITEM = "列出可复用的项目知识（可为空）"
 LIMIT, RULE, AVOID = 5, 300, 200
+# D57 §3.3: what the platform judged of an entry it stored masked, as the Agent wrote it (engine._judged); only the platform
+# writes it — an Agent's own value under this key is dropped before the outcome is stored
+MARK = "_platform_judged"
 SHARED = "共享执行环境不写入、不注入 lessons：条目在发布时提到仓库的知识 PR（D52）"
 KEPT = "共享执行环境：仅在发布时提到仓库的知识 PR"
 REMOVED = "有人删除过同一条知识，不再写入"
@@ -112,33 +115,69 @@ def items(report, known=None):
     secret (the publish scan) — whose text is then not kept either — and none this environment already holds for the
     repository or a person removed there (``known``: {rule: removed})."""
     known = known or {}
-    from .sources import SUSPICIOUS
     raw = (report or {}).get("knowledge")
     if raw is None:
         return [], []
     if not isinstance(raw, list):
         return [], [{"rule": "（knowledge 不是列表）", "result": "skipped", "reason": "knowledge 应为 [{rule, avoid}] 列表，已忽略"}]
-    keep, rest = [], []
+    keep, rest, kept = [], [], set()
     for entry in raw[:30]:
-        rule = entry.get("rule") if isinstance(entry, dict) else entry
-        avoid = entry.get("avoid") if isinstance(entry, dict) else None
-        rule = rule.strip() if isinstance(rule, str) else ""
-        avoid = avoid.strip() if isinstance(avoid, str) else ""
+        rule, avoid = _fields(entry)
+        verdict = marked(entry) or judged(entry)   # D57 §3.3: as written, for an entry stored masked
         if not rule:
             rest.append({"rule": "（空条目）", "result": "skipped", "reason": "条目缺少 rule"})
-        elif SUSPICIOUS.search(f"{rule}\n{avoid}".encode()):
+        elif verdict.get("suspicious"):
             rest.append({"rule": "（含疑似秘密，内容未保存）", "result": "skipped", "reason": "含疑似秘密，未写入"})
-        elif len(rule) > RULE or len(avoid) > AVOID:
+        elif verdict.get("too_long"):
             rest.append({"rule": rule[:RULE] + ("…" if len(rule) > RULE else ""), "avoid": avoid[:AVOID] or None,
                          "result": "skipped", "reason": f"超过长度（rule 至多 {RULE}、avoid 至多 {AVOID} 字符），未写入"})
-        elif rule in known or any(k["rule"] == rule for k in keep):
+        # what this environment holds is what was written, masked as this entry is now; one in this list, as written
+        elif rule in known or verdict.get("key") in kept:
             rest.append({"rule": rule, "avoid": avoid or None, "result": "skipped",
                          "reason": REMOVED if known.get(rule) else "此执行环境已记录同一条知识"})
         elif len(keep) >= LIMIT:
             rest.append({"rule": rule, "avoid": avoid or None, "result": "skipped", "reason": f"超过 {LIMIT} 条，未写入"})
         else:
             keep.append({"rule": rule, **({"avoid": avoid} if avoid else {})})
+            kept.add(verdict.get("key"))
     return keep, rest
+
+
+def _fields(entry):
+    rule = entry.get("rule") if isinstance(entry, dict) else entry
+    avoid = entry.get("avoid") if isinstance(entry, dict) else None
+    return (rule.strip() if isinstance(rule, str) else ""), (avoid.strip() if isinstance(avoid, str) else "")
+
+
+def unmarked(report):
+    """An Agent's outcome as it is read: its knowledge entries without a MARK of their own (only the platform writes
+    one, when it stores them masked: engine._judged)."""
+    entries = report.get("knowledge")
+    if not isinstance(entries, list):
+        return report
+    return {**report, "knowledge": [{k: v for k, v in entry.items() if k != MARK} if isinstance(entry, dict) else entry
+                                    for entry in entries]}
+
+
+def marked(entry):
+    """The MARK the platform put on an entry it stored masked (engine._judged), when it has exactly the shape the
+    platform writes ({suspicious, too_long, key}: two booleans and a SHA-256); None for anything else there."""
+    mark = entry.get(MARK) if isinstance(entry, dict) else None
+    shaped = isinstance(mark, dict) and set(mark) == {"suspicious", "too_long", "key"}
+    if shaped and type(mark["suspicious"]) is bool and type(mark["too_long"]) is bool and isinstance(mark["key"], str) \
+            and re.fullmatch(r"[0-9a-f]{64}", mark["key"]):
+        return mark
+    return None
+
+
+def judged(entry):
+    """What ``items`` judges of an entry by its text: whether it looks like it holds a secret (the publish scan), whether
+    it is too long, and its key among the entries of one list. The platform keeps this for an entry it stores masked
+    (D57 §3.3, under MARK), so that the entry is judged as it was written."""
+    from .sources import SUSPICIOUS
+    rule, avoid = _fields(entry)
+    return {"suspicious": bool(SUSPICIOUS.search(f"{rule}\n{avoid}".encode())),
+            "too_long": len(rule) > RULE or len(avoid) > AVOID, "key": hashlib.sha256(rule.encode()).hexdigest()}
 
 
 def known(db, worker, repo):

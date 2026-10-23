@@ -212,6 +212,39 @@ class WriteTests(KnowledgeCase):
         self.assertFalse(any("ghp_" in (i["rule"] + (i["reason"] or "")) for i in run["knowledge"]["items"]))
         self.assertTrue(all(i["reason"] for i in skipped))
 
+    def test_items_are_judged_as_written_and_kept_masked(self):
+        # D57 §3.3: the outcome is stored masked, yet one the publish scan refuses as written stays refused (its text
+        # nowhere); one it lets through is written as stored, masked
+        from tests.test_secret_rules import OPENAI
+        github = "ghp_" + "a" * 36
+        self.knowledge = [{"rule": f"令牌 {github}"}, f"串 {github}", {"rule": "接口 Key", "avoid": f"不要写死 {OPENAI}"},
+                          "构建用 make build"]
+        rid, run = self.run_()
+        self.assertEqual(self.writes[0]["items"], [{"rule": "接口 Key", "avoid": f"不要写死 {OPENAI[:4]}…{OPENAI[-2:]}"},
+                                                   {"rule": "构建用 make build"}])
+        self.assertEqual([i["reason"] for i in run["knowledge"]["items"] if i["result"] == "skipped"], ["含疑似秘密，未写入"] * 2)
+        with self.db.read() as db:
+            stored = "".join(json.dumps([dict(r) for r in db.execute(f"SELECT * FROM {t}")]) for t in ("attempts", "events"))
+        self.assertNotIn(github[4:-2], stored)
+        self.assertNotIn(OPENAI[4:-2], stored)
+
+    def test_masking_never_changes_which_items_are_written(self):
+        # each is judged on its text as written: one too long only because of its key is still too long, two that differ
+        # only in their keys are still two, and a mark an Agent writes itself means nothing
+        from octopus.knowledge import MARK, RULE
+        from tests.test_secret_rules import chars
+        first, second = ("sk-" + "Q" + chars(seed, 45, "alnum") + "zz" for seed in ("one", "two"))
+        self.assertEqual((first[:4], first[-2:]), (second[:4], second[-2:]))   # masked alike
+        long = "约定 " + "长" * (RULE - 40) + " " + first   # over RULE as written, within it masked
+        self.knowledge = [{"rule": long}, {"rule": f"用 {first} 调用"}, {"rule": f"用 {second} 调用"},
+                          {"rule": "干净的约定", MARK: {"suspicious": True, "too_long": True}}, "构建用 make build"]
+        _, run = self.run_()
+        shown = f"用 {first[:4]}…{first[-2:]} 调用"
+        self.assertEqual([i["rule"] for i in self.writes[0]["items"]], [shown, shown, "干净的约定", "构建用 make build"])
+        skipped = [i for i in run["knowledge"]["items"] if i["result"] == "skipped"]
+        self.assertEqual([i["reason"] for i in skipped], [f"超过长度（rule 至多 {RULE}、avoid 至多 200 字符），未写入"])
+        self.assertTrue(all(MARK not in item for item in self.writes[0]["items"]))
+
     def test_nothing_listed_writes_nothing(self):
         self.knowledge = []
         _, run = self.run_()
@@ -256,6 +289,39 @@ class WriteTests(KnowledgeCase):
         _, run = self.run_()
         self.assertEqual([(i["result"], i["reason"]) for i in run["knowledge"]["items"]],
                          [("refused", "volatile_session_fact"), ("superseded", "替代了：旧规则")])
+
+    def test_why_the_worker_did_not_write_an_item_is_stored_masked(self):
+        # D57 §3.3: the reason the Worker gives, or the error it answers with, is its text: masked (rules and its
+        # token) before it is cut and stored with the item. A Worker of this release says it masked and cut to 200
+        # (worker.said); one from before says it as KiroCrew did, cut — the platform masks it again either way
+        from octopus.worker import said
+        from tests.test_secret_rules import OPENAI, chars
+        token = chars("knowledge-worker-token", 43)
+        with self.db.transaction() as db:
+            db.execute("UPDATE workers SET config=? WHERE id='worker'",
+                       (dumps({"url": "fixture", "token": token, "capabilities": CAPS}),))
+        original, shown = self.request, lambda secret: f"{secret[:4]}…{secret[-2:]}"
+
+        def answer(config, path, body, **kwargs):
+            if path == "/knowledge/write":
+                self.writes.append(body)
+                return {"results": [{"result": "refused", "reason": said("x" * 170 + f" 含 {OPENAI}", 200, (token,))},
+                                    {"result": "superseded", "reason": f"替代了：Bearer {token}"[:200]}]}
+            return original(config, path, body, **kwargs)
+        self.engine.request = answer
+        _, run = self.run_()
+        self.assertEqual([(i["result"], i["reason"]) for i in run["knowledge"]["items"]],
+                         [("refused", "x" * 170 + f" 含 {shown(OPENAI)}"), ("superseded", f"替代了：Bearer {shown(token)}")])
+        self.engine.request = original   # the Worker refuses the write: its error, cut to 160 characters
+        self.knowledge = [{"rule": "另一条约定"}]
+        self.write_errors = [Error(409, "conflict", "x" * 130 + f" 拒绝 Bearer {token}")]
+        _, run = self.run_()
+        self.assertEqual([(i["result"], i["reason"]) for i in run["knowledge"]["items"]],
+                         [("skipped", "未写入：" + "x" * 130 + f" 拒绝 Bearer {shown(token)}")])
+        with self.db.read() as db:
+            stored = json.dumps([dict(r) for r in db.execute("SELECT * FROM knowledge")], ensure_ascii=False)
+        self.assertNotIn(token, stored)
+        self.assertNotIn(OPENAI[4:-2], stored)
 
     def test_an_older_worker_skips_the_write(self):
         self.write_errors = [Error(404, "not_found", "接口不存在")]

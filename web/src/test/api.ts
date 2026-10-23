@@ -62,6 +62,9 @@ function placementOf(workers: Worker[], runs: Run[], url: URL): Placement {
  * lifecycle and q (in id, name, requirement); newest first; one page. Without page=1, the list as before. */
 export function runPage(runs: Run[], url: URL): unknown {
   const params = url.searchParams;
+  // one's own marks (owner 2026-10-22: 收藏、置顶), as the server filters them
+  if (params.get("pinned") === "1") runs = runs.filter((run) => run.marks?.pinned);
+  if (params.get("starred") === "1") runs = runs.filter((run) => run.marks?.starred);
   if (params.get("page") !== "1") return runs;
   const space = params.get("space");
   const status = params.get("status")?.split(",");

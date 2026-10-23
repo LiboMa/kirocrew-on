@@ -137,17 +137,22 @@ def basic(native, result, spec, evidence, report, invalid, lost, missing, blocke
         record("handoff_present", "warn", "执行者没有写交接文件，平台已用原生结果生成一份")
     actual = EFFORT.sub("", evidence.get("actual_model") or "")
     # A backend, model or effort that is not the one requested is the tool's failure: recovery may switch (D38 §3.2).
-    # One the evidence does not show (no routing record) is not: switching cannot fix it, it waits for the user as before.
+    # One the evidence does not show (no routing record) is noted and the task goes on (owner 2026-10-22, gates
+    # retrospective: it used to wait for the user, and switching cannot fix it either).
+    unverified = []
     for wrong, seen, message in ((evidence.get("actual_backend") != spec["tool"], bool(evidence.get("actual_backend")),
                                   "实际 ACP 后端未核实或与配置不匹配"),
                                  (spec["model"] not in {"auto", "default"} and actual != spec["model"], bool(actual),
                                   "实际模型未核实或与本次配置不匹配"),
                                  (bool(spec["effort"] and evidence.get("actual_effort") and evidence["actual_effort"] != spec["effort"]),
                                   True, "实际 Effort 与本次配置不匹配")):
-        if wrong:
+        if wrong and seen:
             records += [handoff, record("identity_match", "fail", message)]
-            return message, "tool" if seen else "model", records
-    records += [record("identity_match", "pass"), handoff]
+            return message, "tool", records
+        if wrong:
+            unverified.append(message.replace("未核实或与本次配置不匹配", "未核实").replace("未核实或与配置不匹配", "未核实"))
+    records += [record("identity_match", "warn", "；".join(unverified) + "（执行环境没有报告），照常执行") if unverified
+                else record("identity_match", "pass"), handoff]
     if report is None and invalid is None:
         records += [record("outcome_valid", "skip"), record("outcome_pass", "skip")]
         return None, None, records

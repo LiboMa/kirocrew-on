@@ -439,6 +439,7 @@ for OTHER in $(other_boundaries "$BOUNDARY"); do
   systemctl is-enabled --quiet "octopus-worker@$OTHER" || { log "边界 ${OTHER}：已停用（systemctl disable），不重启"; continue; }
   log "边界 ${OTHER}：升级"
   boundary_env "$OTHER"
+  boundary_codex "$OTHER"   # settings an existing boundary's Codex lacks (web search off), read by its next task
   systemctl enable "octopus-gateway@$OTHER" "octopus-worker@$OTHER" >/dev/null
   boundary_restart "$OTHER" "$KC" || FAILED_BOUNDARIES="$FAILED_BOUNDARIES $OTHER"
 done

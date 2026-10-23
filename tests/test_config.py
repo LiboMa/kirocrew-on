@@ -92,13 +92,11 @@ class ConfigTests(unittest.TestCase):
         with self.assertRaises(ConfigError):
             load(self.write('disabled_tools = ["gemini"]\n'), environ=self.env, cwd=self.cwd)
 
-    def test_default_admission_is_confirm_and_validated(self):
-        # D55 (owner 2026-10-21): a plan is shown first; repository rules let trusted repositories start at once
-        self.assertEqual(load(environ=self.env, cwd=self.cwd).default_admission, "confirm")
-        self.assertEqual(load(self.write('default_admission = "auto"\n'), environ=self.env, cwd=self.cwd).default_admission,
-                         "auto")
-        with self.assertRaises(ConfigError):
-            load(self.write('default_admission = "later"\n'), environ=self.env, cwd=self.cwd)
+    def test_no_setting_makes_a_session_wait_for_a_person(self):
+        # D70 / D71 (owner 2026-10-22): plans are never confirmed and acceptance never waits — the keys are gone
+        for bad in ('default_acceptance = "confirm"\n', 'default_admission = "confirm"\n'):
+            with self.assertRaises(ConfigError):
+                load(self.write(bad), environ=self.env, cwd=self.cwd)
 
     def test_approval_mode_is_optional_and_validated(self):
         self.assertEqual(load(environ=self.env, cwd=self.cwd).approval_mode, "")

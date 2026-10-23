@@ -3,16 +3,24 @@ import { toast } from "sonner";
 import { ApiError } from "@/api/client";
 import { useMe, useRun, useRunCount, useRunPages, useWorkspace } from "@/api/hooks";
 import { Sheet, SheetContent, SheetTitle } from "@/components/ui/sheet";
-import { ConsoleContext, type ConsoleState, type Dialog } from "@/features/console/context";
+import { AdminPage } from "@/features/admin/AdminPage";
+import { ConsoleContext, type ConsoleState, type Dialog, type Page } from "@/features/console/context";
 import { DialogHost } from "@/features/console/DialogHost";
 import { EmptyState } from "@/features/console/EmptyState";
 import { Sidebar } from "@/features/console/Sidebar";
 import { TopBar } from "@/features/console/TopBar";
 import { SessionView } from "@/features/sessions/SessionView";
+import { SettingsPage } from "@/features/settings/SettingsPage";
 import { elevated } from "@/lib/access";
 import { EMPTY_FILTERS, filterParams, filtersFromUrl, listParams, writeUrl, type RunListFilters } from "@/lib/runList";
 
 const runFromUrl = () => new URLSearchParams(window.location.search).get("run");
+const PAGES: Page[] = ["sessions", "admin", "settings"];
+const pageFromUrl = (): Page => {
+  const view = new URLSearchParams(window.location.search).get("view") as Page | null;
+  return view && PAGES.includes(view) ? view : "sessions";
+};
+const sectionFromUrl = () => new URLSearchParams(window.location.search).get("section") ?? "";
 
 export function Console() {
   const me = useMe();
@@ -25,6 +33,9 @@ export function Console() {
   const memberTeams = useMemo(() => workspace.teams.filter((t) => t.role != null), [workspace.teams]);
   const [space, setSpaceState] = useState("");
   const [selected, setSelected] = useState<string | null>(runFromUrl);
+  // The 管理 and 我的设置 pages live in the address bar too, so a refresh or a shared link opens the same section.
+  const [page, setPage] = useState<Page>(pageFromUrl);
+  const [section, setSection] = useState(sectionFromUrl);
   const [dialog, setDialog] = useState<Dialog | null>(null);
   const [navOpen, setNavOpen] = useState(false);
   // D56: the list is filtered and paged on the server; the filters live in the address bar too.
@@ -39,7 +50,16 @@ export function Console() {
   const select = useCallback((id: string | null) => {
     setSelected(id);
     setNavOpen(false);
-    writeUrl({ run: id });
+    if (!id) return writeUrl({ run: null });
+    setPage("sessions");   // opening a Session (a new one too) shows it, whichever page was open
+    writeUrl({ run: id, view: null, section: null });
+  }, []);
+
+  const go = useCallback((next: Page, part = "") => {
+    setPage(next);
+    setSection(part);
+    setNavOpen(false);
+    writeUrl(next === "sessions" ? { view: null, section: null } : { view: next, section: part || null });
   }, []);
 
   const setFilters = useCallback((next: RunListFilters) => {
@@ -85,8 +105,10 @@ export function Console() {
     loadMore: () => void pages.fetchNextPage(), loadingMore: pages.isFetchingNextPage, filters, setFilters,
     space, setSpace, allSessions, setAllSessions, sharedSessions, setSharedSessions, selected, select, open: setDialog,
     close: () => setDialog(null),
+    // 管理 is for administrators only: anyone else following such a link sees their Sessions.
+    page: page === "admin" && !elevated(me.data) ? "sessions" : page, section, go,
   } : null, [me.data, workspace, runs, pages, count.data, filters, setFilters, space, setSpace, allSessions, setAllSessions,
-    sharedSessions, setSharedSessions, selected, select]);
+    sharedSessions, setSharedSessions, selected, select, page, section, go]);
 
   if (!value || workspace.loading || pages.isPending) {
     return (
@@ -100,14 +122,16 @@ export function Console() {
     <ConsoleContext.Provider value={value}>
       <div className="flex h-svh flex-col">
         <TopBar onMenu={() => setNavOpen(true)} />
-        <div className="flex min-h-0 flex-1">
-          <aside className="hidden w-80 shrink-0 border-r bg-sidebar md:flex md:flex-col">
-            <Sidebar />
-          </aside>
-          <main className="min-w-0 flex-1 overflow-y-auto" id="console-main">
-            {selected ? <SessionView key={selected} id={selected} /> : <EmptyState />}
-          </main>
-        </div>
+        {value.page === "admin" ? <AdminPage /> : value.page === "settings" ? <SettingsPage /> : (
+          <div className="flex min-h-0 flex-1">
+            <aside className="hidden w-80 shrink-0 border-r bg-sidebar md:flex md:flex-col">
+              <Sidebar />
+            </aside>
+            <main className="min-w-0 flex-1 overflow-y-auto" id="console-main">
+              {selected ? <SessionView key={selected} id={selected} /> : <EmptyState />}
+            </main>
+          </div>
+        )}
       </div>
       <Sheet open={navOpen} onOpenChange={setNavOpen}>
         <SheetContent side="left" className="w-[88vw] max-w-sm gap-0 bg-sidebar p-0">

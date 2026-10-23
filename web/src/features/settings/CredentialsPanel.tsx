@@ -4,8 +4,8 @@ import { toast } from "sonner";
 import { api } from "@/api/client";
 import { keys, useCredentials } from "@/api/hooks";
 import type { Credential, CredentialKind, CredentialScope } from "@/api/types";
-import { FormDialog } from "@/components/FormDialog";
 import { NativeSelect } from "@/components/NativeSelect";
+import { Panel } from "@/components/Panel";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -98,9 +98,9 @@ function Row({ credential }: { credential: Credential }) {
   );
 }
 
-/** Settings → 代码仓库凭证: personal, Team and platform credentials; the secret is entered here and never shown again. */
-export function CredentialsDialog() {
-  const { close, me, teams, allTeams } = useConsole();
+/** 代码仓库凭证: personal, Team and platform credentials; the secret is entered here and never shown again. */
+export function CredentialsPanel() {
+  const { me, teams, allTeams } = useConsole();
   const client = useQueryClient();
   const { data: credentials = [] } = useCredentials();
   const admin = elevated(me);
@@ -114,7 +114,7 @@ export function CredentialsDialog() {
   const [secret, setSecret] = useState("");
 
   return (
-    <FormDialog title="代码仓库凭证" kicker="CREDENTIALS" wide onClose={close} submitLabel="保存凭证"
+    <Panel title="代码仓库凭证" submitLabel="保存凭证"
       description="GitHub / GitLab 的访问 Token，用于克隆私有仓库。个人凭证只有你能用；Team 凭证由 Team owner 管理、成员的 Team 会话使用；平台凭证由管理员授权。Token 保存后不再显示，也不会进入任何会话、日志或 Coding Agent 的对话。"
       onSubmit={async () => {
         const scope = owner === "user" || owner === "platform" ? owner : "team";
@@ -184,6 +184,6 @@ export function CredentialsDialog() {
             placeholder="保存后不再显示" />
         </div>
       </div>
-    </FormDialog>
+    </Panel>
   );
 }

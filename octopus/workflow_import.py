@@ -101,7 +101,7 @@ def normalize(raw, notes, known=(), planned=False):
     seen, result, renamed = set(), [], {}
     for index, item in enumerate(raw, 1):
         require(isinstance(item, dict), f"第 {index} 个任务不是对象")
-        used = {"id", "model", "effort", "requested", *CONTRACT, *(("verify_basis",) if planned else ())} | \
+        used = {"id", "model", "effort", "requested", "阶段", *CONTRACT, *(("verify_basis",) if planned else ())} | \
             {key for keys in FIELD_ALIASES.values() for key in keys}
         picked = {field: next((item[key] for key in keys if item.get(key) not in (None, "")), None)
                   for field, keys in FIELD_ALIASES.items()}
@@ -122,7 +122,15 @@ def normalize(raw, notes, known=(), planned=False):
         sid = step_id(item.get("id"), index, seen)
         if isinstance(item.get("id"), str):
             renamed[item["id"]] = sid
-        contract = {k: item[k] for k in CONTRACT if k in item}
+        contract = {k: item[k] for k in CONTRACT if k in item and k != "phase"}
+        written = item.get("phase", item.get("阶段"))   # D69: in either language; a wrong one never sinks the import
+        if written not in (None, ""):
+            from .phases import PHASES
+            value = {"发散": "diverge", "设计": "design", "收敛": "converge"}.get(str(written).strip(), str(written).strip().lower())
+            if value in PHASES:
+                contract["phase"] = value
+            else:
+                notes.append(f"任务「{picked['name'] or index}」的阶段 {written!r} 无效（可用 发散 / 设计 / 收敛），已忽略")
         if planned and "role" in contract:   # D46 P2: an optional label never sinks a plan (as requested, D45)
             from . import roles
             role, kind = contract["role"], contract.get("kind")

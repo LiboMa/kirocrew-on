@@ -50,10 +50,22 @@ export const EVENT_LABELS: Record<string, string> = {
   "app.stopped": "远程预览已停止", "approval.answered": "已答复工具审批", "attempt.checking": "正在运行检查命令",
   "attempt.waiting": "等待条件满足", "attempt.watchdog": "无进展检查", "attempt.budget": "预算用完，未自动处理",
   "task.replaced": "重新规划替换了后续任务", "task.tool_switched": "已切换执行工具", "task.verify_revised": "重新规划修正了检查命令", "task.paths_added": "协调者扩大了可改动路径",
-  "crew.entry_opened": "打开了原生 KiroCrew 页面",
+  "crew.entry_opened": "打开了原生 KiroCrew 页面", "run.chat_changes": "提交了对话中的改动",
 };
 
 /** D46 P2: the roles a task's Agent works in (octopus/roles.py LABELS; kept equal by tests/test_roles.py). */
+/** D69: the phases (octopus/phases.py). */
+export const PHASE_LABELS: Record<string, string> = { diverge: "发散", design: "设计", converge: "收敛" };
+
+/** A task's phase as people read it: what it names, or what its kind implies (a review's follows what it reviews, so
+ * only a written one is shown); nothing for plain converge work, the default. */
+export function phaseText(spec: { phase?: string; kind?: string }): string {
+  if (spec.phase) return "阶段：" + (PHASE_LABELS[spec.phase] ?? spec.phase);
+  if (spec.kind === "research") return "阶段：发散（按类别）";
+  if (spec.kind === "design") return "阶段：设计（按类别）";
+  return "";
+}
+
 export const ROLE_LABELS: Record<string, string> = {
   spec: "Spec 分析", sde: "SDE 开发", integration_test: "集成测试", security_test: "安全测试", challenge: "Challenge", evaluator: "Evaluator",
   knowledge: "Knowledge",

@@ -10,7 +10,7 @@ STEPS = [{"id": "code", "name": "实现", "tool": "claude", "prompt": "实现", 
          {"id": "review", "name": "审查", "tool": "codex", "prompt": "审查", "kind": "review", "acceptance": ["无阻断问题"]},
          {"id": "fix", "name": "按审查修复", "tool": "claude", "prompt": "修复", "kind": "implement", "acceptance": ["已修复"]}]
 FORWARD = {"action": "rework", "target_task_id": "fix", "reason": "审查发现缺陷", "instructions": "在 fix 中修复"}
-WAIT = {"action": "wait_for_user", "reason": "等待", "instructions": "检查"}
+WAIT = {"action": "wait_for_user", "missing": "input", "reason": "等待", "instructions": "检查"}   # D71: what only the user has
 
 
 class TargetCase(ReplanCase):
@@ -32,19 +32,18 @@ class TargetTests(TargetCase):
     def test_a_target_after_the_failed_task_is_refused_saying_which_are_allowed(self):
         rid = self.start(STEPS, recovery={"enabled": True, "max_cycles": 2})
         run = self.tick(rid, 40)
-        self.assertEqual(run["status"], "blocked")
-        self.assertIn("fix 排在失败任务 review 之后", run["error"])
-        self.assertIn("code、review", run["error"])
-        self.assertIn("rework", run["error"])
+        refused = run["recovery"]["history"][0]["decision"]["refused"]
+        self.assertIn("fix 排在失败任务 review 之后", refused)
+        self.assertIn("code、review", refused)
+        self.assertIn("rework", refused)
+        self.assertEqual(run["status"], "completed")   # D71: the failed review is retried instead of stopping
 
     def test_the_next_diagnosis_knows_why_the_last_decision_was_refused(self):
+        self.failing = {("review", 1), ("review", 2)}   # the retry after the refusal fails too: a second diagnosis
         rid = self.start(STEPS, recovery={"enabled": True, "max_cycles": 2})
-        run = self.tick(rid, 40)
-        self.service.operate(self.actor, rid, "recover", {"request_id": "targets-recover-1", "expected_version": run["version"]})
         self.tick(rid, 40)
         previous = self.coordinations()[1]["previous_decisions"]
-        self.assertEqual(previous[0]["target_task_id"], "fix")
-        self.assertEqual(previous[0]["status"], "blocked")
+        self.assertEqual(previous[0]["fallback_from"], "rework")
         self.assertIn("排在失败任务 review 之后", previous[0]["refused"])
 
     def test_a_wait_for_user_is_not_reported_as_refused(self):

@@ -8,10 +8,10 @@ import threading
 import time
 
 from .db import dumps, uid
-from .transport import worker_request
-from . import crew_entry, evaluation, gates, journal, knowledge, planning, quotas, recovery, waiting
+from .transport import worker_request, worker_token
+from . import crew_entry, evaluation, gates, journal, knowledge, phases, planning, quotas, recovery, sources, waiting
 from .security import Error
-from .domain import (CONTRACT, GENERAL_KINDS, awaits_confirmation, required_checks, runs_checks, unserved,
+from .domain import (CONTRACT, GENERAL_KINDS, general, release_confirmations, required_checks, runs_checks, unserved,
                      worker_source)
 from .gates import BLOCKED
 
@@ -79,6 +79,82 @@ def generated_handoff(task, attempt, evidence, native):
     later task, the recovery context and the Coordinator read it there, as they read a real one at ``handoff_path``."""
     item = handoff({"id": task["id"], "spec": attempt["spec"], "evidence": dumps(evidence), "result": native.get("result")})
     return GENERATED + "\n" + json.dumps(item, ensure_ascii=False, indent=2)
+
+
+# D57 §3.3, under the owner's rule of 2026-10-22 (no new gate may hold a user): what the platform stores of an Attempt is
+# masked as it is written, and what was masked is listed — a warning, never a block, a failure or another status. Where
+# each part was is "<category>:<task_id>"; the platform's own records of commits, files and jobs, which later judging
+# reads, are kept as they are.
+CATEGORIES = {"outcome": "outcome", "evaluation": "outcome", "handoff_text": "handoff", "check_results": "checks",
+              "baseline_results": "checks"}
+CHECK_GATES = frozenset({"checks_pass", "tests_fail_on_baseline"})
+KEPT = frozenset({"secrets", "candidate", "reviewed", "baseline", "checks", "check_artifacts", "baseline_artifacts"})
+SECRETS_NAMED = 5
+
+
+def masked(evidence, task_id, extra=(), **texts):
+    """``texts`` (result=…, error=…) masked as they are stored, and ``evidence`` masked in place — once every verdict was
+    made on them as written. What was masked joins ``evidence["secrets"]`` ({kind, location, masked, hash}) once per
+    location and hash, and is named by one warn record, secrets_masked, which neither blocks nor sets ``gate`` or
+    ``failure_type``. Its 「已打码 N 处」 counts those entries: distinct secrets in each place, not occurrences (the same key
+    printed three times in the result is one; in the result and the checks' output, two)."""
+    found = []
+
+    def mask(value, category):
+        value, hits = sources.mask_value(value, extra)
+        found.extend((category, hit) for hit in hits)
+        return value
+    shown = {name: mask(text, name) for name, text in texts.items()}
+    for key in [key for key in evidence if key not in KEPT]:
+        if key in ("gates", "warnings") and isinstance(evidence[key], list):   # a check's verdict quotes its command
+            evidence[key] = [mask(r, "checks" if isinstance(r, dict) and r.get("name") in CHECK_GATES else "error")
+                             for r in evidence[key]]
+        elif key == "outcome" and isinstance(evidence[key], dict):
+            evidence[key] = _judged(evidence[key], mask(evidence[key], "outcome"))
+        else:
+            evidence[key] = mask(evidence[key], CATEGORIES.get(key, "error"))
+    for key in ("check_results", "baseline_results"):   # what the Worker masked in their output (checks.masked_tail)
+        found.extend(("checks", hit) for result in evidence.get(key) or [] if isinstance(result, dict)
+                     for hit in result.get("findings") or [] if isinstance(hit, dict))
+    listed = [item for item in evidence.get("secrets") or [] if isinstance(item, dict)]
+    seen = {(item.get("location"), item.get("hash")) for item in listed}
+    for category, hit in found:
+        item = {"kind": hit.get("kind"), "location": f"{category}:{task_id}", "masked": hit.get("masked"),
+                "hash": hit.get("hash")}
+        if (item["location"], item["hash"]) not in seen:
+            seen.add((item["location"], item["hash"]))
+            listed.append(item)
+    if listed:
+        evidence["secrets"] = listed
+        named = "、".join(f"{item['kind']}（{item['location']}）" for item in listed[:SECRETS_NAMED])
+        record = gates.record("secrets_masked", "warn", f"已打码 {len(listed)} 处疑似密钥：{named}"
+                              + ("等" if len(listed) > SECRETS_NAMED else ""))
+        records = evidence.setdefault("gates", [])
+        at = next((i for i, r in enumerate(records) if isinstance(r, dict) and r.get("name") == "secrets_masked"), None)
+        if at is None:
+            records.append(record)
+        else:
+            records[at] = record
+    return shown
+
+
+def _judged(outcome, shown):
+    """``shown`` (the masked outcome) with what Knowledge judges of its entries kept as written: it reads them later, from
+    what is stored (D46 P4). An entry masking changed carries knowledge.judged of its text as written under knowledge.MARK,
+    which only the platform writes (an Agent's own value there is dropped when its outcome is read, knowledge.unmarked):
+    an entry that has it (knowledge.marked: exactly as the platform writes it; anything else there is dropped) was
+    masked before, and keeps it however often it is masked again."""
+    entries, stored = outcome.get("knowledge"), shown.get("knowledge")
+    if not (isinstance(entries, list) and isinstance(stored, list)):
+        return shown
+    plain = lambda item: {k: v for k, v in item.items() if k != knowledge.MARK} if isinstance(item, dict) else item
+
+    def mark(entry, item):   # the platform's own from before, else (when masking changed the entry) its text as written
+        return knowledge.marked(entry) or (None if plain(item) == plain(entry) else knowledge.judged(entry))
+    shown["knowledge"] = [plain(item) if (judged := mark(entry, item)) is None else
+                          {**(plain(item) if isinstance(item, dict) else {"rule": item}), knowledge.MARK: judged}
+                          for entry, item in zip(entries, stored)]
+    return shown
 
 
 BROKEN = frozenset({"native_error", "native_stopped", "auth", "tool", "model"})   # the conversation itself failed
@@ -205,8 +281,28 @@ class Engine:
             if run["desired"] != "active" and status not in {"stopping", "stopped", "reopening"}:
                 return
             rest = {k: v for k, v in extra.items() if k not in binding}
+            error = sources.mask_text(error)[0] if isinstance(error, str) else error   # D57 §3.3: stored masked
             journal.change(db, "runs", rid, actor, "run.state", reason, event={"status": status, "error": error},
                            status=status, error=error, updated=time.time(), **rest)
+
+    @staticmethod
+    def _mask(token, task_id, evidence, **texts):
+        """``masked`` with this Session's Worker token (``_token``) besides the rules."""
+        return masked(evidence, task_id, (token,), **texts)
+
+    @staticmethod
+    def _token(run):
+        """The token the platform calls this Session's Worker with, to mask it (D57 §3.3). Opening a sealed one may read the
+        vault: callers take it before a write transaction, so the first open never holds the database's write lock."""
+        try:
+            return worker_token(json.loads(run.get("worker_config") or "{}"))
+        except (ValueError, TypeError):
+            return None
+
+    @staticmethod
+    def _task_of(db, attempt_id):
+        row = db.execute("SELECT task_id FROM attempts WHERE id=?", (attempt_id,)).fetchone()
+        return row["task_id"] if row else None
 
     def tick(self, wait=True):
         with self.guard:
@@ -216,6 +312,7 @@ class Engine:
         recovery.reconcile(self.db, skip=busy)
         with self.db.transaction() as db:   # waits that are over continue (D43)
             waiting.resume(db, skip=busy)
+            release_confirmations(db, skip=busy)   # D70: an earlier version's 「计划待确认」 starts
         with self.db.read() as db:
             ids = [r["id"] for r in db.execute(
                 "SELECT r.id FROM runs r "
@@ -302,10 +399,13 @@ class Engine:
     def _skip_knowledge(self, run, attempt_id, evidence, reason, actor=journal.WORKER):
         """D46 P4: the platform's Knowledge task that cannot run or finish is passed over with its reason — never blocked,
         never diagnosed — so a Session the Evaluator passed completes (R5)."""
+        token = self._token(run)
         with self.db.transaction() as db:
+            evidence = {**evidence, "knowledge_skipped": reason}
+            reason = self._mask(token, self._task_of(db, attempt_id), evidence, error=reason)["error"]   # D57 §3.3
             journal.change(db, "attempts", attempt_id, actor, "attempt.state", "Knowledge 沉淀未完成",
-                           event={"id": attempt_id, "status": "accepted", "skipped": reason},
-                           status="accepted", error=None, evidence=dumps({**evidence, "knowledge_skipped": reason,
+                           event={"id": attempt_id, "status": "accepted", "skipped": reason}, mask=(token,),
+                           status="accepted", error=None, evidence=dumps({**evidence,
                                                                           "warnings": gates.warnings(evidence.get("gates"))}),
                            updated=time.time())
             journal.change_rows(db, "tasks", "current_attempt=?", (attempt_id,), actor, "task.state", status="accepted")
@@ -334,7 +434,7 @@ class Engine:
             skipped = str(evidence.get("knowledge_skipped") or "")[:300] or None
             keep, rest = ((), ()) if skipped else knowledge.items(
                 evidence.get("outcome"), knowledge.known(db, run["worker_id"], repo) if repo else None)
-        results = []
+        results, token = [], self._token(run)   # D57 §3.3: what the Worker says is masked with its token, then cut
         if keep and run.get("worker_scope") == "shared":   # D52 R4: for the repository's reviewed knowledge only
             results = [{"result": "kept", "reason": knowledge.KEPT} for _ in keep]
         elif keep and repo:
@@ -358,14 +458,14 @@ class Engine:
                     return True
                 reason = ("执行环境不支持写入知识（Worker 尚未升级）" if exc.status == 404 and exc.code == "not_found"
                           else ("执行环境暂不可用，未写入" if exc.code in {"worker_unavailable", "native_unavailable"}
-                                else "未写入：" + str(exc)[:160]))
+                                else "未写入：" + sources.mask_text(str(exc), (token,))[0][:160]))
                 results = [{"result": "skipped", "reason": reason} for _ in keep]
         rows = []
         for item, answer in zip(keep, results + [{}] * (len(keep) - len(results))):
             answer = answer if isinstance(answer, dict) else {}
             result = answer.get("result") if answer.get("result") in {"written", "refused", "superseded", "skipped", "kept"} else "skipped"
-            reason = str(answer.get("reason") or ("" if result == "written" else "执行环境未报告结果"))[:200] or None
-            rows.append({**item, "result": result, "reason": reason})
+            reason = str(answer.get("reason") or ("" if result == "written" else "执行环境未报告结果"))
+            rows.append({**item, "result": result, "reason": sources.mask_text(reason, (token,))[0][:200] or None})
         rows += rest
         with self.db.transaction() as db:
             if repo:
@@ -393,6 +493,7 @@ class Engine:
             self.backoff[run["id"]] = (failures, self.clock() + min(60.0, self.retry_unavailable * 2 ** (failures - 1)))
         # Error codes are stable; do not publish transport credentials/tracebacks.
         message = str(exc) if hasattr(exc, "code") else "后台操作失败，请检查 Worker 与原生状态"
+        message = sources.mask_text(message, (self._token(run),))[0]   # D57 §3.3: stored and shown masked
         with self.db.read() as db:
             current = db.execute(
                 "SELECT a.* FROM attempts a JOIN tasks t ON t.current_attempt=a.id "
@@ -490,9 +591,11 @@ class Engine:
             if run["error"] != text:   # another error took its place meanwhile (a failed look): it still waits
                 self.update(run["id"], "running", text, actor=journal.WORKER)
             return
-        mark = {"since": self.wall(), "reason": queued.get("reason"), "resuming": bool(queued.get("resuming"))}
+        token = self._token(run)   # D57 §3.3: KiroCrew's reason and detail, stored and recorded with the token masked
+        mark = {"since": self.wall(), "reason": sources.mask_value(queued.get("reason"), (token,))[0],
+                "resuming": bool(queued.get("resuming"))}
         with self.db.transaction() as db:
-            journal.change(db, "attempts", attempt["id"], journal.WORKER, "attempt.queued", text,
+            journal.change(db, "attempts", attempt["id"], journal.WORKER, "attempt.queued", text, mask=(token,),
                            event={"id": attempt["id"], "task_id": task["id"], "cause": queued.get("reason"),
                                   "detail": queued.get("detail")}, evidence=dumps({**prior, "queued": mark}), updated=time.time())
         self.update(run["id"], "running", text, actor=journal.WORKER)
@@ -537,13 +640,12 @@ class Engine:
             quiet = min(progress["idle_seconds"], now - began)   # the Worker's own clock
         elif isinstance(progress.get("updated_at"), (int, float)):
             quiet = now - max(progress["updated_at"], began)
-        tool = str(progress.get("last_tool") or "")[:80]
-        if now - began > total * 60:
-            reason = f"原生任务运行超过 {total} 分钟，看门狗已停止"
-        elif quiet is not None and quiet > idle * 60:
-            reason = f"原生任务 {int(quiet // 60)} 分钟没有进展" + (f"（最后工具：{tool}）" if tool else "") + "，看门狗已停止"
-        else:
+        if not (now - began > total * 60 or quiet is not None and quiet > idle * 60):
             return False
+        # the Worker's text (an older Worker's as KiroCrew wrote it): masked with the token, then cut (D57 §3.3)
+        tool = sources.mask_text(str(progress.get("last_tool") or ""), (self._token(run),))[0][:80]
+        reason = (f"原生任务运行超过 {total} 分钟，看门狗已停止" if now - began > total * 60 else
+                  f"原生任务 {int(quiet // 60)} 分钟没有进展" + (f"（最后工具：{tool}）" if tool else "") + "，看门狗已停止")
         if mark.get("stop_failed_at") and now - mark["stop_failed_at"] < 60:
             return True   # a stop that failed is tried again a minute later, not on every poll
         info = {"reason": reason, "idle_minutes": idle, "attempt_minutes": total, "turns": progress.get("turns"),
@@ -559,7 +661,8 @@ class Engine:
                 return True
             # Not stopped: never start another Agent on the same workspace; try again a minute later.
             self._mark_watchdog(attempt, prior, {**info, "stopping": True, "stop_errors": info["stop_errors"] + 1,
-                                                 "stop_failed_at": now, "stop_error": str(exc)[:200]})
+                                                 "stop_failed_at": now,   # the Worker's text: masked, then cut
+                                                 "stop_error": sources.mask_text(str(exc), (self._token(run),))[0][:200]})
             return True
         if answer.get("finished"):   # it ended on its own meanwhile: its result is judged as usual on the next look
             self._mark_watchdog(attempt, prior, None)
@@ -589,6 +692,8 @@ class Engine:
                     **({"budget_refused": over} if over else {})}
         if config is not None:   # D57 §4: what a stopped review changed is put back, as for any review that did not pass
             self._put_back_review(run, config, attempt, evidence)
+        token = self._token(run)
+        reason = self._mask(token, task["id"], evidence, error=reason)["error"]   # D57 §3.3: stored masked
         if not retry and knowledge.platform(json.loads(run["snapshot"]), task["id"]):   # D46 P4: skipped, not diagnosed
             self._skip_knowledge(run, attempt["id"], evidence, reason, journal.ENGINE)
             return True
@@ -597,7 +702,7 @@ class Engine:
             active = db.execute("SELECT desired FROM runs WHERE id=?", (rid,)).fetchone()[0] == "active"
             journal.change(db, "attempts", attempt["id"], journal.ENGINE, "attempt.state", reason,
                            event={"id": attempt["id"], "task_id": task["id"], "status": "blocked", "error": reason},
-                           status="blocked", error=reason, evidence=dumps(evidence), updated=time.time())
+                           mask=(token,), status="blocked", error=reason, evidence=dumps(evidence), updated=time.time())
             if current["current_attempt"] != attempt["id"] or not active:
                 return True
             if retry:
@@ -625,11 +730,13 @@ class Engine:
         where the Coordinator may recommend another tool."""
         if self._knowledge_attempt(run, attempt_id):
             return self._skip_knowledge(run, attempt_id, evidence, message, actor)
+        token = self._token(run)
         with self.db.transaction() as db:
+            evidence = {**evidence, "failure_type": "tool", "refused": code}
+            message = self._mask(token, self._task_of(db, attempt_id), evidence, error=message)["error"]   # D57 §3.3
             journal.change(db, "attempts", attempt_id, actor, "attempt.state",
-                           event={"id": attempt_id, "status": "blocked", "error": message},
-                           status="blocked", error=message, evidence=dumps({**evidence, "failure_type": "tool", "refused": code}),
-                           updated=time.time())
+                           event={"id": attempt_id, "status": "blocked", "error": message}, mask=(token,),
+                           status="blocked", error=message, evidence=dumps(evidence), updated=time.time())
             journal.change_rows(db, "tasks", "current_attempt=?", (attempt_id,), actor, "task.state", status="blocked")
         self.update(run["id"], "blocked", message, actor=actor)
         recovery.automatic(self.db, run["id"], attempt_id)
@@ -684,16 +791,33 @@ class Engine:
 
     @staticmethod
     def _reverted(rewound, sha):
-        """What a Worker's rewind put back (D57 §4), as the notes a review_bound record shows, and the files."""
-        reverted, notes = [str(name) for name in rewound.get("reverted") or []], []
+        """What a Worker's rewind put back (D57 §4), as the notes a review_bound record shows, and the files: the tracked
+        files put back, then the files the review created, moved out (an older Worker names none)."""
+        listed = lambda key: [str(name) for name in rewound.get(key) or []]
+        names = lambda files: "、".join(files[:10]) + (f" 等 {len(files)} 个" if len(files) > 10 else "")
+        reverted, removed, left, notes = listed("reverted"), listed("removed"), listed("created"), []
         if reverted:
-            notes.append("审查改动的已跟踪文件已由平台撤回：" + "、".join(reverted[:10])
-                         + (f" 等 {len(reverted)} 个" if len(reverted) > 10 else ""))
+            notes.append("审查改动的已跟踪文件已由平台撤回：" + names(reverted))
+        if removed:
+            notes += ["审查新建的文件已由平台移出：" + names(removed), "移出的文件保存在该次尝试的 review-removed 目录"]
+        if rewound.get("listing_failed"):   # e.g. a large workspace past git's time: the tracked files were put back
+            notes.append("未能列出审查新建的文件，未做移出")
+        if left:   # e.g. a path that would resolve outside the project: left in place, and said
+            notes.append("审查新建的这些文件未能移出，仍在工作区：" + names(left))
         if rewound.get("rewound"):
             notes.append(f"审查期间的 {rewound['rewound']} 个提交已撤回，会话分支回到候选 {sha[:7]}")
         if not notes:   # e.g. only what a candidate leaves out changed: still say what the platform did
             notes.append(f"会话分支已由平台恢复到候选 {sha[:7]}")
-        return notes, reverted
+        return notes, list(dict.fromkeys(reverted + removed))
+
+    @staticmethod
+    def _undo(check, created, sha):
+        """What putting a review's changes back does, as messages name it: tracked files put back (撤回), new files moved
+        out (移出)."""
+        return "，".join(part for part in (
+            "撤回审查改动的 " + "、".join(check["changed_files"][:10]) if check["changed_files"] else
+            f"撤回审查期间被改动的会话分支（HEAD 不是候选 {sha[:7]}）" if check["head"] != sha else "",
+            "移出审查新建的 " + "、".join(created[:10]) if created else "") if part)
 
     def _entered(self, run, attempt):
         """Whether a person may have stopped this Attempt's native task in the native page (crew_entry.entered)."""
@@ -704,9 +828,10 @@ class Engine:
         """A review that ended without passing — a rejection, an error, the watchdog's stop — leaves the workspace as the
         reviewer left it, and the rework's candidate would take its edits in: they are put back all the same (D57 §4).
         Recorded as review_bound beside the failure, which stays the Attempt's: its error, failure_type and gate are what
-        recovery sees. warn: put back; skip: no tracked file changed (or a Worker that cannot); fail: putting back failed.
-        Only tracked files are put back (``sources.rewind``: untracked files the reviewer created stay). A review its gates
-        judged (review_bound already recorded) was put back there."""
+        recovery sees. warn: put back; skip: nothing changed (or a Worker that cannot); fail: putting back tracked files
+        failed. The files the reviewer created are moved out too when its dispatch listed the untracked files it started
+        with (``sources.rewind``; without that list they stay). A review its gates judged (review_bound already recorded)
+        was put back there."""
         spec, snapshot = json.loads(attempt["spec"]), json.loads(run["snapshot"])
         if spec.get("kind") != "review" or snapshot.get("execution_contract", 1) < 3 \
                 or planning.planning_task(attempt["task_id"], snapshot) \
@@ -727,22 +852,24 @@ class Engine:
                 raise
             return record("skip", gates.OLD_WORKER) if exc.status == 404 else \
                 record("fail", f"无法核对审查的工作区，未能撤回审查的改动：{exc}")
-        if not check["changed_files"] and check["head"] == sha:
-            return record("skip", "审查没有改动已跟踪的文件")
-        what = "审查改动的 " + "、".join(check["changed_files"][:10]) if check["changed_files"] else \
-            f"审查期间被改动的会话分支（HEAD 不是候选 {sha[:7]}）"
+        created = [str(name) for name in check.get("created") or []]   # a Worker from before D57 §4 names none
+        tracked = bool(check["changed_files"]) or check["head"] != sha
+        if not tracked and not created:   # tracked_only: no list of what it started with, so only tracked files are told
+            return record("skip", "审查没有改动文件" if check.get("tracked_only") is False else "审查没有改动已跟踪的文件")
+        undo = self._undo(check, created, sha)
         try:
             rewound = self.request(config, "/candidate", {**body, "mode": "rewind"}, timeout=180)
         except Error as exc:
             if not 400 <= exc.status < 500:
                 raise
-            return record("fail", f"平台未能撤回{what}：{exc}") if exc.status == 409 else \
-                record("skip", f"未能撤回{what}：{gates.OLD_WORKER}")
+            # new files alone that could not be moved out are a warning, as everything else about them
+            return record("fail" if tracked else "warn", f"平台未能{undo}：{exc}") if exc.status == 409 else \
+                record("skip", f"未能{undo}：{gates.OLD_WORKER}")
         if rewound.get("head") != sha or not rewound.get("clean"):
-            return record("fail", f"平台撤回{what}后，工作区仍不是候选 {sha[:7]}："
+            return record("fail", f"平台{undo}后，工作区仍不是候选 {sha[:7]}："
                           + "、".join((rewound.get("changed_files") or [])[:10]))
-        notes, reverted = self._reverted(rewound, sha)
-        record("warn", "；".join(notes), **({"files": reverted[:30]} if reverted else {}))
+        notes, files = self._reverted(rewound, sha)
+        record("warn", "；".join(notes), **({"files": files[:30]} if files else {}))
 
     def _more_gates(self, run, config, task, attempt, spec, evidence, report, latest, start=None):
         """diff_present, no_secrets and the start of checks_pass for a code task; review_bound for a review (D37 §4).
@@ -772,31 +899,39 @@ class Engine:
                     return fail("review_bound", f"无法核对审查的工作区：{exc}")
                 raise
             sha, reviewed = latest["sha"], str((report or {}).get("reviewed_commit") or "")
-            notes, reverted = [], []
-            if check["changed_files"] or check["head"] != sha:
-                # D57 §4: what the review changed is put back by the platform, its branch back on the candidate
+            notes, files = [], []   # files: the tracked files put back and the new files moved out
+            created = [str(name) for name in check.get("created") or []]   # a Worker from before D57 §4 names none
+            tracked = bool(check["changed_files"]) or check["head"] != sha
+            if tracked or created:
+                # D57 §4: what the review changed is put back by the platform, its branch back on the candidate, and the
+                # files it created moved out
                 try:
                     rewound = self.request(config, "/candidate", {**body, "mode": "rewind"}, timeout=180)
                 except Error as exc:
-                    if exc.status == 409:   # refused (HEAD not on top of the candidate, another branch) or failed: not bound
+                    if not 400 <= exc.status < 500:
+                        raise
+                    if not tracked:   # new files alone left in place: a warning, never a failure (D57 §4)
+                        rewound, notes = None, ["平台未能移出审查新建的 " + "、".join(created[:10]) + f"：{exc}"]
+                    elif exc.status == 409:   # refused (HEAD not on top of the candidate, another branch) or failed: not bound
                         what = "审查改动了 " + "、".join(check["changed_files"][:10]) if check["changed_files"] else \
                             f"审查期间会话分支被改动（HEAD 不是候选 {sha[:7]}）"
-                        return fail("review_bound", f"{what}，平台未能撤回：{exc}")
-                    if 400 <= exc.status < 500:   # a Worker from before D57 cannot put it back: judged as before
-                        if check["changed_files"]:
-                            return fail("review_bound", "审查不应修改代码，修改应交给实现任务：" + "、".join(check["changed_files"][:10]))
+                        return fail("review_bound", f"{what}，平台未能撤回" + (
+                            "，也未能移出审查新建的 " + "、".join(created[:10]) if created else "") + f"：{exc}")
+                    elif check["changed_files"]:   # a Worker from before D57 cannot put it back: judged as before
+                        return fail("review_bound", "审查不应修改代码，修改应交给实现任务：" + "、".join(check["changed_files"][:10]))
+                    else:
                         return fail("review_bound", f"审查期间会话分支被改动（HEAD 不是候选 {sha[:7]}）")
-                    raise
-                if rewound.get("head") != sha or not rewound.get("clean"):
-                    return fail("review_bound", f"平台撤回审查的改动后，工作区仍不是候选 {sha[:7]}："
-                                + "、".join((rewound.get("changed_files") or [])[:10]))
-                notes, reverted = self._reverted(rewound, sha)
+                if rewound is not None:
+                    if rewound.get("head") != sha or not rewound.get("clean"):
+                        return fail("review_bound", f"平台{self._undo(check, created, sha)}后，工作区仍不是候选 {sha[:7]}："
+                                    + "、".join((rewound.get("changed_files") or [])[:10]))
+                    notes, files = self._reverted(rewound, sha)
             if not (len(reviewed) >= 7 and sha.startswith(reviewed)):
                 notes.append(f"审查报告写的版本（{reviewed[:12] or '缺失'}）与候选 {sha[:7]} 不符")
             if notes:   # D57 §13.4: the verdict counts, bound to the candidate
                 records.append(gates.record("review_bound", "warn", "；".join(notes) + "；审查结论照常采用"))
-                if reverted:
-                    records[-1]["files"] = reverted[:30]
+                if files:
+                    records[-1]["files"] = files[:30]
             else:
                 records.append(gates.record("review_bound", "pass", sha[:12]))
             evidence["reviewed"] = sha
@@ -973,15 +1108,20 @@ class Engine:
         elif spec.get("kind") == "test":
             started = self._start_baseline(run, config, attempt, evidence)
             if started:
+                token = self._token(run)
+                self._mask(token, task["id"], evidence)   # the checks' output, stored while the baseline runs
                 with self.db.transaction() as db:
                     journal.change(db, "attempts", attempt["id"], journal.WORKER, "attempt.checking", "在会话基线上运行测试",
-                                   event={"id": attempt["id"], "task_id": task["id"]}, evidence=dumps(evidence), updated=time.time())
+                                   event={"id": attempt["id"], "task_id": task["id"]}, mask=(token,), evidence=dumps(evidence),
+                                   updated=time.time())
                 return
         self._settle(run, task, attempt, evidence, error)
 
     def _settle(self, run, task, attempt, evidence, error):
         """Accept or block an Attempt whose checks ended, like advance does for any other; recovery follows a block."""
         rid, state = run["id"], "blocked" if error else "accepted"
+        token = self._token(run)
+        error = self._mask(token, task["id"], evidence, error=error)["error"]   # judged: the checks' output stored masked
         if state == "accepted":
             evidence["warnings"] = gates.warnings(evidence.get("gates"))   # D57 §4: listed, not blocking
         with self.db.transaction() as db:
@@ -990,7 +1130,7 @@ class Engine:
             journal.change(db, "attempts", attempt["id"], journal.WORKER, "attempt.state",
                            event={"id": attempt["id"], "task_id": task["id"], "status": state, "error": error,
                                   "evidence": evidence},
-                           status=state, evidence=dumps(evidence), error=error, updated=time.time())
+                           mask=(token,), status=state, evidence=dumps(evidence), error=error, updated=time.time())
             if current["current_attempt"] == attempt["id"] and active:
                 journal.change(db, "tasks", (rid, task["id"]), journal.WORKER, "task.state", status=state)
         self.update(rid, "ready" if state == "accepted" else state, error, actor=journal.WORKER)
@@ -1004,10 +1144,11 @@ class Engine:
             # reaches SQL. Ask the Worker even when SQL has no native_parent yet.
             result = self.request(config, "/control", {"run_id": rid, "action": run["desired"]})
             if result["status"] == "stopped":
-                now = time.time()
+                now, token = time.time(), self._token(run)   # the Worker's answer: its token masked in the event too
                 with self.db.transaction() as db:
                     journal.change(db, "runs", rid, journal.WORKER, "session." + run["desired"], event=result,
-                                   status="stopped", lifecycle=result["lifecycle"], desired="stopped", error=None, updated=now)
+                                   mask=(token,), status="stopped", lifecycle=result["lifecycle"], desired="stopped",
+                                   error=None, updated=now)
                     journal.change_rows(db, "attempts", "run_id=? AND status IN ('dispatching','running','dispatch_unknown','waiting_approval')", (rid,),
                                         journal.WORKER, "attempt.state", status="cancelled", updated=now)
                     journal.change_rows(db, "tasks", "run_id=? AND status IN ('dispatching','running','dispatch_unknown','waiting_approval')", (rid,),
@@ -1072,10 +1213,6 @@ class Engine:
                     journal.change(db, "tasks", (rid, task["id"]), journal.ENGINE, "task.state", "重新规划已应用，不再运行",
                                    status="accepted", current_attempt=done["id"])
                     return
-            if attempt is None and awaits_confirmation(json.loads(fresh["snapshot"]), task["id"]):
-                journal.change(db, "runs", rid, journal.ENGINE, "run.awaiting_confirmation", "计划待确认",
-                               event={"status": "awaiting_confirmation"}, status="awaiting_confirmation", updated=time.time())
-                return
             if attempt is None and self._quota_wait(db, fresh):
                 return   # D61: the person's or the Team's running tasks are at their limit
             if attempt is None:
@@ -1146,6 +1283,9 @@ class Engine:
                    if plan.get("applied") else {}),
                 # D46: planning is analysis — its instructions do not tell it to develop
                 **({"stage": "planning"} if planning.planner_task(task["id"], snapshot) else {}),
+                # D65 §6a: general work (no repository, or research / write) reads as a task in a working directory
+                **({"work": "general"} if not planning.planner_task(task["id"], snapshot) and (
+                    spec.get("kind") in GENERAL_KINDS or general(json.loads(run["source"] or "{}"))) else {}),
                 **({"quality": True} if snapshot.get("execution_contract", 1) >= 2 else {}),
                 **({"repair": repair} if repair else {}),
                 **({"continue": resume} if resume else {}),   # D46 P5a: the rework resumes its conversation
@@ -1160,16 +1300,18 @@ class Engine:
                    else {})})
             state = result["status"]
             resumed = {k: result[k] for k in ("continued", "continue_refused") if result.get(k)}
+            token = self._token(run)
+            error = sources.mask_value(result.get("error"), (token,))[0]   # the Worker's text (D57 §3.3)
             with self.db.transaction() as db:
                 journal.change(db, "attempts", attempt["id"], journal.WORKER, "attempt.dispatched", refused(resumed),
-                               event={"id": attempt["id"], "task_id": task["id"], "status": state, **resumed},
+                               event={"id": attempt["id"], "task_id": task["id"], "status": state, **resumed}, mask=(token,),
                                status=state, native_id=result.get("native_id"), context_hash=result.get("context_hash"),
-                               error=result.get("error"), updated=time.time(),
+                               error=error, updated=time.time(),
                                **({"evidence": dumps({**json.loads(attempt["evidence"] or "{}"), **resumed})} if resumed else {}))
                 journal.change_rows(db, "tasks", "run_id=? AND id=? AND current_attempt=? "
                                     "AND EXISTS (SELECT 1 FROM runs WHERE id=? AND desired='active')",
                                     (rid, task["id"], attempt["id"], rid), journal.WORKER, "task.state", status=state)
-            self.update(rid, state, result.get("error"), actor=journal.WORKER)
+            self.update(rid, state, error, actor=journal.WORKER)
             return
         prior = json.loads(attempt["evidence"] or "{}")
         if prior.get("checks") and "check_results" not in prior:
@@ -1177,8 +1319,8 @@ class Engine:
         if prior.get("baseline") and "baseline_results" not in prior:
             return self._poll_baseline(run, config, task, attempt, prior)
         result = self.request(config, "/inspect", {"run_id": rid, "attempt_id": attempt["id"]})
-        if result.get("status") == "dispatch_unknown":
-            self.update(rid, "dispatch_unknown", result.get("error"))
+        if result.get("status") == "dispatch_unknown":   # the Worker's text, with its token masked too (D57 §3.3)
+            self.update(rid, "dispatch_unknown", sources.mask_value(result.get("error"), (self._token(run),))[0])
             return
         native = result.get("native")
         if native and result.get("queued"):
@@ -1222,7 +1364,7 @@ class Engine:
             report, invalid = None, None
             if snapshot.get("execution_contract", 1) >= 2 and not native.get("error") and not native.get("stopped"):
                 try:
-                    report = recovery.outcome(result.get("outcome", ""))
+                    report = knowledge.unmarked(recovery.outcome(result.get("outcome", "")))   # MARK: the platform's
                     evidence["outcome"] = report
                 except (Error, ValueError, TypeError) as exc:
                     invalid = str(exc)
@@ -1247,20 +1389,26 @@ class Engine:
                 error, failure_type, checking = self._more_gates(run, config, task, attempt, spec, evidence, report, latest,
                                                                  start)
                 if checking:   # the verify commands run; the Attempt is judged when they end
+                    token = self._token(run)
+                    shown = self._mask(token, task["id"], evidence, result=native.get("result"))
                     with self.db.transaction() as db:
-                        journal.change(db, "attempts", attempt["id"], journal.WORKER, "attempt.checking",
+                        journal.change(db, "attempts", attempt["id"], journal.WORKER, "attempt.checking", mask=(token,),
                                        event={"id": attempt["id"], "task_id": task["id"], "commands": evidence["checks"]["commands"]},
-                                       status="running", evidence=dumps(evidence), result=native.get("result"), updated=time.time())
+                                       status="running", evidence=dumps(evidence), result=shown["result"], updated=time.time())
                     return self.update(rid, "running", actor=journal.WORKER)
             if not error and gated and evaluation.applies(snapshot, spec, config):   # D46 P3: the Evaluator's verdicts
                 error, pending = evaluation.verdicts(spec, report)
-                evidence["gates"].append(gates.record("evaluated", "fail" if error else "pass",
-                                                      error or (f"{len(pending)} 项待人确认" if pending else None)))
+                automatic = bool(pending) and not error   # D71: what it leaves to a person is a warning, never a wait
+                evidence["gates"].append(gates.record(
+                    "evaluated", "fail" if error else "warn" if automatic else "pass",
+                    error or ("Evaluator 判为待人确认，按平台设置自动通过（不需要人工确认）：" + "；".join(
+                        f"{p['item']}（{p['evidence']}）" for p in pending[:5]) if automatic else
+                        f"{len(pending)} 项待人确认" if pending else None)))
                 if error:   # a failed verdict is reworked; a missing one or one without evidence is the outcome's form (R3)
                     failure_type = "implementation" if error.startswith(evaluation.FAILED) else "contract"
                     evidence["gate"] = "evaluated"
                 elif pending:
-                    evidence["evaluation"] = {"pending": pending}
+                    evidence["evaluation"] = {"pending": pending, **({"automatic": True} if automatic else {})}
             if error:   # D57 §4: a review that did not pass is put back too; its failure stays what recovery sees
                 self._put_back_review(run, config, attempt, evidence)
             if lost and not error:
@@ -1274,8 +1422,7 @@ class Engine:
             state = "blocked" if error else "accepted"
             if state == "accepted" and invalid and knowledge.platform(snapshot, task["id"]):
                 evidence["knowledge_skipped"] = invalid   # D57 §4: accepted with the warning, but its list cannot be read
-            if state == "accepted" and (evidence.get("evaluation") or {}).get("pending"):
-                state = "awaiting_acceptance"   # D46 P3: what the Evaluator left to a person
+        token = self._token(run)   # D57 §3.3: before the write transaction (it may open the vault)
         with self.db.transaction() as db:
             current = db.execute("SELECT * FROM tasks WHERE run_id=? AND id=?", (rid, task["id"])).fetchone()
             # Old observations cannot complete a newly retried task.
@@ -1299,7 +1446,8 @@ class Engine:
                 try:
                     parse_recommendation(native.get("result") or "")
                 except (Error, ValueError, TypeError, KeyError) as exc:   # D66: KiroCrew fixes its own answer, once
-                    design_fix = explain(native.get("result") or "", exc)
+                    # the reason quotes the recommendation: masked once, for the error, the repair and its event
+                    design_fix = sources.mask_text(explain(native.get("result") or "", exc), (token,))[0]
                     state, error = "blocked", "推荐未通过平台校验：" + design_fix + "（已自动请 KiroCrew 修正一次）"
             starts = prior.get("never_started", 0)   # how many Attempts before this one in a row did not start
             if not (retry and current["current_attempt"] == attempt["id"] and active):
@@ -1310,19 +1458,32 @@ class Engine:
                 retry = None   # this Attempt already was the automatic retry: recovery decides
             elif over := recovery.refused(db, run, "retry"):
                 retry, evidence["budget_refused"] = None, over   # past the budget (D42): recovery decides, and says why
+            relaxed = None
             if retry:
                 evidence["transient"] = retry
+            elif state == "blocked" and current["current_attempt"] == attempt["id"] and active and not design_fix \
+                    and (relaxed := phases.relax(evidence, spec, snapshot, error, [
+                        json.loads(row["spec"]) for row in db.execute("SELECT spec FROM tasks WHERE run_id=? ORDER BY ordinal",
+                                                                     (rid,))])):
+                # D69: this phase lets the failure through — accepted with the warning, its conclusion goes on
+                if evidence["phase_relaxed"] == "native_completed":   # nothing came back: the next task is told so
+                    evidence["handoff_generated"] = True
+                    result["handoff"] = evidence["handoff_text"] = (
+                        generated_handoff(task, attempt, evidence, native) + f"\n\n任务未完成：{error}；后续任务照常开始，缺少它的产出。")
+                state, error = "accepted", None
             elif state == "blocked" and current["current_attempt"] == attempt["id"] and active \
                     and knowledge.platform(snapshot, task["id"]):   # D46 P4: the platform's side task never holds a Session
                 evidence["knowledge_skipped"] = error
                 state, error = "accepted", None
+            shown = self._mask(token, task["id"], evidence, result=native.get("result"), error=error)   # judged: stored masked
+            error = shown["error"]
             if state in {"accepted", "awaiting_acceptance"}:   # D57 §4: listed, not blocking; kept when a person accepts
                 evidence["warnings"] = gates.warnings(evidence.get("gates"))
             journal.change(db, "attempts", attempt["id"], journal.WORKER, "attempt.state",
                            event={"id": attempt["id"], "task_id": task["id"], "status": state, "error": error,
                                   "evidence": evidence},
-                           quiet=() if native.get("done") else ("result",),
-                           status=state, evidence=dumps(evidence), result=native.get("result"), error=error, updated=time.time())
+                           quiet=() if native.get("done") else ("result",), mask=(token,),
+                           status=state, evidence=dumps(evidence), result=shown["result"], error=error, updated=time.time())
             if retry:
                 why = {**recovery.WHY, "result_missing": "原生任务没有返回结果",
                        "never_started": "原生任务未能开始（执行环境资源不足）"}[retry]
@@ -1349,14 +1510,11 @@ class Engine:
                            (aid, rid, task["id"], attempt["number"] + 1, current["spec"],
                             dumps({"design_repair": {"of": attempt["id"], "error": design_fix}}), now, now))
                 journal.change(db, "tasks", (rid, task["id"]), journal.ENGINE, "attempt.retry",
-                               f"推荐未通过平台校验（{design_fix}），自动请 KiroCrew 修正一次",
+                               f"推荐未通过平台校验（{design_fix}），自动请 KiroCrew 修正一次", mask=(token,),
                                event={"attempt": attempt["id"], "retry": aid, "transient": "design_invalid"},
                                status="dispatching", current_attempt=aid)
             elif current["current_attempt"] == attempt["id"] and active:
                 journal.change(db, "tasks", (rid, task["id"]), journal.WORKER, "task.state", status=state)
-                if state == "awaiting_acceptance":
-                    journal.record(db, rid, "run.awaiting_acceptance", journal.ENGINE, "验收待确认",
-                                   pending=len(evidence["evaluation"]["pending"]))
         if design_fix:
             return self.update(rid, "ready", None, reason="推荐未通过平台校验，自动请 KiroCrew 修正一次")
         if retry:

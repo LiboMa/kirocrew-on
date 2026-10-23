@@ -1,6 +1,8 @@
 """D37 §5 (G1): the platform runs a task's verify commands itself — in order, every one of them even after a failure
 (D57 §13.3), each and all of them time-limited with their whole process group ended, the output's tail kept with
-credentials hidden; a commit a check makes has an identity, and a failure the environment caused is told apart (D57 §5)."""
+credentials masked; a commit a check makes has an identity, and a failure the environment caused is told apart (D57 §5)."""
+import hashlib
+import json
 import os
 from pathlib import Path
 import subprocess
@@ -10,11 +12,11 @@ import time
 import unittest
 from unittest.mock import patch
 
-from octopus import sources
 from octopus import checks as checks_module
 from octopus.checks import Checks
 from octopus.security import Error
 from tests.test_archive import RID, make_worker
+from tests.test_secret_rules import private_key
 
 
 def finished(checks, job, limit=30):
@@ -129,14 +131,20 @@ class CheckTests(unittest.TestCase):
         self.assertIn(str(self.project.resolve()), value["results"][1]["tail"])   # runs in the project
 
     def test_output_tail_is_kept_and_scrubbed(self):
+        # D57 §3.3: a credential in the output is shown by its first four and last two characters only, and what was
+        # masked is listed in the result (kind, line in the tail, masked form, hash) — its text nowhere
         token = "ghp_" + "A1b2C3d4" * 5
         checks = Checks()
         value = finished(checks, checks.start("run-a", "attempt-1", self.project,
                                               [f"head -c 10000 /dev/zero | tr '\\0' x; echo; echo token={token}"])["job"])
-        tail = value["results"][0]["tail"]
-        self.assertLessEqual(len(tail.encode()), 4096)
-        self.assertNotIn(token, tail)
-        self.assertIn(sources.HIDDEN, tail)
+        result = value["results"][0]
+        self.assertLessEqual(len(result["tail"].encode()), 4096)
+        self.assertTrue(result["tail"].endswith("\ntoken=ghp_…d4\n"), result["tail"][-60:])
+        self.assertEqual(result["findings"], [{"kind": "github", "line": 2, "masked": "ghp_…d4",
+                                               "hash": hashlib.sha256(token.encode()).hexdigest()}])
+        self.assertNotIn(token[4:-2], json.dumps([result["tail"], result["findings"]]))   # the command is the plan's
+        clean = finished(checks, checks.start("run-a", "attempt-2", self.project, ["echo fine"])["job"])
+        self.assertNotIn("findings", clean["results"][0])
 
     def test_a_hanging_command_and_its_children_are_ended(self):
         checks = Checks(per_command=1)
@@ -288,18 +296,20 @@ class CheckTests(unittest.TestCase):
 
     def test_unrunnable_reads_what_the_shell_python_and_git_really_print(self):
         (self.project / "myapp").mkdir()
-        checks = Checks()
-        value = finished(checks, checks.start("run-a", "attempt-1", self.project, [
-            "d57-no-such-command --version",
-            f"{sys.executable} -c 'import d57_no_such_module'",
-            "git init -q repo && cd repo && GIT_AUTHOR_NAME= GIT_COMMITTER_NAME= git commit -q --allow-empty -m x",
-            f"{sys.executable} -c 'assert 1 == 2'",
-            f"{sys.executable} -c 'import myapp.models'",
-            "./d57-never-written.sh",
-            "sh -c scripts/d57-never-written.sh",
-            "bash d57-never-written.sh",
-            "sh d57-never-written.sh",
-            "true"])["job"])
+        # an empty HOME, so that no login profile slows the ten shells down on a loaded machine (as in run_outputs)
+        with tempfile.TemporaryDirectory() as home, patch.dict(os.environ, {"HOME": home}):
+            checks = Checks()
+            value = finished(checks, checks.start("run-a", "attempt-1", self.project, [
+                "d57-no-such-command --version",
+                f"{sys.executable} -c 'import d57_no_such_module'",
+                "git init -q repo && cd repo && GIT_AUTHOR_NAME= GIT_COMMITTER_NAME= git commit -q --allow-empty -m x",
+                f"{sys.executable} -c 'assert 1 == 2'",
+                f"{sys.executable} -c 'import myapp.models'",
+                "./d57-never-written.sh",
+                "sh -c scripts/d57-never-written.sh",
+                "bash d57-never-written.sh",
+                "sh d57-never-written.sh",
+                "true"])["job"], 120)
         expected = ["命令不存在：d57-no-such-command", "缺少 Python 模块：d57_no_such_module", "检查环境没有 git 提交者身份",
                     None, None, None, None, None, None, None]
         tails = [r["tail"] for r in value["results"]]
@@ -310,6 +320,65 @@ class CheckTests(unittest.TestCase):
         self.assertEqual([checks_module.unrunnable(r) for r in value["results"]], expected, tails)
         # the Worker records its answer, made with the project at hand, in each failed result
         self.assertEqual([r.get("unrunnable", "absent") for r in value["results"]], [*expected[:9], "absent"], tails)
+
+    def run_outputs(self, outputs, limit=120):
+        """The results of commands that print each of ``outputs`` (text, exit code). With an empty HOME, so that no login
+        profile slows the shells down."""
+        commands = []
+        for n, (text, code) in enumerate(outputs):
+            (self.project / f"out-{n}.txt").write_text(text)
+            commands.append(f"cat out-{n}.txt; exit {code}")
+        with tempfile.TemporaryDirectory() as home, patch.dict(os.environ, {"HOME": home}):
+            checks = Checks()
+            return finished(checks, checks.start("run-a", "attempt-1", self.project, commands)["job"], limit)["results"]
+
+    def test_masking_never_changes_what_unrunnable_answers(self):
+        # D57 §3.3, §5: the Worker judges a failure on the output as the command printed it, before masking, so a key
+        # header, a key, its last lines or an END line near the error never turns an environment warning into a failure; what it
+        # stores is masked, the reason too
+        key, body = private_key("RSA", 640)
+        header, end = "-----BEGIN RSA PRIVATE" + " KEY-----", "-----END RSA PRIVATE" + " KEY-----"
+        messages = [("python3: No module named pytest", 1), ("python3.11: No module named pytest", 1),
+                    ("/usr/bin/python3: No module named pytest", 1),
+                    ("/usr/bin/env: 'node': No such file or directory", 127),
+                    ("/usr/bin/env: ‘node’: No such file or directory", 127),
+                    ("/bin/sh: 1: pytest: not found", 127), ("/bin/bash: line 1: pytest: command not found", 127),
+                    ("ModuleNotFoundError: No module named 'requests'", 1)]
+        contexts = ["{}\n", header + "\n{}\n", key + "\n{}\n", "\n".join(body.splitlines()[-6:]) + "\n" + end + "\n{}\n",
+                    "{}\nhint: expected " + end + "\n",
+                    "key.pem:" + end + "\n{}\n", "x" * 5000 + "\n{}\nhint: expected " + end + "\n",
+                    "x" * 9000 + "\n{}\n" + end + "\n"]   # the last: its head dropped, so masked from the cut to the END
+        outputs = [(context.format(message), code) for message, code in messages for context in contexts]
+        token = "ghp_" + "Z9y8X7w6" * 5
+        outputs += [(f"Error: Cannot find module '{token}'\n", 1),
+                    ("Error: Cannot find module 'https://u:pw@registry.example.com/x'\n", 1)]
+        results = self.run_outputs(outputs)
+        self.assertEqual(len(results), len(outputs))
+        for n, (message, code) in enumerate(messages):
+            judged = results[n * len(contexts):(n + 1) * len(contexts)]
+            reason = checks_module.unrunnable({"command": "c", "exit": code, "seconds": 0.1, "tail": message + "\n"})
+            self.assertIsNotNone(reason, message)
+            with self.subTest(message):
+                self.assertEqual([r["unrunnable"] for r in judged], [reason] * len(contexts),
+                                 [r["tail"][-200:] for r in judged])
+                self.assertTrue(all(line not in r["tail"] for r in judged for line in body.splitlines()))
+                self.assertEqual([r["tail"] for r in judged[1:3]], ["----…--\n" + message + "\n"] * 2)   # masked
+                self.assertNotIn(message, judged[-1]["tail"])   # hidden in what is shown, still judged
+                self.assertEqual([checks_module.unrunnable(r) for r in judged], [reason] * len(contexts))
+        self.assertEqual(results[-2]["unrunnable"], "缺少 Node 模块：ghp_…w6")
+        self.assertEqual(results[-1]["unrunnable"], "缺少 Node 模块：https://registry.example.com/x")
+        self.assertNotIn(token[4:-2], json.dumps(results, ensure_ascii=False))
+        self.assertNotIn("u:pw", json.dumps(results, ensure_ascii=False))
+
+    def test_an_end_line_is_masked_as_a_cut_off_keys_only_once_output_was_dropped(self):
+        # the reader knows whether it dropped the head of the output: 8 KB exactly is all of it, one byte more is not
+        end = "-----END RSA PRIVATE" + " KEY-----\n"
+        size = 2 * checks_module.TAIL
+        filler = lambda n: ("x " * n)[:n]   # no run of base64 (next to a key's marker, one of 40 or more is masked)
+        results = self.run_outputs([(filler(size - len(end)) + end, 1), (filler(size + 1 - len(end)) + end, 1)])
+        self.assertNotIn("findings", results[0])
+        self.assertTrue(results[0]["tail"].endswith(end))
+        self.assertEqual([f["kind"] for f in results[1]["findings"]], ["private_key"])
 
     def test_cancel_ends_a_running_job(self):
         checks = Checks()
@@ -344,6 +413,18 @@ class WorkerCheckTests(unittest.TestCase):
             node.checks.cancel(RID)   # what the session's stop / close / delete does
             self.assertTrue(finished(node.checks, job, limit=10)["results"][0].get("stopped"))
             self.assertEqual(node.verify_status({"job": job})["state"], "done")
+
+    def test_a_check_that_prints_the_workers_token_shows_it_masked(self):
+        # D57 §3.3: no rule knows the Worker's own token; an Agent there could still have written it where a check prints it
+        with tempfile.TemporaryDirectory() as directory:
+            node, project = make_worker(Path(directory))
+            (project / "token.txt").write_text(f"Bearer {node.token}\n")
+            job = node.verify_start({"run_id": RID, "attempt_id": "attempt-1", "commands": ["cat token.txt; exit 3"]})["job"]
+            result = finished(node.checks, job)["results"][0]
+            self.assertNotIn(node.token, json.dumps(result))
+            self.assertTrue(result["tail"].endswith(f"Bearer {node.token[:4]}…{node.token[-2:]}\n"), result["tail"])
+            self.assertEqual([f["kind"] for f in result["findings"]], ["worker_token"])
+            self.assertEqual((result["exit"], result["command"]), (3, "cat token.txt; exit 3"))   # the command as planned
 
 
 if __name__ == "__main__":

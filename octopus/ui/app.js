@@ -10,7 +10,7 @@ const pendingKeys = new Map();
 let modalHandler = null, modalCleanup = null, modalWorking = false, toastTimer, streamSequence = 0;
 function toast(message){$("toast").textContent=message;$("toast").hidden=false;clearTimeout(toastTimer);toastTimer=setTimeout(()=>$("toast").hidden=true,5000);}
 async function api(path,method="GET",body){
-  const response=await fetch("/v1"+path,{method,headers:{"Authorization":"Bearer "+state.token,...(body!==undefined?{"Content-Type":"application/json"}:{})},body:body!==undefined?JSON.stringify(body):undefined,cache:"no-store"});
+  const response=await fetch("/v1"+path,{method,headers:{...bearer(),...(body!==undefined?{"Content-Type":"application/json"}:{})},body:body!==undefined?JSON.stringify(body):undefined,cache:"no-store"});
   const result=await response.json();
   if(!response.ok){if(response.status===401 && path!=="/login")logout();const error=new Error(result.error || "请求失败");error.status=response.status;error.code=result.code;throw error;}
   return result;
@@ -37,6 +37,8 @@ function modal(title,content,onSubmit,{kicker="DEVELOPMENT WORKSPACE",submit="�
 function closeModal(){modalCleanup?.();modalCleanup=null;$("modal").close();modalHandler=null;$("modal-body").replaceChildren();}
 function download(filename,value){const url=URL.createObjectURL(new Blob([JSON.stringify(value,null,2)],{type:"application/json"}));const a=document.createElement("a");a.href=url;a.download=filename;a.click();setTimeout(()=>URL.revokeObjectURL(url),1000);}
 function logout(){state.token="";state.me=null;state.stream?.abort();streamSequence++;clearInterval(state.refreshTimer);sessionStorage.removeItem("octopus.token");$("app").hidden=true;$("login").hidden=false;state.selected=null;state.run=null;closeModal();}
+// D67: without a token kept in this tab, the login's HttpOnly session cookie signs the request in (the React console keeps none).
+function bearer(){return state.token?{"Authorization":"Bearer "+state.token}:{};}
 async function boot(){
   try{state.me=await api("/me");$("account").textContent=state.me.username.slice(0,2).toUpperCase();$("account").title=state.me.username;
     await refresh();$("login").hidden=true;$("app").hidden=false;
@@ -112,7 +114,7 @@ async function startStream(rid){
   const controller=new AbortController(),sequence=++streamSequence;state.stream=controller;let after=0;
   while(sequence===streamSequence&&state.selected===rid&&!controller.signal.aborted){
     try{
-      const response=await fetch(`/v1/runs/${encodeURIComponent(rid)}/events?stream=1&after=${after}`,{headers:{Authorization:"Bearer "+state.token},signal:controller.signal});
+      const response=await fetch(`/v1/runs/${encodeURIComponent(rid)}/events?stream=1&after=${after}`,{headers:bearer(),signal:controller.signal});
       if(!response.ok)throw new Error("状态流授权失效");
       $("stream-status").textContent="● 实时状态已连接";
       const reader=response.body.getReader(),decoder=new TextDecoder();let buffer="";
@@ -243,4 +245,4 @@ $("run-export").onclick=async()=>{try{download(state.run.id+".json",await api("/
 $("worker-notice").onclick=e=>{if(e.target.id==="assign-worker")assignWorker();};
 $("team-manage").onclick=teamManager;$("api-settings").onclick=()=>apiSettings().catch(e=>toast(e.message));$("worker-settings").onclick=workerSettings;
 $("account").onclick=()=>modal(state.me.username,`<p class="hint">${state.me.admin?"平台管理员":"平台成员"} · ${esc(state.me.id)}</p>`,async()=>{try{await api("/logout","POST",{});}finally{logout();}},{submit:"退出登录"});
-if(state.token)boot();
+if(state.token)boot();else fetch("/v1/me",{cache:"no-store"}).then(r=>{if(r.ok)boot();}).catch(()=>{});

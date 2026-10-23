@@ -21,6 +21,11 @@ pre{white-space:pre-wrap;background:#f6f8fa;padding:.75rem;border-radius:6px}
 """
 
 
+
+def _by(by):
+    """Who accepted a pending item: a person (before D71) or the platform's automatic acceptance."""
+    return by if by.startswith("自动通过") else by + " 确认通过"
+
 def _clip(text, limit):
     text = "" if text is None else str(text)
     return text if len(text) <= limit else text[:limit] + "…"
@@ -125,7 +130,8 @@ def model(view, now=None):
     evaluation = None
     final = sorted(judged["attempts"], key=lambda a: a.get("number") or 0)[-1].get("evidence") or {} if judged else {}
     if judged and any(g.get("name") == "evaluated" for g in final.get("gates") or []):   # only where the gate applied
-        by = ((final.get("evaluation") or {}).get("accepted_by") or {}).get("username")
+        evaluation = final.get("evaluation") or {}   # D71: pending items are accepted automatically, as warnings
+        by = (evaluation.get("accepted_by") or {}).get("username") or ("自动通过，记为提示" if evaluation.get("automatic") else None)
         evaluation = [{"item": _line(a.get("item"), 300), "result": str(a.get("result") or "—"),
                        "by": by if a.get("result") == "pending" else None}
                       for a in (final.get("outcome") or {}).get("acceptance") or []]
@@ -249,7 +255,7 @@ def markdown(view, now=None):
             out += ["", "建议："] + [f"- {_md(s)}" for s in final["suggestions"]]
     if m["evaluation"]:
         out += ["", "## 验收（以 Evaluator 为准）", "", "| 验收项 | 判定 |", "|---|---|"]
-        out += [f"| {_cell(a['item'])} | {a['result']}" + (f"（{_cell(a['by'])} 确认通过）" if a["by"] else "") + " |"
+        out += [f"| {_cell(a['item'])} | {a['result']}" + (f"（{_cell(_by(a['by']))}）" if a["by"] else "") + " |"
                 for a in m["evaluation"]]
     if m["usage"]:
         out += ["", "## 用量", "", "| 任务 | 用量 |", "|---|---|"]
@@ -348,7 +354,7 @@ def html(view, now=None):
                 out.append(f"<p>{title}：</p><ul>" + "".join(f"<li>{row}</li>" for row in rows) + "</ul>")
     if m["evaluation"]:
         out += ["<h2>验收（以 Evaluator 为准）</h2>", "<table><tr><th>验收项</th><th>判定</th></tr>" + "".join(
-            f"<tr><td>{e(a['item'])}</td><td>{e(a['result'])}" + (f"（{e(a['by'])} 确认通过）" if a["by"] else "") + "</td></tr>"
+            f"<tr><td>{e(a['item'])}</td><td>{e(a['result'])}" + (f"（{e(_by(a['by']))}）" if a["by"] else "") + "</td></tr>"
             for a in m["evaluation"]) + "</table>"]
     if m["usage"]:   # D46 P6a
         out += ["<h2>用量</h2>", "<table><tr><th>任务</th><th>用量</th></tr>" + "".join(

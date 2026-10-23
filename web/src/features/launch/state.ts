@@ -26,7 +26,7 @@ export interface Draft {
   nameTouched: boolean;
   space: string;
   worker: string;
-  source: "" | "new" | "git";
+  source: "" | "new" | "git" | "none";
   url: string;
   ref: string;
   /** A source credential named by the user (D35); "" leaves it to matching by repository. */
@@ -124,7 +124,7 @@ export function validateStep(step: number, draft: Draft,
     if (!workflowMode && teamWithoutEnvironment)
       return `Team「${teamWithoutEnvironment}」当前没有可用的执行环境（未分配或已停用），你也还没有自己的执行边界，请联系平台管理员。`;
     if (!draft.name.trim()) return "请填写名称。";
-    if (!workflowMode && !draft.source) return "请明确选择新建项目或目标 Git 仓库，避免把空工作区当作已有项目。";
+    if (!workflowMode && !draft.source) return "请明确选择新建项目、目标 Git 仓库或不需要代码仓库，避免把空工作区当作已有项目。";
     if (!workflowMode && draft.source === "git" && !draft.url.trim()) return "请填写 Git URL。";
     if (!workflowMode && draft.source === "new" && draft.autoPublish) {   // D48: never dropped without a word
       if (!draft.newRepoOwner.trim() || !draft.newRepoName.trim() || !draft.newRepoCredential)
@@ -162,7 +162,7 @@ export function submitBody(draft: Draft) {
   const plan = draft.method === "agent" ? { plan: "agent" as const } : selectionOf(draft);
   const source = draft.source === "git"
     ? { type: "git" as const, url: draft.url.trim(), ...(draft.ref.trim() ? { ref: draft.ref.trim() } : {}) }
-    : { type: "new" as const };
+    : draft.source === "none" ? { type: "none" as const } : { type: "new" as const };   // D65: general work
   return {
     ...plan, input: draft.input.trim(), name: draft.name, source, recovery: draft.recovery,
     ...(draft.source === "git" && draft.credential ? { credentials: { source: draft.credential } } : {}),

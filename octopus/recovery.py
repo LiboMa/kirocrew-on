@@ -3,10 +3,11 @@ import json
 import re
 import time
 
-from . import crew_entry, journal
+from . import crew_entry, journal, sources
 from .db import dumps, uid
 from .domain import SETTLED, TOOLS, required_checks, runs_checks, steps, unserved
 from .security import Error, require
+from .transport import worker_token
 
 LIVE = {"pending", "dispatching", "dispatch_unknown", "running", "waiting_approval"}
 FAILURES = {"implementation", "tests", "environment", "input", "auth", "model",
@@ -57,44 +58,19 @@ def failing_gate(evidence, failure_type=None):
     return evidence.get("gate") or first or evidence.get("failure_type") or failure_type
 
 
-def _waited(row, task_id, gate):
-    """A diagnosis of ``task_id`` failing on ``gate``: its decision's action, "" when it decided nothing; None for another."""
-    context = json.loads(row["context"])
-    if row["failed_task_id"] != task_id or failing_gate(context.get("evidence") or {}, context.get("failure_type")) != gate:
-        return None
-    return (json.loads(row["decision"]) or {}).get("action", "") if row["decision"] else ""
+# D71 (owner 2026-10-22, gates retrospective): the Coordinator waits for a person only for what only the person can supply.
+WAIT_FOR = {"credentials", "input"}
 
 
-def waits(rows, task_id, gate, since=0):
-    """How many diagnoses in a row, since ``since`` (the user's latest continue or the task's latest pass), waited for the
-    user on ``task_id`` failing on ``gate`` (D57 §6.2). One that decided nothing (it failed, or was cancelled) neither
-    counts nor ends the run; one that decided anything else ends it."""
-    count = 0
-    for row in reversed(list(rows)):
-        if row["created"] < since:
-            break
-        action = _waited(row, task_id, gate)
-        if action == "wait_for_user":
-            count += 1
-        elif action:
-            break
-    return count
-
-
-def held(db, rows, run, task, attempt):
-    """The diagnosis that last waited for the user when the same task, failing on the same gate, has waited twice in a row
-    (D57 §6.2, §13.8): no diagnosis is started for it again until the user continues or the task passes, unless the user
-    asks for one (rediagnose); None otherwise."""
-    gate = failing_gate(json.loads(attempt["evidence"] or "{}"), "native_error")
-    if waits(rows, task["id"], gate) < 2:   # most Sessions, on every tick of a blocked one: nothing more to read
-        return None
-    continued = db.execute("SELECT MAX(created) FROM revisions WHERE run_id=? AND json_extract(content,'$.kind')='continued'",
-                           (run["id"],)).fetchone()[0] or 0
-    passed = db.execute("SELECT MAX(updated) FROM attempts WHERE run_id=? AND task_id=? AND status='accepted'",
-                        (run["id"], task["id"])).fetchone()[0] or 0
-    if waits(rows, task["id"], gate, max(continued, passed)) < 2:
-        return None
-    return next(row for row in reversed(list(rows)) if _waited(row, task["id"], gate) == "wait_for_user")
+def fallback(decision, failed_id, why):
+    """D71: a decision the Session cannot follow without stopping — a wait for something other than WAIT_FOR, a refused
+    decision, or none at all — becomes a retry of the failed task with what the Coordinator said and why it was not kept."""
+    decision = decision or {}
+    said = decision.get("instructions") or ""
+    return {"action": "retry", "target_task_id": failed_id, "fallback_from": decision.get("action") or "none",
+            "reason": decision.get("reason") or why,
+            "instructions": "；".join(filter(None, [said, f"（平台：{why}，按失败原因直接修复后重新执行本任务）"])),
+            **({"refused": decision["refused"]} if decision.get("refused") else {})}
 
 
 def replan_quota(snapshot, failure):
@@ -253,16 +229,18 @@ evidence.watchdog 存在时是看门狗停止了没有进展的任务：先判�
 - 工具、模型与 Effort 不能与失败的那次完全相同；模型未公布时，同一工具改用 auto 也是有效的推荐；
 - 审查类任务选择与被审查代码实际所用不同的工具；换用后的实现工具也不能是其后的审查任务所用的工具；
 - 参考 environment.limitations 中的已知问题；
-- environment.switch_tools 为 false 时不能换工具：用 wait_for_user，并说明可换用哪个工具；不确定时也用 wait_for_user。
+- environment.switch_tools 为 false 时不能换工具：在原工具上用 retry，写明具体做法；不确定时选最可能的修复。
 实现、测试、契约或门禁本身的问题仍用 retry 或 rework，不换工具。
 计划本身有问题时（任务拆分不当、缺少必要的步骤、顺序错误、任务目标与需求不符，在原任务上重试或返工无法完成需求）用 replan：
 平台保留已验收的任务，请 KiroCrew 重新规划失败的任务及其后的工作；写明原计划的问题与重新规划的要求。
 每个会话只能重新规划一次：environment.replanned 为 true 时不能再用 replan，除非 environment.replan_exempt 为 true
 （平台按失败证据判定问题出在任务合同上，这次重新规划不占额度）。
-任务的 spec 带 requested（需求中指定的工具或模型）时，不能换用其他工具或模型：用 wait_for_user 说明原因。
+任务的 spec 带 requested（需求中指定的工具或模型）时，不能换用其他工具或模型：在指定的工具上 retry 或 rework。
 检查命令以退出码 127 失败表示命令在执行环境中不存在（environment.commands 列出常见命令中可用与没有的）：这是任务契约中 verify 的问题，
-重试或返工无法修改它——未重新规划过时用 replan 并写明改用的命令，否则用 wait_for_user，请用户续作时修改该任务的 verify。
-判断是否已有足够源码、依赖与输入；缺少仓库、需要用户授权或认证时 wait_for_user，不猜测项目地址。
+重试或返工无法修改它——未重新规划过时用 replan 并写明改用的命令，否则用 wait_for_user（missing 为 input），请用户续作时修改该任务的 verify。
+判断是否已有足够源码、依赖与输入；缺少仓库、需要用户授权或认证时 wait_for_user（missing 为 credentials），不猜测项目地址。
+只有缺少仓库凭证或授权、或缺少只有用户能提供的需求信息时才用 wait_for_user，并写 missing；其余情况（包括不确定）
+选最可能的修复用 retry 或 rework，不要停下等人（平台会把其余的 wait_for_user 当作 retry 执行）。
 若是当前任务可自行修复的问题用 retry；若审查问题需要上游实现者修复用 rework。
 context 有 locked_files 时（只出现在平台升级前被 artifacts_locked 拦下的任务上；现在这项门禁只记提示）：这些修改确应由失败的任务完成时，
 retry / rework 失败的任务并在决定中加 "paths_add": [locked_files 中的文件]（至多 10 个），平台把它们加入该任务的 paths；
@@ -286,8 +264,10 @@ context.previous_decisions 是此前各轮的决定及其结果（status）；�
   "reason":"为什么原工具不能完成、为什么选这个工具","instructions":"以新工具重新执行本任务的要求"}}
 重新规划时：
 {{"action":"replan","reason":"原计划的问题","instructions":"重新规划的要求（需要哪些任务、注意什么）"}}
-action 只能为 retry、rework、switch_tool、replan、wait_for_user；wait_for_user 与 replan 不需 target_task_id，
-instructions 要说明缺少什么、用户下一步如何补充。
+等用户时：
+{{"action":"wait_for_user","missing":"credentials","reason":"缺少什么","instructions":"用户下一步如何补充"}}
+action 只能为 retry、rework、switch_tool、replan、wait_for_user；wait_for_user 与 replan 不需 target_task_id；
+wait_for_user 的 missing 只能是 credentials（仓库凭证、授权、认证）或 input（只有用户能提供的需求信息）。
 同时写 handoff.md，最后汇总判断。提出 wait_for_user 是诊断完成，不是诊断 Agent 自身执行失败。
 """
 
@@ -477,7 +457,7 @@ def summary(db, run):
             "latest": rows[-1] if rows else None, "history": rows}
 
 
-def schedule(db, database, run, task, attempt, *, manual=False, actor=None, rediagnose=False):
+def schedule(db, database, run, task, attempt, *, manual=False, actor=None):
     settings = policy(json.loads(run["snapshot"]).get("recovery"), legacy=True)
     rows = list(db.execute("SELECT * FROM recoveries WHERE run_id=? ORDER BY number", (run["id"],)))
     if any(r["status"] in LIVE for r in rows):
@@ -490,16 +470,10 @@ def schedule(db, database, run, task, attempt, *, manual=False, actor=None, redi
         if (not settings["enabled"] or failure in NEEDS_INPUT or json.loads(attempt["evidence"]).get("requested") or
                 any(r["failed_attempt_id"] == attempt["id"] for r in rows) or (run["worker_id"] and unserved(db, run))):
             return None
-        if held(db, rows, run, task, attempt):   # D57 §6.2: the user has the diagnosis's word on it twice already
-            return None
         key = refused(db, run, "cycle")   # last: the cheap checks above end most ticks of a blocked Session
         if key:
             mark_refused(db, attempt["id"], key)
             return None
-    elif not rediagnose and (last := held(db, rows, run, task, attempt)):
-        # D57 §6.2: asked again, the user is given what the diagnosis said; only rediagnose starts another
-        said = json.loads(last["decision"])
-        raise Error(409, "already_waiting", said["reason"] + "；" + said["instructions"])
     ordered = [dict(t) for t in db.execute("SELECT id,ordinal,spec FROM tasks WHERE run_id=? ORDER BY ordinal",
                                          (run["id"],))]
     context = {"run_id": run["id"], "input": run["input"], "workspace": run["workspace"],
@@ -631,6 +605,9 @@ class Coordinator:
             return
         context = json.loads(item["context"])
         config = json.loads(run["worker_config"])
+        # D57 §3.3: what the diagnosis stores is masked, the Worker's token too (opened here, outside any transaction)
+        extra = (worker_token(config),)
+        mask = lambda value: sources.mask_value(value, extra)[0]
         body = {"run_id": run["id"], "attempt_id": item["attempt_id"], "input": context["input"],
                 "spec": {"id": "diagnose", "name": "协调者诊断与纠错", "tool": "kiro", "model": "auto", "effort": "",
                          "prompt": "分析失败证据，提出可执行的重试、上游返工或等待输入决定。"},
@@ -643,27 +620,29 @@ class Coordinator:
                     self.finish(run, item, error="协调者启动请求被拒绝：" + str(exc))
                     return
                 raise
-            state = result["status"]
+            state, error = result["status"], mask(result.get("error"))
             with self.db.transaction() as db:
                 journal.change(db, "recoveries", item["id"], journal.WORKER, "recovery.state", event={"id": item["id"]},
-                               status=state, native_id=result.get("native_id"), context_hash=result.get("context_hash"),
-                               error=result.get("error"), updated=time.time())
+                               mask=extra, status=state, native_id=result.get("native_id"),
+                               context_hash=result.get("context_hash"), error=error, updated=time.time())
             if state == "blocked":
-                self.finish(run, item, error="协调者未能启动：" + (result.get("error") or "请检查原生环境"))
+                self.finish(run, item, error="协调者未能启动：" + (error or "请检查原生环境"))
             return
         result = self.engine.request(config, "/inspect", {"run_id": run["id"], "attempt_id": item["attempt_id"]})
         native, evidence = result.get("native") or {}, result.get("evidence") or {}
+        # stored masked: copies, the decision below is read as the Coordinator wrote it
         if not native.get("done"):
             state = "waiting_approval" if native.get("awaiting_approval") else "running"
             with self.db.transaction() as db:
                 journal.change(db, "recoveries", item["id"], journal.WORKER, "recovery.state", event={"id": item["id"]},
-                               status=state, evidence=dumps(evidence), updated=time.time())
+                               mask=extra, status=state, evidence=dumps(mask(evidence)), updated=time.time())
             return
         # D57 §6.3: the platform's fault, not the Coordinator's — its runtime, its sandbox, KiroCrew's teardown
         kind = fault(native, self._entered(run, item) if native.get("stopped") else True)
         with self.db.transaction() as db:
             journal.change(db, "recoveries", item["id"], journal.WORKER, "recovery.state", event={"id": item["id"]},
-                           result=native.get("result"), evidence=dumps({**evidence, **({"platform_fault": kind} if kind else {})}),
+                           mask=extra, result=mask(native.get("result")),
+                           evidence=dumps(mask({**evidence, **({"platform_fault": kind} if kind else {})})),
                            updated=time.time())
         if kind and self._retry(run, item, context, kind):
             return
@@ -673,7 +652,7 @@ class Coordinator:
             raw = result.get("decision", "")
             require(isinstance(raw, str) and len(raw) <= 64000, "协调者决定缺失或过大")
             decision = json.loads(raw)
-            fields = {"action", "target_task_id", "reason", "instructions", "tool", "model", "effort", "paths_add"}
+            fields = {"action", "target_task_id", "reason", "instructions", "tool", "model", "effort", "paths_add", "missing"}
             require(isinstance(decision, dict) and set(decision) <= fields, "协调者决定字段无效")
             require(decision.get("action") in {"retry", "rework", "switch_tool", "replan", "wait_for_user"}, "协调者动作无效")
             require(all(isinstance(decision.get(k), str) and 0 < len(decision[k]) <= 8000
@@ -682,9 +661,15 @@ class Coordinator:
                 require(all(isinstance(decision.get(k, ""), str) for k in ("tool", "model", "effort")), "换工具的字段须为字符串")
             else:
                 decision = {k: v for k, v in decision.items() if k not in {"tool", "model", "effort"}}
+            if decision["action"] != "wait_for_user" or decision.get("missing") not in WAIT_FOR:
+                decision.pop("missing", None)
             self.finish(run, item, decision=decision)
         except (Error, ValueError, TypeError) as exc:
-            self.finish(run, item, error="自动诊断未形成可执行决定：" + str(exc))
+            why = "自动诊断未形成可执行决定：" + str(exc)
+            if native.get("stopped"):   # a person stopped the diagnosis: theirs to decide
+                self.finish(run, item, error=why)
+            else:   # D71: the failed task is retried as it failed
+                self.finish(run, item, decision=fallback(None, item["failed_task_id"], why))
 
     def _entered(self, run, item):
         """Whether a person may have stopped this diagnosis in the native page (crew_entry.entered)."""
@@ -721,6 +706,7 @@ class Coordinator:
 
     def finish(self, run, item, *, decision=None, error=None):
         now = time.time()
+        extra = (worker_token(json.loads(run.get("worker_config") or "{}")),)   # D57 §3.3: what is stored is masked
         with self.db.transaction() as db:
             fresh = db.execute("SELECT * FROM runs WHERE id=?", (run["id"],)).fetchone()
             failed = db.execute("SELECT * FROM tasks WHERE run_id=? AND id=?",
@@ -734,7 +720,12 @@ class Coordinator:
                 error = "协调者扩大可改动路径未通过核对：paths_add 只用于重试或返工失败的任务"
                 decision = {**decision, "refused": error}
             elif decision and decision["action"] == "replan":
-                return self._replan(db, fresh, failed, item, decision, now)
+                refusal = self._replan(db, fresh, failed, item, decision, now, extra)
+                if not refusal:
+                    return
+                decision = fallback({**decision, "refused": refusal}, failed["id"], refusal)   # D71: keep going
+            if decision and not error and decision["action"] == "wait_for_user" and decision.get("missing") not in WAIT_FOR:
+                decision = fallback(decision, failed["id"], "协调者没有写明缺少凭证或需求信息")   # D71
             target, widened = None, None
             if decision and not error and decision["action"] != "wait_for_user":
                 target = db.execute("SELECT * FROM tasks WHERE run_id=? AND id=?",
@@ -765,36 +756,44 @@ class Coordinator:
                     except Error as exc:
                         error = "协调者扩大可改动路径未通过核对：" + str(exc)
                         decision = {**decision, "refused": error}
+            if error and decision:
+                # D71: a refused decision is not a stop — the failed task is retried with what the Coordinator said
+                decision, error = fallback({**decision, "refused": error}, failed["id"], error), None
+                target, widened = failed, None
+            stored = sources.mask_value(decision, extra)[0] if decision else None   # decided on as written, stored masked
             if error or decision["action"] == "wait_for_user":
-                message = error or (decision["reason"] + "；" + decision["instructions"])
+                message = sources.mask_text(error or (decision["reason"] + "；" + decision["instructions"]), extra)[0]
                 journal.change(db, "recoveries", item["id"], journal.RECOVERY, "recovery.state", event={"id": item["id"]},
-                               status="blocked", decision=dumps(decision) if decision else None, error=message, updated=now)
+                               mask=extra, status="blocked", decision=dumps(stored) if stored else None, error=message,
+                               updated=now)
                 journal.change(db, "runs", run["id"], journal.RECOVERY, "recovery.blocked",
-                               event={"id": item["id"], "error": message}, status="blocked", error=message, updated=now)
+                               event={"id": item["id"], "error": message}, mask=extra, status="blocked", error=message,
+                               updated=now)
                 return
             invalidated = [row["id"] for row in db.execute(
                 "SELECT id FROM tasks WHERE run_id=? AND ordinal>=? ORDER BY ordinal", (run["id"], target["ordinal"]))]
             journal.change_rows(db, "tasks", "run_id=? AND ordinal>=?", (run["id"], target["ordinal"]), journal.RECOVERY,
-                                "task.reset", decision.get("reason"), status="pending", current_attempt=None)
+                                "task.reset", stored.get("reason"), mask=extra, status="pending", current_attempt=None)
             if widened:   # D54: the revision below records the wider paths
                 spec = json.loads(db.execute("SELECT spec FROM tasks WHERE run_id=? AND id=?", (run["id"], target["id"])).fetchone()[0])
-                journal.change(db, "tasks", (run["id"], target["id"]), journal.RECOVERY, "task.paths_added", decision.get("reason"),
+                journal.change(db, "tasks", (run["id"], target["id"]), journal.RECOVERY, "task.paths_added", stored.get("reason"),
                                event={"task_id": target["id"], "added": decision["paths_add"], "recovery": item["number"]},
-                               spec=dumps({**spec, "paths": widened}))
+                               mask=extra, spec=dumps({**spec, "paths": widened}))
             if decision["action"] == "switch_tool":
-                journal.change(db, "tasks", (run["id"], target["id"]), journal.RECOVERY, "task.tool_switched", decision["reason"],
+                journal.change(db, "tasks", (run["id"], target["id"]), journal.RECOVERY, "task.tool_switched", stored["reason"],
                                event={"task_id": target["id"], "from": decision["switched_from"],
                                       "to": {k: switched[k] for k in ("tool", "model", "effort")}},
-                               spec=dumps(switched))
+                               mask=extra, spec=dumps(switched))
             version = fresh["version"] + 1
             journal.change(db, "recoveries", item["id"], journal.RECOVERY, "recovery.state", event={"id": item["id"]},
-                           status="applied", decision=dumps(decision), error=None, updated=now)
-            journal.change(db, "runs", run["id"], journal.RECOVERY, "recovery.applied", decision.get("reason"),
+                           mask=extra, status="applied", decision=dumps(stored), error=None, updated=now)
+            journal.change(db, "runs", run["id"], journal.RECOVERY, "recovery.applied", stored.get("reason"),
                            event={"id": item["id"], "number": item["number"], "target_task_id": target["id"],
-                                  "invalidated": invalidated}, status="ready", error=None, version=version, updated=now)
+                                  "invalidated": invalidated}, mask=extra, status="ready", error=None, version=version,
+                           updated=now)
             from .revisions import record
             name = json.loads(target["spec"]).get("name", target["id"])
-            reason = decision.get("reason")
+            reason = stored.get("reason")
             if decision["action"] == "switch_tool":
                 was = decision["switched_from"]
                 title = (f"自动纠错：「{name}」由 {was['tool']} / {was['model']} 换为 {switched['tool']} / {switched['model']}"
@@ -804,9 +803,9 @@ class Coordinator:
             if widened:
                 title += f"；扩大「{name}」的可改动路径：{'、'.join(decision['paths_add'])}"
             record(db, run["id"], version, "recovered", title, fresh["owner_id"], now, recovery_id=item["id"],
-                   decision=decision, invalidated=invalidated)
+                   decision=stored, invalidated=invalidated)
 
-    def _replan(self, db, fresh, failed, item, decision, now):
+    def _replan(self, db, fresh, failed, item, decision, now, extra=()):
         """The Coordinator's replan (D41 §3.2): the failed task and those after it are replaced by a KiroCrew planning task;
         accepted tasks stay. Once per Session — besides up to two for a problem in the task's contract (D57 §6.1); never for
         a design Session or for a planning task itself."""
@@ -819,13 +818,8 @@ class Coordinator:
         refusal = ("已重新规划过一次，不能再次重新规划" if used and not exempt else
                    "工作流设计会话不重新规划" if snapshot.get("purpose") == "workflow_design" else
                    "失败的是规划任务本身，不能以重新规划替换" if planning.planning_task(failed["id"], snapshot) else None)
-        if refusal:
-            message = "协调者重新规划的决定未通过核对：" + refusal
-            journal.change(db, "recoveries", item["id"], journal.RECOVERY, "recovery.state", event={"id": item["id"]},
-                           status="blocked", decision=dumps(decision), error=message, updated=now)
-            journal.change(db, "runs", rid, journal.RECOVERY, "recovery.blocked", event={"id": item["id"], "error": message},
-                           status="blocked", error=message, updated=now)
-            return
+        if refusal:   # D71: finish retries the failed task instead (said in the decision's refused)
+            return "协调者重新规划的决定未通过核对：" + refusal
         context = json.loads(item["context"])
         environment = context.get("environment") or {}
         later = [dict(row) for row in db.execute("SELECT * FROM tasks WHERE run_id=? AND ordinal>=? ORDER BY ordinal",
@@ -843,25 +837,27 @@ class Coordinator:
                  **({"required": required} if (required := required_checks(fresh, spec)) else {})} for row in db.execute(
             "SELECT id, spec FROM tasks WHERE run_id=? AND status='accepted' AND ordinal<? ORDER BY ordinal", (rid, failed["ordinal"]))
             if (spec := json.loads(row["spec"])).get("verify")]   # D54 §9 a: their checks are reviewed with the plan
-        spec = planning.replan_step(task_id, replaced, failure, decision, environment.get("models"), environment.get("tools"),
+        # D57 §3.3: decided on as written (finish), the Coordinator's words go on masked — to the planner as well
+        stored = sources.mask_value(decision, extra)[0]
+        spec = planning.replan_step(task_id, replaced, failure, stored, environment.get("models"), environment.get("tools"),
                                     environment.get("limitations"), environment.get("commands"), kept, snapshot.get("preferences"))
         journal.remove_rows(db, "tasks", "run_id=? AND ordinal>=?", (rid, failed["ordinal"]), journal.RECOVERY, "task.replaced",
-                            decision.get("reason"), event={"tasks": replaced})
+                            stored.get("reason"), event={"tasks": replaced}, mask=extra)
         db.execute("INSERT INTO tasks(run_id,id,ordinal,spec) VALUES(?,?,?,?)", (rid, spec["id"], failed["ordinal"], dumps(spec)))
         if snapshot.get("replan"):   # the earlier replans stay known: their tasks, and the ids they replaced
             snapshot["replan_history"] = [*(snapshot.get("replan_history") or []), snapshot["replan"]]
-        snapshot["replan"] = {"task": spec["id"], "applied": False, "replaced": replaced, "reason": decision.get("reason"),
-                              "instructions": decision.get("instructions"), "recovery": item["number"],
+        snapshot["replan"] = {"task": spec["id"], "applied": False, "replaced": replaced, "reason": stored.get("reason"),
+                              "instructions": stored.get("instructions"), "recovery": item["number"],
                               **({"exempt": True} if exempt else {})}
         snapshot["steps"] = snapshot.get("steps", []) + [spec]
         version = fresh["version"] + 1
         journal.change(db, "recoveries", item["id"], journal.RECOVERY, "recovery.state", event={"id": item["id"]},
-                       status="applied", decision=dumps(decision), error=None, updated=now)
-        journal.change(db, "runs", rid, journal.RECOVERY, "recovery.applied", decision.get("reason"),
+                       mask=extra, status="applied", decision=dumps(stored), error=None, updated=now)
+        journal.change(db, "runs", rid, journal.RECOVERY, "recovery.applied", stored.get("reason"),
                        event={"id": item["id"], "number": item["number"], "replan": True,
                               "invalidated": [r["id"] for r in replaced]},
-                       status="ready", error=None, version=version, snapshot=dumps(snapshot), updated=now)
+                       mask=extra, status="ready", error=None, version=version, snapshot=dumps(snapshot), updated=now)
         names = "、".join(r["name"] for r in replaced)
-        reason = decision.get("reason")
+        reason = stored.get("reason")
         record(db, rid, version, "recovered", f"自动纠错：重新规划，替换「{names}」" + (f"（{reason}）" if reason else ""),
-               fresh["owner_id"], now, recovery_id=item["id"], decision=decision, invalidated=[r["id"] for r in replaced])
+               fresh["owner_id"], now, recovery_id=item["id"], decision=stored, invalidated=[r["id"] for r in replaced])

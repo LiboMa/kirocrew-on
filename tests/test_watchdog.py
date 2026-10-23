@@ -56,7 +56,7 @@ class WatchdogCase(unittest.TestCase):
         if path == "/inspect" and any(b.get("coordination") for p, b in self.calls if p == "/dispatch"
                                       and b["attempt_id"] == body["attempt_id"]):
             return {"native": {"done": True, "result": "诊断"}, "evidence": {"actual_backend": "kiro"}, "handoff": "交接",
-                    "decision": dumps({"action": "wait_for_user", "reason": "仍然卡住", "instructions": "检查环境后续作"})}
+                    "decision": dumps({"action": "wait_for_user", "missing": "input", "reason": "仍然卡住", "instructions": "检查环境后续作"})}
         if getattr(self, "finished", False):
             return {"native": {"done": True, "result": "完成"}, "evidence": {"actual_backend": "claude"}, "handoff": "交接",
                     "outcome": dumps({"decision": "pass", "summary": "完成并验证", "failure_type": "none", "findings": []})}
@@ -228,6 +228,46 @@ class WatchdogReviewTests(WatchdogCase):
         attempts = run["tasks"][0]["attempts"]
         self.assertEqual((len(attempts), attempts[0]["status"]), (1, "running"))
         self.assertFalse((attempts[0]["evidence"].get("watchdog") or {}).get("reason"))
+
+    def test_a_failed_stops_error_is_stored_masked(self):
+        # D57 §3.3: the Worker's error is its text; with the Worker's own token in it, the mark keeps it masked
+        import hashlib
+        token = "wt-" + hashlib.sha256(b"task-7-watchdog").hexdigest()[:37]
+        with self.db.transaction() as db:
+            db.execute("UPDATE workers SET config=? WHERE id='worker'",
+                       (dumps({"url": "fixture", "token": token, "capabilities": {}}),))
+        self.stop_error, self.keep_failing = Error(500, "worker_error", f"Gateway 出错：Bearer {token}"), True
+        rid = self.start()
+        run = self.later(rid, 1)
+        mark = run["tasks"][0]["attempts"][0]["evidence"]["watchdog"]
+        self.assertEqual((mark["stop_errors"], mark["stop_error"]), (1, f"Gateway 出错：Bearer {token[:4]}…{token[-2:]}"))
+        with self.db.read() as db:
+            stored = json.dumps([dict(r) for r in db.execute("SELECT * FROM attempts")], ensure_ascii=False)
+        self.assertNotIn(token, stored)
+
+    def test_the_last_tool_is_masked_before_it_is_cut(self):
+        # D57 §3.3: what the Worker reports as the last tool is its text; the platform cuts it to 80 characters for the
+        # reason, after masking it (an older Worker sends it as KiroCrew wrote it)
+        import hashlib
+        token = "wt-" + hashlib.sha256(b"task-7b-last-tool").hexdigest()[:37]
+        with self.db.transaction() as db:
+            db.execute("UPDATE workers SET config=? WHERE id='worker'",
+                       (dumps({"url": "fixture", "token": token, "capabilities": {}}),))
+        original = self.request
+
+        def request(config, path, body, **kwargs):
+            answer = original(config, path, body, **kwargs)
+            if path == "/inspect" and "progress" in answer:
+                answer["progress"]["last_tool"] = "y" * 60 + " Bearer " + token
+            return answer
+        self.engine.request = request
+        rid = self.start()
+        run = self.later(rid, 3)
+        first = sorted(run["tasks"][0]["attempts"], key=lambda a: a["number"])[0]
+        self.assertIn(f"（最后工具：{'y' * 60} Bearer {token[:4]}…{token[-2:]}）", first["error"])
+        with self.db.read() as db:
+            stored = json.dumps([dict(r) for r in db.execute("SELECT * FROM attempts")], ensure_ascii=False)
+        self.assertNotIn(token[4:12], stored)   # the 12 characters an 80-character cut would leave
 
     def test_a_failing_stop_is_never_doubled_and_backs_off(self):
         self.stop_error, self.keep_failing = Error(500, "worker_error", "Gateway 出错"), True

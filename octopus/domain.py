@@ -52,7 +52,7 @@ def name(value):
 
 # Optional task structure (D34 §6.1): what a task delivers and how it is checked, kept in its spec only when given.
 # verify_required (D57 §5): those of the checks that must pass, named by their text; the others only report.
-CONTRACT = ("kind", "role", "deliverables", "acceptance", "verify", "verify_required", "depends_on", "paths", "skills")
+CONTRACT = ("kind", "role", "phase", "deliverables", "acceptance", "verify", "verify_required", "depends_on", "paths", "skills")
 MAX_TASKS = 12   # D66 (owner 2026-10-22): a workflow or a Session; was 8 — a 9-task recommendation was refused
 KINDS = ("implement", "review", "test", "deliver", "design", "research", "write")
 # D65: general work, not bound to Git — research (调研) and write (撰写), judged like a delivery; never an Evaluator's or
@@ -79,8 +79,9 @@ UNCHECKED = ("review", "design")
 
 
 def runs_checks(spec):
-    """Whether the platform runs ``spec``'s verify commands when the task ends (D37 §5)."""
-    return spec.get("kind") not in UNCHECKED
+    """Whether the platform runs ``spec``'s verify commands when the task ends (D37 §5): never a diverge task's (D69)."""
+    from .phases import own
+    return spec.get("kind") not in UNCHECKED and own(spec) != "diverge"
 
 
 def strings(value, field, items, chars):
@@ -149,6 +150,10 @@ def steps(value, known=(), planned=False):
         if "kind" in step:
             require(step["kind"] in KINDS, "任务类别只能是 implement、review、test、deliver、design、research（调研）或 write（撰写）")
             item["kind"] = step["kind"]
+        if "phase" in step:   # D69: diverge / design / converge decides which failures stop the Session
+            from .phases import PHASES
+            require(step["phase"] in PHASES, "阶段（phase）只能是 diverge（发散）、design（设计）或 converge（收敛）")
+            item["phase"] = step["phase"]
         if "role" in step:   # D46 P2: how the Agent works; kind keeps deciding the gates
             from . import roles
             require(step["role"] in roles.KINDS, "角色只能是 " + "、".join(roles.KINDS))
@@ -348,13 +353,31 @@ def confirm_plan(db, rid, who, actor, via):
     journal.record(db, rid, "run.confirmed", who, "已确认计划", via=via, by=actor["username"])
 
 
-def awaits_confirmation(snapshot, task_id):
-    """Whether the Session must wait for its plan to be confirmed before this task (D44). Only KiroCrew's own planning runs
-    first — its plan task and a replan task; a given plan's task that happens to be named ``plan`` waits like any other."""
-    if snapshot.get("admission") != "confirm" or snapshot.get("confirmed"):
-        return False
-    from .planning import planner_task
-    return not planner_task(task_id, snapshot)
+def release_confirmations(db, skip=()):
+    """No Session waits for a person any more (owner 2026-10-22). One an earlier version left in 「计划待确认」 starts as if
+    confirmed — by the platform (D70); one left in 「验收待确认」 has what its Evaluator left pending accepted as a warning
+    (D71). Once, here."""
+    rows = db.execute("SELECT id,status FROM runs WHERE status IN ('awaiting_confirmation','awaiting_acceptance') "
+                      "AND lifecycle='open'").fetchall()
+    for row in rows:
+        if row["id"] in skip:
+            continue
+        if row["status"] == "awaiting_confirmation":
+            confirm_plan(db, row["id"], journal.ENGINE, {"username": "platform"}, "platform")
+            reason = "计划确认已取消，直接开始（D70）"
+        else:
+            for task in db.execute("SELECT * FROM tasks WHERE run_id=? AND status='awaiting_acceptance'", (row["id"],)).fetchall():
+                attempt = db.execute("SELECT * FROM attempts WHERE id=?", (task["current_attempt"],)).fetchone()
+                if attempt is not None:
+                    evidence = json.loads(attempt["evidence"] or "{}")
+                    evidence["evaluation"] = {**(evidence.get("evaluation") or {}), "automatic": True, "accepted_at": time.time()}
+                    journal.change(db, "attempts", attempt["id"], journal.ENGINE, "attempt.state", "验收确认已取消，按提示记录（D71）",
+                                   status="accepted", evidence=dumps(evidence), updated=time.time())
+                journal.change(db, "tasks", (row["id"], task["id"]), journal.ENGINE, "task.state", status="accepted")
+            reason = "验收确认已取消，待人判断的项记为提示（D71）"
+        restart_budget(db, row["id"], journal.ENGINE)
+        journal.change(db, "runs", row["id"], journal.ENGINE, "run.state", reason,
+                       desired="active", status="ready", error=None, updated=time.time())
 
 
 def restart_budget(db, rid, who):
@@ -582,9 +605,8 @@ def _probe(config):
 
 
 class Service:
-    def __init__(self, database, default_admission="auto"):
+    def __init__(self, database):
         self.db = database
-        self.default_admission = default_admission   # D44: a Session without `admission` runs at once unless set to confirm
         self._opened, self._opened_lock = {}, threading.Lock()   # remote preview opening links already followed
         from .credentials import CredentialStore
         self.credentials = CredentialStore(database)   # D35; the server sets its key file
@@ -1008,6 +1030,7 @@ class Service:
         selected = any(body.get(key) is not None for key in ("workflow_id", "template_id", "steps", "document"))
         require(body.get("plan") in (None, "agent", "match"), "plan 只能是 agent 或 match")
         require(not (selected and body.get("plan") == "agent"), "plan=agent 时不要同时指定工作流、模板、steps 或 document")
+        # D70: no Session waits for its plan's confirmation; an older client's admission is checked, then not used
         require(body.get("admission") in (None, "confirm", "auto"), "admission 须为 confirm 或 auto")
         if "publish" in body:
             publish_policy(body["publish"])
@@ -1045,7 +1068,7 @@ class Service:
             # The planner sees which tools this environment can start and its known limits, and chooses (D38 A5).
             body = {**{k: v for k, v in body.items() if k != "plan"},
                     "steps": [plan_step(capabilities.get("models", {}), capabilities.get("tools"), capabilities.get("limitations"),
-                                       capabilities.get("commands"), preferences)]}
+                                       capabilities.get("commands"), preferences, general=general(body.get("source")))]}
         resolved = self.resolve_workflow(actor, {k: v for k, v in body.items() if k != "plan"})
         with self.db.transaction() as db:
             wid = resolved["selection"].get("workflow_id")
@@ -1105,9 +1128,8 @@ class Service:
                             "match_mode": resolved["mode"], "match_reason": resolved["reason"]}
                 snapshot.update(recovery=policy(body.get("recovery")) if design is None else policy({"enabled": False}),
                                 execution_contract=4 if design is None else 1)   # D46 P3: the Evaluator gate
-                if design is None:   # D44: confirm = wait before the first working task; D55: by the repository's rules
-                    decided = policies.admission(db, actor["id"], team, source, body.get("admission"), self.default_admission)
-                    snapshot.update(admission=decided["mode"], admission_basis=decided)
+                if design is None:   # D70: every Session starts once planned
+                    snapshot.update(admission="auto", admission_basis={"mode": "auto", "basis": "default"})
                 if "publish" in body:   # D47: the user's own word on publishing comes first
                     snapshot["publish_policy"] = {**publish_policy(body["publish"]), "source": "user"}
                 if bound:
@@ -1180,15 +1202,16 @@ class Service:
         return dict(row)
 
     def preview_entry(self, actor, rid):
-        """The file the preview opens first (e.g. index.html), asked from the run's Worker."""
+        """(entry, pages): the page the preview opens first and every HTML page the Session produced, asked from the run's
+        Worker; an older Worker names its entry only."""
         with self.db.read() as db:
             run = run_access(db, actor, rid, read=True)
             require(run["worker_id"], "此 Session 尚未分配 Worker，没有可预览的产出", 409, "no_preview")
             worker = db.execute("SELECT config FROM workers WHERE id=?", (run["worker_id"],)).fetchone()
         from .transport import worker_request
-        entry = worker_request(json.loads(worker["config"]), "/files", {"run_id": rid, "path": ""})["entry"]
+        found = worker_request(json.loads(worker["config"]), "/files", {"run_id": rid, "path": ""})
         self.audit_read(actor, rid, "preview")
-        return entry
+        return found["entry"], list(found.get("pages") or [found["entry"]])
 
     def archive_entry(self, actor, rid):
         """Whether the actor may download the run's source and how large it is: a dry run on the Worker, so a
@@ -1871,8 +1894,21 @@ class Service:
         result = worker_request(json.loads(worker["config"]), "/files", {"run_id": rid, "path": relative})
         return base64.b64decode(result["content"])
 
+    def mark_run(self, actor, rid, body):
+        """The actor's own pin and star on a Session they can read (owner 2026-10-22): ``{pinned?, starred?}``."""
+        require(isinstance(body, dict) and body and set(body) <= {"pinned", "starred"}
+                and all(isinstance(v, bool) for v in body.values()), "须写 pinned 或 starred，取值为 true 或 false")
+        with self.db.transaction() as db:
+            run_access(db, actor, rid, admin=False, read=True)
+            row = db.execute("SELECT pinned,starred FROM run_marks WHERE user_id=? AND run_id=?", (actor["id"], rid)).fetchone()
+            marks = {"pinned": bool(row["pinned"]) if row else False, "starred": bool(row["starred"]) if row else False, **body}
+            db.execute("INSERT INTO run_marks(user_id,run_id,pinned,starred,updated) VALUES(?,?,?,?,?) "
+                       "ON CONFLICT(user_id,run_id) DO UPDATE SET pinned=excluded.pinned, starred=excluded.starred, "
+                       "updated=excluded.updated", (actor["id"], rid, int(marks["pinned"]), int(marks["starred"]), time.time()))
+        return marks
+
     def runs(self, actor, all=False, status=None, q=None, limit=None, view=None, page=False, cursor=None, shared=False,
-             **filters):
+             pinned=False, starred=False, **filters):
         """The actor's own and Team Sessions, newest first; with all=True an elevated admin gets every Session (B5).
         Filtered on the server (M3-5): ``status`` (one or a list), ``q`` (full text, every word) and ``limit``, and D56's
         ``lifecycle``, ``space``, ``repo``, ``branch``, ``stage``, ``tool``, ``client``, ``submitter``, ``since``, ``until``
@@ -1887,7 +1923,12 @@ class Service:
         sql, params = listing.sql(found)
         with self.db.read() as db:
             items, total, more = [], 0, False
+            marks = {r["run_id"]: {"pinned": bool(r["pinned"]), "starred": bool(r["starred"])}
+                     for r in db.execute("SELECT run_id,pinned,starred FROM run_marks WHERE user_id=?", (actor["id"],))}
             for row in db.execute(sql, params):
+                mine = marks.get(row["id"], {"pinned": False, "starred": False})
+                if pinned and not mine["pinned"] or starred and not mine["starred"]:
+                    continue
                 try:
                     if shared:   # D64 「共享给我」: only what a share brings
                         run = run_access(db, actor, row["id"], admin=False, read=True)
@@ -1907,7 +1948,7 @@ class Service:
                     if not page:
                         break
                     continue
-                value = self._view(db, run, actor, detail=False)
+                value = {**self._view(db, run, actor, detail=False), "marks": mine}
                 items.append(listed(value) if view == "list" else value)
             if not page:
                 return items
@@ -2151,8 +2192,6 @@ class Service:
                 journal.change_rows(db, "tasks", f"run_id=? AND id IN ({','.join('?' * len(later))})", (rid, *later), who,
                                     "task.reset", status="pending", current_attempt=None)
             restart_budget(db, rid, who)
-            if run["status"] == "awaiting_confirmation":
-                confirm_plan(db, rid, who, actor, "sync")
             reason = unserved(db, run)
             journal.change(db, "runs", rid, who, "run.synced", event={"version": version, "head": head, "commits": candidate.get("commits"),
                                                                        "task_id": writer["id"], "attempt_id": aid},
@@ -2375,19 +2414,10 @@ class Service:
             return {"title": "发布到新仓库待确认", "detail": f"需求要求新建仓库 {name}，平台不会自动创建。",
                     "action": "在会话页核对 owner、仓库名与凭证后点「新建仓库并发布」；Coding Agent 经用户同意后用 octopus_publish "
                               "（repository、credential）。", "task_id": None}
-        if run["status"] == "awaiting_acceptance":   # D46 P3
-            task = next((t for t in run["tasks"] if t["status"] == "awaiting_acceptance"), None)
-            pending = ((((task or {}).get("attempts") or [{}])[-1].get("evidence") or {}).get("evaluation") or {}).get("pending") or []
-            return {"title": "验收待确认",
-                    "detail": "Evaluator 判为需要人判断：" + "；".join(f"{p['item']}（{p['evidence']}）" for p in pending[:5]),
-                    "action": "核对后在会话页点「确认通过」；不通过就点「不通过，返工…」，把这些验收项交回被审查的任务重做。"
-                              "Coding Agent 经用户同意后用 octopus_accept，返工用 octopus_continue。",
-                    "task_id": task["id"] if task else None}
-        if run["status"] == "awaiting_confirmation":
-            planned = (run.get("planning") or {}).get("applied")
-            first = next((t for t in run["tasks"] if t["status"] == "pending"), None)
-            return {"title": "计划待确认", "detail": "规划已完成，任务尚未开始。" if planned else "任务尚未开始。",
-                    "action": "核对任务、工具与检查命令后确认开始；也可修改后续作或关闭。", "task_id": first["id"] if first else None}
+        if run["status"] == "awaiting_acceptance":   # D71: an earlier version's wait, until the Engine accepts it
+            return {"title": "即将继续", "detail": "验收确认已取消，待人判断的项记为提示。", "action": "无需操作。", "task_id": None}
+        if run["status"] == "awaiting_confirmation":   # D70: an earlier version's wait, until the Engine starts it
+            return {"title": "即将开始", "detail": "计划确认已取消，平台正在直接开始。", "action": "无需操作。", "task_id": None}
         if run["status"] == "diagnosing":
             return {"title": "协调者正在诊断与安排修复", "detail": run["error"] or "正在读取失败证据，等待原生诊断结果。",
                     "action": "等待诊断结果；也可停止本 Session", "task_id": task["id"] if task else None}
@@ -2457,8 +2487,12 @@ class Service:
                 "task_name": task["spec"]["name"] if task else None}
 
     def operate(self, actor, rid, action, body):
-        require(action in {"continue", "recover", "stop", "close", "reopen", "delete", "assign-worker", "confirm", "accept"},
+        require(action in {"continue", "recover", "stop", "close", "reopen", "delete", "assign-worker"},
                 "不支持的操作")
+        from . import chat_changes   # D73: what the native chat changed, committed before a continue (it calls the Worker)
+        chat = chat_changes.collect(self, actor, rid, body) if action == "continue" and isinstance(body, dict) else None
+        if action == "recover":
+            chat_changes.refuse(self, actor, rid)
         with self.db.transaction() as db:
             # D64: a collaborator does what an ordinary Team member does, except move the Session to another environment
             run = run_access(db, actor, rid, owner=action == "delete", shares=action != "assign-worker")
@@ -2467,9 +2501,9 @@ class Service:
                 oversight = False
             except Error:
                 oversight = True   # allowed only as an elevated admin (A2): audited
-            if run["team_id"] and action in {"continue", "recover", "reopen", "assign-worker", "confirm", "accept"}:
+            if run["team_id"] and action in {"continue", "recover", "reopen", "assign-worker"}:
                 active_team(db, run["team_id"])   # an archived Team's Sessions stay readable and stoppable (P3)
-            if action in {"continue", "recover", "confirm"}:
+            if action in {"continue", "recover"}:
                 instruct = directs(db, actor, run)
                 require(instruct is None, instruct, 403, "boundary_owner_only")
             require(action not in {"continue", "recover"} or json.loads(run["snapshot"]).get("purpose") != "workflow_design",
@@ -2492,7 +2526,7 @@ class Service:
                     done.append(True)
                     fields.update(version=version, updated=time.time())
                     journal.change(db, "runs", rid, who, "command." + action, event={
-                        "version": version, **{k: body[k] for k in ("task_id", "worker_id", "rerun", "rediagnose") if k in body},
+                        "version": version, **{k: body[k] for k in ("task_id", "worker_id", "rerun") if k in body},
                         **extra,
                         **({"oversight": True, "by": {"id": actor["id"], "username": actor["username"]}} if oversight else {})},
                         **fields)
@@ -2542,28 +2576,26 @@ class Service:
                     journal.change(db, "tasks", (rid, current["id"]), who, "task.spec", spec=dumps(current))
                     reason = unserved(db, run) if run["worker_id"] else None
                     restart_budget(db, rid, who)
+                    note, checking = chat_changes.apply(db, actor, rid, chat) if chat else (None, False)
                     if goal != run["input"]:   # D46: the plan's completion of the requirement no longer matches it
                         fresh = json.loads(db.execute("SELECT snapshot FROM runs WHERE id=?", (rid,)).fetchone()["snapshot"])
                         if (fresh.get("planning") or {}).get("applied"):
                             fresh["planning"]["outdated"] = True
                             journal.change(db, "runs", rid, who, "run.planning", quiet=("snapshot",), snapshot=dumps(fresh))
-                    if run["status"] == "awaiting_confirmation":   # changing the plan and continuing confirms it (D44)
-                        confirm_plan(db, rid, who, actor, "continue")
-                    fields.update(input=goal, desired="active", status="ready" if run["worker_id"] and not reason else "waiting_worker",
-                                  error=reason)
+                    fields.update(input=goal, desired="active", error=reason,
+                                  status=("running" if checking else "ready") if run["worker_id"] and not reason else "waiting_worker")
                     commit()   # before the revision: its snapshot reads the new requirement
                     from .revisions import changes, record
                     detail = "、".join(filter(None, ["需求" if goal != run["input"] else "", changes(before, current)]))
                     names = {row["id"]: json.loads(row["spec"])["name"] for row in ordered}
                     scope = f"重跑 {'、'.join(names[t] for t in reset)}，沿用 {'、'.join(names[t] for t in kept)}" if kept else ""
                     summary = "；".join(filter(None, [detail, scope]))
-                    record(db, rid, version, "continued", f"续作「{current['name']}」" + (f"：{summary}" if summary else ""),
+                    record(db, rid, version, "continued", "；".join(filter(None, [
+                               note, f"续作「{current['name']}」" + (f"：{summary}" if summary else "")])),
                            actor["id"], time.time(), input=goal, task=current, invalidated=reset, rerun=reset, kept=kept,
                            reasons=reasons, **({"recovery": snapshot["recovery"]} if "recovery" in body else {}))
                 elif action == "recover":
                     from .recovery import schedule
-                    # D57 §6.2: 「仍要重新诊断」 — a diagnosis even after two that waited for the user on the same failure
-                    require(isinstance(body.get("rediagnose", False), bool), "rediagnose 须为布尔值")
                     require(run["lifecycle"] == "open" and run["worker_id"] and run["native_parent"] and
                             run["status"] in {"blocked", "failed", "stopped"}, "此 Session 当前不能启动诊断", 409, "busy")
                     reason = unserved(db, run)
@@ -2572,15 +2604,13 @@ class Service:
                                       (rid,)).fetchone()
                     attempt = db.execute("SELECT * FROM attempts WHERE id=?", (task["current_attempt"],)).fetchone() if task else None
                     require(attempt is not None, "尚无可诊断的失败执行；请补充输入并重跑", 409, "not_attempted")
-                    require(task["status"] != "awaiting_acceptance",   # D46 P3: nothing failed, a person is to judge
-                            "Evaluator 留下的验收项等待人确认，没有可诊断的失败：请续作返工，或重新运行后确认验收", 409, "awaiting_acceptance")
                     snapshot = json.loads(run["snapshot"])
                     old = snapshot.get("execution_contract", 1)
                     snapshot["execution_contract"] = max(old, 2)
                     journal.change(db, "runs", rid, who, "run.settings", event={"execution_contract": [old, snapshot["execution_contract"]]},
                                    snapshot=dumps(snapshot))
                     restart_budget(db, rid, who)   # as a continue: the budget counts from the user's request
-                    schedule(db, self.db, run, task, attempt, manual=True, actor=who, rediagnose=body.get("rediagnose", False))
+                    schedule(db, self.db, run, task, attempt, manual=True, actor=who)   # D71: every request is diagnosed
                 elif action == "assign-worker":
                     require(run["status"] == "waiting_worker" and run["lifecycle"] == "open",
                             "运行已分配 Worker 或已关闭", 409, "invalid_state")
@@ -2599,28 +2629,6 @@ class Service:
                         fields.update(worker_id=body["worker_id"], native_parent=None, workspace=None, status="preparing", error=None)
                     else:
                         fields.update(worker_id=body["worker_id"], status="ready" if run["native_parent"] else "preparing", error=None)
-                elif action == "confirm":
-                    require(run["status"] == "awaiting_confirmation" and run["lifecycle"] == "open",
-                            "此 Session 不在等待确认", 409, "invalid_state")
-                    confirm_plan(db, rid, who, actor, "confirm")
-                    restart_budget(db, rid, who)   # the user's word allows the automatic work from here (D42)
-                    fields.update(desired="active", status="ready", error=None)
-                elif action == "accept":   # D46 P3: the person's word on what the Evaluator left pending
-                    require(may_publish(db, actor, run), "只有会话创建者、Team owner 或管理员可以确认验收", 403, "forbidden")
-                    require(run["status"] == "awaiting_acceptance" and run["lifecycle"] == "open",
-                            "此 Session 不在等待验收确认", 409, "invalid_state")
-                    task = db.execute("SELECT * FROM tasks WHERE run_id=? AND status='awaiting_acceptance' ORDER BY ordinal LIMIT 1",
-                                      (rid,)).fetchone()
-                    require(task is not None and task["current_attempt"], "没有待确认的验收", 409, "invalid_state")
-                    attempt = db.execute("SELECT * FROM attempts WHERE id=?", (task["current_attempt"],)).fetchone()
-                    evidence = json.loads(attempt["evidence"] or "{}")
-                    evidence["evaluation"] = {**(evidence.get("evaluation") or {}), "accepted_at": time.time(),
-                                              "accepted_by": {"id": actor["id"], "username": actor.get("username")}}
-                    journal.change(db, "attempts", attempt["id"], who, "run.accepted", status="accepted", evidence=dumps(evidence),
-                                   updated=time.time())
-                    journal.change(db, "tasks", (rid, task["id"]), who, "task.state", status="accepted")
-                    restart_budget(db, rid, who)   # the person's word allows the automatic work from here (as confirm)
-                    fields.update(desired="active", status="ready", error=None)
                 elif action == "reopen":
                     require(run["lifecycle"] == "closed", "只有已关闭的 Session 可重新打开", 409, "invalid_state")
                     fields.update(desired="reopen", status="reopening")
@@ -2635,7 +2643,7 @@ class Service:
                     audit(db, actor, "run." + action, "run", rid, {"version": version})
                 return {"id": rid, "session_id": rid, "version": version, "command": action, "status": "accepted"}
             result = self._command(db, actor, action, rid, body, execute)
-        if action in {"continue", "recover", "close", "delete", "confirm"}:
+        if action in {"continue", "recover", "close", "delete"}:
             # The agents work in the same project again, or the Session ends: its remote preview stops (D36 §5.1).
             self._stop_app(rid, "session")
         return result
@@ -2737,6 +2745,10 @@ class Service:
         require(elevated(actor), "需要平台管理员", 403, "forbidden")
         now = time.time()
         with self.db.read() as db:
+            # The Sessions each person has in progress, counted as the environment list counts them (open, not settled).
+            running = dict(db.execute(
+                "SELECT owner_id,COUNT(*) FROM runs WHERE lifecycle='open' AND status NOT IN "
+                f"({','.join('?' * len(SETTLED))}) GROUP BY owner_id", SETTLED).fetchall())
             result = []
             for row in db.execute("SELECT * FROM users ORDER BY username"):
                 result.append({"id": row["id"], "username": row["username"], "admin": bool(row["admin"]),
@@ -2745,7 +2757,8 @@ class Service:
                                    "SELECT t.id,t.name,m.role FROM members m JOIN teams t ON t.id=m.team_id "
                                    "WHERE m.user_id=? ORDER BY t.name", (row["id"],))],
                                "tokens": db.execute("SELECT count(*) FROM tokens WHERE user_id=? AND expires>?",
-                                                    (row["id"], now)).fetchone()[0]})
+                                                    (row["id"], now)).fetchone()[0],
+                               "running": running.get(row["id"], 0)})
             return result
 
     def user_tokens(self, actor, uid):

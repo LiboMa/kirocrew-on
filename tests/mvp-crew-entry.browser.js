@@ -101,7 +101,7 @@ async page => {
     await p.locator("#new-source").selectOption("new");
     await step(1);await method("template");
     await p.locator("#new-workflow").selectOption("template:proof");
-    await p.waitForFunction(()=>document.querySelector("#launch-0-prompt")?.value.includes("验证工作流"));
+    await p.waitForFunction(()=>document.querySelector("#launch-0-prompt")?.value.includes("当前步骤：1/"));   // D46
     await method("recommend");
     await p.locator("#recommend-start").click();
     await p.waitForSelector("#recommend-open:not([hidden])");

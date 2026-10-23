@@ -37,6 +37,19 @@ function open(run: Run, extra: Record<string, unknown> = {}) {
 }
 
 describe("session detail", () => {
+  test("every HTML page the Session produced can be previewed (EC2 2026-10-22: reports in report/ and artifacts/)", async () => {
+    const run = makeRun({ id: "run-h", status: "completed", worker_id: "w1" });
+    const pages = [{ path: "artifacts/report/index.html", url: "/preview/t.k.e.n/artifacts/report/index.html" },
+      { path: "report/summary.html", url: "/preview/t.k.e.n/report/summary.html" }];
+    open(run, { "POST /runs/run-h/preview": { url: pages[0].url, entry: pages[0].path, expires_in: 600, pages } });
+    const opened = vi.spyOn(window, "open").mockReturnValue(null);
+    await userEvent.click(await screen.findByRole("button", { name: "选择预览页面" }));
+    expect(await screen.findByRole("menuitem", { name: /artifacts\/report\/index\.html/ })).toBeInTheDocument();
+    await userEvent.click(screen.getByRole("menuitem", { name: /report\/summary\.html/ }));
+    expect(opened).toHaveBeenCalledWith(pages[1].url, "_blank", "noopener");
+    opened.mockRestore();
+  });
+
   test("the local preview command is for administrators only (D53)", async () => {
     const run = makeRun({ id: "run-l", status: "completed" });
     open(run, { "GET /me": { id: "u2", username: "dev1", admin: 0, scopes: ["read", "execute", "manage"] } });
@@ -48,18 +61,11 @@ describe("session detail", () => {
     expect(await screen.findByText("deploy/aws/deploy.sh space run-l")).toBeInTheDocument();
   });
 
-  test("says which request it came from and why it started (D55)", async () => {
-    open(makeRun({ id: "run-r", status: "running", request: { id: "request-abc", client: "codex" },
+  test("says which request it came from, and nothing about admission (D55; D70)", async () => {
+    open(makeRun({ id: "run-r", status: "running", request: { id: "request-0123456789abcdef", client: "codex" },
       admission_basis: { mode: "auto", basis: "rule", pattern: "github.com/o/*", scope: "personal", policy_id: "policy-1" } }));
-    expect(await screen.findByText(/来自请求 request-abc · Codex/)).toBeInTheDocument();
-    expect(screen.getByText(/按准入规则「github\.com\/o\/\*」自动开始/)).toBeInTheDocument();
-  });
-
-  test("a Session waiting by the platform default says so; a submitted choice is not repeated (D55)", async () => {
-    open(makeRun({ id: "run-w", status: "awaiting_confirmation", request: { id: "request-0123456789abcdef", client: "claude" },
-      admission_basis: { mode: "confirm", basis: "default" } }));
-    expect(await screen.findByText(/来自请求 request-012345 · Claude Code/)).toBeInTheDocument();
-    expect(screen.getByText(/按平台默认等待确认/)).toBeInTheDocument();
+    expect(await screen.findByText(/来自请求 request-012345 · Codex/)).toBeInTheDocument();
+    expect(screen.queryByText(/准入|自动开始|等待确认/)).not.toBeInTheDocument();
   });
 
   test("a synced Attempt says whose local commits it carries, and the CLI is named (D58)", async () => {
@@ -333,55 +339,34 @@ describe("session detail", () => {
     expect(screen.queryByText(/预算（/)).not.toBeInTheDocument();
   });
 
-  test("a plan waiting for confirmation is confirmed from the session page (D44)", async () => {
-    const waiting = { ...blocked, status: "awaiting_confirmation", error: null,
-      attention: { title: "计划待确认", detail: "规划已完成，任务尚未开始。", action: "核对任务、工具与检查命令后确认开始；也可修改后续作或关闭。" } } as Run;
-    const calls = open(waiting, { "POST /runs/run-a/confirm": { id: "run-a", status: "accepted" } });
-    expect(await screen.findByText("计划待确认", { selector: "#confirm-notice-title" })).toBeInTheDocument();
-    expect(screen.getAllByText("计划待确认").length).toBeGreaterThan(0);   // the status label too
-    await userEvent.click(screen.getByRole("button", { name: /确认并开始/ }));
-    await waitFor(() => expect(calls.find((c) => c.path === "/v1/runs/run-a/confirm")?.body).toMatchObject({ expected_version: 4 }));
+  test("no plan is offered for confirmation (D70)", async () => {   // an earlier version's wait, until the Engine starts it
+    open({ ...blocked, status: "awaiting_confirmation", error: null,
+      attention: { title: "即将开始", detail: "计划确认已取消，平台正在直接开始。", action: "无需操作。" } } as Run);
+    expect(await screen.findByRole("heading", { level: 1 })).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /确认并开始/ })).not.toBeInTheDocument();
   });
 
-  test("what the Evaluator left to a person is accepted from the session page (D46 P3)", async () => {
-    const waiting = { ...blocked, status: "awaiting_acceptance", error: null,
-      attention: { title: "验收待确认", detail: "Evaluator 判为需要人判断：错误密码提示（文案需产品确认）", action: "核对后确认通过" } } as Run;
-    const calls = open(waiting, { "POST /runs/run-a/accept": { id: "run-a", status: "accepted" } });
-    expect(await screen.findByText("验收待确认", { selector: "#accept-notice-title" })).toBeInTheDocument();
-    await userEvent.click(screen.getByRole("button", { name: /确认通过/ }));
-    await waitFor(() => expect(calls.find((c) => c.path === "/v1/runs/run-a/accept")?.body).toMatchObject({ expected_version: 4 }));
+  test("a task says its phase when it is not plain converge work (D69)", async () => {
+    const research = { ...blocked.tasks[0], spec: { ...blocked.tasks[0].spec, kind: "research" as const } };
+    const design = { ...blocked.tasks[1], spec: { ...blocked.tasks[1].spec, kind: "implement" as const, phase: "design" as const } };
+    open({ ...blocked, tasks: [research, design] } as Run);
+    expect(await screen.findByText("阶段：发散（按类别）")).toBeInTheDocument();
+    expect(screen.getByText("阶段：设计")).toBeInTheDocument();
   });
 
-  test("what the Evaluator left to a person can be rejected into a rework of the reviewed change (D46 P3)", async () => {
-    const pending = [{ item: "错误密码提示", result: "pending", evidence: "文案需产品确认" }];
-    const waiting = { ...blocked, status: "awaiting_acceptance", error: null,
-      attention: { title: "验收待确认", detail: "Evaluator 判为需要人判断：错误密码提示（文案需产品确认）", action: "核对后确认通过", task_id: "review" },
-      tasks: [
-        { ...blocked.tasks[0], status: "accepted", spec: { ...blocked.tasks[0].spec, kind: "implement" } },
-        { ...blocked.tasks[1], status: "awaiting_acceptance", current_attempt: "att-2",
-          spec: { ...blocked.tasks[1].spec, kind: "review", role: "evaluator" },
-          attempts: [{ id: "att-2", number: 1, status: "awaiting_acceptance", spec: blocked.tasks[1].spec, native_id: "native-78",
-            context_hash: "def", evidence: { evaluation: { pending } }, result: "验收", error: null, created: 3, updated: 4 }] },
-      ] } as Run;
-    const calls = open(waiting, { "POST /runs/run-a/continue": { id: "run-a", status: "accepted" } });
-    await userEvent.click(await screen.findByRole("button", { name: /不通过，返工/ }));
-    expect(await screen.findByText("继续此 Session · 实现与测试")).toBeInTheDocument();
-    expect((screen.getByLabelText("任务说明") as HTMLTextAreaElement).value).toMatch(/验收未通过[\s\S]*错误密码提示（文案需产品确认）/);
-    await userEvent.click(screen.getByRole("button", { name: "保存并续作" }));
-    await waitFor(() => expect(calls.find((c) => c.path === "/v1/runs/run-a/continue")?.body).toMatchObject({
-      task_id: "code", execution: { prompt: expect.stringContaining("错误密码提示") } }));
+  test("a Session without a repository offers its output, not publishing (D65)", async () => {
+    open(makeRun({ id: "run-n", status: "completed", worker_id: "w1", workspace: "/w/n", source: { type: "none" } }));
+    expect(await screen.findByRole("button", { name: /下载产出/ })).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /下载源码/ })).not.toBeInTheDocument();
+    expect(screen.queryByText(/发布到/)).not.toBeInTheDocument();
   });
 
-  test("an acceptance that may not be given is not offered (D46 P3)", async () => {
-    open({ ...blocked, status: "awaiting_acceptance", error: null, permissions: { operate: true, delete: true, resume: false, publish: false },
-      attention: { title: "验收待确认", detail: "待判定", action: "核对后确认通过" } } as Run);
-    expect(await screen.findByRole("button", { name: /确认通过/ })).toBeDisabled();
-  });
-
-  test("an archived Team's waiting plan cannot be confirmed (D44)", async () => {
-    open({ ...blocked, status: "awaiting_confirmation", error: null, permissions: { operate: true, delete: true, resume: false },
-      attention: { title: "计划待确认", detail: "任务尚未开始。", action: "核对后确认开始" } } as Run);
-    expect(await screen.findByRole("button", { name: /确认并开始/ })).toBeDisabled();
+  test("nothing is left for a person to accept (D71)", async () => {   // an earlier version's wait, until the Engine accepts it
+    open({ ...blocked, status: "awaiting_acceptance", error: null,
+      attention: { title: "即将继续", detail: "验收确认已取消，待人判断的项记为提示。", action: "无需操作。" } } as Run);
+    expect(await screen.findByRole("heading", { level: 1 })).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /确认通过/ })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /不通过，返工/ })).not.toBeInTheDocument();
   });
 
   test("a Session that may not switch tools says so", async () => {

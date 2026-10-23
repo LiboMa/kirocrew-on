@@ -93,6 +93,18 @@ class SteerWorkerTests(unittest.TestCase):
                     self.steer()
                 self.assertEqual((caught.exception.status, caught.exception.code), expected)
 
+    def test_an_error_is_masked_before_it_is_cut(self):
+        # D57 §3.3: KiroCrew's error is cut to 200 characters for the platform, after masking (its own token too)
+        self.dispatch(FIRST)
+        token = self.node.token
+        error = json.dumps({"error": "y" * 160 + " Bearer " + token, "code": "steer_failed"})
+        self.answers["/api/spawn/aaaa1111/steer"] = crew_api.GatewayError(502, error)
+        with self.assertRaises(Error) as caught:
+            self.steer()
+        masked = "502: " + error.replace(token, f"{token[:4]}…{token[-2:]}")
+        self.assertEqual((caught.exception.status, str(caught.exception)), (502, "KiroCrew 未接受补充说明：" + masked[:200]))
+        self.assertNotIn(token[4:-2], str(caught.exception))
+
     def test_delete_releases_the_sessions_conversations(self):
         self.dispatch(FIRST)
         self.dispatch(SECOND, **{"continue": {"conversation": "aaaa1111", "from": FIRST}})   # bbbb2222 in aaaa1111's

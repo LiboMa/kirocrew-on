@@ -17,7 +17,10 @@ def openapi():
     step_list = {"type": "array", "items": ref("Step"), "minItems": 1, "maxItems": 12}   # D66
     listed = lambda items: {"type": "array", "items": {"type": "string", "maxLength": 500}, "maxItems": items}
     from . import roles, skills
-    contract = {"kind": {"enum": ["implement", "review", "test", "deliver", "design"]}, "role": {"enum": list(roles.KINDS)},
+    contract = {"kind": {"enum": ["implement", "review", "test", "deliver", "design", "research", "write"]},
+                "role": {"enum": list(roles.KINDS)},
+                # D69: which failures stop the Session; omitted, inferred from kind (research diverge, design design, else converge)
+                "phase": {"enum": ["diverge", "design", "converge"]},
                 "deliverables": listed(20),
                 "acceptance": listed(20), "verify": listed(10), "depends_on": listed(8), "paths": listed(20),
                 "skills": {"type": "array", "items": {"enum": list(skills.CATALOG)}, "maxItems": skills.LIMIT},
@@ -28,7 +31,9 @@ def openapi():
         "Step": obj({"id": text, "name": text, **execution, **contract}, ["id", "name", "tool", "prompt"]),
         "Execution": obj({"name": text, **execution, **contract}),   # a continue may change the task contract too
         "Source": obj({"type": {"enum": ["new", "git", "none"]}, "url": text, "ref": text}, ["type"]),   # D65: none
-        "Login": obj({"username": text, "password": {"type": "string", "format": "password"}}, ["username", "password"]),
+        "Login": obj({"username": text, "password": {"type": "string", "format": "password"},
+                      # D67: true keeps the login (its token and session cookie) 30 days; otherwise 1 day, cookie until the browser closes
+                      "remember": {"type": "boolean", "default": False}}, ["username", "password"]),
         "User": obj({"username": text, "password": {"type": "string", "format": "password"}, "admin": {"type": "boolean"},
                      "worker_id": text}, ["username", "password"]),
         "Team": obj({"name": text, "owner": text, "worker_id": text}, ["name", "owner", "worker_id"]),
@@ -90,14 +95,16 @@ def openapi():
                       "template_id": text, "document": ref("WorkflowDocument"), "plan": {"enum": ["agent", "match"]},
                       "workflow_version": integer, "steps": step_list, "team_id": text, "worker_id": text,
                        "source": ref("Source"), "recovery": ref("RecoveryPolicy"),
-                       "admission": {"enum": ["confirm", "auto"]},
+                       # D70: accepted from older clients and not used — no plan waits for confirmation
+                       "admission": {"enum": ["confirm", "auto"], "deprecated": True},
                        "publish": obj({"auto": {"type": "boolean", "default": False}, "branch": text, "title": text,
                                        "repository": repository, "credential": text}),
                        "credentials": obj({"source": text})}, ["request_id", "input", "source"]),
         "Rebind": obj({"source": {"type": ["string", "null"]}}, ["source"]),
-        # D55: {"repos": "github.com/o/*", "mode": "auto|confirm"} (admission) or a mapping preference
-        "Policy": obj({"kind": {"enum": ["admission", "mapping"]}, "scope": {"enum": ["personal", "team"]}, "team_id": text,
+        # D55: a mapping preference (admission rules are gone, D70)
+        "Policy": obj({"kind": {"enum": ["mapping"]}, "scope": {"enum": ["personal", "team"]}, "team_id": text,
                        "rule": {"type": "object"}}, ["kind", "scope", "rule"]),
+        "Marks": obj({"pinned": {"type": "boolean"}, "starred": {"type": "boolean"}}),   # one's own pin and star
         "Share": obj({"kind": {"enum": ["user", "team", "everyone"]}, "username": text, "id": text,
                       "role": {"enum": ["viewer", "collaborator"]}}, ["kind", "role"]),   # D64
         "Quota": obj({"scope": {"enum": ["default", "user", "team"]}, "id": text,
@@ -109,16 +116,12 @@ def openapi():
                          "recovery": ref("RecoveryPolicy"), "rerun": {"type": "array", "items": text, "maxItems": 12}},
                         ["request_id", "expected_version", "task_id"]),
         "Control": obj({**command, "confirmation": text}, ["request_id", "expected_version"]),
-        # D57 §6.2: after two diagnoses of the same failure waited for the user, only rediagnose starts another
-        "Recover": obj({**command, "rediagnose": {"type": "boolean"}}, ["request_id", "expected_version"]),
+        "Recover": obj({**command, "rediagnose": {"type": "boolean", "deprecated": True}}, ["request_id", "expected_version"]),
         "AssignWorker": obj({**command, "worker_id": text}, ["request_id", "expected_version", "worker_id"]),
         "Empty": obj({}), "Error": obj({"error": text, "code": text}, ["error", "code"]),
     }
-    schemas["Recover"]["description"] = ("Execute scope. Starts a Coordinator diagnosis of the Session's failed task. When the "
-                                         "last two diagnoses of that task, failing on the same gate, waited for the user (counted "
-                                         "since the latest continue or since the task last passed), it is refused with 409 "
-                                         "already_waiting and the last diagnosis's reason and instructions; rediagnose: true "
-                                         "starts one anyway.")
+    schemas["Recover"]["description"] = ("Execute scope. Starts a Coordinator diagnosis of the Session's failed task, every time "
+                                         "it is asked (D71: no hold after earlier waits; rediagnose is accepted and not needed).")
     schemas["Resolve"]["description"] = "Read-only preview. Explicit workflow_id, template_id or steps wins. If omitted, match permitted workflows/templates using explainable rules. No native tasks or workspace are created."
     schemas["Design"]["description"] = "Execute scope. Starts a real Kiro workflow-design task via the chosen Worker and native ACP. Only recommends; does not run or save the recommended workflow. Poll /designs/{id}, then adopt and edit config.steps."
     schemas["WorkflowDocument"]["description"] = "A workflow generated ahead of time (console export, legacy schema 1 or a bare step list) as JSON, YAML or Markdown with one code block. Parsed and normalized by code; /workflows/parse previews the result and its notes."
@@ -168,6 +171,7 @@ def openapi():
         "/v1/requests": {"get": None}, "/v1/requests/{id}": {"get": None},
         "/v1/policies": {"get": None, "post": "Policy"}, "/v1/policies/{id}": {"delete": "Empty"},
         "/v1/quotas": {"get": None, "post": "Quota"},
+        "/v1/runs/{id}/marks": {"post": "Marks"},
         "/v1/runs/{id}/shares": {"get": None, "post": "Share"}, "/v1/runs/{id}/shares/{share}": {"delete": "Empty"},
         "/v1/runs/{id}/events": {"get": None}, "/v1/runs/{id}/export": {"get": None},
         "/v1/runs/{id}/crew-entry": {"post": "Empty"}, "/v1/runs/{id}/preview": {"post": "Empty"},
@@ -182,7 +186,7 @@ def openapi():
         "/v1/runs/{id}/credentials": {"post": "Rebind"},
         "/v1/runs/{id}/app": {"get": None, "post": "AppAction"}, "/v1/runs/{id}/app/open": {"post": "Empty"},
         "/v1/runs/{id}/recover": {"post": "Recover"},
-        "/v1/runs/{id}/confirm": {"post": "Control"}, "/v1/runs/{id}/accept": {"post": "Control"},
+
         "/v1/runs/{id}/publish": {"post": "Publish"},
         "/v1/runs/{id}/publish-policy": {"post": "PublishPolicy"},
         "/v1/runs/{id}/knowledge/forget": {"post": "KnowledgeForget"},
@@ -281,6 +285,10 @@ def openapi():
             if path == "/v1/runs" and method == "get":
                 op["parameters"] = [{"in": "query", "name": "all", "schema": {"enum": ["1"]},
                                      "description": "Elevated admins only: every Session instead of their own and their Teams'."},
+                                    {"in": "query", "name": "pinned", "schema": {"enum": ["1"]},
+                                     "description": "Only the Sessions the caller pinned (each item's marks say pinned / starred)."},
+                                    {"in": "query", "name": "starred", "schema": {"enum": ["1"]},
+                                     "description": "Only the Sessions the caller starred."},
                                     {"in": "query", "name": "status", "schema": {"type": "string"},
                                      "description": "One Session status, or several separated by commas."},
                                     {"in": "query", "name": "q", "schema": {"type": "string", "minLength": 1, "maxLength": 200},
@@ -345,8 +353,8 @@ def openapi():
                     op["parameters"].append({"in": "path", "name": "share", "required": True, "schema": text})
             if path.startswith("/v1/policies"):
                 op["description"] = {
-                    ("/v1/policies", "get"): "Read scope. The caller's own rules and those of their Teams (team_id: one Team's): admission rules by repository (repos host/owner/repo with *, mode auto|confirm) and mapping preferences; deletable says whether the caller may remove it.",
-                    ("/v1/policies", "post"): "Manage scope. A rule for the caller's own Sessions (scope personal) or a Team's (scope team, Team owner or administrator; not an archived Team). Admission: a submission's admission, else the most specific personal rule, else the Team's, else the platform default (confirm). Audited.",
+                    ("/v1/policies", "get"): "Read scope. The caller's own rules and those of their Teams (team_id: one Team's): mapping preferences, and admission rules written before D70 (no effect; listed so they can be deleted); deletable says whether the caller may remove it.",
+                    ("/v1/policies", "post"): "Manage scope. A rule for the caller's own Sessions (scope personal) or a Team's (scope team, Team owner or administrator; not an archived Team). Only mapping preferences: admission rules are refused (400 admission_removed, D70 — every Session starts once planned). Audited.",
                     ("/v1/policies/{id}", "delete"): "Manage scope. Remove one of the caller's rules, or a Team's as its owner or an administrator. Audited."}[(path, method)]
                 if path == "/v1/policies":
                     op["parameters"] = [{"in": "query", "name": "team_id", "schema": text}] if method == "get" else op.get("parameters", [])
@@ -377,5 +385,9 @@ def openapi():
                 op["responses"]["200"]["content"]["text/event-stream"] = {"schema": text}
             paths[path][method] = op
     return {"openapi": "3.1.0", "info": {"title": "Octopus Team API", "version": __version__},
-            "security": [{"bearer": []}], "servers": [{"url": "/"}], "paths": paths,
-            "components": {"securitySchemes": {"bearer": {"type": "http", "scheme": "bearer"}}, "schemas": schemas}}
+            "security": [{"bearer": []}, {"session": []}], "servers": [{"url": "/"}], "paths": paths,
+            "components": {"securitySchemes": {
+                "bearer": {"type": "http", "scheme": "bearer"},
+                "session": {"type": "apiKey", "in": "cookie", "name": "__Host-octopus_session",
+                            "description": "Set by POST /v1/login (D67). Used only without an Authorization header; "
+                                           "a write on it alone needs this console's Origin."}}, "schemas": schemas}}

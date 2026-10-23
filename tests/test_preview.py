@@ -74,11 +74,52 @@ class PreviewTests(unittest.TestCase):
             (Path(directory) / "outside.txt").write_text("no")
             node = Worker(Path(directory) / "worker", "x" * 40)
             with patch("octopus.worker.workspace.project_dir", return_value=project), patch.object(node, "path", return_value=project):
-                self.assertEqual(node.files({"run_id": RID, "path": ""}), {"entry": "dist/index.html"})
+                self.assertEqual(node.files({"run_id": RID, "path": ""}), {"entry": "dist/index.html", "pages": ["dist/index.html"]})
                 self.assertEqual(node.files({"run_id": RID, "path": "dist/index.html"})["size"], 13)
                 for bad in ("../outside.txt", ".env", "dist/../../outside.txt", "missing.js"):
                     with self.subTest(path=bad), self.assertRaises(Error):
                         node.files({"run_id": RID, "path": bad})
+
+
+class OutputPagesTests(unittest.TestCase):
+    """EC2 run-968d6e37 / run-78526202 (2026-10-22): the reports were written to artifacts/<name>/index.html and
+    report/index.html, and the preview answered 「未找到可预览的 index.html」. Any HTML the Session produced is a page."""
+    def pages(self, files, mtimes=None):
+        with tempfile.TemporaryDirectory() as directory:
+            project = Path(directory) / "project"
+            for name, text in files.items():
+                (project / name).parent.mkdir(parents=True, exist_ok=True)
+                (project / name).write_text(text)
+            for name, when in (mtimes or {}).items():
+                os.utime(project / name, (when, when))
+            node = Worker(Path(directory) / "worker", "x" * 40)
+            with patch("octopus.worker.workspace.project_dir", return_value=project), patch.object(node, "path", return_value=project):
+                return node.files({"run_id": RID, "path": ""})
+
+    def test_a_report_in_a_subdirectory_is_previewed(self):
+        self.assertEqual(self.pages({"report/index.html": "<h1>报告</h1>", "README.md": "x"}),
+                         {"entry": "report/index.html", "pages": ["report/index.html"]})
+
+    def test_the_newest_output_comes_first_and_dependencies_are_not_pages(self):
+        found = self.pages({"artifacts/research/report.html": "a", "artifacts/report/index.html": "b",
+                            "LightRAG/lightrag_webui/index.html": "c",
+                            "LightRAG/.venv/lib/site-packages/x/index.html": "d", "web/node_modules/y/index.html": "e",
+                            ".octopus/notes.html": "f", "venv/lib/z.html": "g", "pkg/site-packages/w.html": "h"},
+                           {"LightRAG/lightrag_webui/index.html": 1000, "artifacts/research/report.html": 2000,
+                            "artifacts/report/index.html": 3000})
+        self.assertEqual(found["pages"], ["artifacts/report/index.html", "artifacts/research/report.html",
+                                          "LightRAG/lightrag_webui/index.html"])
+        self.assertEqual(found["entry"], "artifacts/report/index.html")
+
+    def test_a_project_entry_still_comes_first(self):
+        found = self.pages({"dist/index.html": "app", "report/summary.html": "r"},
+                           {"dist/index.html": 1000, "report/summary.html": 2000})
+        self.assertEqual(found, {"entry": "dist/index.html", "pages": ["dist/index.html", "report/summary.html"]})
+
+    def test_nothing_to_preview_says_so(self):
+        with self.assertRaises(Error) as caught:
+            self.pages({"notes.md": "x"})
+        self.assertEqual(caught.exception.code, "no_preview")
 
 
 if __name__ == "__main__":

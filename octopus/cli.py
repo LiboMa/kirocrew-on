@@ -1,4 +1,4 @@
-"""The user's octopus commands (D58 M3-2): login, submit, plan, confirm, status, watch, report, pull, sync, continue,
+"""The user's octopus commands (D58 M3-2): login, submit, plan, status, watch, report, pull, sync, continue,
 approvals and search. They make the same calls as the MCP tools (mcp.call) and the same local git work (local.py), and
 answer in Chinese for a person, or as JSON with --json."""
 import argparse
@@ -16,7 +16,7 @@ from .policies import basis_text
 from .requests import CLI_LABEL
 
 EXPIRES = ("7d", "30d", "365d", "never")   # D62: how long the saved token lasts
-COMMANDS = ("login", "submit", "plan", "confirm", "status", "watch", "report", "pull", "sync", "continue", "approvals", "search")
+COMMANDS = ("login", "submit", "plan", "status", "watch", "report", "pull", "sync", "continue", "approvals", "search")
 STATES = {"preparing": "准备中", "ready": "就绪", "running": "运行中", "waiting_approval": "等待批准", "dispatch_unknown": "派发待核实",
           "stopping": "停止中", "reopening": "重新打开中", "diagnosing": "诊断中", "failed": "失败", "blocked": "已阻塞",
           "completed": "已完成", "stopped": "已停止", "waiting_worker": "等待执行环境", "awaiting_confirmation": "计划待确认",
@@ -42,13 +42,12 @@ def parser():
     submit = command("submit", "提交需求（在 Git 仓库内时取 origin 与当前分支为源码）", session=False)
     submit.add_argument("input")
     submit.add_argument("--plan", choices=["agent", "match"])
-    submit.add_argument("--admission", choices=["auto", "confirm"])
     submit.add_argument("--team")
     submit.add_argument("--new", action="store_true", help="新建项目，不用本地仓库")
+    submit.add_argument("--no-repo", action="store_true", help="不需要代码仓库：调研、分析、写作等一般任务（D65）")
     submit.add_argument("--push-base", action="store_true", help="先把当前分支推送到 origin")
     submit.add_argument("--allow-unpushed", action="store_true", help="按 origin 上已有的提交提交")
     command("plan", "查看计划：任务、工具、映射来源、验收与检查")
-    command("confirm", "确认计划，开始执行")
     command("status", "精简状态").add_argument("--detail", action="store_true")
     command("watch", "跟随事件，直到会话停下")
     command("report", "Feature 报告").add_argument("--html", action="store_true")
@@ -145,8 +144,6 @@ def _plan_text(view):
                      + (f"  来源：{source}" if source else ""))
         lines += [f"     验收：{item}" for item in spec.get("acceptance") or []]
         lines += [f"     检查：{command}" for command in spec.get("verify") or []]
-    if view.get("status") == "awaiting_confirmation":
-        lines.append("确认后开始执行：octopus confirm")
     return "\n".join(lines)
 
 
@@ -155,8 +152,8 @@ def run(argv, client, cwd):
     args = parser().parse_args(argv)
     say = (lambda value, text: print(json.dumps(value, ensure_ascii=False, indent=2) if args.json else text))
     if args.command == "submit":
-        repo = None if args.new else local.repository(cwd)
-        source = local.source(repo) if repo else {"type": "new"}
+        repo = None if args.new or args.no_repo else local.repository(cwd)
+        source = {"type": "none"} if args.no_repo else local.source(repo) if repo else {"type": "new"}
         if source["type"] == "git":
             missing, count = local.missing_branch(repo), local.unpushed(repo)
             if missing and not args.push_base:
@@ -169,7 +166,7 @@ def run(argv, client, cwd):
         body = {"request_id": _request(), "input": args.input, "source": source, "dir": str(repo or cwd),
                 "allow_unpushed": True,   # checked (and pushed) here already
 
-                **{key: value for key, value in (("plan", args.plan), ("admission", args.admission), ("team_id", args.team)) if value}}
+                **{key: value for key, value in (("plan", args.plan), ("team_id", args.team)) if value}}
         result = mcp.call(client, "octopus_start", body)
         if repo:
             local.link(repo, {"run_id": result["id"], "request_id": result.get("request_id"), "url": getattr(client, "url", None)})
@@ -187,10 +184,6 @@ def run(argv, client, cwd):
     if args.command == "plan":
         view = client.request("GET", f"/v1/runs/{rid}")
         return say(view, _plan_text(view))
-    if args.command == "confirm":
-        version = client.request("GET", f"/v1/runs/{rid}")["version"]
-        result = mcp.call(client, "octopus_confirm", {"run_id": rid, "request_id": _request(), "expected_version": version})
-        return say(result, f"已确认计划：{rid}（{_state(result.get('status'))}）")
     if args.command == "report":
         text = client.text("GET", f"/v1/runs/{rid}/report?format={'html' if args.html else 'md'}")
         return print(text)

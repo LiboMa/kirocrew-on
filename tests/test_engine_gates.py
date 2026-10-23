@@ -1,5 +1,6 @@
 """D37 §3–§9: the Engine asks the Worker for each code task's candidate and runs its checks before accepting it, binds a
 review to the latest candidate, sends gate failures through recovery, and leaves old Sessions and old Workers alone."""
+import hashlib
 import json
 from pathlib import Path
 import tempfile
@@ -11,6 +12,7 @@ from octopus.db import dumps
 from octopus.engine import Engine
 from octopus.security import Error
 from octopus.worker import Worker
+from tests.test_secret_rules import chars
 from tests.test_teams_workers import TeamsWorkersCase
 
 C1, C0, BASE = "c" * 40, "0" * 40, "b" * 40
@@ -73,8 +75,11 @@ class EngineGateTests(TeamsWorkersCase):
         return engine
 
     def attempt(self, rid, task):
+        """The task's latest judged Attempt: D71 retries a failed task after a diagnosis that decided nothing, so its current
+        Attempt may be a new one still running."""
         with self.db.read() as db:
-            row = db.execute("SELECT a.* FROM attempts a JOIN tasks t ON t.current_attempt=a.id WHERE t.run_id=? AND t.id=?",
+            row = db.execute("SELECT * FROM attempts WHERE run_id=? AND task_id=? AND status NOT IN "
+                             "('pending','dispatching','running','dispatch_unknown','waiting_approval') ORDER BY number DESC LIMIT 1",
                              (rid, task)).fetchone()
         return dict(row), json.loads(row["evidence"] or "{}")
 
@@ -578,6 +583,178 @@ class EngineGateTests(TeamsWorkersCase):
         self.assertEqual(rework["names"], ["src/b.js"])
         self.assertEqual(self.service.run(self.c, rid)["status"], "completed")
 
+    def test_a_review_that_only_creates_a_file_has_it_moved_out_and_still_counts(self):
+        """End to end on a real workspace (D57 §4): the review writes review.md and passes; the file is moved into the
+        Attempt's folder, the verdict counts, and the next implement candidate holds the implementer's files only."""
+        from octopus import sources
+        from tests.test_archive import RID, make_worker
+        root = Path(tempfile.mkdtemp())
+        self.addCleanup(__import__("shutil").rmtree, root, True)
+        node, project = make_worker(root)
+        polish = {**IMPLEMENT, "id": "polish", "name": "完善", "verify": []}
+
+        class Real(FakeWorker):
+            def __call__(self, config, path, body=None, **kwargs):
+                if path == "/candidate":
+                    self.calls.append((path, body))
+                    return node.candidate({**body, "run_id": RID})
+                if path == "/dispatch" and body["attempt_id"] not in self.dispatched:
+                    task = body["spec"]["id"]
+                    if task == "review":   # what the Worker records when it dispatches a review
+                        folder = node.path(RID) / "attempts" / body["attempt_id"]
+                        folder.mkdir(parents=True, exist_ok=True)
+                        (folder / "untracked.json").write_text(json.dumps({"paths": sources.untracked(project)}))
+                    for name, text in {"code": {"src/a.js": "export const a = 1;\n"}, "review": {"review.md": "审查结论\n"},
+                                       "polish": {"src/b.js": "export const b = 2;\n"}}[task].items():
+                        (project / name).parent.mkdir(parents=True, exist_ok=True)
+                        (project / name).write_text(text)
+                if path == "/inspect" and self.dispatched[body["attempt_id"]]["spec"]["id"] == "review":
+                    sha = (self.dispatched[body["attempt_id"]].get("candidate") or {}).get("sha", "")
+                    self.outcomes["review"] = {"decision": "pass", "summary": "无阻断问题", "reviewed_commit": sha}
+                return super().__call__(config, path, body, **kwargs)
+        worker = Real()
+        rid = self.session([{**IMPLEMENT, "verify": []}, REVIEW, polish])
+        self.run_engine(worker, ticks=30)
+        c1 = self.attempt(rid, "code")[1]["candidate"]["sha"]
+        attempt, evidence = self.attempt(rid, "review")
+        gate = self.review_bound(evidence)
+        self.assertEqual((gate["status"], gate["files"]), ("warn", ["review.md"]))
+        self.assertIn("审查新建的文件已由平台移出：review.md", gate["detail"])
+        self.assertIn("移出的文件保存在该次尝试的 review-removed 目录", gate["detail"])
+        self.assertIn("审查结论照常采用", gate["detail"])
+        self.assertNotIn("已跟踪", gate["detail"])
+        self.assertEqual((attempt["status"], evidence["reviewed"]), ("accepted", c1))
+        self.assertEqual((node.path(RID) / "attempts" / attempt["id"] / "review-removed/review.md").read_text(), "审查结论\n")
+        candidate = self.attempt(rid, "polish")[1]["candidate"]
+        self.assertEqual(candidate["names"], ["src/b.js"])
+        self.assertNotIn("review.md", sources._git(project, "ls-tree", "-r", "--name-only", candidate["sha"]).splitlines())
+        self.assertFalse((project / "review.md").exists())
+        self.assertEqual(self.service.run(self.c, rid)["status"], "completed")
+
+    def test_a_rejecting_review_that_creates_a_file_has_it_moved_out(self):   # D57 §4: _put_back_review
+        rejection = {"decision": "changes_requested", "summary": "缺少空输入的边界处理", "failure_type": "implementation",
+                     "reviewed_commit": C1}
+        put_back = lambda reverted, removed, left=(): lambda body: {
+            "head": C1, "clean": True, "changed_files": [], "reverted": reverted, "rewound": 0, "removed": removed,
+            "created": list(left), "tracked_only": False}
+
+        def refused(body):
+            raise Error(409, "candidate_failed", "Git 操作失败（exit 1）：index.lock")
+        cases = (("warn", {"changed_files": [], "created": ["review.md"]}, put_back([], ["review.md"]),
+                  "审查新建的文件已由平台移出：review.md；移出的文件保存在该次尝试的 review-removed 目录", ["review.md"]),
+                 ("warn", {"changed_files": ["src/a.js"], "created": ["review.md"]}, put_back(["src/a.js"], ["review.md"]),
+                  "审查改动的已跟踪文件已由平台撤回：src/a.js；审查新建的文件已由平台移出：review.md；"
+                  "移出的文件保存在该次尝试的 review-removed 目录", ["src/a.js", "review.md"]),
+                 ("skip", {"changed_files": [], "created": []}, None, "审查没有改动文件", None),
+                 # a folder the reviewer made a repository, holding files it started with: left in place, and said
+                 ("warn", {"changed_files": [], "created": ["tools/"]}, put_back([], [], ["tools/"]),
+                  "审查新建的这些文件未能移出，仍在工作区：tools/", None),
+                 ("warn", {"changed_files": [], "created": ["review.md"]}, refused,
+                  "平台未能移出审查新建的 review.md：Git 操作失败（exit 1）：index.lock", None),
+                 ("fail", {"changed_files": ["src/a.js"], "created": ["review.md"]}, refused,
+                  "平台未能撤回审查改动的 src/a.js，移出审查新建的 review.md：Git 操作失败（exit 1）：index.lock", None))
+        for index, (status, changes, rewind, words, files) in enumerate(cases):
+            with self.subTest(words=words):
+                worker = FakeWorker()
+                rid = self.session([{**IMPLEMENT, "verify": []}, REVIEW], recovery=True, request=f"start-000000008{index}")
+                worker.outcomes["review"] = rejection
+                worker.check = lambda body, changes=changes: {"head": C1, "clean": not changes["changed_files"],
+                                                              "tracked_only": False, **changes}
+                if rewind:
+                    worker.rewind = rewind
+                self.run_engine(worker, ticks=8)
+                attempt, evidence = self.attempt(rid, "review")
+                self.assertEqual((attempt["status"], attempt["error"], evidence["failure_type"]),
+                                 ("blocked", "缺少空输入的边界处理", "implementation"))   # what recovery sees, unchanged
+                self.assertNotIn("gate", evidence)
+                gate = self.review_bound(evidence)
+                self.assertEqual((gate["status"], gate.get("files")), (status, files))
+                self.assertIn(words, gate["detail"])
+                self.assertEqual(gate["detail"].count("review-removed"), 1 if "已由平台移出" in words else 0)
+                modes = [b["mode"] for p, b in worker.calls if p == "/candidate" and b["attempt_id"] == attempt["id"]]
+                self.assertEqual(modes, ["check", "rewind"] if rewind else ["check"])
+
+    def test_new_files_that_cannot_be_moved_out_never_fail_a_review(self):   # no new failure: D57 §4 only lowers gates
+        worker = FakeWorker()
+        rid = self.session([{**IMPLEMENT, "verify": []}, REVIEW])
+        worker.outcomes["review"] = {"decision": "pass", "summary": "无阻断问题", "reviewed_commit": C1}
+        worker.check = lambda body: {"head": C1, "clean": True, "changed_files": [], "created": ["review.md"],
+                                     "tracked_only": False}
+
+        def refused(body):
+            raise Error(409, "candidate_failed", "Git 操作失败（exit 128）")
+        worker.rewind = refused
+        self.run_engine(worker, ticks=16)
+        attempt, evidence = self.attempt(rid, "review")
+        gate = self.review_bound(evidence)
+        self.assertEqual((gate["status"], attempt["status"], evidence["reviewed"]), ("warn", "accepted", C1))
+        self.assertIn("平台未能移出审查新建的 review.md：Git 操作失败（exit 128）", gate["detail"])   # as _put_back_review says it
+        self.assertIn("审查结论照常采用", gate["detail"])
+        self.assertNotIn("gate", evidence)
+
+    def test_new_files_that_could_not_be_listed_on_rewind_are_said_not_failed(self):   # tracked files were put back
+        rejection = {"decision": "changes_requested", "summary": "缺少空输入的边界处理", "failure_type": "implementation",
+                     "reviewed_commit": C1}
+        for index, outcome in enumerate(({"decision": "pass", "summary": "无阻断问题", "reviewed_commit": C1}, rejection)):
+            with self.subTest(decision=outcome["decision"]):
+                worker = FakeWorker()
+                rid = self.session([{**IMPLEMENT, "verify": []}, REVIEW], request=f"start-000000010{index}")
+                worker.outcomes["review"] = outcome
+                worker.check = lambda body: {"head": C1, "clean": False, "changed_files": ["src/a.js"],
+                                             "created": ["review.md"], "tracked_only": False}
+                worker.rewind = lambda body: {"head": C1, "clean": True, "changed_files": [], "reverted": ["src/a.js"],
+                                              "rewound": 0, "removed": [], "listing_failed": True, "created": [],
+                                              "tracked_only": True}
+                self.run_engine(worker, ticks=16)
+                attempt, evidence = self.attempt(rid, "review")
+                gate = self.review_bound(evidence)
+                self.assertEqual((gate["status"], gate["files"]), ("warn", ["src/a.js"]))
+                self.assertIn("审查改动的已跟踪文件已由平台撤回：src/a.js；未能列出审查新建的文件，未做移出", gate["detail"])
+                self.assertNotIn("review-removed", gate["detail"])
+                self.assertNotIn("gate", evidence)
+                self.assertEqual(attempt["status"], "accepted" if outcome is not rejection else "blocked")
+
+    def test_a_rewind_that_leaves_the_workspace_off_the_candidate_names_what_it_did(self):
+        worker = FakeWorker()
+        rid = self.session([{**IMPLEMENT, "verify": []}, REVIEW])
+        worker.outcomes["review"] = {"decision": "pass", "summary": "无阻断问题", "reviewed_commit": C1}
+        worker.check = lambda body: {"head": C1, "clean": False, "changed_files": ["src/a.js"], "created": ["review.md"],
+                                     "tracked_only": False}
+        worker.rewind = lambda body: {"head": C1, "clean": False, "changed_files": ["src/a.js"], "reverted": ["src/a.js"],
+                                      "rewound": 0, "removed": ["review.md"], "created": [], "tracked_only": False}
+        self.run_engine(worker, ticks=16)
+        attempt, evidence = self.attempt(rid, "review")
+        self.assertEqual((self.gates(evidence)["review_bound"], attempt["status"]), ("fail", "blocked"))
+        self.assertIn(f"平台撤回审查改动的 src/a.js，移出审查新建的 review.md后，工作区仍不是候选 {C1[:7]}：src/a.js",
+                      attempt["error"])   # in the words _put_back_review uses
+
+    def test_an_old_worker_without_created_keeps_todays_behaviour(self):   # no created, no tracked_only, no removed
+        rejection = {"decision": "changes_requested", "summary": "缺少空输入的边界处理", "failure_type": "implementation",
+                     "reviewed_commit": C1}
+        for index, (outcome, check, status, words) in enumerate((
+                (rejection, None, "skip", "审查没有改动已跟踪的文件"),
+                ({"decision": "pass", "summary": "无阻断问题", "reviewed_commit": C1}, None, "pass", C1[:12]),
+                (rejection, {"head": C1, "clean": False, "changed_files": ["src/a.js"]}, "warn",
+                 "审查改动的已跟踪文件已由平台撤回：src/a.js"))):
+            with self.subTest(status=status):
+                worker = FakeWorker()
+                rid = self.session([{**IMPLEMENT, "verify": []}, REVIEW], request=f"start-000000009{index}")
+                worker.outcomes["review"] = outcome
+                if check:
+                    worker.check = lambda body, check=check: check
+                    worker.rewind = lambda body: {"head": C1, "clean": True, "changed_files": [], "reverted": ["src/a.js"],
+                                                  "rewound": 0}
+                self.run_engine(worker, ticks=16)
+                attempt, evidence = self.attempt(rid, "review")
+                gate = self.review_bound(evidence)
+                self.assertEqual(gate["status"], status)
+                self.assertIn(words, gate["detail"])
+                self.assertNotIn("移出", gate["detail"])
+                self.assertNotEqual(gate["detail"], "审查没有改动文件")
+                self.assertEqual(gate.get("files"), ["src/a.js"] if check else None)
+                modes = [b["mode"] for p, b in worker.calls if p == "/candidate" and b["attempt_id"] == attempt["id"]]
+                self.assertEqual(modes, ["check", "rewind"] if check else ["check"])
+
     def test_stopping_during_checks_ends_them_and_ignores_late_results(self):
         worker, rid = FakeWorker(), self.session([IMPLEMENT])
         worker.verify = [{"state": "running", "passed": None, "failed": None, "results": []}]
@@ -911,6 +1088,273 @@ class EngineGateTests(TeamsWorkersCase):
         attempt, evidence = self.attempt(rid, "test")
         self.assertEqual(self.gates(evidence).get("tests_fail_on_baseline"), "skip")
         self.assertEqual(attempt["status"], "accepted")
+
+
+# Put together while the test runs (tests/test_secret_rules.py): no complete credential is written in this file.
+SECRET = "ghp" + "_" + chars("task-7-result", 36, "alnum")
+SHOWN = SECRET[:4] + "…" + SECRET[-2:]
+TASK = {**IMPLEMENT, "id": "task-1"}
+
+
+class SecretMaskingTests(TeamsWorkersCase):
+    """D57 §3.3, owner 2026-10-22 (no new gate may hold a user): what the platform stores of an Attempt is masked when it is
+    written, and what was masked is listed — evidence.secrets and one warn record — never a block, a failure or another
+    status; the verdicts are made on what the Agent and its checks wrote."""
+    session, run_engine, attempt, gates = (EngineGateTests.session, EngineGateTests.run_engine, EngineGateTests.attempt,
+                                           EngineGateTests.gates)
+
+    def stored(self):
+        """Every row the platform keeps, as text: the Session, its tasks, Attempts, events, recoveries and revisions."""
+        with self.db.read() as db:
+            return "\n".join(json.dumps([dict(row) for row in db.execute(f"SELECT * FROM {table}")], ensure_ascii=False)
+                             for table in ("runs", "tasks", "attempts", "events", "recoveries", "revisions"))
+
+    def run_status(self, rid):
+        with self.db.read() as db:
+            return db.execute("SELECT status FROM runs WHERE id=?", (rid,)).fetchone()["status"]
+
+    def masked_record(self, evidence):
+        records = [g for g in evidence["gates"] if g["name"] == "secrets_masked"]
+        self.assertEqual(len(records), 1, evidence["gates"])
+        return records[0]
+
+    def test_a_secret_in_the_result_is_stored_masked_and_warns(self):
+        worker, rid = FakeWorker(), self.session([TASK])
+        worker.results["task-1"] = f"完成：已写入配置 GH_TOKEN={SECRET}"
+        self.run_engine(worker)
+        attempt, evidence = self.attempt(rid, "task-1")
+        self.assertEqual(attempt["result"], f"完成：已写入配置 GH_TOKEN={SHOWN}")
+        stored = self.stored()
+        self.assertNotIn(SECRET[4:-2], stored)   # attempts.result, the evidence and the journal alike
+        self.assertIn(SHOWN, stored)
+        self.assertEqual((attempt["status"], self.run_status(rid)), ("accepted", "completed"))   # nothing held
+        self.assertEqual(evidence["secrets"], [{"kind": "github", "location": "result:task-1", "masked": SHOWN,
+                                                "hash": hashlib.sha256(SECRET.encode()).hexdigest()}])
+        record = self.masked_record(evidence)
+        self.assertEqual((record["status"], record["detail"]), ("warn", "已打码 1 处疑似密钥：github（result:task-1）"))
+        self.assertIn("secrets_masked", [w["name"] for w in evidence["warnings"]])
+        self.assertNotIn("gate", evidence)
+        self.assertNotIn("failure_type", evidence)
+
+    def test_a_secret_in_a_check_tail_is_listed(self):
+        # an older Worker's tail, as the command printed it, and a tail the Worker masked with what it masked listed
+        shown = {"kind": "github", "line": 2, "masked": SHOWN, "hash": hashlib.sha256(SECRET.encode()).hexdigest()}
+        cases = (("raw", {"tail": f"ok\nexport GH_TOKEN={SECRET}\n"}),
+                 ("masked by the Worker", {"tail": f"ok\nexport GH_TOKEN={SHOWN}\n", "findings": [shown]}))
+        for number, (name, tail) in enumerate(cases):
+            with self.subTest(name):
+                worker, rid = FakeWorker(), self.session([TASK], request="start-%016d" % (70 + number))
+                worker.verify = [{"state": "done", "passed": True, "failed": None,
+                                  "results": [{"command": "npm test", "exit": 0, "seconds": 1.0, **tail}]}]
+                self.run_engine(worker)
+                attempt, evidence = self.attempt(rid, "task-1")
+                self.assertEqual(evidence["check_results"][0]["tail"], f"ok\nexport GH_TOKEN={SHOWN}\n")
+                self.assertNotIn(SECRET[4:-2], self.stored())
+                self.assertEqual([(s["kind"], s["location"], s["masked"], s["hash"]) for s in evidence["secrets"]],
+                                 [("github", "checks:task-1", SHOWN, shown["hash"])])
+                self.assertEqual(self.masked_record(evidence)["detail"], "已打码 1 处疑似密钥：github（checks:task-1）")
+                self.assertEqual((attempt["status"], self.gates(evidence)["checks_pass"], self.run_status(rid)),
+                                 ("accepted", "pass", "completed"))
+
+    def test_a_secret_in_a_failing_check_command_is_judged_as_before(self):
+        # the required check is known by its text as written, the masked one only stored (D57 §5)
+        command = f"curl -fsS -H 'Authorization: token {SECRET}' https://api.example.test/health"
+        worker, rid = FakeWorker(), self.session([{**TASK, "verify": [command]}])
+        worker.verify = [{"state": "done", "passed": False, "failed": 0,
+                          "results": [{"command": command, "exit": 22, "seconds": 1.0, "tail": "", "unrunnable": None}]}]
+        self.run_engine(worker, ticks=8)
+        attempt, evidence = self.attempt(rid, "task-1")
+        shown = command.replace(SECRET, SHOWN)
+        self.assertEqual((attempt["status"], evidence["gate"], evidence["failure_type"]), ("blocked", "checks_pass", "gate"))
+        self.assertEqual(attempt["error"], f"检查命令失败：{shown}（退出码 22）")
+        self.assertEqual(evidence["check_results"][0]["command"], shown)
+        self.assertEqual(next(g for g in evidence["gates"] if g["name"] == "checks_pass")["detail"], attempt["error"])
+        with self.db.read() as db:
+            run = db.execute("SELECT status, error FROM runs WHERE id=?", (rid,)).fetchone()
+            events = "".join(row[0] for row in db.execute("SELECT payload FROM events WHERE run_id=?", (rid,)))
+        self.assertEqual(tuple(run), ("blocked", attempt["error"]))
+        self.assertNotIn(SECRET[4:-2], attempt["evidence"] + events)
+        self.assertEqual(sorted({s["location"] for s in evidence["secrets"]}), ["checks:task-1", "error:task-1"])
+        self.assertEqual(self.masked_record(evidence)["status"], "warn")
+
+    def test_a_secret_changes_nothing_but_what_is_stored(self):
+        # the same Session with and without a credential in its result, outcome and check output: judged alike
+        def session(number, secret):
+            worker = FakeWorker()
+            worker.results["task-1"] = f"完成 {secret}"
+            worker.outcomes["task-1"] = {"decision": "pass", "summary": f"完成 {secret}", "findings": [f"见 {secret}"]}
+            worker.verify = [{"state": "done", "passed": True, "failed": None,
+                              "results": [{"command": "npm test", "exit": 0, "seconds": 1.0, "tail": f"ok {secret}"}]}]
+            rid = self.session([TASK, {**REVIEW, "id": "task-2"}], request="start-%016d" % (80 + number))
+            self.run_engine(worker, ticks=20)
+            judged = []
+            for task in ("task-1", "task-2"):
+                attempt, evidence = self.attempt(rid, task)
+                judged.append((attempt["status"], [(g["name"], g["status"]) for g in evidence["gates"]
+                                                   if g["name"] != "secrets_masked"],
+                               sorted(set(evidence) - {"secrets"}), [w["name"] for w in evidence.get("warnings", [])
+                                                                     if w["name"] != "secrets_masked"]))
+            return rid, worker, (judged, self.run_status(rid), [p for p, _ in worker.calls])
+        _, _, clean = session(0, "无凭证")
+        rid, worker, masked = session(1, SECRET)
+        self.assertEqual(clean, masked)
+        judged, status, _ = masked
+        self.assertEqual(([a for a, *_ in judged], status), (["accepted", "accepted"], "completed"))
+        _, evidence = self.attempt(rid, "task-1")
+        self.assertEqual(self.masked_record(evidence)["detail"],
+                         "已打码 3 处疑似密钥：github（result:task-1）、github（outcome:task-1）、github（checks:task-1）")
+        upstream = next(b for b in worker.dispatched.values() if b["spec"]["id"] == "task-2")["upstream"][0]
+        self.assertNotIn(SECRET[4:-2], json.dumps(upstream, ensure_ascii=False))   # the next task is told the masked text
+        self.assertIn(SHOWN, upstream["summary"])
+
+    def test_the_handoff_the_platform_writes_is_masked(self):
+        worker, rid = FakeWorker(), self.session([TASK])
+        worker.outcomes["task-1"] = {"decision": "pass", "summary": f"完成 {SECRET}"}   # what the handoff tells of it
+        self.run_engine(EngineGateTests.without_handoff(worker, "task-1"))
+        attempt, evidence = self.attempt(rid, "task-1")
+        self.assertIs(evidence["handoff_generated"], True)
+        self.assertIn(f"完成 {SHOWN}", evidence["handoff_text"])
+        self.assertNotIn(SECRET[4:-2], self.stored())
+        self.assertEqual([s["location"] for s in evidence["secrets"]], ["outcome:task-1", "handoff:task-1"])
+        self.assertEqual(attempt["status"], "accepted")
+
+    def test_the_workers_own_token_is_masked(self):
+        # the token the platform calls this Session's Worker with: what an Agent there could print, though no rule knows it
+        token = json.loads(TeamsWorkersCase.config("b-p"))["token"]
+        worker, rid = FakeWorker(), self.session([TASK])
+        worker.results["task-1"] = f"Worker 配置：Bearer {token}"
+        self.run_engine(worker)
+        attempt, evidence = self.attempt(rid, "task-1")
+        self.assertNotIn(token, self.stored())
+        self.assertEqual(attempt["result"], f"Worker 配置：Bearer {token[:4]}…{token[-2:]}")
+        self.assertEqual([(s["kind"], s["location"]) for s in evidence["secrets"]], [("worker_token", "result:task-1")])
+        self.assertEqual(attempt["status"], "accepted")
+
+    def test_a_dispatch_error_is_stored_masked(self):
+        # what the Worker answers a dispatch with is its text, not the platform's: masked on the Attempt and the Session
+        token = json.loads(TeamsWorkersCase.config("b-p"))["token"]
+        worker, rid = FakeWorker(), self.session([TASK])
+
+        def call(config, path, body=None, **kwargs):
+            if path == "/dispatch":
+                return {"status": "blocked", "error": f"KiroCrew 拒绝：Bearer {token}"}
+            return worker(config, path, body, **kwargs)
+        self.run_engine(call, ticks=3)
+        with self.db.read() as db:
+            error = db.execute("SELECT error FROM attempts WHERE run_id=?", (rid,)).fetchone()[0]
+            run = db.execute("SELECT status, error FROM runs WHERE id=?", (rid,)).fetchone()
+        self.assertEqual(error, f"KiroCrew 拒绝：Bearer {token[:4]}…{token[-2:]}")
+        self.assertEqual(tuple(run), ("blocked", error))
+        self.assertNotIn(token, self.stored())
+
+    def test_masking_twice_lists_once(self):
+        # the result is stored while the checks run and again when they end: one finding, one record
+        worker, rid = FakeWorker(), self.session([TASK])
+        worker.results["task-1"] = f"完成 {SECRET}"
+        worker.verify = [{"state": "running", "passed": None, "failed": None, "results": []},
+                         {"state": "done", "passed": True, "failed": None,
+                          "results": [{"command": "npm test", "exit": 0, "seconds": 1.0, "tail": f"ok {SECRET}"}]}]
+        self.run_engine(worker)
+        attempt, evidence = self.attempt(rid, "task-1")
+        self.assertEqual([s["location"] for s in evidence["secrets"]], ["result:task-1", "checks:task-1"])
+        self.assertEqual(self.masked_record(evidence)["detail"],
+                         "已打码 2 处疑似密钥：github（result:task-1）、github（checks:task-1）")
+        self.assertEqual([w["name"] for w in evidence["warnings"]], ["secrets_masked"])
+        self.assertEqual(attempt["status"], "accepted")
+
+    def test_an_entry_too_long_only_because_of_a_token_stays_too_long_when_masked_again(self):
+        # Knowledge judges an entry as it was written (knowledge.MARK): the platform's mark outlives the Attempt being
+        # masked again — while its checks run, then when they end — and an Agent's own mark is dropped when it is read
+        from octopus import knowledge
+        from octopus.engine import masked
+        token = json.loads(TeamsWorkersCase.config("b-p"))["token"]
+        long = "约定 " + "长" * (knowledge.RULE - 20) + " " + token   # over RULE as written, within it masked
+        reason = f"超过长度（rule 至多 {knowledge.RULE}、avoid 至多 {knowledge.AVOID} 字符），未写入"
+        evidence = {"outcome": {"decision": "pass", "summary": "完成", "knowledge": [{"rule": long}, "构建用 make build"]}}
+        for _ in range(2):
+            masked(evidence, "task-1", (token,))
+        self.assertNotIn(token, json.dumps(evidence, ensure_ascii=False))
+        keep, rest = knowledge.items(evidence["outcome"])
+        self.assertEqual((keep, [r["reason"] for r in rest]), ([{"rule": "构建用 make build"}], [reason]))
+        worker, rid = FakeWorker(), self.session([TASK])
+        worker.outcomes["task-1"] = {"decision": "pass", "summary": "完成", "knowledge": [
+            {"rule": long}, {"rule": "干净的约定", knowledge.MARK: {"suspicious": True, "too_long": True}}]}
+        worker.verify = [{"state": "running", "passed": None, "failed": None, "results": []},
+                         {"state": "done", "passed": True, "failed": None,
+                          "results": [{"command": "npm test", "exit": 0, "seconds": 1.0, "tail": "ok"}]}]
+        self.run_engine(worker)
+        attempt, evidence = self.attempt(rid, "task-1")
+        self.assertEqual(attempt["status"], "accepted")
+        self.assertNotIn(token, self.stored())
+        keep, rest = knowledge.items(evidence["outcome"])
+        self.assertEqual((keep, [r["reason"] for r in rest]), ([{"rule": "干净的约定"}], [reason]))
+
+    def test_what_the_worker_answers_a_poll_or_a_stop_with_keeps_no_workers_token(self):
+        # what the Worker says of the Session (a dispatch it cannot confirm, its answer to a stop): masked with its token
+        token = json.loads(TeamsWorkersCase.config("b-p"))["token"]
+        worker, rid = FakeWorker(), self.session([TASK])
+
+        def call(config, path, body=None, **kwargs):
+            if path == "/inspect":
+                return {"status": "dispatch_unknown", "error": f"派发未确认：Bearer {token}"}
+            if path == "/control":
+                return {"status": "stopped", "lifecycle": "open", "detail": f"已停止：Bearer {token}"}
+            return worker(config, path, body, **kwargs)
+        engine = self.run_engine(call, ticks=3)
+        with self.db.read() as db:
+            run = db.execute("SELECT status, error, version FROM runs WHERE id=?", (rid,)).fetchone()
+        self.assertEqual(tuple(run)[:2], ("dispatch_unknown", f"派发未确认：Bearer {token[:4]}…{token[-2:]}"))
+        self.assertNotIn(token, self.stored())
+        self.service.operate(self.c, rid, "stop", {"request_id": "stop-0000000071", "expected_version": run["version"]})
+        engine.tick()
+        with self.db.read() as db:
+            events = [json.loads(row[0]) for row in db.execute("SELECT payload FROM events WHERE run_id=? AND kind=?",
+                                                               (rid, "session.stop"))]
+        self.assertEqual([e["detail"] for e in events], [f"已停止：Bearer {token[:4]}…{token[-2:]}"])
+        self.assertNotIn(token, self.stored())
+
+    def test_a_queue_keeps_no_workers_token(self):
+        # D60: what KiroCrew says of a queue (its reason and detail, as the Worker reports them) is masked with the
+        # token, in the event and in evidence.queued
+        token = json.loads(TeamsWorkersCase.config("b-p"))["token"]
+        shown = f"{token[:4]}…{token[-2:]}"
+        worker, rid = FakeWorker(), self.session([TASK])
+
+        def call(config, path, body=None, **kwargs):
+            if path == "/inspect":
+                return {"status": "running", "native": {"done": False, "queued": True}, "evidence": {}, "queued": {
+                    "reason": token, "detail": f"等待内存：Bearer {token}", "elapsed": 3, "resuming": False}}
+            return worker(config, path, body, **kwargs)
+        self.run_engine(call, ticks=3)
+        with self.db.read() as db:
+            evidence = json.loads(db.execute("SELECT evidence FROM attempts WHERE run_id=?", (rid,)).fetchone()[0])
+            events = [json.loads(row[0]) for row in db.execute("SELECT payload FROM events WHERE run_id=? AND kind=?",
+                                                               (rid, "attempt.queued"))]
+        self.assertEqual(evidence["queued"]["reason"], shown)
+        self.assertEqual([(e["cause"], e["detail"]) for e in events], [(shown, f"等待内存：Bearer {shown}")])
+        self.assertNotIn(token, self.stored())
+
+    def test_only_the_platforms_own_mark_is_kept(self):
+        # knowledge.MARK as the platform writes it — {suspicious, too_long, key} and nothing else — is kept when the
+        # outcome is masked again; any other value there is dropped, and the entry is judged by its text
+        from octopus import knowledge
+        from octopus.engine import masked
+        token = json.loads(TeamsWorkersCase.config("b-p"))["token"]
+        evidence = {"outcome": {"decision": "pass", "summary": "完成", "knowledge": [{"rule": f"用 {token} 调用"}]}}
+        masked(evidence, "task-1", (token,))
+        mark = evidence["outcome"]["knowledge"][0][knowledge.MARK]
+        self.assertEqual(mark, knowledge.judged({"rule": f"用 {token} 调用"}))
+        forged = [{"suspicious": True}, {**mark, "suspicious": True, "extra": 1}, {**mark, "too_long": "yes"},
+                  {**mark, "key": 3}, {**mark, "key": "k"}, ["suspicious"], "too_long"]
+        for value in forged:
+            with self.subTest(value):
+                evidence = {"outcome": {"decision": "pass", "summary": "完成", "knowledge": [
+                    {"rule": "干净的约定", knowledge.MARK: value}, "构建用 make build"]}}
+                masked(evidence, "task-1", (token,))
+                self.assertEqual(evidence["outcome"]["knowledge"], [{"rule": "干净的约定"}, "构建用 make build"])
+                self.assertEqual(knowledge.items({"knowledge": [{"rule": "干净的约定", knowledge.MARK: value}]})[0],
+                                 [{"rule": "干净的约定"}])
+
 
 class WorkerReviewTests(unittest.TestCase):
     def test_a_review_is_told_which_commit_to_review(self):

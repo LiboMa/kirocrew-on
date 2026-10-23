@@ -1,16 +1,16 @@
 # 进度与完成记录
 
-> 由 `tools/progress.py` 生成（2026-10-22 16:30 CST）：任务状态取自 `docs/progress.json`，提交记录取自 git。看板：`docs/progress-dashboard.html`；实时看板：`python3 tools/progress.py --serve --ec2`（http://127.0.0.1:8765/）。
+> 由 `tools/progress.py` 生成（2026-10-23 22:38 CST）：任务状态取自 `docs/progress.json`，提交记录取自 git。看板：`docs/progress-dashboard.html`；实时看板：`python3 tools/progress.py --serve --ec2`（http://127.0.0.1:8765/）。
 
-- **本轮完成度**：87%　**MVP 完成度**：63%
-- **分支**：HEAD `5ec0681`；自 `origin/main` 起 433 个提交——已推送 335、已部署 EC2 98、仅本机 0；EC2 运行 `5ec0681`
-- **回归**：1412 后端 + 92 + 205 控制台（connect codex / kiro-ide 本机）；EC2 运行 95e5aa9
+- **本轮完成度**：87%　**MVP 完成度**：69%
+- **分支**：HEAD `3af7331`；自 `origin/main` 起 527 个提交——已推送 452、已部署 EC2 75、仅本机 0；EC2 运行 `3af7331`
+- **回归**：1861 后端 + 92 + 272 控制台 + 7 个浏览器测试；EC2 运行 3af7331（D73、gzip、D57 写入时打码）
 
 ## 模块
 
 | 模块 | 完成度 | 已验收 | 已部署 · 待验收 | 本机完成 · 待部署 | 进行中 | 卡点 · 等外部 | 未开始 |
 |---|---|---|---|---|---|---|---|
-| MVP 里程碑（M1–M5） | 63% | 13 | 6 | 0 | 1 | 0 | 9 |
+| MVP 里程碑（M1–M5） | 69% | 16 | 13 | 0 | 1 | 0 | 9 |
 | D46 Agent 角色与提示体系 | 87% | 8 | 3 | 0 | 0 | 1 | 0 |
 | D49 每人一个执行边界 | 80% | 2 | 2 | 0 | 1 | 0 | 0 |
 | D50 编码技能包 | 100% | 2 | 0 | 0 | 0 | 0 | 0 |
@@ -43,128 +43,225 @@
 
 ## 完成记录（按决策，最近的在前）
 
-### D64（8 个提交：已部署 EC2 8）
+### D73（8 个提交：已部署 EC2 8）
 
-- `5ec0681` 2026-10-22 〔已部署 EC2〕 test: octopus_runs 的参数集合含 shared（D64）
-- `d28dfbe` 2026-10-22 〔已部署 EC2〕 fix(sharing): 终审修正（D64）——协作者的 sync 不再记成管理员监管（_oversight 按写判定，持有查看共享的管理员写入仍算监管）；placement（改派用的执行环境清单）不对共享开放；「共享给我」列表标出角色与共享人；入口矩阵补齐（导出、预览、pull、观察、设计状态、发布、补充说明、审批、验收、凭证、知识、发布策略、预览启停）
-- `c91c991` 2026-10-22 〔已部署 EC2〕 docs: D64 会话共享——运维说明（共享给谁、角色、不对共享开放的、谁能共享、看到哪里、取消与收不回的）；MVP-RELEASE 与看板 M4-1
-- `41dadc5` 2026-10-22 〔已部署 EC2〕 feat(console): 会话页「共享」（个人按用户名、所在 Team、全公司仅查看；列出与取消）、访问身份提示（你以 查看 / 协作 身份访问，由谁共享）、侧栏「共享给我」；查看者的续作 / 诊断 / 停止 / 关闭按钮按 permissions.operate 禁用，改派按 permissions.assign（D64 Task 3）
-- `5a672af` 2026-10-22 〔已部署 EC2〕 feat(mcp): octopus_runs 的 shared 列出共享给用户的会话，octopus_status 带 access；Skill 说明（D64 Task 3 的一部分）
-- `d9cef1e` 2026-10-22 〔已部署 EC2〕 feat(sharing): 每个入口按读写放行（D64 Task 2）——读入口（会话、事件流、修订、变更、代码改动、待批准列表、导出、预览、pull、KiroCrew 会话观察、placement 等）标 read=True；改派执行环境、原生入口、D55 Request 排除共享；collaborator 与普通 Team 成员相同；permissions 按实际判定（operate、share、assign），会话视图带 access；GET /v1/runs?shared=1「共享给我」，默认列表不含共享来的
-- `b491ae9` 2026-10-22 〔已部署 EC2〕 feat(sharing): 会话共享的存储、访问判定与接口（D64 Task 1）——迁移 12 shares（个人 / Team / 全公司，viewer / collaborator，全公司只能查看）；run_access 增加 read（读接受任何共享）与 shares（False 排除共享），默认按写；access_of；GET / POST /v1/runs/<id>/shares、DELETE …/<share>（创建者、Team owner、管理员；审计）；迁移器改为执行缺失的编号（两个分支各加迁移不再互相跳过）
-- `b19416b` 2026-10-22 〔已部署 EC2〕 docs(spec,plan): D64 M4-1 会话共享给个人 / Team / 全公司（viewer / collaborator，collaborator 等同普通 Team 成员；全公司只能查看；迁移器补跑缺失编号）——设计稿与 4 个任务的实施计划
+- `7ba46c6` 2026-10-23 〔已部署 EC2〕 docs: 续作是怎么工作的（Markdown + HTML，同一份内容）——什么时候用、入口、平台收到后的 8 步（含 D73 先提交聊天里的改动）、Engine 之后怎么跑、保留与替换、常见问题、代码位置；tools/md_to_html.py 由 Markdown 生成 HTML
+- `4dce92a` 2026-10-23 〔已部署 EC2〕 fix(chat): 协作者提示写明开始与结束按同一个 Attempt 对应；聊天里的建立说明与结果说明统一为 KiroCrew ON（D73）
+- `3898235` 2026-10-23 〔已部署 EC2〕 docs(design): D73 预检补上边界主人、Team 未归档、非工作流建议会话
+- `999eee7` 2026-10-23 〔已部署 EC2〕 feat(chat): 在 KiroCrew 聊天里直接和父会话对话，也能回到平台续作（D73）——父会话 Agent 由观察员改为协作者：平台不在执行时可按要求改工作区或派 poc-kiro / poc-claude / poc-codex；平台开始执行任务时聊天里写一行说明；续作前把工作区里聊天的改动提交为新候选（最后一个写代码任务上的「对话中的改动」尝试，秘密检查、检查命令，之后的任务重跑），有凭证 409 chat_secret；未提交时请求诊断 409 chat_changes；续作不允许的人不会触发提交
+- `cbde8cd` 2026-10-23 〔已部署 EC2〕 docs(design): D73 技术实现点——协作者提示、开始执行的说明、续作时提交对话中的改动（预检、check / commit、凭证拒绝、写代码任务上的尝试、之后任务重置、请求诊断拒绝）、测试清单
+- `550b263` 2026-10-23 〔已部署 EC2〕 docs(design): D73 改为最简做法——用户在 KiroCrew 原生聊天里直接和父会话 Agent 对话，不新增接口：父会话 Agent 由观察员改为协作者（提示）；续作时把工作区里聊天的改动提交为新候选（复用 /candidate，同 D58 同步），否则审查的放回会还原它们
+- `4bcbda4` 2026-10-23 〔已部署 EC2〕 docs(design): D73 设计与技术方案——弊端与问题 13 项（含两项高风险：对话里的工作没有逐步把关、安全底线）及缓解；取舍；组件职责、写者状态、数据、平台 / Worker / KiroCrew 三层接口、调用规范与错误码、归纳时序、提示与总结 JSON；测试、EC2 验收与分期（P0 验证 → P4 D72）
+- `902a59f` 2026-10-23 〔已部署 EC2〕 docs(design): D73 提案——对话与结构化迭代两种工作方式、一份状态：单写者规则、聊天留痕、续作前归纳（平台核对事实 + 聊天 Agent 结构化总结 + 记为「对话中的工作」）；先做四个验证实验；D72 并入为快捷方式（待负责人确认）
 
-### D63（2 个提交：已部署 EC2 2）
+### D72（2 个提交：已部署 EC2 2）
 
-- `b4a7cba` 2026-10-22 〔已部署 EC2〕 docs: D63 已在 EC2 验收（c887aac）——空闲 ACP 进程 9 → 3、已用内存 5391 → 2921 MB，新会话不再预先起会话；BACKLOG 记子 Agent 结束时父会话仍跑一轮 coordinator
-- `c887aac` 2026-10-22 〔已部署 EC2〕 fix(composition): 边界的 KiroCrew 配置关掉 session.eager_spawn（D63）——KiroCrew 0.10 默认为每个 chat slot 预先起会话；平台的 slot 从不认领，白占进程，内存吃紧时被回收还连带 SIGKILL 正在运行的子 Agent（EC2 run-16848466…，parent-end teardown）；新配置与已有配置都写 false，明确开启的保留
+- `3042f78` 2026-10-23 〔已部署 EC2〕 docs: BACKLOG 记延后项（部署 5fd7976 + 2c3206e、上游简报、#11576、D72 草稿所在分支）
+- `dbaef32` 2026-10-23 〔已部署 EC2〕 docs: 派发机制比较报告（KiroCrew ON Engine / 本机 KiroCrew 0.8.0 / 原版 PoC 流水线）；父会话不再逐个回复的原理；在聊天里继续和子 Agent 对话的设计稿（D72，待负责人确认）
 
-### D62（3 个提交：已部署 EC2 3）
+### D71（2 个提交：已部署 EC2 2）
 
-- `4eaf293` 2026-10-22 〔已部署 EC2〕 docs: D62 已在 EC2 验收（ab29b40）——7 天 Token 7 天到期、永不过期的列表为 null 且能认证、非法取值 400
-- `ab29b40` 2026-10-22 〔已部署 EC2〕 fix(tokens): 终审修正（D62）——octopus connect 完成时按平台实际给的有效期提示（永不过期 / 有效期至某日），不再写死 30 天；旧版控制台的 Token 列表显示「永不过期」而不是 1970 年
-- `d75e34f` 2026-10-22 〔已部署 EC2〕 feat(tokens): API Token 有效期可选 7 / 30 / 365 天或永不过期（D62，负责人 2026-10-22）——POST /v1/tokens 的 expires_in；永不过期以远期日期保存、API 返回 expires null、列表显示「永不过期」；带 admin 的最长 30 天；控制台「有效期」（默认 30 天，修正写死的「7 天后到期」）；octopus connect / login --expires（同时发 ttl，旧平台照旧 30 天）；OpenAPI 与运维说明
+- `13ead9d` 2026-10-23 〔已部署 EC2〕 feat(acceptance): 删除「验收待确认」（D71，负责人 2026-10-22 关卡检讨）——Evaluator 留给人判断的项一律记为提示、会话照常完成，报告写「自动通过，记为提示」；删除 default_acceptance、确认验收的操作与 POST /v1/runs/<id>/accept、MCP octopus_accept、控制台「确认通过 / 不通过，返工」；升级前停在验收待确认的会话由引擎下一轮按提示接受并继续；Skill 与 MCP 只在发布推送、删除、批准工具调用与管理员操作前征得同意，其余按用户要求直接做
+- `8b9dc71` 2026-10-22 〔已部署 EC2〕 feat(recovery): 协调者只在缺凭证或缺需求信息时停下（D71，负责人 2026-10-22 关卡检讨）——wait_for_user 须写明 missing（credentials / input），其余的等待、平台拒绝的决定（目标、换工具、扩大路径、重新规划）与没有可用决定的诊断都改为按协调者所说重试失败的任务，拒绝原因记在决定的 refused，下一次诊断看得到；仍受自动纠错轮次上限约束；删除 D57 §6.2「连续两次等待后不再自动诊断」与 rediagnose（旧客户端传入时忽略）；执行环境没有报告的后端或模型（identity_match）只记提示、照常执行
 
-### D61（8 个提交：已部署 EC2 8）
+### D69（10 个提交：已部署 EC2 10）
 
-- `ff33ad5` 2026-10-22 〔已部署 EC2〕 docs: D61 已在 EC2 验收（d4ae66f）——Team 上限 1 时第二个会话排队、第一个结束后自动开始；BACKLOG 记 KiroCrew 回收未认领父会话时杀掉子 Agent
-- `d4ae66f` 2026-10-22 〔已部署 EC2〕 fix(quotas): 终审修正（D61）——只数任务当前的 Attempt（续作留下的仍显示运行中的记录不再让会话等自己）；排队期间又等执行环境恢复的，等待时间只计一次，run.quota_go 照常记下
-- `aa2a40c` 2026-10-22 〔已部署 EC2〕 docs: D61 并发上限——运维说明（限什么、谁设、到了上限、不等待）；MVP-RELEASE、BACKLOG（第 3 期用量上限）与进度
-- `9193bc1` 2026-10-22 〔已部署 EC2〕 feat(console): 设置 →「并发上限」（D61 Task 3）——看自己的与所在 Team 的上限与占用；平台管理员设每人默认与单独上限，Team owner 设本 Team 的；成员只读
-- `adbc2a2` 2026-10-22 〔已部署 EC2〕 feat(mcp): 只读 octopus_quotas 与 Skill 说明（D61 Task 3 的一部分；控制台「并发上限」待做）
-- `3d2bd37` 2026-10-22 〔已部署 EC2〕 feat(engine): 按并发上限排队（D61 Task 2）——会话的下一个任务开始前，在创建 Attempt 的同一写事务里数个人与 Team 的占用；满了就等待（run.quota_wait 只记一次，「需要处理」写明哪个范围、上限与占用，无需操作），有空位按等待先后开始（run.quota_go，等待不计时长预算）；久未被看到的等待不挡别人；自动重试照常不等待
-- `c76ca8d` 2026-10-22 〔已部署 EC2〕 feat(quotas): 并发上限的存储与接口（D61 Task 1）——迁移 10 quotas（每人默认 / 某人 / 某 Team，1–50）；占用按仍在推进的会话中运行的 Attempt 与协调者诊断计（执行环境停用留下的不计）；GET / POST /v1/quotas（管理员设默认与个人、Team owner 设本 Team），写审计 quota.set；OpenAPI
-- `02198d3` 2026-10-22 〔已部署 EC2〕 docs(spec,plan): D61 M4-4 第 2 期——每人 / 每 Team 的并发上限（设计稿与 4 个任务的实施计划；默认不设、到了上限按等待先后排队）
+- `b1f5817` 2026-10-23 〔已部署 EC2〕 docs: D69 在 EC2 验收通过（run-3852f436）
+- `b673ed1` 2026-10-23 〔已部署 EC2〕 docs: 进度看板——D69 / D71 / 管理页面 / 收藏置顶已部署 EC2 828caee
+- `9ab159d` 2026-10-23 〔已部署 EC2〕 docs: D69 按阶段把关的运维说明
+- `4742899` 2026-10-23 〔已部署 EC2〕 feat(phases): 控制台的阶段（D69 第 5 步）——任务编辑器有「阶段」下拉（自动 / 发散 / 设计 / 收敛），标题行显示所选阶段；会话页任务写明阶段（按类别推断的写「按类别」，普通收敛任务不显示）；类型与标签补上 research / write
+- `cce70c2` 2026-10-23 〔已部署 EC2〕 feat(phases): 导入、OpenAPI 与 Skill 写明阶段（D69 第 4 步）——导入接受 phase 与「阶段：发散 / 设计 / 收敛」，无效时记说明并忽略；OpenAPI 任务契约有 phase 枚举，kind 补上 research / write；Skill 说明三个阶段与推断规则
+- `49d24a3` 2026-10-23 〔已部署 EC2〕 feat(phases): 规划规则与 Agent 指令写明阶段（D69 第 3 步）——规划提示多一行 phase（diverge / design / converge，不写按 kind 推断），任务类别补上一般任务的 research / write（D65）；重新规划用短写法，工具清单截断 450 → 420 以守住长度上限；发散任务的契约说明结论不会阻断后续任务
+- `fad1af1` 2026-10-23 〔已部署 EC2〕 feat(phases): 只有发散任务时的必过检查（D69 第 2b 步）——重新规划后没有能运行检查的任务、且只是因为都是发散任务时记提示，不判计划无效（有可运行的任务但放不下时照旧 409）；首次规划中落在不运行检查的任务上的必过检查写明不会运行
+- `76e4147` 2026-10-23 〔已部署 EC2〕 feat(phases): 引擎按阶段把关（D69 第 2 步）——发散任务与设计阶段中途的任务：自动重试之后仍失败、且失败在白名单内时，记为带前缀的提示并按完成接受，不诊断、不进纠错；原生任务没跑完时平台生成交接写明「任务未完成」；设计阶段末与收敛任务照旧；发散任务不运行检查命令；研发会话行为不变
+- `64278a1` 2026-10-23 〔已部署 EC2〕 feat(phases): 任务的阶段（D69 第 1 步）——phase 为 diverge / design / converge，未写时按类别推断（research 发散、design 设计、审查取所审任务的阶段、其余收敛）；设计阶段末的判定；可放行的失败为白名单（原生出错、工具不符、执行者或审查者的结论，缺输入 / 认证 / 环境 / 安全除外），放行时 fail 改为带前缀的提示并移除 gate 与 failure_type；平台自己的任务没有阶段
+- `dff5d2a` 2026-10-22 〔已部署 EC2〕 docs: D69 按阶段把关的设计稿与实施计划（负责人选「按阶段把关」；含 D57 会话的约束与审阅意见）
 
-### D60（8 个提交：已部署 EC2 8）
+### D65（9 个提交：已推送 2、已部署 EC2 7）
 
-- `bb268bd` 2026-10-22 〔已部署 EC2〕 docs: D60 真实排队已在 EC2 验收——临时调高 owner 边界内存门槛，会话显示「排队：等待执行环境资源（执行环境内存不足）」，恢复后 63 秒出队并完成，配置原样恢复
-- `e223182` 2026-10-22 〔已部署 EC2〕 docs: D60 已部署 EC2（290718f）——部署后会话照常完成；看板 M4-4 第 1 期已部署、第 2 期（D61）进行中
-- `290718f` 2026-10-22 〔已部署 EC2〕 fix(queue): 终审修正（D60）——已开始过又排队的任务（有 state.json、resuming）也认作排队；排队文字被别的错误盖住后恢复；排队中每 20 秒才看一次；会话的「需要处理」显示排队（无需操作），不再是红色错误
-- `117e2fb` 2026-10-22 〔已部署 EC2〕 docs: D60 排队可见——运维说明（排队、不计、没有开始、处理）；MVP-RELEASE 与进度看板 M4-4 第 1 期
-- `ef0e4b2` 2026-10-22 〔已部署 EC2〕 feat(engine): 排队可见（D60 Task 2）——KiroCrew 推迟的原生任务在会话显示「排队：等待执行环境资源（原因类别）」，事件 attempt.queued / attempt.dequeued；看门狗不计排队，从排队结束起计时；排队时间不计时间预算；never started 自动重新派发（不占自动重试与预算，连续第 3 次交给协调者，排队前已开始过的照旧交给协调者）
-- `ea26a8a` 2026-10-22 〔已部署 EC2〕 feat(worker): inspect 认出被 KiroCrew 推迟的原生任务（D60）——列表与状态文件都没有时改问 GET /api/spawn/{id}，排队中且任务文字带本 Attempt 标记的回 queued（原因、说明、已等待、是否 resuming），不再报「原生任务归属当前不可核实」
-- `8c8bbe3` 2026-10-22 〔已部署 EC2〕 docs(plan): D60 排队可见的实施计划（3 个任务）
-- `c943720` 2026-10-22 〔已部署 EC2〕 docs(spec): D60 M4-4 第 1 期——排队可见、看门狗不计排队、never started 自动重派（MVP 1.1.0 调研报告任务一；以 EC2 上 KiroCrew 0.10.0 的 spawn 回执与 GET /api/spawn/{id} 为准）
+- `64509e6` 2026-10-23 〔已部署 EC2〕 docs: EC2 运行 a183d84——父会话不再多跑一轮的线上核对（2 轮 → 0 轮）、D65 规划措辞复核；进度看板
+- `1ef70d6` 2026-10-23 〔已部署 EC2〕 fix(planning): 没有仓库的会话，规划提示不再说「源码已由平台准备在…源码检出」，一般任务的契约写明不写 role（EC2 run-656be0a4 验收：写作任务配了 sde 被忽略）；OPERATIONS 记 D65 线上验收
+- `f1dddda` 2026-10-23 〔已部署 EC2〕 docs: 进度看板——EC2 运行 bc651cc（检查只读自己的行、构建产物长期缓存、D65 入口、D57 打码规则）
+- `c964058` 2026-10-23 〔已部署 EC2〕 docs: D65 一般任务的运维说明与看板
+- `5a84791` 2026-10-23 〔已部署 EC2〕 feat(general): 一般任务的入口（D65 第 3 步）——发起向导的代码来源多一项「不需要代码仓库（调研、分析、写作等一般任务）」，提交 source none；这类会话页不显示发布、按钮写「下载产出」；octopus submit --no-repo；MCP octopus_start 与 Skill 写明 source none 与 research / write
+- `5145e67` 2026-10-23 〔已部署 EC2〕 feat(general): 一般任务的规划与 Agent 指令（D65 第 2 步）——平台对没有代码仓库的会话与 research / write 任务在派发中写 work: general，Worker 据此写「本次任务」「工作目录」与对应结尾（研发任务的指令逐字不变，旧 Worker 忽略该字段）；没有仓库时规划提示多一节「本会话没有代码仓库」；首次规划写明一般任务契约的写法
+- `563188f` 2026-10-23 〔已部署 EC2〕 docs: 进度看板记入 D65–D71、预览页面、管理页面与历史会话收藏置顶
+- `8b515ab` 2026-10-22 〔已推送〕 docs(spec): D65 实现前的 6 项决定（一般任务的判定与 work 字段、none 会话不限类型、提示长度、旧 Worker 降级为 deliver、发布核验同 deliver、系统提示本期不改）
+- `280559e` 2026-10-22 〔已推送〕 feat(general): D65 设计稿、计划与 Task 1 的一部分——来源 none（不需要代码仓库，Worker 按 new 准备，不能发布）；任务类型 research（调研）、write（撰写），门禁与 deliver 同档
 
-### D59（10 个提交：已部署 EC2 10）
+### D57（38 个提交：已推送 20、已部署 EC2 18）
 
-- `6243bb5` 2026-10-22 〔已部署 EC2〕 docs: D59 EC2 核对（30ca5b7）——Worker 只剩 token_sealed、数据库文件无明文、3 个 Worker 能力刷新与一个会话走通
-- `30ca5b7` 2026-10-22 〔已部署 EC2〕 fix(workers): 终审修正（D59）——远程预览的校验头从密封的 Token 计算（升级后远程 Worker 不再 500）；主密钥文件丢失或不可读时一律 503 worker_secret；主密钥不可读时平台照常启动（使用密封 Token 的调用 503，跳过本次密封）；每个进程只解开一次（不再每次调用都运行 openssl）；OPERATIONS 写明恢复步骤与 D59 之前的备份含明文
-- `69eaec6` 2026-10-22 〔已部署 EC2〕 fix(transport): 密封 Token 的密钥改由 configure_key 设定，不再覆盖 Worker TLS 证书的 configure（D59，部署前发现）
-- `324e3e7` 2026-10-22 〔已部署 EC2〕 docs: D59 Worker Token 密封——OPERATIONS 主密钥说明、MVP-RELEASE K10、进度
-- `c252a3b` 2026-10-22 〔已部署 EC2〕 test(bootstrap): 重新注册后 Worker Token 以密封形式保存（D59）
-- `880733d` 2026-10-22 〔已部署 EC2〕 feat(workers): 平台启动时把已有的明文 Worker Token 密封（D59 K10）——迁移之后执行一次、可重复执行，没有配置密钥时按 D35 在数据目录生成
-- `2e22515` 2026-10-22 〔已部署 EC2〕 feat(workers): 注册与更新连接时把 Worker Token 密封后存入（D59 K10）——数据库只有 token_sealed；平台启动时把 D35 的密钥交给 transport；列表与环境视图不含任何 Token 字段；能力刷新保留密封值
-- `3278287` 2026-10-22 〔已部署 EC2〕 feat(workers): transport 接受密封的 Worker Token（token_sealed）并只在发请求时解开（D59 K10）——解不开时 503 worker_secret 并请平台管理员重新连接，不回退到明文；明文 token 照旧可用；diff 与 sync 传给 Worker 的连接保留 token_sealed
-- `a878ce0` 2026-10-22 〔已部署 EC2〕 docs(plan): D59 Worker Token 移出数据库的实施计划（4 个任务）
-- `b3228ca` 2026-10-22 〔已部署 EC2〕 docs(spec): D59 M4-2 Worker Token 移出数据库（K10）——用 D35 的 vault 与密钥密封为 token_sealed，只在 transport 发请求时解封，写入即密封，启动时把已有的明文密封（可重复执行）
+- `37c2a43` 2026-10-23 〔已部署 EC2〕 Merge commit '9b33c40' into feat/m11-gates（D57 Task 6b+7b 打码后续）
+- `9b33c40` 2026-10-23 〔已部署 EC2〕 fix(security): 打码合并补漏第 5 轮——逐行字符串字面量写出的私钥（pprint、pytest -vv 字典对比、相邻字面量、"…\n" +、shell 续行）重新合为一处；行前缀只差数字时（cat -n、grep -n、日志时间戳）也算同一前缀（D57）
+- `d70498f` 2026-10-23 〔已部署 EC2〕 fix(security): 打码合并设上限——一段最多 8 KB、只跨像前缀的间隔、不跨密钥边界与标签；字面 \n 连接的行也合并（D57）
+- `4ce0184` 2026-10-23 〔已部署 EC2〕 fix(security): 打码补漏第 3 轮——私钥的各行（行尾、转义换行或列表分隔加不超过 32 字节的前缀相隔）合为一处打码与一条记录；行内首行的空格规则要求含数字或 +/=；Worker 的 Gateway 报错先打码再截断（D57）
+- `b9f9868` 2026-10-23 〔已部署 EC2〕 fix(security): 打码补漏第 2 轮——文本中出现私钥标记时，40 个字符以上的 base64 一律按私钥打码（pytest 与 diff 的任意前缀）；行内首行接受空格（10 字符以上）与引号后的值；Worker 与看门狗先打码再截断（D57）
+- `89d53b9` 2026-10-23 〔已部署 EC2〕 fix(security): 打码补漏第 1 轮——缩进内容的 diff 与 pytest 对比的标记列、标签或空格后的首行、排队原因与详情带 Worker Token、Worker 先打码再截断、平台标记只认平台写的形状（D57）
+- `37d6552` 2026-10-23 〔已部署 EC2〕 fix(security): 打码补漏——diff 前缀与 JSON 首段里的私钥尾部、二次打码保留平台标记、剩余写入点带 Worker Token、知识条目原因打码（D57）
+- `2c3206e` 2026-10-23 〔已部署 EC2〕 fix(security): 协调者原话、Worker 回复与看门狗报错连同 Worker Token 一起打码后再写入事件与记录；知识条目按原文判定长度与重复，平台标记只认平台写的；字典键也打码；先取 Token 再开写事务（D57）
+- `ba34990` 2026-10-23 〔已部署 EC2〕 feat(security): 平台保存的结果、交接、检查输出、事件与诊断记录在写入时打码，命中只记提示、不阻塞（D57）
+- `89082a4` 2026-10-23 〔已部署 EC2〕 fix(security): 看不到 BEGIN 时，紧挨 END 之前的私钥正文行连同 END 一起打码（tail、grep -B、pytest 差异、docker compose 前缀、JSON 转义）；正文行截在省略号前也打码；读取线程先记下已丢弃再删除（D57）
+- `9c19b01` 2026-10-23 〔已部署 EC2〕 fix(security): 检查结果的环境判断取打码前的输出；路径里的 \n 不再漏出私钥正文；没截断时不按孤立的 END 打码（D57）
+- `06db9c0` 2026-10-23 〔已部署 EC2〕 fix(security): 打码规则补漏——OpenAI 旧式 Key 不设左界，私钥正文认多重转义与头部转义值、空 Comment 行，只认标准头部名（报错信息不被吞掉），检查输出尾部里 BEGIN 已被截掉的私钥打码到 END 为止，Terraform secret_key、boto aws_security_token 与预签名 URL 的 X-Amz-Security-Token 也打码；拦截规则不变（D57）
+- `d8b1748` 2026-10-22 〔已部署 EC2〕 fix(security): 拦截仍用原有规则——SUSPICIOUS 恢复 D57 之前的原样（候选、发布、Knowledge 只按它拦），扩充的 SECRET_RULES 只用于打码与列出命中，负责人同意前门禁不比以前拦得更多（D57）
+- `3eae88e` 2026-10-22 〔已部署 EC2〕 fix(security): 密钥识别先拦为主——AWS Key ID 不设词界并带走紧贴的 Secret，sk-ant- / Slack / 平台 Token 去掉左词界，OpenAI 旧式 Key 认转义与 URL 编码，JSON 转义与 PGP 头的私钥整块打码，更多 AWS 标签与会话令牌、Slack xapp / xoxe，重叠命中合并为一处（D57）
+- `ca6dabb` 2026-10-22 〔已部署 EC2〕 feat(security): 密钥识别规则扩充（AWS 临时凭证与 Secret Key、Anthropic、OpenAI、Slack、平台 Token、Worker Token）与统一打码（D57）
+- `a79f09a` 2026-10-22 〔已部署 EC2〕 fix(review): 撤回后列不出未跟踪文件时不移出、不判失败，只在提示中说明；撤回后仍不是候选的提示用「撤回 / 移出」措辞（D57）
+- `f0605bc` 2026-10-22 〔已部署 EC2〕 fix(review): 含快照文件的文件夹不整体移出；核对列不出未跟踪文件时按只核对已跟踪文件；快照在锁外列出；新建文件统一用「移出」（D57）
+- `e9939fb` 2026-10-22 〔已部署 EC2〕 feat(review): 审查新建的文件由平台移出到该次尝试的 review-removed 目录，不再带进下一次候选（D57）
+- `efb5c6b` 2026-10-22 〔已推送〕 merge: D57 增量 B——检查全部执行与 git 身份、必过 / 建议检查、纠错防空转与平台故障自动重试（feat/gate-relief cd86e1f）
+- `cd86e1f` 2026-10-22 〔已推送〕 feat(recovery): 同一根因两次等用户后不再派诊断（可「仍要重新诊断」）；沙箱故障与 KiroCrew 回收子任务自动重试一次，诊断同样适用；合同问题的 replan 不占额度（D57）
+- `a41e934` 2026-10-22 〔已推送〕 fix(checks): 必过检查只能承接到平台会运行检查的任务；重新规划漏掉的由平台补上（D57）
+- `77f2cf3` 2026-10-22 〔已推送〕 feat(checks): 检查分必过与建议，只有必过检查失败才拦；规划者引原文才能标必过（D57）
+- `dec77cc` 2026-10-22 〔已推送〕 test(checks): 真实运行里「sh 文件」的退出码随 sh 是 bash 还是 dash 而不同，只断言判定（D57）
+- `38518b8` 2026-10-22 〔已推送〕 fix(checks): bash 报不带路径的文件「No such file or directory」也算项目自己的错误（D57）
+- `8e588cd` 2026-10-22 〔已推送〕 fix(checks): 检查调用的脚本路径不存在算项目自己的错误，不再记为环境原因（D57）
+- `ad16721` 2026-10-22 〔已推送〕 fix(checks): 默认 git 身份改由临时全局配置给出，项目与用户自己的身份优先；项目自己有的模块缺失不算环境原因（D57）
+- `828adb2` 2026-10-22 〔已推送〕 feat(checks): 检查命令全部执行、注入默认 git 身份、识别环境原因的失败（D57）
+- `316afb8` 2026-10-22 〔已推送〕 merge: D57 第一批（门禁 warn、五个门禁降为提示、审查改动由平台撤回）合入 feat/m11-gates
+- `66f1976` 2026-10-22 〔已推送〕 fix(review): 撤回记录写明只撤回已跟踪的文件；rewind 的说明列出撤回不到的情形（D57）
+- `04af334` 2026-10-22 〔已推送〕 fix(review): 没有通过的审查（拒绝、出错、看门狗停止）改动的文件同样由平台撤回，返工的候选不再收进审查者的改动（D57）
+- `c559ca7` 2026-10-22 〔已推送〕 feat(review): 审查改动的文件由平台撤回、会话分支回到候选，结论照常采用（D57）
+- `30a6696` 2026-10-22 〔已推送〕 fix(gates): 结果文件不合法时识别常见的拒绝写法；上游任务的提示随前序交接交给后续审查（D57）
+- `bb71beb` 2026-10-22 〔已推送〕 fix(gates): 结果文件不合法但写明拒绝时仍按拒绝判定；平台生成的交接存入 evidence 并交给后续任务；提示词与新判定一致（D57）
+- `75a6adf` 2026-10-22 〔已推送〕 feat(gates): diff_present、artifacts_locked、tests_fail_on_baseline、handoff_present、outcome_valid 降为提示（D57）
+- `7611a6c` 2026-10-22 〔已推送〕 fix(gates): 报告列出「提示 N 项」，Knowledge 跳过的验收也写入 warnings（D57）
+- `9111f99` 2026-10-22 〔已推送〕 feat(gates): 门禁新增「提示」状态 warn，不使任务 blocked、不触发纠错（D57）
+- `ee09921` 2026-10-22 〔已推送〕 docs(plan): D57 门禁减负与安全底线实施计划（20 个任务）
+- `fdf2f90` 2026-10-21 〔已推送〕 docs(spec): D57 门禁减负与安全底线（负责人已确认；编号原暂定 D56）——补充实现时的 10 条设计者决定
 
-### D58（11 个提交：已部署 EC2 11）
+### D70（1 个提交：已部署 EC2 1）
 
-- `361b7fb` 2026-10-22 〔已部署 EC2〕 docs: D58 已部署 EC2 c4469aa 并验收（Claude Code MCP 与 CLI 走通 submit → pull → sync → 复审；.env 被拒）；§7 验收 1 记录（Codex、Kiro IDE 待负责人核对）；进度
-- `c4469aa` 2026-10-22 〔已部署 EC2〕 fix(sync,local): 终审修正（D58）——Worker 的 sync 把上传的 bundle 当不可信输入：头部只接受一个分支提交、对象先解包到隔离目录，核查通过才迁入（被拒绝的同步不留任何对象、不写任何 ref），用 fast-forward merge 移动（不覆盖未跟踪文件），按会话加锁，同一同步重放时给出同样的结果；平台在调用 Worker 前校验 request_id，与续作一致要求上游任务已验收、执行环境可用，管理员代为同步写审计，同步后停止预览；检查未能启动时照样记录 Attempt、由引擎重新启动检查；同步的 Attempt 写交接摘要（含说明）；CLI 在仓库内 --allow-unpushed 不再崩溃；当前分支不在 origin 上时 submit 停下；两边都有新提交时 pull 把会话的最新提交取为 refs/octopus/<run>/remote 并提示 rebase，只有本地领先时不报错；SSH 地址的端口与非 SSH 地址正确处理；无法识别的仓库不算本仓库；保存的 Token 只发给它的平台；git 调用不等待终端、有超时
-- `7dc4f09` 2026-10-22 〔已部署 EC2〕 fix(server): 拉回的下载里不用 name 作循环变量（它是模块的名称校验函数，tests/test_server_shadowing 拦下）（D58）
-- `3d18672` 2026-10-22 〔已部署 EC2〕 docs: D58 本地 / 远端联动与使用者命令行——OPERATIONS、CONNECT、MVP-RELEASE §14.3、BACKLOG、进度
-- `f90374e` 2026-10-22 〔已部署 EC2〕 feat(console): 本地同步的 Attempt、修订与事件，客户端 CLI（D58）
-- `5426f37` 2026-10-22 〔已部署 EC2〕 feat(mcp): octopus_link、octopus_pull、octopus_sync 与提交前的未推送检测（D58）——在用户本机的仓库执行，与 CLI 同一套本地逻辑；octopus_start 提交本仓库时若有 origin 没有的提交先停下（push_base 经用户同意后推送，或 allow_unpushed），成功后关联仓库；octopus_status 缺 run_id 时读关联；Skill 写明联动流程与拒绝原因
-- `4e0642d` 2026-10-22 〔已部署 EC2〕 feat(cli): 使用者的 octopus 命令（login、submit、plan、confirm、status、watch、report、pull、sync、continue、approvals、search）（D58 M3-2）——login 用用户名与密码登录后改存一枚 30 天的「octopus CLI」Token（0600），并吊销登录用的那枚；submit 在 Git 仓库内取 origin 与当前分支，本地有未推送提交时停下并提示 --push-base / --allow-unpushed，成功后关联仓库；其余命令默认用本仓库关联的会话、与 MCP 同样的调用，输出中文摘要或 --json；运维命令不变
-- `3960d03` 2026-10-22 〔已部署 EC2〕 feat(local): 本地仓库与会话的关联、pull、sync 与未推送提交检测（D58）——.octopus/session.json 与 .octopus/sessions/ 写入 .git/info/exclude；pull 把会话分支的 bundle 取为本地 octopus/<run>（缺基线时自动取完整历史，从不覆盖本地分支自己的提交），并写报告、计划与各任务交接；sync 只在工作区已提交、当前分支包含会话 head 时把其后的提交打成 bundle 上传，同一同步的 request_id 固定；源码取 origin（SSH 地址按 HTTPS）与当前分支；未推送提交计数与 --push-base；Client 增加 upload 与 /bundle/ 下载
-- `79143dc` 2026-10-22 〔已部署 EC2〕 feat(sync): POST /v1/runs/<id>/sync——本地提交成为新候选，重新检查并让下游任务重新审查；pull 的 bundle 下载（D58）——二进制上传（≤ 20 MB）经 Worker 快进；最后一个写代码的任务记「本地同步」Attempt（候选、synced、门禁），有检查命令时照常运行与判定，其后的任务重新执行；修订「本地同步」、事件 run.synced；同一 request_id 只同步一次；权限与续作相同；POST /v1/runs/<id>/bundle 给出 10 分钟的拉回链接；CLI 的 Token 记为 client cli
-- `4b7c9c7` 2026-10-22 〔已部署 EC2〕 feat(worker): 会话分支的 pull bundle 与 sync（D58）——POST /pull/bundle 按发布同样核查疑似凭证与 .env 后给出分支（自基线或完整历史）；POST /sync 导入本地提交的 bundle，只在会话分支仍在 old、工作区没有未纳入候选的改动、head 是快进且新内容没有疑似凭证时把分支与工作区移到 head，返回与候选相同的字段；上限 20 MB
-- `a522f79` 2026-10-22 〔已部署 EC2〕 docs(spec,plan): D58 M3-2 用户 CLI 与 M3-4 本地 / 远端联动——git bundle 交换提交（不经托管方）、会话关联 .octopus/session.json、pull 拉回分支与上下文、sync 只接受快进并让最后一个写代码的任务重新检查、下游重新审查、未推送提交检测与 --push-base；CLI 与 MCP 共用 octopus/local.py；6 个任务的实施计划
+- `d9e96ea` 2026-10-22 〔已部署 EC2〕 feat(admission): 规划完成后直接开始，删除计划确认（D70，负责人 2026-10-22：「计划完成后，不要找我确认……把这个垃圾的过程删掉！直接开始！」）——没有「计划待确认」：提交时的 admission（旧客户端仍可传，照旧校验、不再使用）、个人 / Team 的准入规则与平台配置都不再让会话停下，default_admission 配置项删除；升级前停在「计划待确认」的会话由引擎下一轮记为平台确认并直接开始；删除 POST /v1/runs/<id>/confirm、MCP octopus_confirm 与 octopus_start.admission、CLI confirm 与 --admission、控制台「确认并开始」与准入规则表单（已写的规则标为已取消、可删除，新建返回 400 admission_removed）；Skill 与运维说明同步
 
-### D57（11 个提交：已部署 EC2 11）
+### D68（2 个提交：已部署 EC2 2）
 
-- `316afb8` 2026-10-22 〔已部署 EC2〕 merge: D57 第一批（门禁 warn、五个门禁降为提示、审查改动由平台撤回）合入 feat/m11-gates
-- `66f1976` 2026-10-22 〔已部署 EC2〕 fix(review): 撤回记录写明只撤回已跟踪的文件；rewind 的说明列出撤回不到的情形（D57）
-- `04af334` 2026-10-22 〔已部署 EC2〕 fix(review): 没有通过的审查（拒绝、出错、看门狗停止）改动的文件同样由平台撤回，返工的候选不再收进审查者的改动（D57）
-- `c559ca7` 2026-10-22 〔已部署 EC2〕 feat(review): 审查改动的文件由平台撤回、会话分支回到候选，结论照常采用（D57）
-- `30a6696` 2026-10-22 〔已部署 EC2〕 fix(gates): 结果文件不合法时识别常见的拒绝写法；上游任务的提示随前序交接交给后续审查（D57）
-- `bb71beb` 2026-10-22 〔已部署 EC2〕 fix(gates): 结果文件不合法但写明拒绝时仍按拒绝判定；平台生成的交接存入 evidence 并交给后续任务；提示词与新判定一致（D57）
-- `75a6adf` 2026-10-22 〔已部署 EC2〕 feat(gates): diff_present、artifacts_locked、tests_fail_on_baseline、handoff_present、outcome_valid 降为提示（D57）
-- `7611a6c` 2026-10-22 〔已部署 EC2〕 fix(gates): 报告列出「提示 N 项」，Knowledge 跳过的验收也写入 warnings（D57）
-- `9111f99` 2026-10-22 〔已部署 EC2〕 feat(gates): 门禁新增「提示」状态 warn，不使任务 blocked、不触发纠错（D57）
-- `ee09921` 2026-10-22 〔已部署 EC2〕 docs(plan): D57 门禁减负与安全底线实施计划（20 个任务）
-- `fdf2f90` 2026-10-21 〔已部署 EC2〕 docs(spec): D57 门禁减负与安全底线（负责人已确认；编号原暂定 D56）——补充实现时的 10 条设计者决定
+- `b6a5f4b` 2026-10-22 〔已部署 EC2〕 fix(server): 平台的 default_acceptance 传到 API 服务（D68 b3d5353 只改了 octopus serve 的调用，server() 没有这个参数，服务启动即 TypeError；test_service_lifecycle 两项因此失败）
+- `b3d5353` 2026-10-22 〔已部署 EC2〕 feat(admission): 工作流决定后不再请人确认（D68，负责人 2026-10-22）——平台默认准入改为直接开始（default_admission=auto）；Evaluator 判为待人确认的验收项默认记为提示、会话照常完成（default_acceptance=auto，会话开始时记入快照）；提交时 confirm、个人 / Team 的 confirm 规则与平台改回 confirm 照旧等待；Skill、运维说明与控制台文案
 
-### D56（8 个提交：已部署 EC2 8）
+### D67（1 个提交：已部署 EC2 1）
 
-- `789cada` 2026-10-22 〔已部署 EC2〕 docs: D56 已部署 EC2 8cfef39，§7 验收 3 勾选（经 API 实测全部过滤、全文与翻页，候选 diff 可读）；BACKLOG 记终审延后项与 .kiro/settings 进入候选；进度
-- `8cfef39` 2026-10-22 〔已部署 EC2〕 fix(console,diff): 终审修正（D56）——「进行中」只发送会话状态（dispatching 是任务状态，曾使整组 400），控制台的会话状态清单与服务端一致并有测试；列表读取失败时显示原因，不再看起来像空列表；创建时间按使用者本地的日换算；失去访问权的会话即使读过也会移出；正在输入的仓库 / 分支不因其他筛选变化而清空；全文恢复匹配工作流名称；diff 不显示下载同样不含的文件（.env 等，只给数量），不用仓库自己的 textconv 与前缀设置；工作区已不在的会话返回 409 而不是 500
-- `b5cf2bf` 2026-10-22 〔已部署 EC2〕 docs: D56 会话列表的过滤、全文、分页与代码改动——OPERATIONS、MVP-RELEASE §14.3、BACKLOG、进度
-- `501b519` 2026-10-22 〔已部署 EC2〕 feat(diff): Attempt 详情可看候选的代码改动（D56）——Worker 的 /candidate 新增只读的 mode: diff（相对上一个候选或会话基线，每个文件的增删行数与统一 diff，200 KB / 4000 行截断）；GET /v1/runs/<id>/attempts/<attempt>/diff 按会话的访问检查读取，没有候选 404 no_candidate，被凭证检查挡在分支外的候选 409 candidate_secret（从不显示），旧 Worker 409 worker_outdated 并请平台管理员升级；控制台每次 Attempt 多一个「代码改动」折叠区，展开才请求，点开文件看它的 diff
-- `5abedab` 2026-10-22 〔已部署 EC2〕 feat(console): 会话列表服务端过滤、全文搜索与分页，筛选写进地址栏（D56）——搜索停顿 300 ms 后查询，状态分组按状态与生命周期发给服务端，「筛选」面板（仓库、分支、阶段、工具、客户端、提交者、创建时间）与可移除的标签，「加载更多」按游标翻页，标签页与概况的数字取服务端总数；选中的会话不在已加载的页里时按 ID 读取，只有 404 / 403 才提示不可访问；服务端列表不再返回已删除的会话，全文也匹配来源客户端的名称（原控制台的 D55 搜索）
-- `8636d63` 2026-10-21 〔已部署 EC2〕 feat(mcp): octopus_runs 按空间、仓库、分支、阶段、工具、客户端、提交者、时间过滤与全文搜索（D56）；Skill 同步
-- `bce2261` 2026-10-21 〔已部署 EC2〕 feat(runs): 会话列表按空间、状态（可多个）、生命周期、仓库、分支、阶段、工具、客户端、提交者、时间与全文过滤，服务端分页（D56 M3-5）——仓库按 主机/所有者/仓库 比较（https、ssh、git@ 同一结果）；全文覆盖需求、规划、各任务名称与说明、最近一次结论与错误，多词全部命中；page=1 返回 {items, next, total}，游标按（创建时间, ID），翻页时新建的会话不重复不遗漏；不带 page 照旧返回数组
-- `0dcc989` 2026-10-21 〔已部署 EC2〕 docs(spec,plan): D56 M3-5 控制台——服务端按空间、状态、仓库、分支、阶段、工具、客户端、提交者、时间与全文过滤，分页（不带 page 时照旧返回数组），MCP octopus_runs 同步；Attempt 详情的代码改动（Worker mode diff）；5 个任务的实施计划
+- `50d2bd0` 2026-10-22 〔已部署 EC2〕 feat(auth): 登录会话持久化（D67，负责人 2026-10-22）——登录写入 HttpOnly / Secure / SameSite=Strict 的 __Host-octopus_session Cookie，「保持登录（30 天）」默认勾选，不勾选时 1 天、浏览器关闭即结束；新标签页与重开的浏览器凭 Cookie 保持登录，Cookie 生效时页面不再保存 Token，浏览器拒收时退回到只在本标签页保存；API 先看 Authorization 头，没有时用 Cookie，仅凭 Cookie 的写入须带本站 Origin；退出登录撤销 Token 并清除 Cookie；经典控制台共用同一登录；CLI / bootstrap / connect 不传 remember，仍为 1 天
 
-### D55（11 个提交：已部署 EC2 11）
+### D66（3 个提交：已推送 3）
 
-- `b840dbb` 2026-10-21 〔已部署 EC2〕 docs: M2 §6 验收 1 勾选（D55，EC2 80bc0c4：Request 登记、默认先确认、按准入规则直接执行）；BACKLOG 记 EC2 现场的 Harness 问题（内存不足不可见、deliver 不入库产物与 diff_present、评审写文件与 review_bound）；进度
-- `bea5a71` 2026-10-21 〔已部署 EC2〕 docs(progress): D55 已部署 EC2 80bc0c4——迁移 9 生效；§6 验收 1 第 1 步通过（不带 admission 停在计划待确认、回执带 request_id、octopus_requests 可见）；准入规则在 EC2 命中两种仓库写法；owner 边界内存不足致子 Agent 排队，观察中
-- `80bc0c4` 2026-10-21 〔已部署 EC2〕 fix(policies): 终审修正（D55）——最具体的准入规则按字面字符多少取胜（较早的 github.com/o/* 不再被较新的 * 盖过）；MCP 精简状态带 admission、admission_basis 与 request，Coding Agent 能说明会话为何等待；报告抬头写明准入依据；管理员能在列表中看到并删除他为非所在 Team 建的规则；管理员读他人的 Request 写审计（与会话一致）；BACKLOG 记延后的次要项
-- `e36ac62` 2026-10-21 〔已部署 EC2〕 docs: D55 Request、准入规则与映射偏好——OPERATIONS 新节（默认已改为 confirm）、MVP-RELEASE §14.2 第 1、4、5 行、进度、BACKLOG 延后项
-- `02e581d` 2026-10-21 〔已部署 EC2〕 feat(console): 会话页写明来自哪个请求与准入依据；设置「准入与映射偏好」（D55）——头部一行「来自请求 request-xxxxxx · Codex；按准入规则「github.com/o/*」自动开始 / 按平台默认等待确认」（提交时自己指定的不重复）；新对话框分「准入规则」「映射偏好」两组，显示作用域与内容，可删除自己能维护的，新增时选作用域（个人、本人是 owner 的 Team）、仓库模式与准入方式，或按类别 / 角色的工具与模型，服务端的拒绝原样显示在表单下；会话搜索也匹配来源客户端（输入「Codex」）
-- `4e37c28` 2026-10-21 〔已部署 EC2〕 feat(mcp): octopus_requests 与只读的 octopus_policies；octopus_start 回执带 request_id；Skill 写明默认先确认、准入依据与按偏好的映射来源（D55）
-- `4703429` 2026-10-21 〔已部署 EC2〕 feat(policies): 个人 / Team 映射偏好进入规划提示与映射来源（D55 M2-4）——偏好按类别或角色对应工具 / 模型，同一类别或角色上个人覆盖 Team；提交时写入会话快照，首次规划（600）与重新规划（200）的提示多一节「用户的映射偏好」，每条一行：优先采纳、不采纳写明理由，需求中指定的优先，不可用的工具不选；规划者的任务与偏好一致时映射来源写「按个人偏好 / 按 Team 偏好」；重新规划的最坏情况仍 ≤ 7800（保留任务检查 800→600、检查命令 300→250）；设计 §6 记 tool: auto 本期不做
-- `37197fb` 2026-10-21 〔已部署 EC2〕 feat(policies): 按仓库范围的准入规则，平台默认改为先确认（D55 M2-5）——个人 / Team 规则 {repos: 主机/所有者/仓库（可 *）, mode: auto|confirm}；判定顺序为提交时指定 → 个人规则 → Team 规则 → 平台默认，同层取最具体（通配最少、再按最新）；https、ssh、git@host:path 三种写法同一结果，新建项目不命中；会话快照与视图带 admission_basis，Request 的策略快照记命中的规则；Team 规则只有 owner 或管理员能增删、归档的 Team 不能新增，增删写审计；GET/POST /v1/policies、DELETE /v1/policies/<id>；default_admission 默认 confirm
-- `8cff53b` 2026-10-21 〔已部署 EC2〕 feat(requests): 每次提交登记 Request（D55 M2-1）——迁移 9 建 requests 与 policies 表、runs.request_id；来源客户端取自 Token 标签（控制台 / claude / kiro / codex / kiro-ide / api）；记需求原文、源码、显式选择（只记个数与格式）与准入 / 自动纠错 / 发布策略快照；会话视图带 request，旧会话为 null；GET /v1/requests（status、q、client、limit）与 /v1/requests/<id>，看不到其会话的人得 404
-- `c39be8b` 2026-10-21 〔已部署 EC2〕 docs(plan): D55 M2 剩余的实施计划（6 个任务：Request、准入规则与默认先确认、映射偏好进入规划、MCP 与 Skill、控制台、文档与 EC2 验收）；进度：connect codex 在 EC2 以真实 Codex 核对
-- `9879cc4` 2026-10-21 〔已部署 EC2〕 feat(connect): octopus connect codex（合并 ~/.codex/config.toml，只替换 [mcp_servers.kirocrew-on]）与 connect kiro-ide（合并 <项目>/.kiro/settings/mcp.json，不需要 kiro-cli）——备份、0600、合并后解析核对；合并失败时只说原因并吊销刚签发的 Token（M3-1）；docs(spec): D55 M2 剩余（Request、按仓库准入、映射偏好）及负责人的三项决定
+- `fd5f821` 2026-10-22 〔已推送〕 test: D66 第二部分——无效推荐先自动修正一次再显示无效、推荐提示的新措辞（上一个提交漏改的两项测试）
+- `8eacf3f` 2026-10-22 〔已推送〕 fix(designs): 推荐的输入 / 输出约束与看得懂的反馈（D66 第二部分，负责人 2026-10-22）——推荐提示写明「输入」与平台逐条校验的「输出约束」（只一个 JSON 块、1–12 个任务、字段、id、名称与提示长度、工具、depends_on、审查独立）；推荐未通过校验时平台自动把原因交回 KiroCrew 修正一次（修正中显示「上一版未通过平台校验，KiroCrew 正在按原因修正」）；仍不合格时给出具体原因（如「KiroCrew 推荐了 13 个任务，超过平台上限 12 个」）与下一步（重新推荐或「导入并修改」），下一步按钮的提示同样写原因
+- `1a1293a` 2026-10-22 〔已推送〕 fix(workflows): 任务上限 8 → 12（D66，负责人 2026-10-22）——EC2 上 KiroCrew 推荐了 9 个任务的调研工作流（run-40f03559…、run-443e1fd9…），平台按 1–8 判为无效、控制台没有可采用的方案；工作流、会话、导入、OpenAPI、推荐与规划提示、新旧控制台统一为 1–12，推荐提示写明超出时合并相邻步骤；推荐未通过校验时写明原因、可看原始内容并「导入并修改」
 
-### D54（5 个提交：已部署 EC2 5）
+### D64（10 个提交：已推送 10）
 
-- `245d2ea` 2026-10-21 〔已部署 EC2〕 feat(recovery): 协调者的返工可扩大可改动路径（D54）——artifacts_locked 的失败记录带被拒文件，协调者在 context.locked_files 中看到；重试 / 返工失败的任务时可加 paths_add（只取 locked_files 中的文件，至多 10 个，合并后至多 20 项），平台核对后扩大该任务的 paths，记在这次自动纠错的修订与时间线 task.paths_added；不符时整份决定被拒并写明原因；OPERATIONS、Skill 与设计同步
-- `ef47d6d` 2026-10-21 〔已部署 EC2〕 docs: 进度——run-25c7aaa7 完成；D54 主体待负责人确认
-- `17687ec` 2026-10-21 〔已部署 EC2〕 feat(replan): 重新规划复核保留任务的检查命令（负责人 2026-10-21，D54 §9 a）——提示列出保留的已验收任务的 verify；计划可带 verify_fixes，平台只接受指向保留任务且不清空 implement / test 检查的修正，写入该任务（不重跑）并记在这次重新规划的修订里，时间线 task.verify_revised；重新规划提示的各节限长下调以容下（最坏约 7720 / 8000）
-- `82fadb4` 2026-10-21 〔已部署 EC2〕 docs(spec): D54 记下同类问题——保留任务的过时检查命令（run-25c7aaa7 第 15 轮后 checks_pass 因 backend/.venv 失败），不交给协调者，列出可选做法待负责人决定
-- `3325522` 2026-10-21 〔已部署 EC2〕 docs(spec): D54 协调者的返工可扩大可改动路径——只限门禁锁住的、此前已验收任务的文件，记修订与时间线（EC2 run-25c7aaa7 卡在 artifacts_locked 13 轮）
+- `fb63e35` 2026-10-22 〔已推送〕 fix(sharing): D64 终审延后项——Team 会话的访问身份与判定一致（创建者离开 Team 后被共享回来显示为共享、出现在「共享给我」）；共享视图不带 Request；不共享给已能访问的人（个人会话的创建者、Team 会话的成员）与会话所在的 Team，已删除的会话不能共享；查看者的预览启停禁用；共享会话的删除提示；Skill 措辞
+- `3968321` 2026-10-22 〔已推送〕 docs: D64 已部署 EC2（5ec0681）——迁移 12 执行，共享给全公司与 Team 的列表、access、MCP、全公司只能查看与审计核对通过，取消后为空；他人账号的核对待负责人
+- `5ec0681` 2026-10-22 〔已推送〕 test: octopus_runs 的参数集合含 shared（D64）
+- `d28dfbe` 2026-10-22 〔已推送〕 fix(sharing): 终审修正（D64）——协作者的 sync 不再记成管理员监管（_oversight 按写判定，持有查看共享的管理员写入仍算监管）；placement（改派用的执行环境清单）不对共享开放；「共享给我」列表标出角色与共享人；入口矩阵补齐（导出、预览、pull、观察、设计状态、发布、补充说明、审批、验收、凭证、知识、发布策略、预览启停）
+- `c91c991` 2026-10-22 〔已推送〕 docs: D64 会话共享——运维说明（共享给谁、角色、不对共享开放的、谁能共享、看到哪里、取消与收不回的）；MVP-RELEASE 与看板 M4-1
+- `41dadc5` 2026-10-22 〔已推送〕 feat(console): 会话页「共享」（个人按用户名、所在 Team、全公司仅查看；列出与取消）、访问身份提示（你以 查看 / 协作 身份访问，由谁共享）、侧栏「共享给我」；查看者的续作 / 诊断 / 停止 / 关闭按钮按 permissions.operate 禁用，改派按 permissions.assign（D64 Task 3）
+- `5a672af` 2026-10-22 〔已推送〕 feat(mcp): octopus_runs 的 shared 列出共享给用户的会话，octopus_status 带 access；Skill 说明（D64 Task 3 的一部分）
+- `d9cef1e` 2026-10-22 〔已推送〕 feat(sharing): 每个入口按读写放行（D64 Task 2）——读入口（会话、事件流、修订、变更、代码改动、待批准列表、导出、预览、pull、KiroCrew 会话观察、placement 等）标 read=True；改派执行环境、原生入口、D55 Request 排除共享；collaborator 与普通 Team 成员相同；permissions 按实际判定（operate、share、assign），会话视图带 access；GET /v1/runs?shared=1「共享给我」，默认列表不含共享来的
+- `b491ae9` 2026-10-22 〔已推送〕 feat(sharing): 会话共享的存储、访问判定与接口（D64 Task 1）——迁移 12 shares（个人 / Team / 全公司，viewer / collaborator，全公司只能查看）；run_access 增加 read（读接受任何共享）与 shares（False 排除共享），默认按写；access_of；GET / POST /v1/runs/<id>/shares、DELETE …/<share>（创建者、Team owner、管理员；审计）；迁移器改为执行缺失的编号（两个分支各加迁移不再互相跳过）
+- `b19416b` 2026-10-22 〔已推送〕 docs(spec,plan): D64 M4-1 会话共享给个人 / Team / 全公司（viewer / collaborator，collaborator 等同普通 Team 成员；全公司只能查看；迁移器补跑缺失编号）——设计稿与 4 个任务的实施计划
 
-### D49 第 3 期 · 每人一个执行边界（2 个提交：已部署 EC2 2）
+### D63（3 个提交：已推送 3）
 
-- `c5c4615` 2026-10-21 〔已部署 EC2〕 docs: 进度——owner 边界的公开原生入口已开通（D49 第 3 期）；run-25c7aaa7 的 artifacts_locked 待负责人决定
-- `d02325d` 2026-10-21 〔已部署 EC2〕 feat(deploy): 平台主机上边界的公开原生入口（D49 第 3 期）——deploy.sh boundary native <名称> 建只含 CloudFront 分发的栈、nginx 中转到该边界的 Gateway、写入 crew_url 并排空重启；控制台在入口未开通时按 D53 说明（会话照常执行，请平台管理员开通）；自动纠错换工具时 test 任务不算作者（负责人 2026-10-21）
+- `64c27f8` 2026-10-22 〔已推送〕 test: 根目录的 KiroCrew 配置播种用例带上 D63 的 session.eager_spawn=false
+- `b4a7cba` 2026-10-22 〔已推送〕 docs: D63 已在 EC2 验收（c887aac）——空闲 ACP 进程 9 → 3、已用内存 5391 → 2921 MB，新会话不再预先起会话；BACKLOG 记子 Agent 结束时父会话仍跑一轮 coordinator
+- `c887aac` 2026-10-22 〔已推送〕 fix(composition): 边界的 KiroCrew 配置关掉 session.eager_spawn（D63）——KiroCrew 0.10 默认为每个 chat slot 预先起会话；平台的 slot 从不认领，白占进程，内存吃紧时被回收还连带 SIGKILL 正在运行的子 Agent（EC2 run-16848466…，parent-end teardown）；新配置与已有配置都写 false，明确开启的保留
+
+### D62（3 个提交：已推送 3）
+
+- `4eaf293` 2026-10-22 〔已推送〕 docs: D62 已在 EC2 验收（ab29b40）——7 天 Token 7 天到期、永不过期的列表为 null 且能认证、非法取值 400
+- `ab29b40` 2026-10-22 〔已推送〕 fix(tokens): 终审修正（D62）——octopus connect 完成时按平台实际给的有效期提示（永不过期 / 有效期至某日），不再写死 30 天；旧版控制台的 Token 列表显示「永不过期」而不是 1970 年
+- `d75e34f` 2026-10-22 〔已推送〕 feat(tokens): API Token 有效期可选 7 / 30 / 365 天或永不过期（D62，负责人 2026-10-22）——POST /v1/tokens 的 expires_in；永不过期以远期日期保存、API 返回 expires null、列表显示「永不过期」；带 admin 的最长 30 天；控制台「有效期」（默认 30 天，修正写死的「7 天后到期」）；octopus connect / login --expires（同时发 ttl，旧平台照旧 30 天）；OpenAPI 与运维说明
+
+### D61（9 个提交：已推送 9）
+
+- `3dc896c` 2026-10-22 〔已推送〕 fix(quotas,tokens): D61 / D62 终审延后项——「并发上限」单独设置先校验 1–50、被拒时保留所选用户，每行随重新读取的值更新，读取失败显示原因，管理员看到的非本人 Team 列为「其他 Team」；octopus connect / login 给旧平台的 ttl 为所选天数（最长 30 天），--expires 不能与 --token 同用，--admin 帮助改正
+- `ff33ad5` 2026-10-22 〔已推送〕 docs: D61 已在 EC2 验收（d4ae66f）——Team 上限 1 时第二个会话排队、第一个结束后自动开始；BACKLOG 记 KiroCrew 回收未认领父会话时杀掉子 Agent
+- `d4ae66f` 2026-10-22 〔已推送〕 fix(quotas): 终审修正（D61）——只数任务当前的 Attempt（续作留下的仍显示运行中的记录不再让会话等自己）；排队期间又等执行环境恢复的，等待时间只计一次，run.quota_go 照常记下
+- `aa2a40c` 2026-10-22 〔已推送〕 docs: D61 并发上限——运维说明（限什么、谁设、到了上限、不等待）；MVP-RELEASE、BACKLOG（第 3 期用量上限）与进度
+- `9193bc1` 2026-10-22 〔已推送〕 feat(console): 设置 →「并发上限」（D61 Task 3）——看自己的与所在 Team 的上限与占用；平台管理员设每人默认与单独上限，Team owner 设本 Team 的；成员只读
+- `adbc2a2` 2026-10-22 〔已推送〕 feat(mcp): 只读 octopus_quotas 与 Skill 说明（D61 Task 3 的一部分；控制台「并发上限」待做）
+- `3d2bd37` 2026-10-22 〔已推送〕 feat(engine): 按并发上限排队（D61 Task 2）——会话的下一个任务开始前，在创建 Attempt 的同一写事务里数个人与 Team 的占用；满了就等待（run.quota_wait 只记一次，「需要处理」写明哪个范围、上限与占用，无需操作），有空位按等待先后开始（run.quota_go，等待不计时长预算）；久未被看到的等待不挡别人；自动重试照常不等待
+- `c76ca8d` 2026-10-22 〔已推送〕 feat(quotas): 并发上限的存储与接口（D61 Task 1）——迁移 10 quotas（每人默认 / 某人 / 某 Team，1–50）；占用按仍在推进的会话中运行的 Attempt 与协调者诊断计（执行环境停用留下的不计）；GET / POST /v1/quotas（管理员设默认与个人、Team owner 设本 Team），写审计 quota.set；OpenAPI
+- `02198d3` 2026-10-22 〔已推送〕 docs(spec,plan): D61 M4-4 第 2 期——每人 / 每 Team 的并发上限（设计稿与 4 个任务的实施计划；默认不设、到了上限按等待先后排队）
+
+### D60（9 个提交：已推送 9）
+
+- `3ecf025` 2026-10-22 〔已推送〕 fix(queue): D60 终审延后项——MCP 状态的最近事件不带排队的 detail（主机内存数字只给管理员视图）；补看门狗在排队结束后照常动作的反向对照测试
+- `bb268bd` 2026-10-22 〔已推送〕 docs: D60 真实排队已在 EC2 验收——临时调高 owner 边界内存门槛，会话显示「排队：等待执行环境资源（执行环境内存不足）」，恢复后 63 秒出队并完成，配置原样恢复
+- `e223182` 2026-10-22 〔已推送〕 docs: D60 已部署 EC2（290718f）——部署后会话照常完成；看板 M4-4 第 1 期已部署、第 2 期（D61）进行中
+- `290718f` 2026-10-22 〔已推送〕 fix(queue): 终审修正（D60）——已开始过又排队的任务（有 state.json、resuming）也认作排队；排队文字被别的错误盖住后恢复；排队中每 20 秒才看一次；会话的「需要处理」显示排队（无需操作），不再是红色错误
+- `117e2fb` 2026-10-22 〔已推送〕 docs: D60 排队可见——运维说明（排队、不计、没有开始、处理）；MVP-RELEASE 与进度看板 M4-4 第 1 期
+- `ef0e4b2` 2026-10-22 〔已推送〕 feat(engine): 排队可见（D60 Task 2）——KiroCrew 推迟的原生任务在会话显示「排队：等待执行环境资源（原因类别）」，事件 attempt.queued / attempt.dequeued；看门狗不计排队，从排队结束起计时；排队时间不计时间预算；never started 自动重新派发（不占自动重试与预算，连续第 3 次交给协调者，排队前已开始过的照旧交给协调者）
+- `ea26a8a` 2026-10-22 〔已推送〕 feat(worker): inspect 认出被 KiroCrew 推迟的原生任务（D60）——列表与状态文件都没有时改问 GET /api/spawn/{id}，排队中且任务文字带本 Attempt 标记的回 queued（原因、说明、已等待、是否 resuming），不再报「原生任务归属当前不可核实」
+- `8c8bbe3` 2026-10-22 〔已推送〕 docs(plan): D60 排队可见的实施计划（3 个任务）
+- `c943720` 2026-10-22 〔已推送〕 docs(spec): D60 M4-4 第 1 期——排队可见、看门狗不计排队、never started 自动重派（MVP 1.1.0 调研报告任务一；以 EC2 上 KiroCrew 0.10.0 的 spawn 回执与 GET /api/spawn/{id} 为准）
+
+### D59（10 个提交：已推送 10）
+
+- `6243bb5` 2026-10-22 〔已推送〕 docs: D59 EC2 核对（30ca5b7）——Worker 只剩 token_sealed、数据库文件无明文、3 个 Worker 能力刷新与一个会话走通
+- `30ca5b7` 2026-10-22 〔已推送〕 fix(workers): 终审修正（D59）——远程预览的校验头从密封的 Token 计算（升级后远程 Worker 不再 500）；主密钥文件丢失或不可读时一律 503 worker_secret；主密钥不可读时平台照常启动（使用密封 Token 的调用 503，跳过本次密封）；每个进程只解开一次（不再每次调用都运行 openssl）；OPERATIONS 写明恢复步骤与 D59 之前的备份含明文
+- `69eaec6` 2026-10-22 〔已推送〕 fix(transport): 密封 Token 的密钥改由 configure_key 设定，不再覆盖 Worker TLS 证书的 configure（D59，部署前发现）
+- `324e3e7` 2026-10-22 〔已推送〕 docs: D59 Worker Token 密封——OPERATIONS 主密钥说明、MVP-RELEASE K10、进度
+- `c252a3b` 2026-10-22 〔已推送〕 test(bootstrap): 重新注册后 Worker Token 以密封形式保存（D59）
+- `880733d` 2026-10-22 〔已推送〕 feat(workers): 平台启动时把已有的明文 Worker Token 密封（D59 K10）——迁移之后执行一次、可重复执行，没有配置密钥时按 D35 在数据目录生成
+- `2e22515` 2026-10-22 〔已推送〕 feat(workers): 注册与更新连接时把 Worker Token 密封后存入（D59 K10）——数据库只有 token_sealed；平台启动时把 D35 的密钥交给 transport；列表与环境视图不含任何 Token 字段；能力刷新保留密封值
+- `3278287` 2026-10-22 〔已推送〕 feat(workers): transport 接受密封的 Worker Token（token_sealed）并只在发请求时解开（D59 K10）——解不开时 503 worker_secret 并请平台管理员重新连接，不回退到明文；明文 token 照旧可用；diff 与 sync 传给 Worker 的连接保留 token_sealed
+- `a878ce0` 2026-10-22 〔已推送〕 docs(plan): D59 Worker Token 移出数据库的实施计划（4 个任务）
+- `b3228ca` 2026-10-22 〔已推送〕 docs(spec): D59 M4-2 Worker Token 移出数据库（K10）——用 D35 的 vault 与密钥密封为 token_sealed，只在 transport 发请求时解封，写入即密封，启动时把已有的明文密封（可重复执行）
+
+### D58（11 个提交：已推送 11）
+
+- `361b7fb` 2026-10-22 〔已推送〕 docs: D58 已部署 EC2 c4469aa 并验收（Claude Code MCP 与 CLI 走通 submit → pull → sync → 复审；.env 被拒）；§7 验收 1 记录（Codex、Kiro IDE 待负责人核对）；进度
+- `c4469aa` 2026-10-22 〔已推送〕 fix(sync,local): 终审修正（D58）——Worker 的 sync 把上传的 bundle 当不可信输入：头部只接受一个分支提交、对象先解包到隔离目录，核查通过才迁入（被拒绝的同步不留任何对象、不写任何 ref），用 fast-forward merge 移动（不覆盖未跟踪文件），按会话加锁，同一同步重放时给出同样的结果；平台在调用 Worker 前校验 request_id，与续作一致要求上游任务已验收、执行环境可用，管理员代为同步写审计，同步后停止预览；检查未能启动时照样记录 Attempt、由引擎重新启动检查；同步的 Attempt 写交接摘要（含说明）；CLI 在仓库内 --allow-unpushed 不再崩溃；当前分支不在 origin 上时 submit 停下；两边都有新提交时 pull 把会话的最新提交取为 refs/octopus/<run>/remote 并提示 rebase，只有本地领先时不报错；SSH 地址的端口与非 SSH 地址正确处理；无法识别的仓库不算本仓库；保存的 Token 只发给它的平台；git 调用不等待终端、有超时
+- `7dc4f09` 2026-10-22 〔已推送〕 fix(server): 拉回的下载里不用 name 作循环变量（它是模块的名称校验函数，tests/test_server_shadowing 拦下）（D58）
+- `3d18672` 2026-10-22 〔已推送〕 docs: D58 本地 / 远端联动与使用者命令行——OPERATIONS、CONNECT、MVP-RELEASE §14.3、BACKLOG、进度
+- `f90374e` 2026-10-22 〔已推送〕 feat(console): 本地同步的 Attempt、修订与事件，客户端 CLI（D58）
+- `5426f37` 2026-10-22 〔已推送〕 feat(mcp): octopus_link、octopus_pull、octopus_sync 与提交前的未推送检测（D58）——在用户本机的仓库执行，与 CLI 同一套本地逻辑；octopus_start 提交本仓库时若有 origin 没有的提交先停下（push_base 经用户同意后推送，或 allow_unpushed），成功后关联仓库；octopus_status 缺 run_id 时读关联；Skill 写明联动流程与拒绝原因
+- `4e0642d` 2026-10-22 〔已推送〕 feat(cli): 使用者的 octopus 命令（login、submit、plan、confirm、status、watch、report、pull、sync、continue、approvals、search）（D58 M3-2）——login 用用户名与密码登录后改存一枚 30 天的「octopus CLI」Token（0600），并吊销登录用的那枚；submit 在 Git 仓库内取 origin 与当前分支，本地有未推送提交时停下并提示 --push-base / --allow-unpushed，成功后关联仓库；其余命令默认用本仓库关联的会话、与 MCP 同样的调用，输出中文摘要或 --json；运维命令不变
+- `3960d03` 2026-10-22 〔已推送〕 feat(local): 本地仓库与会话的关联、pull、sync 与未推送提交检测（D58）——.octopus/session.json 与 .octopus/sessions/ 写入 .git/info/exclude；pull 把会话分支的 bundle 取为本地 octopus/<run>（缺基线时自动取完整历史，从不覆盖本地分支自己的提交），并写报告、计划与各任务交接；sync 只在工作区已提交、当前分支包含会话 head 时把其后的提交打成 bundle 上传，同一同步的 request_id 固定；源码取 origin（SSH 地址按 HTTPS）与当前分支；未推送提交计数与 --push-base；Client 增加 upload 与 /bundle/ 下载
+- `79143dc` 2026-10-22 〔已推送〕 feat(sync): POST /v1/runs/<id>/sync——本地提交成为新候选，重新检查并让下游任务重新审查；pull 的 bundle 下载（D58）——二进制上传（≤ 20 MB）经 Worker 快进；最后一个写代码的任务记「本地同步」Attempt（候选、synced、门禁），有检查命令时照常运行与判定，其后的任务重新执行；修订「本地同步」、事件 run.synced；同一 request_id 只同步一次；权限与续作相同；POST /v1/runs/<id>/bundle 给出 10 分钟的拉回链接；CLI 的 Token 记为 client cli
+- `4b7c9c7` 2026-10-22 〔已推送〕 feat(worker): 会话分支的 pull bundle 与 sync（D58）——POST /pull/bundle 按发布同样核查疑似凭证与 .env 后给出分支（自基线或完整历史）；POST /sync 导入本地提交的 bundle，只在会话分支仍在 old、工作区没有未纳入候选的改动、head 是快进且新内容没有疑似凭证时把分支与工作区移到 head，返回与候选相同的字段；上限 20 MB
+- `a522f79` 2026-10-22 〔已推送〕 docs(spec,plan): D58 M3-2 用户 CLI 与 M3-4 本地 / 远端联动——git bundle 交换提交（不经托管方）、会话关联 .octopus/session.json、pull 拉回分支与上下文、sync 只接受快进并让最后一个写代码的任务重新检查、下游重新审查、未推送提交检测与 --push-base；CLI 与 MCP 共用 octopus/local.py；6 个任务的实施计划
+
+### D56（8 个提交：已推送 8）
+
+- `789cada` 2026-10-22 〔已推送〕 docs: D56 已部署 EC2 8cfef39，§7 验收 3 勾选（经 API 实测全部过滤、全文与翻页，候选 diff 可读）；BACKLOG 记终审延后项与 .kiro/settings 进入候选；进度
+- `8cfef39` 2026-10-22 〔已推送〕 fix(console,diff): 终审修正（D56）——「进行中」只发送会话状态（dispatching 是任务状态，曾使整组 400），控制台的会话状态清单与服务端一致并有测试；列表读取失败时显示原因，不再看起来像空列表；创建时间按使用者本地的日换算；失去访问权的会话即使读过也会移出；正在输入的仓库 / 分支不因其他筛选变化而清空；全文恢复匹配工作流名称；diff 不显示下载同样不含的文件（.env 等，只给数量），不用仓库自己的 textconv 与前缀设置；工作区已不在的会话返回 409 而不是 500
+- `b5cf2bf` 2026-10-22 〔已推送〕 docs: D56 会话列表的过滤、全文、分页与代码改动——OPERATIONS、MVP-RELEASE §14.3、BACKLOG、进度
+- `501b519` 2026-10-22 〔已推送〕 feat(diff): Attempt 详情可看候选的代码改动（D56）——Worker 的 /candidate 新增只读的 mode: diff（相对上一个候选或会话基线，每个文件的增删行数与统一 diff，200 KB / 4000 行截断）；GET /v1/runs/<id>/attempts/<attempt>/diff 按会话的访问检查读取，没有候选 404 no_candidate，被凭证检查挡在分支外的候选 409 candidate_secret（从不显示），旧 Worker 409 worker_outdated 并请平台管理员升级；控制台每次 Attempt 多一个「代码改动」折叠区，展开才请求，点开文件看它的 diff
+- `5abedab` 2026-10-22 〔已推送〕 feat(console): 会话列表服务端过滤、全文搜索与分页，筛选写进地址栏（D56）——搜索停顿 300 ms 后查询，状态分组按状态与生命周期发给服务端，「筛选」面板（仓库、分支、阶段、工具、客户端、提交者、创建时间）与可移除的标签，「加载更多」按游标翻页，标签页与概况的数字取服务端总数；选中的会话不在已加载的页里时按 ID 读取，只有 404 / 403 才提示不可访问；服务端列表不再返回已删除的会话，全文也匹配来源客户端的名称（原控制台的 D55 搜索）
+- `8636d63` 2026-10-21 〔已推送〕 feat(mcp): octopus_runs 按空间、仓库、分支、阶段、工具、客户端、提交者、时间过滤与全文搜索（D56）；Skill 同步
+- `bce2261` 2026-10-21 〔已推送〕 feat(runs): 会话列表按空间、状态（可多个）、生命周期、仓库、分支、阶段、工具、客户端、提交者、时间与全文过滤，服务端分页（D56 M3-5）——仓库按 主机/所有者/仓库 比较（https、ssh、git@ 同一结果）；全文覆盖需求、规划、各任务名称与说明、最近一次结论与错误，多词全部命中；page=1 返回 {items, next, total}，游标按（创建时间, ID），翻页时新建的会话不重复不遗漏；不带 page 照旧返回数组
+- `0dcc989` 2026-10-21 〔已推送〕 docs(spec,plan): D56 M3-5 控制台——服务端按空间、状态、仓库、分支、阶段、工具、客户端、提交者、时间与全文过滤，分页（不带 page 时照旧返回数组），MCP octopus_runs 同步；Attempt 详情的代码改动（Worker mode diff）；5 个任务的实施计划
+
+### D55（11 个提交：已推送 11）
+
+- `b840dbb` 2026-10-21 〔已推送〕 docs: M2 §6 验收 1 勾选（D55，EC2 80bc0c4：Request 登记、默认先确认、按准入规则直接执行）；BACKLOG 记 EC2 现场的 Harness 问题（内存不足不可见、deliver 不入库产物与 diff_present、评审写文件与 review_bound）；进度
+- `bea5a71` 2026-10-21 〔已推送〕 docs(progress): D55 已部署 EC2 80bc0c4——迁移 9 生效；§6 验收 1 第 1 步通过（不带 admission 停在计划待确认、回执带 request_id、octopus_requests 可见）；准入规则在 EC2 命中两种仓库写法；owner 边界内存不足致子 Agent 排队，观察中
+- `80bc0c4` 2026-10-21 〔已推送〕 fix(policies): 终审修正（D55）——最具体的准入规则按字面字符多少取胜（较早的 github.com/o/* 不再被较新的 * 盖过）；MCP 精简状态带 admission、admission_basis 与 request，Coding Agent 能说明会话为何等待；报告抬头写明准入依据；管理员能在列表中看到并删除他为非所在 Team 建的规则；管理员读他人的 Request 写审计（与会话一致）；BACKLOG 记延后的次要项
+- `e36ac62` 2026-10-21 〔已推送〕 docs: D55 Request、准入规则与映射偏好——OPERATIONS 新节（默认已改为 confirm）、MVP-RELEASE §14.2 第 1、4、5 行、进度、BACKLOG 延后项
+- `02e581d` 2026-10-21 〔已推送〕 feat(console): 会话页写明来自哪个请求与准入依据；设置「准入与映射偏好」（D55）——头部一行「来自请求 request-xxxxxx · Codex；按准入规则「github.com/o/*」自动开始 / 按平台默认等待确认」（提交时自己指定的不重复）；新对话框分「准入规则」「映射偏好」两组，显示作用域与内容，可删除自己能维护的，新增时选作用域（个人、本人是 owner 的 Team）、仓库模式与准入方式，或按类别 / 角色的工具与模型，服务端的拒绝原样显示在表单下；会话搜索也匹配来源客户端（输入「Codex」）
+- `4e37c28` 2026-10-21 〔已推送〕 feat(mcp): octopus_requests 与只读的 octopus_policies；octopus_start 回执带 request_id；Skill 写明默认先确认、准入依据与按偏好的映射来源（D55）
+- `4703429` 2026-10-21 〔已推送〕 feat(policies): 个人 / Team 映射偏好进入规划提示与映射来源（D55 M2-4）——偏好按类别或角色对应工具 / 模型，同一类别或角色上个人覆盖 Team；提交时写入会话快照，首次规划（600）与重新规划（200）的提示多一节「用户的映射偏好」，每条一行：优先采纳、不采纳写明理由，需求中指定的优先，不可用的工具不选；规划者的任务与偏好一致时映射来源写「按个人偏好 / 按 Team 偏好」；重新规划的最坏情况仍 ≤ 7800（保留任务检查 800→600、检查命令 300→250）；设计 §6 记 tool: auto 本期不做
+- `37197fb` 2026-10-21 〔已推送〕 feat(policies): 按仓库范围的准入规则，平台默认改为先确认（D55 M2-5）——个人 / Team 规则 {repos: 主机/所有者/仓库（可 *）, mode: auto|confirm}；判定顺序为提交时指定 → 个人规则 → Team 规则 → 平台默认，同层取最具体（通配最少、再按最新）；https、ssh、git@host:path 三种写法同一结果，新建项目不命中；会话快照与视图带 admission_basis，Request 的策略快照记命中的规则；Team 规则只有 owner 或管理员能增删、归档的 Team 不能新增，增删写审计；GET/POST /v1/policies、DELETE /v1/policies/<id>；default_admission 默认 confirm
+- `8cff53b` 2026-10-21 〔已推送〕 feat(requests): 每次提交登记 Request（D55 M2-1）——迁移 9 建 requests 与 policies 表、runs.request_id；来源客户端取自 Token 标签（控制台 / claude / kiro / codex / kiro-ide / api）；记需求原文、源码、显式选择（只记个数与格式）与准入 / 自动纠错 / 发布策略快照；会话视图带 request，旧会话为 null；GET /v1/requests（status、q、client、limit）与 /v1/requests/<id>，看不到其会话的人得 404
+- `c39be8b` 2026-10-21 〔已推送〕 docs(plan): D55 M2 剩余的实施计划（6 个任务：Request、准入规则与默认先确认、映射偏好进入规划、MCP 与 Skill、控制台、文档与 EC2 验收）；进度：connect codex 在 EC2 以真实 Codex 核对
+- `9879cc4` 2026-10-21 〔已推送〕 feat(connect): octopus connect codex（合并 ~/.codex/config.toml，只替换 [mcp_servers.kirocrew-on]）与 connect kiro-ide（合并 <项目>/.kiro/settings/mcp.json，不需要 kiro-cli）——备份、0600、合并后解析核对；合并失败时只说原因并吊销刚签发的 Token（M3-1）；docs(spec): D55 M2 剩余（Request、按仓库准入、映射偏好）及负责人的三项决定
+
+### D54（5 个提交：已推送 5）
+
+- `245d2ea` 2026-10-21 〔已推送〕 feat(recovery): 协调者的返工可扩大可改动路径（D54）——artifacts_locked 的失败记录带被拒文件，协调者在 context.locked_files 中看到；重试 / 返工失败的任务时可加 paths_add（只取 locked_files 中的文件，至多 10 个，合并后至多 20 项），平台核对后扩大该任务的 paths，记在这次自动纠错的修订与时间线 task.paths_added；不符时整份决定被拒并写明原因；OPERATIONS、Skill 与设计同步
+- `ef47d6d` 2026-10-21 〔已推送〕 docs: 进度——run-25c7aaa7 完成；D54 主体待负责人确认
+- `17687ec` 2026-10-21 〔已推送〕 feat(replan): 重新规划复核保留任务的检查命令（负责人 2026-10-21，D54 §9 a）——提示列出保留的已验收任务的 verify；计划可带 verify_fixes，平台只接受指向保留任务且不清空 implement / test 检查的修正，写入该任务（不重跑）并记在这次重新规划的修订里，时间线 task.verify_revised；重新规划提示的各节限长下调以容下（最坏约 7720 / 8000）
+- `82fadb4` 2026-10-21 〔已推送〕 docs(spec): D54 记下同类问题——保留任务的过时检查命令（run-25c7aaa7 第 15 轮后 checks_pass 因 backend/.venv 失败），不交给协调者，列出可选做法待负责人决定
+- `3325522` 2026-10-21 〔已推送〕 docs(spec): D54 协调者的返工可扩大可改动路径——只限门禁锁住的、此前已验收任务的文件，记修订与时间线（EC2 run-25c7aaa7 卡在 artifacts_locked 13 轮）
+
+### D49 第 3 期 · 每人一个执行边界（2 个提交：已推送 2）
+
+- `c5c4615` 2026-10-21 〔已推送〕 docs: 进度——owner 边界的公开原生入口已开通（D49 第 3 期）；run-25c7aaa7 的 artifacts_locked 待负责人决定
+- `d02325d` 2026-10-21 〔已推送〕 feat(deploy): 平台主机上边界的公开原生入口（D49 第 3 期）——deploy.sh boundary native <名称> 建只含 CloudFront 分发的栈、nginx 中转到该边界的 Gateway、写入 crew_url 并排空重启；控制台在入口未开通时按 D53 说明（会话照常执行，请平台管理员开通）；自动纠错换工具时 test 任务不算作者（负责人 2026-10-21）
 
 ### D46 P3 · Agent 角色与提示体系（8 个提交：已推送 8）
 
@@ -177,9 +274,9 @@
 - `1614598` 2026-10-18 〔已推送〕 feat(evaluation): Evaluator 门禁（D46 P3）——改代码的新会话（契约 4、Worker 支持角色卡片）以 Evaluator 对每条验收项的 pass / fail / pending 与证据为准：缺项或缺证据交给协调者，fail 返工，pending 停在「验收待确认」，经确认（记确认者，不计预算）后继续
 - `c1fb892` 2026-10-18 〔已推送〕 docs(spec,plan): D46 P3 Evaluator 门禁——改代码的会话以 Evaluator 的逐项判定为准（负责人 2026-10-18：都要经过 Evaluator；pending 停在「验收待确认」）；缺少时平台追加；适用于契约 4 且 Worker 支持角色卡片
 
-### D37 · 候选提交、门禁与报告（5 个提交：已推送 4、已部署 EC2 1）
+### D37 · 候选提交、门禁与报告（5 个提交：已推送 5）
 
-- `889fa00` 2026-10-21 〔已部署 EC2〕 feat(runs): 会话列表在服务端过滤（M3-5 第一步）——GET /v1/runs 支持 status / q / limit，最新的在前，不带参数时不变；MCP octopus_runs 改为精简列表 {items, more}（默认 20、至多 50，只含状态、进度、需要处理的事与错误首行），EC2 上完整列表约 55 万字符超出 MCP 结果上限（M3-3）；OpenAPI、Skill、OPERATIONS 同步；进度：M2-3 已由 D37 / D46 P3 覆盖
+- `889fa00` 2026-10-21 〔已推送〕 feat(runs): 会话列表在服务端过滤（M3-5 第一步）——GET /v1/runs 支持 status / q / limit，最新的在前，不带参数时不变；MCP octopus_runs 改为精简列表 {items, more}（默认 20、至多 50，只含状态、进度、需要处理的事与错误首行），EC2 上完整列表约 55 万字符超出 MCP 结果上限（M3-3）；OpenAPI、Skill、OPERATIONS 同步；进度：M2-3 已由 D37 / D46 P3 覆盖
 - `fccf081` 2026-10-15 〔已推送〕 feat(gates): artifacts_locked（已验收任务的交付物只能由 paths 覆盖它们的任务修改）与 tests_fail_on_baseline（测试任务的测试须在会话基线上失败）（D37 §11.1、§11.2）
 - `d9b0a0d` 2026-10-15 〔已推送〕 feat(worker): 基线检查模式（标记、切换、必然恢复）；遗留的基线在下一次操作前恢复，运行中的基线不被其他请求打断（D37 §11.1）
 - `b9cf48d` 2026-10-15 〔已推送〕 feat(sources,checks): 候选记录改动的文件名；在项目目录原地切到会话基线并叠加测试文件、必然恢复（D37 §11.1）
@@ -478,11 +575,16 @@
 - `ec02d73` 2026-10-12 〔已推送〕 docs: D32 会话修订历史；EC2 验收记录与能力清单
 - `c3c0f4e` 2026-10-12 〔已推送〕 feat(revisions): 会话修订历史与 Prompt 差异（后端，D32）——每次创建 / 规划 / 续作 / 自动纠错记录完整快照与摘要；旧修订按记录还原；GET /v1/runs/<id>/revisions[/<version>|/diff]；MCP octopus_revisions 只返回变化；OpenAPI 与 Skill
 
-### 未标记 · 功能（67 个提交：已推送 64、已部署 EC2 3）
+### 未标记 · 功能（72 个提交：已推送 67、已部署 EC2 5）
 
-- `ccd91e0` 2026-10-21 〔已部署 EC2〕 feat(dashboard): MVP 里程碑面板——M1–M5 各一条按状态分段的进度条（未开始显示为空轨）、完成度与已验收数；点一行展开其条目，「展开全部」开关（role=switch）；展开状态存 localStorage，实时页刷新后保留；实时页不重播动画；筛选与搜索同样作用于里程碑（负责人 2026-10-21）
-- `e069a5f` 2026-10-21 〔已部署 EC2〕 feat(tools): 实时进度看板——tools/progress.py --serve [PORT] [--ec2]：只在 127.0.0.1，每次请求现读 docs/progress.json 与 git，页面每 15 秒刷新、不写文件；--ec2 每 5 分钟经 SSM 只读读取 EC2 运行的提交（负责人 2026-10-21）
-- `b733fc6` 2026-10-21 〔已部署 EC2〕 feat(console): 凭证卡片「编辑范围」——已有凭证可改仓库范围（PATCH repos）
+- `f774040` 2026-10-23 〔已部署 EC2〕 feat(sessions): 历史会话的置顶、收藏、共享与删除（负责人 2026-10-22）——每行「⋯」菜单：置顶 / 收藏（个人标记，迁移 13 run_marks，POST /v1/runs/<id>/marks，列表项带 marks，?pinned=1 / ?starred=1），共享与删除沿用原对话框；置顶的会话显示在列表顶部，筛选组加「收藏」
+- `462d2b6` 2026-10-23 〔已部署 EC2〕 feat(admin): 执行环境列出每个 Worker 的实时状态，选中一行看详情与操作；管理首页是概览（负责人 2026-10-22：在管理 Portal 里列出 Worker 的状态）
+- `a4ca091` 2026-10-22 〔已部署 EC2〕 feat(admin): 用户改为一人一行，操作就地一步完成（负责人 2026-10-22：重新规划用户管理）
+- `61ccab6` 2026-10-22 〔已部署 EC2〕 feat(console): 「管理」与「我的设置」两个页面取代「设置」菜单里的对话框（负责人 2026-10-22：单独的管理页面）
+- `319503c` 2026-10-22 〔已部署 EC2〕 feat(admin): 用户列表带上每人进行中的会话数（管理 Portal 用户表「运行中的会话」一列）
+- `ccd91e0` 2026-10-21 〔已推送〕 feat(dashboard): MVP 里程碑面板——M1–M5 各一条按状态分段的进度条（未开始显示为空轨）、完成度与已验收数；点一行展开其条目，「展开全部」开关（role=switch）；展开状态存 localStorage，实时页刷新后保留；实时页不重播动画；筛选与搜索同样作用于里程碑（负责人 2026-10-21）
+- `e069a5f` 2026-10-21 〔已推送〕 feat(tools): 实时进度看板——tools/progress.py --serve [PORT] [--ec2]：只在 127.0.0.1，每次请求现读 docs/progress.json 与 git，页面每 15 秒刷新、不写文件；--ec2 每 5 分钟经 SSM 只读读取 EC2 运行的提交（负责人 2026-10-21）
+- `b733fc6` 2026-10-21 〔已推送〕 feat(console): 凭证卡片「编辑范围」——已有凭证可改仓库范围（PATCH repos）
 - `e0d8791` 2026-10-20 〔已推送〕 feat(tools): 完成记录机制——tools/progress.py 从 git 列出自 origin/main 起的全部提交，按决策分组并标明已推送 / 已部署 EC2 / 仅本机，连同 docs/progress.json 的任务状态写入看板与 docs/PROGRESS.md（负责人 2026-10-20）
 - `092a19a` 2026-10-20 〔已推送〕 feat(console): 任务的模型改为下拉选择该执行环境公布的模型——「自动」时也列出全部（原输入框按当前值过滤建议，自动时只剩 auto）；模型取自将要执行的环境（平台的默认位置或所选环境），工作流编辑器不再取空间里的第一个环境
 - `fc75650` 2026-10-18 〔已推送〕 feat(deploy): Gateway 需要重启时先排空——Worker 有 .maintenance 标记时不接受新的准备与派发（503 native_unavailable，平台自动退避重试），安装脚本等 Gateway 中运行的原生任务结束（最多 DRAIN_MINUTES，默认 30 分钟）后重启，Worker 重启后移除标记（复盘 #8，EC2 run-f7670bfb…）
@@ -548,10 +650,14 @@
 - `ff7768c` 2026-10-12 〔已推送〕 feat(migrations): 迁移 4——Team 归档、Worker 退役与空闲主机曾服务的 Team
 - `d5cf9ba` 2026-10-12 〔已推送〕 feat(console): 会话页「修订历史」——按时间列出创建 / 规划 / 续作 / 自动纠错，任选两版对比需求与各任务（字段前后值、Prompt 逐行增删，未变化的任务折叠）
 
-### 未标记 · 修复（49 个提交：已推送 47、已部署 EC2 2）
+### 未标记 · 修复（53 个提交：已推送 49、已部署 EC2 4）
 
-- `39458e2` 2026-10-21 〔已部署 EC2〕 fix(deploy): 边界运维——重复 boundary add 不给 --memory / --cpu 时保留现有资源上限（不再重置并排空重启 Gateway）；--owner 按小写匹配平台用户；boundary add 传 AWS_REGION；systemctl disable 的边界部署时不检查、不重启
-- `ff7e42a` 2026-10-21 〔已部署 EC2〕 fix(deploy): 边界的中转配置名为 kirocrew-relay-boundary-<名称>.conf——nginx 按文件名读 conf.d，须在定义 log_format kirocrew_native 的 kirocrew-native.conf 之后（EC2 2026-10-21：nginx -t 报 unknown log format，已回退、crew_url 未改）
+- `8846490` 2026-10-23 〔已部署 EC2〕 fix(deploy): 执行边界的 Codex 不再联网搜索（EC2 run-3852f436 / run-78526202 / run-f2539d3a：「Access denied: web search is not authorized for this identity」，边界的 Bedrock 身份无权联网搜索，每次都失败并消耗一轮纠错）——config.toml 首行写 web_search = "disabled"（codex 0.153.4 实测有效），已有配置补上、他人写的保留；每次部署对所有边界执行
+- `82f974e` 2026-10-23 〔已部署 EC2〕 fix(console): 提示条放在顶栏下方，不再盖住顶栏按钮（390 px 宽度下创建 Token 的提示盖住「打开会话列表」，鼠标停在上面时一直不消失）；浏览器测试取看得见的会话列表，运行器失败时列出等待的元素
+- `7c04dce` 2026-10-22 〔已部署 EC2〕 fix(preview): 预览找得到会话产出的全部 HTML 页面（EC2 2026-10-22：报告写在 report/、artifacts/<名称>/ 下，预览一律「未找到可预览的 index.html」）——Worker 在项目中查找 HTML（跳过隐藏目录与 node_modules / venv / site-packages 等依赖目录），网页项目的入口在前，其余按生成时间新的在前；预览接口与 MCP 返回 pages 及各自的链接；会话页「预览产出」旁可选择页面
+- `dd3851c` 2026-10-22 〔已部署 EC2〕 fix(designs): 输出约束写明 kind 的可选值，未知类别的原因写成看得懂的话（EC2 run-931d06ff… 的第一次推荐用了平台不认识的 kind，已由自动修正救回）
+- `39458e2` 2026-10-21 〔已推送〕 fix(deploy): 边界运维——重复 boundary add 不给 --memory / --cpu 时保留现有资源上限（不再重置并排空重启 Gateway）；--owner 按小写匹配平台用户；boundary add 传 AWS_REGION；systemctl disable 的边界部署时不检查、不重启
+- `ff7e42a` 2026-10-21 〔已推送〕 fix(deploy): 边界的中转配置名为 kirocrew-relay-boundary-<名称>.conf——nginx 按文件名读 conf.d，须在定义 log_format kirocrew_native 的 kirocrew-native.conf 之后（EC2 2026-10-21：nginx -t 报 unknown log format，已回退、crew_url 未改）
 - `8db5430` 2026-10-21 〔已推送〕 fix: 次要问题第 7 批——Worker 删除知识如实报告 KiroCrew 的拒绝与错误；多个平台 Knowledge 任务各写一次；等待执行环境时每 30 秒重试知识写入；基线测试按条件等待（高负载下的偶发失败）
 - `2cd7a88` 2026-10-21 〔已推送〕 fix: 次要问题第 6 批——安装脚本不再以命令行参数传管理员密码；重新规划用精简的角色与技能目录（最长约 7350 / 8000）；placement 按创建者回答写入 OPERATIONS
 - `f5c41b7` 2026-10-21 〔已推送〕 fix: 次要问题第 5 批——预览的本机步骤给 cwd 加引号、拒绝控制字符与符号链接的声明；知识标记与 exclude 文件拒绝符号链接；角色卡片读一次、格式错时说明是哪张
@@ -600,12 +706,18 @@
 - `23396a9` 2026-10-12 〔已推送〕 fix(access): 审查修复——自动诊断同样核对执行环境；退役 Worker 上的会话在本地关闭 / 删除、不能重新打开，重新打开中的会话计入退役检查；归档 Team 可调整已有成员角色；可移除已停用的成员；归档 Team 的会话停用续作 / 诊断 / 重新打开 / 分配并说明原因；退出唯一的 Team 后回到个人空间
 - `436233b` 2026-10-12 〔已推送〕 fix(console): 修订差异只在改动处保留 2 行上下文、其余折叠；修订列表不重复类型（EC2 实测长 Prompt）
 
-### 未标记 · 文档（32 个提交：已推送 28、已部署 EC2 4）
+### 未标记 · 文档（38 个提交：已推送 32、已部署 EC2 6）
 
-- `904618b` 2026-10-21 〔已部署 EC2〕 docs: 进度——M2 / M3 / M4 / M5 按 MVP-RELEASE §6 / §7 与 BACKLOG 拆成 21 个条目（各写现状与是否需设计），看板可见（负责人 2026-10-21 问）
-- `b4f74ee` 2026-10-21 〔已部署 EC2〕 docs: 进度看板刷新（EC2 17687ec）
-- `8540e96` 2026-10-21 〔已部署 EC2〕 docs: 进度——重新规划复核保留检查已部署 EC2（17687ec）
-- `68a6b12` 2026-10-21 〔已部署 EC2〕 docs: 进度看板刷新（EC2 d02325d）
+- `3af7331` 2026-10-23 〔已部署 EC2〕 docs(prd): 管理与「我的设置」用对话框完成操作（草案，待负责人确认）——一级页面只放列表与状态，新增 / 修改 / 危险操作进对话框，一次性 Token 只显示一次，克制的状态动画与减少动态效果
+- `907f4b1` 2026-10-23 〔已部署 EC2〕 docs(research): KiroCrew 发版节奏与开发方向——公开仓库可查发版（约一到两周一个小版本，0.10.0 处于 rc），没有公开路线图；我们钉的 57df464 落后 rc.1 约 1000 个提交；建议改钉正式版、0.2.0 先升级；上游 P0 #11576 即我们遇到的 Gateway 卡顿
+- `c92d4ca` 2026-10-23 〔已部署 EC2〕 docs(research): KiroCrew 原生能力调研——成员与小组为主（MVP 0.2.0 输入）：成员是带私有记忆与常驻对话的命名 Agent、隔离只是路由；小组只是名册分组；频道是多 Agent 房间；会话内并行与角色成员化为候选，Conductor / 动态工作流 / 波次 / follow_up 不接
+- `d021a95` 2026-10-23 〔已部署 EC2〕 docs: BACKLOG 记录 Gateway 事件循环卡住被看门狗结束的处理与剩余项、浏览器测试截图路径
+- `59ee263` 2026-10-23 〔已部署 EC2〕 docs(ops): 运维说明改用新的控制台入口（管理 › 执行环境 / 用户 / Team / 并发上限，我的设置 › 代码仓库凭证 / 映射偏好 / 修改密码）
+- `ca413f3` 2026-10-22 〔已部署 EC2〕 docs: 关卡与门禁检讨（负责人 2026-10-22）——经过、全部关卡清单、根因、以后的规则与待负责人决定的建议
+- `904618b` 2026-10-21 〔已推送〕 docs: 进度——M2 / M3 / M4 / M5 按 MVP-RELEASE §6 / §7 与 BACKLOG 拆成 21 个条目（各写现状与是否需设计），看板可见（负责人 2026-10-21 问）
+- `b4f74ee` 2026-10-21 〔已推送〕 docs: 进度看板刷新（EC2 17687ec）
+- `8540e96` 2026-10-21 〔已推送〕 docs: 进度——重新规划复核保留检查已部署 EC2（17687ec）
+- `68a6b12` 2026-10-21 〔已推送〕 docs: 进度看板刷新（EC2 d02325d）
 - `f27c24d` 2026-10-21 〔已推送〕 docs: 进度——次要问题第 1–7 批已部署 EC2（8db5430）
 - `a5eb554` 2026-10-21 〔已推送〕 docs(skill): 写明 latest.continued 是自动纠错接上了上一轮对话，与 octopus_continue 无关；进度记下待负责人决定的三项
 - `b06b843` 2026-10-20 〔已推送〕 docs: 进度——推送前安全扫描通过（c36ebad，git-defender scan / scan-history 均无发现）
@@ -635,14 +747,23 @@
 - `b57cba1` 2026-10-12 〔已推送〕 docs: BACKLOG 记录访问管理第 2 期审查延后项
 - `638e4e6` 2026-10-12 〔已推送〕 docs(plan): 访问管理第 2 期——Team 与 Worker 管理、派发前核对、管理操作审计
 
-### 未标记 · 测试（5 个提交：已推送 5）
+### 未标记 · 测试（8 个提交：已推送 5、已部署 EC2 3）
 
+- `8da8ba5` 2026-10-23 〔已部署 EC2〕 test(browser): 截图写到运行器给的 $BROWSER_ARTIFACTS（没设就不截图），不再写死主仓库路径；BACKLOG 记 Gateway 复查
+- `bc651cc` 2026-10-23 〔已部署 EC2〕 test(checks): 环境判断的真实命令用例改用空 HOME、放宽到 120 秒——机器忙时 bash 登录 profile 拖慢十条命令，超过 30 秒就假失败
+- `828caee` 2026-10-23 〔已部署 EC2〕 test(browser): 真实浏览器核对会话列表的置顶与取消置顶、管理页面打开执行环境
 - `02f44e3` 2026-10-18 〔已推送〕 test(kirocrew): HTTP 字段契约——平台发给 KiroCrew 的每个请求体只许用其处理函数读取的键（tests/kirocrew_contract.json http：spawn、chat slots 及 context / note / resume / approve、stop-all）；本机回归以 AST 扫描 Worker 的全部请求体，部署时原生测试核对已安装 KiroCrew 的处理模块仍读取这些键；OPERATIONS 与 BACKLOG 更新
 - `34d6443` 2026-10-18 〔已推送〕 test(kirocrew): 报错词表契约——平台 L0 自动重试依赖的 KiroCrew 报错文字（取消、ACP 进程退出、AcpProcessDied、进程组清理失败）列入 tests/kirocrew_contract.json 并附 EC2 原样报错；本机回归核对每条按其种类重试，部署时原生测试核对已安装的 KiroCrew 仍含这些文字
 - `d138dec` 2026-10-17 〔已推送〕 test(kirocrew): 配置契约——平台写入 config.json 的键列在 tests/kirocrew_contract.json（版本与 versions.env 一致）；本机回归核对 seed() 只写清单内的键，部署时原生测试在主机上核对清单中的键都是已安装 KiroCrew 的配置字段，并用 KiroCrew 自己的加载器读回新配置、不得有被忽略的键。seed() 去掉 KiroCrew 不读的 dashboard.host / port 与 workspaces.default.path（EC2 上加载器如实报出，连同旧的 memory.enabled），去掉随之无用的 port 参数；HTTP 字段契约等后续记入 BACKLOG
 - `bd552c4` 2026-10-16 〔已推送〕 test(credentials): 测试中固定 github.com / gitlab.example.com 的解析结果——本机代理的 fake-IP（198.18.0.0/15）不再使凭据测试被 refused_address 拒绝
 - `fd9f1f4` 2026-10-12 〔已推送〕 test(access): 权限矩阵覆盖 Team 与 Worker 管理；OpenAPI 记录第 2 期接口与 admin scope
 
-### 未标记 · 其他（1 个提交：已部署 EC2 1）
+### 未标记 · 其他（7 个提交：已推送 1、已部署 EC2 6）
 
-- `95e5aa9` 2026-10-21 〔已部署 EC2〕 perf(runs): 会话列表的 view=list——任务只带 ID、状态、名称、工具、类别与角色，规划不带补全的需求；React 控制台（每 10 秒）与 MCP 的列表改用它，会话页照旧取完整会话（EC2 上任务说明占完整列表的三分之二）；旧版 /classic/ 不变（M3-5）
+- `5fd7976` 2026-10-23 〔已部署 EC2〕 perf(server): GET 的文本响应 ≥ 1 KB 时按 Accept-Encoding 以 gzip 发送（会话列表 50 行 199 KB、控制台脚本 731 KB 原样传输；CloudFront 不缓存故不压缩）；POST 不压缩（登录与新 Token 的应答含秘密）；Vary: Accept-Encoding
+- `a183d84` 2026-10-23 〔已部署 EC2〕 perf(worker): 派发、续接与模型探测后调用 KiroCrew 的 mark-collected——子 Agent 结束时不再注入平台的父会话、不再多跑一轮协调者（每个任务省一次 Kiro 用量与一个常驻进程）；结果照旧从 GET /api/spawn/{id} 读；失败不影响派发；HTTP 契约登记新请求体
+- `64a73cd` 2026-10-23 〔已部署 EC2〕 Merge commit '89082a4' into feat/m11-gates
+- `46e6959` 2026-10-23 〔已部署 EC2〕 perf(console): 带内容哈希的构建产物长期缓存（BACKLOG：每次打开控制台都重新下载约 800 KB）——/assets/ 下 Vite 生成的 name-<hash>.ext 回 Cache-Control: public, max-age=31536000, immutable；页面与不带哈希的文件照旧 no-store，部署后立即取到新文件
+- `21495ea` 2026-10-23 〔已部署 EC2〕 perf(worker): 检查运行中的尝试只读它自己的那一行（EC2 2026-10-22 13:25–13:30：owner 边界的 Gateway 事件循环最长卡住 18 秒，被其看门狗以 SIGALRM 结束，两个子 Agent 中途断开）——每次 inspect 都读完整 /api/spawn 列表（58 条、310 KB、约 150 ms 占用 Gateway 唯一的事件循环线程），一条自己的 GET /api/spawn/{id} 只有 7 KB / 16 ms；state.json 证明归属的运行中尝试改读自己的行，已结束、排队或无法证明归属的照旧读列表（只有列表写明是否被人停止）
+- `41b3959` 2026-10-23 〔已部署 EC2〕 Merge branch 'feat/admin-portal' into feat/m11-gates
+- `95e5aa9` 2026-10-21 〔已推送〕 perf(runs): 会话列表的 view=list——任务只带 ID、状态、名称、工具、类别与角色，规划不带补全的需求；React 控制台（每 10 秒）与 MCP 的列表改用它，会话页照旧取完整会话（EC2 上任务说明占完整列表的三分之二）；旧版 /classic/ 不变（M3-5）

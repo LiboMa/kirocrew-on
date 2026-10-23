@@ -48,7 +48,7 @@ describe("session list on the server (D56)", () => {
     const { paged } = start();
     const list = await screen.findByRole("navigation", { name: "会话列表" });
     await userEvent.click(screen.getByRole("button", { name: "进行中" }));
-    await waitFor(() => expect(within(list).getAllByRole("button").map((b) => b.dataset.run)).toEqual(["run-b"]));
+    await waitFor(() => expect(within(list).getAllByRole("button").filter((b) => b.dataset.run).map((b) => b.dataset.run)).toEqual(["run-b"]));
     expect(paged().at(-1)?.get("status")?.split(",")).not.toContain("dispatching");
   });
 
@@ -122,5 +122,55 @@ describe("session list on the server (D56)", () => {
     render(<App />);
     expect(await screen.findByRole("heading", { name: "很早的会话" })).toBeInTheDocument();
     expect(window.location.search).toContain("run=run-z");
+  });
+});
+
+
+// Owner 2026-10-22: 「历史 Session，请增加收藏、置顶、删除、分享功能」
+describe("pin, star, share and delete from the list", () => {
+  function begin(marks: Record<string, { pinned: boolean; starred: boolean }> = {}) {
+    const searches: URLSearchParams[] = [];
+    const marked = (run: (typeof runs)[number]) => ({ ...run, marks: marks[run.id] ?? { pinned: false, starred: false },
+      permissions: { operate: true, delete: true, share: true } });
+    setToken("oct_fixture");
+    const calls = mockApi(workspaceRoutes(runs, {
+      "GET /runs": (_body: unknown, url: URL) => {
+        searches.push(new URLSearchParams(url.search));
+        if (url.searchParams.get("pinned") === "1") return runs.filter((r) => marks[r.id]?.pinned).map(marked);
+        return runPage(runs.map(marked), url);
+      },
+      "POST /runs/run-a/marks": (body: unknown) => {
+        marks["run-a"] = { ...(marks["run-a"] ?? { pinned: false, starred: false }), ...(body as object) };
+        return marks["run-a"];
+      },
+    }));
+    render(<App />);
+    return { searches, calls };
+  }
+
+  test("a row's menu pins a Session, which then shows on top", async () => {
+    const { calls } = begin();
+    await screen.findByRole("navigation", { name: "会话列表" });
+    await userEvent.click(await screen.findByRole("button", { name: "会话操作：修复登录失败" }));
+    await userEvent.click(await screen.findByRole("menuitem", { name: "置顶" }));
+    await waitFor(() => expect(calls.find((c) => c.method === "POST" && c.path === "/v1/runs/run-a/marks")?.body).toEqual({ pinned: true }));
+    const pinned = await screen.findByRole("region", { name: "置顶" });
+    expect(await within(pinned).findByText("修复登录失败")).toBeInTheDocument();
+  });
+
+  test("「收藏」 lists the starred, and a starred or pinned Session says so", async () => {
+    const { searches } = begin({ "run-b": { pinned: false, starred: true } });
+    const list = await screen.findByRole("navigation", { name: "会话列表" });
+    expect(await within(list).findByLabelText("已收藏")).toBeInTheDocument();
+    await userEvent.click(screen.getByRole("button", { name: "收藏" }));
+    await waitFor(() => expect(searches.some((s) => s.get("starred") === "1" && s.get("page") === "1")).toBe(true));
+  });
+
+  test("share and delete are in the row's menu", async () => {
+    begin();
+    await screen.findByRole("navigation", { name: "会话列表" });
+    await userEvent.click(await screen.findByRole("button", { name: "会话操作：订单缓存" }));
+    await userEvent.click(await screen.findByRole("menuitem", { name: /删除/ }));
+    expect(await screen.findByRole("dialog")).toHaveTextContent("run-b");
   });
 });

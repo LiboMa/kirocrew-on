@@ -43,16 +43,27 @@ def commands_line(commands):
             f"没有：{'、'.join(commands.get('missing') or []) or '无'}。verify 只用可用的命令。\n")
 
 
-def rules(count, depends, compact=False):
+# D69 / D65: the phases and the general kinds, one line each (the replan's prompt is the tighter one: its short forms)
+GENERAL_KINDS_LINE = "；一般任务用 research 调研、write 撰写"
+GENERAL_KINDS_COMPACT = " / research / write"
+PHASE_LINE = "可写 phase：diverge（发散：头脑风暴、调研、多方案，只查安全底线）/ design（设计，阶段末把关）/ converge（实现、撰写、测试、交付）；不写按 kind 推断。"
+PHASE_COMPACT = "phase：diverge 发散 / design 设计 / converge 收敛（可不写）。"
+GENERAL_CONTRACT = "一般任务（research / write）：deliverables 写产出文件名，acceptance 写阅读即可核对的标准，不写 role，不必写 paths 与 verify。"
+
+
+def rules(count, depends, compact=False, general=False):
     """What every planned task carries and the gates it meets — the same for the first plan and a replan (D46);
-    ``compact``: the role and skill catalogues by name only (the replan's prompt is the tighter one)."""
+    ``compact``: the role and skill catalogues by name only (the replan's prompt is the tighter one); ``general``: no
+    repository (D65)."""
     from . import roles, skills
     return f"""3. 任务拆分与 Agent 映射：steps 为 {count} 个顺序任务，每个任务选择最合适的工具并写出具体 prompt；
-   后续任务将在同一个 Session、同一份源码检出上依次执行。
-4. 任务契约：每个任务必须给出 kind（implement / review / test / deliver / design）、deliverables、
+   后续任务将在同一个 Session、{"同一个工作目录中" if general else "同一份源码检出上"}依次执行。
+4. 任务契约：每个任务必须给出 kind（implement / review / test / deliver / design{GENERAL_KINDS_COMPACT if compact else GENERAL_KINDS_LINE}）、deliverables、
    至少 1 条可检查的 acceptance（审查与测试任务的验收项取自 summary 的验收标准，不另加要求）；
    {REQUIRED_COMPACT if compact else REQUIRED}{depends}
    paths 写本任务可改动的路径，便于续作时判断哪些任务受影响。
+   {PHASE_COMPACT if compact else PHASE_LINE}
+   {"" if compact else GENERAL_CONTRACT}
    平台会检查并记提示（不会因此退回）：test 任务新增的测试应在会话基线（实现之前的源码）上失败；后续任务若要修改此前任务
    交付的文件，应在自己的 paths 中列出这些文件。test 任务只写测试、不改实现，其 verify 不安装依赖（不写 npm install / pip install 等）；
    检查与测试生成的文件（覆盖率、报告、构建产物）应写入 .gitignore。审查与测试的结论：缺陷用 changes_requested，
@@ -75,7 +86,7 @@ def rules(count, depends, compact=False):
 def environment(models, tools, limitations, commands, compact=False):
     """The execution environment's facts, clipped so the planning prompt fits the Worker's 8000 characters (D46);
     ``compact`` for the replan, whose failure and decision take their own share."""
-    size = (450, 250, 250, 400) if compact else (700, 600, 400, 1200)   # every common command's line is under 200
+    size = (420, 250, 250, 400) if compact else (700, 600, 400, 1200)   # every common command's line is under 200; D69: 450 → 420 for the phase line
     return f"""## 此执行环境的 Coding 工具与已知限制
 {_clip(dumps(tools or {}), size[0])}
 available 为 false 的工具不要选择（需求明确指定的除外，见下；reason 为原因）；没有列出时表示执行环境未报告。
@@ -104,19 +115,28 @@ def preference_section(preferences, limit):
 """
 
 
-def plan_step(models=None, tools=None, limitations=None, commands=None, preferences=None):
-    """The first task of an Agent-planned Session (always Kiro; it plans and does not change business code)."""
-    prompt = intent_prompt(dumps(EXAMPLE), "（见上方完整用户需求）", "本任务的工作目录（即本 Session 的源码检出）", prepared=True) + f"""
+NO_REPOSITORY = """## 本会话没有代码仓库
+所有任务在同一个空的工作目录中完成，产出是其中的文件（报告、方案、数据等），用户在会话页下载；不安排检出、.gitignore、
+preview.json、PR 或「改代码」的 evaluator。
+
+"""
+
+
+def plan_step(models=None, tools=None, limitations=None, commands=None, preferences=None, general=False):
+    """The first task of an Agent-planned Session (always Kiro; it plans and does not change business code). ``general``:
+    the Session has no repository (D65)."""
+    prompt = intent_prompt(dumps(EXAMPLE), "（见上方完整用户需求）", "本任务的工作目录（即本 Session 的源码检出）", prepared=True,
+                           general=general) + f"""
 
 ## 本任务的交付
 1. 意图识别：intent 一句话说明用户真正要完成什么、属于哪类工作。
 2. 需求补全：summary 写成 Markdown——目标、范围（含不做什么）、可验证的验收标准、关键假设与待确认问题；
    只补全用户没有说清但完成任务必需的内容，不改变用户的明确要求。
-{rules("1–7", "depends_on 只列前序任务的 id；")}
+{rules("1–7", "depends_on 只列前序任务的 id；", general=general)}
 
 {environment(models, tools, limitations, commands)}
 
-{preference_section(preferences, 600)}最终回复必须包含且仅包含一个 JSON 代码块（字段：intent、summary、name、steps）；不要加入第二个 JSON/YAML 代码块。
+{NO_REPOSITORY if general else ""}{preference_section(preferences, 600)}最终回复必须包含且仅包含一个 JSON 代码块（字段：intent、summary、name、steps）；不要加入第二个 JSON/YAML 代码块。
 同时按本任务要求写交接文件，说明规划依据与待用户核实的条件。
 """
     return {"id": PLAN_ID, "name": "需求分析与任务规划（KiroCrew）", "tool": "kiro", "model": "auto", "effort": "",
@@ -152,9 +172,9 @@ def expand(db, rid, text, models=None, replan=False, tools=None):
         wanted = step.get("requested") or {}   # D45: the requirement's own choice is kept, never quietly replaced
         listed = published.get(step["tool"])
         state = (tools or {}).get(step["tool"])
-        if wanted and isinstance(state, dict) and state.get("available") is False:   # said before a confirmation (D44)
+        if wanted and isinstance(state, dict) and state.get("available") is False:   # said in the plan (D45)
             notes.append(f"任务「{step['name']}」：需求指定的 {step['tool']} 在此执行环境不可用（{state.get('reason') or '原因未报告'}），"
-                         "确认后会停下等待处理")
+                         "执行到这个任务时会停下等待处理")
         if wanted.get("model"):
             if wanted["model"] not in {"auto", "default"} and listed is not None and wanted["model"] not in listed:
                 notes.append(f"任务「{step['name']}」：需求指定的模型 {wanted['model']} 未由执行环境公布")
@@ -244,6 +264,7 @@ def _required_checks(db, rid, current, steps, notes, replan):
     """D57 §5.1, §13: which of the planned tasks' checks must pass. A planner's mark counts with a quote from the requirement
     (the Session's input), or — in a replan — for a required check of a task it replaces, carried over as it is; any other
     is advisory and said so. A replaced task's required check the replan left out is placed by the platform (_carry)."""
+    from .domain import runs_checks
     requirement = db.execute("SELECT input FROM runs WHERE id=?", (rid,)).fetchone()["input"]
     replaced = ((current.get("replan") or {}).get("replaced") or []) if replan else []
     inherited = list(dict.fromkeys(command for task in replaced for command in task.get("required") or []))
@@ -261,6 +282,8 @@ def _required_checks(db, rid, current, steps, notes, replan):
             step["verify_required"] = required
         else:
             step.pop("verify_required", None)
+        if required and not runs_checks(step):   # D69 Task 2b: said, so no one thinks it ran
+            notes.append(f"任务「{step['name']}」的必过检查不会运行（{_unchecked(step)}）：" + "、".join(_clip(c, 80) for c in required[:3]))
         if kept := {command: basis[command] for command in required if command in basis}:
             step["verify_basis"] = kept
     _carry(replaced, steps, notes)
@@ -289,8 +312,19 @@ def _carry(replaced, steps, notes):
                 target["verify"] = [*target.get("verify", []), command]
             target["verify_required"] = [*target.get("verify_required", []), command]
             notes.append(f"平台把原任务「{task.get('name') or task.get('id')}」的必过检查补到了 {target['id']}：{_clip(command, 120)}")
+    if missing and not runnable and any(_unchecked(step) == "发散阶段不运行检查命令" for step in steps):
+        # D69 Task 2b (D57 session): only diverge tasks — exploratory work is not red-lined; said instead
+        notes.append("必须通过的检查没有可运行的任务（发散阶段不运行检查命令）：" + "、".join(f"「{_clip(c, 120)}」" for c in missing[:5]))
+        return
     require(not missing, f"重新规划没有能承接被替换任务必过检查的新任务（审查与设计任务的检查平台不运行，每个任务至多 {room} 条检查）："
             + "、".join(f"「{_clip(command, 200)}」" for command in missing[:5]), 409, "plan_invalid")
+
+
+def _unchecked(step):
+    """Why the platform runs no checks of ``step`` (domain.runs_checks)."""
+    from .phases import own
+    return "发散阶段不运行检查命令" if own(step) == "diverge" and step.get("kind") not in ("review", "design") \
+        else "审查与设计任务的检查平台不运行"
 
 
 def _fix_kept_checks(db, rid, kept, fixes, notes):

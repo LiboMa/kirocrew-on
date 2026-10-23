@@ -1,5 +1,5 @@
 /* Actual HTTP/SQLite fixture; no Engine or native Coding tools. */
-async page => {
+async (page, {artifactRoot} = {}) => {
   const browser=await page.context().browser().browserType().launch({headless:true,channel:"chrome"});
   const context=await browser.newContext({viewport:{width:1480,height:1050},reducedMotion:"reduce"});
   const p=await context.newPage(),errors=[],checks=[];
@@ -55,7 +55,8 @@ async page => {
     await p.waitForSelector("[data-revoke]");
     check((await p.locator("#modal-body").innerText()).includes("fixture-reader"),"Web 添加指定用户授权");
     await close();
-    const reader=await context.newPage();
+    // Another person, so another browser: a new tab of this one is still the owner's (D67 session cookie).
+    const reader=await (await browser.newContext({viewport:{width:1480,height:1050},reducedMotion:"reduce"})).newPage();
     await reader.goto("http://127.0.0.1:8921/classic/");
     await reader.getByLabel("用户名",{exact:true}).fill("fixture-reader");
     await reader.getByLabel("密码",{exact:true}).fill("Fixture-password-123!");
@@ -64,7 +65,7 @@ async page => {
     check(await reader.locator("#session-list [data-run]").count()===0,"工作流共享没有泄露 Owner 的私人运行");
     await reader.locator("#flow-list [data-flow]").click();
     check(await reader.locator("#flow-name").isDisabled()&&await reader.locator("#modal-submit").isHidden(),"Viewer 无编辑权限");
-    await reader.close();
+    await reader.context().close();
     await p.locator("#run-delete").click();
     await p.locator("#confirm-id").fill("wrong-id");
     await p.locator("#modal-submit").click();
@@ -81,9 +82,9 @@ async page => {
     await p.locator("#new-flow").click();
     check(await p.locator("#modal").evaluate(n=>n.scrollWidth<=n.clientWidth+1),"移动端工作流向导没有横向溢出");
     check(await p.locator("[data-template]").count()===3,"提供三种工作流模板");
-    await p.screenshot({path:"/Users/malibo/MyDev/Kiro-Family-Spaces/experiments/kirocrew-on/state/browser/browser-mobile.png",fullPage:false});
+    if(artifactRoot)await p.screenshot({path:`${artifactRoot}/browser-mobile.png`,fullPage:false});
     await close();await p.setViewportSize({width:1480,height:1050});
-    await p.screenshot({path:"/Users/malibo/MyDev/Kiro-Family-Spaces/experiments/kirocrew-on/state/browser/browser-desktop.png",fullPage:false});
+    if(artifactRoot)await p.screenshot({path:`${artifactRoot}/browser-desktop.png`,fullPage:false});
     check(errors.length===0,"无浏览器脚本错误");
     return {ok:true,checks,nativeCalls:0,mode:"ephemeral HTTP/SQLite browser fixture"};
   }finally{await context.close();await browser.close();}

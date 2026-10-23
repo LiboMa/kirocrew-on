@@ -1,5 +1,5 @@
 import {
-  CircleStop, Copy, Download, Eye, ExternalLink, FolderDown, ListRestart, MonitorPlay, MoreHorizontal, Play, Power, RotateCcw, Stethoscope,
+  CircleStop, Copy, Download, Eye, ExternalLink, FolderDown, ListRestart, MonitorPlay, MoreHorizontal, Power, RotateCcw, Stethoscope,
   Share2,
   Trash2,
   UserCog,
@@ -21,6 +21,7 @@ import { NativeSessionPanel } from "@/features/sessions/NativeSessionPanel";
 import { AppPreviewPanel } from "@/features/sessions/AppPreviewPanel";
 import { ChangesPanel } from "@/features/sessions/ChangesPanel";
 import { CredentialControl } from "@/features/sessions/CredentialControl";
+import { PreviewPages } from "@/features/sessions/PreviewPages";
 import { PublishControl } from "@/features/sessions/PublishControl";
 import { RevisionsPanel } from "@/features/sessions/RevisionsPanel";
 import { KnowledgePanel } from "@/features/sessions/KnowledgePanel";
@@ -31,9 +32,9 @@ import { TaskList } from "@/features/sessions/TaskList";
 import { useSessionActions } from "@/features/sessions/useSessionActions";
 import { bindingLabel } from "@/lib/credentials";
 import { usageLine } from "@/lib/usage";
-import { basisText, clientLabel } from "@/lib/policies";
+import { clientLabel } from "@/lib/policies";
 import {
-  canContinue, canDelete, canRecover, canStop, closeAction, crewEntryReason, deleteReason, directReason, resumeReason, rework,
+  canContinue, canDelete, canRecover, canStop, closeAction, crewEntryReason, deleteReason, directReason, resumeReason,
   shareAccess, statusText,
 } from "@/lib/session";
 
@@ -88,11 +89,9 @@ export function SessionView({ id }: { id: string }) {
               <p id="run-goal" className="line-clamp-3 text-sm leading-6 whitespace-pre-wrap text-muted-foreground">{run.input}</p>
             )}
             <p id="run-id" className="font-mono text-[11px] text-muted-foreground">{run.id} · revision {run.version}</p>
-            {(run.request || basisText(run.admission_basis)) && (
+            {run.request && (
               <p id="run-request" className="text-xs text-muted-foreground">
-                {run.request && <>来自请求 {run.request.id.slice(0, 14)} · {clientLabel(run.request.client)}</>}
-                {run.request && basisText(run.admission_basis) && "；"}
-                {basisText(run.admission_basis)}
+                来自请求 {run.request.id.slice(0, 14)} · {clientLabel(run.request.client)}
               </p>
             )}
             {run.created_by && (
@@ -106,7 +105,7 @@ export function SessionView({ id }: { id: string }) {
                 <CredentialControl run={run} />
               </p>
             )}
-            <PublishControl run={run} />
+            {run.source?.type !== "none" && <PublishControl run={run} />}   {/* D65: no repository, nothing to publish */}
           </div>
           <div className="flex flex-col items-end gap-2">
             <StatusBadge status={run.lifecycle === "closed" ? "stopped" : run.status} className="text-xs"
@@ -138,8 +137,9 @@ export function SessionView({ id }: { id: string }) {
           </Tooltip>
           <Button size="sm" variant="outline" onClick={actions.downloadSource} id="run-download"
             disabled={!run.worker_id || !run.workspace || !!actions.busy}
-            title={!run.worker_id || !run.workspace ? "源码尚未准备，暂无可下载的内容" : "下载源码（含 .git，不含依赖目录与 .env）"}>
-            <FolderDown /> 下载源码
+            title={!run.worker_id || !run.workspace ? "工作目录尚未准备，暂无可下载的内容"
+              : run.source?.type === "none" ? "下载产出（工作目录中的文件）" : "下载源码（含 .git，不含依赖目录与 .env）"}>
+            <FolderDown /> {run.source?.type === "none" ? "下载产出" : "下载源码"}
           </Button>
           <ReportButton run={run} />
           {run.permissions?.share && (
@@ -152,9 +152,12 @@ export function SessionView({ id }: { id: string }) {
               <MonitorPlay /> 打开远程预览
             </Button>
           )}
-          <Button size="sm" variant="outline" onClick={actions.preview} disabled={!run.worker_id} id="run-preview">
-            <Eye /> 预览产出
-          </Button>
+          <span className="inline-flex gap-0.5">
+            <Button size="sm" variant="outline" onClick={actions.preview} disabled={!run.worker_id} id="run-preview">
+              <Eye /> 预览产出
+            </Button>
+            <PreviewPages run={run} />
+          </span>
           <Button size="sm" variant="outline" onClick={actions.stop} disabled={!canStop(run) || !!actions.busy} id="run-stop">
             <CircleStop /> 停止
           </Button>
@@ -190,34 +193,6 @@ export function SessionView({ id }: { id: string }) {
         )}
       </header>
 
-      {run.status === "awaiting_confirmation" && (
-        <Alert id="confirm-notice" className="border-warning/30 bg-warning/5">
-          <AlertTitle id="confirm-notice-title">{run.attention?.title ?? "计划待确认"}</AlertTitle>
-          <AlertDescription className="flex flex-wrap items-center gap-3">
-            <span>{[run.attention?.detail, run.attention?.action].filter(Boolean).join(" ")}</span>
-            <Button size="sm" onClick={actions.confirm} id="run-confirm"
-              disabled={!!actions.busy || run.permissions?.operate === false || !!resumeReason(run) || !!directReason(run)}>
-              <Play /> 确认并开始
-            </Button>
-          </AlertDescription>
-        </Alert>
-      )}
-      {run.status === "awaiting_acceptance" && (
-        <Alert id="accept-notice" className="border-warning/30 bg-warning/5">
-          <AlertTitle id="accept-notice-title">{run.attention?.title ?? "验收待确认"}</AlertTitle>
-          <AlertDescription className="flex flex-wrap items-center gap-3">
-            <span>{[run.attention?.detail, run.attention?.action].filter(Boolean).join(" ")}</span>
-            <Button size="sm" onClick={actions.accept} id="run-accept"
-              disabled={!!actions.busy || run.permissions?.publish === false || !!resumeReason(run)}>
-              <Play /> 确认通过
-            </Button>
-            <Button size="sm" variant="outline" onClick={() => open({ kind: "continue", run, ...rework(run) })} id="run-rework"
-              disabled={!!actions.busy || !canContinue(run)}>
-              <RotateCcw /> 不通过，返工…
-            </Button>
-          </AlertDescription>
-        </Alert>
-      )}
       {run.attention && run.status !== "waiting_worker" && run.status !== "awaiting_confirmation"
         && run.status !== "awaiting_acceptance" && (
         <Alert variant="destructive" id="run-attention" className="border-destructive/30 bg-destructive/5">

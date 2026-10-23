@@ -23,4 +23,5 @@ Element.prototype.releasePointerCapture ??= () => {};
 afterEach(() => {
   cleanup();
   sessionStorage.clear();
+  window.history.replaceState(null, "", "/");   // the page and section live in the address bar (?view=admin&section=…)
 });

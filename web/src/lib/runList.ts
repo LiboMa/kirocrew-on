@@ -31,7 +31,7 @@ export const EMPTY_FILTERS: RunListFilters = {
   q: "", group: "all", repo: "", branch: "", stage: "", tool: "", client: "", submitter: "", since: "", until: "",
 };
 
-const GROUPS: RunFilter[] = ["all", "active", "attention", "done", "closed"];
+const GROUPS: RunFilter[] = ["all", "active", "attention", "done", "closed", "starred"];
 
 export function filtersFromUrl(search: string): RunListFilters {
   const params = new URLSearchParams(search);
@@ -68,6 +68,7 @@ export function listParams(filters: RunListFilters, space: string | null, limit 
   const statuses = { active: [...ACTIVE_STATES], attention: [...ATTENTION_STATES], done: ["completed"] }[filters.group as string];
   if (statuses) params.set("status", statuses.filter((s) => SESSION_STATES.has(s)).join(","));
   if (filters.group === "closed") params.set("lifecycle", "closed");
+  else if (filters.group === "starred") params.set("starred", "1");   // one's own stars, open or closed
   else if (filters.group !== "all") params.set("lifecycle", "open");
   if (filters.q.trim()) params.set("q", filters.q.trim());
   activeFilters(filters).forEach((key) => params.set(key, key === "since" || key === "until" ? day(filters[key], key) : filters[key].trim()));

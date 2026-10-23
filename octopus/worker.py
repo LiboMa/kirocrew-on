@@ -53,6 +53,12 @@ def discovery_loop(worker, stop, first=60, every=900):
             return
 
 
+def said(text, limit, extra=()):
+    """What KiroCrew said, as the platform is told it: masked (the rules, and ``extra``: this Worker's own token, D57
+    §3.3), then cut to ``limit``: no part of a credential the cut runs through is left where no rule knows it."""
+    return workspace.mask_text(str(text), extra)[0][:limit]
+
+
 def write(path, value):
     path.parent.mkdir(parents=True, exist_ok=True)
     temporary = path.with_name("." + path.name + ".tmp")
@@ -89,6 +95,9 @@ TAILS = {
                  "只产出不提交的补丁或报告也可以。",
     "deliver": "依据需求完成交付并真实验证，按项目既有依赖与规范工作；交付涉及代码时，改动应留在源码目录中；"
                "只产出不提交的补丁或报告也可以。",
+    # D65: general work — what it produces is files in the working directory, and its handoff says what and on what basis
+    "research": "收集、阅读并核实资料与数据，把发现、依据与取舍写成工作目录中的文件；交接写产出、依据与未完成项。",
+    "write": "按需求产出成品（报告、方案、文档、清单等），写成工作目录中的文件；交接写产出、依据与未完成项。",
 }
 DEFAULT_TAIL = "依据需求进行开发和真实验证，按项目既有依赖与规范工作。"
 COMMON_TAIL = ("记录具体修改、测试命令、结果和限制。若不能完成，最终回答单独一行写 BLOCKED 并说明恢复条件"
@@ -100,20 +109,25 @@ STAGE_TAILS = {
     "workflow_design": "只执行当前任务，不派生其他子任务。不读取平台或其他项目的凭据。不要编造结论。",
     "coordination": "只执行当前诊断，不派生其他子任务。不读取平台或其他项目的凭据。需要用户补充或决定时在 decision.json 中用 wait_for_user。",
 }
-# The parent Session's agent (D46): the Owner observer — it explains and points the user to a continue; it does not act.
-OBSERVER_CONTEXT = ("你是此 Octopus 研发会话的 Owner 观察员：向用户解释计划、进度、错误与修复决定。"
-                    "平台 Engine 统一派发已采纳的任务；失败诊断通过原生 poc-diagnose 子任务执行（不能再派生任务）。"
-                    "保持同一 Session 与工作区，使用平台给出的真实交接和纠错记录。"
-                    "不要自行派发子任务、执行旧 next/accept、修改源码或平台数据库。"
-                    "用户要修改需求或任务时，请其在控制台「续作」或经 octopus_continue 提交；需要用户补充项目来源或权限时具体说明；"
-                    "不要把未知原因说成已解决。")
+# The parent Session's agent (D46), a collaborator the person talks to in the native chat (D73): written into each new parent
+# Session (prompts.COORDINATOR is its system prompt).
+OBSERVER_CONTEXT = ("你是此 KiroCrew ON 会话的协作者：用户在这里直接与你对话。回答以平台写在聊天里的说明、交接文件和工作区为准。"
+                    "用户要求时，你可以直接修改工作区，或用 spawn_run 派子 Agent（poc-kiro / poc-claude / poc-codex，cwd 为工作区，keep 为 true）。"
+                    "平台正在执行任务时（出现「KiroCrew ON 开始执行：…（Attempt X）」而还没有同一 Attempt 的「已返回」说明）先不动手，"
+                    "请用户等平台停下或在控制台停止。"
+                    "不推送、不建 PR / MR、不改 .octopus/ 下的平台文件、不读取凭证。"
+                    "平台每个任务结束时，它的改动已提交为候选；只有你在聊天里改的，要等用户续作时才由平台提交。"
+                    "用户要回到平台继续时，帮他总结做了什么、做了哪些决定、还剩什么、需求有没有变；"
+                    "需求以最近一次尝试的 instructions.md 开头为准（工作区上两级的 attempts/<Attempt>/instructions.md），"
+                    "聊天里改变了行为或范围时写「需求有变化」并给出续作时应填的完整新需求，否则平台会按原需求把改动改回去。"
+                    "然后请他在控制台续作：平台会先把工作区里的改动提交为新的候选。")
 PREVIEW = ("\n\n## 可运行产出的声明\n交付物是可以运行的应用时，在项目根目录写 .octopus/preview.json："
            '{"processes":[{"name":"web","command":"npm run dev -- --port $PORT","cwd":".","port":"$PORT","entry":true}],'
            '"install":["npm ci"],"ready":{"path":"/","timeout":120}}。1–4 个进程（前后端分开时各一个），恰有一个 entry；'
            'install 至多 4 条；远程预览要求入口进程的 port 为 "$PORT"。')
 
 
-def envelope(task_input, requirement, contract, prompt, upstream, project, handoff, stage=None, extra=""):
+def envelope(task_input, requirement, contract, prompt, upstream, project, handoff, stage=None, extra="", work=None):
     """The instructions an Attempt reads (D46): the requirement, the contract and the task, the upstream handoffs, then
     what this kind of work does — planning, design and diagnosis are not told to develop — and the handoff it writes."""
     from . import roles
@@ -122,10 +136,11 @@ def envelope(task_input, requirement, contract, prompt, upstream, project, hando
     common = STAGE_TAILS.get(stage, COMMON_TAIL)
     role = (contract or {}).get("role")   # D46 P2: the role card comes first
     card = f"# 你的角色：{roles.LABELS[role]}\n{roles.card(role)}\n\n" if role in roles.KINDS else ""
-    return (card + "# 本次研发任务\n\n" + task_input + briefing(requirement, contract) + "\n\n## 任务\n" + prompt +
+    title, folder = ("本次任务", "工作目录") if work == "general" else ("本次研发任务", "源码目录")   # D65 §6a
+    return (card + f"# {title}\n\n" + task_input + briefing(requirement, contract) + "\n\n## 任务\n" + prompt +
             "\n\n## 前序交接\n前序任务的结论、发现、候选与检查；handoff 是其完整交接文件的路径，需要细节时读取；"
             "执行者没有写交接时，handoff_text 是平台根据其结果生成的交接。\n" +
-            dumps(upstream) + f"\n\n源码目录：{project}\n交接文件：{handoff}\n" + tail + common + HANDOFF + extra)
+            dumps(upstream) + f"\n\n{folder}：{project}\n交接文件：{handoff}\n" + tail + common + HANDOFF + extra)
 
 
 def briefing(requirement, contract):
@@ -152,6 +167,9 @@ def briefing(requirement, contract):
             text += "逐项完成并核对上述验收项；审查与测试以它们为判定依据。\n"
         if contract.get("kind") == "deliver":
             text += PREVIEW.lstrip("\n") + "\n"
+        from .phases import own
+        if own(contract) == "diverge":   # D69: its conclusion does not hold up the Session
+            text += "发散阶段：写出发现、依据与取舍，未完成项写在交接里；平台不会因本任务的结论阻断后续任务。\n"
     return text
 
 
@@ -263,7 +281,8 @@ class Worker:
         # Remote preview (D36 §5): on a Worker host the platform reaches the apps through this host's nginx preview
         # port (TLS, preview_tls_name in its certificate); without one, on the platform host's loopback.
         self.apps = Apps(path_prepend)
-        self.checks = Checks(path_prepend)   # a task's verify commands (D37 §5)
+        # a task's verify commands (D37 §5); their output shows this Worker's own token masked too (D57 §3.3)
+        self.checks = Checks(path_prepend, mask=(token,))
         self.preview_tls_port, self.preview_tls_name = preview_tls_port, preview_tls_name
 
     @staticmethod
@@ -333,7 +352,8 @@ class Worker:
             try:
                 return self.native(path) or []
             except crew_api.GatewayError as exc:
-                raise Error(502, "native_error", "读取 KiroCrew 待批准项失败：" + str(exc).splitlines()[0][:200]) from None
+                raise Error(502, "native_error",
+                            "读取 KiroCrew 待批准项失败：" + said(str(exc).splitlines()[0], 200, (self.token,))) from None
         items = []
         for view in read("/api/chat/slots"):
             info = view.get("pending_approval_info") if isinstance(view, dict) and view.get("key") == slot else None
@@ -383,7 +403,8 @@ class Worker:
         except crew_api.GatewayError as exc:   # the platform reads a Worker 404 as "not supported": never pass one on
             if exc.status == 404:
                 raise Error(409, "approval_not_pending", "该批准请求已不在等待中（已被答复或过期）") from None
-            raise Error(502, "native_error", "KiroCrew 未接受答复：" + str(exc).splitlines()[0][:200]) from None
+            raise Error(502, "native_error",
+                        "KiroCrew 未接受答复：" + said(str(exc).splitlines()[0], 200, (self.token,))) from None
         return {"ok": True, "origin": origin, "request_id": wanted[1], "decision": decision}
 
     def native(self, path, body=None, method=None, timeout=None, headers=None):
@@ -421,14 +442,15 @@ class Worker:
                     code = json.loads(text).get("code")
                 except (ValueError, AttributeError):
                     code = None
-                results.append({"rule": item["rule"], "result": "refused", "reason": f"HTTP {exc.status} " + (code or text[:200])})
+                results.append({"rule": item["rule"], "result": "refused",
+                                "reason": f"HTTP {exc.status} " + said(code or text, 200, (self.token,))})
                 continue
             if not answer.get("ok"):
-                results.append({"rule": item["rule"], "result": "refused",
-                                "reason": str(answer.get("reason") or answer.get("outcome") or "未写入")[:200]})
+                reason = said(answer.get("reason") or answer.get("outcome") or "未写入", 200, (self.token,))
+                results.append({"rule": item["rule"], "result": "refused", "reason": reason})
             elif answer.get("superseded"):
-                results.append({"rule": item["rule"], "result": "superseded",
-                                "reason": "替代了：" + "；".join(str(r)[:100] for r in answer["superseded"][:3])})
+                replaced = "；".join(said(r, 100, (self.token,)) for r in answer["superseded"][:3])
+                results.append({"rule": item["rule"], "result": "superseded", "reason": "替代了：" + replaced})
             else:
                 results.append({"rule": item["rule"], "result": "written"})
         return {"results": results}
@@ -443,9 +465,11 @@ class Worker:
         except crew_api.GatewayError as exc:   # the platform reads a Worker 404 as "not supported": never pass one on
             if exc.status == 404:
                 return {"ok": True, "absent": True}   # KiroCrew holds no such lesson (deleted there already)
-            raise Error(502, "native_error", "KiroCrew 未删除：" + str(exc).splitlines()[0][:200]) from None
+            raise Error(502, "native_error",
+                        "KiroCrew 未删除：" + said(str(exc).splitlines()[0], 200, (self.token,))) from None
         if isinstance(answer, dict) and answer.get("ok") is False:
-            raise Error(409, "forget_refused", "KiroCrew 未删除：" + str(answer.get("reason") or "原因未报告")[:200])
+            raise Error(409, "forget_refused",
+                        "KiroCrew 未删除：" + said(answer.get("reason") or "原因未报告", 200, (self.token,)))
         return {"ok": True}
 
     def path(self, rid):
@@ -481,6 +505,8 @@ class Worker:
             if not isinstance(message, dict):
                 continue
             content = message.get("content") if isinstance(message.get("content"), str) else ""
+            # D57 §3.3: credentials and this Worker's own token masked, before the cut (so none is left half shown)
+            content = workspace.mask_text(content, (self.token,))[0]
             messages.append({"role": str(message.get("role") or ""), "content": content[:self.OBSERVE_TEXT],
                              "truncated": len(content) > self.OBSERVE_TEXT,
                              "ts": message["ts"] if isinstance(message.get("ts"), str) else None})
@@ -492,6 +518,26 @@ class Worker:
 
     PREVIEW_ENTRIES = ("index.html", "dist/index.html", "build/index.html", "public/index.html", "web/index.html",
                        "out/index.html", "site/index.html")
+    # Directories whose HTML is a dependency's, never the Session's output (EC2 run-968d6e37: a cloned repository's .venv).
+    NOT_PAGES = {"node_modules", "venv", "site-packages", "__pycache__", "bower_components"}
+    PAGES = 30
+
+    def pages(self, project):
+        """The HTML the Session produced, best first: a web project's own entry (PREVIEW_ENTRIES), then the newest. EC2
+        2026-10-22: reports written to report/ or artifacts/<name>/ were 「未找到可预览的 index.html」."""
+        found, seen = [], 0
+        for root, directories, files in os.walk(project):
+            directories[:] = sorted(d for d in directories if not d.startswith(".") and d not in self.NOT_PAGES)
+            for name in files:
+                seen += 1
+                if name.lower().endswith((".html", ".htm")) and not name.startswith("."):
+                    path = Path(root) / name
+                    found.append((path.relative_to(project).as_posix(), path.stat().st_mtime))
+            if seen > 20000:   # a very large project: what was found so far
+                break
+        entries = [e for e in self.PREVIEW_ENTRIES if any(f == e for f, _ in found)]
+        rest = [f for f, _ in sorted(found, key=lambda item: (-item[1], item[0])) if f not in entries]
+        return (entries + rest)[:self.PAGES]
 
     def files(self, body):
         """Read-only project files for the console preview: never outside the project, never hidden files (.env, .git)."""
@@ -501,11 +547,10 @@ class Worker:
         relative = body.get("path") or ""
         require(isinstance(relative, str) and len(relative) <= 500 and "\x00" not in relative, "路径无效")
         if not relative:
-            entry = next((e for e in self.PREVIEW_ENTRIES if (project / e).is_file()), None)
-            entry = entry or next((p.name for p in sorted(project.glob("*.html"))), None)
-            require(entry is not None, "未找到可预览的 index.html；需要开发服务器的项目请在会话页「远程预览」里启动，或「下载源码」在本机运行",
+            pages = self.pages(project)
+            require(bool(pages), "此会话还没有产出 HTML 页面；需要开发服务器的项目请在会话页「远程预览」里启动，或「下载源码」在本机运行",
                     404, "no_preview")
-            return {"entry": entry}
+            return {"entry": pages[0], "pages": pages}
         target = (project / relative).resolve()
         require(target.is_relative_to(project) and target.is_file(), "文件不存在", 404, "not_found")
         require(not any(part.startswith(".") for part in target.relative_to(project).parts), "文件不存在", 404, "not_found")
@@ -617,12 +662,49 @@ class Worker:
                 workspace.baseline_restore(workspace.project_dir(run), candidate)
             marker.unlink(missing_ok=True)
 
+    @staticmethod
+    def _untracked_at_start(run, folder):
+        """The untracked files a review starts with (D57 §4), kept in its Attempt's folder, outside the project: what it
+        creates beside them is moved out when its changes are put back. None when they cannot be listed: the review runs
+        without them."""
+        try:
+            return workspace.untracked(workspace.project_dir(run))
+        except Exception as exc:   # never holds the review up
+            print(f"KiroCrew ON Worker: 未记录审查开始时的未跟踪文件（{folder.name}：{workspace.scrub(exc)[:200]}）",
+                  file=sys.stderr, flush=True)
+            return None
+
+    @staticmethod
+    def _review_snapshot(run, attempt):
+        """The untracked files a review Attempt started with, or None: not a review, or dispatched before D57 §4."""
+        if not (isinstance(attempt, str) and re.fullmatch(r"attempt-[a-f0-9]{32}", attempt)):
+            return None
+        path = run / "attempts" / attempt / "untracked.json"
+        try:
+            paths = None if path.is_symlink() or not path.is_file() else json.loads(path.read_text()).get("paths")
+        except (OSError, ValueError, AttributeError):
+            return None
+        return paths if isinstance(paths, list) and all(isinstance(name, str) for name in paths) else None
+
+    @staticmethod
+    def _created(state, project, keep):
+        """A check's or a rewind's state with the untracked files the review created (``created``, D57 §4);
+        ``tracked_only`` when only its tracked files could be told: the Attempt has no snapshot, or listing failed."""
+        if keep is not None:
+            try:
+                return {**state, "created": sorted(set(workspace.untracked(project)) - set(keep)), "tracked_only": False}
+            except ValueError:   # never a failure of its own: told as by a Worker without snapshots
+                pass
+        return {**state, "created": [], "tracked_only": True}
+
     def candidate(self, body):
         """A task's candidate commit (D37 §3, ``mode: commit``), a review's check that the workspace is still the
         candidate it reviewed (§6, ``mode: check``), or putting back what a read-only platform task changed in tracked
-        files after that candidate (D46 P4, ``mode: restore``; never moves the branch), or what a review changed in tracked
-        files — its commits on top of the candidate too, so the branch is back on it (D57 §4, ``mode: rewind``) — or what a
-        candidate changed (D56, ``mode: diff``; read only)."""
+        files after that candidate (D46 P4, ``mode: restore``; never moves the branch), or what a review changed — its
+        commits on top of the candidate too, so the branch is back on it, and the files it created, moved into its
+        Attempt's ``review-removed`` folder (D57 §4, ``mode: rewind``) — or what a candidate changed (D56, ``mode: diff``;
+        read only). check and rewind name the files the review created (``created``) when its dispatch listed the
+        untracked files it started with."""
         run = self.path(body["run_id"])
         self._undo_baseline(run)
         try:   # a Session whose workspace is gone (cleaned up long after it ended) says so, not a 500
@@ -640,9 +722,10 @@ class Worker:
             if mode == "diff":
                 require(body.get("expected"), "diff 需要 expected")
                 return workspace.candidate_diff(project, body["expected"], body.get("parent") or base)
+            keep = self._review_snapshot(run, body.get("attempt_id")) if mode in {"check", "rewind"} else None
             if mode == "check":
                 require(body.get("expected"), "check 需要 expected")
-                return workspace.clean_against(project, body["expected"])
+                return self._created(workspace.clean_against(project, body["expected"]), project, keep)
             if mode == "restore":
                 require(body.get("expected"), "restore 需要 expected")
                 state = workspace.clean_against(project, body["expected"])
@@ -658,7 +741,8 @@ class Worker:
                             f"会话分支不在候选 {body['expected'][:7]} 之上，不能撤回", 409, "conflict")
                     current = workspace._git(project, "rev-parse", "--abbrev-ref", "HEAD")
                     require(current == branch, f"工作区不在会话分支 {branch}（当前 {current}），不能撤回", 409, "conflict")
-                return workspace.rewind(project, body["expected"])
+                into = None if keep is None else run / "attempts" / body["attempt_id"] / "review-removed"
+                return self._created(workspace.rewind(project, body["expected"], keep=keep, into=into), project, keep)
             message = str(body.get("message") or "KiroCrew ON：任务候选")[:300]
             return workspace.task_candidate(project, message, branch, run, body.get("parent"), base, body.get("since"))
         except ValueError as exc:
@@ -989,7 +1073,10 @@ class Worker:
                          "include_memory": False, "include_lessons": False, "include_project": False, "silent": True}
                 if self.approval_mode == "auto":
                     spawn["approval_mode"] = "auto"
-                tried(session, result="spawned", native_id=self.native("/api/spawn", spawn).get("id"))
+                native_id = self.native("/api/spawn", spawn).get("id")
+                if native_id:
+                    self._quiet_parent(native_id, spawn["parent_session"])
+                tried(session, result="spawned", native_id=native_id)
             except Exception as exc:   # recorded, not raised: the next round tries again
                 tried(session, result="failed", error=type(exc).__name__)
             done.append(session)
@@ -1099,7 +1186,7 @@ class Worker:
                 write(parent_file, {"slot": slot, "parent": "dashboard:" + slot})
             if not (run / "parent-note.json").exists():
                 result = self.native("/api/chat/slots/" + slot + "/note", {
-                    "content": f"Octopus MVP 1.0.0 已建立研发运行 {rid}。源码工作区：{workspace.project_dir(run)}。"
+                    "content": f"KiroCrew ON 已建立研发运行 {rid}。源码工作区：{workspace.project_dir(run)}。"
                                "任务由平台 API 串行调度，进度与交接会回写此对话。",
                     "source": "octopus-run", "ephemeral": True})
                 require(result.get("ok"), "原生会话记录未确认", 409, "native_unavailable")
@@ -1184,6 +1271,11 @@ class Worker:
         folder = run / "attempts" / attempt
         # Checked before the lock: a slow kiro-cli must not hold every other request of this Worker.
         login = self.tool_auth() if spec["tool"] == "kiro" or body.get("coordination") or body.get("design") else "ok"
+        try:   # D57 §4: a review's untracked files, listed before the lock too (a large workspace is slow to list)
+            review = (self.contract(spec, body.get("contract")).get("kind") or spec.get("kind")) == "review"
+        except Error:
+            review = False   # refused, and said, under the lock
+        listed = self._untracked_at_start(run, folder) if review and not (folder / "dispatch.json").exists() else None
         with self.lock:
             record = folder / "dispatch.json"
             if record.exists():
@@ -1256,20 +1348,25 @@ class Worker:
                                              health["models"], health["tools"])
             stage = ("coordination" if body.get("coordination") else "workflow_design" if body.get("design")
                      else body.get("stage") if body.get("stage") in {"planning"} else None)
+            work = "general" if body.get("work") == "general" else None   # D65: said by the platform
             instructions = envelope(body["input"], requirement, contract, spec["prompt"], body.get("upstream", []),
                                     workspace.project_dir(run), handoff, stage=stage,
-                                    extra=extra_prompt + ("\n\n" + design_prompt if design_prompt else ""))
+                                    extra=extra_prompt + ("\n\n" + design_prompt if design_prompt else ""), work=work)
             (folder / "instructions.md").write_text(instructions)
             write(folder / "context.json", context)
             context_hash = hashlib.sha256(dumps(context).encode()).hexdigest()
             marker = "[OCTOPUS-ATTEMPT:" + attempt + "]"
-            prompt = f"{marker}\n完整阅读 {folder / 'instructions.md'}，在指定源码目录完成本次任务。"
+            prompt = f"{marker}\n完整阅读 {folder / 'instructions.md'}，在指定{'工作' if work else '源码'}目录完成本次任务。"
             value = {"request_hash": hashlib.sha256(dumps(body).encode()).hexdigest(),
                      "status": "dispatching", "attempt_id": attempt, "context_hash": context_hash}
             if given:
                 value["skills"] = given
             if resume is not None and unresumable is None:
                 value["continuing"] = resume   # kept for a reconcile: a lost receipt still knows the chain
+            if review:   # D57 §4: a first dispatch only, before its native task starts
+                (folder / "untracked.json").unlink(missing_ok=True)   # from a dispatch that stopped before it was recorded
+                if listed is not None:
+                    write(folder / "untracked.json", {"paths": listed})
             write(record, value)  # Persist before the native side effect.
             try:
                 spawn = {
@@ -1309,6 +1406,9 @@ class Worker:
                     result = self.native("/api/spawn", spawn)
                 require(re.fullmatch(r"[a-f0-9]{8,64}", str(result.get("id", ""))), "原生 Task ID 无效")
                 value.update(status="running", native_id=result["id"], receipt=result)
+                if self._quiet_parent(result["id"], parent["parent"]):
+                    value["collected"] = True
+                self._start_note(folder, parent, spec, attempt)
             except crew_api.GatewayError as exc:
                 try:
                     failure = json.loads(str(exc).partition(": ")[2])
@@ -1318,12 +1418,40 @@ class Worker:
                 # counted:true. Only a recognized JSON client refusal is definitive.
                 refused = exc.status in {400, 401, 403, 404, 409, 422} and "error" in failure and not failure.get("counted")
                 value.update(status="blocked" if refused else "dispatch_unknown",
-                             error=("原生拒绝：" + str(failure["error"])[:1000]) if refused
+                             error=("原生拒绝：" + said(failure["error"], 1000, (self.token,))) if refused
                              else f"Native HTTP {exc.status}; inspect before retry")
             except Exception:
                 value.update(status="dispatch_unknown", error="原生派发回执未确认")
             write(record, value)
             return value
+
+    TOOL_NAMES = {"kiro": "Kiro CLI", "claude": "Claude Code", "codex": "Codex", "opencode": "OpenCode"}
+
+    def _start_note(self, folder, parent, spec, attempt):
+        """D73: one line in the parent Session's chat as a task starts — the person and the Agent there know the platform is
+        the writer until the task's result note follows (KiroCrew's note: shown, never a turn). Best effort, once an Attempt."""
+        marker = folder / "start-note.json"
+        if marker.exists():
+            return
+        name = workspace.mask_text(str(spec.get("name") or spec.get("id") or ""), (self.token,))[0][:80]
+        content = (f"KiroCrew ON 开始执行：{name}（{self.TOOL_NAMES.get(spec.get('tool'), spec.get('tool'))}，Attempt {attempt}）。"
+                   "完成前请不要修改工作区；完成后这里会出现结果说明。")
+        try:
+            self.native("/api/chat/slots/" + parent["slot"] + "/note", {"content": content, "source": "octopus-start",
+                                                                         "ephemeral": True}, timeout=10)
+            write(marker, {"recorded": True})
+        except Exception:   # never holds the dispatch up
+            pass
+
+    def _quiet_parent(self, native_id, parent):
+        """Tell KiroCrew the platform collects this run's result itself (GET /api/spawn/{id}), so its end runs no turn
+        in the parent slot: KiroCrew 0.10's POST /api/spawn/mark-collected, which its own blocking spawn tool uses. Best
+        effort: an older or busy Gateway injects the result as before, and the dispatch stands either way."""
+        try:
+            self.native("/api/spawn/mark-collected", {"ids": [native_id], "parent_session": parent}, timeout=10)
+            return True
+        except Exception:
+            return False
 
     USAGE_ROW = {"input": "input_tokens", "output": "output_tokens", "cache_read": "cache_read_tokens",
                  "cache_create": "cache_write_tokens"}
@@ -1443,7 +1571,8 @@ class Worker:
         if not owned and "[OCTOPUS-ATTEMPT:" + attempt + "]" not in str(row.get("task") or ""):
             return None
         elapsed = row.get("elapsed")
-        return {"reason": str(row.get("reason") or "")[:40], "detail": str(row.get("reason_detail") or "")[:300],
+        return {"reason": said(row.get("reason") or "", 40, (self.token,)),
+                "detail": said(row.get("reason_detail") or "", 300, (self.token,)),
                 "elapsed": elapsed if isinstance(elapsed, (int, float)) and not isinstance(elapsed, bool) else None,
                 "resuming": bool(row.get("resuming"))}
 
@@ -1456,14 +1585,28 @@ class Worker:
         dispatch = json.loads((folder / "dispatch.json").read_text())
         if not dispatch.get("native_id"):
             return self.reconcile(run, parent, attempt, dispatch)
-        rows = self.native("/api/spawn").get("agents", [])
-        native = next((t for t in rows if t.get("id") == dispatch["native_id"] and t.get("parent") == parent["parent"]), None)
         statefile = self.home / "subagents" / dispatch["native_id"] / "state.json"
         state = {}
         if statefile.is_file() and not statefile.is_symlink():
             saved = json.loads(statefile.read_text())
             if saved.get("id") == dispatch["native_id"] and saved.get("parent_session") == parent["parent"]:
                 state = saved
+        native = None
+        if state:
+            # A running run whose state.json proves it is ours: its own row (EC2 2026-10-22: 7 KB / 16 ms, where the whole
+            # listing was 310 KB / 150 ms of the Gateway's one loop thread on every poll, and the loop's watchdog ended it).
+            # Ended, queued, or not provably ours: the listing, which alone says whether a person stopped it.
+            try:
+                own = self.native("/api/spawn/" + dispatch["native_id"])
+            except crew_api.GatewayError:
+                own = None
+            if isinstance(own, dict) and own.get("id") == dispatch["native_id"] and own.get("done") is False \
+                    and not own.get("queued") and own.get("status") != "queued":
+                native = {**own, "parent": parent["parent"]}
+        if native is None:
+            rows = self.native("/api/spawn").get("agents", [])
+            native = next((t for t in rows if t.get("id") == dispatch["native_id"] and t.get("parent") == parent["parent"]),
+                          None)
         if native is None:   # D60: a run KiroCrew deferred, or one that began and waits again (resuming), is not listed
             queued = self._queued(dispatch["native_id"], attempt, owned=bool(state))
             if queued is not None:
@@ -1513,9 +1656,11 @@ class Worker:
             # Native busy-turn notes are limited to MAX_DEFERRED_NOTE_CHARS=4000.
             # Keep the complete native response below and in SQL; only the
             # declarative parent-chat projection is shortened.
-            header = (f"Octopus 执行 Attempt {attempt} 已返回。原生 Task：{dispatch['native_id']}。"
+            header = (f"KiroCrew ON 执行 Attempt {attempt} 已返回。原生 Task：{dispatch['native_id']}。"
                       f"实际后端：{evidence.get('actual_backend') or '未核实'}。交接验证由平台进行。\n\n")
-            raw = str(native.get("result", ""))
+            # D57 §3.3: KiroCrew shows and keeps the parent conversation — credentials and this Worker's own token are
+            # masked there, before the cut; the platform reads the result as written below
+            raw = workspace.mask_text(str(native.get("result", "")), (self.token,))[0]
             footer = "\n\n（父对话仅显示摘要；完整结果保留在原生子任务和 Octopus 执行记录中。）"
             note = header + raw
             if len(note) > 3800:
@@ -1535,7 +1680,8 @@ class Worker:
             # (the platform's may differ), and the /api/spawn row's turns and redacted last tool (state.json's is raw).
             updated = state.get("updated_at") if state else None
             signal = {"turns": native.get("turns", state.get("turns") if state else None),
-                      "last_tool": str(native.get("last_tool") or "")[:200], "status": state.get("status") if state else None}
+                      "last_tool": said(native.get("last_tool") or "", 200, (self.token,)),   # masked, then cut
+                      "status": state.get("status") if state else None}
             if isinstance(updated, (int, float)) and not isinstance(updated, bool):
                 signal.update(updated_at=updated, idle_seconds=max(0.0, time.time() - updated))
             progress = {"progress": signal}
@@ -1592,7 +1738,8 @@ class Worker:
                 raise Error(409, "not_running", "任务已不在运行，补充说明未送达") from None
             if detail.startswith("steer_unsupported"):   # a backend KiroCrew cannot steer (codex)
                 raise Error(409, "steer_unsupported", "该任务的后端不支持补充说明") from None
-            raise Error(502, "native_error", "KiroCrew 未接受补充说明：" + str(exc).splitlines()[0][:200]) from None
+            raise Error(502, "native_error",
+                        "KiroCrew 未接受补充说明：" + said(str(exc).splitlines()[0], 200, (self.token,))) from None
         return {"ok": True, "status": str(answer.get("status") or "steered")}
 
     def _release(self, run):

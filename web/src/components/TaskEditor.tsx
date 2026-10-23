@@ -5,9 +5,10 @@ import { AgentFields } from "@/components/AgentFields";
 import { Button } from "@/components/ui/button";
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible";
 import { Input } from "@/components/ui/input";
+import { NativeSelect } from "@/components/NativeSelect";
 import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
-import { TOOLS } from "@/lib/labels";
+import { PHASE_LABELS, TOOLS } from "@/lib/labels";
 
 export function newStep(): Step {
   return { id: "task-" + crypto.randomUUID().slice(0, 8), name: "新任务", tool: "claude", model: "auto", effort: "", prompt: "" };
@@ -43,7 +44,9 @@ export function TaskEditor({ tasks, onChange, models, defaults, idPrefix, title,
                 <span className="grid size-6 shrink-0 place-items-center rounded bg-muted font-mono text-[11px]">{index + 1}</span>
                 <CollapsibleTrigger className="group flex min-w-0 flex-1 items-center gap-2 text-left">
                   <strong className="truncate text-sm">{task.name || "未命名任务"}</strong>
-                  <small className="shrink-0 text-xs text-muted-foreground">{TOOLS[task.tool] ?? task.tool} · {task.model || "auto"}</small>
+                  <small className="shrink-0 text-xs text-muted-foreground">
+                    {TOOLS[task.tool] ?? task.tool} · {task.model || "auto"}{task.phase ? ` · ${PHASE_LABELS[task.phase]}` : ""}
+                  </small>
                   <ChevronDown className="ml-auto size-4 shrink-0 text-muted-foreground group-data-[state=open]:rotate-180" />
                 </CollapsibleTrigger>
                 {!readOnly && (
@@ -64,6 +67,19 @@ export function TaskEditor({ tasks, onChange, models, defaults, idPrefix, title,
                   <div className="space-y-1.5">
                     <Label htmlFor={`${idPrefix}-${index}-prompt`}>Agent 提示词 / 任务说明</Label>
                     <Textarea id={`${idPrefix}-${index}-prompt`} rows={5} value={task.prompt} onChange={(e) => change(index, { prompt: e.target.value })} />
+                  </div>
+                  <div className="max-w-60 space-y-1.5">
+                    <Label htmlFor={`${idPrefix}-${index}-phase`}>阶段</Label>
+                    {/* D69: 发散 lets the task's own failure through as a warning; 设计 is judged at the phase's end */}
+                    <NativeSelect id={`${idPrefix}-${index}-phase`} value={task.phase ?? ""} onChange={(e) => {
+                      const { phase: _ignored, ...rest } = task;
+                      onChange(tasks.map((t, i) => (i === index ? (e.target.value ? { ...rest, phase: e.target.value as Step["phase"] } : rest) : t)));
+                    }}>
+                      <option value="">自动（按类别）</option>
+                      <option value="diverge">发散：头脑风暴、调研、多方案</option>
+                      <option value="design">设计：阶段末把关</option>
+                      <option value="converge">收敛：实现、撰写、测试、交付</option>
+                    </NativeSelect>
                   </div>
                   <AgentFields idPrefix={`${idPrefix}-${index}`} models={models} defaults={defaults} value={task}
                     onChange={(agent) => change(index, { ...agent, effort: agent.tool === "opencode" ? "" : agent.effort })} />

@@ -95,6 +95,25 @@ class LibraryTests(HostCase):
             with self.subTest(memory=memory, cpu=cpu):
                 self.assertNotEqual(self.bash(f"boundary_limits alice '{memory}' '{cpu}'", check=False).returncode, 0)
 
+    def test_codex_never_searches_the_web_from_a_boundary(self):
+        # EC2 run-3852f436 / run-78526202 / run-f2539d3a (2026-10-22): "Access denied: web search is not authorized for this
+        # identity" — the boundary's Bedrock identity may not search, and each such turn failed and cost a recovery cycle.
+        install = 'install() { mkdir -p "${@: -1}"; }\n'
+        config = self.root / "data/alice/home/.codex/config.toml"
+        self.bash(install + "boundary_codex alice")
+        self.assertEqual(config.read_text(), 'web_search = "disabled"\nmodel_provider = "amazon-bedrock"\nmodel = "openai.gpt-6-astra"\n')
+        config.write_text('model = "openai.gpt-6-astra"\n[profiles.fast]\nmodel = "x"\n')   # an existing one: put first, kept
+        self.bash(install + "boundary_codex alice")
+        self.assertEqual(config.read_text(), 'web_search = "disabled"\nmodel = "openai.gpt-6-astra"\n[profiles.fast]\nmodel = "x"\n')
+        config.write_text('web_search = "live"\nmodel = "m"\n')   # someone's own choice is theirs
+        self.bash(install + "boundary_codex alice")
+        self.assertEqual(config.read_text(), 'web_search = "live"\nmodel = "m"\n')
+
+    def test_every_boundary_gets_the_codex_settings_on_each_deploy(self):
+        text = (ROOT / "deploy/install/al2023.sh").read_text()
+        loop = text[text.index("# others:begin"):text.index("# others:end")]
+        self.assertIn('boundary_codex "$OTHER"', loop)
+
     def test_the_tools_environment_is_written_per_boundary(self):
         self.bash("boundary_env alice")
         self.assertEqual((self.root / "etc/boundary-alice.env").read_text(),
@@ -215,7 +234,8 @@ class InstallerTests(unittest.TestCase):
         self.assertGreater(loop, self.text.index('bootstrap-worker --worker-url "http://127.0.0.1:$WORKER_PORT"'))
         block = self.text[self.text.index("# others:begin"):self.text.index("# others:end")]
         calls = []
-        stubs = ('other_boundaries() { echo alice; echo bob; echo carol; }\nboundary_env() { :; }\nlog() { echo "LOG $*"; }\n'
+        stubs = ('other_boundaries() { echo alice; echo bob; echo carol; }\nboundary_env() { :; }\nboundary_codex() { :; }\n'
+                 'log() { echo "LOG $*"; }\n'
                  'systemctl() { :; }\nboundary_restart() { echo "restart $1"; [ "$1" != bob ]; }\nBOUNDARY=personal KC=/k\n')
         result = subprocess.run(["bash", "-c", "set -euo pipefail\n" + stubs + block + "\necho END"], capture_output=True, text=True)
         self.assertNotEqual(result.returncode, 0)   # the deploy reports the failure

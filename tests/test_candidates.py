@@ -1,11 +1,13 @@
 """D37 §3, §6: a task's candidate commit on the Session's branch (secrets keep the branch where it was), and a review's
 check that the workspace is still the candidate it reviewed."""
 import json
+import os
 from pathlib import Path
 import subprocess
 import tempfile
 import threading
 import unittest
+from unittest.mock import patch
 import urllib.error
 import urllib.request
 
@@ -13,6 +15,8 @@ from octopus import sources
 from octopus.security import Error
 from octopus.worker import serve
 from tests.test_archive import RID, TOKEN, make_worker
+
+ATTEMPT = "attempt-" + "5" * 32
 
 
 def git(project, *args):
@@ -90,7 +94,7 @@ class CandidateTests(unittest.TestCase):
         self.write({"src/a.js": "a"})
         sha = self.commit()["sha"]
         check = lambda: self.node.candidate({"run_id": RID, "attempt_id": "attempt-2", "mode": "check", "expected": sha})
-        self.assertEqual(check(), {"head": sha, "clean": True, "changed_files": []})
+        self.assertEqual(check(), {"head": sha, "clean": True, "changed_files": [], "created": [], "tracked_only": True})
         self.write({".env": "SECRET=1", "node_modules/y/i.js": "y"})
         self.assertTrue(check()["clean"])   # what a download and a publish leave out does not count
         self.write({".coverage": "data", "reports/junit.xml": "<x/>", "dist/app.js": "built"})
@@ -129,7 +133,8 @@ class CandidateTests(unittest.TestCase):
         c1 = self.commit()["sha"]
         self.write({"docs/guide.md": "审查结论写进了文档\n"})
         result = self.rewind(c1)
-        self.assertEqual(result, {"head": c1, "clean": True, "changed_files": [], "reverted": ["docs/guide.md"], "rewound": 0})
+        self.assertEqual(result, {"head": c1, "clean": True, "changed_files": [], "reverted": ["docs/guide.md"], "rewound": 0,
+                                  "removed": [], "created": [], "tracked_only": True})
         self.assertEqual((self.project / "docs/guide.md").read_text(), "指南\n")
         self.assertEqual(self.rewind(c1)["reverted"], [])   # nothing left to put back
 
@@ -171,6 +176,161 @@ class CandidateTests(unittest.TestCase):
             self.rewind(c1)
         self.assertEqual(caught.exception.status, 409)
         self.assertEqual(git(self.project, "rev-parse", "HEAD"), head)
+
+    def snapshot(self, attempt=ATTEMPT):   # what the Worker records when it dispatches a review (D57 §4)
+        folder = self.node.path(RID) / "attempts" / attempt
+        folder.mkdir(parents=True, exist_ok=True)
+        (folder / "untracked.json").write_text(json.dumps({"paths": sources.untracked(self.project)}))
+        return folder
+
+    def review(self, mode, expected, attempt=ATTEMPT):
+        return self.node.candidate({"run_id": RID, "attempt_id": attempt, "mode": mode, "expected": expected})
+
+    def test_rewind_moves_out_files_the_reviewer_created(self):   # D57 §4: a review's new files never reach a candidate
+        self.write({"src/a.js": "a", ".gitignore": "build/\n"})
+        c1 = self.commit()["sha"]
+        self.write({"notes.txt": "实现者的笔记", "build/old.log": "old", "node_modules/x/i.js": "x"})
+        folder = self.snapshot()
+        self.assertEqual(json.loads((folder / "untracked.json").read_text()), {"paths": ["notes.txt"]})
+        self.write({"review.md": "审查结论\n", "docs/new.md": "新文档\n", "build/out.log": "log", "node_modules/x/y.js": "y"})
+        check = self.review("check", c1)
+        self.assertEqual((check["head"], check["clean"], check["changed_files"]), (c1, True, []))
+        self.assertEqual((check["created"], check["tracked_only"]), (["docs/new.md", "review.md"], False))
+        result = self.review("rewind", c1)
+        self.assertEqual((result["head"], result["clean"], result["reverted"], result["rewound"]), (c1, True, [], 0))
+        self.assertEqual((result["removed"], result["created"]), (["docs/new.md", "review.md"], []))
+        moved = folder / "review-removed"
+        self.assertEqual(((moved / "review.md").read_text(), (moved / "docs/new.md").read_text()), ("审查结论\n", "新文档\n"))
+        self.assertFalse((self.project / "review.md").exists())
+        self.assertFalse((self.project / "docs").exists())   # left empty by the move
+        self.assertTrue(self.project.is_dir())
+        # the implementer's untracked file, ignored files and what a candidate leaves out stay where they are
+        self.assertEqual((self.project / "notes.txt").read_text(), "实现者的笔记")
+        for name in ("build/out.log", "build/old.log", "node_modules/x/y.js", "node_modules/x/i.js"):
+            self.assertTrue((self.project / name).is_file(), name)
+        self.assertEqual(git(self.project, "rev-parse", "HEAD"), c1)
+        self.assertEqual(self.review("check", c1)["created"], [])
+        self.assertEqual(self.review("rewind", c1)["removed"], [])   # nothing left to move
+
+    def test_rewind_without_a_snapshot_moves_nothing(self):   # an Attempt dispatched before D57 §4 recorded none
+        self.write({"src/a.js": "a"})
+        c1 = self.commit()["sha"]
+        self.write({"review.md": "审查结论\n"})
+        self.assertEqual(self.review("check", c1), {"head": c1, "clean": True, "changed_files": [], "created": [],
+                                                    "tracked_only": True})
+        result = self.review("rewind", c1)
+        self.assertEqual((result["removed"], result["created"], result["tracked_only"]), ([], [], True))
+        self.assertEqual((self.project / "review.md").read_text(), "审查结论\n")
+        self.assertFalse((self.node.path(RID) / "attempts" / ATTEMPT / "review-removed").exists())
+        self.assertEqual(sources.rewind(self.project, c1)["removed"], [])
+
+    def test_a_review_dispatch_records_the_untracked_snapshot(self):
+        native = self.node.native
+        self.node.native = lambda path, body=None, method=None, **kw: {"id": "abcdef12"} if path == "/api/spawn" \
+            else native(path, body, method)
+        run = self.node.path(RID)
+        self.assertFalse((run / "attempts").resolve().is_relative_to(self.project.resolve()))   # never in a candidate
+        self.write({"notes.txt": "实现者的笔记", ".env": "SECRET=1", "node_modules/x/i.js": "x"})
+
+        def dispatch(attempt, kind, **extra):
+            return self.node.dispatch({"run_id": RID, "attempt_id": attempt, "input": "需求", "upstream": [], "quality": True,
+                                       "spec": {"id": kind, "name": kind, "tool": "claude", "model": "auto", "effort": "",
+                                                "prompt": kind},
+                                       "contract": {"kind": kind, "acceptance": ["完成"]}, **extra})
+        held, listing = [], sources.untracked
+
+        def probe():   # from another thread, as another request of this Worker would
+            free = self.node.lock.acquire(blocking=False)
+            held.append(not free)
+            if free:
+                self.node.lock.release()
+
+        def listed(project):   # a large workspace is slow to list: never while this Worker's other requests wait
+            thread = threading.Thread(target=probe)
+            thread.start()
+            thread.join()
+            return listing(project)
+        with patch.object(sources, "untracked", side_effect=listed):
+            self.assertEqual(dispatch(ATTEMPT, "review")["status"], "running")
+        self.assertEqual(held, [False])
+        snapshot = run / "attempts" / ATTEMPT / "untracked.json"
+        self.assertEqual(json.loads(snapshot.read_text()), {"paths": ["notes.txt"]})
+        self.write({"review.md": "审查结论\n"})
+        with patch.object(sources, "untracked", side_effect=listed) as again:
+            dispatch(ATTEMPT, "review")   # the same Attempt again: the snapshot of its first dispatch stays, not relisted
+        self.assertEqual((json.loads(snapshot.read_text()), again.call_count), ({"paths": ["notes.txt"]}, 0))
+        other = "attempt-" + "6" * 32
+        self.assertEqual(dispatch(other, "implement")["status"], "running")
+        self.assertFalse((run / "attempts" / other / "untracked.json").exists())
+        # a listing that fails never holds the review up: it runs without a snapshot
+        failed = "attempt-" + "7" * 32
+        with patch.object(sources, "untracked", side_effect=ValueError("Git 操作失败（exit 128）")):
+            self.assertEqual(dispatch(failed, "review")["status"], "running")
+        self.assertFalse((run / "attempts" / failed / "untracked.json").exists())
+        self.assertTrue((run / "attempts" / failed / "dispatch.json").is_file())
+
+    def test_a_folder_the_reviewer_made_a_repository_keeps_the_files_it_held(self):
+        self.write({"src/a.js": "a"})
+        c1 = self.commit()["sha"]
+        self.write({"tools/kept.sh": "echo kept\n"})
+        folder = self.snapshot()
+        self.assertEqual(json.loads((folder / "untracked.json").read_text()), {"paths": ["tools/kept.sh"]})
+        git(self.project, "init", "-q", "tools")   # git now lists the folder as one entry, tools/
+        self.write({"tools/new.md": "新文件\n"})
+        self.assertEqual(self.review("check", c1)["created"], ["tools/"])
+        result = self.review("rewind", c1)
+        self.assertEqual((result["removed"], result["created"]), ([], ["tools/"]))   # left in place, and said
+        self.assertEqual((self.project / "tools/kept.sh").read_text(), "echo kept\n")
+        self.assertEqual((self.project / "tools/new.md").read_text(), "新文件\n")
+        self.assertFalse((folder / "review-removed").exists())
+
+    def test_a_check_that_cannot_list_untracked_files_tells_tracked_files_only(self):   # never a failure of its own
+        self.write({"src/a.js": "a"})
+        c1 = self.commit()["sha"]
+        self.snapshot()
+        self.write({"review.md": "审查结论\n", "src/a.js": "审查者改了实现"})
+        with patch.object(sources, "untracked", side_effect=ValueError("Git 操作超时（status，180 秒）")):
+            self.assertEqual(self.review("check", c1), {"head": c1, "clean": False, "changed_files": ["src/a.js"],
+                                                        "created": [], "tracked_only": True})
+
+    def test_a_rewind_that_cannot_list_untracked_files_still_puts_back_tracked_files(self):   # nothing moved, and said
+        self.write({"src/a.js": "a"})
+        c1 = self.commit()["sha"]
+        folder = self.snapshot()
+        self.write({"review.md": "审查结论\n", "src/a.js": "审查者改了实现"})
+        self.assertEqual(self.review("check", c1)["created"], ["review.md"])
+        with patch.object(sources, "untracked", side_effect=ValueError("Git 操作超时（status，180 秒）")):
+            result = self.review("rewind", c1)
+        self.assertEqual((result["head"], result["clean"], result["reverted"], result["removed"], result["listing_failed"]),
+                         (c1, True, ["src/a.js"], [], True))
+        self.assertEqual(((self.project / "src/a.js").read_text(), (self.project / "review.md").read_text()),
+                         ("a", "审查结论\n"))
+        self.assertFalse((folder / "review-removed").exists())
+        self.assertNotIn("listing_failed", self.review("rewind", c1))   # listed: the flag only when it failed
+
+    def test_rewind_never_moves_a_path_outside_the_project(self):
+        outside = self.root / "outside"
+        outside.mkdir()
+        (outside / "secret.txt").write_text("外部文件")
+        self.write({"src/a.js": "a"})
+        c1 = self.commit()["sha"]
+        folder = self.snapshot()
+        (self.project / "link.txt").symlink_to(outside / "secret.txt")   # the reviewer's links, out of the project
+        (self.project / "linkdir").symlink_to(outside)
+        result = self.review("rewind", c1)
+        self.assertEqual(result["removed"], ["link.txt", "linkdir"])
+        moved = folder / "review-removed"
+        self.assertEqual((os.readlink(moved / "link.txt"), os.readlink(moved / "linkdir")),
+                         (str(outside / "secret.txt"), str(outside)))   # moved as links, never followed
+        self.assertFalse(os.path.lexists(self.project / "link.txt") or os.path.lexists(self.project / "linkdir"))
+        self.assertEqual(sorted(p.name for p in outside.iterdir()), ["secret.txt"])
+        self.assertEqual((outside / "secret.txt").read_text(), "外部文件")
+        # a path that would resolve outside the project is left where it is, never moved
+        (self.project / "via").symlink_to(outside)
+        with patch.object(sources, "untracked", return_value=["../outside/secret.txt", "via/secret.txt", "/etc/hosts"]):
+            self.assertEqual(sources.rewind(self.project, c1, keep=[], into=folder / "again")["removed"], [])
+        self.assertEqual((outside / "secret.txt").read_text(), "外部文件")
+        self.assertFalse((folder / "again").exists())
 
     def test_commit_ids_are_checked_before_git_sees_them(self):
         for bad in ("--output=/tmp/x", "HEAD", "abc"):

@@ -1,5 +1,5 @@
 /* UI recovery responses are substitutes; source/manual submission uses the real fixture API. */
-async page => {
+async (page, {artifactRoot} = {}) => {
   const browser=await page.context().browser().browserType().launch({headless:true,channel:"chrome"});
   const context=await browser.newContext({viewport:{width:1480,height:1050},reducedMotion:"reduce"});
   const p=await context.newPage(),checks=[],errors=[],requests=[];
@@ -56,7 +56,7 @@ async page => {
     await p.setViewportSize({width:390,height:844});
     check(await p.evaluate(()=>document.documentElement.scrollWidth<=innerWidth+1),"窄屏旧入口与状态卡不造成页面横向溢出");
     await p.setViewportSize({width:1480,height:1050});
-    await p.screenshot({path:"/Users/malibo/MyDev/Kiro-Family-Spaces/experiments/kirocrew-on/state/browser/recovery-ui.png"});
+    if(artifactRoot)await p.screenshot({path:`${artifactRoot}/recovery-ui.png`});
 
     await p.locator("#new-run").click();
     check(await p.locator('#modal input[name="plan-method"]:checked').inputValue()==="recommend","新需求默认引导 Agent 推荐、审阅和采用");

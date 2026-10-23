@@ -1,6 +1,6 @@
 {
   "_comment": "进度看板与 docs/PROGRESS.md 的唯一数据源：任务状态在这里维护；提交记录由 tools/progress.py 从 git 生成（负责人 2026-10-20）。",
-  "checks": "1412 后端 + 92 + 205 控制台（connect codex / kiro-ide 本机）；EC2 运行 95e5aa9",
+  "checks": "1861 后端 + 92 + 272 控制台 + 7 个浏览器测试；EC2 运行 3af7331（D73、gzip、D57 写入时打码）",
   "status": {
     "accepted": {
       "label": "已验收",
@@ -81,7 +81,7 @@
           "name": "M2-5 按仓库范围的自动准入与策略快照",
           "status": "accepted",
           "ref": "EC2 80bc0c4",
-          "more": "D55 ✅ EC2 2026-10-21：默认 confirm（不带 admission 停在计划待确认，依据 default）；个人规则命中 git@ 与 https://GitHub.com/ 两种写法，run-0cf3db03… 未经确认直接执行至完成（依据 rule）。验收用的规则、Token 与会话已清理。"
+          "more": "D55 ✅ EC2 2026-10-21：默认 confirm（不带 admission 停在计划待确认，依据 default）；个人规则命中 git@ 与 https://GitHub.com/ 两种写法，run-0cf3db03… 未经确认直接执行至完成（依据 rule）。验收用的规则、Token 与会话已清理。 D70（负责人 2026-10-22）取消准入规则与计划确认：规划完成后一律直接开始。"
         },
         {
           "id": "m2-fault",
@@ -233,6 +233,71 @@
           "name": "M5 CONN-05 双平台闭环：GitHub 与 GitLab 测试仓库实测",
           "status": "todo",
           "ref": "CONNECTORS.md"
+        },
+        {
+          "id": "m2-d65-general",
+          "name": "D65 一般任务：任务类型不与 Git 绑定（research / write、不需要代码仓库）",
+          "status": "accepted",
+          "ref": "spec 2026-10-22-general-tasks · EC2 bc651cc run-656be0a4 · a183d84 run-d62631d5",
+          "more": "EC2 2026-10-23：Agent 规划、不需要仓库，约 3 分钟完成、中间不停；1 个 write 任务，指令写「本次任务」与工作目录，产出 compare.md（标题 + 3 段）。规划提示提「源码检出」、写作任务配 sde 的问题由 1ef70d6 修复，a183d84 上复核通过。"
+        },
+        {
+          "id": "m3-d66-limit",
+          "name": "D66 推荐上限 12 个任务、提示写明输入与输出约束、无效推荐自动修正一次",
+          "status": "deployed",
+          "ref": "EC2 fd5f821 · run-931d06ff"
+        },
+        {
+          "id": "m3-d67-cookie",
+          "name": "D67 Cookie 登录与登录会话持久化（保持登录 30 天）",
+          "status": "deployed",
+          "ref": "EC2 dff5d2a",
+          "more": "__Host-octopus_session（HttpOnly / Secure / SameSite=Strict）；Authorization 头优先；仅凭 Cookie 的写入须带本站 Origin；浏览器测试核对新标签页保持登录。"
+        },
+        {
+          "id": "m2-d70-no-plan-confirm",
+          "name": "D70 规划完成后直接开始，删除计划确认与准入规则",
+          "status": "deployed",
+          "ref": "EC2 dff5d2a · run-95da3ebb 自动放行"
+        },
+        {
+          "id": "m2-d71-no-waits",
+          "name": "D71 关卡检讨的移除项：验收不再等人、协调者只在缺凭证 / 需求信息时停、模型未核实只提示、Agent 只在不可逆操作前问",
+          "status": "deployed",
+          "ref": "8b9dc71 · 13ead9d · docs/postmortems/2026-10-22-gates-retrospective.md · EC2 828caee",
+          "more": "EC2 828caee：遗留的「验收待确认」run-f2539d3a 被引擎按提示接受并完成；线上没有等人确认的会话。"
+        },
+        {
+          "id": "m2-d69-phases",
+          "name": "D69 按阶段把关（发散不阻断、设计阶段末把关、收敛照旧）",
+          "status": "accepted",
+          "ref": "64278a1..9ab159d · spec 2026-10-22-phase-gating · EC2 828caee",
+          "more": "EC2 828caee 验收 run-3852f436（无仓库，调研 → 撰写 → 审查）：调研任务按要求写 changes_requested，记为「发散阶段不阻断」提示、一次接受、没有诊断；收敛阶段的审查照旧把关，发现报告的真实错误后退回撰写返工，复审通过，会话完成。"
+        },
+        {
+          "id": "m3-d73-chat",
+          "name": "D73 在 KiroCrew 聊天里直接对话，也能回到平台续作",
+          "status": "accepted",
+          "ref": "spec 2026-10-23-chat-and-structured-iteration · EC2 3af7331 run-588bc3d5",
+          "more": "父会话 Agent 由观察员改为协作者；平台开始执行时聊天里写一行；续作前把聊天里的改动提交为新候选（「对话中的改动」，之后的任务重跑）。EC2 验证：问进展、改代码、派 poc-claude、总结都在聊天里完成，续作提交 07fdc05、审查与返工照常。发现两处提示问题（把已提交说成没入库；改了行为却说需求没变）已修正，待部署。报告 docs/reports/2026-10-23-d73-chat-collaboration.md。"
+        },
+        {
+          "id": "m3-preview-pages",
+          "name": "预览找得到会话产出的全部 HTML 页面（report/、artifacts/<名称>/），可选择页面",
+          "status": "deployed",
+          "ref": "EC2 7c04dce"
+        },
+        {
+          "id": "m4-admin-portal",
+          "name": "管理页面：执行环境实时状态、用户一人一行就地操作、我的设置",
+          "status": "deployed",
+          "ref": "feat/admin-portal 319503c..59ee263 · 合并 41b3959 · EC2 828caee"
+        },
+        {
+          "id": "m3-session-marks",
+          "name": "历史会话：收藏、置顶、删除、分享",
+          "status": "deployed",
+          "ref": "迁移 13 run_marks · 会话列表「⋯」 · EC2 828caee"
         }
       ],
       "milestones": [

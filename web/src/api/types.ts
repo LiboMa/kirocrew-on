@@ -11,7 +11,9 @@ export interface Step {
   effort: Effort | string;
   prompt: string;
   /** Optional task contract (D34): what the task delivers and how it is checked. */
-  kind?: "implement" | "review" | "test" | "deliver" | "design";
+  kind?: "implement" | "review" | "test" | "deliver" | "design" | "research" | "write";
+  /** D69: which failures stop the Session; omitted, inferred from kind (octopus/phases.py). */
+  phase?: "diverge" | "design" | "converge";
   /** D46 P2: the role the task's Agent works in (its card); kind decides the gates. */
   role?: "spec" | "sde" | "integration_test" | "security_test" | "challenge" | "evaluator" | "knowledge";
   deliverables?: string[];
@@ -259,7 +261,7 @@ export interface Recovery {
 }
 
 export interface RunSource {
-  type: "new" | "git";
+  type: "new" | "git" | "none";   // none: no repository (D65)
   url?: string;
   ref?: string;
 }
@@ -395,6 +397,8 @@ export interface Run {
   /** What the server allows the current user on this Session; absent from older platforms. */
   /** resume: false for a Session of an archived Team (readable and stoppable only). */
   /** publish: may publish the Session and answer its approvals (creator, Team owner, admin; D38 A3). */
+  /** One's own pin and star (owner 2026-10-22: 收藏、置顶). */
+  marks?: { pinned: boolean; starred: boolean };
   permissions?: { operate: boolean; delete: boolean; native?: boolean; resume?: boolean; publish?: boolean;
     /** D49 R7: why the native entry stays closed (e.g. another member's boundary). */
     native_reason?: string;
@@ -488,6 +492,8 @@ export interface AdminUser {
   last_login: number | null;
   teams: { id: string; name: string; role: string }[];
   tokens: number;
+  /** Sessions of theirs that are open and not settled; absent from older platforms. */
+  running?: number;
 }
 
 export interface UserToken {

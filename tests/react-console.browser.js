@@ -9,7 +9,9 @@ async page => {
   const check=(yes,message)=>{if(!yes)throw Error(message);checks.push(message);};
   const dialog=()=>p.getByRole("dialog");
   const next=()=>dialog().getByRole("button",{name:"下一步"}).click();
-  const api=async path=>p.evaluate(async path=>(await fetch("/v1"+path,{headers:{Authorization:"Bearer "+sessionStorage.getItem("octopus.token")}})).json(),path);
+  // D67: the session cookie signs the console in; a token is kept in the tab only when the browser refuses the cookie.
+  const api=async path=>p.evaluate(async path=>{const t=sessionStorage.getItem("octopus.token");
+    return (await fetch("/v1"+path,{headers:t?{Authorization:"Bearer "+t}:{}})).json();},path);
   try {
     await p.goto("http://127.0.0.1:8921/");
     check(await p.getByRole("heading",{name:"进入开发空间"}).isVisible(),"/ 提供 React 控制台登录页");
@@ -18,16 +20,44 @@ async page => {
     await p.getByRole("button",{name:/登录工作台/}).click();
     await p.waitForSelector("#session-list [data-run]");
     check(await p.locator("#session-list [data-run]").count()===2,"登录后列出当前空间的 Sessions");
+    const cookie=(await context.cookies()).find(c=>c.name==="__Host-octopus_session");
+    check(cookie?.httpOnly&&cookie.secure&&cookie.sameSite==="Strict"&&cookie.expires-Date.now()/1000>29*86400,
+      "登录写入 HttpOnly 会话 Cookie，默认保持 30 天");
+    check(await p.evaluate(()=>sessionStorage.getItem("octopus.token"))===null,"Cookie 生效时页面不保存 Token");
+    const tab=await context.newPage();
+    await tab.goto("http://127.0.0.1:8921/");
+    await tab.waitForSelector("#session-list [data-run]");
+    check(true,"新标签页凭会话 Cookie 保持登录");
+    await tab.close();
 
+    // Owner 2026-10-22: pin from a row's menu (it shows on top), then unpin; the admin page lists the environments
+    await p.getByRole("button",{name:/^会话操作：/}).first().click();
+    await p.getByRole("menuitem",{name:"置顶"}).click();
+    await p.getByRole("region",{name:"置顶"}).waitFor();
+    check(await p.getByRole("region",{name:"置顶"}).locator("[data-run]").count()===1,"会话列表行菜单置顶，置顶分组在列表顶部");
+    await p.getByRole("region",{name:"置顶"}).getByRole("button",{name:/^会话操作：/}).click();
+    await p.getByRole("menuitem",{name:"取消置顶"}).click();
+    await p.getByRole("region",{name:"置顶"}).waitFor({state:"detached"});
+    check(true,"取消置顶后置顶分组消失");
+    await p.getByRole("button",{name:"管理"}).click();
+    await p.getByRole("navigation",{name:"管理"}).getByRole("link",{name:"执行环境"}).click();
+    await p.getByText(/刷新状态/).first().waitFor();
+    check(new URL(p.url()).searchParams.get("view")==="admin","管理页面可打开执行环境，地址栏记下所在页面");
+    await p.getByRole("button",{name:"返回会话"}).click();
+    await p.waitForSelector("#session-list [data-run]");
+
+    // D56: the list is filtered by the server, 300 ms after typing stops
+    const listed=async n=>p.waitForFunction(n=>document.querySelectorAll("#session-list [data-run]").length===n,n,{timeout:5000}).then(()=>true,()=>false);
     const firstId=await p.locator("#session-list [data-run]").first().getAttribute("data-run");
     await p.getByLabel("搜索会话").fill(firstId.slice(-10));
-    check(await p.locator("#session-list [data-run]").count()===1,"会话搜索按 ID 片段过滤");
+    check(await listed(1),"会话搜索按 ID 片段过滤");
     await p.getByLabel("搜索会话").fill("独立需求");
-    check(await p.locator("#session-list [data-run]").count()===2,"会话搜索按需求内容过滤");
+    check(await listed(2),"会话搜索按需求内容过滤");
     await p.getByLabel("搜索会话").fill("");
     await p.getByRole("button",{name:"已完成"}).click();
-    check(await p.locator("#session-list [data-run]").count()===0,"状态筛选：没有已完成的会话");
-    await p.getByRole("button",{name:"全部"}).click();
+    check(await listed(0),"状态筛选：没有已完成的会话");
+    await p.getByRole("button",{name:"全部",exact:true}).click();   // not the administrator's 「全部会话」
+    await listed(2);
 
     await p.locator("#session-list [data-run]").first().click();
     await p.waitForSelector("#run-title");
@@ -62,7 +92,7 @@ async page => {
     await p.waitForFunction(name=>document.querySelector("#run-title")?.textContent===name,generated.name);
     const imported=await api("/runs/"+new URL(p.url()).searchParams.get("run"));
     check(imported.tasks.map(t=>t.spec.tool).join(",")==="kiro,claude,codex","导入的工作流按提交内容创建 Session（真实 API）");
-    check((await p.locator("#worker-notice").innerText()).includes("请选择此开发空间的 Worker"),"无 Worker 时只登记需求，提示分配");
+    check(/没有可用 Worker|等待选择 Worker/.test(await p.locator("#worker-notice").innerText()),"无 Worker 时只登记需求，提示分配");   // the server's hint (81394f9)
 
     const importedId=new URL(p.url()).searchParams.get("run");
     await p.getByRole("button",{name:/新建开发/}).click();
@@ -86,19 +116,20 @@ async page => {
     await p.waitForFunction(()=>document.querySelector("#flow-list")?.textContent.includes("v2"));
     check((await p.locator("#flow-list").innerText()).includes("React 编辑后的流程"),"工作流编辑形成新版本");
 
-    await p.getByRole("button",{name:"设置"}).click();
-    await p.getByRole("menuitem",{name:/API 与 Coding Agent/}).click();
-    await dialog().getByLabel("新 Token 名称").fill("react-browser-client");
-    await dialog().getByRole("button",{name:"创建 API Token"}).click();
+    await p.getByRole("button",{name:"我的设置"}).click();
+    await p.getByRole("navigation",{name:"我的设置"}).getByRole("link",{name:/API 与 Coding Agent/}).click();
+    await p.getByLabel("新 Token 名称").fill("react-browser-client");
+    await p.getByRole("button",{name:"创建 API Token"}).click();
     await p.locator(".secret").waitFor();
     check((await p.locator(".secret").innerText()).startsWith("oct_"),"API Token 一次性显示");
-    await dialog().getByRole("button",{name:"关闭"}).click();
+    await p.getByRole("button",{name:"完成"}).click();
+    await p.getByRole("button",{name:"返回会话"}).click();
 
     await p.setViewportSize({width:390,height:844});
     await p.waitForTimeout(200);
     check(await p.evaluate(()=>document.documentElement.scrollWidth<=innerWidth+1),"390 px 宽度无横向溢出");
     await p.getByRole("button",{name:"打开会话列表"}).click();
-    check(await p.locator("#session-list [data-run]").first().isVisible(),"窄屏以抽屉展示会话列表");
+    check(await p.locator("#session-list:visible [data-run]").first().isVisible(),"窄屏以抽屉展示会话列表");   // the desktop sidebar stays mounted, hidden
     await p.keyboard.press("Escape");
     await p.setViewportSize({width:1440,height:1000});
 

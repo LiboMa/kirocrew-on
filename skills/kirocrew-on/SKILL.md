@@ -46,7 +46,9 @@ KiroCrew ON 在远端执行开发任务：KiroCrew 的 Kiro Agent 先识别意�
 
 - `request_id`：每个新需求生成新的 UUID；同一请求重试时沿用，后台只执行一次。
 - `input`：完整需求——要做什么、约束、验收标准。用户给的仓库地址、分支与限制原样写进去。
-- `source`：新项目 `{"type": "new"}`；已有仓库 `{"type": "git", "url": "<仓库地址>", "ref": "<分支，可省略>"}`。
+- `source`：新项目 `{"type": "new"}`；已有仓库 `{"type": "git", "url": "<仓库地址>", "ref": "<分支，可省略>"}`；
+  不需要代码仓库的一般工作（调研、分析、写作、方案）用 `{"type": "none"}`（D65）：产出是工作目录中的文件，会话页「下载产出」取得，不发布到仓库。
+  这类任务的 `kind` 用 `research`（调研）或 `write`（撰写），也可用 `review` / `design`。
 - 默认不传 `steps` / `workflow_id` / `template_id` / `document`：由 KiroCrew 的 Kiro Agent 规划
   （Session 第 1 个任务「需求分析与任务规划」，完成后自动追加并执行生成的任务）。
 - 用户已经有写好的工作流（JSON / YAML / 含一个代码块的 Markdown）时，放进 `document: {"content": "..."}` 按原样运行；
@@ -54,19 +56,19 @@ KiroCrew ON 在远端执行开发任务：KiroCrew 的 Kiro Agent 先识别意�
 - 自己写 `steps` 时，每个任务可带 `role`（`spec`、`sde`、`integration_test`、`security_test`、`challenge`、`evaluator`）：Agent 按对应的
   角色卡片工作，`kind` 仍决定门禁；审查类角色（`security_test` / `challenge` / `evaluator`）不要用实现该改动的工具（会被拒绝）。
   续作时 `execution.role` 给 `null` 或空串即去掉任务的角色（`kind` 不变）。
+  可带 `phase`（D69 按阶段把关）：`diverge` 发散（头脑风暴、调研、多方案）任务自身的失败只记提示、结论交给下一个任务；`design` 设计在阶段末把关一次；
+  `converge` 收敛（实现、撰写、测试、交付）照常。不写按 `kind` 推断（`research` 为发散、`design` 为设计、审查取所审任务的阶段、其余为收敛）。
   还可带 `skills`（至多 4 个，取自平台技能包：`test-driven-development`、`systematic-debugging`、`verification-before-completion`、
   `receiving-code-review`、`frontend-design`）：Agent 开始前读取并按其方法工作，如界面任务带 `frontend-design`、实现任务带
   `test-driven-development`。由 KiroCrew 规划时规划者自己推荐，不必替它写。
 - `worker_id` 通常省略：平台先用你自己的执行边界（Team 会话也一样），没有时用 Team 的环境或空间内唯一的环境；返回的 `placement.hint`（如「你还没有自己的执行边界…」）原样告诉用户。想先知道会在哪执行，用 `octopus_environments`（`default: true` 的那个）。
-- 403 `boundary_owner_only`：会话在他人的执行边界上运行（Agent 以此人的身份执行），只有边界主人能续作、诊断、确认计划、补充说明或批准；原样告诉用户，请会话创建者操作，不要换别的工具或参数重试。
+- 403 `boundary_owner_only`：会话在他人的执行边界上运行（Agent 以此人的身份执行），只有边界主人能续作、诊断、补充说明或批准；原样告诉用户，请会话创建者操作，不要换别的工具或参数重试。
 - 提交到 Team 返回 409 `team_without_worker`（该 Team 尚未分配执行环境）或 `environment_disabled`（执行环境已停用）时，
   原样告诉用户需要平台管理员在控制台分配或启用执行环境；也可以建议改在个人空间提交。不要换一个 Team 重试。
 - 返回 409 `team_archived` 时该 Team 已归档：不能提交新会话或续作，已有会话仍可查看与停止；告诉用户需要平台管理员恢复，或改在其他空间提交。
-- 准入：平台默认先确认——规划照常完成，第一个执行任务开始前会话停在 `awaiting_confirmation`（见第 3 节）。用户在控制台
-  「准入与映射偏好」中为信任的仓库写了规则（`auto`）时直接开始；会话的 `admission_basis` 写明依据（`submitted` / `rule` 及其
-  `pattern` / `default`），原样告诉用户「按准入规则…自动开始」或「按平台默认等待确认」。用户明确说「直接开始 / 不用确认」时才传
-  `admission: "auto"`，明确要先看计划时传 `admission: "confirm"`；不要为了省一步替用户传 `auto`。
-- 回执带 `request_id`（`request-…`）：每次提交登记一个 Request（来源客户端、需求、显式选择与准入依据），`octopus_requests` 可查。
+- 规划完成后直接开始（D70，负责人 2026-10-22）：没有「计划待确认」，不要问用户是否开始，也不要等。用户想先看计划时，
+  提交后用 `octopus_status` 把任务列给他看；要修改就用 `octopus_continue`。Evaluator 判为「待人确认」的验收项记为提示，会话照常完成（D68）。
+- 回执带 `request_id`（`request-…`）：每次提交登记一个 Request（来源客户端、需求与显式选择），`octopus_requests` 可查。
 - 用户明确要求完成后提交 PR / MR 时传 `publish: {"auto": true}`：会话完成并通过审查后平台自动推送 `octopus/<run>` 分支并创建 Draft PR / MR
   （需要绑定有写权限的凭证）。没有要求时不传，完成后先问用户，同意后再用 `octopus_publish`。不要安排 Agent 自己推送或建 PR 的任务——Agent 没有仓库写凭证。
   会话中途可用 `octopus_publish_policy {run_id, auto}` 开关（用户同意后）。
@@ -83,8 +85,8 @@ KiroCrew ON 在远端执行开发任务：KiroCrew 的 Kiro Agent 先识别意�
 - 需要某次尝试的原始输出或完整证据时才传 `detail: true`；完整记录可能有十几万字符，超出客户端的输出上限。
 - 任务通常需要几分钟到几十分钟；每 30–60 秒查询一次，向用户汇报真实状态。状态不是 `completed` 时不要宣称完成。
 - `octopus_runs` 列出用户可见的会话（最新的在前，每个只有状态、进度、需要处理的事与错误首行；默认 20 个，`status` 过滤；还可按 `space`、`repo`（如 `github.com/o/r`）、`branch`、`stage`（当前进行到的任务类别，`done` 为全部验收）、`tool`、`client`、`submitter`、`since` / `until`（`YYYY-MM-DD`）组合过滤；`q` 为全文搜索（需求、规划、任务说明、最近的结论与错误，多个词须全部命中）；`more: true` 时缩小条件或加大 `limit`）；详情用 `octopus_status`；`octopus_me` 返回当前身份、是否管理员、Token scope 与所在 Team。
-- `octopus_requests` 列出用户提交过的需求（Request：来源客户端 `client`、需求前 200 字、准入方式与依据、对应会话；`status`、`client`、`q`
-  过滤，`more` 同上）。`octopus_policies`（可传 `team_id`）只读地列出用户的准入规则与映射偏好；规则只能由用户在控制台维护，不要替用户改准入。
+- `octopus_requests` 列出用户提交过的需求（Request：来源客户端 `client`、需求前 200 字、对应会话；`status`、`client`、`q`
+  过滤，`more` 同上）。`octopus_policies`（可传 `team_id`）只读地列出用户的映射偏好；偏好只能由用户在控制台维护。
 - 别人共享给用户的会话（D64）：`octopus_runs` 加 `shared: true` 列出；`octopus_status` 的 `access` 说明用户以什么身份访问（`via: share` 时 `role` 为 `viewer` 只能查看、`collaborator` 可续作与停止）。查看者不要尝试续作、停止或批准；共享只能由会话创建者、Team owner 或平台管理员在控制台设置，不要替用户共享。
 - `octopus_quotas` 只读：用户与其 Team 同时运行的任务数上限与占用。「需要处理」写「排队：已达到并发上限」时无需重新提交：有任务结束后按排队先后自动开始；上限由平台管理员或 Team owner 在控制台设置，不要替用户改。
 - `octopus_changes`（传 `run_id`）列出会话的变更记录：谁（用户与客户端，或 Engine / Worker / KiroCrew / 协调者）在什么时候改了什么、
@@ -106,11 +108,9 @@ KiroCrew ON 在远端执行开发任务：KiroCrew 的 Kiro Agent 先识别意�
 | 状态 | 含义与处理 |
 |---|---|
 | `running` / `diagnosing` | 正在执行或自动诊断返工，继续等待 |
-| `waiting_worker` | 还没有 Worker 执行，或原来的执行环境已更换、已移出该空间、已停用或已退役（`error` 写明原因）：把 `attention.title` / `attention.action` 告诉用户。`attention.workers` 为 0 时该空间没有可用的执行环境（尚未分配或已停用），请管理员分配或启用，或改在个人空间重新提交；大于 0 时用 `octopus_environments`（传 `run_id`）列出这个会话可分配的环境，经用户确认后用 `octopus_assign_worker` 分配 |
-| `blocked` / `failed` | 读 `attention.title` / `attention.action` 告诉用户；可用 `octopus_recover` 诊断修复，或用 `octopus_continue` 修改后重跑。`attention.title` 为「需要换用工具或模型」时，向用户说明原因（`attention.detail`）并建议换用一个可用的工具；经用户同意后用 `octopus_continue` 的 `execution.tool` / `execution.model` 续作，不要自行决定 |
+| `waiting_worker` | 还没有 Worker 执行，或原来的执行环境已更换、已移出该空间、已停用或已退役（`error` 写明原因）：把 `attention.title` / `attention.action` 告诉用户。`attention.workers` 为 0 时该空间没有可用的执行环境（尚未分配或已停用），请管理员分配或启用，或改在个人空间重新提交；大于 0 时用 `octopus_environments`（传 `run_id`）列出这个会话可分配的环境，直接用 `octopus_assign_worker` 分配 `default: true` 的那个（没有默认时选第一个），告诉用户分配到了哪里，用户要别的再改 分配 |
+| `blocked` / `failed` | 读 `attention.title` / `attention.action` 告诉用户；可用 `octopus_recover` 诊断修复，或用 `octopus_continue` 修改后重跑。`attention.title` 为「需要换用工具或模型」时，向用户说明原因（`attention.detail`）并直接换用一个可用的工具，用 `octopus_continue` 的 `execution.tool` / `execution.model` 续作，告诉用户换成了什么（需求明确指定了工具的除外：说明原因，由用户决定） |
 | `waiting_approval` | 原生任务在等待批准一次工具调用：用 `octopus_approvals` 列出，把工具、完整的命令或文件与用途告诉用户；用户同意后用 `octopus_approve` 答复（approve），不同意则 reject。不要替用户决定 |
-| `awaiting_acceptance` | 验收待确认：改代码的会话由 Evaluator 逐项验收，它把需要人判断的项（Evaluator 任务的 `latest.pending`：验收项与证据）留给用户；把这些项列给用户，同意后用 `octopus_accept {run_id, request_id, expected_version}`，不同意时用 `octopus_continue` 返工：`task_id` 用 Evaluator 之前那个改代码的任务（kind 为 implement / deliver），把没通过的项写进它的 `prompt`；不要替用户确认 |
-| `awaiting_confirmation` | 计划待确认：把各任务（名称、工具与模型及 `mapping` 来源——如「KiroCrew 规划（按个人偏好）」表示规划者采纳了用户的映射偏好——、验收项、检查命令）列给用户；用户同意后用 `octopus_confirm {run_id, request_id, expected_version}` 开始执行，要修改时用 `octopus_continue`（修改后续作即视为确认），不要替用户确认 |
 | `completed` | 完成；用 `octopus_preview` 给出预览。`session.knowledge` 列出本次沉淀的项目知识（见下） |
 
 ## 4．迭代：`octopus_continue` / `octopus_recover`
@@ -119,8 +119,8 @@ KiroCrew ON 在远端执行开发任务：KiroCrew 的 Kiro Agent 先识别意�
   `run_id`、新的 `request_id`、`expected_version`（取自最近一次 `octopus_status` 的 `session.version`）、`task_id`、
   更新后的 `input`；可选 `execution`（`name`、`prompt`、`tool`、`model`、`effort`，以及任务契约 `acceptance`、`verify` 等），
   工具本身失败时，自动纠错会请 KiroCrew 协调者推荐换用的工具（`octopus_status` 的 `latest.switched_from` 写明从哪个工具换来、原因）；
-  会话关闭了换工具（`recovery.switch_tools: false`）或协调者等待用户时，由你向用户建议并经同意后续作。
-  `artifacts_locked`（改了此前已验收任务的文件）时，协调者可为失败的任务扩大可改动路径（修订摘要「扩大「X」的可改动路径」）；它没有这样做而在等待时，经用户同意后用 `octopus_continue` 的 `execution.paths` 补上这些文件。
+  会话关闭了换工具（`recovery.switch_tools: false`）时，按协调者的说明直接续作并告诉用户做了什么；协调者只在缺少仓库凭证或需求信息时等待用户（D71），这时把缺什么告诉用户。
+  `artifacts_locked`（改了此前已验收任务的文件）时，协调者可为失败的任务扩大可改动路径（修订摘要「扩大「X」的可改动路径」）；它没有这样做时，直接用 `octopus_continue` 的 `execution.paths` 补上这些文件并告诉用户。
   自动纠错的返工会接着该任务上一轮的原生对话做（保留上下文）：`latest.continued: true` 表示这一次接上了——它与你的 `octopus_continue`（续作）无关；`latest.continue_refused` 是没能接上的原因，这一次从新对话开始。
 - 只重跑受影响的任务：用 `rerun` 列出这次修改会影响的后续任务（例如只改前端时不列后端），省略则重跑之后的全部任务。
   依赖重跑任务的任务、其后的审查 / 测试任务、尚未完成的任务会由平台自动一并重跑；其余沿用上一版结果。
@@ -138,7 +138,7 @@ KiroCrew ON 在远端执行开发任务：KiroCrew 的 Kiro Agent 先识别意�
 
 ## 给运行中的任务补充说明
 
-- 用户要纠正或补充一个**正在运行的 Kiro 任务**时，用 `octopus_steer {run_id, task_id, message}`，说明插入它正在进行的这一轮。把要发送的原文给用户确认后再发；
+- 用户要纠正或补充一个**正在运行的 Kiro 任务**时，用 `octopus_steer {run_id, task_id, message}`，说明插入它正在进行的这一轮。按用户的原意发送（不改变其意思），发送后告诉用户；
   只能由会话创建者、Team owner 或管理员发送，写入审计与时间线。
 - `409 not_running`：任务已结束，改用 `octopus_continue`（尚未开始时等它开始）；`steer_unsupported`：任务不是 Kiro 后端（claude / codex 不支持），
   或执行环境的 Worker 尚未升级——等它结束后用 `octopus_continue` 修改。
@@ -174,7 +174,7 @@ KiroCrew ON 在远端执行开发任务：KiroCrew 的 Kiro Agent 先识别意�
 ## 5．预览产出
 
 - 想在本机运行、查看或继续开发：`octopus_download`（传 `run_id`，可选 `dest`）把源码（含 `.git`，不含依赖目录与 `.env`）
-  下载解压到本机目录，返回启动步骤 `start`。征得用户同意后按步骤安装依赖并启动，把 `localhost` 地址告诉用户；
+  下载解压到本机目录，返回启动步骤 `start`。按步骤安装依赖并启动，把 `localhost` 地址告诉用户；
   不要把任何凭证写进下载的项目。下载链接 10 分钟有效，用户也可以在控制台会话页点「下载源码」。
 - 想在浏览器里看到运行起来的应用（开发服务器、前后端两个进程都可以）：`octopus_app`（`run_id`、`action`）。
   - `start` 后每 10 秒左右 `status` 一次，直到 `running` 或 `failed`。安装依赖可能要几分钟。
@@ -182,7 +182,7 @@ KiroCrew ON 在远端执行开发任务：KiroCrew 的 Kiro Agent 先识别意�
   - `running` 后 `open`，把链接交给用户本人：10 分钟内有效、只能打开一次，打开后浏览器保持 8 小时；不要转发到公开渠道。
   - 看完后 `stop`。每个执行环境最多 3 个（409 `app_limit`）；会话执行任务时不能启动（409 `app_busy`），续作或关闭会话会停止预览；
     空闲 30 分钟自动停止。409 `app_unsupported` / `app_preview_unconfigured` 表示执行环境或平台尚未支持，改用 `octopus_download`。
-- `octopus_preview`（传 `run_id`）返回 Web 预览链接，静态页面可在浏览器中直接打开。
+- `octopus_preview`（传 `run_id`）返回 Web 预览链接：`url` 打开最合适的一页，`pages` 列出会话产出的全部 HTML 页面（如 `report/`、`artifacts/<名称>/` 下的报告）及各自的链接，都给用户。
 - 链接 10 分钟有效，每次打开都核对你仍能查看该会话；返回 403（`preview_expired` / `preview_invalid` / `preview_forbidden`）时重新调用 `octopus_preview` 取新链接（`preview_forbidden` 表示已无权查看，告诉用户）。
 - 预览在与控制台隔离的沙箱中运行：页面里的 `localStorage`、`sessionStorage`、IndexedDB 与 Cookie 都不可用。
   依赖它们的功能（如保存设置、计数）在预览中失效不代表产出有缺陷；要验证这类功能，用 `octopus_download` 下载到本机打开，
@@ -196,16 +196,17 @@ KiroCrew ON 在远端执行开发任务：KiroCrew 的 Kiro Agent 先识别意�
   别的目录用 `octopus_link {run_id, dir}` 关联。
 - 想在本机接着改：`octopus_pull`（`checkout: true` 切换到本地分支 `octopus/<run>`），上下文（报告、计划、各任务交接）在
   `.octopus/sessions/<run>/`。在这个分支上修改并 **提交** 后 `octopus_sync`（`note` 写给审查者）：平台把它作为新候选，重新运行检查，
-  其后的审查 / 测试任务重新执行；会话页的修订历史记「本地同步」。同步前把要同步的提交告诉用户并得到同意。
+  其后的审查 / 测试任务重新执行；会话页的修订历史记「本地同步」。同步后把同步了哪些提交告诉用户。
 - `octopus_pull` 返回 `diverged: true` 时（本地分支与会话分支都有新提交）：把 `hint` 告诉用户，在本地分支上 `git rebase <remote_ref>`
   （或 merge）后再 `octopus_sync`；返回 `ahead` 表示只有本地领先，可直接同步。`octopus_start` 返回 `missing_branch` 时当前分支不在 origin 上。
 - 拒绝时原样告诉用户：`sync_not_fast_forward`（远端又有了新提交：先 `octopus_pull` 再改）、`sync_secret_found` / `bundle_secret_found`
   （提交里有疑似凭证或 `.env`：用户自己移除后再提交）、`sync_dirty`（会话的工作区还有未纳入候选的改动：等会话结束或续作）、`busy`。
-- 用户也可以用命令行：`octopus login`，之后 `octopus submit / status / plan / confirm / pull / sync / watch / search …`。
+- 用户也可以用命令行：`octopus login`，之后 `octopus submit / status / plan / pull / sync / watch / search …`。
 
 ## 6．原则
 
-- 停止、关闭、删除会话前先征得用户同意（`octopus_control`）。
+- 删除会话前先征得用户同意（不可撤销；`octopus_control`）。停止、关闭随时可以续作或重新打开，按用户的要求直接做。
+- 只在不可逆或对外的操作前征得同意（D71，负责人 2026-10-22）：发布与推送、删除、批准工具调用、管理员操作；其余按用户的要求直接做，做完告诉用户。
 - 只报告工具返回的真实状态与证据，不编造执行结果；工具报错时原样说明错误。
 - 工具出错时返回结构化的 `{status, code, error}`：
   - 401：Token 失效或已撤销，请用户重新执行第 1 节的连接命令；

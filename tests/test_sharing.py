@@ -243,7 +243,6 @@ class EntryTests(ShareCase):
             "steer": lambda: service.steer(actor, rid, {"message": "补充"}),
             "answer_approval": lambda: service.answer_approval(actor, rid, {"origin": "native", "request_id": "r-1",
                                                                              "request_mid": "m-1", "decision": "approve"}),
-            "accept": lambda: service.operate(actor, rid, "accept", {"request_id": "share-accept-1", "expected_version": version}),
             "rebind": lambda: service.rebind(actor, rid, {"source": None}),
             "forget_knowledge": lambda: service.forget_knowledge(actor, rid, {"id": "k-1"}),
             "set_publish_policy": lambda: service.set_publish_policy(actor, rid, {"auto": True}),

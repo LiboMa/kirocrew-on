@@ -24,7 +24,8 @@ class PromptTests(unittest.TestCase):
         text = designs.instructions("需求", {"input": "需求", "basis": []}, "/w", {"claude": ["auto"]},
                                     {"kiro": {"available": True}, "claude": {"available": True}, "codex": {"available": True}})
         for needle in ("## 输入", "## 输出约束", "1–12 个", "只输出一个", "小写字母开头", "kiro", "claude", "codex",
-                       "审查任务的工具与被审查改动的作者不同", "80 个字符", "depends_on 只能指向前面的任务"):
+                       "审查任务的工具与被审查改动的作者不同", "80 个字符", "depends_on 只能指向前面的任务",
+                       "kind 只能是 implement、review、test、deliver、design、research、write"):
             self.assertIn(needle, text, needle)
 
     def test_a_repair_says_what_was_wrong_and_is_not_part_of_the_basis(self):
@@ -49,6 +50,9 @@ class ExplainTests(unittest.TestCase):
         self.assertIn("gemini", self.reason(reply([step(0, tool="gemini")])))
         self.assertIn("Task-1", self.reason(reply([{**step(0), "id": "Task-1"}])))
         self.assertIn("审查不独立", self.reason(reply([step(0, kind="implement"), step(1, role="evaluator")])))
+        # EC2 run-931d06ff… (after the D66 deploy): KiroCrew wrote a kind the platform does not know
+        self.assertEqual(self.reason(reply([step(0, kind="research-synthesis")])),
+                         "有任务的类别（kind）写成了「research-synthesis」（可选：implement、review、test、deliver、design、research、write，或不写）")
 
 
 class EngineRepairTests(unittest.TestCase):
@@ -97,6 +101,17 @@ class EngineRepairTests(unittest.TestCase):
         for _ in range(6):
             engine.tick()
         self.assertTrue(designs.status(self.service, self.a, created["id"]).get("repairing"))
+
+    def test_a_repairs_reason_keeps_no_workers_token(self):
+        # D57 §3.3: the reason quotes the recommendation; with the Worker's token in it, every record keeps it masked
+        token = "x" * 40   # the design Worker's (test_mvp.design_worker)
+        status = self.run_design([reply([step(0, tool=token)]), reply(test_mvp.SPEC, "退款接口工作流")])
+        self.assertEqual(status["status"], "ready")
+        self.assertIn("xxxx…xx", self.dispatched[1]["design"]["repair"]["error"])
+        with self.db.read() as db:
+            stored = "\n".join(json.dumps([dict(r) for r in db.execute(f"SELECT * FROM {table}")], ensure_ascii=False)
+                               for table in ("runs", "tasks", "attempts", "events", "recoveries", "revisions"))
+        self.assertNotIn(token, stored)
 
     def test_once_only_and_then_the_person_reads_why_and_what_to_do(self):
         status = self.run_design([reply([step(i) for i in range(13)])])
