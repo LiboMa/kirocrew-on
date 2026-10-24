@@ -20,7 +20,7 @@
 ## 客户端与控制台（原 M3）
 - `octopus connect` 扩展到 Codex 与 Kiro IDE；CLI 命令集（submit / plan / confirm / status / watch / report / approvals / search）。
 - 控制台：服务端分页、按仓库 / 分支 / 阶段 / 工具 / 客户端 / 提交者 / 时间过滤、全文搜索；详情中的 diff、门禁与报告。
-- Worker 自助接入（一次性接入码，Worker 启动时自行登记 URL 与 Token），本地全栈启动时自动登记 Worker。
+- Worker 自助接入（一次性接入码，Worker 启动时自行登记 URL 与 Token），本地全栈启动时自动登记 Worker——设计见 `docs/superpowers/specs/2026-10-24-worker-enrollment-design.md`（待负责人确认）。
 - 旧版控制台 `/classic/` 在 React 版功能对齐并经负责人确认后移除。
 
 ## 共享与组织（原 M4）
@@ -29,7 +29,7 @@
 - ~~**子 Agent 结束时父会话仍跑一轮 coordinator**~~（EC2 2026-10-22，D63 之后的核对）：Worker 派发时已带 `silent: true`，但 KiroCrew 0.10 只按它关 Slack / Dashboard 通知（slack/gateway.py:10820 起），结果照样注入父 chat slot（`Subagent … → _run_chat in octopus-run-…`，gateway.py:10457），为平台的 slot 起一个 poc-coordinator（kiro 后端）进程并跑一轮——每个任务结束都多一轮 Kiro 用量，进程留到 TTL。待：查 KiroCrew 有无不回报父会话的派发方式（平台以 parent_session 证明归属，须一起设计），或向上游提需求。
   2026-10-23 修复：KiroCrew 0.10 已有 `POST /api/spawn/mark-collected {ids, parent_session}`（它自己的阻塞式 spawn 工具用来表示父会话已拿到结果），Worker 每次派发、续接与模型探测拿到原生 ID 后立即调用，结束时不再注入父会话、不跑这一轮，波次的汇总轮也不再触发；结果照旧从 `GET /api/spawn/{id}` 读取，交付标记与保留时长不变。标记只在 Gateway 内存中：运行中 Gateway 重启后，结束时会照旧跑一轮。
 - 用量上限（M4-4 第 3 期）：每人 / 每 Team 按周期（月）的 Kiro credits、token 或分钟数上限（D46 P6a 已有用量记录）；D61 只限同时运行的任务数。
-- 原生入口改为单 Session 票据（K03）；Worker Token 移出数据库（K10）。
+- 原生入口改为单 Session 票据（K03）。~~Worker Token 移出数据库（K10）~~：D59 已做（写入即用凭证主密钥密封，只在请求时解开）。
 
 ## 会话运行优化后续（D34）
 - 按 `depends_on` 并行执行互不依赖的任务（同一工作区，按 `paths` 判断冲突；默认关闭）。
@@ -374,3 +374,8 @@
 - **侧栏会话行与会话页的「⋯」菜单打开的对话框**（2026-10-24 终审）：它们在菜单项里直接打开对话框，记下的焦点是菜单项，关闭后仍落到页面开头；改为与 `RowActions` 相同的做法即可。
 - ~~**「管理 › 用户」改执行环境分两步**~~（2026-10-24 在控制台处理，未部署）：移出旧环境失败时对话框说明「已加入 X，但没能从 Y 移出」并重新读取列表；再点一次只重试移出，不再重复加入（此前返回 409）。中间状态仍可能出现（两个共享环境同时服务这个人），服务器一次完成的「改为」接口留待需要时再做。
 - **不可撤回的删除没有要求输入名称**：PRD §3.2 要求不可撤回的操作输入名称确认，现在 Token 撤销、仓库凭证删除、Worker 退役都只是普通确认框（写明「不能撤回」）。要不要加这一步，由负责人决定（新增的确认步骤要负责人同意）。
+
+## 执行环境登记的两处不一致（2026-10-24 设计 Worker 自助接入时发现）
+
+- `GET /v1/workers/<id>/capabilities`（刷新模型）只核对 `boundary`，引擎的健康轮询与原生入口还核对 `host_principal` 与 `isolation`。
+- 非 spare 的 Worker 登记时只与**已启用**的 Worker 比对 `boundary`：已停用 Worker 的边界可以再登记给另一个人或 Team。
