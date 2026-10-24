@@ -99,10 +99,11 @@ _KEY_BEGINS, _KEY_ENDS = re.compile(_KEY_BEGIN), re.compile(_KEY_END)
 # rest of it is masked however short.
 _KEY_MARKER = re.compile(rb"-----(?:BEGIN|END) [A-Z ]*PRIVATE KEY(?: BLOCK)?-----")
 _NEAR_A_KEY = re.compile(rb"(?<![A-Za-z0-9+/=])[A-Za-z0-9+/=](?:[A-Za-z0-9+/=]|\\+/){39,}")
-# The letter of an escaped line break right before it ("\n", "\r"), and a label's tail (AWS_SECRET_ACCESS_KEY= is read
-# "KEY=", aws_session_token= "token="): base64 has an "=" only at its end, so what is before one inside a run is a
+# The letter of an escaped line break right before it ("\n", "\r") or the rest of an escaped character ("\u94a5",
+# JSON's ensure_ascii: a mask after its backslash would break the escape), and a label's tail (AWS_SECRET_ACCESS_KEY= is
+# read "KEY=", aws_session_token= "token="): base64 has an "=" only at its end, so what is before one inside a run is a
 # label, shown, and its value is what the precise rules name (aws_secret_key, aws_session_token).
-_NOT_KEY_TEXT = re.compile(rb"(?:(?<=\\)[nr])?(?:[A-Za-z][A-Za-z0-9]{0,31}=(?=[A-Za-z0-9+/]|\\+/))?")
+_NOT_KEY_TEXT = re.compile(rb"(?:(?<=\\)(?:[nr]|u[0-9A-Fa-f]{4}))?(?:[A-Za-z][A-Za-z0-9]{0,31}=(?=[A-Za-z0-9+/]|\\+/))?")
 # A key's lines are one span (one mask, one finding) where what is between two private_key spans is where a line ends
 # and the next line's prefix: 32 bytes at most, the whole chain 8 KB at most (about a diff of two 4096-bit keys). A
 # line ends after spaces, its string's closing quote and a list's comma, in a line break, a shell's backslash and line
@@ -146,11 +147,46 @@ _BASE64 = frozenset(b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz012345
 _BASE64_BYTES = bytes(sorted(_BASE64))
 
 
+_ESCAPE = re.compile(r"\\(?:u[0-9A-Fa-f]{4}|.)|.", re.S)   # a character as JSON (or repr) writes it: \/, \n, 钥
+# A key's run of characters may take the first ones of a key glued to it ("sk-…sk-…": the first run takes the second's
+# "sk"): a rule's next match is looked for from this many bytes before the end of the one before (or right after its
+# start), so the second is found too, and both are one span. Longer than any prefix a rule's run may take.
+_GLUE = 32
+
+
 def _masked(value):
     """A credential as it may be shown (D57 §3.3): its first four and last two characters; a value too short to keep
-    most of it hidden that way is shown as the ellipsis alone."""
+    most of it hidden that way is shown as the ellipsis alone. Its characters as written, escapes whole: what is shown
+    never ends or begins inside one (``abc\\/…`` shows ``abc``, a ``\\u00e9`` at its end is not shown), so JSON text
+    that held a credential still parses."""
     text = value.decode(errors="replace")
-    return text[:4] + "…" + text[-2:] if len(text) >= 12 else "…"
+    if len(text) < 12:
+        return "…"
+    head, tail = "", ""
+    for piece in _ESCAPE.finditer(text):
+        if len(head) + len(piece.group()) > 4:
+            break
+        head += piece.group()
+    # its last characters, read from a place no escape spans — none of the 6 characters before it is a backslash — so a
+    # long one is never read whole
+    at = len(text) - 8
+    while at > 0 and (backslash := text.rfind("\\", max(at - 6, 0), at)) >= 0:
+        at = backslash
+    for piece in reversed(_ESCAPE.findall(text, max(at, 0))):
+        if len(tail) + len(piece) > 2:
+            break
+        tail = piece + tail
+    return head + "…" + tail
+
+
+def _matches(pattern, data):
+    """``pattern``'s matches in ``data``, each looked for from ``_GLUE`` bytes before the end of the one before (never
+    before its start): one that begins inside the one before (a key glued to it) is found too. Linear: each match is
+    looked through again for at most ``_GLUE`` bytes."""
+    at = 0
+    while (match := pattern.search(data, at)) is not None:
+        yield match
+        at = max(match.start() + 1, match.end() - _GLUE)
 
 
 def find_secrets(data, extra=(), cut=None, dropped=True):
@@ -172,7 +208,7 @@ def find_secrets(data, extra=(), cut=None, dropped=True):
             spans.append((at, -1, at + len(value), "worker_token"))
             at = data.find(value, at + len(value))
     for priority, (kind, pattern) in enumerate(SECRET_RULES):
-        for match in pattern.finditer(data):
+        for match in _matches(pattern, data):
             start, end = match.span("secret") if "secret" in pattern.groupindex else match.span()
             spans.append((start, priority, end, kind))
     if _KEY_MARKER.search(data):   # a key's marker in view: every long run of base64 around it
@@ -330,9 +366,13 @@ def _open_key(data, before):
     return begin is not None and not _KEY_ENDS.search(data, begin.end(), before)
 
 
-def mask_text(text, extra=()):
+def mask_text(text, extra=(), memo=None):
     """``text`` with every credential ``find_secrets`` finds replaced by its masked form, and what was found (``start``/
-    ``end`` in characters of ``text``). Masking masked text changes nothing."""
+    ``end`` in characters of ``text``). Masking masked text changes nothing. ``memo``: what ``premask`` made of the
+    texts known before a write transaction, for the same ``extra`` — looked up there, not masked again."""
+    if memo is not None and memo.extra == tuple(extra or ()) and text in memo:
+        shown, found = memo[text]
+        return shown, [dict(hit) for hit in found]
     data = text.encode(errors="surrogatepass")
     found = find_secrets(data, [v.encode(errors="surrogatepass") if isinstance(v, str) else v for v in extra or ()])
     pieces, at, chars = [], 0, 0
@@ -347,15 +387,15 @@ def mask_text(text, extra=()):
     return "".join(pieces) + data[at:].decode(errors="surrogatepass"), found
 
 
-def mask_value(value, extra=()):
+def mask_value(value, extra=(), memo=None):
     """``value`` as JSON holds it (dicts, lists, strings, numbers) with every string masked as ``mask_text`` masks it —
     a dict's keys too (an Agent's outcome names its own) — and what was found, in order. A copy: the value itself, which
-    verdicts read, is left as it was (D57 §3.3)."""
+    verdicts read, is left as it was (D57 §3.3). ``memo`` as for ``mask_text``."""
     found = []
 
     def walk(item):
         if isinstance(item, str):
-            text, hits = mask_text(item, extra)
+            text, hits = mask_text(item, extra, memo)
             found.extend(hits)
             return text
         if isinstance(item, dict):
@@ -364,6 +404,39 @@ def mask_value(value, extra=()):
             return [walk(child) for child in item]
         return item
     return walk(value), found
+
+
+class Premasked(dict):
+    """What ``mask_text`` makes of texts known before a write transaction (``premask``), with its ``extra``."""
+
+    def __init__(self, extra=()):
+        super().__init__()
+        self.extra = tuple(extra or ())
+
+
+def premask(value, extra=()):
+    """Every string in ``value`` (walked as ``mask_value`` walks it) masked, and every mask that changed one masked
+    again (as the journal does with what is stored), for ``mask_text``'s ``memo``: what is stored of an Attempt is
+    masked before its write transaction, which then only writes (D57 §3.3) — the same text as masking it there, as
+    masking is a function of the text and ``extra`` alone."""
+    memo = Premasked(extra)
+
+    def walk(item):
+        if isinstance(item, str):
+            if item not in memo:
+                memo[item] = mask_text(item, extra)
+                shown = memo[item][0]
+                if shown not in memo:   # it held a credential: its mask, as the journal masks it again
+                    memo[shown] = mask_text(shown, extra)
+        elif isinstance(item, dict):
+            for key, child in item.items():
+                walk(key)
+                walk(child)
+        elif isinstance(item, (list, tuple)):
+            for child in item:
+                walk(child)
+    walk(value)
+    return memo
 
 
 def env_file(name):
@@ -657,10 +730,13 @@ def restore(project, paths):
 def rewind(project, expected, keep=None, into=None):
     """A review's changes put back (D57 §4): commits made on top of the candidate ``expected`` dropped — the candidate and
     what came before it, the implementer's, are never touched — and what remains changed in tracked files restored: what a
-    check counts (``clean_against``), and nothing else. ``reverted`` lists those tracked files. Then, given ``keep`` (the
-    untracked files the review started with), the untracked files it created are moved into ``into`` (outside the project),
-    never deleted: ``removed`` lists them (``_move_out``); ``listing_failed`` when they could not be listed (none moved, the
-    tracked files put back all the same). Its limits:
+    check counts (``clean_against``), and nothing else. ``reverted`` lists those tracked files. Given ``into`` (outside
+    the project), what they had — staged, in the working tree, in the dropped commits — is first kept in a patch there
+    (``_keep_patch``) that ``git apply`` restores on the candidate, named by ``patch`` ("review-removed/tracked.patch"):
+    D73 puts people in the same workspace, and their edits during a review are never lost. Then, given ``keep`` (the
+    untracked files the review started with), the untracked files it created are moved into ``into``, never deleted:
+    ``removed`` lists them (``_move_out``); ``listing_failed`` when they could not be listed (none moved, the tracked
+    files put back all the same). Its limits:
 
     - without ``keep`` the untracked files the reviewer created (and never committed) are kept: the next candidate's
       ``git add -A`` takes them; an untracked file in ``keep`` the reviewer changed stays as it is;
@@ -671,7 +747,7 @@ def rewind(project, expected, keep=None, into=None):
 
     ``ValueError``, with nothing moved, when HEAD is not ``expected`` or a commit on top of it, or ``into`` is in the
     project."""
-    if keep is not None and Path(into).resolve().is_relative_to(Path(project).resolve()):
+    if into is not None and Path(into).resolve().is_relative_to(Path(project).resolve()):
         raise ValueError("移出审查新建文件的目录不能在项目中")
     head = _git(project, "rev-parse", "--verify", "HEAD^{commit}")
     rewound = 0
@@ -681,14 +757,42 @@ def rewind(project, expected, keep=None, into=None):
         rewound = int(_git(project, "rev-list", "--count", f"{expected}..{head}", env=SAFE_GIT_ENV))
         # HEAD only: the dropped commits' changes become staged changes, put back below like any other
         _git(project, "-c", "core.hooksPath=" + os.devnull, "reset", "-q", "--soft", expected, env=SAFE_GIT_ENV)
-    reverted = clean_against(project, expected)["changed_files"]
+    reverted, kept = clean_against(project, expected)["changed_files"], None
+    if reverted and into is not None:   # a copy of what is put back, before it is
+        kept = _keep_patch(project, expected, reverted, Path(into))
     if reverted:
         restore(project, reverted)
     if rewound:   # what is left staged (a left-out file a dropped commit added) back to untracked; files untouched
         _git(project, "-c", "core.hooksPath=" + os.devnull, "reset", "-q", env=SAFE_GIT_ENV)
     removed = [] if keep is None else _move_out(project, keep, into)
     return {**clean_against(project, expected), "reverted": reverted, "rewound": rewound, "removed": removed or [],
-            **({"listing_failed": True} if removed is None else {})}
+            **({"listing_failed": True} if removed is None else {}),
+            **({"patch": f"{Path(into).name}/{kept}"} if kept else {})}
+
+
+def _keep_patch(project, expected, paths, into):
+    """``paths``' changes from ``expected`` (the index, the working tree and the commits after it alike) written to a
+    new ``tracked.patch`` in ``into`` (``tracked-2.patch``… when taken), as ``git apply`` takes it on ``expected``:
+    binary, no renames, no external diff or text conversion, a/ and b/ whatever the configuration says. Its name; None
+    when the diff is empty."""
+    diff = _git_bytes(project, "-c", "diff.noprefix=false", "-c", "diff.mnemonicPrefix=false", "--literal-pathspecs",
+                      "diff", "--binary", "--no-color", "--no-ext-diff", "--no-textconv", "--no-renames", expected,
+                      "--", *paths, env=SAFE_GIT_ENV)
+    if not diff:
+        return None
+    try:   # never put back what could not be kept: the rewind fails instead (review_bound's fail), the edits stay
+        into.mkdir(parents=True, exist_ok=True)
+        for number in range(1, 1000):
+            name = "tracked.patch" if number == 1 else f"tracked-{number}.patch"
+            try:
+                with open(into / name, "xb") as stream:
+                    stream.write(diff)
+                return name
+            except FileExistsError:
+                continue
+    except OSError as exc:
+        raise ValueError(f"审查改动的副本未能保存，未撤回：{exc.strerror or exc}") from None
+    raise ValueError("审查改动的副本无处保存，未撤回")
 
 
 def _move_out(project, keep, into):

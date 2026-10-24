@@ -48,6 +48,34 @@ def labelled():
     return set(re.findall(r'"([a-z_]+\.[a-z_-]+)"\s*:', block("EVENT_LABELS"))), set(re.findall(r'"([a-z_]+\.[a-z_-]+)"', block("TIMELINE_HIDDEN")))
 
 
+GATE_CALLS = {"record", "fail"}   # gates.record(name, …), the engine's fail(name, detail)
+GATE_NAME = re.compile(r"[a-z]+(?:_[a-z]+)*")
+
+
+def gates_written():
+    """The gate names ``octopus/`` records: a gate call's first argument, and the gate an Attempt names as failed."""
+    statuses = {"pass", "warn", "fail", "skip"}
+    names = set()
+    for path in sorted((ROOT / "octopus").rglob("*.py")):
+        for node in ast.walk(ast.parse(path.read_text())):
+            if isinstance(node, ast.Call) and node.args and isinstance(node.args[0], ast.Constant):
+                called = node.func.attr if isinstance(node.func, ast.Attribute) else getattr(node.func, "id", None)
+                value = node.args[0].value
+                if called in GATE_CALLS and isinstance(value, str) and GATE_NAME.fullmatch(value) and value not in statuses:
+                    names.add(value)
+            elif isinstance(node, ast.Assign) and isinstance(node.value, ast.Constant) and any(
+                    isinstance(t, ast.Subscript) and isinstance(t.slice, ast.Constant) and t.slice.value == "gate"
+                    for t in node.targets):
+                names.add(node.value.value)
+    return names
+
+
+def gate_labels():
+    text = (ROOT / "web/src/lib/labels.ts").read_text()
+    block = re.search(r"GATE_LABELS[^=]*=\s*\{(.*?)\};", text, re.S)
+    return dict(re.findall(r'([a-z_]+)\s*:\s*"([^"]+)"', block.group(1))) if block else {}
+
+
 class EventLabelTests(unittest.TestCase):
     def test_every_event_kind_written_has_a_timeline_title(self):
         kinds, _ = emitted()
@@ -57,6 +85,15 @@ class EventLabelTests(unittest.TestCase):
 
     def test_a_kind_built_at_run_time_is_listed(self):
         self.assertEqual(emitted()[1], [])
+
+    def test_every_gate_written_has_a_chinese_name(self):   # Task 15: the English name only in the tooltip
+        written, labels = gates_written(), gate_labels()
+        self.assertGreaterEqual(len(written), 13)
+        self.assertLessEqual({"native_completed", "secrets_masked", "evaluated", "read_only"}, written)
+        self.assertEqual(sorted(written - set(labels)), [])
+        for name, label in labels.items():
+            with self.subTest(name):
+                self.assertTrue(label == "Evaluator" or re.search(r"[\u4e00-\u9fff]", label), label)
 
     def test_the_labels_are_read(self):
         titles, hidden = labelled()

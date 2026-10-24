@@ -21,6 +21,8 @@ export interface Step {
   verify?: string[];
   /** D57 §5: those of verify (by their text) that must pass; the others only warn. */
   verify_required?: string[];
+  /** D57: the KiroCrew planner wrote this task (and its checks). */
+  origin?: "planner";
   depends_on?: string[];
   paths?: string[];
   /** D50: methods from the platform's skill pack the task's Agent reads first (at most 4). */
@@ -410,6 +412,10 @@ export interface Run {
   access?: { via: "owner" | "team" | "share" | "admin"; role?: string; by?: string | null };
   /** KiroCrew Agent planning: intent recognition, requirement enrichment and the generated tasks. */
   planning?: { mode: "agent"; applied: boolean; intent?: string; summary?: string; name?: string; tasks?: string[]; notes?: string[] } | null;
+  /** How the Session's workflow was chosen: "agent" when the KiroCrew planner wrote its tasks. */
+  match_mode?: string | null;
+  /** D41: the Coordinator's latest replan and the tasks it wrote. */
+  replan?: { tasks?: string[] } | null;
 }
 
 /** GET /v1/runs/<id>/observe (D30): the run's native KiroCrew Session, read through its Worker. Messages are oldest
@@ -480,6 +486,8 @@ export interface ApiToken {
   scopes: string;
   expires: number | null;   // D62: null never expires
   last_used?: number | null;
+  /** The token this login itself uses: it cannot be regenerated from here; absent from older platforms. */
+  current?: boolean;
 }
 
 /** GET /v1/admin/users (elevated administrators). */

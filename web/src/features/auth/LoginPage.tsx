@@ -1,6 +1,7 @@
 import { useState, type FormEvent } from "react";
 import { ArrowRight } from "lucide-react";
 import { api, cookieSession, setCookieSession, setToken } from "@/api/client";
+import { Logo } from "@/components/Logo";
 import { Button } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/checkbox";
 import { Input } from "@/components/ui/input";
@@ -49,7 +50,7 @@ export function LoginPage() {
             {Object.values(TOOLS).map((name, index) => (
               <span key={name} className="flex items-center gap-2">
                 {index > 0 && <ArrowRight className="size-3.5 text-muted-foreground" aria-hidden />}
-                <span className="rounded-md border bg-card px-3 py-1.5 shadow-xs">{name}</span>
+                <span className="rounded-md border bg-card px-3 py-1.5">{name}</span>
               </span>
             ))}
           </div>
@@ -90,13 +91,13 @@ export function LoginPage() {
   );
 }
 
-export function Brand({ compact = false }: { compact?: boolean }) {
+export function Brand() {
   return (
     <div className="flex shrink-0 items-center gap-3">
-      <span className="grid size-9 place-items-center rounded-lg bg-primary text-lg font-bold text-primary-foreground">K</span>
-      <span className={compact ? "hidden leading-tight sm:block" : "leading-tight"}>
+      <Logo size={36} />
+      <span className="leading-tight">
         <strong className="block text-sm tracking-wide">KiroCrew ON</strong>
-        <small className="text-[11px] text-muted-foreground">开发工作台</small>
+        <small className="font-mono text-[11px] text-muted-foreground">开发工作台</small>
       </span>
     </div>
   );

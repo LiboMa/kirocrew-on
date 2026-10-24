@@ -212,6 +212,55 @@ class CandidateTests(unittest.TestCase):
         self.assertEqual(self.review("check", c1)["created"], [])
         self.assertEqual(self.review("rewind", c1)["removed"], [])   # nothing left to move
 
+    def test_what_a_rewind_puts_back_in_tracked_files_is_kept_as_a_patch(self):
+        # (final review 4) D73 puts people in the review's workspace: what is put back of tracked files — staged, in the
+        # working tree, in the review's commits — is first written to review-removed/tracked.patch (never in the
+        # project), which applies on the candidate; with a snapshot or without, and only when something is put back
+        binary = bytes(range(256))
+        for snapshot in (True, False):
+            with self.subTest(snapshot=snapshot):
+                self.setUp()
+                self.write({"src/a.js": "a\n", "docs/guide.md": "指南\n", "old.txt": "旧\n"})
+                (self.project / "logo.bin").write_bytes(binary)
+                c1 = self.commit()["sha"]
+                folder = self.snapshot() if snapshot else self.node.path(RID) / "attempts" / ATTEMPT
+                self.write({"docs/review.md": "审查结论\n", "docs/guide.md": "审查者改了指南\n"})
+                self.agent_commit("review: 写下审查结论")
+                self.write({"src/a.js": "有人在审查期间改了实现\n", "staged.txt": "暂存的新文件\n"})
+                git(self.project, "add", "staged.txt")
+                (self.project / "logo.bin").write_bytes(binary[::-1])
+                (self.project / "old.txt").unlink()
+                edited = {name: (self.project / name).read_bytes() for name in
+                          ("src/a.js", "staged.txt", "logo.bin", "docs/review.md", "docs/guide.md")}
+                result = self.review("rewind", c1)
+                self.assertEqual((result["head"], result["clean"], result["rewound"]), (c1, True, 1))
+                self.assertEqual(result["patch"], "review-removed/tracked.patch")
+                patch_file = folder / "review-removed" / "tracked.patch"
+                self.assertTrue(patch_file.is_file())
+                self.assertFalse(patch_file.resolve().is_relative_to(self.project.resolve()))
+                self.assertEqual((self.project / "src/a.js").read_text(), "a\n")   # put back
+                git(self.project, "apply", "--index", str(patch_file))   # and restored from the patch
+                self.assertEqual({name: (self.project / name).read_bytes() for name in edited}, edited)
+                self.assertFalse((self.project / "old.txt").exists())
+                git(self.project, "reset", "-q", "--hard", c1)
+                git(self.project, "clean", "-fdq")
+                again = self.review("rewind", c1)   # nothing to put back: no patch, the first one kept
+                self.assertNotIn("patch", again)
+                self.assertEqual(sorted(p.name for p in (folder / "review-removed").iterdir()), ["tracked.patch"])
+
+    def test_a_rewind_that_cannot_keep_its_patch_puts_nothing_back(self):   # the edits are never lost
+        self.write({"src/a.js": "a\n"})
+        c1 = self.commit()["sha"]
+        folder = self.node.path(RID) / "attempts" / ATTEMPT
+        folder.mkdir(parents=True)
+        (folder / "review-removed").write_text("not a folder")
+        self.write({"src/a.js": "有人在审查期间改了实现\n"})
+        with self.assertRaises(Error) as caught:
+            self.review("rewind", c1)
+        self.assertEqual(caught.exception.status, 409)
+        self.assertIn("未撤回", str(caught.exception))
+        self.assertEqual((self.project / "src/a.js").read_text(), "有人在审查期间改了实现\n")
+
     def test_rewind_without_a_snapshot_moves_nothing(self):   # an Attempt dispatched before D57 §4 recorded none
         self.write({"src/a.js": "a"})
         c1 = self.commit()["sha"]
@@ -305,7 +354,7 @@ class CandidateTests(unittest.TestCase):
                          (c1, True, ["src/a.js"], [], True))
         self.assertEqual(((self.project / "src/a.js").read_text(), (self.project / "review.md").read_text()),
                          ("a", "审查结论\n"))
-        self.assertFalse((folder / "review-removed").exists())
+        self.assertEqual([p.name for p in (folder / "review-removed").iterdir()], ["tracked.patch"])   # nothing moved
         self.assertNotIn("listing_failed", self.review("rewind", c1))   # listed: the flag only when it failed
 
     def test_rewind_never_moves_a_path_outside_the_project(self):

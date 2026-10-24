@@ -36,7 +36,7 @@ function SessionRow({ run, where }: { run: Run; where: string | null }) {
       <button type="button" data-run={run.id} onClick={() => select(run.id)}
         aria-current={run.id === selected ? "true" : undefined}
         className={cn("w-full rounded-lg border border-transparent px-3 py-2.5 pr-9 text-left transition-colors hover:bg-card",
-          run.id === selected && "border-primary/25 bg-card shadow-xs")}>
+          run.id === selected && "border-primary/25 bg-card")}>
         <strong className="line-clamp-2 text-[13px] leading-5 font-medium">
           {marks.pinned && <Pin className="mr-1 inline size-3 text-primary" aria-label="已置顶" />}
           {marks.starred && <Star className="mr-1 inline size-3 fill-amber-400 text-amber-500" aria-label="已收藏" />}

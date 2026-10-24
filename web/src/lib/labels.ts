@@ -66,6 +66,16 @@ export function phaseText(spec: { phase?: string; kind?: string }): string {
   return "";
 }
 
+/** D57 Task 15: each gate an Attempt records (octopus/gates.py, octopus/engine.py; tests/test_event_labels.py keeps every
+ * one named) as people read it. The platform's own name is only the tooltip; a gate a phase let through (D69) keeps its name
+ * and says so in its detail. */
+export const GATE_LABELS: Record<string, string> = {
+  native_completed: "原生执行", identity_match: "实际工具与模型", handoff_present: "交接文件", outcome_valid: "结果文件",
+  outcome_pass: "任务结论", diff_present: "入库改动", no_secrets: "密钥检查", secrets_masked: "已打码的疑似密钥",
+  artifacts_locked: "已验收的文件", checks_pass: "检查命令", tests_fail_on_baseline: "测试是否针对改动", review_bound: "审查对象",
+  read_only: "知识沉淀只读", evaluated: "Evaluator",
+};
+
 export const ROLE_LABELS: Record<string, string> = {
   spec: "Spec 分析", sde: "SDE 开发", integration_test: "集成测试", security_test: "安全测试", challenge: "Challenge", evaluator: "Evaluator",
   knowledge: "Knowledge",

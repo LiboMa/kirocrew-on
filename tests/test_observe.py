@@ -121,6 +121,25 @@ class PlatformObserveTests(unittest.TestCase):
         self.update(lifecycle="closed")
         self.assertEqual(self.observe()["messages"][0]["content"], "完成")
 
+    def test_an_old_workers_answer_is_masked_by_the_platform(self):
+        # (final review 6) a Worker from before D57 §3.3 answers as the conversation was written: the console's observe is
+        # masked by the platform too — the rules and the Session's Worker token — and is otherwise what the Worker said
+        secret = "ghp" + "_" + chars("old-worker-observe", 36, "alnum")
+        token = self.config["token"]
+        answer = {**self.OBSERVATION, "title": f"配置 {secret}", "messages": [
+            {"role": "assistant", "content": f"GH_TOKEN={secret}\nAuthorization: Bearer {token}", "truncated": False,
+             "ts": None}, {"role": "user", "content": "完成", "truncated": False, "ts": None}]}
+        with patch("octopus.crew_entry.worker_request", return_value=answer):
+            result = crew_entry.observe(self.service, self.actor, self.rid)
+        self.assertNotIn(secret[4:-2], dumps(result))
+        self.assertNotIn(token, dumps(result))
+        self.assertEqual(result["messages"][0]["content"], f"GH_TOKEN={secret[:4]}…{secret[-2:]}\nAuthorization: Bearer "
+                                                           f"{token[:4]}…{token[-2:]}")
+        self.assertEqual({**result, "messages": result["messages"][1:], "title": None},
+                         {**answer, "messages": answer["messages"][1:], "title": None})
+        with patch("octopus.crew_entry.worker_request", side_effect=self.fake):
+            self.assertEqual(crew_entry.observe(self.service, self.actor, self.rid), self.OBSERVATION)   # clean: as is
+
     def test_a_team_member_on_a_shared_environment_can_watch_what_they_cannot_open(self):
         with self.db.transaction() as db:
             db.execute("INSERT INTO teams(id,name,created) VALUES('team-shared','Shared Team',0)")

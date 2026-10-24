@@ -186,15 +186,66 @@ describe("session detail", () => {
     await userEvent.click(await screen.findByText("执行证据与历史 Attempt"));
     const gates = screen.getByRole("list", { name: "门禁" });
     expect(within(gates).getAllByRole("listitem").map((item) => item.textContent)).toEqual(
-      ["✓ native_completed", "✓ diff_present · 2 个文件", "✗ checks_pass · 检查命令失败：npm test（退出码 1）", "– review_bound · 此前没有候选"]);
+      ["✓ 原生执行", "✓ 入库改动 · 2 个文件", "✗ 检查命令 · 检查命令失败：npm test（退出码 1）", "– 审查对象 · 此前没有候选"]);
+    expect(within(gates).getByTitle("checks_pass")).toHaveTextContent("检查命令");   // Task 15: the English name as the tooltip
     expect(screen.getByText("abc1234 · 2 个文件 +12 −3")).toBeInTheDocument();
+  });
+
+  test("a gate a phase let through keeps its name, and says so in its detail (D69)", async () => {
+    const task = blocked.tasks[0];
+    const evidence = { ...task.attempts![0].evidence, gates: [
+      { name: "native_completed", status: "warn", detail: "发散阶段不阻断：原生任务失败", relaxed: "fail" },
+      { name: "secrets_masked", status: "warn", detail: "已打码 1 处疑似密钥：aws_access_key（result:code）" }] };
+    open({ ...blocked, tasks: [{ ...task, attempts: [{ ...task.attempts![0], evidence }] }, blocked.tasks[1]] } as Run);
+    await userEvent.click(await screen.findByText("执行证据与历史 Attempt"));
+    const gates = screen.getByRole("list", { name: "门禁" });
+    expect(within(gates).getAllByRole("listitem").map((item) => item.textContent)).toEqual(
+      ["⚠ 原生执行 · 发散阶段不阻断：原生任务失败", "⚠ 已打码的疑似密钥 · 已打码 1 处疑似密钥：aws_access_key（result:code）"]);
+    expect(within(gates).getByTitle("native_completed")).toBeInTheDocument();
+  });
+
+  test("a task names its required and its advisory checks (D57 §5)", async () => {
+    const [code, review] = blocked.tasks;
+    open({ ...blocked, tasks: [
+      { ...code, spec: { ...code.spec, verify: ["npm test", "npm run lint"], verify_required: ["npm test"] } },
+      { ...review, spec: { ...review.spec, kind: "review", verify: ["pytest -q"], verify_required: ["pytest -q"] } },
+    ] } as Run);
+    const [first, second] = await screen.findAllByRole("list", { name: "检查" });
+    expect(within(first).getAllByRole("listitem").map((item) => item.textContent))
+      .toEqual(["必过检查：npm test", "建议检查：npm run lint"]);
+    expect(within(second).getAllByRole("listitem").map((item) => item.textContent))
+      .toEqual(["必过检查：pytest -q", "以上检查不会运行（审查与设计任务）"]);
+  });
+
+  test("a diverge task says its checks will not run (D69)", async () => {
+    const [code, review] = blocked.tasks;
+    const research = { ...code, spec: { ...code.spec, kind: "research" as const, verify: ["npm test"], verify_required: [] } };
+    open({ ...blocked, tasks: [research, review] } as Run);
+    const [checks] = await screen.findAllByRole("list", { name: "检查" });
+    expect(within(checks).getAllByRole("listitem").map((item) => item.textContent))
+      .toEqual(["建议检查：npm test", "以上检查不会运行（发散阶段）"]);
+  });
+
+  // (final review 8) a task from before D57 has no verify_required: its checks shown as the platform judges them
+  // (domain.required_checks) — a planner's advisory, a person's required
+  const checked = { ...blocked.tasks[0], spec: { ...blocked.tasks[0].spec, verify: ["npm test"] } };
+  test.each([
+    ["a person's", { ...blocked, tasks: [checked, blocked.tasks[1]] }, "必过检查：npm test"],
+    ["the planner's (origin)", { ...blocked, tasks: [{ ...checked, spec: { ...checked.spec, origin: "planner" } },
+      blocked.tasks[1]] }, "建议检查：npm test"],
+    ["an agent-planned Session's", { ...blocked, match_mode: "agent", tasks: [checked, blocked.tasks[1]] }, "建议检查：npm test"],
+    ["a replan's", { ...blocked, replan: { tasks: ["code"] }, tasks: [checked, blocked.tasks[1]] }, "建议检查：npm test"],
+  ])("a task from before D57 shows %s checks as the platform judges them", async (_, run, shown) => {
+    open(run as Run);
+    const [checks] = await screen.findAllByRole("list", { name: "检查" });
+    expect(within(checks).getAllByRole("listitem").map((item) => item.textContent)).toEqual([shown]);
   });
 
   test("a warned gate is marked ⚠ and a completed Session counts its latest attempts' warnings (D57)", async () => {
     const task = blocked.tasks[0];
     const warned = { ...task.attempts![0], id: "att-2", number: 2, status: "accepted", error: null,
       evidence: { ...task.attempts![0].evidence, gates: [{ name: "native_completed", status: "pass" },
-        { name: "diff_present", status: "warn", detail: "本任务没有改动入库文件" }] } };
+        { name: "diff_present", status: "warn", detail: "本任务没有改动入库文件。如果它本来就只产出补丁或报告，可以忽略。" }] } };
     const earlier = { ...task.attempts![0], evidence: { gates: [{ name: "outcome_valid", status: "warn" }] } };   // not counted
     open(makeRun({ id: "run-a", status: "completed", progress: { accepted: 1, total: 1 },
       tasks: [{ ...task, status: "accepted", current_attempt: "att-2", attempts: [earlier, warned] }] } as Partial<Run>));
@@ -203,7 +254,7 @@ describe("session detail", () => {
     await userEvent.click(screen.getByText("执行证据与历史 Attempt"));
     const [latest] = screen.getAllByRole("list", { name: "门禁" });
     expect(within(latest).getAllByRole("listitem").map((item) => item.textContent)).toEqual(
-      ["✓ native_completed", "⚠ diff_present · 本任务没有改动入库文件"]);
+      ["✓ 原生执行", "⚠ 入库改动 · 本任务没有改动入库文件。如果它本来就只产出补丁或报告，可以忽略。"]);
     expect(within(latest).getAllByRole("listitem")[1]).toHaveClass("text-amber-600");
   });
 
@@ -401,6 +452,28 @@ describe("session detail", () => {
     expect(docs).not.toBeChecked();
     await userEvent.click(within(dialog).getByRole("button", { name: "保存并续作" }));
     await waitFor(() => expect(calls.find((c) => c.path === "/v1/runs/run-k/continue")?.body).toMatchObject({ task_id: "code", rerun: ["check"] }));
+  });
+
+  test("continue reminds to update the requirement when the native chat changed the workspace (D73, a reminder only)", async () => {
+    const run = makeRun({ id: "run-chat", status: "completed", worker_id: "w1", tasks: blocked.tasks.map((t) => ({ ...t, status: "accepted" })) });
+    const calls = open(run, { "GET /runs/run-chat/chat-changes": { files: ["hello.py", "README.md"], count: 2, commits: false },
+      "POST /runs/run-chat/continue": { id: "run-chat", version: 3 } });
+    await userEvent.click((await screen.findAllByRole("button", { name: "配置并续作" }))[0]);
+    const dialog = await screen.findByRole("dialog");
+    const reminder = await within(dialog).findByRole("note", { name: "对话中的改动" });
+    expect(reminder).toHaveTextContent("工作区里有对话中的改动（2 个文件：hello.py、README.md）");
+    expect(reminder).toHaveTextContent("请同步修改上面的「本次完整需求」");
+    await userEvent.click(within(dialog).getByRole("button", { name: "保存并续作" }));   // it never stops the continue
+    await waitFor(() => expect(calls.some((c) => c.path === "/v1/runs/run-chat/continue")).toBe(true));
+  });
+
+  test("continue shows no reminder when the workspace holds nothing new", async () => {
+    const run = makeRun({ id: "run-clean", status: "completed", worker_id: "w1", tasks: blocked.tasks.map((t) => ({ ...t, status: "accepted" })) });
+    const calls = open(run, { "GET /runs/run-clean/chat-changes": { files: [], count: 0, commits: false } });
+    await userEvent.click((await screen.findAllByRole("button", { name: "配置并续作" }))[0]);
+    const dialog = await screen.findByRole("dialog");
+    await waitFor(() => expect(calls.some((c) => c.path === "/v1/runs/run-clean/chat-changes")).toBe(true));
+    expect(within(dialog).queryByRole("note", { name: "对话中的改动" })).toBeNull();
   });
 
   test("tasks the latest continue left as they were say so", async () => {

@@ -24,6 +24,8 @@ REJECTIONS = ("changes_requested", "blocked")
 # Before D57 any decision but pass failed: fail / rejected count as well, but only where a verdict is written — a top-level
 # JSON value or the value of a decision-like key (a heading included) — never as a word on its own.
 VERDICTS = REJECTIONS + ("fail", "rejected")
+# Task 15 (D57 §8): a stated verdict as a gate's detail shows it; the decision itself stays the token.
+SAID = {"changes_requested": "要求修改", "blocked": "受阻", "fail": "不通过", "rejected": "拒绝"}
 _DECO = r"""[\s*_`"'“”‘’]*"""   # Markdown and quotes around the key, the separator and the value
 _KEY = r"(?:\bdecision\b|\bverdict\b|结论|决定)"
 _VALUE = r"(changes[ \t_-]*requested|blocked|fail|rejected)\b"
@@ -160,11 +162,12 @@ def basic(native, result, spec, evidence, report, invalid, lost, missing, blocke
         rejection = stated(result.get("outcome"), str(native.get("result") or ""))
         if rejection:   # as outcome_pass judges a readable one: the agent's rejection stands
             decision, summary, failure = rejection
-            message = summary or f"结果写明了 {decision}，但结果文件不合法：{invalid}"
-            records += [record("outcome_valid", "warn", f"{invalid}；结果写明了 {decision}，按该结论判断"),
+            said = SAID.get(decision, decision)
+            message = summary or f"结果写明了「{said}」，但结果文件不合法：{invalid}"
+            records += [record("outcome_valid", "warn", f"{invalid}；结果写明了「{said}」，按该结论判断"),
                         record("outcome_pass", "fail", message)]
             return message, failure, records
-        records += [record("outcome_valid", "warn", f"{invalid}；已按结果文字判断：没有写明 changes_requested 或 blocked，按通过"),
+        records += [record("outcome_valid", "warn", f"{invalid}；已按结果文字判断：没有写明「要求修改」或「受阻」，按通过"),
                     record("outcome_pass", "skip", "结果文件不合法，没有可读的结论")]
         return None, None, records
     records.append(record("outcome_valid", "pass"))

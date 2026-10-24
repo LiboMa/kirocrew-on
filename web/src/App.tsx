@@ -5,6 +5,7 @@ import { ApiError, cookieSession, getToken, onSignInChange } from "@/api/client"
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { LoginPage } from "@/features/auth/LoginPage";
 import { Console } from "@/features/console/Console";
+import { useTheme } from "@/lib/theme";
 
 function createClient() {
   return new QueryClient({
@@ -19,6 +20,7 @@ function createClient() {
 
 export function App({ client: injected }: { client?: QueryClient }) {
   const [client] = useState(() => injected ?? createClient());
+  const [theme] = useTheme();
   // null until the session cookie has answered (D67): a new tab or a reopened browser is still signed in by it.
   const [signedIn, setSignedIn] = useState<boolean | null>(() => (getToken() ? true : null));
   useEffect(() => onSignInChange((value) => {
@@ -34,7 +36,7 @@ export function App({ client: injected }: { client?: QueryClient }) {
       <TooltipProvider delayDuration={300}>
         {signedIn === null ? null : signedIn ? <Console /> : <LoginPage />}
         {/* Below the 56 px top bar: a toast must never cover its buttons (on 390 px it hid 「打开会话列表」 while hovered) */}
-        <Toaster position="top-center" richColors closeButton offset={{ top: 64 }} mobileOffset={{ top: 64 }} />
+        <Toaster position="top-center" richColors closeButton theme={theme} offset={{ top: 64 }} mobileOffset={{ top: 64 }} />
       </TooltipProvider>
     </QueryClientProvider>
   );

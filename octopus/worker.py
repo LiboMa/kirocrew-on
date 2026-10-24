@@ -283,6 +283,7 @@ class Worker:
         self.apps = Apps(path_prepend)
         # a task's verify commands (D37 §5); their output shows this Worker's own token masked too (D57 §3.3)
         self.checks = Checks(path_prepend, mask=(token,))
+        self._looked = set()   # D73: the check jobs whose leftovers were recorded as the platform's (untracked-seen.json)
         self.preview_tls_port, self.preview_tls_name = preview_tls_port, preview_tls_name
 
     @staticmethod
@@ -646,7 +647,15 @@ class Worker:
         return {**started, "baseline": True, "base": base}
 
     def verify_status(self, body):
-        return self.checks.status(str(body.get("job", "")))
+        job = str(body.get("job", ""))
+        status = self.checks.status(job)
+        if status["state"] != "running" and job not in self._looked:   # D73: what the checks left is the platform's
+            self._looked.add(job)
+            with self.checks.lock:
+                rid = (self.checks.jobs.get(job) or {}).get("run_id")
+            if rid:
+                self._seen(self.path(rid))
+        return status
 
     def _not_on_baseline(self, rid):
         """While a baseline run has the project on the base (D37 §11.1), what reads or serves its files waits: a download,
@@ -697,6 +706,34 @@ class Worker:
                 pass
         return {**state, "created": [], "tracked_only": True}
 
+    @staticmethod
+    def _seen(run, paths=None):
+        """D73: the untracked files the platform has seen in the workspace, rewritten whole (atomically) each time it looks —
+        a review's start, a candidate commit, a check or baseline job seen done — in run/untracked-seen.json. A review's own
+        untracked.json (its baseline, D57 §4) is kept as it is. Best effort: it never holds the platform's work up."""
+        try:
+            listed = workspace.untracked(workspace.project_dir(run)) if paths is None else list(paths)
+            write(run / "untracked-seen.json", {"paths": listed, "at": time.time()})
+        except Exception:
+            pass
+
+    @staticmethod
+    def _new_untracked(run, project):
+        """D73: the untracked files the workspace has beyond those the platform last saw (untracked-seen.json; before it, the
+        newest review's untracked.json): what a chat created after the platform stopped — what its own checks left is in
+        that list. Every untracked file when the platform has never looked."""
+        seen_file = run / "untracked-seen.json"
+        snapshots = [seen_file] if seen_file.is_file() and not seen_file.is_symlink() else \
+            sorted((p for p in (run / "attempts").glob("attempt-*/untracked.json") if p.is_file() and not p.is_symlink()),
+                   key=lambda p: p.stat().st_mtime)
+        seen = set()
+        if snapshots:
+            try:
+                seen = set(json.loads(snapshots[-1].read_text()).get("paths") or [])
+            except (OSError, ValueError, AttributeError, TypeError):
+                seen = set()
+        return [name for name in workspace.untracked(project) if name not in seen][:200]
+
     def candidate(self, body):
         """A task's candidate commit (D37 §3, ``mode: commit``), a review's check that the workspace is still the
         candidate it reviewed (§6, ``mode: check``), or putting back what a read-only platform task changed in tracked
@@ -725,7 +762,10 @@ class Worker:
             keep = self._review_snapshot(run, body.get("attempt_id")) if mode in {"check", "rewind"} else None
             if mode == "check":
                 require(body.get("expected"), "check 需要 expected")
-                return self._created(workspace.clean_against(project, body["expected"]), project, keep)
+                state = self._created(workspace.clean_against(project, body["expected"]), project, keep)
+                if body.get("untracked") is True:   # D73: what a chat created since the platform last looked
+                    state["untracked"] = self._new_untracked(run, project)
+                return state
             if mode == "restore":
                 require(body.get("expected"), "restore 需要 expected")
                 state = workspace.clean_against(project, body["expected"])
@@ -741,10 +781,15 @@ class Worker:
                             f"会话分支不在候选 {body['expected'][:7]} 之上，不能撤回", 409, "conflict")
                     current = workspace._git(project, "rev-parse", "--abbrev-ref", "HEAD")
                     require(current == branch, f"工作区不在会话分支 {branch}（当前 {current}），不能撤回", 409, "conflict")
-                into = None if keep is None else run / "attempts" / body["attempt_id"] / "review-removed"
+                # what it puts back is kept there too (tracked.patch), with or without a snapshot
+                attempt = body.get("attempt_id")
+                into = run / "attempts" / attempt / "review-removed" \
+                    if isinstance(attempt, str) and re.fullmatch(r"attempt-[a-f0-9]{32}", attempt) else None
                 return self._created(workspace.rewind(project, body["expected"], keep=keep, into=into), project, keep)
             message = str(body.get("message") or "KiroCrew ON：任务候选")[:300]
-            return workspace.task_candidate(project, message, branch, run, body.get("parent"), base, body.get("since"))
+            made = workspace.task_candidate(project, message, branch, run, body.get("parent"), base, body.get("since"))
+            self._seen(run)   # D73: the platform has looked
+            return made
         except ValueError as exc:
             raise Error(409, "candidate_failed", workspace.scrub(exc)) from None
 
@@ -1367,6 +1412,7 @@ class Worker:
                 (folder / "untracked.json").unlink(missing_ok=True)   # from a dispatch that stopped before it was recorded
                 if listed is not None:
                     write(folder / "untracked.json", {"paths": listed})
+                    self._seen(run, listed)   # D73: the platform has looked
             write(record, value)  # Persist before the native side effect.
             try:
                 spawn = {

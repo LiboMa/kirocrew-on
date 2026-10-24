@@ -1,10 +1,10 @@
 import { usageLine } from "@/lib/usage";
 import { ChevronDown } from "lucide-react";
-import type { Run } from "@/api/types";
+import type { Run, Step } from "@/api/types";
 import { Button } from "@/components/ui/button";
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible";
 import { StatusBadge } from "@/components/StatusBadge";
-import { ROLE_LABELS, TOOLS, formatTime, phaseText } from "@/lib/labels";
+import { GATE_LABELS, ROLE_LABELS, TOOLS, formatTime, phaseText } from "@/lib/labels";
 import { canRetryTask } from "@/lib/session";
 import { SteerControl } from "@/features/sessions/SteerControl";
 import { AttemptDiff } from "@/features/sessions/AttemptDiff";
@@ -30,6 +30,41 @@ function methods(planned: string[] | undefined, attempts: NonNullable<Run["tasks
   return <>{" · "}<span>方法（计划，执行环境未交付）：{planned.join("、")}</span></>;
 }
 
+/** That the platform runs none of the checks listed above, and why (octopus/domain.py runs_checks), or null. */
+function unchecked(spec: Step): string | null {
+  if (spec.kind === "review" || spec.kind === "design") return "以上检查不会运行（审查与设计任务）";
+  if ((spec.phase ?? (spec.kind === "research" ? "diverge" : null)) === "diverge") return "以上检查不会运行（发散阶段）";
+  return null;
+}
+
+/** Which of a task's checks must pass, as the platform judges them (octopus/domain.py required_checks): its
+ * verify_required; a task from before D57 names none — then none of a planner's (its origin, an agent-planned Session, a
+ * replan's task) and all of a person's. */
+function requiredChecks(run: Run, spec: Step): string[] {
+  if (spec.verify_required !== undefined) return spec.verify_required;
+  const planner = spec.origin === "planner" || run.match_mode === "agent" || !!run.replan?.tasks?.includes(spec.id);
+  return planner ? [] : spec.verify ?? [];
+}
+
+/** D57 §5: a task's checks, those that must pass (「必过检查」, as in the revision history) and the others that only note
+ * (「建议检查」). */
+function Checks({ run, spec }: { run: Run; spec: Step }) {
+  const verify = spec.verify ?? [];
+  if (!verify.length) return null;
+  const required = requiredChecks(run, spec);
+  const rows: [string, string[]][] = [["必过检查", verify.filter((c) => required.includes(c))],
+    ["建议检查", verify.filter((c) => !required.includes(c))]];
+  const note = unchecked(spec);
+  return (
+    <ul aria-label="检查" className="mt-2 space-y-0.5 text-xs text-muted-foreground">
+      {rows.filter(([, list]) => list.length).map(([label, list]) => (
+        <li key={label}>{label}：<span className="font-mono break-all text-foreground/85">{list.join("；")}</span></li>
+      ))}
+      {note && <li>{note}</li>}
+    </ul>
+  );
+}
+
 export function TaskList({ run, onContinue }: { run: Run; onContinue: (taskId: string) => void }) {
   return (
     <ol id="task-list" className="space-y-3" aria-label="开发任务">
@@ -38,7 +73,7 @@ export function TaskList({ run, onContinue }: { run: Run; onContinue: (taskId: s
         const spec = task.spec;
         return (
           <li key={task.id}>
-            <article className="rounded-xl border bg-card p-4 shadow-xs sm:p-5" data-task={task.id}>
+            <article className="rounded-xl border bg-card p-4 sm:p-5" data-task={task.id}>
               <header className="flex items-start gap-3">
                 <span className="grid size-7 shrink-0 place-items-center rounded-md bg-muted font-mono text-xs">
                   {String(index + 1).padStart(2, "0")}
@@ -59,6 +94,7 @@ export function TaskList({ run, onContinue }: { run: Run; onContinue: (taskId: s
                 <StatusBadge status={task.status} />
               </header>
               <p className="mt-3 line-clamp-4 text-sm leading-6 whitespace-pre-wrap text-foreground/85">{spec.prompt}</p>
+              <Checks run={run} spec={spec} />
               <footer className="mt-3 flex flex-wrap items-center gap-3">
                 <Button type="button" size="sm" variant="outline" disabled={!canRetryTask(run, index)}
                   onClick={() => onContinue(task.id)} data-retry={task.id}>配置并续作</Button>
@@ -117,7 +153,9 @@ export function TaskList({ run, onContinue }: { run: Run; onContinue: (taskId: s
                             {attempt.evidence.gates.map((gate, index) => (
                               <li key={index} className={gate.status === "fail" ? "text-destructive" : gate.status === "warn" ? "text-amber-600"
                                 : gate.status === "skip" ? "text-muted-foreground" : undefined}>
-                                {{ pass: "✓", warn: "⚠", fail: "✗", skip: "–" }[gate.status]} {gate.name}{gate.detail ? " · " + gate.detail : ""}
+                                {{ pass: "✓", warn: "⚠", fail: "✗", skip: "–" }[gate.status]}{" "}
+                                <span title={gate.name}>{GATE_LABELS[gate.name] ?? gate.name}</span>
+                                {gate.detail ? " · " + gate.detail : ""}
                               </li>
                             ))}
                           </ul>

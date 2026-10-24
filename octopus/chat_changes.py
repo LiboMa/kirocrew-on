@@ -54,13 +54,22 @@ def _settled(service, actor, rid, version=None):
 def _changed(config, rid, head):
     """Whether the workspace holds what no candidate has: files changed against the branch's candidate, or commits on it.
     False when the Worker cannot say (before D37, or no workspace)."""
+    state = _check(config, rid, head)
+    return state is not None and bool(state["files"] or state["commits"])
+
+
+def _check(config, rid, head):
+    """What the workspace holds beyond the branch's candidate: changed tracked files, files created since the platform last
+    looked (a Worker before this fix leaves those out) and whether commits were made on it; None when it cannot say."""
     try:
-        state = worker_request(config, "/candidate", {"run_id": rid, "mode": "check", "expected": head["sha"]}, timeout=60)
+        state = worker_request(config, "/candidate", {"run_id": rid, "mode": "check", "expected": head["sha"], "untracked": True},
+                               timeout=60)
     except Error as exc:
         if exc.status == 404 or exc.code in SKIPPED:
-            return False
+            return None
         raise
-    return not (state.get("clean") and state.get("head") == head["sha"])
+    files = list(dict.fromkeys([*(state.get("changed_files") or []), *(state.get("untracked") or [])]))
+    return {"files": files, "commits": state.get("head") != head["sha"]}
 
 
 def collect(service, actor, rid, body):
@@ -145,6 +154,15 @@ def apply(db, actor, rid, chat):
     journal.record(db, rid, "run.chat_changes", who, reason=f"{note}（提交 {candidate['sha'][:7]}）", files=files,
                    task=writer["id"], attempt=chat["attempt"], head=candidate["sha"])
     return note, bool(chat["job"])
+
+
+def pending(service, actor, rid):
+    """The continue dialog's reminder (owner 2026-10-23: 只提醒、不拦截): the files the workspace holds that the branch's
+    candidate has not, and whether commits were made on it. It only looks; nothing when it cannot say."""
+    state = _settled(service, actor, rid)
+    found = _check(state["config"], rid, state["head"]) if state else None
+    files = (found or {}).get("files") or []
+    return {"files": files[:FILES], "count": len(files), "commits": bool(found and found["commits"])}
 
 
 def refuse(service, actor, rid):
