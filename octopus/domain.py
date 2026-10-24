@@ -2209,6 +2209,11 @@ class Service:
         self._stop_app(rid, "session")   # as a continue does: the preview ran the code before it
         return result
 
+    def chat_changes(self, actor, rid):
+        """D73: what the native chat changed in the workspace that no candidate has yet — the continue dialog's reminder."""
+        from . import chat_changes
+        return chat_changes.pending(self, actor, rid)
+
     def bundle_entry(self, actor, rid):
         """Whether the actor may pull the Session's branch (D58 §5): read access and a prepared workspace."""
         with self.db.read() as db:
@@ -2380,13 +2385,14 @@ class Service:
             if run.get("worker_id"):
                 # It ran on an environment that no longer runs it (§6.2).
                 title = f"{where}的{run.get('error') or '执行环境不可用'}"
-                detail = "已完成的任务保留；换到另一个执行环境时，工作区在新环境中重新准备，原环境中的产出不会迁移。"
-                action = ("选择 Worker 后继续执行。" if space["workers"]
+                detail = ("这是执行环境的问题，不是你的任务。已完成的任务保留；换到另一个执行环境时，工作区在新环境中重新准备，"
+                          "原环境中的产出不会迁移。")
+                action = ("点「分配 Worker」选择另一个执行环境后继续执行。" if space["workers"]
                           else "请平台管理员为该空间分配执行环境后重新分配 Worker。")
                 return {"title": title, "detail": detail, "action": action, "workers": space["workers"], "task_id": None}
             if space["workers"]:
                 title, detail = "需求已保存，等待选择 Worker", f"{where}有 {space['workers']} 个可用 Worker，提交时未指定。"
-                action = "选择 Worker 后开始执行。"
+                action = "点「分配 Worker」选择后开始执行。"
             elif space["team"] and space.get("disabled"):
                 title, detail = f"{where}的执行环境已停用", "该 Team 的执行环境被管理员停用，暂时无法执行。"
                 action = "请平台管理员重新启用该执行环境后分配 Worker；也可以改在个人空间重新提交。"
@@ -2398,10 +2404,11 @@ class Service:
                 title, detail = f"{where}没有可用 Worker", "尚未为你登记执行环境。"
                 action = "请平台管理员为你登记执行环境后分配 Worker。"
             return {"title": title, "detail": detail, "action": action, "workers": space["workers"], "task_id": None}
+        approve = ("在会话页「待批准」中查看工具与命令后批准或拒绝；Coding Agent 可用 octopus_approvals 查看、"
+                   "经用户同意后用 octopus_approve 答复。")
         if run["status"] == "waiting_approval":
             return {"title": "等待批准", "detail": run["error"] or "原生任务正在等待批准一次工具调用。",
-                    "action": "在会话页「待批准」中查看工具与命令后批准或拒绝；Coding Agent 可用 octopus_approvals 查看、"
-                              "经用户同意后用 octopus_approve 答复。", "task_id": task["id"] if task else None}
+                    "action": approve, "task_id": task["id"] if task else None}
         if run["status"] == "completed" and (run.get("publish_auto") or {}).get("ok") is False:
             return {"title": "自动发布未完成", "detail": run["publish_auto"].get("error"),
                     "action": "处理后在会话页点「发布到仓库」（例如绑定一枚有写权限的凭证）；会话的工作已完成。"
@@ -2413,14 +2420,26 @@ class Service:
             name = f"{suggested['owner']}/{suggested['name']}"   # D48 R7: never created on its own
             return {"title": "发布到新仓库待确认", "detail": f"需求要求新建仓库 {name}，平台不会自动创建。",
                     "action": "在会话页核对 owner、仓库名与凭证后点「新建仓库并发布」；Coding Agent 经用户同意后用 octopus_publish "
-                              "（repository、credential）。", "task_id": None}
+                              "发布（写明新仓库与凭证）。", "task_id": None}
         if run["status"] == "awaiting_acceptance":   # D71: an earlier version's wait, until the Engine accepts it
             return {"title": "即将继续", "detail": "验收确认已取消，待人判断的项记为提示。", "action": "无需操作。", "task_id": None}
         if run["status"] == "awaiting_confirmation":   # D70: an earlier version's wait, until the Engine starts it
             return {"title": "即将开始", "detail": "计划确认已取消，平台正在直接开始。", "action": "无需操作。", "task_id": None}
         if run["status"] == "diagnosing":
+            from .recovery import LIVE, WHY, unfinished
+            told = "缺少凭证或需求信息时会告诉你缺什么。也可以停止本会话。"   # D71: the only waits a diagnosis ends in
+            if (latest or {}).get("status") == "waiting_approval":   # the diagnosis's own tool call (ApprovalsCard)
+                return {"title": "诊断在等待批准一次工具调用", "detail": "协调者的诊断请求执行一次需要批准的工具调用，答复之前诊断不会继续。",
+                        "action": approve, "task_id": task["id"] if task else None}
+            fault = (((latest or {}).get("context") or {}).get("retry") or {}).get("transient")
+            if fault in WHY and latest["status"] in LIVE:   # D57 §6.3: the platform's fault, dispatched again on its own
+                return {"title": unfinished(fault) + "，正在自动重试",
+                        "detail": f"平台临时故障：{WHY[fault]}。平台已自动重试 1 次，正在等结果。"
+                                  "这是平台的问题，不是你的任务；你的任务结果都在。",
+                        "action": "无需操作：诊断完成后自动按结果修复；" + told, "task_id": task["id"] if task else None}
             return {"title": "协调者正在诊断与安排修复", "detail": run["error"] or "正在读取失败证据，等待原生诊断结果。",
-                    "action": "等待诊断结果；也可停止本 Session", "task_id": task["id"] if task else None}
+                    "action": "无需操作：诊断完成后自动按结果修复（重试、返工或换工具）；" + told,
+                    "task_id": task["id"] if task else None}
         if run["status"] != "blocked":
             from .waiting import queue_attention, quota_attention
             return queue_attention(run, task) or quota_attention(run)
@@ -2429,6 +2448,7 @@ class Service:
         from .waiting import handed_over, kiro_login_failure
         error = run.get("error") or attempt.get("error") or "尚无可核实的错误原因"
         outcome = ((attempt.get("evidence") or {}).get("outcome") or {})
+        detail = error
         if failure in {"auth", "input", None, "native_error"} and pushing(" ".join(filter(None, [
                 error, outcome.get("summary"), " ".join(map(str, outcome.get("findings") or []))]))):
             # D47: an Agent has no repository write credential by design; publishing is the platform's
@@ -2442,49 +2462,97 @@ class Service:
                 action = ("此会话的源码不来自远端仓库：推送与建仓库由平台完成——会话完成后在会话页填写新仓库（owner、仓库名）与有写权限的凭证，"
                           "点「新建仓库并发布」；可续作去掉要求建仓库或推送的任务。")
         elif run.get("error") == "Worker 已停用":   # D43: continues on its own once the Worker is enabled again
-            title, action = "执行环境已停用", "管理员重新启用后自动继续。"
+            title, action = "执行环境已停用", "无需操作：这是执行环境的问题，管理员重新启用后自动继续；急用请联系平台管理员。"
         elif "原生任务已停止" in error:
             title = (task["spec"]["name"] + "：已停止") if task else "原生任务已停止，尚未完成"
-            action = "可请求协调者诊断，或配置后原地重跑；停止原因未报告时不能推断。"
+            action = ("停止原因没有报告（可能是有人在原生页面停止了它），平台不会自动重跑。确认后点「请求协调者诊断」，"
+                      "或在该任务上「配置并续作」重跑。")
         elif not task and not run.get("native_parent") and (
                 ((run.get("credentials") or {}).get("source") or {}).get("unavailable") or (run.get("credentials") or {}).get("removed")):
             title, action = "仓库凭证不可用", "在会话页更换凭证，或请凭证管理者重新启用；凭证可用后自动继续。"
         elif not task and not run.get("native_parent"):
-            title, action = "项目准备未完成", "检查仓库来源、访问权限和 Worker，处理具体错误后重跑。"
+            title = "项目准备未完成"
+            action = ("任务还没开始，问题在源码准备：检查仓库地址、访问权限与执行环境，处理详情中的错误后，"
+                      "在第一个任务上「配置并续作」重新准备。")
         elif ((attempt.get("evidence") or {}).get("watchdog") or {}).get("reason"):
             title = "原生任务卡住，看门狗已停止"
-            action = ("检查任务是否在运行不会结束的命令（如开发服务器）或等待输入；可在续作时调整提示，"
-                      "或为较慢的构建与测试调大 recovery.idle_minutes 后重跑。")
+            action = ("任务长时间没有进展：检查它是否在运行不会结束的命令（如开发服务器）或在等待输入，在该任务上「配置并续作」"
+                      "调整说明后重跑；构建与测试确实较慢时，可让 Coding Agent 调大会话的无进展时限后重跑。")
         elif failure == "tool" and (attempt.get("evidence") or {}).get("requested"):
-            title, action = "需求指定的工具或模型不可用", "修复执行环境后续作，或在「配置并续作」中改用可用的工具或模型。"
+            title = "需求指定的工具或模型不可用"
+            action = ("需求点名了它，平台不会自动换用：请平台管理员在执行环境中装好或开通后续作，"
+                      "或在该任务上「配置并续作」改用可用的工具或模型。")
         elif failure == "tool":
             title = "需要换用工具或模型"
             action = ("协调者可推荐换用可用的工具（自动纠错开启且允许换工具时）；也可在「配置并续作」中换用可用的工具或模型后重跑，"
                       "详情中是失败原因或协调者的建议。")
         elif failure == "input":
-            title, action = "等待补充项目或任务信息", "补充缺少的源码来源或需求，再继续同一 Session。"
+            title = "等待补充项目或任务信息"
+            action = ("缺少：只有你能提供的源码来源或需求信息（详情中是任务的说明）。由你补充：在该任务上「配置并续作」写入后，"
+                      "继续同一会话。")
         elif task and kiro_login_failure(attempt.get("evidence") or {}, attempt.get("error"),
                                          (attempt.get("spec") or task["spec"]).get("tool")):
             if handed_over((attempt.get("evidence") or {}).get("waiting") or {}):
                 title = "Kiro 登录正常，需要处理"
-                action = "失败后检查到 Kiro 登录正常（未见过期，或检查前已恢复），平台不会自动重跑：确认后续作。"
+                action = ("失败后检查到 Kiro 登录正常（未见过期，或检查前已恢复），平台不会自动重跑：确认后在该任务上「配置并续作」。")
             else:   # the platform reads Kiro's login and continues on its own (D43)
                 title = "等待 Kiro 登录恢复"
                 action = ("请平台管理员发起 kiro 重新登录；在你自己的执行边界上时，由你用自己的账号授权管理员给出的设备码。"
                           "登录恢复后自动继续（平台每分钟检查一次）。")
         elif failure in {"auth", "model"}:
-            title, action = "等待处理认证、权限或模型配置", "在原生 KiroCrew 处理权限，或修改本任务配置后重跑。"
-        elif latest and latest["status"] == "blocked":
-            title, action = "协调者需要你处理具体阻塞", "按诊断说明补充条件，再请求诊断或原地重跑。"
+            title = "等待处理认证、权限或模型配置"
+            action = ("任务报告认证、权限或模型有问题（详情中是原因），平台不会自动重跑。缺少的登录或权限由你或平台管理员在原生 KiroCrew "
+                      "中处理；模型不可用时在该任务上「配置并续作」改用可用的模型。")
+        elif latest and latest["status"] == "blocked" and latest.get("failed_attempt_id") == attempt.get("id"):
+            title, detail, action = Service._diagnosis_stop(latest, error, run["recovery"].get("budget"))
+        elif failure == "native_error":
+            title = "原生任务出错，没有完成"
+            action = ("这通常是工具或执行环境的问题，不是你的需求（详情中是原生错误）。点「请求协调者诊断」让协调者判断重试还是换工具，"
+                      "或在该任务上「配置并续作」后重跑。")
+        elif failure == "environment":
+            title = "执行环境有问题，任务没有完成"
+            action = ("任务报告执行环境缺东西或出错（详情中是原因），不是你的需求：请平台管理员处理执行环境后，点「请求协调者诊断」"
+                      "或在该任务上「配置并续作」重跑。")
         else:
-            title, action = "任务未通过交接或质量检查", "查看失败证据，可请求协调者诊断并修复，或配置后原地重跑。"
+            title = "任务未通过交接或质量检查"
+            action = ("任务的产出没有通过检查：原因见详情，证据在该任务的「执行证据与历史 Attempt」中。点「请求协调者诊断」"
+                      "让协调者安排修复，或在该任务上「配置并续作」后重跑。")
         # What refused automatic recovery of this failure (D42), unless a diagnosis ran for it after all.
         refusal = (attempt.get("evidence") or {}).get("budget_refused")
         if refusal and run["recovery"].get("budget") and not (latest and latest.get("failed_attempt_id") == attempt.get("id")):
             from .recovery import budget_note
             action += " " + budget_note(run["recovery"]["budget"], refusal)
-        return {"title": title, "detail": error, "action": action, "task_id": task["id"] if task else None,
+        return {"title": title, "detail": detail, "action": action, "task_id": task["id"] if task else None,
                 "task_name": task["spec"]["name"] if task else None}
+
+    @staticmethod
+    def _diagnosis_stop(latest, error, budget=None):
+        """(title, detail, action) of a Session its latest diagnosis stopped (Task 15, D57 §8): what it waits for and who
+        supplies it (D71 recovery.WAIT_FOR), the platform's fault, a diagnosis that never started, or one that was
+        stopped."""
+        from .recovery import WHY, limit_reached, unfinished
+        said = latest.get("error") or error
+        missing = (latest.get("decision") or {}).get("missing")
+        fault = (latest.get("evidence") or {}).get("platform_fault")
+        look = "或展开该任务的「执行证据与历史 Attempt」查看结果。"
+        if missing == "credentials":
+            return "需要你提供凭证或授权", error, ("缺少：仓库凭证、授权或认证。由你或凭证管理者提供：在会话页更换凭证或按详情准备好授权后，"
+                                          "点「请求协调者诊断」，或在该任务上「配置并续作」。")
+        if missing == "input":
+            return "需要你补充需求信息", error, "缺少：只有你能提供的需求信息。由你补充：在该任务上「配置并续作」写入需求后继续同一会话。"
+        if fault in WHY:   # D57 §6.3: retried once, or the budget refused it (which limit: recovery.Coordinator._retry)
+            key = (latest.get("evidence") or {}).get("budget_refused")
+            again = "已自动重试 1 次，仍未成功。" if (latest.get("context") or {}).get("retry_of") else \
+                (limit_reached(budget, key) + "，" if key and budget else "") + "没有再试。"
+            return (unfinished(fault), f"平台临时故障：{WHY[fault]}。{again}这是平台的问题，不是你的任务；你的任务结果都在。",
+                    "点「请求协调者诊断」重新诊断；" + look)
+        if said.startswith(("协调者启动请求被拒绝：", "协调者未能启动：")):   # recovery.Coordinator.advance: never dispatched
+            return ("诊断员没能启动", said.rstrip("。") + "。这是执行环境的问题，不是你的任务；你的任务结果都在。",
+                    "稍后点「请求协调者诊断」重新诊断，反复出现请联系平台管理员；" + look)
+        if said.startswith("自动诊断未形成可执行决定"):   # stopped before it decided (recovery: a person's, never retried)
+            return ("诊断已停止，没有形成决定", said.rstrip("。") + "。诊断在完成前被停止（例如有人在原生页面停止了它）；你的任务结果都在。",
+                    "停止的诊断不会自动再派。需要时点「请求协调者诊断」重新诊断；或在该任务上「配置并续作」。")
+        return "协调者需要你处理具体阻塞", error, "按详情中协调者的说明处理后，点「请求协调者诊断」，或在该任务上「配置并续作」。"
 
     def operate(self, actor, rid, action, body):
         require(action in {"continue", "recover", "stop", "close", "reopen", "delete", "assign-worker"},
@@ -2543,7 +2611,10 @@ class Service:
                     # D45: the user's own new tool or model for the task takes the place of what the requirement named
                     changed = any(key in override and override[key] != before.get(key) for key in ("tool", "model"))
                     merged = {**{k: v for k, v in before.items() if not (changed and k == "requested")}, **override}
-                    if "verify" in override and "verify_required" not in override:   # D57 §5.3: the user's own checks
+                    # D57 §5.3: checks the user changed are their own, all required; sent back as they are (a form
+                    # echoes them), they keep which must pass
+                    if "verify" in override and "verify_required" not in override \
+                            and override["verify"] != before.get("verify", []):
                         merged["verify_required"] = override["verify"]
                     if override.get("role", "x") in (None, ""):   # the user takes the role away; the kind stays
                         merged.pop("role")

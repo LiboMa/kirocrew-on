@@ -335,7 +335,7 @@ class EngineGateTests(TeamsWorkersCase):
                     recovered = db.execute("SELECT COUNT(*) FROM recoveries WHERE run_id=?", (rid,)).fetchone()[0]
                 if status == "blocked":
                     self.assertEqual((self.gates(evidence)["outcome_pass"], evidence["failure_type"]), ("fail", "implementation"))
-                    self.assertIn("changes_requested", attempt["error"])
+                    self.assertIn("结果写明了「要求修改」", attempt["error"])   # Task 15: the verdict in words people read
                     self.assertEqual(recovered, 1)   # an ordinary failure: diagnosed
                     self.assertNotIn("/candidate", worker.paths())
                 else:
@@ -645,6 +645,11 @@ class EngineGateTests(TeamsWorkersCase):
                  ("warn", {"changed_files": ["src/a.js"], "created": ["review.md"]}, put_back(["src/a.js"], ["review.md"]),
                   "审查改动的已跟踪文件已由平台撤回：src/a.js；审查新建的文件已由平台移出：review.md；"
                   "移出的文件保存在该次尝试的 review-removed 目录", ["src/a.js", "review.md"]),
+                 # (final review 4) what was put back of tracked files is kept as a patch, and said where
+                 ("warn", {"changed_files": ["src/a.js"], "created": []},
+                  lambda body: {**put_back(["src/a.js"], [])(body), "patch": "review-removed/tracked.patch"},
+                  "审查改动的已跟踪文件已由平台撤回：src/a.js；撤回前的改动另存在该次尝试的 review-removed/tracked.patch"
+                  "（git apply 可恢复）", ["src/a.js"]),
                  ("skip", {"changed_files": [], "created": []}, None, "审查没有改动文件", None),
                  # a folder the reviewer made a repository, holding files it started with: left in place, and said
                  ("warn", {"changed_files": [], "created": ["tools/"]}, put_back([], [], ["tools/"]),
@@ -670,7 +675,8 @@ class EngineGateTests(TeamsWorkersCase):
                 gate = self.review_bound(evidence)
                 self.assertEqual((gate["status"], gate.get("files")), (status, files))
                 self.assertIn(words, gate["detail"])
-                self.assertEqual(gate["detail"].count("review-removed"), 1 if "已由平台移出" in words else 0)
+                self.assertEqual(gate["detail"].count("review-removed"), 1 if "已由平台移出" in words or "patch" in words
+                                 else 0)
                 modes = [b["mode"] for p, b in worker.calls if p == "/candidate" and b["attempt_id"] == attempt["id"]]
                 self.assertEqual(modes, ["check", "rewind"] if rewind else ["check"])
 
@@ -1261,6 +1267,47 @@ class SecretMaskingTests(TeamsWorkersCase):
                          "已打码 2 处疑似密钥：github（result:task-1）、github（checks:task-1）")
         self.assertEqual([w["name"] for w in evidence["warnings"]], ["secrets_masked"])
         self.assertEqual(attempt["status"], "accepted")
+
+    def test_the_write_transaction_scans_none_of_the_attempts_texts(self):
+        # (final review 5) an Attempt's result, outcome and checks' output — and the journal's own pass over what is
+        # stored of them — are masked before the write transaction that judges it: inside it, with the write lock held,
+        # only what the transaction itself adds (a reason, a mark, the list of what was masked) is looked through
+        from contextlib import contextmanager
+        from octopus import sources
+        padding = "这是一段很长的输出。" * 3000   # 30 000 characters: the Attempt's result and its checks' output are long
+        find, transaction, scanned, writing = sources.find_secrets, self.db.transaction, [], []
+
+        def spy(data, *args, **kwargs):
+            scanned.append((bool(writing), len(data)))
+            return find(data, *args, **kwargs)
+
+        @contextmanager
+        def tracked():
+            with transaction() as db:
+                writing.append(True)
+                try:
+                    yield db
+                finally:
+                    writing.pop()
+        cases = (("judged when it ends", []), ("judged when its checks end", ["npm test"]))
+        for number, (name, verify) in enumerate(cases):
+            with self.subTest(name):
+                scanned.clear()
+                worker = FakeWorker()
+                rid = self.session([{**TASK, "verify": verify}], request="start-%016d" % (90 + number))
+                worker.results["task-1"] = padding + f"\nGH_TOKEN={SECRET}"
+                worker.outcomes["task-1"] = {"decision": "pass", "summary": f"完成 {SECRET}",
+                                             "findings": [padding[:1500]]}
+                worker.verify = [{"state": "done", "passed": True, "failed": None, "results": [
+                    {"command": "npm test", "exit": 0, "seconds": 1.0, "tail": padding[:3000] + f"\nok {SECRET}"}]}]
+                with patch.object(sources, "find_secrets", spy), patch.object(self.db, "transaction", tracked):
+                    self.run_engine(worker)
+                attempt, evidence = self.attempt(rid, "task-1")
+                self.assertEqual((attempt["status"], self.run_status(rid)), ("accepted", "completed"))
+                self.assertNotIn(SECRET[4:-2], self.stored())
+                self.assertEqual(len(evidence["secrets"]), 3 if verify else 2)
+                self.assertTrue(any(size > 30000 for inside, size in scanned if not inside))   # masked: before the lock
+                self.assertEqual([size for inside, size in scanned if inside and size > 1000], [])
 
     def test_an_entry_too_long_only_because_of_a_token_stays_too_long_when_masked_again(self):
         # Knowledge judges an entry as it was written (knowledge.MARK): the platform's mark outlives the Attempt being

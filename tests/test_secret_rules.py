@@ -12,6 +12,7 @@ import secrets
 import subprocess
 import tempfile
 import unittest
+import unittest.mock
 from urllib.parse import quote
 
 from octopus import checks, sources
@@ -937,6 +938,71 @@ class SecretRuleTests(unittest.TestCase):
         self.assertTrue(all(secret[i:i + 8] not in tail for i in range(len(secret) - 8)), tail[:200])
         self.assertEqual([(h["kind"], h["masked"]) for h in hits], [("anthropic", "sk-a…AA")])
         self.assertEqual(set(hits[0]), {"kind", "line", "masked", "hash"})
+
+    def test_what_a_mask_shows_never_ends_or_begins_inside_an_escape(self):
+        # (final review 1) stored JSON text that held a key still parses once masked: the four characters shown first
+        # never end in an escape's backslash ("abc\/…" written by PHP's json_encode) or inside a \uXXXX, the two shown
+        # last never begin inside one, and a run of base64 right after an escaped character (ensure_ascii's "钥")
+        # begins after it
+        hint = "-----END RSA PRIVATE" + " KEY-----"
+        body = chars("escaped-head", 60, "std").replace("/", "x")
+        armour = "-----BEGIN PGP PRIVATE" + " KEY BLOCK-----\nComment: café\n"
+        documents = {
+            "php's slash after three characters": ('{"hint": "' + hint + '", "sig": "abc\\/' + body + '"}', [body]),
+            "a key right after escaped Chinese": (json.dumps({"hint": hint, "log": "密钥" + body}), [body]),
+            "a header ending in an escaped character": (json.dumps({"key": armour}), []),
+        }
+        for name, (document, keys) in documents.items():
+            with self.subTest(name):
+                shown, found = sources.mask_text(document)
+                self.assertTrue(found, shown)
+                self.assertIsInstance(json.loads(shown), dict, shown)
+                self.assertEqual([key[i:i + 10] for key in keys for i in range(len(key) - 9) if key[i:i + 10] in shown],
+                                 [], shown)
+                for hit in found:
+                    head, tail = hit["masked"].split("…") if "…" in hit["masked"] else ("", "")
+                    self.assertFalse(head.endswith("\\") or re.search(r"\\u[0-9a-fA-F]{0,3}$", head), hit["masked"])
+                    self.assertFalse(re.match(r"[0-9a-fA-F]{1,4}(?![0-9a-fA-F])", tail) and "\\u" in document, hit["masked"])
+        self.assertEqual(sources.mask_text(documents["php's slash after three characters"][0])[1][0]["masked"],
+                         "abc…" + body[-2:])
+
+    def test_glued_keys_are_one_mask_and_masking_again_changes_nothing(self):
+        # (final review 2) a key's run of characters takes the next key's first ones ("sk", "ghp") when they are glued:
+        # both are masked in one pass, as one, so what is stored and what the journal masks again are the same
+        legacy = ["sk-" + chars(f"glued-{n}", 40, "alnum") for n in range(3)]
+        classic = ["ghp" + "_" + chars(f"glued-gh-{n}", 36, "alnum") for n in range(2)]
+        for keys in (legacy[:2], legacy, classic, [legacy[0], ANT], [legacy[0], PROJECT], [OPENAI, OPENAI]):
+            text = "KEY=" + "".join(keys) + "\nnext line\n"
+            with self.subTest(keys=[key[:6] for key in keys]):
+                once, found = sources.mask_text(text)
+                self.assertEqual(len(found), 1, once)
+                self.assertEqual([key[i:i + 10] for key in keys for i in range(len(key) - 9) if key[i:i + 10] in once],
+                                 [], once)
+                self.assertEqual(sources.mask_text(once), (once, []))
+                self.assertTrue(once.startswith("KEY=" + keys[0][:4] + "…") and once.endswith("\nnext line\n"), once)
+
+    def test_masking_what_the_rules_masked_changes_nothing(self):
+        # (final review 2) every text the fixtures above mask (rounds 1–5: escaped, cut short, diffs, the marker rule,
+        # string literals) and every check tail they mask, masked again, is what it was
+        original, tail_of, masked = sources.mask_text, checks.masked_tail, []
+
+        def text(value, extra=(), memo=None):
+            result = original(value, extra, memo)
+            masked.append((result[0], extra))
+            return result
+
+        def tail(raw, *args, **kwargs):
+            result = tail_of(raw, *args, **kwargs)
+            masked.append((result[0], kwargs.get("extra", ())))
+            return result
+        names = [name for name in dir(self) if name.startswith("test_") and name not in {
+            "test_masking_what_the_rules_masked_changes_nothing", "test_glued_keys_are_one_mask_and_masking_again_changes_nothing"}]
+        with unittest.mock.patch.object(sources, "mask_text", text), unittest.mock.patch.object(checks, "masked_tail", tail):
+            for name in names:
+                getattr(self, name)()
+        self.assertGreater(len(masked), 500)
+        changed = [value[:200] for value, extra in masked if original(value, extra)[0] != value]
+        self.assertEqual(changed, [])
 
     def test_masks_never_pull_the_buffers_head_into_the_tail(self):
         # the kept output starts wherever the last 8 KB began — possibly inside a private key whose header was dropped;

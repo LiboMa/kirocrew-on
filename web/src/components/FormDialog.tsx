@@ -17,10 +17,12 @@ interface Props {
   onSubmit?: () => Promise<void> | void;
   onClose: () => void;
   footer?: ReactNode;
+  /** The closing button's words (「我已保存」 after a one-time secret); 取消 / 关闭 by default. */
+  closeLabel?: string;
 }
 
 /** Modal form: shows the server's reason on failure and cannot be dismissed while a request is in flight. */
-export function FormDialog({ title, kicker, description, children, submitLabel = "保存", destructive, note, wide, onSubmit, onClose, footer }: Props) {
+export function FormDialog({ title, kicker, description, children, submitLabel = "保存", destructive, note, wide, onSubmit, onClose, footer, closeLabel }: Props) {
   const [error, setError] = useState("");
   const [busy, setBusy] = useState(false);
 
@@ -47,13 +49,13 @@ export function FormDialog({ title, kicker, description, children, submitLabel =
             <DialogTitle className="text-xl">{title}</DialogTitle>
             {description ? <DialogDescription>{description}</DialogDescription> : <DialogDescription className="sr-only">{title}</DialogDescription>}
           </DialogHeader>
-          <div className="min-h-0 flex-1 space-y-4 overflow-y-auto px-6 py-5">{children}</div>
+          {children && <div className="min-h-0 flex-1 space-y-4 overflow-y-auto px-6 py-5">{children}</div>}
           {error && <p role="alert" className="px-6 pb-2 text-sm text-destructive">{error}</p>}
           <DialogFooter className="items-center gap-2 border-t bg-muted/40 px-6 py-4 sm:justify-between">
             <span className="text-xs text-muted-foreground">{note}</span>
             <div className="flex gap-2">
               {footer}
-              <Button type="button" variant="outline" onClick={onClose} disabled={busy}>{onSubmit ? "取消" : "关闭"}</Button>
+              <Button type="button" variant="outline" onClick={onClose} disabled={busy}>{closeLabel ?? (onSubmit ? "取消" : "关闭")}</Button>
               {onSubmit && (
                 <Button type="submit" variant={destructive ? "destructive" : "default"} disabled={busy}>
                   {busy ? "处理中…" : submitLabel}

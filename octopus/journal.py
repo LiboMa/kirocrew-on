@@ -28,12 +28,12 @@ def shown(value):
     return value
 
 
-def record(db, rid, kind, actor, changes=None, reason=None, mask=(), **extra):
+def record(db, rid, kind, actor, changes=None, reason=None, mask=(), memo=None, **extra):
     """An event, every string in it masked (D57 §3.3): whatever a writer passes — its reason, its own fields, the values
     it changed — never keeps a credential's text; ``mask``: what no rule knows that the writer does (the Session's Worker
-    token), masked too."""
+    token), masked too; ``memo``: what the writer masked of them before its transaction (``sources.premask``)."""
     payload = {**extra, "actor": actor, **({"changes": changes} if changes else {}), **({"reason": reason} if reason else {})}
-    payload = mask_value(payload, mask)[0]
+    payload = mask_value(payload, mask, memo)[0]
     db.execute("INSERT INTO events(run_id,kind,payload,created) VALUES(?,?,?,?)", (rid, kind, dumps(payload), time.time()))
 
 
@@ -45,10 +45,10 @@ def _run(table, row):
     return row["id"] if table == "runs" else row["run_id"]
 
 
-def change(db, table, key, actor, kind, reason=None, event=None, quiet=(), mask=(), **fields):
+def change(db, table, key, actor, kind, reason=None, event=None, quiet=(), mask=(), memo=None, **fields):
     """Write ``fields`` to one row (``tasks`` keyed by (run_id, id)) and record what changed; returns the changes.
     ``quiet`` fields are written but not recorded (a running task's partial reply would otherwise log every poll);
-    ``mask`` as for ``record`` (the fields are written as given: the writer masks what it stores)."""
+    ``mask`` and ``memo`` as for ``record`` (the fields are written as given: the writer masks what it stores)."""
     columns = KEYS[table]
     where = " AND ".join(f"{column}=?" for column in columns)
     params = tuple(key) if isinstance(key, tuple) else (key,)
@@ -58,7 +58,7 @@ def change(db, table, key, actor, kind, reason=None, event=None, quiet=(), mask=
     db.execute(f"UPDATE {table} SET " + ",".join(f"{k}=?" for k in fields) + f" WHERE {where}", (*fields.values(), *params))
     diff = _diff(row, fields, quiet)
     if diff:
-        record(db, _run(table, row), kind, actor, diff, reason, mask, **(event or {}))
+        record(db, _run(table, row), kind, actor, diff, reason, mask, memo, **(event or {}))
     return diff
 
 

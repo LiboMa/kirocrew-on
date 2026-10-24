@@ -79,6 +79,15 @@ class RelaxTests(unittest.TestCase):
                 self.assertIsNone(phases.relax(evidence, self.PLAN[0], {}, "原因", self.PLAN))
                 self.assertEqual(repr(evidence), before)   # untouched
 
+    def test_a_rejecting_review_whose_edits_could_not_be_put_back_still_blocks(self):
+        """D57 whole-branch review: relax turned every fail into a warning, so a diverge review that asked for changes and
+        whose own edits could not be undone (_put_back_review's review_bound fail) let those edits into the next candidate."""
+        evidence = self.evidence("outcome_pass", "implementation")
+        evidence["gates"].append({"name": "review_bound", "status": "fail", "detail": "撤回审查改动失败：工作区仍有审查者的改动"})
+        before = repr(evidence)
+        self.assertIsNone(phases.relax(evidence, self.PLAN[0], {}, "原因", self.PLAN))
+        self.assertEqual(repr(evidence), before)
+
     def test_a_converge_task_and_a_platform_task_are_never_relaxed(self):
         self.assertIsNone(phases.relax(self.evidence("outcome_pass", "tests"), self.PLAN[1], {}, "原因", self.PLAN))
         plan = [spec("plan", "research"), spec("check", "research", role="evaluator")]

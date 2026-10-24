@@ -77,8 +77,7 @@ class BasicGateTests(unittest.TestCase):
         error, failure, records = judge(invalid="outcome.json 无效")
         self.assertEqual((error, failure), (None, None))
         self.assertEqual(self.names(records)[-2:], [("outcome_valid", "warn"), ("outcome_pass", "skip")])
-        self.assertIn("outcome.json 无效", records[-2]["detail"])
-        self.assertIn("按结果文字判断", records[-2]["detail"])
+        self.assertEqual(records[-2]["detail"], "outcome.json 无效；已按结果文字判断：没有写明「要求修改」或「受阻」，按通过")
         # a standalone BLOCKED line in the result still fails as BLOCKED
         error, failure, records = judge(invalid="outcome.json 无效", blocked=True)
         self.assertEqual((error, records[-1]["status"]), (BLOCKED, "fail"))
@@ -88,7 +87,7 @@ class BasicGateTests(unittest.TestCase):
         invalid = "outcome.json 无效"
         cases = (
             ('{"decision": "changes_requested"}', "完成",
-             ("结果写明了 changes_requested，但结果文件不合法：outcome.json 无效", "implementation")),
+             ("结果写明了「要求修改」，但结果文件不合法：outcome.json 无效", "implementation")),
             ('{"decision": "Changes_Requested", "summary": "缺测试", "failure_type": "tests", "findings": "x"}', "完成",
              ("缺测试", "tests")),
             ('{"decision": "blocked", "summary": "缺少数据库地址", "failure_type": "nonsense"}', "完成",
@@ -96,13 +95,13 @@ class BasicGateTests(unittest.TestCase):
             ('{"verdict": "changes_requested", "summary": "缺测试", "failure_type": "tests"}', "完成",
              ("缺测试", "tests")),   # the wrong key, still a stated verdict
             ("{decision: blocked, summary: 缺少数据库地址}", "完成",
-             ("结果写明了 blocked，但结果文件不合法：outcome.json 无效", "implementation")),
+             ("结果写明了「受阻」，但结果文件不合法：outcome.json 无效", "implementation")),
             ("", "审查完成，发现两个问题。\n\n**changes_requested**",
-             ("结果写明了 changes_requested，但结果文件不合法：outcome.json 无效", "implementation")),
+             ("结果写明了「要求修改」，但结果文件不合法：outcome.json 无效", "implementation")),
             ("", "结论：changes_requested，见交接",
-             ("结果写明了 changes_requested，但结果文件不合法：outcome.json 无效", "implementation")),
+             ("结果写明了「要求修改」，但结果文件不合法：outcome.json 无效", "implementation")),
             ('{"decision": "pass", "summary": ""}', '{"decision": "changes_requested"}',
-             ("结果写明了 changes_requested，但结果文件不合法：outcome.json 无效", "implementation")),
+             ("结果写明了「要求修改」，但结果文件不合法：outcome.json 无效", "implementation")),
         )
         for outcome, text, (message, failure) in cases:
             with self.subTest(outcome=outcome, text=text):
@@ -110,10 +109,12 @@ class BasicGateTests(unittest.TestCase):
                 self.assertEqual((error, kind), (message, failure))
                 self.assertEqual(self.names(records)[-2:], [("outcome_valid", "warn"), ("outcome_pass", "fail")])
                 self.assertEqual(records[-1]["detail"], message)
+                self.assertRegex(records[-2]["detail"], r"^outcome\.json 无效；结果写明了「(要求修改|受阻)」，按该结论判断$")
 
     def test_the_common_ways_of_stating_a_rejection_are_read(self):   # review of D57 §4: decorated, headed, spelled
-        def told(decision):
-            return f"结果写明了 {decision}，但结果文件不合法：outcome.json 无效"
+        def told(decision):   # Task 15: the verdict in words people read
+            said = {"changes_requested": "要求修改", "blocked": "受阻", "fail": "不通过", "rejected": "拒绝"}[decision]
+            return f"结果写明了「{said}」，但结果文件不合法：outcome.json 无效"
         cases = (   # (outcome file, reply, the decision it states)
             ("", "**Decision:** changes_requested", "changes_requested"),
             ("", "**结论**：changes_requested", "changes_requested"),

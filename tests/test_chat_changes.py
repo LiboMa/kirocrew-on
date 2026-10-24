@@ -18,10 +18,10 @@ C2 = "d" * 40
 class ChatChangesCase(TeamsWorkersCase):
     def setUp(self):
         super().setUp()
-        self.worker, self.dirty, self.secrets, self.continues = FakeWorker(), False, [], 0
+        self.worker, self.dirty, self.secrets, self.continues, self.created = FakeWorker(), False, [], 0, []
         clean, made = self.worker.check, self.worker.candidate
         self.worker.check = lambda body: ({"head": body["expected"], "clean": False, "changed_files": ["src/chat.js"]}
-                                          if self.dirty else clean(body))
+                                          if self.dirty else {**clean(body), **({"untracked": list(self.created)} if body.get("untracked") else {})})
 
         def candidate(body):
             if not self.dirty:
@@ -104,6 +104,22 @@ class ContinueTests(ChatChangesCase):
         commits = [b for b in self.candidate_calls("commit") if b["attempt_id"] == code[2]["id"]]
         self.assertEqual(commits[0]["parent"], C2)
 
+    def test_a_chat_that_only_created_files_is_committed_too(self):
+        """EC2 review of D73: the check counts tracked files only, so a chat that wrote a new README alone went unseen."""
+        rid = self.finished()
+        self.created = ["README.md"]
+
+        def candidate(body):
+            self.created = []
+            return {"sha": C2, "parent": body["parent"], "changed": True, "files": 1, "insertions": 9, "deletions": 0,
+                    "rewritten": False, "secrets": [], "names": ["README.md"]}
+        self.worker.candidate = candidate
+        self.proceed(rid, "review")
+        chat = self.attempts(rid, "code")[1]
+        self.assertEqual(chat["evidence"]["chat"]["files"], ["README.md"])
+        asked = [b for b in self.candidate_calls("check") if b.get("untracked")]
+        self.assertTrue(asked)   # the platform asks for the files created since it last looked
+
     def test_a_clean_workspace_adds_nothing(self):
         rid = self.finished()
         self.proceed(rid, "review")
@@ -148,6 +164,25 @@ class ContinueTests(ChatChangesCase):
         self.assertEqual(caught.exception.code, "boundary_owner_only")
         self.assertEqual(len(self.candidate_calls("commit")), commits)
         self.assertEqual(len(self.attempts(rid, "code")), 1)
+
+
+class PendingTests(ChatChangesCase):
+    """The continue dialog's reminder (owner 2026-10-23: 只提醒、不拦截): what the workspace holds that no candidate has."""
+    def test_it_lists_the_changed_and_the_created_files(self):
+        rid = self.finished()
+        self.assertEqual(self.service.chat_changes(self.c, rid), {"files": [], "count": 0, "commits": False})
+        self.dirty, self.created = True, []
+        self.assertEqual(self.service.chat_changes(self.c, rid), {"files": ["src/chat.js"], "count": 1, "commits": False})
+        self.dirty, self.created = False, ["README.md"]
+        self.assertEqual(self.service.chat_changes(self.c, rid)["files"], ["README.md"])
+        self.assertEqual(len(self.attempts(rid, "code")), 1)   # it only looks: nothing is committed
+
+    def test_the_route(self):
+        rid = self.finished()
+        self.created = ["README.md"]
+        with self.http() as call:
+            status, body = call("GET", f"/v1/runs/{rid}/chat-changes", self.tokens["carol"])
+        self.assertEqual((status, body["count"], body["files"]), (200, 1, ["README.md"]))
 
 
 class RecoverTests(ChatChangesCase):
