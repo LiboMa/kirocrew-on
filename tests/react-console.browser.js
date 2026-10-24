@@ -39,12 +39,21 @@ async page => {
     await p.getByRole("menuitem",{name:"取消置顶"}).click();
     await p.getByRole("region",{name:"置顶"}).waitFor({state:"detached"});
     check(true,"取消置顶后置顶分组消失");
-    await p.getByRole("button",{name:"管理"}).click();
+    // Owner 2026-10-24 (青岩): the navigation on the left groups 工作台, 管理 and 我的设置; its entries are links
     await p.getByRole("navigation",{name:"管理"}).getByRole("link",{name:"执行环境"}).click();
-    await p.getByText(/刷新状态/).first().waitFor();
+    await p.getByRole("region",{name:"执行环境列表"}).waitFor();
     check(new URL(p.url()).searchParams.get("view")==="admin","管理页面可打开执行环境，地址栏记下所在页面");
-    await p.getByRole("button",{name:"返回会话"}).click();
+    check(await p.getByRole("navigation",{name:"管理"}).getByRole("link",{name:"执行环境"}).getAttribute("aria-current")==="page",
+      "导航标出所在分区");
+    await p.getByRole("navigation",{name:"工作台"}).getByRole("link",{name:"会话"}).click();
     await p.waitForSelector("#session-list [data-run]");
+    await p.getByRole("button",{name:"深色模式"}).click();
+    check(await p.evaluate(()=>document.documentElement.classList.contains("dark")&&localStorage.getItem("octopus.theme")==="dark"),
+      "深色模式切换并记在浏览器里");
+    await p.reload();
+    await p.waitForSelector("#session-list [data-run]");
+    check(await p.evaluate(()=>document.documentElement.classList.contains("dark")),"刷新后保持深色模式");
+    await p.getByRole("button",{name:"浅色模式"}).click();
 
     // D56: the list is filtered by the server, 300 ms after typing stops
     const listed=async n=>p.waitForFunction(n=>document.querySelectorAll("#session-list [data-run]").length===n,n,{timeout:5000}).then(()=>true,()=>false);
@@ -116,25 +125,38 @@ async page => {
     await p.waitForFunction(()=>document.querySelector("#flow-list")?.textContent.includes("v2"));
     check((await p.locator("#flow-list").innerText()).includes("React 编辑后的流程"),"工作流编辑形成新版本");
 
-    await p.getByRole("button",{name:"我的设置"}).click();
     await p.getByRole("navigation",{name:"我的设置"}).getByRole("link",{name:/API 与 Coding Agent/}).click();
-    check(await p.getByLabel("Token 名称").count()===0,"Token 页上没有内嵌的输入框（PRD 2026-10-23）");
+    check(await p.getByLabel("Token 名称",{exact:true}).count()===0,"Token 页上没有内嵌的输入框（PRD 2026-10-23）");
     await p.getByRole("button",{name:"新建 Token"}).click();
     const tokenDialog=p.getByRole("dialog",{name:"新建 Token"});
     await tokenDialog.getByLabel("Token 名称").fill("react-browser-client");
     await tokenDialog.getByRole("button",{name:"创建 Token"}).click();
     await p.locator(".secret").waitFor();
-    check((await p.locator(".secret").innerText()).startsWith("oct_"),"API Token 在对话框里一次性显示");
+    const original=await p.locator(".secret").innerText();
+    check(original.startsWith("oct_"),"API Token 在对话框里一次性显示");
     await p.getByRole("dialog",{name:"Token 已创建"}).getByRole("button",{name:"我已保存"}).click();
     await p.locator("[data-token-row]",{hasText:"react-browser-client"}).waitFor();
     check(await p.locator(".secret").count()===0,"关闭后不再显示 Token");
-    await p.getByRole("button",{name:"返回会话"}).click();
+    // Owner 2026-10-24: regenerating keeps the entry; the old value stops working at once, the new one works
+    const bearer=async raw=>p.evaluate(async raw=>(await fetch("/v1/me",{headers:{Authorization:"Bearer "+raw}})).status,raw);
+    await p.getByRole("button",{name:"重新生成 Token：react-browser-client"}).click();
+    await p.getByRole("dialog",{name:"重新生成 Token"}).getByRole("button",{name:"重新生成"}).click();
+    await p.locator(".secret").waitFor();
+    const renewed=await p.locator(".secret").innerText();
+    await p.getByRole("dialog",{name:"Token 已重新生成"}).getByRole("button",{name:"我已保存"}).click();
+    check(await p.locator("[data-token-row]",{hasText:"react-browser-client"}).count()===1,"重新生成后仍是同一条 Token");
+    check(await bearer(renewed)===200&&await bearer(original)===401,"重新生成后新值可用、旧值立即失效");
+    await p.getByRole("navigation",{name:"工作台"}).getByRole("link",{name:"会话"}).click();
 
     await p.setViewportSize({width:390,height:844});
     await p.waitForTimeout(200);
     check(await p.evaluate(()=>document.documentElement.scrollWidth<=innerWidth+1),"390 px 宽度无横向溢出");
     await p.getByRole("button",{name:"打开会话列表"}).click();
     check(await p.locator("#session-list:visible [data-run]").first().isVisible(),"窄屏以抽屉展示会话列表");   // the desktop sidebar stays mounted, hidden
+    await p.keyboard.press("Escape");
+    await p.getByRole("button",{name:"打开导航"}).click();
+    await p.getByRole("dialog",{name:"导航"}).getByRole("navigation",{name:"我的设置"}).waitFor();
+    check(true,"窄屏从「打开导航」打开左侧导航");
     await p.keyboard.press("Escape");
     await p.setViewportSize({width:1440,height:1000});
 

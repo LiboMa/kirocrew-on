@@ -58,6 +58,8 @@ export interface Action {
   onSelect: () => void;
   tone?: "danger";
   disabled?: boolean;
+  /** Runs at once rather than opening a dialog (刷新模型): its menu item has no 「…」. */
+  direct?: boolean;
 }
 
 const NARROW = "(max-width: 639px)";
@@ -89,9 +91,10 @@ export function RowActions({ actions, more = [], menu }: { actions: Action[]; mo
           </DropdownMenuTrigger>
           <DropdownMenuContent align="end" className="w-44">
             {listed.map((a, index) => [
-              a.tone === "danger" && index > 0 && <DropdownMenuSeparator key={a.label + "-rule"} />,
+              // One rule sets the dangerous ones apart, not one between each of them
+              a.tone === "danger" && index > 0 && listed[index - 1].tone !== "danger" && <DropdownMenuSeparator key={a.label + "-rule"} />,
               <DropdownMenuItem key={a.label} onSelect={a.onSelect} disabled={a.disabled} className={cn(a.tone === "danger" && "text-destructive")}>
-                <a.icon />{a.label}…
+                <a.icon />{a.label}{a.direct ? "" : "…"}
               </DropdownMenuItem>,
             ])}
           </DropdownMenuContent>
