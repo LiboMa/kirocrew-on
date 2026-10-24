@@ -23,9 +23,9 @@ export type Dialog =
   | { kind: "assign"; run: Run }
   | { kind: "control"; run: Run; action: "close" | "reopen" | "delete" };
 
-/** What the console shows: the Sessions, the administrators' 管理 page or 我的设置 (kept in the address bar as
- * ``?view=admin&section=users``). */
-export type Page = "sessions" | "admin" | "settings";
+/** What the console shows: the workbench — Sessions or the workflow library — the administrators' 管理 page or
+ * 我的设置 (kept in the address bar as ``?view=workflows``, ``?view=admin&section=users``). */
+export type Page = "sessions" | "workflows" | "admin" | "settings";
 
 export interface ConsoleState {
   me: Me;

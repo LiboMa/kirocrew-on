@@ -2,6 +2,7 @@ import { afterEach, describe, expect, test, vi } from "vitest";
 import { render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { App } from "@/App";
+import { workbench } from "@/test/pages";
 import { setToken } from "@/api/client";
 import { makeRun, mockApi, runPage, workspaceRoutes } from "@/test/api";
 
@@ -99,7 +100,7 @@ describe("session list on the server (D56)", () => {
     await waitFor(() => expect(paged().at(-1)?.get("submitter")).toBeNull());
   });
 
-  test("more is loaded from the cursor and the tab counts the server's total", async () => {
+  test("more is loaded from the cursor and the top bar's 「会话」 counts the server's total", async () => {
     start((url) => {
       if (url.searchParams.get("limit") === "1") return { items: [], next: null, total: 7 };
       return url.searchParams.get("cursor") === "c1"
@@ -107,7 +108,7 @@ describe("session list on the server (D56)", () => {
         : { items: runs, next: "c1", total: 7 };
     });
     const list = await screen.findByRole("navigation", { name: "会话列表" });
-    expect(await screen.findByRole("tab", { name: /会话 7/ })).toBeInTheDocument();
+    expect(await workbench("会话")).toHaveTextContent("会话 7");
     await userEvent.click(await screen.findByRole("button", { name: "加载更多" }));
     expect(await within(list).findByText("更早的会话")).toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "加载更多" })).toBeNull();

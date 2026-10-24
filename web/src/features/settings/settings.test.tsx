@@ -423,9 +423,10 @@ describe("settings", () => {
 
   test("a member sees neither user management nor anything that needs the admin scope", async () => {
     start({ "GET /me": { id: "u2", username: "dev1", admin: 0, scopes: ["read", "execute", "manage"] } });
-    expect(await screen.findByRole("navigation", { name: "我的设置" })).toBeInTheDocument();
-    expect(screen.queryByRole("navigation", { name: "管理" })).toBeNull();
-    expect(screen.queryByRole("link", { name: "用户" })).toBeNull();
+    expect(await screen.findByRole("button", { name: "我的设置" })).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "管理" })).toBeNull();
+    await userEvent.click(screen.getByRole("button", { name: /账户/ }));
+    expect(screen.queryByRole("menuitem", { name: "管理" })).toBeNull();
   });
 
   test("anyone changes their own password from the account menu", async () => {
