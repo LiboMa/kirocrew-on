@@ -11,10 +11,11 @@ import { TokensPanel } from "@/features/settings/TokensPanel";
 
 /** 管理 (elevated administrators): every section of the platform's administration, one at a time. */
 export function AdminPage() {
-  const { section } = useConsole();
+  const { section, go } = useConsole();
   const current = chosen(ADMIN_SECTIONS, section).id;
   return (
-    <PageShell>
+    <PageShell title="管理" sections={ADMIN_SECTIONS} current={current} href={(id) => `?view=admin&section=${id}`}
+      onSelect={(id) => go("admin", id)}>
       {current === "overview" && <OverviewPanel />}
       {current === "environments" && <EnvironmentsPanel />}
       {current === "users" && <UsersPanel />}

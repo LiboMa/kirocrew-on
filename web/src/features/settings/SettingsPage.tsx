@@ -11,10 +11,12 @@ import { TokensPanel } from "@/features/settings/TokensPanel";
 
 /** 我的设置: one's own access, credentials, preferences and password (the sections are in sections.ts). */
 export function SettingsPage() {
-  const { me, teams, section } = useConsole();
-  const current = chosen(settingsSections(me, teams, section), section).id;
+  const { me, teams, section, go } = useConsole();
+  const sections = settingsSections(me, teams, section);
+  const current = chosen(sections, section).id;
   return (
-    <PageShell>
+    <PageShell title="我的设置" sections={sections} current={current} href={(id) => `?view=settings&section=${id}`}
+      onSelect={(id) => go("settings", id)}>
       {current === "tokens" && <TokensPanel />}
       {current === "credentials" && <CredentialsPanel />}
       {current === "policies" && <PoliciesPanel />}
