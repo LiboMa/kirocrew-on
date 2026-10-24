@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useRef, useState } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { KeyRound, KeySquare, Plus, Server, ShieldCheck, ShieldOff, Trash2, UserCheck, UserPlus, UserX } from "lucide-react";
 import { toast } from "sonner";
@@ -310,14 +310,19 @@ function JoinTeamDialog({ user, onClose, onDone }: DialogProps) {
 }
 
 /** 改执行环境: the personal space moves onto the chosen shared environment and off the shared ones it used before. A
- * person on their own dedicated environment keeps it: this only chooses between shared ones. */
+ * person on their own dedicated environment keeps it: this only chooses between shared ones. Joining and leaving are two
+ * requests: if leaving fails, the list is read again and the dialog says so; trying again only leaves. Whether to join
+ * is read from the environments as they are (joining twice is refused as a duplicate) — also after the dialog was closed
+ * and opened again. What it moves from stays the one it showed when it opened. */
 function EnvironmentDialog({ user, onClose, onDone }: DialogProps) {
   const { workers } = useConsole();
   const refresh = useRefresh();
-  const current = personalEnvironment(workers, user);
+  const [opened] = useState(() => personalEnvironment(workers, user));
+  const current = opened ?? personalEnvironment(workers, user);   // the environments may still be on their way
   const own = !!current && current.scope !== "shared";
   const options = own ? [] : workers.filter((w) => w.scope === "shared" && !!w.enabled && w.id !== current?.id);
   const [choice, setChoice] = useState<string | null>(null);
+  const joined = useRef<string | null>(null);   // joined in this dialog, before the list showed it
   const target = options.find((w) => w.id === choice) ?? options[0];
   const name = user.username;
   const now = current ? <>{name} 的个人空间现在用「{currentLabel(current)}」。</> : <>{name} 的个人空间还没有执行环境。</>;
@@ -327,9 +332,19 @@ function EnvironmentDialog({ user, onClose, onDone }: DialogProps) {
         : !target ? <>{now}没有其他可用的共享环境：先在「执行环境」页把一个 Worker 设为共享环境。</>
         : <>{now}改到另一个共享环境后，新的会话在那里执行；已有的会话派发下一个任务前要重新分配 Worker，已在执行的任务不中断。</>}
       onSubmit={target && (async () => {
-        await api("/workers/" + encodeURIComponent(target.id) + "/spaces", "POST", { user_id: user.id });
-        for (const w of workers.filter((x) => x.scope === "shared" && x.id !== target.id && (x.spaces ?? []).some((s) => s.user_id === user.id)))
-          await api("/workers/" + encodeURIComponent(w.id) + "/spaces", "DELETE", { user_id: user.id });
+        const there = joined.current === target.id || (target.spaces ?? []).some((s) => s.user_id === user.id);
+        if (!there) {
+          await api("/workers/" + encodeURIComponent(target.id) + "/spaces", "POST", { user_id: user.id });
+          joined.current = target.id;
+        }
+        for (const w of workers.filter((x) => x.scope === "shared" && x.id !== target.id && (x.spaces ?? []).some((s) => s.user_id === user.id))) {
+          try {
+            await api("/workers/" + encodeURIComponent(w.id) + "/spaces", "DELETE", { user_id: user.id });
+          } catch (error) {
+            await refresh();
+            throw new Error(`已加入 ${target.name}，但没能从 ${w.name} 移出：${(error as Error).message}。再点一次只重试移出。`);
+          }
+        }
         await refresh();
         onDone(user.id, `已把 ${name} 的个人空间改到 ${target.name}`);
       })}>

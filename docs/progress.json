@@ -291,29 +291,36 @@
         {
           "id": "m3-011-tokens",
           "name": "MVP-0.1.1 管理与我的设置用对话框（全部页面）+ Token 重新生成",
-          "status": "local",
-          "ref": "PRD 2026-10-23-admin-settings-dialogs · feat/mvp-0.1.1 ed30e91 f996ff8 a3f980e",
+          "status": "accepted",
+          "ref": "PRD 2026-10-23-admin-settings-dialogs · feat/mvp-0.1.1 ed30e91 f996ff8 a3f980e · EC2 1834ebb（PR #5、#6）",
           "more": "Token、用户、执行环境、概览、Team、仓库凭证、映射偏好、并发上限、修改密码都改为表格 + 对话框，页面上不再有编辑输入框；Token 每行可「重新生成」（同一条、新值只显示一次、旧值立即失效，当前登录的那条不可）。Vitest 314、浏览器 7 个文件通过；未部署。"
         },
         {
           "id": "m3-011-qingyan",
           "name": "MVP-0.1.1 青岩改版：左侧分组导航、页头、四格 K 标志、浅色 / 深色主题、扁平控件",
-          "status": "local",
-          "ref": "docs/design/2026-10-24-qingyan.md · feat/mvp-0.1.1 8c3394f d6aec4d",
-          "more": "负责人 2026-10-24 选方案一「青岩」、标志方案三；布局参考 Sub2API：导航分工作台 / 管理 / 我的设置，底部深色模式与收起；列表页为工具栏 + 表格 + 行内操作，手机上操作收进「⋯」。"
+          "status": "accepted",
+          "ref": "docs/design/2026-10-24-qingyan.md · feat/mvp-0.1.1 8c3394f d6aec4d · EC2 1834ebb（PR #5、#6）",
+          "more": "负责人 2026-10-24 选方案一「青岩」、标志方案三；前端优化：导航分工作台 / 管理 / 我的设置，底部深色模式与收起；列表页为工具栏 + 表格 + 行内操作，手机上操作收进「⋯」。"
+        },
+        {
+          "id": "m3-011-list-slim",
+          "name": "MVP-0.1.1 会话列表视图瘦身与对话框焦点",
+          "status": "accepted",
+          "ref": "feat/mvp-0.1.1 2549c12 fbe1e31（PR #5 之后，未推送） · EC2 1834ebb（PR #5、#6）",
+          "more": "view=list 只留需求前 200 字、规划去掉说明文字，不再返回也不再计算用量 / 知识 / 凭证 / 核验；EC2 实测 50 行 111 KB、传输 15.7 KB（gzip），此前 223 KB / 53 KB。FormDialog 关闭后焦点回到打开它的按钮（含「⋯」）。"
         },
         {
           "id": "m3-011-continue-hint",
           "name": "MVP-0.1.1 续作对话框提醒对话中的改动",
-          "status": "local",
-          "ref": "feat/mvp-0.1.1 d617f1c",
+          "status": "accepted",
+          "ref": "feat/mvp-0.1.1 d617f1c · EC2 1834ebb（PR #5、#6）",
           "more": "GET /v1/runs/<id>/chat-changes；有改动时列出文件、提示同步修改需求；只提醒、不拦截。"
         },
         {
           "id": "m3-011-untracked",
           "name": "MVP-0.1.1 续作前也认出聊天里新建的文件",
-          "status": "local",
-          "ref": "feat/mvp-0.1.1 a95c8eb",
+          "status": "accepted",
+          "ref": "feat/mvp-0.1.1 a95c8eb · EC2 1834ebb（PR #5、#6）",
           "more": "Worker /candidate check 可选 untracked：最近一次审查开始时的清单之外的新文件。"
         },
         {

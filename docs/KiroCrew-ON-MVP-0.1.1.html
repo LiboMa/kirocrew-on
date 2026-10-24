@@ -1,0 +1,89 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>KiroCrew ON MVP 0.1.1：版本说明</title>
+<!-- Generated from MVP-0.1.1.md by tools/md_to_html.py; edit the Markdown, then regenerate. -->
+<style>
+  :root { --ink: #172033; --muted: #5b6577; --line: #e3e7ef; --bg: #f6f8fb; --card: #ffffff; --brand: #5b4bdb; --brand-soft: #eeebff;
+          --native: #0e6f86; --native-soft: #e2f3f7; --poc: #4a5568; --poc-soft: #edf0f5;
+          --sans: -apple-system, BlinkMacSystemFont, "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", "Noto Sans CJK SC", sans-serif;
+          --mono: "SF Mono", Menlo, Consolas, monospace; }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--bg); color: var(--ink); font: 16px/1.75 var(--sans); }
+  main { max-width: 1040px; margin: 0 auto; padding: 56px 28px 96px; }
+  main > p, main > ul, main > ol, li > p { max-width: 44em; }
+  h1 { font-size: 32px; line-height: 1.3; margin: 0 0 16px; }
+  h2 { font-size: 23px; margin: 56px 0 10px; padding-top: 20px; border-top: 1px solid var(--line); }
+  h3 { font-size: 18px; margin: 28px 0 8px; }
+  p { margin: 0 0 14px; }
+  ul, ol { padding-left: 1.5em; margin: 0 0 14px; }
+  li { margin: 5px 0; }
+  li > ul, li > ol { margin: 6px 0 4px; }
+  code { font-family: var(--mono); font-size: 0.86em; background: #eef1f6; padding: 1px 5px; border-radius: 4px; }
+  pre { font-family: var(--mono); font-size: 13px; line-height: 1.6; background: #101828; color: #e7ecf5; padding: 16px 18px;
+        border-radius: 8px; overflow-x: auto; margin: 0 0 18px; }
+  pre code { background: none; padding: 0; color: inherit; font-size: inherit; }
+  .table { overflow-x: auto; margin: 14px 0 18px; background: var(--card); border: 1px solid var(--line); border-radius: 10px; }
+  table { border-collapse: collapse; width: 100%; font-size: 14px; line-height: 1.65; }
+  th, td { text-align: left; vertical-align: top; padding: 10px 14px; border-bottom: 1px solid var(--line); }
+  tr:last-child td { border-bottom: none; }
+  thead th { background: #f0f3f8; font-weight: 600; white-space: nowrap; }
+  strong { font-weight: 650; }
+  figure { margin: 18px 0 24px; }
+  .flow { display: flex; flex-wrap: wrap; align-items: stretch; gap: 10px 8px; list-style: none; padding: 0; margin: 0; }
+  .flow li { margin: 0; flex: 1 1 150px; background: var(--card); border: 1px solid var(--line); border-top: 3px solid var(--c, var(--brand));
+             border-radius: 8px; padding: 10px 12px; font-size: 14px; line-height: 1.5; }
+  .flow li b { display: block; font-size: 13px; color: var(--c, var(--brand)); margin-bottom: 2px; }
+  .flow .chat { --c: var(--native); } .flow .keep { --c: var(--poc); }
+  figcaption { font-size: 13px; color: var(--muted); margin-top: 8px; }
+  a:focus-visible { outline: 3px solid var(--brand); outline-offset: 2px; }
+  @media (max-width: 760px) { main { padding: 32px 18px 72px; } h1 { font-size: 26px; } }
+  @media print { body { background: #fff; } .table, .flow li { break-inside: avoid; } }
+</style>
+</head>
+<body>
+<main>
+<h1>KiroCrew ON MVP 0.1.1：版本说明</h1>
+<p>日期：2026-10-24　·　分支 <code>feat/mvp-0.1.1</code>（PR #5），基于 main <code>fe49f81</code>（EC2 当时运行 <code>12fbd9f</code>）　·　HTML 版：<a href="KiroCrew-ON-MVP-0.1.1.html"><code>docs/KiroCrew-ON-MVP-0.1.1.html</code></a></p>
+<p>产品是什么、给谁用、整体流程，见 <a href="MVP-0.1.0.md">MVP 0.1.0：产品、流程与架构</a>。本文只写 0.1.1 相对 0.1.0 的变化。</p>
+<h2>1．这一版做了什么</h2>
+<div class="table"><table><thead><tr><th>方面</th><th>变化</th></tr></thead><tbody><tr><td><strong>前端优化</strong></td><td>控制台整体改版：左侧分组导航、浅色 / 深色主题、新标志；管理与「我的设置」的列表都改成表格，新增、修改、危险操作都在对话框里完成</td></tr><tr><td><strong>Token 重新生成</strong></td><td>已有的 API Token 可以换一个新值，名称和权限不变，旧值立即失效</td></tr><tr><td><strong>在 KiroCrew 聊天里协作（D73 补充）</strong></td><td>续作时提醒聊天里改过的文件；聊天里新建的文件也会被认出，续作前一并提交</td></tr><tr><td><strong>门禁与提示（D57 补充）</strong></td><td>提示写清发生了什么、是谁的问题、建议怎么做；门禁显示中文名，检查分为必过和建议两类；打码与审查撤回做了多处修正</td></tr><tr><td><strong>性能</strong></td><td>会话列表的数据量减少约一半，gzip 后约减少 70%</td></tr><tr><td><strong>可用性</strong></td><td>对话框关闭后，焦点回到打开它的按钮；手机上行操作收进「⋯」</td></tr></tbody></table></div>
+<h2>2．前端优化</h2>
+<h3>2.1 导航与页头</h3>
+<ul><li>左侧导航分三组：<strong>工作台</strong>（会话）、<strong>管理</strong>（只有管理员看得到）、<strong>我的设置</strong>。每个条目都是链接，可以新开标签页或收藏。</li><li>导航底部是「深色模式」和「收起导航」，这两个设置都记在浏览器里。
+<ul><li>没有选过主题时，跟随系统设置。</li><li>收起后只显示图标。</li></ul></li><li>页头内容随页面变化：
+<ul><li>会话页显示开发空间切换；</li><li>管理和设置页显示当前位置，例如「管理 / 用户」；</li><li>右侧固定是「新建开发」和账户菜单（修改密码、经典控制台、退出登录）。</li></ul></li><li>窄屏上的入口：
+<ul><li>1024 像素以下，从「打开导航」打开导航；</li><li>768 像素以下，从「打开会话列表」打开会话列表。</li></ul></li><li>标志换成四个方块拼成的 K，浏览器标签页的图标同步更换。</li></ul>
+<h3>2.2 列表页</h3>
+<p>管理与「我的设置」的列表页结构统一，由上到下是：</p>
+<ul><li><strong>标题、说明和主操作</strong>，例如「新建 Token」「新建用户」「登记 Worker」；</li><li><strong>工具栏</strong>：搜索、刷新，右侧显示数量；</li><li><strong>表格</strong>：行尾放常用操作（图标加文字），其余的收进「⋯」，危险操作标红。手机上所有行操作都收进「⋯」，不并排放按钮；</li><li><strong>空列表</strong>：说明下一步做什么；搜索没有结果时，说明没找到什么。</li></ul>
+<p>「管理 › 概览」改为统计卡片，点一张卡片进入对应的管理页。</p>
+<h3>2.3 操作都在对话框里完成</h3>
+<p>页面上不再有编辑用的输入框，只保留搜索框。覆盖的页面：</p>
+<div class="table"><table><thead><tr><th>页面</th><th>对话框</th></tr></thead><tbody><tr><td>API 与 Coding Agent 接入</td><td>新建 Token、重新生成、撤销</td></tr><tr><td>管理 › 用户</td><td>新建用户、重设密码、加入 Team、改执行环境、查看与撤销 Token、设为 / 取消管理员、停用 / 启用</td></tr><tr><td>管理 › 执行环境</td><td>登记 Worker、编辑（名称、连接）、分配到空间、设为共享 / 改回专属、停用、退役</td></tr><tr><td>Team</td><td>新建 Team、改名、添加成员、更换执行环境、归档 / 恢复、改角色、移出、退出 Team</td></tr><tr><td>代码仓库凭证</td><td>添加凭证（分「是什么」「能访问哪些仓库」「Token」三节）、仓库范围、更换 Token、停用 / 启用、删除</td></tr><tr><td>映射偏好</td><td>新增规则、编辑、删除</td></tr><tr><td>并发上限</td><td>修改、移除上限、单独设置上限</td></tr><tr><td>修改密码</td><td>修改密码</td></tr></tbody></table></div>
+<p>对话框的规则：</p>
+<ul><li>一个对话框只做一件事。标题用动词，提交按钮写出结果，提示条用同一个词，例如「重新生成 Token」→「重新生成」→「已重新生成 Token X」。</li><li>危险操作先写明后果。例如停用用户：此人立即不能登录、全部 Token 失效；进行中的会话照常执行，但不能再用此人的个人仓库凭证。</li><li>失败时对话框不关闭，在框内显示服务器给的原因。</li><li>新增或修改的行高亮一次，删除的行淡出。系统设置为「减少动态效果」时，不播放动画。</li><li>一次性的密钥（新建或重新生成的 Token）只在那一屏显示一次，配「复制」和「我已保存」。</li></ul>
+<h2>3．Token 重新生成</h2>
+<ul><li><strong>入口</strong>：控制台「API 与 Coding Agent 接入」每行的「重新生成」，或接口 <code>POST /v1/tokens/&lt;id&gt;/regenerate</code>。</li><li><strong>结果</strong>：同一条 Token 换一个新值，只显示一次；旧值立即失效（返回 401），用旧值打开的状态流也会断开。</li><li><strong>有效期</strong>：默认保持原到期时间，也可以改为从现在起 7 天、30 天、365 天或永不过期。带 admin 权限的 Token 最长 30 天。</li><li><strong>限制</strong>：
+<ul><li>当前登录正在用的那枚返回 <code>409 token_in_use</code>，列表里标「当前登录」，不提供重新生成和撤销；</li><li>发起请求的 Token 的权限要覆盖目标 Token 的权限，否则返回 403。例如只有 manage 权限的 Token，不能拿到同一账号 admin Token 的新值。</li></ul></li></ul>
+<h2>4．在 KiroCrew 聊天里协作（D73 补充）</h2>
+<ul><li><strong>续作时提醒</strong>：续作对话框读取 <code>GET /v1/runs/&lt;id&gt;/chat-changes</code>，在需求下方列出聊天里改过、还没提交的文件，提示你同步修改需求。只提醒、不拦截，读取失败时不显示。</li><li><strong>认出新建的文件</strong>：Worker 的 <code>/candidate check</code> 可选 <code>untracked</code>，聊天里新建的文件也会在续作前提交为「对话中的改动」。平台检查自己留下的产物不算在内，判断依据是 <code>run/untracked-seen.json</code>，它在审查开始、候选提交、检查结束时重写。</li></ul>
+<h2>5．门禁与提示（D57 补充）</h2>
+<ul><li><strong>提示</strong>：写清发生了什么、是谁的问题、建议怎么做；门禁显示中文名；诊断等待批准、预算拒绝重试时，说清是哪一项。</li><li><strong>检查分类</strong>：检查分为必过和建议两类，续作原样带回的检查保持原来的分类。</li><li><strong>打码</strong>：
+<ul><li>露出的首尾不切断转义；</li><li>紧挨着的密钥合成一处；</li><li>控制台的会话观察由平台再打码一次。</li></ul></li><li><strong>审查撤回</strong>：撤回审查者的改动之前，先存一份 <code>tracked.patch</code>。</li><li><strong>阶段放宽（D69）</strong>：审查者的改动没能撤回的尝试（<code>review_bound</code> 失败），不按阶段放宽。</li></ul>
+<h2>6．性能：会话列表瘦身</h2>
+<ul><li><strong>改了什么</strong>：<code>GET /v1/runs?view=list</code> 只返回列表用得到的内容。
+<ul><li>需求只留前 200 字；</li><li>规划去掉说明文字；</li><li>不再返回、也不再计算用量、知识、凭证可用性与核验结果。</li></ul></li><li><strong>不受影响</strong>：会话页 <code>GET /v1/runs/&lt;id&gt;</code> 照旧返回完整内容。</li><li><strong>效果</strong>：按 EC2 上 50 行的数据估算，未压缩从 223 KB 降到 119 KB，gzip 后从 53 KB 降到 15 KB；服务器也不再为每一行读取全部尝试记录。</li><li><strong>核对过的使用方</strong>：侧栏、空状态页、MCP <code>octopus_runs</code>、CLI <code>search</code>，以及从列表行打开的对话框，都不用被去掉的字段。</li></ul>
+<h2>7．升级须知</h2>
+<ul><li><strong>需要一起部署</strong>：平台和 Worker 要一起部署，因为续作检查新文件用到 Worker 的新参数 <code>untracked</code>。<code>deploy.sh push</code> 会一起更新。</li><li><strong>接口变化</strong>（都向后兼容）：
+<ul><li>新增 <code>POST /v1/tokens/&lt;id&gt;/regenerate</code>；</li><li>新增 <code>GET /v1/runs/&lt;id&gt;/chat-changes</code>；</li><li><code>GET /v1/tokens</code> 每条多了 <code>current</code>；</li><li><code>view=list</code> 的字段变少（见第 6 节）。自己写的脚本如果从列表里读用量或完整需求，要改为读会话详情。</li></ul></li><li><strong>不需要迁移数据</strong>。</li></ul>
+<h2>8．验证</h2>
+<div class="table"><table><thead><tr><th>项目</th><th>结果</th></tr></thead><tbody><tr><td>完整回归 <code>tools/regress.sh</code>（根目录的旧测试、<code>tests/</code> 下的 Python 测试、web 测试与构建）</td><td>通过，Python 测试 1893 条</td></tr><tr><td>控制台单元测试（Vitest）</td><td>31 个文件、323 条通过</td></tr><tr><td>浏览器测试（真实 HTTP + SQLite，不连原生 Worker）</td><td>7 个文件、143 项检查通过，包括重新生成后「新值可用、旧值 401」、深色模式刷新后保持、窄屏打开导航</td></tr><tr><td>截图检查</td><td>1280 像素逐页、深色模式、390 像素（无横向溢出）</td></tr><tr><td>代码审查</td><td>两轮独立审查，发现的严重与重要问题都已修复并补测试</td></tr><tr><td>发布前扫描</td><td>干净克隆里 git-defender scan 与 scan-history 无密钥</td></tr><tr><td>EC2 实测（部署 <code>1834ebb</code>，上报版本 0.1.1）</td><td>通过。接口 14 项：列表 50 行未压缩 111 KB、传输 15.7 KB（gzip）；会话详情完整；重新生成全流程（同一条、旧值 401、当前登录 409、只读 Token 403）；chat-changes 可读；控制台带新图标。浏览器 10 项：会话列表与详情、「当前登录」标记、在界面上重新生成与撤销、焦点回到「重新生成」按钮、深色模式、390 像素无横向溢出、无脚本异常</td></tr></tbody></table></div>
+<h2>9．已知问题与后续</h2>
+<p>已记入 <a href="BACKLOG.md">BACKLOG</a>：</p>
+<ul><li>侧栏会话行和会话页的「⋯」菜单打开的对话框，关闭后焦点仍落到页面开头（管理与设置页已修好）。</li><li>撤销 Token、删除凭证、退役 Worker 这类不可撤回的操作，只用普通确认框，写明「不能撤回」，没有要求输入名称。要不要加，由负责人决定。</li><li>改执行环境仍然分「加入新环境」「移出旧环境」两步。移出失败时，对话框会说明情况，再点一次只重试移出。服务器端一次完成的接口留待需要时再做。</li></ul>
+</main>
+</body>
+</html>

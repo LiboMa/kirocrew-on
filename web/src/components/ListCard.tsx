@@ -1,4 +1,4 @@
-import { useSyncExternalStore, type ReactNode } from "react";
+import { useRef, useSyncExternalStore, type ReactNode } from "react";
 import { MoreHorizontal, RefreshCw, Search, type LucideIcon } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import {
@@ -7,7 +7,7 @@ import {
 import { Input } from "@/components/ui/input";
 import { cn } from "@/lib/utils";
 
-/** A list on the 管理 / 我的设置 pages (青岩, after Sub2API's list pages): a toolbar — a search when ``onSearch`` is given,
+/** A list on the 管理 / 我的设置 pages (青岩): a toolbar — a search when ``onSearch`` is given,
  * 刷新 when ``onRefresh`` is, what the list holds on the right — above the rows (a table, or what to do when empty). */
 export function ListCard({ label, search, onSearch, searchLabel = "搜索", onRefresh, refreshing, summary, children }: {
   /** Names the list for assistive technology. */
@@ -70,12 +70,15 @@ function watchNarrow(listener: () => void) {
   return () => query?.removeEventListener?.("change", listener);
 }
 
-/** A row's actions (PRD 2026-10-23 §3.5 and Sub2API's lists): ``actions`` as an icon and its word beside each other on a
+/** A row's actions (PRD 2026-10-23 §3.5): ``actions`` as an icon and its word beside each other on a
  * wide screen; ``more`` — and on a phone everything — in the row's 「⋯」 menu, named ``menu``. */
 export function RowActions({ actions, more = [], menu }: { actions: Action[]; more?: Action[]; menu: string }) {
   const narrow = useSyncExternalStore(watchNarrow, narrowNow, () => false);
   const inline = narrow ? [] : actions;
   const listed = narrow ? [...actions, ...more] : more;
+  // A menu item's step runs once the menu has closed and given the focus back to 「⋯」: a dialog it opens then returns
+  // the focus there when it closes, not to the top of the page (the menu item it would remember is gone by then).
+  const chosen = useRef<(() => void) | null>(null);
   return (
     <span className="inline-flex items-center justify-end gap-1">
       {inline.map((a) => (
@@ -85,15 +88,20 @@ export function RowActions({ actions, more = [], menu }: { actions: Action[]; mo
         </Button>
       ))}
       {listed.length > 0 && (
-        <DropdownMenu>
+        <DropdownMenu onOpenChange={(open) => { if (open) chosen.current = null; }}>   {/* reopened while closing: forget the old step */}
           <DropdownMenuTrigger asChild>
             <Button type="button" size="icon-sm" variant="ghost" aria-label={menu}><MoreHorizontal /></Button>
           </DropdownMenuTrigger>
-          <DropdownMenuContent align="end" className="w-44">
+          <DropdownMenuContent align="end" className="w-44" onCloseAutoFocus={() => {
+            const step = chosen.current;
+            chosen.current = null;
+            if (step) window.setTimeout(step);
+          }}>
             {listed.map((a, index) => [
               // One rule sets the dangerous ones apart, not one between each of them
               a.tone === "danger" && index > 0 && listed[index - 1].tone !== "danger" && <DropdownMenuSeparator key={a.label + "-rule"} />,
-              <DropdownMenuItem key={a.label} onSelect={a.onSelect} disabled={a.disabled} className={cn(a.tone === "danger" && "text-destructive")}>
+              <DropdownMenuItem key={a.label} onSelect={() => { chosen.current = a.onSelect; }} disabled={a.disabled}
+                className={cn(a.tone === "danger" && "text-destructive")}>
                 <a.icon />{a.label}{a.direct ? "" : "…"}
               </DropdownMenuItem>,
             ])}
