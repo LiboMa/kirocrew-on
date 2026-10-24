@@ -2,7 +2,7 @@ import { useRef, useState } from "react";
 import { useQueryClient } from "@tanstack/react-query";
 import { Pencil, Plus, Trash2 } from "lucide-react";
 import { toast } from "sonner";
-import { api } from "@/api/client";
+import { ApiError, api } from "@/api/client";
 import { keys, usePolicies } from "@/api/hooks";
 import type { Policy } from "@/api/types";
 import { FormDialog } from "@/components/FormDialog";
@@ -135,7 +135,8 @@ export function PoliciesPanel() {
 
 /** Write a mapping preference — or, given ``policy``, edit one. The API has no PATCH for a rule: saving an edit writes the
  * rule as it now reads, then removes the old one, so a failure leaves at most both (never neither). If only the removal
- * failed, the dialog says so and trying again only removes it. */
+ * failed, the dialog says so and trying again only removes it — unless the form was changed meanwhile: then that is
+ * written too and the earlier write removed with the old rule. A rule already gone counts as removed. */
 function RuleDialog({ policy, onClose, onSaved }: { policy?: Policy; onClose: () => void; onSaved: (made: Policy) => void }) {
   const { me, teams, allTeams } = useConsole();
   const client = useQueryClient();
@@ -146,19 +147,32 @@ function RuleDialog({ policy, onClose, onSaved }: { policy?: Policy; onClose: ()
   const [target, setTarget] = useState(rule?.role ?? rule?.kind ?? "review");
   const [tool, setTool] = useState<string>(rule?.tool ?? "codex");
   const [model, setModel] = useState(rule?.model ?? "");
-  const written = useRef<Policy | null>(null);   // an edit's new rule, once written: a retry only removes the old one
+  // An edit's rule once written, with what was sent for it; and the rules it replaces, still to remove
+  const written = useRef<{ sent: string; policy: Policy } | null>(null);
+  const replaced = useRef<string[]>(policy ? [policy.id] : []);
 
   return (
     <FormDialog title={policy ? "编辑规则" : "新增规则"} submitLabel={policy ? "保存规则" : "添加规则"} onClose={onClose}
       description="告诉规划者某类任务或某个角色你希望用哪个工具；需求中明确指定的工具总是优先。"
       onSubmit={async () => {
         const next = { [by]: target, tool, ...(model.trim() ? { model: model.trim() } : {}) };
-        const made = written.current ?? await api<Policy>("/policies", "POST", { kind: "mapping",
-          scope: scope === "personal" ? "personal" : "team", ...(scope === "personal" ? {} : { team_id: scope }), rule: next });
+        const body = { kind: "mapping", scope: scope === "personal" ? "personal" : "team",
+          ...(scope === "personal" ? {} : { team_id: scope }), rule: next };
+        const sent = JSON.stringify(body);
+        let made = written.current?.sent === sent ? written.current.policy : null;
+        if (!made) {
+          made = await api<Policy>("/policies", "POST", body);
+          if (written.current) replaced.current.push(written.current.policy.id);   // superseded by this change
+          written.current = policy ? { sent, policy: made } : null;
+        }
         if (policy) {
-          written.current = made;
           try {
-            await api("/policies/" + encodeURIComponent(policy.id), "DELETE");
+            for (const id of [...replaced.current]) {
+              await api("/policies/" + encodeURIComponent(id), "DELETE").catch((error) => {
+                if (!(error instanceof ApiError && error.status === 404)) throw error;
+              });
+              replaced.current = replaced.current.filter((r) => r !== id);
+            }
           } catch (error) {
             await client.invalidateQueries({ queryKey: keys.policies });
             throw new Error("新规则已保存，旧规则没能删除：" + (error as Error).message);

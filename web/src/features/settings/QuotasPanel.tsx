@@ -29,11 +29,14 @@ const inRange = (text: string) => {
 const OUT_OF_RANGE = "上限须为 1–50 的整数";
 
 /** Sends one limit (``null`` removes it) and keeps what the server answers: every limit, read again. */
+/** Sets a limit and shows the server's answer; ``shown`` may hold the answer back (a row fading out first) and returns
+ * when the list shows it. A refusal throws before anything changes, so the dialog keeps its reason. */
 function useSave() {
   const client = useQueryClient();
-  return async (scope: Scope, id: string | undefined, running: number | null) => {
+  return async (scope: Scope, id: string | undefined, running: number | null,
+    shown: (show: () => Promise<void>) => Promise<void> = (show) => show()) => {
     const answer = await api<Quotas>("/quotas", "POST", { scope, ...(id ? { id } : {}), running });
-    client.setQueryData(keys.quotas, answer);
+    await shown(async () => { client.setQueryData(keys.quotas, answer); });
   };
 }
 
@@ -107,9 +110,11 @@ export function QuotasPanel() {
         <FormDialog title="移除上限" submitLabel="移除上限" onClose={() => setDialog(null)} description={removal(dialog.limit)}
           onSubmit={async () => {
             const { limit } = dialog;
-            if (limit.scope === "user") {   // the person's row goes: they are back on the default
-              setDialog(null);
-              await motion.leave(limit.quota, () => save(limit.scope, limit.id, null));
+            if (limit.scope === "user") {   // the person's row goes once the server agreed: they are back on the default
+              await save(limit.scope, limit.id, null, (show) => {
+                setDialog(null);
+                return motion.leave(limit.quota, show);
+              });
             } else {
               await save(limit.scope, limit.id, null);
               setDialog(null);

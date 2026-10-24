@@ -182,7 +182,7 @@ function TeamPage({ team, motion }: { team: Team; motion: Motion }) {
   const primary = archived ? (admin ? [archiving] : []) : [...(unassigned ? [environment] : []), ...(manage ? [add, rename] : [])];
   const inline = primary.slice(0, 2);
   const more = [
-    ...primary.slice(2), ...(manage && archived ? [rename] : []), ...(moving && !unassigned ? [environment] : []),
+    ...primary.slice(2), ...(manage && archived ? [rename] : []), ...(moving && (archived || !unassigned) ? [environment] : []),
     ...(admin && !archived ? [archiving] : []),
   ];
   const card = motion.props("team:" + team.id);

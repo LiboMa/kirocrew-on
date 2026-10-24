@@ -136,4 +136,41 @@ describe("mapping preferences (D55); admission rules are gone (D70)", () => {
     expect(sent(calls, "POST", "/policies")).toHaveLength(1);
     expect(sent(calls, "DELETE", "/policies/policy-3")).toHaveLength(2);
   });
+
+  test("a change made after the old rule could not be removed is saved too, and nothing is left behind (review 2026-10-24)", async () => {
+    let refuse = true;
+    let next = 4;
+    const { calls, panel } = await openPolicies({ "GET /policies": [review],
+      "POST /policies": (body: unknown) => ({ ...review, id: `policy-${next++}`, rule: (body as { rule: unknown }).rule }),
+      "DELETE /policies/policy-3": () => (refuse ? new Response(JSON.stringify({ error: "服务暂不可用", code: "x" }), { status: 503 })
+        : { id: "policy-3", deleted: true }),
+      "DELETE /policies/policy-4": { id: "policy-4", deleted: true } });
+    await userEvent.click(within(panel).getByRole("button", { name: "编辑规则：类别 审查 → claude" }));
+    const dialog = await screen.findByRole("dialog", { name: "编辑规则" });
+    await userEvent.selectOptions(within(dialog).getByLabelText("工具"), "codex");
+    await userEvent.click(within(dialog).getByRole("button", { name: "保存规则" }));
+    await within(dialog).findByRole("alert");
+    refuse = false;
+    await userEvent.type(within(dialog).getByLabelText("模型（可空）"), "gpt-5");   // changed before trying again
+    const toasts = () => screen.queryAllByText("已保存规则：类别 审查 → codex（模型 gpt-5）").length;   // sonner's are global
+    const before = toasts();
+    await userEvent.click(within(dialog).getByRole("button", { name: "保存规则" }));
+    await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
+    expect(sent(calls, "POST", "/policies").map((b) => (b as { rule: unknown }).rule)).toEqual([
+      { kind: "review", tool: "codex" }, { kind: "review", tool: "codex", model: "gpt-5" }]);
+    expect(sent(calls, "DELETE", "/policies/policy-4")).toHaveLength(1);   // the first write, superseded
+    expect(sent(calls, "DELETE", "/policies/policy-3")).toHaveLength(2);
+    await waitFor(() => expect(toasts()).toBe(before + 1));
+  });
+
+  test("an old rule already gone counts as removed", async () => {
+    const saved = { ...review, id: "policy-4", rule: { kind: "review", tool: "codex" } };
+    const { panel } = await openPolicies({ "GET /policies": [review], "POST /policies": saved,
+      "DELETE /policies/policy-3": () => new Response(JSON.stringify({ error: "规则不存在", code: "not_found" }), { status: 404 }) });
+    await userEvent.click(within(panel).getByRole("button", { name: "编辑规则：类别 审查 → claude" }));
+    const dialog = await screen.findByRole("dialog", { name: "编辑规则" });
+    await userEvent.selectOptions(within(dialog).getByLabelText("工具"), "codex");
+    await userEvent.click(within(dialog).getByRole("button", { name: "保存规则" }));
+    await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
+  });
 });

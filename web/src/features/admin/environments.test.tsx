@@ -296,6 +296,24 @@ describe("管理 › 执行环境", () => {
     expect(row).toHaveAttribute("data-fresh", "true");
   });
 
+  test("编辑 opened before the environments are read: its address fills in, and renaming alone only renames (review 2026-10-24)", async () => {
+    let arrive: (value: unknown) => void = () => {};
+    const late = new Promise((resolve) => { arrive = resolve; });
+    const calls = start({ ...ENVIRONMENTS, "GET /admin/environments": () => late, "PATCH /workers/w1": { id: "w1", name: "共享-1" } });
+    const list = await openSection("管理", "执行环境");
+    const row = await rowOf(list, "personal");
+    await userEvent.click(within(row).getByRole("button", { name: "编辑：personal" }));
+    const dialog = await screen.findByRole("dialog", { name: "编辑 Worker" });
+    arrive(ENVIRONMENTS["GET /admin/environments"]);   // the slow probe of every Worker answers while the dialog is open
+    await waitFor(() => expect(within(dialog).getByLabelText("Worker URL")).toHaveValue("http://127.0.0.1:8928"));
+    await userEvent.clear(within(dialog).getByLabelText("Worker 名称"));
+    await userEvent.type(within(dialog).getByLabelText("Worker 名称"), "共享-1");
+    await userEvent.click(within(dialog).getByRole("button", { name: "保存" }));
+    await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
+    expect(calls.find((c) => c.method === "PATCH" && c.path === "/v1/workers/w1")?.body).toEqual({ name: "共享-1" });
+    expect(calls.some((c) => c.path === "/v1/workers/w1/connection")).toBe(false);
+  });
+
   test("编辑 keeps the connection unless a new token is given; a new address needs one", async () => {
     const calls = start({ ...ENVIRONMENTS, "POST /workers/w1/connection": { id: "w1", capabilities: {} } });
     const list = await openSection("管理", "执行环境");

@@ -44,6 +44,22 @@ class RegenerateTests(AccessCase):
             status, body = call("POST", f"/v1/tokens/{current['id']}/regenerate", self.tokens["bob"], {})
         self.assertEqual((status, body["code"]), (409, "token_in_use"))
 
+    def test_a_narrower_token_cannot_regenerate_a_wider_one(self):
+        # Review 2026-10-24: alice's manage-only token must not turn her admin token into a value it can use (A3)
+        with self.http() as call:
+            status, narrow = call("POST", "/v1/tokens", self.tokens["alice"], {"label": "agent", "scopes": ["read", "execute", "manage"],
+                                                                              "expires_in": "30d"})
+            self.assertEqual(status, 201)
+            status, wide = call("POST", "/v1/tokens", self.tokens["alice"], {"label": "ops", "scopes": ["read", "admin"], "expires_in": "7d"})
+            self.assertEqual(status, 201)
+            status, body = call("POST", f"/v1/tokens/{wide['id']}/regenerate", narrow["token"], {})
+            self.assertEqual((status, body["code"]), (403, "forbidden"))
+            self.assertEqual(call("GET", "/v1/me", wide["token"])[0], 200)   # refused: the old value still works
+            status, same = call("POST", f"/v1/tokens/{self.made['id']}/regenerate", self.tokens["bob"], {})
+            self.assertEqual(status, 200)   # within its own scopes it may
+            status, other = call("POST", "/v1/tokens", self.tokens["alice"], {"label": "reader", "scopes": ["read"], "expires_in": "7d"})
+            self.assertEqual(call("POST", f"/v1/tokens/{other['id']}/regenerate", narrow["token"], {})[0], 200)
+
     def test_someone_elses_or_an_unknown_token_is_not_found(self):
         with self.http() as call:
             self.assertEqual(call("POST", f"/v1/tokens/{self.made['id']}/regenerate", self.tokens["eve"], {})[0], 404)
