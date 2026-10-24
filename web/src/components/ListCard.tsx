@@ -7,7 +7,7 @@ import {
 import { Input } from "@/components/ui/input";
 import { cn } from "@/lib/utils";
 
-/** A list on the 管理 / 我的设置 pages (青岩, after Sub2API's list pages): a toolbar — a search when ``onSearch`` is given,
+/** A list on the 管理 / 我的设置 pages (青岩): a toolbar — a search when ``onSearch`` is given,
  * 刷新 when ``onRefresh`` is, what the list holds on the right — above the rows (a table, or what to do when empty). */
 export function ListCard({ label, search, onSearch, searchLabel = "搜索", onRefresh, refreshing, summary, children }: {
   /** Names the list for assistive technology. */
@@ -70,7 +70,7 @@ function watchNarrow(listener: () => void) {
   return () => query?.removeEventListener?.("change", listener);
 }
 
-/** A row's actions (PRD 2026-10-23 §3.5 and Sub2API's lists): ``actions`` as an icon and its word beside each other on a
+/** A row's actions (PRD 2026-10-23 §3.5): ``actions`` as an icon and its word beside each other on a
  * wide screen; ``more`` — and on a phone everything — in the row's 「⋯」 menu, named ``menu``. */
 export function RowActions({ actions, more = [], menu }: { actions: Action[]; more?: Action[]; menu: string }) {
   const narrow = useSyncExternalStore(watchNarrow, narrowNow, () => false);

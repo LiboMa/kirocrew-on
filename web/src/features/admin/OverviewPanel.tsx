@@ -19,7 +19,7 @@ interface Figure {
   tint: string;
 }
 
-/** 管理 › 概览: the platform at a glance, as Sub2API's dashboard (青岩) — one flat card per figure, each opening its
+/** 管理 › 概览: the platform at a glance (青岩) — one flat card per figure, each opening its
  * section; what needs an administrator is listed below. */
 export function OverviewPanel() {
   const { workers, allTeams, go } = useConsole();

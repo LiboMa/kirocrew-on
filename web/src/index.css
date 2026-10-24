@@ -3,7 +3,7 @@
 
 @custom-variant dark (&:is(.dark *));
 
-/* KiroCrew ON theme「青岩」(owner 2026-10-24: Sub2API's teal family, flat, small square-ish corners; light and dark).
+/* KiroCrew ON theme「青岩」(owner 2026-10-24: a teal family, flat, small square-ish corners; light and dark).
    shadcn/ui variables; system fonts only (CSP: no remote fonts). */
 :root {
   --radius: 0.375rem;
