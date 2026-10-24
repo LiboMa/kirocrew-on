@@ -34,7 +34,7 @@ KiroCrew ON 在远端执行开发任务：KiroCrew 的 Kiro Agent 先识别意�
    .venv/bin/python -m octopus connect kiro-ide --url {{OCTOPUS_URL}} --username <用户名> --project <项目目录>
    ```
 
-   - 命令会提示输入密码。不便交互时，用户可先在控制台右上角菜单「API 与 Coding Agent 接入」创建 Token，
+   - 命令会提示输入密码。不便交互时，用户可先在控制台顶栏的「我的设置 › API 与 Coding Agent 接入」创建 Token，
      设为环境变量 `OCTOPUS_API_TOKEN` 后再执行，命令直接使用该 Token。
    - 平台管理员需要经 Agent 管理用户、Team 或执行环境时，可加 `--admin`：Token 额外含 admin、7 天有效。
      这枚 Token 能停用用户、更换 Team 的执行环境，只在本人设备上使用；不需要管理时用普通连接。

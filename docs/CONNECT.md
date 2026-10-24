@@ -9,7 +9,7 @@ Claude Code 与 Kiro CLI 用 `octopus connect` 自动配置（§2），其他客
   `https://kirocrew-on.tinyboat.blog`），或 SSM 隧道 `http://localhost:18918`。
 - **Token**：`octopus connect --username <你的用户名>` 提示输入密码，以本人账号登录后创建一枚 30 天有效的 Token
   （`read, execute, manage`：查看、提交、管理自己的工作流），随后登出这次登录。未给 `--username` 时交互询问。
-  也可以先在控制台右上角菜单「API 与 Coding Agent 接入」创建，设为环境变量 `OCTOPUS_API_TOKEN`。
+  也可以先在控制台顶栏的「我的设置 › API 与 Coding Agent 接入」创建，设为环境变量 `OCTOPUS_API_TOKEN`。
   平台管理员需要经 Agent 管理用户、Team、执行环境时加 `--admin`：Token 另含 `admin`、7 天有效，MCP 才会列出管理员工具；
   这枚 Token 能停用用户、更换执行环境，只在本人设备上使用。
 - **MCP 服务器**（stdio，所有客户端相同）：

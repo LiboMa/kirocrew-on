@@ -1196,6 +1196,13 @@ tools/local_stack.sh stop               # 逆序 SIGTERM，只结束本栈的进
 
 `/` 为 React 控制台（`web/` 构建到 `octopus/ui/dist/`）；未构建时 `/` 回退到旧版。旧版控制台保留在 `/classic/`，两者共用登录。
 
+布局（负责人 2026-10-24，见 `docs/design/2026-10-24-qingyan.md` 第 4 节）：
+
+- **顶栏中间是工作台**：开发空间切换和「会话 / 工作流」两个页签，工作流页的地址是 `?view=workflows`。
+- **顶栏右侧**：「新建开发」，以及「管理」（只有管理员）和「我的设置」两个文字入口。手机上这两个入口收进账户菜单。
+- **管理与「我的设置」**：页面里有自己的分区导航，地址是 `?view=admin&section=…`、`?view=settings&section=…`；顶栏左侧有「返回工作台」。
+- **深色模式**：在账户菜单里切换。
+
 ```bash
 npm --prefix web ci                     # 前端依赖（lockfile 固定版本）
 npm --prefix web run build              # 构建到 octopus/ui/dist（主机安装时由 al2023.sh 执行）
