@@ -35,6 +35,17 @@ describe("RowActions", () => {
     expect(regenerate).toHaveBeenCalled();
   });
 
+  test("a step that runs at once has no 「…」; one rule sets the dangerous ones apart", async () => {
+    narrow(false);
+    render(<RowActions menu="操作：a" actions={[]} more={[
+      { icon: RefreshCw, label: "刷新模型", name: "刷新模型：a", direct: true, onSelect: () => {} },
+      { icon: Trash2, label: "停用", name: "停用：a", tone: "danger", onSelect: () => {} },
+      { icon: Trash2, label: "退役", name: "退役：a", tone: "danger", onSelect: () => {} }]} />);
+    await userEvent.click(screen.getByRole("button", { name: "操作：a" }));
+    expect(screen.getAllByRole("menuitem").map((m) => m.textContent)).toEqual(["刷新模型", "停用…", "退役…"]);
+    expect(screen.getAllByRole("separator")).toHaveLength(1);
+  });
+
   test("no actions, no menu", () => {
     narrow(false);
     const { container } = render(<RowActions menu="操作：a" actions={[]} />);
