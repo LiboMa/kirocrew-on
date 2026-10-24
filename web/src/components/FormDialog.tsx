@@ -21,10 +21,13 @@ interface Props {
   closeLabel?: string;
 }
 
-/** Modal form: shows the server's reason on failure and cannot be dismissed while a request is in flight. */
+/** Modal form: shows the server's reason on failure and cannot be dismissed while a request is in flight. Closing puts
+ * the focus back where it was when the dialog opened (the button that opened it): Radix only returns it to a
+ * DialogTrigger, and these dialogs are opened from code, so it fell to the top of the page. */
 export function FormDialog({ title, kicker, description, children, submitLabel = "保存", destructive, note, wide, onSubmit, onClose, footer, closeLabel }: Props) {
   const [error, setError] = useState("");
   const [busy, setBusy] = useState(false);
+  const [returnTo] = useState(() => (typeof document !== "undefined" ? document.activeElement : null) as HTMLElement | null);
 
   async function submit(event: FormEvent) {
     event.preventDefault();
@@ -42,7 +45,12 @@ export function FormDialog({ title, kicker, description, children, submitLabel =
 
   return (
     <Dialog open onOpenChange={(open) => !open && !busy && onClose()}>
-      <DialogContent className={cn("max-h-[92svh] gap-0 overflow-hidden p-0", wide ? "sm:max-w-4xl" : "sm:max-w-xl")}>
+      <DialogContent className={cn("max-h-[92svh] gap-0 overflow-hidden p-0", wide ? "sm:max-w-4xl" : "sm:max-w-xl")}
+        onCloseAutoFocus={(event) => {
+          if (!returnTo?.isConnected) return;   // a removed row's button is gone: Radix's default then
+          event.preventDefault();
+          returnTo.focus();
+        }}>
         <form onSubmit={submit} className="flex max-h-[92svh] flex-col">
           <DialogHeader className="border-b px-6 pt-6 pb-4 text-left">
             {kicker && <p className="text-[11px] font-semibold tracking-[0.18em] text-muted-foreground">{kicker}</p>}
