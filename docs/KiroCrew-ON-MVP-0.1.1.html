@@ -49,18 +49,21 @@
 <p>日期：2026-10-24　·　分支 <code>feat/mvp-0.1.1</code>（PR #5），基于 main <code>fe49f81</code>（EC2 当时运行 <code>12fbd9f</code>）　·　HTML 版：<a href="KiroCrew-ON-MVP-0.1.1.html"><code>docs/KiroCrew-ON-MVP-0.1.1.html</code></a></p>
 <p>产品是什么、给谁用、整体流程，见 <a href="MVP-0.1.0.md">MVP 0.1.0：产品、流程与架构</a>。本文只写 0.1.1 相对 0.1.0 的变化。</p>
 <h2>1．这一版做了什么</h2>
-<div class="table"><table><thead><tr><th>方面</th><th>变化</th></tr></thead><tbody><tr><td><strong>前端优化</strong></td><td>控制台整体改版：左侧分组导航、浅色 / 深色主题、新标志；管理与「我的设置」的列表都改成表格，新增、修改、危险操作都在对话框里完成</td></tr><tr><td><strong>Token 重新生成</strong></td><td>已有的 API Token 可以换一个新值，名称和权限不变，旧值立即失效</td></tr><tr><td><strong>在 KiroCrew 聊天里协作（D73 补充）</strong></td><td>续作时提醒聊天里改过的文件；聊天里新建的文件也会被认出，续作前一并提交</td></tr><tr><td><strong>门禁与提示（D57 补充）</strong></td><td>提示写清发生了什么、是谁的问题、建议怎么做；门禁显示中文名，检查分为必过和建议两类；打码与审查撤回做了多处修正</td></tr><tr><td><strong>性能</strong></td><td>会话列表的数据量减少约一半，gzip 后约减少 70%</td></tr><tr><td><strong>可用性</strong></td><td>对话框关闭后，焦点回到打开它的按钮；手机上行操作收进「⋯」</td></tr></tbody></table></div>
+<div class="table"><table><thead><tr><th>方面</th><th>变化</th></tr></thead><tbody><tr><td><strong>前端优化</strong></td><td>控制台整体改版：顶栏突出工作台（「会话 / 工作流」），管理与「我的设置」退到顶栏右侧；浅色 / 深色主题、新标志；管理与「我的设置」的列表都改成表格，新增、修改、危险操作都在对话框里完成</td></tr><tr><td><strong>Token 重新生成</strong></td><td>已有的 API Token 可以换一个新值，名称和权限不变，旧值立即失效</td></tr><tr><td><strong>在 KiroCrew 聊天里协作（D73 补充）</strong></td><td>续作时提醒聊天里改过的文件；聊天里新建的文件也会被认出，续作前一并提交</td></tr><tr><td><strong>门禁与提示（D57 补充）</strong></td><td>提示写清发生了什么、是谁的问题、建议怎么做；门禁显示中文名，检查分为必过和建议两类；打码与审查撤回做了多处修正</td></tr><tr><td><strong>性能</strong></td><td>会话列表的数据量减少约一半，gzip 后约减少 70%</td></tr><tr><td><strong>可用性</strong></td><td>对话框关闭后，焦点回到打开它的按钮；手机上行操作收进「⋯」</td></tr></tbody></table></div>
 <h2>2．前端优化</h2>
-<h3>2.1 导航与页头</h3>
-<ul><li>左侧导航分三组：<strong>工作台</strong>（会话）、<strong>管理</strong>（只有管理员看得到）、<strong>我的设置</strong>。每个条目都是链接，可以新开标签页或收藏。</li><li>导航底部是「深色模式」和「收起导航」，这两个设置都记在浏览器里。
-<ul><li>没有选过主题时，跟随系统设置。</li><li>收起后只显示图标。</li></ul></li><li>页头内容随页面变化：
-<ul><li>会话页显示开发空间切换；</li><li>管理和设置页显示当前位置，例如「管理 / 用户」；</li><li>右侧固定是「新建开发」和账户菜单（修改密码、经典控制台、退出登录）。</li></ul></li><li>窄屏上的入口：
-<ul><li>1024 像素以下，从「打开导航」打开导航；</li><li>768 像素以下，从「打开会话列表」打开会话列表。</li></ul></li><li>标志换成四个方块拼成的 K，浏览器标签页的图标同步更换。</li></ul>
+<h3>2.1 导航：工作台放在最前</h3>
+<p>负责人 2026-10-24 选定「顶栏切换」，对比见 <code>docs/design/2026-10-24-workbench-options.html</code>。第一次部署到 EC2 的 <code>1834ebb</code> 用的还是左侧分组导航，这次调整之后以下面的描述为准。</p>
+<ul><li><strong>顶栏中间是工作台</strong>：开发空间切换，加上「会话」「工作流」两个页签，页签上显示数量。
+<ul><li>两个页签都是链接，可以新开标签页；工作流的地址是 <code>?view=workflows</code>。</li><li>工作流从会话列表里的一个页签，升为与会话并列的页面，见 2.3 节。</li></ul></li><li><strong>顶栏右侧</strong>：「新建开发」，以及两个不显眼的文字入口「管理」（只有管理员看得到）和「我的设置」。</li><li><strong>账户菜单</strong>：修改密码、深色模式、经典控制台、退出登录。主题的选择记在浏览器里，没有选过时跟随系统设置。</li><li><strong>管理与「我的设置」</strong>：回到改版前的样式。
+<ul><li>页面左边是它自己的分区导航，标题就是页面名；</li><li>顶栏里，「返回工作台」代替工作台页签的位置。</li></ul></li><li><strong>窄屏</strong>：
+<ul><li>768 像素以下，从「打开会话列表」打开会话列表；</li><li>640 像素以下，不显示标志和数量，「管理」「我的设置」收进账户菜单。</li></ul></li><li><strong>标志</strong>：换成四个方块拼成的 K，浏览器标签页的图标同步更换。</li></ul>
 <h3>2.2 列表页</h3>
 <p>管理与「我的设置」的列表页结构统一，由上到下是：</p>
 <ul><li><strong>标题、说明和主操作</strong>，例如「新建 Token」「新建用户」「登记 Worker」；</li><li><strong>工具栏</strong>：搜索、刷新，右侧显示数量；</li><li><strong>表格</strong>：行尾放常用操作（图标加文字），其余的收进「⋯」，危险操作标红。手机上所有行操作都收进「⋯」，不并排放按钮；</li><li><strong>空列表</strong>：说明下一步做什么；搜索没有结果时，说明没找到什么。</li></ul>
 <p>「管理 › 概览」改为统计卡片，点一张卡片进入对应的管理页。</p>
-<h3>2.3 操作都在对话框里完成</h3>
+<h3>2.3 工作流页</h3>
+<ul><li><strong>表格</strong>：列出每个工作流的名称、任务链（例如「2 个 · Claude Code → Codex」）、版本和归属，可以按名称搜索。</li><li><strong>打开</strong>：点名称打开编辑器，改动形成新版本，已经在跑的会话不受影响。</li><li><strong>行尾操作</strong>：「新建开发」从这个工作流开始一个会话；「编辑」打开编辑器；工作流的 owner 还能在「⋯」里共享。</li></ul>
+<h3>2.4 操作都在对话框里完成</h3>
 <p>页面上不再有编辑用的输入框，只保留搜索框。覆盖的页面：</p>
 <div class="table"><table><thead><tr><th>页面</th><th>对话框</th></tr></thead><tbody><tr><td>API 与 Coding Agent 接入</td><td>新建 Token、重新生成、撤销</td></tr><tr><td>管理 › 用户</td><td>新建用户、重设密码、加入 Team、改执行环境、查看与撤销 Token、设为 / 取消管理员、停用 / 启用</td></tr><tr><td>管理 › 执行环境</td><td>登记 Worker、编辑（名称、连接）、分配到空间、设为共享 / 改回专属、停用、退役</td></tr><tr><td>Team</td><td>新建 Team、改名、添加成员、更换执行环境、归档 / 恢复、改角色、移出、退出 Team</td></tr><tr><td>代码仓库凭证</td><td>添加凭证（分「是什么」「能访问哪些仓库」「Token」三节）、仓库范围、更换 Token、停用 / 启用、删除</td></tr><tr><td>映射偏好</td><td>新增规则、编辑、删除</td></tr><tr><td>并发上限</td><td>修改、移除上限、单独设置上限</td></tr><tr><td>修改密码</td><td>修改密码</td></tr></tbody></table></div>
 <p>对话框的规则：</p>
@@ -80,7 +83,7 @@
 <ul><li><strong>需要一起部署</strong>：平台和 Worker 要一起部署，因为续作检查新文件用到 Worker 的新参数 <code>untracked</code>。<code>deploy.sh push</code> 会一起更新。</li><li><strong>接口变化</strong>（都向后兼容）：
 <ul><li>新增 <code>POST /v1/tokens/&lt;id&gt;/regenerate</code>；</li><li>新增 <code>GET /v1/runs/&lt;id&gt;/chat-changes</code>；</li><li><code>GET /v1/tokens</code> 每条多了 <code>current</code>；</li><li><code>view=list</code> 的字段变少（见第 6 节）。自己写的脚本如果从列表里读用量或完整需求，要改为读会话详情。</li></ul></li><li><strong>不需要迁移数据</strong>。</li></ul>
 <h2>8．验证</h2>
-<div class="table"><table><thead><tr><th>项目</th><th>结果</th></tr></thead><tbody><tr><td>完整回归 <code>tools/regress.sh</code>（根目录的旧测试、<code>tests/</code> 下的 Python 测试、web 测试与构建）</td><td>通过，Python 测试 1893 条</td></tr><tr><td>控制台单元测试（Vitest）</td><td>31 个文件、323 条通过</td></tr><tr><td>浏览器测试（真实 HTTP + SQLite，不连原生 Worker）</td><td>7 个文件、143 项检查通过，包括重新生成后「新值可用、旧值 401」、深色模式刷新后保持、窄屏打开导航</td></tr><tr><td>截图检查</td><td>1280 像素逐页、深色模式、390 像素（无横向溢出）</td></tr><tr><td>代码审查</td><td>两轮独立审查，发现的严重与重要问题都已修复并补测试</td></tr><tr><td>发布前扫描</td><td>干净克隆里 git-defender scan 与 scan-history 无密钥</td></tr><tr><td>EC2 实测（部署 <code>1834ebb</code>，上报版本 0.1.1）</td><td>通过。接口 14 项：列表 50 行未压缩 111 KB、传输 15.7 KB（gzip）；会话详情完整；重新生成全流程（同一条、旧值 401、当前登录 409、只读 Token 403）；chat-changes 可读；控制台带新图标。浏览器 10 项：会话列表与详情、「当前登录」标记、在界面上重新生成与撤销、焦点回到「重新生成」按钮、深色模式、390 像素无横向溢出、无脚本异常</td></tr></tbody></table></div>
+<div class="table"><table><thead><tr><th>项目</th><th>结果</th></tr></thead><tbody><tr><td>完整回归 <code>tools/regress.sh</code>（根目录的旧测试、<code>tests/</code> 下的 Python 测试、web 测试与构建）</td><td>通过，Python 测试 1893 条</td></tr><tr><td>控制台单元测试（Vitest）</td><td>31 个文件、324 条通过</td></tr><tr><td>浏览器测试（真实 HTTP + SQLite，不连原生 Worker）</td><td>7 个文件、145 项检查通过，包括：重新生成后「新值可用、旧值 401」；深色模式刷新后保持；顶栏「会话 / 工作流」与「返回工作台」；工作流是一级页面；窄屏上管理入口在账户菜单里</td></tr><tr><td>截图检查</td><td>1280 像素逐页、深色模式、390 像素（无横向溢出）</td></tr><tr><td>代码审查</td><td>两轮独立审查，发现的严重与重要问题都已修复并补测试</td></tr><tr><td>发布前扫描</td><td>干净克隆里 git-defender scan 与 scan-history 无密钥</td></tr><tr><td>EC2 实测（部署 <code>1834ebb</code>，上报版本 0.1.1）</td><td>通过。接口 14 项：列表 50 行未压缩 111 KB、传输 15.7 KB（gzip）；会话详情完整；重新生成全流程（同一条、旧值 401、当前登录 409、只读 Token 403）；chat-changes 可读；控制台带新图标。浏览器 10 项：会话列表与详情、「当前登录」标记、在界面上重新生成与撤销、焦点回到「重新生成」按钮、深色模式、390 像素无横向溢出、无脚本异常</td></tr></tbody></table></div>
 <h2>9．已知问题与后续</h2>
 <p>已记入 <a href="BACKLOG.md">BACKLOG</a>：</p>
 <ul><li>侧栏会话行和会话页的「⋯」菜单打开的对话框，关闭后焦点仍落到页面开头（管理与设置页已修好）。</li><li>撤销 Token、删除凭证、退役 Worker 这类不可撤回的操作，只用普通确认框，写明「不能撤回」，没有要求输入名称。要不要加，由负责人决定。</li><li>改执行环境仍然分「加入新环境」「移出旧环境」两步。移出失败时，对话框会说明情况，再点一次只重试移出。服务器端一次完成的接口留待需要时再做。</li></ul>
