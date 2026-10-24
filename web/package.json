@@ -1,7 +1,7 @@
 {
   "name": "kirocrew-on-console",
   "private": true,
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "KiroCrew ON web console (React). Built into ../octopus/ui/dist and served by the Python platform API.",
   "type": "module",
   "scripts": {

@@ -57,9 +57,9 @@ class WorkerObserveTests(unittest.TestCase):
         self.assertNotIn("queue", result)
         self.assertNotIn("local-app", dumps(result))
         self.assertTrue(node.health()["observe"])
-        # The Worker reports the platform's release number (MVP 0.1.0), not a constant of its own.
+        # The Worker reports the platform's release number (MVP 0.1.1), not a constant of its own.
         import octopus
-        self.assertEqual((octopus.__version__, node.health()["version"]), ("0.1.0", "0.1.0"))
+        self.assertEqual((octopus.__version__, node.health()["version"]), ("0.1.1", "0.1.1"))
 
     def test_the_worker_masks_secrets_and_its_own_token(self):
         # D57 §3.3: the Worker's own token too (no rule knows it); masked before the 20 000-character cut
