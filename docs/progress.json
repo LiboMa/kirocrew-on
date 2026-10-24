@@ -317,6 +317,13 @@
           "more": "去掉左侧导航；顶栏中间是开发空间与「会话 / 工作流」，工作流升为一级页面（表格：任务链、版本、归属，行内新建开发 / 编辑 / 共享）；管理与我的设置是顶栏右侧的文字入口，页面里用自己的分区导航和「返回工作台」；深色模式在账户菜单。"
         },
         {
+          "id": "m3-worker-enroll",
+          "name": "Worker 自助接入：一次性接入码、worker enroll、本地全栈自动登记",
+          "status": "todo",
+          "ref": "spec 2026-10-24-worker-enrollment-design · 负责人 2026-10-24：放到 MVP 0.2.0",
+          "more": "管理员签发一次性接入码（登记到哪里签发时定死），Worker 主机执行 worker enroll 自行登记；平台照旧带 Token 核实 /health；Token 不经人手、不进 SSM 命令历史。负责人 2026-10-24 决定放到 MVP 0.2.0，与 0.2.0 的「Worker 自助申请」（集群版后台自动开 Worker、登记与管理）一起设计，第 7 节的三个待定点届时再定。"
+        },
+        {
           "id": "m3-011-continue-hint",
           "name": "MVP-0.1.1 续作对话框提醒对话中的改动",
           "status": "accepted",

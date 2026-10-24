@@ -20,7 +20,7 @@
 ## 客户端与控制台（原 M3）
 - `octopus connect` 扩展到 Codex 与 Kiro IDE；CLI 命令集（submit / plan / confirm / status / watch / report / approvals / search）。
 - 控制台：服务端分页、按仓库 / 分支 / 阶段 / 工具 / 客户端 / 提交者 / 时间过滤、全文搜索；详情中的 diff、门禁与报告。
-- Worker 自助接入（一次性接入码，Worker 启动时自行登记 URL 与 Token），本地全栈启动时自动登记 Worker。
+- Worker 自助接入（一次性接入码，Worker 启动时自行登记 URL 与 Token），本地全栈启动时自动登记 Worker——设计见 `docs/superpowers/specs/2026-10-24-worker-enrollment-design.md`——负责人 2026-10-24 决定放到 MVP 0.2.0，并入「MVP 0.2.0 重要更新」的 Worker 自助申请。
 - 旧版控制台 `/classic/` 在 React 版功能对齐并经负责人确认后移除。
 
 ## 共享与组织（原 M4）
@@ -29,7 +29,7 @@
 - ~~**子 Agent 结束时父会话仍跑一轮 coordinator**~~（EC2 2026-10-22，D63 之后的核对）：Worker 派发时已带 `silent: true`，但 KiroCrew 0.10 只按它关 Slack / Dashboard 通知（slack/gateway.py:10820 起），结果照样注入父 chat slot（`Subagent … → _run_chat in octopus-run-…`，gateway.py:10457），为平台的 slot 起一个 poc-coordinator（kiro 后端）进程并跑一轮——每个任务结束都多一轮 Kiro 用量，进程留到 TTL。待：查 KiroCrew 有无不回报父会话的派发方式（平台以 parent_session 证明归属，须一起设计），或向上游提需求。
   2026-10-23 修复：KiroCrew 0.10 已有 `POST /api/spawn/mark-collected {ids, parent_session}`（它自己的阻塞式 spawn 工具用来表示父会话已拿到结果），Worker 每次派发、续接与模型探测拿到原生 ID 后立即调用，结束时不再注入父会话、不跑这一轮，波次的汇总轮也不再触发；结果照旧从 `GET /api/spawn/{id}` 读取，交付标记与保留时长不变。标记只在 Gateway 内存中：运行中 Gateway 重启后，结束时会照旧跑一轮。
 - 用量上限（M4-4 第 3 期）：每人 / 每 Team 按周期（月）的 Kiro credits、token 或分钟数上限（D46 P6a 已有用量记录）；D61 只限同时运行的任务数。
-- 原生入口改为单 Session 票据（K03）；Worker Token 移出数据库（K10）。
+- 原生入口改为单 Session 票据（K03）。~~Worker Token 移出数据库（K10）~~：D59 已做（写入即用凭证主密钥密封，只在请求时解开）。
 
 ## 会话运行优化后续（D34）
 - 按 `depends_on` 并行执行互不依赖的任务（同一工作区，按 `paths` 判断冲突；默认关闭）。
@@ -324,6 +324,38 @@
 
 - 调研：`docs/research/2026-10-23-kirocrew-native-capabilities.md`（成员与小组为主）。候选：会话内并行（独立 spawn + `/api/spawn/lanes`）、角色成员化试点（先在测试边界核实成员设置是否作用于 `crew=` 派发）、频道用于小规模多 Agent 讨论、导出用于证据归档。不接：Conductor、KiroCrew 动态工作流、并行波次、steer `follow_up`。改变体验的须负责人确认。
 
+## MVP 0.2.0 重要更新：两种部署模式与 Worker 自助申请（负责人 2026-10-24）
+
+负责人在对话中确定的方向，作为 0.2.0 部署与扩缩容设计的输入。「〔设计者决定〕」是负责人未逐条确认、由设计者定的，可调整。
+
+- **两种部署模式，都一键部署。** 安装方式对标 KiroCrew：一行安装脚本（`curl -fsSL <下载地址>/install.sh | sh`）、pip（指向频道索引）、Docker、源码构建。
+- **单机版：控制面与数据面在同一台 EC2 上。**
+  - 用户先在自己的 AWS 账号里开一台 EC2、登录进去，再执行一行安装脚本；装在这台机器上，不从用户电脑远程创建。
+  - 脚本自己检测系统与架构，开的是什么就装在什么上；检测到 x86_64 时照装，但明确提示推荐 ARM64（Graviton），开机器前的说明也把 Graviton 写成首选。
+  - 支持 Amazon Linux 2023 与 Ubuntu 22.04 / 24.04，ARM64 与 x86_64；其他系统说明受支持的系统后退出，不硬装。〔设计者决定〕
+  - 装好 KiroCrew 与 KiroCrew ON（平台 API、Engine、数据库、Worker、Gateway，systemd 常驻），用这台机器的 IAM Role 或用户提供的 AK/SK 在其账号里建 CloudFront 回源到本机（回源密钥保护，同现有 EC2），建管理员，打印控制台地址与初始密码。
+  - 以后可以升级成集群版：这台作为控制面，再按向导加数据面，不必重装。〔设计者决定〕
+- **集群版：控制面与数据面分开部署，向导分两步，部署套件统一掌控。**
+  - 用户用自己的账号登录控制台，自助「申请 Worker」，申请时填入自己的认证信息：Kiro CLI、Claude Code、Codex，一人一 Key。
+  - 后台自动分配 Graviton Worker，自动加入并纳管：开机、安装、注册、证书、健康检查对用户不可见；控制面完成初始化与集成注册。
+  - Kiro CLI 用设备码登录，由用户自己登录自己的：申请 Worker 时控制台显示设备码，用户在浏览器里确认一次（负责人 2026-10-24 已同意）；登录状态存在用户的 EBS 卷上，换机器不用重登。
+  - 参照业界控制面 / 数据面做法：Kubernetes 节点加入（一次性 bootstrap token + 证书签发）、GitHub Actions 自托管 Runner 注册令牌、EKS 托管节点组；控制面持有期望状态并调度，数据面只认短期凭证、可随时替换。
+  - 已有的输入：`docs/superpowers/specs/2026-10-24-worker-enrollment-design.md`（一次性接入码、`worker enroll`、平台照旧带 Token 核实 `/health`、Token 不经人手）。负责人 2026-10-24 决定把它放进 0.2.0 一起设计；里面待定的三点——谁能签发、有效期、部署脚本何时改——届时随「Worker 自助申请」一起定。
+- **共享 Worker 与专用 Worker，两种申请都支持，用户自选。**
+  - 共享 Worker：不独占 EC2，多人共用主机，每人一个隔离的执行边界（各自的执行用户与端口）；后台由 Auto Scaling 配合。
+  - **每人独占一块 EBS 卷作为工作空间**（加密）：工作区，以及各 Agent 的家目录、登录凭证、本地数据库；KiroCrew 记忆也放卷上，换机器不用重新登录〔设计者决定〕。
+  - 池整体 CPU / 内存压力过高时，ASG 开新 Worker 节点，挂上独立的 EBS 开始工作。
+  - 专用 Worker：独占一台 EC2，同样挂用户自己的 EBS。
+  - 共享与专用之间切换：只是把 EBS 改挂到另一台 EC2；在两次尝试之间进行（停旧主机上该用户的进程 → 卸卷 → 挂到新主机 → 启动），会话、记忆、登录状态不变。
+- **设计须写明的 AWS 限制**〔设计者补充〕：
+  - EBS 只能挂在同一可用区的实例上：用户的卷、共享池与专用 Worker 默认同一可用区；跨可用区要先快照再恢复，只用于故障转移。
+  - 单台实例可挂的卷有上限（Nitro 一般二十几块，扣除根卷与网卡）：它决定一台共享主机最多放几人，扩容信号要同时看 CPU、内存与剩余挂载位。
+  - 各主机上执行用户的 UID 须全局统一，由控制面分配，否则卷上文件属主对不上。
+- **待负责人确认：**
+  1. 用户认证信息存放：Secrets Manager 按用户隔离、控制台与日志不显示〔设计者建议〕。
+  2. 缩容：先排空或把边界迁走再回收主机的策略与时机。
+- **与已有草稿的关系：** `feat/stateless-worker-pool`（`.worktrees/worker-pool`，未提交：会话租约、S3 检查点、Worker 池、Litestream）与 `docs/mvp-0.2.0-ha-scaling`（`.worktrees/mvp-020-ha`，e268b69、7bc7b73：平台高可用、按负载扩容、控制面 / 数据面分工）。本节的「每人一块 EBS、改挂即迁移」取代其中「工作区靠 git bundle 搬家」作为主路径（bundle 保留为跨可用区与备份手段）〔设计者决定〕；三者合并成一份设计与一份实施计划后再开工。
+
 ## 稳定性（2026-10-22 发现）
 
 - ~~**会话列表每行过重**~~（2026-10-24 在 feat/mvp-0.1.1 处理，未部署）：核对过侧栏、空状态页、MCP `octopus_runs` 与 CLI `search` 用到的字段后，`view=list` 只留需求的前 200 字，规划去掉说明文字（instructions、reason、intent），不再返回、也不再计算 usage、knowledge、credentials、verified；tasks 按约定保留。按 EC2 的 50 行估算：223 KB → 119 KB，gzip 后 53 KB → 15 KB。
@@ -343,3 +375,8 @@
 - **侧栏会话行与会话页的「⋯」菜单打开的对话框**（2026-10-24 终审）：它们在菜单项里直接打开对话框，记下的焦点是菜单项，关闭后仍落到页面开头；改为与 `RowActions` 相同的做法即可。
 - ~~**「管理 › 用户」改执行环境分两步**~~（2026-10-24 在控制台处理，未部署）：移出旧环境失败时对话框说明「已加入 X，但没能从 Y 移出」并重新读取列表；再点一次只重试移出，不再重复加入（此前返回 409）。中间状态仍可能出现（两个共享环境同时服务这个人），服务器一次完成的「改为」接口留待需要时再做。
 - **不可撤回的删除没有要求输入名称**：PRD §3.2 要求不可撤回的操作输入名称确认，现在 Token 撤销、仓库凭证删除、Worker 退役都只是普通确认框（写明「不能撤回」）。要不要加这一步，由负责人决定（新增的确认步骤要负责人同意）。
+
+## 执行环境登记的两处不一致（2026-10-24 设计 Worker 自助接入时发现）
+
+- `GET /v1/workers/<id>/capabilities`（刷新模型）只核对 `boundary`，引擎的健康轮询与原生入口还核对 `host_principal` 与 `isolation`。
+- 非 spare 的 Worker 登记时只与**已启用**的 Worker 比对 `boundary`：已停用 Worker 的边界可以再登记给另一个人或 Team。
