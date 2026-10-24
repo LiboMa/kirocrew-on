@@ -1,4 +1,4 @@
-import { useSyncExternalStore, type ReactNode } from "react";
+import { useRef, useSyncExternalStore, type ReactNode } from "react";
 import { MoreHorizontal, RefreshCw, Search, type LucideIcon } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import {
@@ -76,6 +76,9 @@ export function RowActions({ actions, more = [], menu }: { actions: Action[]; mo
   const narrow = useSyncExternalStore(watchNarrow, narrowNow, () => false);
   const inline = narrow ? [] : actions;
   const listed = narrow ? [...actions, ...more] : more;
+  // A menu item's step runs once the menu has closed and given the focus back to 「⋯」: a dialog it opens then returns
+  // the focus there when it closes, not to the top of the page (the menu item it would remember is gone by then).
+  const chosen = useRef<(() => void) | null>(null);
   return (
     <span className="inline-flex items-center justify-end gap-1">
       {inline.map((a) => (
@@ -89,11 +92,16 @@ export function RowActions({ actions, more = [], menu }: { actions: Action[]; mo
           <DropdownMenuTrigger asChild>
             <Button type="button" size="icon-sm" variant="ghost" aria-label={menu}><MoreHorizontal /></Button>
           </DropdownMenuTrigger>
-          <DropdownMenuContent align="end" className="w-44">
+          <DropdownMenuContent align="end" className="w-44" onCloseAutoFocus={() => {
+            const step = chosen.current;
+            chosen.current = null;
+            if (step) window.setTimeout(step);
+          }}>
             {listed.map((a, index) => [
               // One rule sets the dangerous ones apart, not one between each of them
               a.tone === "danger" && index > 0 && listed[index - 1].tone !== "danger" && <DropdownMenuSeparator key={a.label + "-rule"} />,
-              <DropdownMenuItem key={a.label} onSelect={a.onSelect} disabled={a.disabled} className={cn(a.tone === "danger" && "text-destructive")}>
+              <DropdownMenuItem key={a.label} onSelect={() => { chosen.current = a.onSelect; }} disabled={a.disabled}
+                className={cn(a.tone === "danger" && "text-destructive")}>
                 <a.icon />{a.label}{a.direct ? "" : "…"}
               </DropdownMenuItem>,
             ])}
