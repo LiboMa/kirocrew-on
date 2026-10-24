@@ -1,0 +1,342 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>KiroCrew ON 控制台：突出工作台的三种布局</title>
+<style>
+  :root {
+    --primary: #0d9488; --primary-ink: #ffffff; --accent: #e6f6f4; --accent-ink: #0f766e;
+    --bg: #f6f8f9; --card: #ffffff; --line: #e2e8f0; --ink: #0f172a; --muted: #64748b; --faint: #94a3b8;
+    --warn: #b45309; --warn-bg: #fef3c7; --ok: #047857; --ok-bg: #d1fae5; --run: #0369a1; --run-bg: #e0f2fe;
+    --r: 4px; --r-card: 6px;
+    --sans: -apple-system, BlinkMacSystemFont, "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", "Noto Sans CJK SC", sans-serif;
+    --mono: "SF Mono", Menlo, Consolas, monospace;
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: #eef1f4; color: var(--ink); font: 15px/1.65 var(--sans); }
+  .page { max-width: 1240px; margin: 0 auto; padding: 44px 24px 96px; }
+  .page > h1 { font-size: 28px; line-height: 1.3; margin: 0 0 10px; }
+  .page > p { max-width: 46em; color: #475569; margin: 0 0 10px; }
+  .lead b { color: var(--ink); }
+  section.option { margin-top: 52px; }
+  .option > header { display: grid; grid-template-columns: 1fr auto; gap: 6px 24px; align-items: end; margin-bottom: 14px; }
+  .option > header h2 { margin: 0; font-size: 22px; }
+  .option > header p { margin: 4px 0 0; color: #475569; max-width: 50em; }
+  .pick { font-size: 13px; color: var(--muted); }
+  .points { display: grid; grid-template-columns: repeat(3, 1fr); gap: 12px; margin-top: 14px; }
+  .points div { background: var(--card); border: 1px solid var(--line); border-radius: var(--r-card); padding: 12px 14px; font-size: 13.5px; }
+  .points b { display: block; font-size: 13px; margin-bottom: 2px; }
+  .points .minus b { color: var(--warn); }
+  .frame { overflow-x: auto; border: 1px solid #cfd6de; border-radius: var(--r-card); background: var(--bg); }
+
+  /* the mock console */
+  .mock { min-width: 1080px; height: 560px; display: flex; flex-direction: column; font-size: 13px; color: var(--ink); }
+  .mock .row { display: flex; min-height: 0; flex: 1; }
+  .bar { height: 52px; display: flex; align-items: center; gap: 12px; padding: 0 16px; background: var(--card); border-bottom: 1px solid var(--line); flex-shrink: 0; }
+  .brand { display: flex; align-items: center; gap: 8px; font-weight: 700; font-size: 14px; white-space: nowrap; }
+  .select { height: 30px; display: inline-flex; align-items: center; gap: 18px; padding: 0 10px; border: 1px solid var(--line); border-radius: var(--r); background: var(--card); color: var(--ink); }
+  .select::after { content: "▾"; color: var(--faint); font-size: 11px; }
+  .tabs { display: flex; gap: 2px; padding: 3px; background: #eef2f5; border-radius: var(--r-card); }
+  .tabs span { padding: 5px 16px; border-radius: var(--r); font-size: 14px; color: var(--muted); font-weight: 600; }
+  .tabs span.on { background: var(--card); color: var(--ink); box-shadow: inset 0 -2px 0 var(--primary); }
+  .tabs small { font-weight: 400; color: var(--faint); margin-left: 4px; }
+  .spacer { flex: 1; }
+  .btn { height: 30px; display: inline-flex; align-items: center; gap: 6px; padding: 0 12px; border-radius: var(--r); border: 1px solid var(--line); background: var(--card); font-weight: 600; font-size: 12.5px; white-space: nowrap; }
+  .btn.primary { background: var(--primary); color: var(--primary-ink); border-color: transparent; }
+  .quiet { color: var(--muted); font-size: 12.5px; padding: 0 6px; white-space: nowrap; }
+  .av { width: 28px; height: 28px; border-radius: var(--r); display: grid; place-items: center; background: var(--accent); color: var(--accent-ink); font: 700 11px/1 var(--mono); }
+
+  .list { width: 300px; flex-shrink: 0; background: var(--card); border-right: 1px solid var(--line); padding: 12px; display: flex; flex-direction: column; gap: 8px; overflow: hidden; }
+  .search { height: 30px; border: 1px solid var(--line); border-radius: var(--r); padding: 0 10px; display: flex; align-items: center; color: var(--faint); }
+  .chips { display: flex; flex-wrap: wrap; gap: 5px; }
+  .chips span { padding: 1px 9px; border: 1px solid var(--line); border-radius: 999px; color: var(--muted); font-size: 12px; }
+  .chips span.on { background: var(--primary); border-color: var(--primary); color: #fff; }
+  .run { padding: 8px 10px; border-radius: var(--r); border: 1px solid transparent; }
+  .run.on { border-color: rgba(13,148,136,.3); background: #f8fdfc; }
+  .run b { display: block; font-weight: 600; font-size: 12.5px; line-height: 1.45; }
+  .run .meta { display: flex; gap: 8px; align-items: center; margin-top: 4px; font-size: 11px; color: var(--muted); }
+  .tag { padding: 0 6px; border-radius: 3px; font-size: 11px; font-weight: 600; }
+  .tag.warn { background: var(--warn-bg); color: var(--warn); }
+  .tag.ok { background: var(--ok-bg); color: var(--ok); }
+  .tag.run { background: var(--run-bg); color: var(--run); }
+  .detail { flex: 1; min-width: 0; padding: 18px 22px; display: flex; flex-direction: column; gap: 12px; overflow: hidden; }
+  .card { background: var(--card); border: 1px solid var(--line); border-radius: var(--r-card); padding: 14px 16px; }
+  .detail h3 { margin: 2px 0 4px; font-size: 18px; line-height: 1.35; }
+  .crumb { font-size: 11.5px; color: var(--muted); }
+  .progress { height: 6px; background: #e5edf0; border-radius: 3px; overflow: hidden; }
+  .progress i { display: block; height: 100%; background: var(--primary); }
+  .actions { display: flex; gap: 6px; flex-wrap: wrap; margin-top: 10px; }
+  .task { display: grid; grid-template-columns: 28px 1fr auto; gap: 10px; align-items: center; padding: 9px 0; border-top: 1px solid var(--line); }
+  .task:first-of-type { border-top: 0; }
+  .task code { font: 600 11px/1 var(--mono); color: var(--muted); }
+  .task small { display: block; color: var(--muted); font-size: 11.5px; }
+
+  /* option 2: the workbench rail */
+  .rail { width: 214px; flex-shrink: 0; background: var(--card); border-right: 1px solid var(--line); display: flex; flex-direction: column; padding: 12px 10px; gap: 2px; }
+  .rail .brand { padding: 2px 6px 12px; border-bottom: 1px solid var(--line); margin-bottom: 10px; }
+  .rail .btn.primary { justify-content: center; margin: 0 2px 12px; height: 34px; font-size: 13px; }
+  .rail h5 { margin: 10px 8px 4px; font-size: 12px; font-weight: 600; color: var(--muted); }
+  .item { display: flex; align-items: center; justify-content: space-between; padding: 6px 10px; border-radius: var(--r); font-size: 13px; color: #334155; }
+  .item.on { background: var(--accent); color: var(--accent-ink); font-weight: 600; box-shadow: inset 3px 0 0 var(--primary); }
+  .item em { font-style: normal; font-size: 11.5px; color: var(--faint); }
+  .item em.warn { color: var(--warn); font-weight: 700; }
+  .rail .foot { margin-top: auto; border-top: 1px solid var(--line); padding-top: 8px; }
+  .rail .foot .item { color: var(--muted); font-size: 12.5px; }
+
+  /* option 3: the workbench home */
+  .home { flex: 1; padding: 22px 28px; display: flex; flex-direction: column; gap: 16px; overflow: hidden; }
+  .ask { background: var(--card); border: 1px solid var(--line); border-radius: var(--r-card); padding: 16px 18px; }
+  .ask h3 { margin: 0 0 10px; font-size: 20px; }
+  .field { height: 64px; border: 1.5px solid var(--primary); border-radius: var(--r-card); padding: 10px 12px; color: var(--faint); display: flex; align-items: flex-start; justify-content: space-between; }
+  .field .btn { align-self: flex-end; }
+  .ask .chips { margin-top: 10px; }
+  .cols { display: grid; grid-template-columns: 1.2fr 1fr 1fr; gap: 14px; }
+  .cols h4 { margin: 0 0 8px; font-size: 13.5px; display: flex; justify-content: space-between; }
+  .cols h4 span { color: var(--muted); font-weight: 400; }
+  .line { display: flex; justify-content: space-between; gap: 8px; padding: 7px 0; border-top: 1px solid var(--line); font-size: 12.5px; }
+  .line:first-of-type { border-top: 0; }
+  .flow { padding: 8px 0; border-top: 1px solid var(--line); }
+  .flow:first-of-type { border-top: 0; }
+  .flow b { display: block; font-size: 12.5px; }
+  .flow small { color: var(--accent-ink); font-size: 11.5px; }
+  .menu { position: absolute; right: 14px; top: 46px; width: 200px; background: var(--card); border: 1px solid var(--line); border-radius: var(--r-card); box-shadow: 0 8px 24px rgba(15,23,42,.12); padding: 6px; font-size: 13px; z-index: 2; }
+  .menu div { padding: 6px 10px; border-radius: var(--r); }
+  .menu div.sep { height: 1px; padding: 0; margin: 4px 2px; background: var(--line); }
+  .menu .who { color: var(--muted); font-size: 12px; }
+  .menu .hl { background: var(--accent); color: var(--accent-ink); font-weight: 600; }
+
+  /* the management page, the same in all three */
+  .admin { flex: 1; display: flex; min-height: 0; }
+  .secnav { width: 220px; flex-shrink: 0; background: var(--card); border-right: 1px solid var(--line); padding: 18px 12px; }
+  .secnav h4 { margin: 0 8px 12px; font-size: 16px; }
+  .content { flex: 1; padding: 20px 24px; min-width: 0; }
+  .content h3 { margin: 0; font-size: 18px; }
+  .content > p { margin: 2px 0 12px; color: var(--muted); font-size: 12.5px; }
+  table { width: 100%; border-collapse: collapse; font-size: 12.5px; }
+  th { text-align: left; font-weight: 600; color: var(--muted); padding: 8px 12px; background: #f8fafc; border-bottom: 1px solid var(--line); }
+  td { padding: 9px 12px; border-bottom: 1px solid var(--line); }
+  tr:last-child td { border-bottom: 0; }
+  .tbl { background: var(--card); border: 1px solid var(--line); border-radius: var(--r-card); overflow: hidden; }
+
+  .compare { margin-top: 56px; }
+  .compare h2 { font-size: 22px; margin: 0 0 12px; }
+  .compare table { font-size: 14px; background: var(--card); border: 1px solid var(--line); border-radius: var(--r-card); overflow: hidden; }
+  .compare th, .compare td { padding: 10px 14px; vertical-align: top; }
+  .compare th { background: #f1f5f9; color: var(--ink); }
+  .compare td:first-child { color: var(--muted); white-space: nowrap; }
+  .rec { margin-top: 18px; background: var(--card); border: 1px solid var(--line); border-left: 4px solid var(--primary); border-radius: var(--r-card); padding: 14px 18px; max-width: 60em; }
+  .rec p { margin: 4px 0; }
+  @media (max-width: 760px) { .points { grid-template-columns: 1fr; } .option > header { grid-template-columns: 1fr; } }
+</style>
+</head>
+<body>
+<main class="page">
+  <h1>突出工作台的三种布局</h1>
+  <p class="lead">负责人 2026-10-24：<b>弱化管理功能</b>，把管理放回原来的样式，突出工作台，也就是会话与工作流。<b>已选定方案一「顶栏切换」</b>，实现见视觉规范 <code>docs/design/2026-10-24-qingyan.md</code> 第 4 节。</p>
+  <p>三个方案的配色、标志、对话框和表格都和现在一样，只比较<b>导航放在哪里、谁更显眼</b>。管理与「我的设置」三个方案相同：从一个不显眼的入口进入，页面里有自己的分区导航，并有「返回工作台」，见本页末尾。</p>
+
+  <!-- ===================== 方案一 ===================== -->
+  <section class="option" id="one">
+    <header>
+      <div><h2>方案一 · 顶栏切换</h2>
+        <p>不要左侧导航。顶栏中间是醒目的「会话 / 工作流」切换，工作台占满下面的整个宽度；管理和「我的设置」退回顶栏右侧，是两个文字入口，和改版前一样。</p></div>
+      <span class="pick">最接近原来的样子</span>
+    </header>
+    <div class="frame"><div class="mock">
+      <div class="bar">
+        <span class="brand"><svg width="22" height="22" viewBox="0 0 30 30" aria-hidden="true"><rect width="14" height="14" fill="#14b8a6"/><rect x="16" width="14" height="14" fill="#334155"/><rect y="16" width="14" height="14" fill="#14b8a6"/><rect x="16" y="16" width="14" height="14" fill="#5eead4"/><polygon points="16,14 30,0 30,6 22,14" fill="#fff"/><polygon points="16,16 22,16 30,24 30,30" fill="#fff"/></svg>KiroCrew ON</span>
+        <span class="select">我的开发空间</span>
+        <span class="tabs" style="margin-left:18px"><span class="on">会话<small>106</small></span><span>工作流<small>3</small></span></span>
+        <span class="spacer"></span>
+        <span class="btn primary">＋ 新建开发</span>
+        <span class="quiet">管理</span><span class="quiet">我的设置</span>
+        <span class="av">LM</span>
+      </div>
+      <div class="row">
+        <div class="list">
+          <div class="search">搜索需求、任务说明、结论或 ID</div>
+          <div class="chips"><span class="on">全部</span><span>进行中 2</span><span>需处理 3</span><span>已完成</span><span>收藏</span></div>
+          <div class="run on"><b>AgenticOps 项目·架构·功能介绍 HTML Presentation</b><div class="meta"><span class="tag ok">已完成</span>4/4 交接<span class="spacer"></span>10/21 12:40</div></div>
+          <div class="run"><b>修复登录失败并补充回归测试</b><div class="meta"><span class="tag warn">需处理</span>1/3 交接<span class="spacer"></span>10/24 14:02</div></div>
+          <div class="run"><b>KiroCrew 功能 / 模块 / 用法全景讲解</b><div class="meta"><span class="tag run">进行中</span>2/4 交接<span class="spacer"></span>10/24 14:50</div></div>
+          <div class="run"><b>做一个介绍 ACP、A2A、MCP 等协议的对比报告</b><div class="meta"><span class="tag ok">已完成</span>4/4 交接<span class="spacer"></span>10/20 11:35</div></div>
+        </div>
+        <div class="detail">
+          <div class="card">
+            <div class="crumb">个人空间 · 自定义任务</div>
+            <h3>AgenticOps 项目·架构·功能介绍 HTML Presentation</h3>
+            <div class="progress"><i style="width:100%"></i></div>
+            <div class="actions"><span class="btn primary">续作</span><span class="btn">在 KiroCrew 中打开</span><span class="btn">预览产出</span><span class="btn">报告</span><span class="btn">共享</span></div>
+          </div>
+          <div class="card">
+            <div class="task"><code>01</code><div>素材核实与逐页规划<small>Kiro CLI · 已交接</small></div><span class="tag ok">已交接</span></div>
+            <div class="task"><code>02</code><div>撰写 HTML 演示文稿<small>Claude Code · 已交接</small></div><span class="tag ok">已交接</span></div>
+            <div class="task"><code>03</code><div>独立审查<small>Codex · 已交接</small></div><span class="tag ok">已交接</span></div>
+          </div>
+        </div>
+      </div>
+    </div></div>
+    <div class="points">
+      <div><b>工作台</b>「会话 / 工作流」是整个顶栏最醒目的东西。工作流从会话列表里的一个页签升为同级页面</div>
+      <div><b>管理</b>回到顶栏右侧的两个文字入口，进入后用原来的分区导航；手机上收进账户菜单</div>
+      <div class="minus"><b>代价</b>「需处理」仍是会话列表里的一个筛选，要先进会话页再点；顶栏在窄屏上更挤</div>
+    </div>
+  </section>
+
+  <!-- ===================== 方案二 ===================== -->
+  <section class="option" id="two">
+    <header>
+      <div><h2>方案二 · 工作台侧栏</h2>
+        <p>保留左侧导航，但里面只放工作台：会话按状态分组（需处理、进行中……），工作流按来源分组。管理和设置合成侧栏底部一个灰色的「管理与设置」。</p></div>
+      <span class="pick">工作台最显眼</span>
+    </header>
+    <div class="frame"><div class="mock">
+      <div class="row">
+        <div class="rail">
+          <span class="brand"><svg width="22" height="22" viewBox="0 0 30 30" aria-hidden="true"><rect width="14" height="14" fill="#14b8a6"/><rect x="16" width="14" height="14" fill="#334155"/><rect y="16" width="14" height="14" fill="#14b8a6"/><rect x="16" y="16" width="14" height="14" fill="#5eead4"/><polygon points="16,14 30,0 30,6 22,14" fill="#fff"/><polygon points="16,16 22,16 30,24 30,30" fill="#fff"/></svg>KiroCrew ON</span>
+          <span class="btn primary">＋ 新建开发</span>
+          <h5>会话</h5>
+          <span class="item on">需处理 <em class="warn">3</em></span>
+          <span class="item">进行中 <em>2</em></span>
+          <span class="item">全部 <em>106</em></span>
+          <span class="item">置顶 <em>1</em></span>
+          <span class="item">收藏 <em>4</em></span>
+          <span class="item">共享给我 <em>2</em></span>
+          <h5>工作流</h5>
+          <span class="item">我的工作流 <em>3</em></span>
+          <span class="item">参考模板 <em>2</em></span>
+          <div class="foot"><span class="item">⚙ 管理与设置</span><span class="item">◐ 深色模式</span></div>
+        </div>
+        <div style="flex:1;display:flex;flex-direction:column;min-width:0">
+          <div class="bar"><span class="select">我的开发空间</span><span class="spacer"></span><span class="av">LM</span></div>
+          <div class="row">
+            <div class="list" style="width:290px">
+              <div class="search">在「需处理」中搜索</div>
+              <div class="run on"><b>修复登录失败并补充回归测试</b><div class="meta"><span class="tag warn">需处理</span>协调者需要你处理阻塞<span class="spacer"></span>14:02</div></div>
+              <div class="run"><b>导出报表在 Safari 上错位</b><div class="meta"><span class="tag warn">需处理</span>等待批准诊断<span class="spacer"></span>13:10</div></div>
+              <div class="run"><b>私有仓库的会话准备源码失败</b><div class="meta"><span class="tag warn">需处理</span>凭证不可用<span class="spacer"></span>昨天</div></div>
+            </div>
+            <div class="detail">
+              <div class="card">
+                <div class="crumb">个人空间 · 完整研发链</div>
+                <h3>修复登录失败并补充回归测试</h3>
+                <div class="progress"><i style="width:33%"></i></div>
+                <div class="actions"><span class="btn primary">处理阻塞</span><span class="btn">续作</span><span class="btn">在 KiroCrew 中打开</span></div>
+              </div>
+              <div class="card">
+                <div class="task"><code>01</code><div>分析需求与定位<small>Kiro CLI · 已交接</small></div><span class="tag ok">已交接</span></div>
+                <div class="task"><code>02</code><div>实现修复与回归测试<small>Claude Code · 交接缺失</small></div><span class="tag warn">需处理</span></div>
+                <div class="task"><code>03</code><div>独立审查<small>Codex · 等待</small></div><span class="tag">等待</span></div>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div></div>
+    <div class="points">
+      <div><b>工作台</b>打开就是「需处理」，一眼看到要我做什么；会话的状态、置顶、收藏、共享都是侧栏条目，会话列表里不再放一排筛选</div>
+      <div><b>管理</b>侧栏底部只剩一个灰色入口，管理员和普通成员看到的都是这一个；进入后用原来的分区导航</div>
+      <div class="minus"><b>代价</b>三栏布局，1280 像素以下侧栏要收成图标；改动比方案一多（侧栏要接会话筛选）</div>
+    </div>
+  </section>
+
+  <!-- ===================== 方案三 ===================== -->
+  <section class="option" id="three">
+    <header>
+      <div><h2>方案三 · 工作台首页</h2>
+        <p>新增一个「工作台」首页：上面是大输入框，一句话开始开发；下面是需要你处理的、进行中的、常用的工作流。管理和设置只放在账户菜单里，最不显眼。</p></div>
+      <span class="pick">管理最弱、上手最快</span>
+    </header>
+    <div class="frame"><div class="mock" style="position:relative">
+      <div class="bar">
+        <span class="brand"><svg width="22" height="22" viewBox="0 0 30 30" aria-hidden="true"><rect width="14" height="14" fill="#14b8a6"/><rect x="16" width="14" height="14" fill="#334155"/><rect y="16" width="14" height="14" fill="#14b8a6"/><rect x="16" y="16" width="14" height="14" fill="#5eead4"/><polygon points="16,14 30,0 30,6 22,14" fill="#fff"/><polygon points="16,16 22,16 30,24 30,30" fill="#fff"/></svg>KiroCrew ON</span>
+        <span class="tabs" style="margin-left:18px"><span class="on">工作台</span><span>会话<small>106</small></span><span>工作流<small>3</small></span></span>
+        <span class="spacer"></span>
+        <span class="select">我的开发空间</span>
+        <span class="av">LM</span>
+      </div>
+      <div class="menu">
+        <div class="who">admin · 平台管理员</div><div class="sep"></div>
+        <div class="hl">管理</div><div>我的设置</div><div>修改密码</div><div>打开经典控制台</div><div class="sep"></div><div>退出登录</div>
+      </div>
+      <div class="home">
+        <div class="ask" style="max-width:780px">
+          <h3>今天要做什么？</h3>
+          <div class="field">说一句需求，例如「做一个番茄钟，Codex 审查」<span class="btn primary">开始开发</span></div>
+          <div class="chips"><span>完整研发链</span><span>最小实现与审查</span><span>让 KiroCrew 推荐</span></div>
+        </div>
+        <div class="cols">
+          <div class="card"><h4>需要你处理 <span>3</span></h4>
+            <div class="line"><span>修复登录失败并补充回归测试</span><span class="tag warn">阻塞</span></div>
+            <div class="line"><span>导出报表在 Safari 上错位</span><span class="tag warn">待批准</span></div>
+            <div class="line"><span>私有仓库的会话准备源码失败</span><span class="tag warn">凭证</span></div>
+          </div>
+          <div class="card"><h4>进行中 <span>2</span></h4>
+            <div class="line"><span>KiroCrew 功能 / 模块全景讲解</span><span>2/4</span></div>
+            <div class="progress"><i style="width:50%"></i></div>
+            <div class="line"><span>Agent 知识库与记忆系统调研</span><span>1/4</span></div>
+            <div class="progress"><i style="width:25%"></i></div>
+          </div>
+          <div class="card"><h4>常用工作流 <span>3</span></h4>
+            <div class="flow"><b>完整研发链</b><small>Kiro CLI → Claude Code → Codex → Claude Code</small></div>
+            <div class="flow"><b>最小实现与审查</b><small>Claude Code → Codex</small></div>
+          </div>
+        </div>
+      </div>
+    </div></div>
+    <div class="points">
+      <div><b>工作台</b>首页就是工作台本身，新人第一眼就知道从哪开始；会话、工作流是同级的两个页面</div>
+      <div><b>管理</b>只在账户菜单里（图中打开的样子），日常完全看不到；进入后用原来的分区导航</div>
+      <div class="minus"><b>代价</b>多一个首页要做；管理员进管理要点两下；天天用的人可能直接去「会话」，首页用得少</div>
+    </div>
+  </section>
+
+  <!-- ===================== 管理页 ===================== -->
+  <section class="option" id="admin">
+    <header>
+      <div><h2>管理与「我的设置」（三个方案相同）</h2>
+        <p>回到原来的样式：页面左边是它自己的分区导航，标题写「管理」或「我的设置」，顶栏左侧有「返回工作台」。分区里的表格和对话框沿用这次改好的样子。</p></div>
+    </header>
+    <div class="frame"><div class="mock" style="height:420px">
+      <div class="bar">
+        <span class="brand"><svg width="22" height="22" viewBox="0 0 30 30" aria-hidden="true"><rect width="14" height="14" fill="#14b8a6"/><rect x="16" width="14" height="14" fill="#334155"/><rect y="16" width="14" height="14" fill="#14b8a6"/><rect x="16" y="16" width="14" height="14" fill="#5eead4"/><polygon points="16,14 30,0 30,6 22,14" fill="#fff"/><polygon points="16,16 22,16 30,24 30,30" fill="#fff"/></svg>KiroCrew ON</span>
+        <span class="btn">← 返回工作台</span>
+        <span class="spacer"></span><span class="btn primary">＋ 新建开发</span><span class="av">LM</span>
+      </div>
+      <div class="admin">
+        <div class="secnav">
+          <h4>管理</h4>
+          <span class="item">概览</span><span class="item">执行环境</span><span class="item on">用户</span><span class="item">Team</span><span class="item">接入与凭证</span><span class="item">并发上限</span>
+        </div>
+        <div class="content">
+          <div style="display:flex;justify-content:space-between;align-items:flex-start"><div><h3>用户</h3><p>停用或重设密码会让该用户的全部 Token 立即失效。</p></div><span class="btn primary">＋ 新建用户</span></div>
+          <div class="tbl"><table>
+            <tr><th>用户名</th><th>状态</th><th>所在 Team</th><th>执行环境</th><th>最近登录</th><th style="text-align:right">操作</th></tr>
+            <tr><td>admin <span class="tag ok">管理员</span></td><td>● 有效</td><td>平台组（owner）</td><td>共享环境 · personal</td><td>10/24 15:20</td><td style="text-align:right;color:var(--muted)">重设密码 · 加入 Team · ⋯</td></tr>
+            <tr><td>dev1</td><td>● 有效</td><td>平台组</td><td>专属环境 · dev1</td><td>10/23 18:02</td><td style="text-align:right;color:var(--muted)">重设密码 · 加入 Team · ⋯</td></tr>
+          </table></div>
+        </div>
+      </div>
+    </div></div>
+  </section>
+
+  <section class="compare">
+    <h2>对比</h2>
+    <table>
+      <tr><th></th><th>方案一 · 顶栏切换</th><th>方案二 · 工作台侧栏</th><th>方案三 · 工作台首页</th></tr>
+      <tr><td>工作台在哪</td><td>顶栏中间「会话 / 工作流」</td><td>左侧整条侧栏</td><td>首页，加顶栏「工作台 / 会话 / 工作流」</td></tr>
+      <tr><td>管理入口</td><td>顶栏右侧文字「管理」「我的设置」</td><td>侧栏底部一个灰色「管理与设置」</td><td>只在账户菜单里</td></tr>
+      <tr><td>打开后先看到</td><td>会话列表与最近一个会话</td><td>「需处理」的会话</td><td>输入框、需要你处理的、进行中的</td></tr>
+      <tr><td>窄屏</td><td>顶栏变挤，切换变成图标</td><td>侧栏收成图标或抽屉</td><td>首页各栏改成上下排列</td></tr>
+      <tr><td>改动量</td><td>小：拆掉侧栏，恢复原来的管理页外框，工作流升为页面</td><td>中：侧栏改接会话筛选与工作流分组</td><td>较大：新做首页，另两项同方案一</td></tr>
+      <tr><td>适合</td><td>天天用、习惯原来布局的人</td><td>同时盯着好几个会话的人</td><td>新成员多、希望一句话就开始的团队</td></tr>
+    </table>
+    <div class="rec">
+      <p><b>我的建议：方案一。</b>它最直接地满足「弱化管理、回到原来的样式」：管理退回成两个文字入口，工作台占满宽度；工作流第一次和会话并列，成为一级页面；改动也最小。</p>
+      <p>如果你更在意「打开就知道要处理什么」，选方案二；如果团队里新人多、想让第一屏就能开始开发，选方案三。</p>
+    </div>
+  </section>
+</main>
+</body>
+</html>

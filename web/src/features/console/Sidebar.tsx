@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 import { useQueryClient } from "@tanstack/react-query";
-import { MoreHorizontal, Pin, Plus, Search, Star } from "lucide-react";
+import { MoreHorizontal, Pin, Search, Star } from "lucide-react";
 import { toast } from "sonner";
 import { api } from "@/api/client";
 import { keys, usePinnedRuns } from "@/api/hooks";
@@ -11,7 +11,6 @@ import {
 } from "@/components/ui/dropdown-menu";
 import { Input } from "@/components/ui/input";
 import { ScrollArea } from "@/components/ui/scroll-area";
-import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { StatusBadge } from "@/components/StatusBadge";
 import { useConsole } from "@/features/console/context";
 import { RunFilters } from "@/features/console/RunFilters";
@@ -71,7 +70,7 @@ function SessionRow({ run, where }: { run: Run; where: string | null }) {
 }
 
 export function Sidebar() {
-  const { runs, workflows, open, users, me, allTeams, allSessions, setAllSessions, sharedSessions,
+  const { runs, users, me, allTeams, allSessions, setAllSessions, sharedSessions,
     setSharedSessions, filters, setFilters, space,
     spaceTotal, hasMore, loadMore, loadingMore, listError } = useConsole();
   const found = usePinnedRuns(allSessions || sharedSessions ? null : space, allSessions).data;
@@ -91,15 +90,8 @@ export function Sidebar() {
     ? ` · ${run.access.role === "collaborator" ? "协作" : "查看"}${run.access.by ? ` · 由 ${run.access.by} 共享` : ""}` : "") : null);
 
   return (
-    <Tabs defaultValue="sessions" className="flex min-h-0 flex-1 flex-col gap-0">
-      <div className="px-4 pt-4 pb-3">
-        <TabsList className="w-full">
-          <TabsTrigger value="sessions">会话 <span className="text-muted-foreground">{spaceTotal}</span></TabsTrigger>
-          <TabsTrigger value="workflows">工作流 <span className="text-muted-foreground">{workflows.length}</span></TabsTrigger>
-        </TabsList>
-      </div>
-      <TabsContent value="sessions" className="flex min-h-0 flex-1 flex-col">
-        <div className="space-y-3 px-4 pb-3">
+    <div className="flex min-h-0 flex-1 flex-col">
+        <div className="space-y-3 px-4 pt-4 pb-3">
           <div className="relative">
             <Search className="pointer-events-none absolute top-2.5 left-2.5 size-4 text-muted-foreground" aria-hidden />
             <Input value={query} onChange={(e) => setQuery(e.target.value)} placeholder="搜索需求、任务说明、结论或 ID"
@@ -154,28 +146,6 @@ export function Sidebar() {
             )}
           </nav>
         </ScrollArea>
-      </TabsContent>
-      <TabsContent value="workflows" className="flex min-h-0 flex-1 flex-col">
-        <div className="px-4 pb-3">
-          <Button variant="outline" size="sm" className="w-full" id="new-flow"
-            onClick={() => open({ kind: "workflow", flow: null })}><Plus /> 新建工作流</Button>
-        </div>
-        <ScrollArea className="min-h-0 flex-1">
-          <nav id="flow-list" aria-label="工作流库" className="space-y-1 px-2 pb-4">
-            {workflows.map((flow) => (
-              <button key={flow.id} type="button" data-flow={flow.id} onClick={() => open({ kind: "workflow", flow })}
-                className="w-full rounded-lg px-3 py-2.5 text-left transition-colors hover:bg-card">
-                <strong className="block truncate text-[13px] font-medium">{flow.name}</strong>
-                <small className="text-[11px] text-muted-foreground">
-                  v{flow.version} · {flow.steps.length} Tasks · {flow.owner_id === me.id ? "我的" :
-                    users.find((u) => u.id === flow.owner_id)?.username ?? "已共享"}{flow.archived ? " · 已归档" : ""}
-                </small>
-              </button>
-            ))}
-            {!workflows.length && <p className="px-3 py-6 text-center text-xs text-muted-foreground">从模板构建你的第一个工作流。</p>}
-          </nav>
-        </ScrollArea>
-      </TabsContent>
-    </Tabs>
+    </div>
   );
 }

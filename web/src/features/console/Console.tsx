@@ -4,7 +4,6 @@ import { ApiError } from "@/api/client";
 import { useMe, useRun, useRunCount, useRunPages, useWorkspace } from "@/api/hooks";
 import { Sheet, SheetContent, SheetTitle } from "@/components/ui/sheet";
 import { AdminPage } from "@/features/admin/AdminPage";
-import { AppRail, useRailCollapsed } from "@/features/console/AppRail";
 import { ConsoleContext, type ConsoleState, type Dialog, type Page } from "@/features/console/context";
 import { DialogHost } from "@/features/console/DialogHost";
 import { EmptyState } from "@/features/console/EmptyState";
@@ -12,11 +11,12 @@ import { Sidebar } from "@/features/console/Sidebar";
 import { TopBar } from "@/features/console/TopBar";
 import { SessionView } from "@/features/sessions/SessionView";
 import { SettingsPage } from "@/features/settings/SettingsPage";
+import { WorkflowsPage } from "@/features/workflows/WorkflowsPage";
 import { elevated } from "@/lib/access";
 import { EMPTY_FILTERS, filterParams, filtersFromUrl, listParams, writeUrl, type RunListFilters } from "@/lib/runList";
 
 const runFromUrl = () => new URLSearchParams(window.location.search).get("run");
-const PAGES: Page[] = ["sessions", "admin", "settings"];
+const PAGES: Page[] = ["sessions", "workflows", "admin", "settings"];
 const pageFromUrl = (): Page => {
   const view = new URLSearchParams(window.location.search).get("view") as Page | null;
   return view && PAGES.includes(view) ? view : "sessions";
@@ -39,8 +39,6 @@ export function Console() {
   const [section, setSection] = useState(sectionFromUrl);
   const [dialog, setDialog] = useState<Dialog | null>(null);
   const [navOpen, setNavOpen] = useState(false);
-  const [railOpen, setRailOpen] = useState(false);   // the navigation on a narrow screen
-  const [railCollapsed, toggleRail] = useRailCollapsed();
   // D56: the list is filtered and paged on the server; the filters live in the address bar too.
   const [filters, setFiltersState] = useState<RunListFilters>(() => filtersFromUrl(window.location.search));
   const scope = allSessions || sharedSessions ? null : space;
@@ -62,7 +60,6 @@ export function Console() {
     setPage(next);
     setSection(part);
     setNavOpen(false);
-    setRailOpen(false);
     writeUrl(next === "sessions" ? { view: null, section: null } : { view: next, section: part || null });
   }, []);
 
@@ -124,33 +121,23 @@ export function Console() {
 
   return (
     <ConsoleContext.Provider value={value}>
-      <div className="flex h-svh">
-        <aside className="hidden shrink-0 border-r lg:flex">
-          <AppRail collapsed={railCollapsed} onCollapse={toggleRail} />
-        </aside>
-        <div className="flex min-w-0 flex-1 flex-col">
-          <TopBar onNav={() => setRailOpen(true)} onList={() => setNavOpen(true)} />
-          {value.page === "admin" ? <AdminPage /> : value.page === "settings" ? <SettingsPage /> : (
-            <div className="flex min-h-0 flex-1">
-              <aside className="hidden w-72 shrink-0 border-r bg-sidebar md:flex md:flex-col xl:w-80">
-                <Sidebar />
-              </aside>
-              <main className="min-w-0 flex-1 overflow-y-auto" id="console-main">
-                {selected ? <SessionView key={selected} id={selected} /> : <EmptyState />}
-              </main>
-            </div>
-          )}
-        </div>
+      <div className="flex h-svh flex-col">
+        <TopBar onList={() => setNavOpen(true)} />
+        {value.page === "admin" ? <AdminPage /> : value.page === "settings" ? <SettingsPage />
+          : value.page === "workflows" ? <WorkflowsPage /> : (
+          <div className="flex min-h-0 flex-1">
+            <aside className="hidden w-80 shrink-0 border-r bg-sidebar md:flex md:flex-col">
+              <Sidebar />
+            </aside>
+            <main className="min-w-0 flex-1 overflow-y-auto" id="console-main">
+              {selected ? <SessionView key={selected} id={selected} /> : <EmptyState />}
+            </main>
+          </div>
+        )}
       </div>
-      <Sheet open={railOpen} onOpenChange={setRailOpen}>
-        <SheetContent side="left" className="w-auto gap-0 p-0">
-          <SheetTitle className="sr-only">导航</SheetTitle>
-          <AppRail />
-        </SheetContent>
-      </Sheet>
       <Sheet open={navOpen} onOpenChange={setNavOpen}>
         <SheetContent side="left" className="w-[88vw] max-w-sm gap-0 bg-sidebar p-0">
-          <SheetTitle className="sr-only">会话与工作流</SheetTitle>
+          <SheetTitle className="sr-only">会话列表</SheetTitle>
           <Sidebar />
         </SheetContent>
       </Sheet>
