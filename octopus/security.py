@@ -89,16 +89,20 @@ def issue_token(db, user, scopes=None, label="API", ttl=86400, expires_in=None):
     return value
 
 
-def regenerate_token(db, user, tid, expires_in=None, current=None):
+def regenerate_token(db, user, tid, expires_in=None, current=None, allowed=None):
     """Owner 2026-10-24: the same token entry (name, scopes) with a new secret, shown once; the old secret stops at once.
     Its expiry stays unless ``expires_in`` chooses a new lifetime (as issue_token's, admin at most 30 days). The token the
-    request itself signs in with (``current``) is refused: regenerating it would sign the person out."""
+    request itself signs in with (``current``) is refused: regenerating it would sign the person out. As when a token is
+    issued, the request's own scopes (``allowed``) bound what it may get: a manage-only token must not obtain the value of
+    the same person's admin token (A3)."""
     row = db.execute("SELECT id,label,scopes,expires FROM tokens WHERE id=? AND user_id=? AND expires>?",
                      (tid, user, time.time())).fetchone()
     require(row is not None, "Token 不存在或已失效", 404, "not_found")
     require(tid != current, "这是你当前登录正在使用的 Token：重新生成会让你立刻退出。请退出后重新登录，或在别的客户端里操作", 409,
             "token_in_use")
     scopes = json.loads(row["scopes"])
+    require(allowed is None or set(scopes) <= set(allowed), "不能扩大 Token scope：这枚 Token 的权限超出当前登录的权限", 403,
+            "forbidden")
     expires = row["expires"]
     if expires_in is not None:
         require(isinstance(expires_in, str) and expires_in in EXPIRIES, "有效期 expires_in 须为 7d、30d、365d 或 never")

@@ -630,7 +630,7 @@ def server(database, port=8918, host="127.0.0.1", allowed_hosts=(), origin_secre
                     require(isinstance(body, dict) and set(body) <= {"expires_in"}, "只接受 expires_in")
                     with database.transaction() as db:
                         return self.respond(regenerate_token(db, actor["id"], segments[2], body.get("expires_in"),
-                                                             actor.get("token_id")))
+                                                             actor.get("token_id"), actor["scopes"]))
                 if len(segments) == 3 and segments[:2] == ["v1", "tokens"] and method == "DELETE":
                     with database.transaction() as db:
                         db.execute("DELETE FROM tokens WHERE id=? AND user_id=?", (segments[2], actor["id"]))

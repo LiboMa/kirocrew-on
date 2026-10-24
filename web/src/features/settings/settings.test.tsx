@@ -354,6 +354,19 @@ describe("settings", () => {
     expect(await screen.findByText("已恢复 Team 平台组")).toBeInTheDocument();
   });
 
+  test("an archived Team without an execution environment can still be given one (review 2026-10-24)", async () => {
+    const calls = start({
+      "GET /teams": [{ id: "team-1", name: "平台组", role: "owner", created: 1, members: [], environment: null, archived: 1 }],
+      "GET /workers": [{ id: "w1", name: "personal", owner_id: "u1", team_id: null, enabled: true, scope: "shared",
+        spaces: [{ user_id: "u1" }], capabilities: {} }],
+      "POST /teams/team-1/environment": { id: "team-1" },
+    });
+    const section = await openTeams();
+    const dialog = await teamMenu(section, "平台组", "分配执行环境", "分配执行环境");
+    await userEvent.click(within(dialog).getByRole("button", { name: "分配执行环境" }));
+    await waitFor(() => expect(calls.find((c) => c.path === "/v1/teams/team-1/environment")?.body).toEqual({ worker_id: "w1" }));
+  });
+
   test("a member leaves a Team and sees none of its management", async () => {
     const calls = start({
       "GET /me": { id: "u1", username: "fixture-owner", admin: 0, scopes: ["read", "execute", "manage"] },

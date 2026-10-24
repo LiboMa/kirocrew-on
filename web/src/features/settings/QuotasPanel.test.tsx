@@ -77,6 +77,21 @@ describe("limits on running tasks (D61)", () => {
     expect(await screen.findByText("已移除上限：bob")).toBeInTheDocument();
   });
 
+  test("removing a person's limit that the server refuses keeps the dialog open with the reason (review 2026-10-24)", async () => {
+    const { panel } = await openQuotas({ "POST /quotas": () => new Response(JSON.stringify({ error: "需要 admin 权限", code: "forbidden" }),
+      { status: 403 }) });
+    await userEvent.click(within(row(panel, "user:u2")).getByRole("button", { name: "上限操作：bob" }));
+    await userEvent.click(await screen.findByRole("menuitem", { name: "移除上限…" }));
+    const confirm = await screen.findByRole("dialog", { name: "移除上限" });
+    const toasts = () => screen.queryAllByText("已移除上限：bob").length;   // sonner's toasts are global: one may remain from before
+    const before = toasts();
+    await userEvent.click(within(confirm).getByRole("button", { name: "移除上限" }));
+    expect(await within(confirm).findByRole("alert")).toHaveTextContent("需要 admin 权限");
+    expect(screen.getByRole("dialog", { name: "移除上限" })).toBeInTheDocument();
+    expect(toasts()).toBe(before);   // no success claimed
+    expect(row(panel, "user:u2")).toBeInTheDocument();
+  });
+
   test("a person's own limit is checked before it is sent, and a refusal keeps the choice (D61 minors)", async () => {
     const { calls, panel } = await openQuotas({ "POST /quotas": new Response(JSON.stringify({ error: "用户不存在或已停用", code: "not_found" }),
       { status: 404 }) });

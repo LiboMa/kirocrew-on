@@ -51,11 +51,12 @@ export function TopBar({ onNav, onList }: { onNav: () => void; onList: () => voi
         </Button>
       )}
       {place ? (
-        <p className="min-w-0 truncate text-sm">
+        // The page's one level-1 heading (a Session's page has its own): 管理 / 用户
+        <h1 className="min-w-0 truncate text-sm font-normal">
           <span className="text-muted-foreground">{place[0]}</span>
           <span aria-hidden className="mx-2 text-muted-foreground/60">/</span>
           <strong className="font-medium">{place[1]}</strong>
-        </p>
+        </h1>
       ) : (
         <Select value={space || PERSONAL} onValueChange={(value) => setSpace(value === PERSONAL ? "" : value)}>
           <SelectTrigger aria-label="开发空间" className="h-8 w-auto max-w-[52vw] min-w-32 sm:min-w-44">

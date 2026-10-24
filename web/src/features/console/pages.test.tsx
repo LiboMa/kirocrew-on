@@ -30,7 +30,7 @@ describe("the navigation, 管理 and 我的设置", () => {
     expect(within(screen.getByRole("navigation", { name: "工作台" })).getByRole("link", { name: "会话" })).toHaveAttribute("aria-current", "page");
     await userEvent.click(within(nav).getByRole("link", { name: "概览" }));
     expect(await panel("概览")).toBeInTheDocument();
-    expect(screen.getByText("概览", { selector: "header strong" }).parentElement).toHaveTextContent("管理/概览");
+    expect(screen.getByRole("heading", { level: 1 })).toHaveTextContent("管理/概览");
     await userEvent.click(within(nav).getByRole("link", { name: "用户" }));
     expect(within(nav).getByRole("link", { name: "用户" })).toHaveAttribute("aria-current", "page");
     expect(within(nav).getByRole("link", { name: "概览" })).not.toHaveAttribute("aria-current");

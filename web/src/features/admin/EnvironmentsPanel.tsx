@@ -412,12 +412,15 @@ function RegisterDialog({ refresh, onClose }: { refresh: () => Promise<unknown>;
 }
 
 /** 编辑 (spec §6.1): a Worker's name, and — after its host is replaced or its token rotated — its connection. The
- * connection is kept unless a new token is given; a new address alone is refused, as the server needs both. */
+ * connection is kept unless a new token is given; a new address alone is refused, as the server needs both. The
+ * address shown follows the environments' answer until it is edited: the dialog may open before every Worker has been
+ * probed (seconds when one is unreachable), and an address the person never touched is not a new one. */
 function EditDialog({ worker, url: current, refresh, onClose }: {
   worker: Worker; url: string; refresh: () => Promise<unknown>; onClose: (saved?: string) => void;
 }) {
   const [title, setTitle] = useState(worker.name);
-  const [url, setUrl] = useState(current);
+  const [edited, setUrl] = useState<string | null>(null);
+  const url = edited ?? current;
   const [secret, setSecret] = useState("");
   const base = "/workers/" + encodeURIComponent(worker.id);
   return (
