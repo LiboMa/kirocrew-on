@@ -46,8 +46,8 @@
 <body>
 <main>
 <h1>KiroCrew ON MVP 0.1.1：版本说明</h1>
-<p>日期：2026-10-24　·　分支 <code>feat/mvp-0.1.1</code>（PR #5），基于 main <code>fe49f81</code>（EC2 当时运行 <code>12fbd9f</code>）　·　HTML 版：[<code>docs/KiroCrew-ON-MVP-0.1.1.html</code>](KiroCrew-ON-MVP-0.1.1.html)</p>
-<p>产品是什么、给谁用、整体流程，见 [MVP 0.1.0：产品、流程与架构](MVP-0.1.0.md)。本文只写 0.1.1 相对 0.1.0 的变化。</p>
+<p>日期：2026-10-24　·　分支 <code>feat/mvp-0.1.1</code>（PR #5），基于 main <code>fe49f81</code>（EC2 当时运行 <code>12fbd9f</code>）　·　HTML 版：<a href="KiroCrew-ON-MVP-0.1.1.html"><code>docs/KiroCrew-ON-MVP-0.1.1.html</code></a></p>
+<p>产品是什么、给谁用、整体流程，见 <a href="MVP-0.1.0.md">MVP 0.1.0：产品、流程与架构</a>。本文只写 0.1.1 相对 0.1.0 的变化。</p>
 <h2>1．这一版做了什么</h2>
 <div class="table"><table><thead><tr><th>方面</th><th>变化</th></tr></thead><tbody><tr><td><strong>前端优化</strong></td><td>控制台整体改版：左侧分组导航、浅色 / 深色主题、新标志；管理与「我的设置」的列表都改成表格，新增、修改、危险操作都在对话框里完成</td></tr><tr><td><strong>Token 重新生成</strong></td><td>已有的 API Token 可以换一个新值，名称和权限不变，旧值立即失效</td></tr><tr><td><strong>在 KiroCrew 聊天里协作（D73 补充）</strong></td><td>续作时提醒聊天里改过的文件；聊天里新建的文件也会被认出，续作前一并提交</td></tr><tr><td><strong>门禁与提示（D57 补充）</strong></td><td>提示写清发生了什么、是谁的问题、建议怎么做；门禁显示中文名，检查分为必过和建议两类；打码与审查撤回做了多处修正</td></tr><tr><td><strong>性能</strong></td><td>会话列表的数据量减少约一半，gzip 后约减少 70%</td></tr><tr><td><strong>可用性</strong></td><td>对话框关闭后，焦点回到打开它的按钮；手机上行操作收进「⋯」</td></tr></tbody></table></div>
 <h2>2．前端优化</h2>
@@ -82,7 +82,7 @@
 <h2>8．验证</h2>
 <div class="table"><table><thead><tr><th>项目</th><th>结果</th></tr></thead><tbody><tr><td>完整回归 <code>tools/regress.sh</code>（根目录的旧测试、<code>tests/</code> 下的 Python 测试、web 测试与构建）</td><td>通过，Python 测试 1893 条</td></tr><tr><td>控制台单元测试（Vitest）</td><td>31 个文件、323 条通过</td></tr><tr><td>浏览器测试（真实 HTTP + SQLite，不连原生 Worker）</td><td>7 个文件、143 项检查通过，包括重新生成后「新值可用、旧值 401」、深色模式刷新后保持、窄屏打开导航</td></tr><tr><td>截图检查</td><td>1280 像素逐页、深色模式、390 像素（无横向溢出）</td></tr><tr><td>代码审查</td><td>两轮独立审查，发现的严重与重要问题都已修复并补测试</td></tr><tr><td>发布前扫描</td><td>干净克隆里 git-defender scan 与 scan-history 无密钥</td></tr><tr><td>EC2 实测</td><td>合并后部署，结果补在这里</td></tr></tbody></table></div>
 <h2>9．已知问题与后续</h2>
-<p>已记入 [BACKLOG](BACKLOG.md)：</p>
+<p>已记入 <a href="BACKLOG.md">BACKLOG</a>：</p>
 <ul><li>侧栏会话行和会话页的「⋯」菜单打开的对话框，关闭后焦点仍落到页面开头（管理与设置页已修好）。</li><li>撤销 Token、删除凭证、退役 Worker 这类不可撤回的操作，只用普通确认框，写明「不能撤回」，没有要求输入名称。要不要加，由负责人决定。</li><li>改执行环境仍然分「加入新环境」「移出旧环境」两步。移出失败时，对话框会说明情况，再点一次只重试移出。服务器端一次完成的接口留待需要时再做。</li></ul>
 </main>
 </body>

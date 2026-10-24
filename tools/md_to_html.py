@@ -53,7 +53,24 @@ STYLE = """
 """
 
 
+LINK = re.compile(r"\[([^\]]+)\]\(([^)\s]+)\)")
+
+
 def inline(text):
+    """A line's code, bold, line breaks and links; a link's text may hold code. Only relative and http(s) targets link."""
+    out, at = [], 0
+    for match in LINK.finditer(text):
+        label, target = match.groups()
+        if re.match(r"^[a-z][a-z0-9+.-]*:", target, re.I) and not re.match(r"^https?://", target, re.I):
+            continue   # javascript: and the like stay text
+        out.append(spans(text[at:match.start()]))
+        out.append(f'<a href="{html.escape(target)}">{spans(label)}</a>')
+        at = match.end()
+    out.append(spans(text[at:]))
+    return "".join(out)
+
+
+def spans(text):
     parts = re.split(r"(`[^`]+`)", text)
     out = []
     for part in parts:
