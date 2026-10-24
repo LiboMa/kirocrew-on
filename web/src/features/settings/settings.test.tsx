@@ -59,6 +59,7 @@ describe("settings", () => {
     await userEvent.click(within(issued).getByRole("button", { name: "我已保存" }));
     await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
     expect(screen.queryByText("oct_secret_value")).toBeNull();   // never shown again
+    await waitFor(() => expect(within(section).getByRole("button", { name: "新建 Token" })).toHaveFocus());   // through both screens
     const row = await within(section).findByText("Claude Code");
     expect(row.closest("[data-token-row]")).toHaveAttribute("data-fresh", "true");   // the new row is lit up
     expect(await screen.findByText("已创建 Token Claude Code")).toBeInTheDocument();
@@ -109,6 +110,7 @@ describe("settings", () => {
     await userEvent.click(within(issued).getByRole("button", { name: "我已保存" }));
     await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
     expect(screen.queryByText("oct_new_value")).toBeNull();
+    await waitFor(() => expect(within(section).getByRole("button", { name: "重新生成 Token：claude MCP" })).toHaveFocus());
     expect((await within(section).findByText("claude MCP")).closest("[data-token-row]")).toHaveAttribute("data-fresh", "true");
     expect(await screen.findByText("已重新生成 Token claude MCP")).toBeInTheDocument();
   });

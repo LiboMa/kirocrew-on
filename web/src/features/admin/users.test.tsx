@@ -288,6 +288,30 @@ describe("管理 › 用户", () => {
     expect(posted(calls, "/workers/w1/spaces", "DELETE")).toHaveLength(2);
   });
 
+  test("改执行环境 reopened after a partial move does not join twice (review 2026-10-24)", async () => {
+    let joined = false;
+    let left = 0;
+    const calls = start({
+      "GET /workers": () => WORKERS.map((w) => (w.id === "w3" && joined ? { ...w, spaces: [{ user_id: "u2" }] } : w)),
+      "POST /workers/w3/spaces": () => { joined = true; return { ok: true }; },
+      "DELETE /workers/w1/spaces": () => (left++ === 0 ? new Response(JSON.stringify({ error: "服务暂不可用", code: "x" }), { status: 503 })
+        : { ok: true }),
+      "DELETE /workers/w3/spaces": { ok: true },
+      "POST /workers/w1/spaces": () => new Response(JSON.stringify({ error: "该用户已在此共享环境中", code: "conflict" }), { status: 409 }),
+    });
+    const panel = await openUsers();
+    let dialog = await fromMenu(panel, "dev1", "改执行环境", "改执行环境");
+    await userEvent.click(within(dialog).getByRole("button", { name: "改执行环境" }));
+    await within(dialog).findByRole("alert");
+    await userEvent.click(within(dialog).getByRole("button", { name: "取消" }));
+    await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
+    dialog = await fromMenu(panel, "dev1", "改执行环境", "改执行环境");   // on both now: whichever it moves to, it is on already
+    await userEvent.click(within(dialog).getByRole("button", { name: "改执行环境" }));
+    await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
+    expect(posted(calls, "/workers/w3/spaces")).toHaveLength(1);
+    expect(posted(calls, "/workers/w1/spaces")).toEqual([]);   // never joined twice (that answers 409)
+  });
+
   test("a deactivated person joins nothing until enabled", async () => {
     const panel = await (start(), openUsers());
     expect(within(panel).getByRole("button", { name: "加入 Team：gone" })).toBeDisabled();

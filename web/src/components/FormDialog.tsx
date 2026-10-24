@@ -19,15 +19,20 @@ interface Props {
   footer?: ReactNode;
   /** The closing button's words (「我已保存」 after a one-time secret); 取消 / 关闭 by default. */
   closeLabel?: string;
+  /** Where the focus goes back to on closing, when the dialog is a later screen of another (the button that opened the
+   * first one); by default whatever had it when this one opened. */
+  returnTo?: HTMLElement | null;
 }
 
 /** Modal form: shows the server's reason on failure and cannot be dismissed while a request is in flight. Closing puts
  * the focus back where it was when the dialog opened (the button that opened it): Radix only returns it to a
  * DialogTrigger, and these dialogs are opened from code, so it fell to the top of the page. */
-export function FormDialog({ title, kicker, description, children, submitLabel = "保存", destructive, note, wide, onSubmit, onClose, footer, closeLabel }: Props) {
+export function FormDialog({ title, kicker, description, children, submitLabel = "保存", destructive, note, wide, onSubmit, onClose, footer, closeLabel,
+  returnTo: given }: Props) {
   const [error, setError] = useState("");
   const [busy, setBusy] = useState(false);
-  const [returnTo] = useState(() => (typeof document !== "undefined" ? document.activeElement : null) as HTMLElement | null);
+  const [opener] = useState(() => (typeof document !== "undefined" ? document.activeElement : null) as HTMLElement | null);
+  const returnTo = given !== undefined ? given : opener;
 
   async function submit(event: FormEvent) {
     event.preventDefault();

@@ -88,7 +88,7 @@ export function RowActions({ actions, more = [], menu }: { actions: Action[]; mo
         </Button>
       ))}
       {listed.length > 0 && (
-        <DropdownMenu>
+        <DropdownMenu onOpenChange={(open) => { if (open) chosen.current = null; }}>   {/* reopened while closing: forget the old step */}
           <DropdownMenuTrigger asChild>
             <Button type="button" size="icon-sm" variant="ghost" aria-label={menu}><MoreHorizontal /></Button>
           </DropdownMenuTrigger>

@@ -125,10 +125,12 @@ export function TokensPanel() {
 }
 
 /** The value of a token just made or regenerated, shown this once with a copy button. */
-function IssuedDialog({ title, issued, after, onClose }: { title: string; issued: IssuedToken; after: string; onClose: () => void }) {
+function IssuedDialog({ title, issued, after, returnTo, onClose }: {
+  title: string; issued: IssuedToken; after: string; returnTo: HTMLElement | null; onClose: () => void;
+}) {
   const [copied, setCopied] = useState(false);
   return (
-    <FormDialog title={title} closeLabel="我已保存" onClose={onClose}
+    <FormDialog title={title} closeLabel="我已保存" onClose={onClose} returnTo={returnTo}
       description="只显示这一次。把它配置到对应客户端的私有环境变量中。">
       <div className="flex items-center gap-2 rounded-lg border bg-muted/50 p-3 duration-300 animate-in fade-in-0 zoom-in-95 motion-reduce:animate-none">
         <code className="secret min-w-0 flex-1 font-mono text-xs break-all">{issued.token}</code>
@@ -148,12 +150,13 @@ function RegenerateDialog({ token, onClose }: { token: ApiToken; onClose: (done?
   const client = useQueryClient();
   const [lifetime, setLifetime] = useState("");
   const [issued, setIssued] = useState<IssuedToken | null>(null);
+  const [opener] = useState(() => document.activeElement as HTMLElement | null);   // through both screens
   const admin = scopesOf(token).includes("admin");
 
-  if (issued) return <IssuedDialog title="Token 已重新生成" issued={issued} after="旧值已失效。" onClose={() => onClose(true)} />;
+  if (issued) return <IssuedDialog title="Token 已重新生成" issued={issued} after="旧值已失效。" returnTo={opener} onClose={() => onClose(true)} />;
 
   return (
-    <FormDialog title="重新生成 Token" submitLabel="重新生成" onClose={() => onClose()}
+    <FormDialog title="重新生成 Token" submitLabel="重新生成" onClose={() => onClose()} returnTo={opener}
       description={<>为「{token.label}」生成新的值：名称和权限不变，旧值立即失效，正在用它的客户端要换成新值。</>}
       onSubmit={async () => {
         const result = await api<IssuedToken>(`/tokens/${token.id}/regenerate`, "POST", lifetime ? { expires_in: lifetime } : {});
@@ -180,9 +183,11 @@ function NewTokenDialog({ onClose }: { onClose: (made?: { id: string; label: str
   const [scope, setScope] = useState("execute");
   const [lifetime, setLifetime] = useState("30d");
   const [issued, setIssued] = useState<(IssuedToken & { label: string }) | null>(null);
+  const [opener] = useState(() => document.activeElement as HTMLElement | null);   // through both screens
 
   if (issued) {
-    return <IssuedDialog title="Token 已创建" issued={issued} after="可随时撤销。" onClose={() => onClose({ id: issued.id, label: issued.label })} />;
+    return <IssuedDialog title="Token 已创建" issued={issued} after="可随时撤销。" returnTo={opener}
+      onClose={() => onClose({ id: issued.id, label: issued.label })} />;
   }
 
   return (
