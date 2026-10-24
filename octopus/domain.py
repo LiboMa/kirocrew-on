@@ -24,15 +24,22 @@ SETTLED = ("failed", "blocked", "completed", "stopped", "waiting_worker", "await
 RUN_STATES = SETTLED + ("preparing", "ready", "running", "waiting_approval", "dispatch_unknown", "stopping", "reopening", "diagnosing")
 
 
+LISTED_INPUT = 200   # characters of the requirement a list row keeps: the title of a Session without a name
+
+
 def listed(view):
     """A Session as the console's list and the Coding Agents' list need it (M3-5): its tasks by name and state, the plan
-    without its summary — the tasks' prompts alone were two thirds of the list on EC2 (101 Sessions, ~550 000 characters)."""
+    without its prose — the tasks' prompts alone were two thirds of the list on EC2 (101 Sessions, ~550 000 characters) —
+    and the requirement's beginning only (2026-10-24: 28 % of 50 rows, 223 KB; the session page reads it whole)."""
     keep = ("id", "name", "tool", "model", "kind", "role")
     tasks = [{"id": t["id"], "status": t["status"], "spec": {k: t["spec"][k] for k in keep if k in t["spec"]}}
              for t in view.get("tasks") or []]
-    plans = {key: {k: v for k, v in view[key].items() if k not in {"summary", "notes", "replaced"}}
+    prose = {"summary", "notes", "replaced", "instructions", "reason", "intent"}
+    plans = {key: {k: v for k, v in view[key].items() if k not in prose}
              for key in ("planning", "replan") if isinstance(view.get(key), dict)}
-    return {**view, "tasks": tasks, **plans}
+    text = view.get("input") or ""
+    shown = text if len(text) <= LISTED_INPUT else text[:LISTED_INPUT].rstrip() + "…"
+    return {**view, "input": shown, "tasks": tasks, **plans}
 # What the admin environment listing shows of a live /health (no boundary or principal hashes).
 HEALTH_FIELDS = ("isolation", "crew_entry", "crew_origin", "version", "tool_auth")
 
@@ -1948,7 +1955,7 @@ class Service:
                     if not page:
                         break
                     continue
-                value = {**self._view(db, run, actor, detail=False), "marks": mine}
+                value = {**self._view(db, run, actor, detail=False, brief=view == "list"), "marks": mine}
                 items.append(listed(value) if view == "list" else value)
             if not page:
                 return items
@@ -2294,7 +2301,10 @@ class Service:
             return None
         return head
 
-    def _view(self, db, run, actor, detail=True):
+    def _view(self, db, run, actor, detail=True, brief=False):
+        """A Session as the API shows it; ``detail`` adds every Attempt (the session page). ``brief`` (the list view) leaves
+        out what no list shows and what costs the most to read: the usage summed over every Attempt's evidence, the
+        knowledge, the credential's availability and the verification."""
         value = {k: v for k, v in run.items() if k not in {"snapshot", "request_id"}}
         request = db.execute("SELECT id,client FROM requests WHERE id=?", (run["request_id"],)).fetchone() \
             if run.get("request_id") else None
@@ -2313,15 +2323,16 @@ class Service:
         value["quota_wait"] = quotas.waiting(snapshot, run) or None if run["status"] == "ready" else None   # D61
         creator = db.execute("SELECT username FROM users WHERE id=?", (run["owner_id"],)).fetchone()
         value["created_by"] = {"id": run["owner_id"], "username": creator["username"] if creator else None}
-        from . import credentials as repo_credentials
-        pinned = snapshot.get("credentials") or {}
-        value["credentials"] = ({"source": repo_credentials.availability(db, pinned["source"], run)} if pinned.get("source")
-                                else {"source": None, "removed": pinned["removed"]} if pinned.get("removed") else None)
         value["publish"] = snapshot.get("publish")
-        value["verified"] = self._verified(db, run["id"])
-        from . import knowledge
-        scope = db.execute("SELECT scope FROM workers WHERE id=?", (run["worker_id"],)).fetchone() if run["worker_id"] else None
-        value["knowledge"] = knowledge.view(db, run, scope["scope"] if scope else None)
+        if not brief:
+            from . import credentials as repo_credentials
+            pinned = snapshot.get("credentials") or {}
+            value["credentials"] = ({"source": repo_credentials.availability(db, pinned["source"], run)} if pinned.get("source")
+                                    else {"source": None, "removed": pinned["removed"]} if pinned.get("removed") else None)
+            value["verified"] = self._verified(db, run["id"])
+            from . import knowledge
+            scope = db.execute("SELECT scope FROM workers WHERE id=?", (run["worker_id"],)).fetchone() if run["worker_id"] else None
+            value["knowledge"] = knowledge.view(db, run, scope["scope"] if scope else None)
         value["tasks"] = []
         for row in db.execute("SELECT * FROM tasks WHERE run_id=? ORDER BY ordinal", (run["id"],)):
             task = dict(row)
@@ -2338,9 +2349,10 @@ class Service:
                     item["spec"], item["evidence"] = json.loads(item["spec"]), json.loads(item["evidence"])
                     task["attempts"].append(item)
             value["tasks"].append(task)
-        from . import usage   # D46 P6a: what the Session's Attempts used
-        value["usage"] = usage.total([json.loads(r["evidence"] or "{}") for r in db.execute(
-            "SELECT evidence FROM attempts WHERE run_id=?", (run["id"],))])
+        if not brief:
+            from . import usage   # D46 P6a: what the Session's Attempts used
+            value["usage"] = usage.total([json.loads(r["evidence"] or "{}") for r in db.execute(
+                "SELECT evidence FROM attempts WHERE run_id=?", (run["id"],))])
         value["progress"] = {"accepted": sum(t["status"] == "accepted" for t in value["tasks"]),
                              "total": len(value["tasks"])}
         if detail:

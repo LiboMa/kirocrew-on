@@ -35,6 +35,29 @@ class ServiceListingTests(ConfirmationCase):
                 self.assertIn(key, run)
         self.assertLess(len(json.dumps(slim, ensure_ascii=False)), len(json.dumps(full, ensure_ascii=False)))
 
+    def test_the_list_view_is_slim_and_skips_what_only_the_session_page_reads(self):
+        # EC2 2026-10-24: 50 rows were 223 KB — the requirement alone 28 %, the replan's instructions and reason 10 %, and
+        # usage, knowledge, credentials and verification (each read from every Attempt) that no list shows
+        long = self.start(input="实现登录页并补充回归测试。" * 60)
+        with self.db.transaction() as db:
+            snapshot = json.loads(db.execute("SELECT snapshot FROM runs WHERE id=?", (long,)).fetchone()["snapshot"])
+            snapshot["replan"] = {"mode": "replan", "instructions": "按新的需求重新规划" * 200, "reason": "需求变了" * 200,
+                                  "intent": "登录" * 100, "tasks": ["code"]}
+            db.execute("UPDATE runs SET snapshot=? WHERE id=?", (json.dumps(snapshot, ensure_ascii=False), long))
+        full = next(r for r in self.service.runs(self.actor) if r["id"] == long)
+        slim = next(r for r in self.service.runs(self.actor, view="list") if r["id"] == long)
+        self.assertTrue(full["input"].startswith(slim["input"].removesuffix("…")))
+        self.assertLessEqual(len(slim["input"]), 201)
+        self.assertTrue(slim["input"].endswith("…"))
+        self.assertEqual(slim["replan"], {"mode": "replan", "tasks": ["code"]})
+        for key in ("usage", "knowledge", "credentials", "verified"):
+            self.assertIn(key, full)
+            self.assertNotIn(key, slim)
+        short = next(r for r in self.service.runs(self.actor, view="list") if r["id"] == self.ids[0])
+        self.assertEqual(short["input"], "实现登录页")   # a short requirement is whole
+        page = self.service.runs(self.actor, view="list", page=True, limit=50)   # the page the console reads
+        self.assertNotIn("usage", page["items"][0])
+
     def test_a_bad_filter_is_refused(self):
         for kwargs in ({"status": "nope"}, {"limit": 0}, {"limit": 201}, {"q": "x" * 201}, {"view": "everything"}):
             with self.subTest(kwargs), self.assertRaises(Error):
