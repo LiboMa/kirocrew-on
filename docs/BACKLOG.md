@@ -326,7 +326,7 @@
 
 ## 稳定性（2026-10-22 发现）
 
-- **会话列表每行过重**（EC2 2026-10-23）：`GET /v1/runs?page=1&view=list` 50 行 199 KB，大头是需求全文（58 KB）、tasks（21 KB）、replan（17 KB）、credentials、knowledge、permissions、usage；侧栏用不到。gzip 之后传输量已降，精简列表视图的字段要先核对 MCP `octopus_runs` 与 CLI `search` 用到哪些。
+- ~~**会话列表每行过重**~~（2026-10-24 在 feat/mvp-0.1.1 处理，未部署）：核对过侧栏、空状态页、MCP `octopus_runs` 与 CLI `search` 用到的字段后，`view=list` 只留需求的前 200 字，规划去掉说明文字（instructions、reason、intent），不再返回、也不再计算 usage、knowledge、credentials、verified；tasks 按约定保留。按 EC2 的 50 行估算：223 KB → 119 KB，gzip 后 53 KB → 15 KB。
 
 - **Gateway 事件循环卡住后被看门狗结束**：EC2 2026-10-22 13:25–13:30，owner 边界的 Gateway 事件循环多次卡住（最长 18 秒），KiroCrew 的 loop_watchdog 以 SIGALRM 结束进程，两个子 Agent 中途断开（「Orphaned: gateway_restart」），由自动纠错救回。
   - 已处理（21495ea）：Worker 检查运行中的尝试改读自己的那一行，不再每次读完整列表（310 KB / 150 ms → 7 KB / 16 ms）。

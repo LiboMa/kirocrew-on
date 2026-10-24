@@ -323,7 +323,9 @@ def openapi():
                                     {"in": "query", "name": "limit", "schema": {"type": "integer", "minimum": 1, "maximum": 200},
                                      "description": "At most this many, newest first."},
                                     {"in": "query", "name": "view", "schema": {"enum": ["list"]},
-                                     "description": "What a list needs: tasks by name and state, the plan without its summary."}]
+                                     "description": "What a list needs: tasks by name and state, the plan without its prose, the requirement's first "
+                                                    "200 characters; no usage, knowledge, credentials or verification (the session "
+                                                    "page has them)."}]
             if path == "/v1/runs/{id}/bundle":
                 op["description"] = ("Read scope. A 10-minute link to the Session's branch as a git bundle (D58 pull): GET it, "
                                      "add ?full=1 for the whole history; headers X-Pull-Head / -Base / -Branch / -Full. 409 "
