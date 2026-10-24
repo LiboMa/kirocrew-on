@@ -312,8 +312,8 @@
         {
           "id": "m3-011-workbench",
           "name": "控制台突出工作台：顶栏「会话 / 工作流」，管理与我的设置回到原来的样式",
-          "status": "local",
-          "ref": "docs/design/2026-10-24-workbench-options.html（负责人选方案一）· feat/workbench-layout",
+          "status": "accepted",
+          "ref": "docs/design/2026-10-24-workbench-options.html（负责人选方案一）· PR #7 · EC2 d5dcf8c",
           "more": "去掉左侧导航；顶栏中间是开发空间与「会话 / 工作流」，工作流升为一级页面（表格：任务链、版本、归属，行内新建开发 / 编辑 / 共享）；管理与我的设置是顶栏右侧的文字入口，页面里用自己的分区导航和「返回工作台」；深色模式在账户菜单。"
         },
         {

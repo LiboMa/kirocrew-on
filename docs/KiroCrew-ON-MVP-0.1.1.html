@@ -52,7 +52,7 @@
 <div class="table"><table><thead><tr><th>方面</th><th>变化</th></tr></thead><tbody><tr><td><strong>前端优化</strong></td><td>控制台整体改版：顶栏突出工作台（「会话 / 工作流」），管理与「我的设置」退到顶栏右侧；浅色 / 深色主题、新标志；管理与「我的设置」的列表都改成表格，新增、修改、危险操作都在对话框里完成</td></tr><tr><td><strong>Token 重新生成</strong></td><td>已有的 API Token 可以换一个新值，名称和权限不变，旧值立即失效</td></tr><tr><td><strong>在 KiroCrew 聊天里协作（D73 补充）</strong></td><td>续作时提醒聊天里改过的文件；聊天里新建的文件也会被认出，续作前一并提交</td></tr><tr><td><strong>门禁与提示（D57 补充）</strong></td><td>提示写清发生了什么、是谁的问题、建议怎么做；门禁显示中文名，检查分为必过和建议两类；打码与审查撤回做了多处修正</td></tr><tr><td><strong>性能</strong></td><td>会话列表的数据量减少约一半，gzip 后约减少 70%</td></tr><tr><td><strong>可用性</strong></td><td>对话框关闭后，焦点回到打开它的按钮；手机上行操作收进「⋯」</td></tr></tbody></table></div>
 <h2>2．前端优化</h2>
 <h3>2.1 导航：工作台放在最前</h3>
-<p>负责人 2026-10-24 选定「顶栏切换」，对比见 <code>docs/design/2026-10-24-workbench-options.html</code>。第一次部署到 EC2 的 <code>1834ebb</code> 用的还是左侧分组导航，这次调整之后以下面的描述为准。</p>
+<p>负责人 2026-10-24 选定「顶栏切换」，对比见 <code>docs/design/2026-10-24-workbench-options.html</code>。第一次部署到 EC2 的 <code>1834ebb</code> 用的还是左侧分组导航；<code>d5dcf8c</code> 起改为下面的样子，EC2 实测通过（接口 14 项、浏览器 13 项）。</p>
 <ul><li><strong>顶栏中间是工作台</strong>：开发空间切换，加上「会话」「工作流」两个页签，页签上显示数量。
 <ul><li>两个页签都是链接，可以新开标签页；工作流的地址是 <code>?view=workflows</code>。</li><li>工作流从会话列表里的一个页签，升为与会话并列的页面，见 2.3 节。</li></ul></li><li><strong>顶栏右侧</strong>：「新建开发」，以及两个不显眼的文字入口「管理」（只有管理员看得到）和「我的设置」。</li><li><strong>账户菜单</strong>：修改密码、深色模式、经典控制台、退出登录。主题的选择记在浏览器里，没有选过时跟随系统设置。</li><li><strong>管理与「我的设置」</strong>：回到改版前的样式。
 <ul><li>页面左边是它自己的分区导航，标题就是页面名；</li><li>顶栏里，「返回工作台」代替工作台页签的位置。</li></ul></li><li><strong>窄屏</strong>：
