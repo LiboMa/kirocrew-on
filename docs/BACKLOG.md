@@ -20,7 +20,7 @@
 ## 客户端与控制台（原 M3）
 - `octopus connect` 扩展到 Codex 与 Kiro IDE；CLI 命令集（submit / plan / confirm / status / watch / report / approvals / search）。
 - 控制台：服务端分页、按仓库 / 分支 / 阶段 / 工具 / 客户端 / 提交者 / 时间过滤、全文搜索；详情中的 diff、门禁与报告。
-- Worker 自助接入（一次性接入码，Worker 启动时自行登记 URL 与 Token），本地全栈启动时自动登记 Worker——设计见 `docs/superpowers/specs/2026-10-24-worker-enrollment-design.md`（待负责人确认）。
+- Worker 自助接入（一次性接入码，Worker 启动时自行登记 URL 与 Token），本地全栈启动时自动登记 Worker——设计见 `docs/superpowers/specs/2026-10-24-worker-enrollment-design.md`——负责人 2026-10-24 决定放到 MVP 0.2.0，并入「MVP 0.2.0 重要更新」的 Worker 自助申请。
 - 旧版控制台 `/classic/` 在 React 版功能对齐并经负责人确认后移除。
 
 ## 共享与组织（原 M4）
@@ -340,6 +340,7 @@
   - 后台自动分配 Graviton Worker，自动加入并纳管：开机、安装、注册、证书、健康检查对用户不可见；控制面完成初始化与集成注册。
   - Kiro CLI 用设备码登录，由用户自己登录自己的：申请 Worker 时控制台显示设备码，用户在浏览器里确认一次（负责人 2026-10-24 已同意）；登录状态存在用户的 EBS 卷上，换机器不用重登。
   - 参照业界控制面 / 数据面做法：Kubernetes 节点加入（一次性 bootstrap token + 证书签发）、GitHub Actions 自托管 Runner 注册令牌、EKS 托管节点组；控制面持有期望状态并调度，数据面只认短期凭证、可随时替换。
+  - 已有的输入：`docs/superpowers/specs/2026-10-24-worker-enrollment-design.md`（一次性接入码、`worker enroll`、平台照旧带 Token 核实 `/health`、Token 不经人手）。负责人 2026-10-24 决定把它放进 0.2.0 一起设计；里面待定的三点——谁能签发、有效期、部署脚本何时改——届时随「Worker 自助申请」一起定。
 - **共享 Worker 与专用 Worker，两种申请都支持，用户自选。**
   - 共享 Worker：不独占 EC2，多人共用主机，每人一个隔离的执行边界（各自的执行用户与端口）；后台由 Auto Scaling 配合。
   - **每人独占一块 EBS 卷作为工作空间**（加密）：工作区，以及各 Agent 的家目录、登录凭证、本地数据库；KiroCrew 记忆也放卷上，换机器不用重新登录〔设计者决定〕。

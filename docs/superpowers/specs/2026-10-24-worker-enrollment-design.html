@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Worker 自助接入：一次性接入码（设计，待负责人确认）</title>
+<title>Worker 自助接入：一次性接入码（设计草案，放到 MVP 0.2.0）</title>
 <!-- Generated from 2026-10-24-worker-enrollment-design.md by tools/md_to_html.py; edit the Markdown, then regenerate. -->
 <style>
   :root { --ink: #172033; --muted: #5b6577; --line: #e3e7ef; --bg: #f6f8fb; --card: #ffffff; --brand: #5b4bdb; --brand-soft: #eeebff;
@@ -45,8 +45,8 @@
 </head>
 <body>
 <main>
-<h1>Worker 自助接入：一次性接入码（设计，待负责人确认）</h1>
-<p>日期：2026-10-24　·　来源：BACKLOG「客户端与控制台」——「Worker 自助接入（一次性接入码，Worker 启动时自行登记 URL 与 Token），本地全栈启动时自动登记 Worker」</p>
+<h1>Worker 自助接入：一次性接入码（设计草案，放到 MVP 0.2.0）</h1>
+<p>日期：2026-10-24　·　状态：负责人 2026-10-24 决定放到 MVP 0.2.0，与 BACKLOG「MVP 0.2.0 重要更新」里的 Worker 自助申请一起设计，第 7 节的三点届时再定　·　来源：BACKLOG「客户端与控制台」——「Worker 自助接入（一次性接入码，Worker 启动时自行登记 URL 与 Token），本地全栈启动时自动登记 Worker」</p>
 <h2>1．为什么做</h2>
 <p>今天登记一个 Worker，管理员要做这些事：</p>
 <ol><li>在 Worker 主机上，找到 Worker 自己生成的 <code>worker.token</code>；</li><li>把 Token 和 Worker 地址抄进控制台「登记 Worker」，或者交给 <code>bootstrap-worker</code>；</li><li>平台带着这个 Token 调一次 Worker 的 <code>/health</code>，核实之后，把 Token 用凭证主密钥密封入库。</li></ol>
