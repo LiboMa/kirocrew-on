@@ -266,6 +266,28 @@ describe("管理 › 用户", () => {
     expect(posted(calls, "/workers/w1/spaces", "DELETE")).toHaveLength(1);
   });
 
+  test("改执行环境: if leaving the old environment fails, it says so, and trying again only leaves it (BACKLOG 2026-10-24)", async () => {
+    let joined = false;
+    let refuse = true;
+    const calls = start({
+      "GET /workers": () => WORKERS.map((w) => (w.id === "w3" && joined ? { ...w, spaces: [{ user_id: "u2" }] } : w)),
+      "POST /workers/w3/spaces": () => { joined = true; return { ok: true }; },
+      "DELETE /workers/w1/spaces": () => (refuse ? new Response(JSON.stringify({ error: "服务暂不可用", code: "x" }), { status: 503 })
+        : { ok: true }),
+    });
+    const panel = await openUsers();
+    const dialog = await fromMenu(panel, "dev1", "改执行环境", "改执行环境");
+    await userEvent.click(within(dialog).getByRole("button", { name: "改执行环境" }));
+    expect(await within(dialog).findByRole("alert"))
+      .toHaveTextContent("已加入 shared-2，但没能从 personal 移出：服务暂不可用。再点一次只重试移出。");
+    expect(within(dialog).getByLabelText("改到")).toHaveValue("w3");   // still the same choice, after the refresh
+    refuse = false;
+    await userEvent.click(within(dialog).getByRole("button", { name: "改执行环境" }));
+    await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
+    expect(posted(calls, "/workers/w3/spaces")).toEqual([{ user_id: "u2" }]);   // joined once, not refused as a duplicate
+    expect(posted(calls, "/workers/w1/spaces", "DELETE")).toHaveLength(2);
+  });
+
   test("a deactivated person joins nothing until enabled", async () => {
     const panel = await (start(), openUsers());
     expect(within(panel).getByRole("button", { name: "加入 Team：gone" })).toBeDisabled();
