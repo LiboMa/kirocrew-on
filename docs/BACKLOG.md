@@ -384,3 +384,20 @@
 
 - `GET /v1/workers/<id>/capabilities`（刷新模型）只核对 `boundary`，引擎的健康轮询与原生入口还核对 `host_principal` 与 `isolation`。
 - 非 spare 的 Worker 登记时只与**已启用**的 Worker 比对 `boundary`：已停用 Worker 的边界可以再登记给另一个人或 Team。
+
+## 预览域名与控制台同站（2026-10-25，0.2.0 设计审阅时发现）
+
+**问题**：会话预览 `<run-id>.preview.tinyboat.blog` 与控制台 `kirocrew-on.tinyboat.blog` 同属可注册域名 `tinyboat.blog`，浏览器把两者当作同站（same-site）。
+
+**现在挡得住的**：
+- 登录 Cookie 是 `__Host-octopus_session`，不带 Domain、`SameSite=Strict`，预览页覆盖不了它；
+- 用 Cookie 登录的写入必须带控制台自己的 Origin（`octopus/server.py` 的 `identity`），预览页发起的写入会被拒绝；
+- 控制台不返回 CORS 头，预览页读不到控制台的响应。
+
+**挡不住的**：
+- `SameSite=Strict` 对同站请求不起作用：预览页发起的 GET 会带上登录 Cookie。因此，任何有副作用的 GET 都是跨站请求伪造的入口，需要逐一核对。
+- 预览页可以写 `Domain=tinyboat.blog` 的 Cookie，写多了会让控制台的请求头过大而失败（OPERATIONS「会话独立预览域名」已记）。
+- 预览页可以写 `Domain=preview.tinyboat.blog` 的 Cookie，覆盖其他会话的预览 Cookie。
+
+**修法**：预览改用独立的可注册域名。0.2.0 的原生入口也要这样做（设计 CE2，硬性要求）。由负责人决定域名。
+
