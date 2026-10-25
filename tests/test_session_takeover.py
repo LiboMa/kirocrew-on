@@ -2,7 +2,10 @@
 boundary — the same Session moves to their own boundary and runs as them from then on. Its executor (``runs.executor_id``)
 is apart from its creator (``owner_id``): where it may run, whose limits and knowledge space it uses, who directs and
 publishes it follow the executor; the creator keeps owning (and deleting) it."""
+import json
+
 from octopus import knowledge, quotas
+from octopus.security import Error
 from octopus.domain import executor_of, run_permissions, unserved
 from tests.test_session_placement import PlacementCase
 
@@ -87,6 +90,91 @@ class ExecutorTests(ExecutorCase):
         with self.db.read() as db:
             self.assertTrue(run_permissions(db, self.people["bob"], self.row(self.rid))["native"])
             self.assertFalse(run_permissions(db, self.people["alice"], self.row(self.rid))["native"])   # R7: bob's now
+
+
+class TakeoverCommandTests(ExecutorCase):
+    def setUp(self):
+        super().setUp()
+        with self.db.transaction() as db:   # a Session that has stopped: what a takeover moves
+            db.execute("UPDATE runs SET status='blocked', native_parent='octopus-x', workspace='/w/alice' WHERE id=?", (self.rid,))
+        self.keys = 0
+
+    def takeover(self, person="bob", **extra):
+        self.keys += 1
+        version = self.row(self.rid)["version"]
+        return self.service.takeover(self.people[person], self.rid,
+                                     {"request_id": f"takeover-fixture-{self.keys}", "expected_version": version, **extra})
+
+    def code(self, call):
+        try:
+            call()
+        except Error as error:
+            return error.status, error.code
+        return None
+
+    def test_a_collaborator_takes_it_over_to_their_own_boundary(self):
+        before = self.row(self.rid)["version"]
+        result = self.takeover()
+        self.assertEqual((result["takeover"]["state"], result["takeover"]["to"], result["takeover"]["from"]),
+                         ("moving", "bob-b", "alice-b"))
+        row = self.row(self.rid)
+        self.assertEqual(json.loads(row["snapshot"])["takeover"]["by"], self.ids["bob"])
+        self.assertEqual(row["version"], before + 1)
+        self.assertEqual(row["worker_id"], "alice-b")   # the Engine moves it; until then it stays where it was
+        with self.db.read() as db:
+            kinds = [r["kind"] for r in db.execute("SELECT kind FROM events WHERE run_id=?", (self.rid,))]
+        self.assertIn("run.takeover_requested", kinds)
+
+    def test_the_same_request_takes_it_over_once(self):
+        version = self.row(self.rid)["version"]
+        body = {"request_id": "takeover-fixture-same", "expected_version": version}
+        first = self.service.takeover(self.people["bob"], self.rid, body)
+        self.assertEqual(self.service.takeover(self.people["bob"], self.rid, body), first)
+        self.assertEqual(self.row(self.rid)["version"], version + 1)
+
+    def test_who_may_not_take_it_over(self):
+        with self.db.transaction() as db:
+            db.execute("UPDATE shares SET role='viewer' WHERE id='share-1'")
+        self.assertEqual(self.code(self.takeover)[0], 403)   # a viewer only reads
+        with self.db.transaction() as db:
+            db.execute("UPDATE shares SET role='collaborator' WHERE id='share-1'")
+        self.assertEqual(self.code(lambda: self.takeover("alice")), (409, "already_yours"))   # it runs on her own boundary
+        with self.db.transaction() as db:   # dave can continue it but has no boundary of his own to take it to
+            db.execute("INSERT INTO shares(id,run_id,kind,subject,role,created_by,created) VALUES('share-2',?,'user',?,"
+                       "'collaborator',?,1)", (self.rid, self.ids["dave"], self.ids["alice"]))
+        self.assertEqual(self.code(lambda: self.takeover("dave")), (409, "no_own_environment"))
+        self.assertEqual(self.code(lambda: self.service.takeover(self.admin, self.rid, {
+            "request_id": "takeover-fixture-admin", "expected_version": self.row(self.rid)["version"]}))[0], 403)
+
+    def test_only_a_session_that_has_stopped_moves(self):
+        with self.db.transaction() as db:
+            db.execute("UPDATE runs SET status='running' WHERE id=?", (self.rid,))
+        self.assertEqual(self.code(self.takeover), (409, "busy"))
+        with self.db.transaction() as db:
+            db.execute("UPDATE runs SET status='blocked' WHERE id=?", (self.rid,))
+        self.assertEqual(self.code(lambda: self.takeover(expected_version=0)), (409, "version_conflict"))
+
+    def test_nothing_else_runs_while_it_moves(self):
+        self.takeover()
+        version = self.row(self.rid)["version"]
+        self.assertEqual(self.code(lambda: self.service.operate(self.people["alice"], self.rid, "continue", {
+            "request_id": "continue-while-moving", "expected_version": version})), (409, "takeover_in_progress"))
+        self.assertEqual(self.code(self.takeover), (409, "takeover_in_progress"))
+
+    def test_no_preview_publish_or_sync_while_it_moves(self):
+        self.takeover()
+        alice = self.people["alice"]
+        for call in (lambda: self.service.app_start(alice, self.rid), lambda: self.service.publish(alice, self.rid, {}),
+                     lambda: self.service.sync(alice, self.rid, b"bundle", "a" * 40, "sync-while-moving", 0, old="b" * 40)):
+            self.assertEqual(self.code(call), (409, "takeover_in_progress"))
+
+    def test_the_console_knows_who_may_take_it_over(self):
+        with self.db.read() as db:
+            bob = run_permissions(db, self.people["bob"], self.row(self.rid))
+            alice = run_permissions(db, self.people["alice"], self.row(self.rid))
+        self.assertTrue(bob["takeover"])
+        self.assertFalse(alice["takeover"])
+        self.assertIn("已经在你的执行环境上", alice["takeover_reason"])
 
 if __name__ == "__main__":
     import unittest

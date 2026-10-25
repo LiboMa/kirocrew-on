@@ -306,6 +306,30 @@ def directs(db, actor, run):
             "补充说明、批准工具）" + ("；需要接手时请 Team owner 或管理员把会话改派到 Team 的环境" if run["team_id"] else ""))
 
 
+def moving(run):
+    """The takeover the Engine is carrying out for this Session (D74), or None."""
+    takeover = json.loads(run["snapshot"]).get("takeover") or {}
+    return takeover if takeover.get("state") == "moving" else None
+
+
+def takeover_target(db, actor, run):
+    """Where the actor would take the Session over to (D74) and why not: ``(worker, reason, code)`` — their one own
+    boundary, while the Session runs on someone else's own boundary, has stopped and nothing else moves it."""
+    if moving(run):
+        return None, "正在接手到新的执行环境，请稍候", "takeover_in_progress"
+    holder = boundary_owner(db, run)
+    if holder is None:
+        return None, "会话在 Team 或共享的执行环境上，能续作的人都可以直接续作，不需要接手", "not_needed"
+    if holder == actor["id"]:
+        return None, "会话已经在你的执行环境上", "already_yours"
+    mine = [w for w in space_workers(db, actor["id"], run["team_id"]) if own(w, actor["id"])]
+    if len(mine) != 1:
+        return None, "你还没有自己的执行环境：请联系平台管理员开通后再接手", "no_own_environment"
+    if run["lifecycle"] != "open" or run["status"] not in SETTLED or run["status"] == "waiting_worker":
+        return None, "会话正在执行：请先等待结束或停止，再接手", "busy"
+    return mine[0], None, None
+
+
 def placement(db, user, team):
     """Where a new Session of this person in this space runs when no Worker is named (D49 R2): their one own boundary;
     else the space's only environment (a Team's with a hint to get a boundary, owner 2026-10-19); else a choice waits."""
@@ -608,7 +632,13 @@ def run_permissions(db, actor, run):
     archived = bool(run["team_id"]) and bool(
         (db.execute("SELECT archived FROM teams WHERE id=?", (run["team_id"],)).fetchone() or {"archived": 0})["archived"])
     instruct = directs(db, actor, run)   # D49 R10
+    # D74: take a Session on someone else's own boundary over to one's own — who may continue it, not through oversight
+    reach = allowed(admin=False)
+    _, refused, _ = takeover_target(db, actor, run) if reach else (None, "管理员不因管理员身份接手会话；查看者不能接手", None)
+    if archived and not refused:
+        refused = "Team 已归档，不能接手"
     return {"operate": allowed(), "delete": allowed(owner=True), "native": native, "resume": not archived,
+            "takeover": refused is None, **({"takeover_reason": refused} if refused else {}),
             "publish": may_direct(db, actor, run), "share": may_publish(db, actor, run),   # D64: a viewer only reads
             "assign": allowed(shares=False), **({"native_reason": reason} if reason else {}),
             "direct": instruct is None, **({"direct_reason": instruct} if instruct else {})}
@@ -1585,6 +1615,7 @@ class Service:
         with self.db.read() as db:
             run = run_access(db, actor, rid)
             require(may_direct(db, actor, run), "只有会话创建者、执行人、Team owner 或管理员可以发布", 403, "forbidden")
+            require(not moving(run), "正在接手到新的执行环境，请稍候", 409, "takeover_in_progress")   # D74
             require(not general(json.loads(run["source"])), NO_REPOSITORY, 409, "no_repository")   # D65
             require(run["lifecycle"] == "open" and run["status"] in SETTLED and run["workspace"],
                     "会话执行结束后才能发布", 409, "publish_busy")
@@ -1772,6 +1803,7 @@ class Service:
     def app_start(self, actor, rid):
         with self.db.read() as db:
             run = run_access(db, actor, rid)
+            require(not moving(run), "正在接手到新的执行环境，请稍候", 409, "takeover_in_progress")   # D74
             require(run_permissions(db, actor, run)["resume"], "Team 已归档，不能启动预览", 409, "team_archived")
             require(run["lifecycle"] == "open", "会话已关闭，请先重新打开", 409, "invalid_state")
             require(run["status"] in SETTLED, "会话正在执行任务，完成后再启动预览", 409, "app_busy")
@@ -2150,6 +2182,7 @@ class Service:
                 "bundle": hashlib.sha256(data).hexdigest()}   # the command's digest covers the bytes, not the bytes
         with self.db.read() as db:
             run = run_access(db, actor, rid)
+            require(not moving(run), "正在接手到新的执行环境，请稍候", 409, "takeover_in_progress")   # D74
             oversight = self._oversight(db, actor, rid)   # an elevated admin's: audited (A2)
             done = db.execute("SELECT hash, response FROM commands WHERE actor=? AND key=?", (actor["id"], request_id)).fetchone()
             if done is None:
@@ -2583,6 +2616,35 @@ class Service:
                     "停止的诊断不会自动再派。需要时点「请求协调者诊断」重新诊断；或在该任务上「配置并续作」。")
         return "协调者需要你处理具体阻塞", error, "按详情中协调者的说明处理后，点「请求协调者诊断」，或在该任务上「配置并续作」。"
 
+    def takeover(self, actor, rid, body):
+        """Take a Session that runs on someone else's own boundary over to one's own (D74): recorded here, carried out
+        by the Engine (the workspace moves as a git bundle, which may take longer than a request). Those who may
+        continue it may take it over — a collaborator, a Team member, its creator taking it back — never through an
+        administrator's oversight; a viewer only reads."""
+        require(isinstance(body, dict) and set(body) <= {"request_id", "expected_version"}, "只接受 request_id 与 expected_version")
+        with self.db.transaction() as db:
+            try:
+                run = run_access(db, actor, rid, admin=False)
+            except Error as exc:   # an administrator sees it through oversight: say why, as the native entry does
+                if exc.status == 404 and elevated(actor) and db.execute("SELECT 1 FROM runs WHERE id=?", (rid,)).fetchone():
+                    raise Error(403, "forbidden", "管理员不因管理员身份接手会话：接手会以你的身份运行别人的会话") from None
+                raise
+            if run["team_id"]:
+                active_team(db, run["team_id"])
+            def execute():
+                require(body.get("expected_version") == run["version"], "Session 版本已更新", 409, "version_conflict")
+                worker, reason, code = takeover_target(db, actor, run)
+                require(worker is not None, reason, 409, code)
+                snapshot = json.loads(run["snapshot"])
+                takeover = {"state": "moving", "to": worker["id"], "from": run["worker_id"], "by": actor["id"],
+                            "by_name": actor["username"], "requested_at": time.time()}
+                version = run["version"] + 1
+                journal.change(db, "runs", rid, journal.person(actor), "run.takeover_requested", event={
+                    "version": version, "to": worker["id"], "from": run["worker_id"]},
+                    snapshot=dumps({**snapshot, "takeover": takeover}), version=version, updated=time.time())
+                return {"id": rid, "version": version, "takeover": takeover}
+            return self._command(db, actor, "takeover", rid, body, execute)
+
     def operate(self, actor, rid, action, body):
         require(action in {"continue", "recover", "stop", "close", "reopen", "delete", "assign-worker"},
                 "不支持的操作")
@@ -2598,6 +2660,7 @@ class Service:
                 oversight = False
             except Error:
                 oversight = True   # allowed only as an elevated admin (A2): audited
+            require(not moving(run), "正在接手到新的执行环境，请稍候", 409, "takeover_in_progress")   # D74
             if run["team_id"] and action in {"continue", "recover", "reopen", "assign-worker"}:
                 active_team(db, run["team_id"])   # an archived Team's Sessions stay readable and stoppable (P3)
             if action in {"continue", "recover"}:

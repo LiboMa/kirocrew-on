@@ -1023,6 +1023,8 @@ def server(database, port=8918, host="127.0.0.1", allowed_hosts=(), origin_secre
                             if query.get("stream") == ["1"]:
                                 return self.events(actor, rid, after)
                             return self.respond(service.events(actor, rid, after))
+                        if action == "takeover" and method == "POST":   # D74: carried out by the Engine
+                            return self.respond(service.takeover(actor, rid, body), 202)
                         if method == "POST":
                             return self.respond(service.operate(actor, rid, action, body))
                 raise Error(404, "not_found", "接口不存在")
