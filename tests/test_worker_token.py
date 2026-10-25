@@ -151,7 +151,7 @@ class SealedOnWriteTests(AccessCase):
             db.execute("INSERT INTO workers(id,name,owner_id,config,scope) VALUES('w8','w8',?,?,'dedicated')",
                        (self.b["id"], dumps({"url": "https://10.0.0.9:8943", "token_sealed": sealed, "capabilities": self.HEALTH})))
         with mock.patch("octopus.server.worker_request", return_value={**self.HEALTH, "models": {}}), self.http() as call:
-            self.assertEqual(call("GET", "/v1/workers/w8/capabilities", self.tokens["bob"])[0], 200)
+            self.assertEqual(call("POST", "/v1/workers/w8/capabilities", self.tokens["bob"], {})[0], 200)
         config = self.stored("w8")
         self.assertEqual((config.get("token"), config["token_sealed"]), (None, sealed))
 

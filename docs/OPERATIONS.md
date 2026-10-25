@@ -40,6 +40,7 @@
 - **识别顺序**：
   - API 先看 `Authorization` 头（CLI、MCP、API Token）；没有这个头时才看 Cookie。
   - 只凭 Cookie 的写入必须带本站 `Origin`，否则 403 `origin`。
+  - 只凭 Cookie 的请求，浏览器标明来自同站或跨站的子资源请求（`Sec-Fetch-Site` 为 `same-site` 或 `cross-site`，且不是顶层页面打开）一律 403 `origin`：会话预览 `*.preview.tinyboat.blog` 与控制台同站，`SameSite=Strict` 挡不住它们的图片、fetch、iframe 与事件流（2026-10-25）。控制台自己的请求、地址栏打开、从别处点链接打开不受影响；没有这个头的旧浏览器照旧；带 `Authorization` 头的 CLI、MCP 不受影响。
 - **退出**：「退出登录」同时撤销 Token、清除 Cookie。
 - **不接受 Cookie 的浏览器**（例如 Safari 经 `http://localhost` 隧道访问）：退回到只在当前标签页保存 Token。
 - **命令行不变**：`octopus login`、bootstrap、connect 不传 `remember`，仍是 1 天的 Token。
@@ -115,7 +116,7 @@ dev server 只在工作区写 `node_modules/.vite`；不需要把工作区拉回
 
 **Worker 管理**（管理员，「管理 › 执行环境」选中的那一行）：改名、「更新连接」（主机替换或 Token 轮换，新地址按登记规则重新核验）、
 「退役」（仍是某 Team 的执行环境或有进行中的会话时拒绝；退役后不再出现在列表与选择器中，它服务的个人空间失去该环境，历史会话保留引用）。
-该环境服务的全部用户（含共享环境上的个人与 Team 成员）都可以「刷新模型」。
+该环境服务的全部用户（含共享环境上的个人与 Team 成员）都可以「刷新模型」（`POST /v1/workers/<id>/capabilities`，2026-10-25 起不再接受 GET；执行边界、主机或隔离变了返回 409 `worker_changed`，由管理员「更新连接」）。
 
 Team 与执行环境的管理操作都写入审计（`GET /v1/admin/audit`）：`team.create|rename|archive|restore|environment|member.set|member.remove|member.leave`、
 `worker.register|rename|retire|enabled|share|dedicate|space.add|space.remove|connection`（不记录 Worker URL 与 Token）。

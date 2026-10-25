@@ -258,7 +258,8 @@ class ReportApiTests(AccessCase):
         status, headers, body = self.fetch(f"/v1/runs/{rid}/report?format=html", self.token("bob", ["read"]))
         self.assertEqual(status, 200)
         self.assertTrue(headers["content-type"].startswith("text/html"))
-        self.assertEqual(headers["content-security-policy"], "default-src 'none'; style-src 'unsafe-inline'; img-src data:")
+        # 2026-10-25: nor shown inside another page (a same-site preview could frame it with the console's cookie)
+        self.assertEqual(headers["content-security-policy"], "default-src 'none'; style-src 'unsafe-inline'; img-src data:; frame-ancestors 'none'")
         self.assertEqual((headers["x-content-type-options"], headers["cache-control"]), ("nosniff", "no-store"))
         self.assertIn("<h1>订单系统</h1>", body)
         self.assertEqual(self.fetch(f"/v1/runs/{rid}/report", self.tokens["bob"])[0], 200)   # Markdown by default
