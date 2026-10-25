@@ -274,6 +274,8 @@ if [ -z "$WORKER_HOST" ] && [ -n "${NATIVE_DOMAIN:-}" ]; then
   toml_set "$BOUNDARY_TOML" crew_url "\"https://$NATIVE_DOMAIN\""
   toml_set "$BOUNDARY_TOML" crew_entry_ttl '"1h"'
   GATEWAY_PORT="$(grep -E '^gateway_port' "$BOUNDARY_TOML" | grep -oE '[0-9]+')"
+  # K03: through every public relay the native login ends with its access cookie (included by each one below)
+  install -m 0644 "$TARGET/deploy/nginx/kirocrew-native-guard.conf" /etc/nginx/kirocrew-native-guard.conf
   # Rendered from files only: the origin secret never appears on a command line.
   umask 027
   "$PYTHON" - "$TARGET/deploy/nginx/kirocrew-native.conf" /etc/kirocrew-on/origin-secret "$NATIVE_PORT" "$GATEWAY_PORT" \
@@ -294,7 +296,30 @@ PY
     setsebool -P httpd_can_network_connect 1
     semanage port -a -t http_port_t -p tcp "$NATIVE_PORT" 2>/dev/null || semanage port -m -t http_port_t -p tcp "$NATIVE_PORT"
   fi
-  nginx -t -q
+  # Relays rendered before the guard existed (deploy.sh worker-host native / boundary native) include it from now on;
+  # one nginx refuses is put back as it was, with a warning, rather than stopping the release.
+  PATCHED_RELAYS=""
+  restore_relays() {
+    for relay in $PATCHED_RELAYS; do mv -f "${relay}.before-guard" "$relay"; done
+    log "警告：原生中转加入刷新拦截后 nginx 校验未通过，已还原；这些中转的原生登录仍可经刷新延续（K03）"
+  }
+  for relay in /etc/nginx/conf.d/kirocrew-relay-*.conf; do
+    [ -e "$relay" ] || continue
+    grep -q "kirocrew-native-guard.conf" "$relay" && continue
+    cp -p "$relay" "${relay}.before-guard"
+    "$PYTHON" - "$relay" <<'GUARD_PY'
+import sys
+path = sys.argv[1]
+text = open(path).read()
+anchor = "    client_max_body_size 50m;\n"
+if anchor not in text:
+    sys.exit(0)   # not one of ours as rendered: left as it is
+open(path, "w").write(text.replace(anchor, anchor + "    include /etc/nginx/kirocrew-native-guard.conf;   # K03\n", 1))
+GUARD_PY
+    PATCHED_RELAYS="$PATCHED_RELAYS $relay"
+  done
+  nginx -t -q || { restore_relays; nginx -t -q; }
+  rm -f /etc/nginx/conf.d/kirocrew-relay-*.conf.before-guard
   systemctl enable nginx >/dev/null
   systemctl reload-or-restart nginx
 fi

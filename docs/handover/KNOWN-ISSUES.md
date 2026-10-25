@@ -7,7 +7,7 @@
 |---|---|---|---|---|
 | K01 | OpenCode 执行曾返回空结果或不完整交付（2026-10-11 本地复现：`opencode/big-pickle` 两次未写 handoff、一次空结果；EC2 复现：shell heredoc 写文件被 KiroCrew 工具门禁以 `hook_deny` 拒绝，OpenCode 只收到无原因的拒绝后以 `_No response._` 结束，三次均 blocked） | 单阶段 deliver（opencode，`model=auto`） | 新版判为 blocked，不宣称完成；替换配置 deliver→claude 已验证 | M2 回退链；查明命中的门禁层（审计记录不含原因） |
 | K02 | 含 `/`、`:`、`[]` 的模型 ID 被原生 spawn 格式拒绝 | 指定 `provider/model` 形式的 OpenCode 模型 | Worker 公布能力时过滤，返回 `model_transport_unsupported` | M1 Task 14 / 18 记录；上游最小方案另行提交 |
-| K03 | 原生浏览器登录覆盖整个 Gateway，平台撤权不使其失效；2026-10-11 起原生对话经第二个 CloudFront 分发对公网开放（源站密钥 + Gateway token 登录） | 生成 crew-entry 链接后撤销成员 | 仅对执行边界所有者开放；公网入口登录有效期 1 h；nginx 不记录 token | M4 单 Session 票据 |
+| K03 | 原生浏览器登录覆盖整个 Gateway，平台撤权不使其失效；2026-10-11 起原生对话经第二个 CloudFront 分发对公网开放（源站密钥 + Gateway token 登录） | 生成 crew-entry 链接后撤销成员 | 仅对执行边界所有者开放；公网入口登录有效期 1 h，Gateway 另发的 30 天刷新凭据在公网中转上被拦下（2026-10-26）；nginx 不记录 token | M4 单 Session 票据 |
 | K04 | 新版 Web 未代理原生权限批准；待批准时停止可能挂起 | 触发需要批准的工具调用 | 回 KiroCrew 原生页面处理 | M2 批准代理 |
 | K05 | Kiro 不报告实际模型；公布的模型不代表有配额 | 查看 Kiro Attempt 证据 | 显示“未报告” | M1 记录 |
 | K06 | 父会话 note 上限约 4000 字符，Worker 截断到 3800 | 长交接摘要 | 交接以文件为准 | M2 报告与上下文 |

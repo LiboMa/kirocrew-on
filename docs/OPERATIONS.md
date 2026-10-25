@@ -212,6 +212,10 @@ Worker 主机本身不对公网开放。控制台提示“该执行环境尚未�
 `X-Origin-Verify` 的请求，支持 WebSocket）→ 回环 Gateway `127.0.0.1:5476`。Gateway 仍然只监听回环，并保留自己的
 token 登录、Host 与 CSRF 检查；公网来源经 `KIROCREW_CORS_ORIGINS` 被信任（由 `crew_url` 推导）。
 入口登录有效期 `crew_entry_ttl = "1h"`（K03：该登录覆盖整个 Gateway；过期后在控制台重新点击打开）。
+Gateway 在发访问 Cookie 的同时还发一条 30 天的刷新凭据（`mc_refresh_<端口>`，2026-10-26 在 EC2 实测确认），原生页面会用
+`/api/auth/refresh` 把它换成新的登录；所有公网中转（`kirocrew-native.conf`、`kirocrew-relay-*.conf`）都包含
+`/etc/nginx/kirocrew-native-guard.conf`，把这个请求答成「刷新链已吊销」（401），登录因此在访问 Cookie 到期时结束，
+原生页面回到需要登录的提示。`deploy.sh push` 安装这个片段，并给此前渲染的中转补上 include（nginx 校验不过就还原并警告）。
 nginx 访问日志只记路径，不记 `?token=` 查询串。经代理的请求在 KiroCrew 中被识别为远程，不能修改 Gateway 配置。
 SSM 隧道（`localhost:15476`）方式仍可用：`crew_url` 指向本地端口时，该端口进入 `KIROCREW_ALLOWED_LOOPBACK_PORTS`。
 
@@ -671,7 +675,7 @@ CloudFront 只使用 us-east-1 的证书）：分发加上别名与证书（SNI�
     - 会话被停止或关闭：不重试；
     - 看门狗停的：按 D39 自动重试一次，见「看门狗」；
     - 有人可能经入口停的：按人工停止处理，不重试。
-  - **为什么是 8 小时**：入口给的原生登录最长 8 小时，而且覆盖该 Worker 的整个 Gateway（K03）。打开过入口的人，能停止该 Gateway 上的任何原生任务。
+  - **为什么是 8 小时**：入口给的原生登录最长 8 小时（`crew_entry_ttl` 的上限；Gateway 的 30 天刷新在公网中转上被拦下，见「原生对话入口」），而且覆盖该 Worker 的整个 Gateway（K03）。打开过入口的人，能停止该 Gateway 上的任何原生任务。
   - **已知缺口**：不经平台、直接连到 Gateway 的停止平台看不到（如经 SSM 端口转发打开原生页面后停止），会被当作回收，最多多重试一次。运维这样停了任务又不想让它重跑时，在平台上停止该会话。
   - **部署注意**：这个判断看的是审计里的 `run.crew_entry` 记录，D57 起才写。首次部署 D57 后的 8 小时内，部署前打开的入口没有记录：经这样的入口人工停止的任务，可能被当作回收自动重试一次。
   - D63 已关闭 eager spawn，回收应很少见，这条重试是兜底。

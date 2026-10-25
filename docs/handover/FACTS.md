@@ -16,7 +16,7 @@
 | F10 | Engine 单线程：`engine.lock` 独占租约 + 一个 daemon 线程；`tick` 串行推进所有 Run，`/prepare` 最长 240 s，其他 Worker 请求 35 s 超时 | `engine.py:20-25, 62-64, 113`；`transport.py:11` |
 | F11 | Worker 到 Gateway 写死 `127.0.0.1`，Worker 必须与 Gateway 同机；只有浏览器 origin 可通过 `--crew-url` 配置 | `api.py:37, 54, 73, 77, 90`；`worker.py:49, 395` |
 | F12 | 原生 token 每次调用现取：`request()` 每次调用 `token()`，读取 `.local_secret` 并请求 `/api/token/local`；一次 inspect 至少换 2–3 次 token；只有旧版观察器缓存 180 s | `api.py:50-57, 76`；`worker.py:native 54-55` |
-| F13 | crew-entry 链接中的原生 token `ttl=8h`，是整个 Gateway 的 owner 浏览器登录，不是单 Session 票据 | `api.py:chat_entry_url 60-68`；`test_workflow.py:231` |
+| F13 | crew-entry 链接中的原生 token `ttl=8h`（EC2 设为 1h），是整个 Gateway 的 owner 浏览器登录，不是单 Session 票据；换取登录时 Gateway 另发 30 天的刷新凭据（`mc_refresh_<端口>`，Path=/api/auth），公网中转拦下 `/api/auth/refresh`（2026-10-26） | `api.py:chat_entry_url 60-68`；`test_workflow.py:231` |
 | F14 | 路由日志：旧版 `poc.py` 写 `ROOT/evidence/provider-routing.jsonl`；Worker `inspect` 按 `session_key == "subagent:<id>"` 读取 `actual_backend`；缺失时验收拦截为“实际 ACP 后端未核实” | `poc.py:183`；`worker.py:287-295`；`engine.py:180-182` |
 | F15 | Team API 只接受远程 Git 来源（https / ssh / `user@host:path`），不接受宿主机路径 | `domain.py:271-283` |
 | F16 | Worker 注册规则：与平台同一宿主账号的 Worker 仅允许管理员个人空间以 `trusted-local` 使用；Team Worker 必须声明 `dedicated`；不同空间不能共用同一宿主账号 | `server.py:202-228` |
