@@ -142,6 +142,12 @@ TOOLS = [
     {"name": "octopus_recover", "description": "在原 Session 和 Workspace 启动 KiroCrew Coordinator 诊断，按实际失败证据重试、退回上游返工并复审；只在缺少仓库凭证或需求信息时停下说明。异步执行，以状态与纠错记录确认结果。",
      "inputSchema": object_schema({"run_id": STRING, "request_id": STRING, "expected_version": {"type": "integer"}},
                                  ["run_id", "request_id", "expected_version"])},
+    {"name": "octopus_takeover", "description": "把跑在别人个人执行环境上的会话接手到用户自己的执行环境（D74）：同一个会话连同提交历史"
+                                                "搬过去，之后以用户自己的身份、凭证和用量运行；原生聊天的上下文不跟过去，创建者可以接回。"
+                                                "只在 octopus_status 的 permissions.takeover 为真时使用，调用前先征得用户同意。"
+                                                "异步：返回 takeover.state=moving，用 octopus_status 等它消失（成功）或变为 failed（看 reason）。",
+     "inputSchema": object_schema({"run_id": STRING, "request_id": STRING, "expected_version": {"type": "integer"}},
+                                 ["run_id", "request_id", "expected_version"])},
     {"name": "octopus_control", "description": "停止、关闭、重新打开 Session；删除要求完整 Session ID 确认，并先备份。",
      "inputSchema": object_schema({"run_id": STRING, "request_id": STRING, "expected_version": {"type": "integer"},
                                   "action": {"enum": ["stop", "close", "reopen", "delete"]}, "confirmation": STRING},
@@ -405,7 +411,8 @@ def admin_environments(client, args):
 SESSION_FIELDS = ("id", "name", "status", "desired", "lifecycle", "version", "error", "attention", "progress", "input",
                   "planning", "team_id", "worker_id", "workflow_name", "match_mode", "created", "updated", "kept", "verified",
                   "request",   # D55: the submission it came from (admission is gone, D70)
-                  "access")   # D64: the user's own, their Team's, a share (viewer / collaborator) or an admin's oversight
+                  "access",   # D64: the user's own, their Team's, a share (viewer / collaborator) or an admin's oversight
+                  "executed_by", "takeover")   # D74: who runs it when not its creator; a takeover moving or failed
 
 
 def compact_status(session, events):
@@ -454,6 +461,9 @@ def compact_status(session, events):
     for key in ("publish_policy", "publish_auto", "publish_target", "publish_suggestion"):   # D47, D48
         if session.get(key):
             view[key] = session[key]
+    if session.get("permissions"):   # D49 R10 / D74: whether the user may direct it here, or take it over to their own
+        view["permissions"] = {k: session["permissions"].get(k) for k in ("direct", "direct_reason", "takeover", "takeover_reason")
+                               if k in session["permissions"]}
     if session.get("placement"):   # D49: where it runs and, on a Team's environment for want of one's own boundary, why
         view["placement"] = session["placement"]
     if session.get("usage"):   # D46 P6a: what its Attempts used
@@ -669,6 +679,9 @@ def call(client, name, args):
     if name == "octopus_publish_policy":   # D47
         return client.request("POST", "/v1/runs/" + quote(args["run_id"], safe="") + "/publish-policy",
                               {k: args[k] for k in ("auto", "repository", "credential") if k in args})
+    if name == "octopus_takeover":   # D74
+        return client.request("POST", "/v1/runs/" + quote(args["run_id"], safe="") + "/takeover",
+                              {"request_id": args["request_id"], "expected_version": args["expected_version"]})
     if name in {"octopus_continue", "octopus_recover", "octopus_control"}:
         rid = args.pop("run_id")
         if name == "octopus_continue" and "credentials" in args:

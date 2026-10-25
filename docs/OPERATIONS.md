@@ -1129,7 +1129,9 @@ Draft PR（GitHub）/ Draft MR（GitLab）。
 - **凭证**：创建者的个人凭证不跟过去。仍可用的 Team / 平台凭证照旧；否则换成接手人可用的同一仓库凭证；没有就记为「已撤下」，发布前由执行人更换。
 - **不搬**：原生聊天的上下文与记忆、被 `.gitignore` 忽略的文件（`node_modules`、`.env`、构建产物，新环境的检查会重新生成）。
   原执行环境里的工作区与原生会话保留不删（属于创建者）；接回时，原边界上旧的工作区目录改名为 `<run>.before-<时间>` 留存。
-- **第 2 期**：MCP `octopus_takeover`；按尝试记录执行人的用量；不在分支上的旧候选随 bundle 带走；旧工作区的清理策略。
+- **MCP**：`octopus_status` 带 `permissions`（`direct` / `takeover` 及原因）、`executed_by` 与 `takeover`；`octopus_takeover {run_id, request_id, expected_version}`
+  发起接手（Skill 写明先征得用户同意，与控制台的确认一致）。
+- **第 2 期**：按尝试记录执行人的用量；不在分支上的旧候选随 bundle 带走；旧工作区的清理策略。
 
 ### 用户、Token 与管理员权限（访问管理第 1 期）
 
