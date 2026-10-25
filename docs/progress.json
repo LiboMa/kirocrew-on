@@ -706,9 +706,9 @@
         },
         {
           "id": "confirm",
-          "name": "负责人确认推送",
-          "status": "todo",
-          "ref": "负责人",
+          "name": "负责人确认推送与合并",
+          "status": "accepted",
+          "ref": "负责人 2026-10-24：PR #5、#6、#7 已合并；之后开发完即推送、开 PR、部署 EC2（合并仍由负责人）",
           "deps": [
             "acc-route",
             "acc-p5",
@@ -720,12 +720,13 @@
         },
         {
           "id": "push",
-          "name": "推送 60 个提交（--no-verify）并更新 PR #4",
-          "status": "todo",
+          "name": "推送到 main（经 PR）",
+          "status": "accepted",
           "deps": [
             "confirm",
             "scan"
-          ]
+          ],
+          "ref": "PR #4 → main 8477234；PR #5–#7 → main b2b8986（2026-10-24 改写历史后）"
         }
       ]
     },
@@ -816,19 +817,19 @@
   "next": [
     {
       "who": "owner",
-      "text": "D52 EC2 验收：指定一个可写入的测试仓库与写凭证（会在其上开 octopus/knowledge-… 分支与 Draft PR）"
+      "text": "合并 PR #8：MVP 0.2.0 输入（两种部署模式、Worker 自助申请、每人一块 EBS、认证随卷、缩容待评估），Worker 自助接入并入 0.2.0"
     },
     {
       "who": "owner",
-      "text": "可选：建一个测试成员账号（我不经 MCP 建用户），以便在 EC2 实测 D49 第 2 期的成员回退与 R10"
+      "text": "0.2.0 的设计合并（worker-pool 与 mvp-020-ha 两份草案并成一份设计 + 计划）完成后，定开工顺序"
     },
     {
       "who": "owner",
-      "text": "规划质量：默认 admission 改为 confirm（计划先给人看），和 / 或在规划后加一个不同工具的计划审查"
+      "text": "下一个大项的先后：M5 仓库闭环（CONN-01…05）、M3-6 移除 /classic/、M4-3 原生入口单 Session 票据（K03）、D49 第 3 期"
     },
     {
       "who": "owner",
-      "text": "下一个大项的先后：M2 剩余、M3 剩余、M4 剩余、M5 仓库闭环、D49 第 3 期、返工自动附技能（skills-next）"
+      "text": "确认后删除本机备份分支 backup/main-before-rewrite（改写前的 main）"
     }
   ]
 }
