@@ -382,7 +382,7 @@
 
 ## 执行环境登记的两处不一致（2026-10-24 设计 Worker 自助接入时发现）
 
-- `GET /v1/workers/<id>/capabilities`（刷新模型）只核对 `boundary`，引擎的健康轮询与原生入口还核对 `host_principal` 与 `isolation`。
+- ~~`GET /v1/workers/<id>/capabilities`（刷新模型）只核对 `boundary`~~（2026-10-25 修复，PR #9：改为 POST，同时核对 `host_principal` 与 `isolation`，在事务里重读后只更新能力字段，不再覆盖同时发生的「更新连接」）。
 - 非 spare 的 Worker 登记时只与**已启用**的 Worker 比对 `boundary`：已停用 Worker 的边界可以再登记给另一个人或 Team。
 
 ## 预览域名与控制台同站（2026-10-25，0.2.0 设计审阅时发现）
@@ -400,4 +400,13 @@
 - 预览页可以写 `Domain=preview.tinyboat.blog` 的 Cookie，覆盖其他会话的预览 Cookie。
 
 **修法**：预览改用独立的可注册域名。0.2.0 的原生入口也要这样做（设计 CE2，硬性要求）。由负责人决定域名。
+
+**2026-10-25 已做（PR #9，域名换之前的缓解）**：
+- 排查了所有 GET：没有 GET 签发票据或写 Cookie，真正改业务数据的只有「刷新模型」，已改为 POST；
+- 只凭 Cookie 的请求，浏览器标明来自同站或跨站的子资源请求（`Sec-Fetch-Site`、`Sec-Fetch-Mode`）一律拒绝，顶层打开页面不受影响；
+- 报告页与平台的提示页加 `frame-ancestors 'none'`，不能被嵌入。
+
+**仍待**：
+- 事件流（SSE）按 Token 限制同时打开的条数；`export`、`chat-changes`、尝试 diff 加频率限制。有效 Token 的持有者仍可以大量发起这些请求，消耗资源。
+- Cookie 灌满 `.tinyboat.blog` 让控制台请求头过大，以及不同会话的预览之间互相覆盖 Cookie，要等换了域名才能解决。
 
