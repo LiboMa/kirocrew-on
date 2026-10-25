@@ -395,6 +395,15 @@ def restart_budget(db, rid, who):
     journal.change(db, "runs", rid, who, "run.budget", quiet=("snapshot",), snapshot=dumps({**snapshot, "budget_since": time.time()}))
 
 
+def executor_of(run):
+    """Who the Session runs as (D74): its creator, until someone took it over to their own boundary."""
+    try:
+        value = run["executor_id"]
+    except (KeyError, IndexError):
+        value = None
+    return value or run["owner_id"]
+
+
 def unserved(db, run):
     """Why the run's Worker no longer runs it (spec §6.2): None while it is enabled and still serves the run's space."""
     row = db.execute("SELECT enabled,retired FROM workers WHERE id=?", (run["worker_id"],)).fetchone()
@@ -402,9 +411,10 @@ def unserved(db, run):
         return "执行环境已退役"
     if not row["enabled"]:
         return "执行环境已停用"
-    if all(w["id"] != run["worker_id"] for w in space_workers(db, run["owner_id"], run["team_id"])):
+    person = executor_of(run)   # D74: the one it runs as — its creator unless taken over
+    if all(w["id"] != run["worker_id"] for w in space_workers(db, person, run["team_id"])):
         mine = db.execute("SELECT scope,team_id,owner_id FROM workers WHERE id=?", (run["worker_id"],)).fetchone()
-        if run["team_id"] and own(mine, run["owner_id"]):   # D49 R3: the creator's boundary served the Team while they were in it
+        if run["team_id"] and own(mine, person):   # D49 R3: the creator's boundary served the Team while they were in it
             return "会话创建者已不在该 Team：请 Team owner 或管理员把会话分配到 Team 的环境"
         return "执行环境已更换或已移出该空间"
     return None
@@ -563,10 +573,16 @@ def mapping(snapshot, task, evidence=None):
 
 
 def may_publish(db, actor, run):
-    """The creator, a Team owner or an admin (D35 §5.2): who may publish a Session and answer its approvals (D38 A3)."""
+    """The creator, a Team owner or an admin (D35 §5.2): who controls a Session — shares it, deletes its knowledge."""
     team_owner = bool(run["team_id"]) and db.execute(
         "SELECT 1 FROM members WHERE team_id=? AND user_id=? AND role='owner'", (run["team_id"], actor["id"])).fetchone()
     return run["owner_id"] == actor["id"] or bool(team_owner) or elevated(actor)
+
+
+def may_direct(db, actor, run):
+    """Who may publish a Session, add a note to its running turn and answer its approvals (D38 A3): those who control it,
+    and the one it runs as (D74) — a turn they took over runs on their boundary with their credentials."""
+    return may_publish(db, actor, run) or executor_of(run) == actor["id"]
 
 
 def run_permissions(db, actor, run):
@@ -578,7 +594,8 @@ def run_permissions(db, actor, run):
             return True
         except Error:
             return False
-    native, reason = allowed(admin=False, shares=False), None
+    # The native entry never opens through a share (K03), except to the one the Session runs as on their own boundary (D74)
+    native, reason = allowed(admin=False, shares=executor_of(run) == actor["id"]), None
     if native and run["worker_id"]:
         worker = db.execute("SELECT scope,owner_id,team_id FROM workers WHERE id=?", (run["worker_id"],)).fetchone()
         native = worker is None or worker["scope"] != "shared" or worker["owner_id"] == actor["id"]
@@ -592,7 +609,7 @@ def run_permissions(db, actor, run):
         (db.execute("SELECT archived FROM teams WHERE id=?", (run["team_id"],)).fetchone() or {"archived": 0})["archived"])
     instruct = directs(db, actor, run)   # D49 R10
     return {"operate": allowed(), "delete": allowed(owner=True), "native": native, "resume": not archived,
-            "publish": may_publish(db, actor, run), "share": may_publish(db, actor, run),   # D64: a viewer only reads
+            "publish": may_direct(db, actor, run), "share": may_publish(db, actor, run),   # D64: a viewer only reads
             "assign": allowed(shares=False), **({"native_reason": reason} if reason else {}),
             "direct": instruct is None, **({"direct_reason": instruct} if instruct else {})}
 
@@ -1181,8 +1198,8 @@ class Service:
         with self.db.read() as db:
             if rid:
                 run = run_access(db, actor, rid, shares=False)   # D64: for moving it, not for shares
-                user, team = run["owner_id"], run["team_id"]
-                options = space_workers(db, user, team)   # the Session's creator's, not the operator's (R4)
+                user, team = executor_of(run), run["team_id"]
+                options = space_workers(db, user, team)   # the one it runs as (D74; its creator unless taken over), not the operator's (R4)
                 placed = json.loads(run["snapshot"]).get("placement") or {}
                 answer = {"worker": next((w for w in options if w["id"] == run["worker_id"]), None),
                           "placement": placed.get("kind"), "hint": placed.get("hint"), "options": options}
@@ -1370,7 +1387,7 @@ class Service:
         require(mode == "interrupt", "只支持 interrupt：补充说明送入正在运行的这一轮")
         with self.db.read() as db:
             run = run_access(db, actor, rid)
-            require(may_publish(db, actor, run), "只有会话创建者、Team owner 或管理员可以补充说明", 403, "forbidden")
+            require(may_direct(db, actor, run), "只有会话创建者、执行人、Team owner 或管理员可以补充说明", 403, "forbidden")
             instruct = directs(db, actor, run)   # D49 R10
             require(instruct is None, instruct, 403, "boundary_owner_only")
             require(run_permissions(db, actor, run)["resume"], "Team 已归档，不能补充说明", 409, "team_archived")
@@ -1413,7 +1430,7 @@ class Service:
                 f"{body['origin']} 的批准须带 request_id 与 {key}（取自 octopus_approvals 的列表）")
         with self.db.read() as db:
             run = run_access(db, actor, rid)
-            require(may_publish(db, actor, run), "只有会话创建者、Team owner 或管理员可以答复批准请求", 403, "forbidden")
+            require(may_direct(db, actor, run), "只有会话创建者、执行人、Team owner 或管理员可以答复批准请求", 403, "forbidden")
             instruct = directs(db, actor, run)   # D49 R10
             require(instruct is None, instruct, 403, "boundary_owner_only")
             config, retired = self._app_worker(db, run["worker_id"])
@@ -1458,7 +1475,7 @@ class Service:
         policy = publish_policy(body)
         with self.db.transaction() as db:
             run = run_access(db, actor, rid)
-            require(may_publish(db, actor, run), "只有会话创建者、Team owner 或管理员可以设置发布", 403, "forbidden")
+            require(may_direct(db, actor, run), "只有会话创建者、执行人、Team owner 或管理员可以设置发布", 403, "forbidden")
             snapshot, source = json.loads(run["snapshot"]), json.loads(run["source"])
             require(not general(source), NO_REPOSITORY, 409, "no_repository")
             self._new_repository_policy(db, actor, run["team_id"], source, policy)
@@ -1567,7 +1584,7 @@ class Service:
                 "只接受 branch、title、repository 与 credential")
         with self.db.read() as db:
             run = run_access(db, actor, rid)
-            require(may_publish(db, actor, run), "只有会话创建者、Team owner 或管理员可以发布", 403, "forbidden")
+            require(may_direct(db, actor, run), "只有会话创建者、执行人、Team owner 或管理员可以发布", 403, "forbidden")
             require(not general(json.loads(run["source"])), NO_REPOSITORY, 409, "no_repository")   # D65
             require(run["lifecycle"] == "open" and run["status"] in SETTLED and run["workspace"],
                     "会话执行结束后才能发布", 409, "publish_busy")
@@ -2380,7 +2397,7 @@ class Service:
     @staticmethod
     def _space(db, run):
         """The run's space for the waiting_worker hint: Team name (None for a personal space) and enabled Workers."""
-        workers = len(space_workers(db, run["owner_id"], run["team_id"]))
+        workers = len(space_workers(db, executor_of(run), run["team_id"]))
         if run["team_id"]:
             team = db.execute("SELECT name FROM teams WHERE id=?", (run["team_id"],)).fetchone()
             return {"team": team["name"] if team else run["team_id"], "workers": workers,
