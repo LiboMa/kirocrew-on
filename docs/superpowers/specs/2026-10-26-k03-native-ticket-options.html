@@ -1,0 +1,77 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>原生入口改为单会话票据（K03 / M4-3）：现状与三种方案（待负责人选择）</title>
+<!-- Generated from 2026-10-26-k03-native-ticket-options.md by tools/md_to_html.py; edit the Markdown, then regenerate. -->
+<style>
+  :root { --ink: #172033; --muted: #5b6577; --line: #e3e7ef; --bg: #f6f8fb; --card: #ffffff; --brand: #5b4bdb; --brand-soft: #eeebff;
+          --native: #0e6f86; --native-soft: #e2f3f7; --poc: #4a5568; --poc-soft: #edf0f5;
+          --sans: -apple-system, BlinkMacSystemFont, "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", "Noto Sans CJK SC", sans-serif;
+          --mono: "SF Mono", Menlo, Consolas, monospace; }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--bg); color: var(--ink); font: 16px/1.75 var(--sans); }
+  main { max-width: 1040px; margin: 0 auto; padding: 56px 28px 96px; }
+  main > p, main > ul, main > ol, li > p { max-width: 44em; }
+  h1 { font-size: 32px; line-height: 1.3; margin: 0 0 16px; }
+  h2 { font-size: 23px; margin: 56px 0 10px; padding-top: 20px; border-top: 1px solid var(--line); }
+  h3 { font-size: 18px; margin: 28px 0 8px; }
+  p { margin: 0 0 14px; }
+  ul, ol { padding-left: 1.5em; margin: 0 0 14px; }
+  li { margin: 5px 0; }
+  li > ul, li > ol { margin: 6px 0 4px; }
+  code { font-family: var(--mono); font-size: 0.86em; background: #eef1f6; padding: 1px 5px; border-radius: 4px; }
+  pre { font-family: var(--mono); font-size: 13px; line-height: 1.6; background: #101828; color: #e7ecf5; padding: 16px 18px;
+        border-radius: 8px; overflow-x: auto; margin: 0 0 18px; }
+  pre code { background: none; padding: 0; color: inherit; font-size: inherit; }
+  .table { overflow-x: auto; margin: 14px 0 18px; background: var(--card); border: 1px solid var(--line); border-radius: 10px; }
+  table { border-collapse: collapse; width: 100%; font-size: 14px; line-height: 1.65; }
+  th, td { text-align: left; vertical-align: top; padding: 10px 14px; border-bottom: 1px solid var(--line); }
+  tr:last-child td { border-bottom: none; }
+  thead th { background: #f0f3f8; font-weight: 600; white-space: nowrap; }
+  strong { font-weight: 650; }
+  figure { margin: 18px 0 24px; }
+  .flow { display: flex; flex-wrap: wrap; align-items: stretch; gap: 10px 8px; list-style: none; padding: 0; margin: 0; }
+  .flow li { margin: 0; flex: 1 1 150px; background: var(--card); border: 1px solid var(--line); border-top: 3px solid var(--c, var(--brand));
+             border-radius: 8px; padding: 10px 12px; font-size: 14px; line-height: 1.5; }
+  .flow li b { display: block; font-size: 13px; color: var(--c, var(--brand)); margin-bottom: 2px; }
+  .flow .chat { --c: var(--native); } .flow .keep { --c: var(--poc); }
+  figcaption { font-size: 13px; color: var(--muted); margin-top: 8px; }
+  a:focus-visible { outline: 3px solid var(--brand); outline-offset: 2px; }
+  @media (max-width: 760px) { main { padding: 32px 18px 72px; } h1 { font-size: 26px; } }
+  @media print { body { background: #fff; } .table, .flow li { break-inside: avoid; } }
+</style>
+</head>
+<body>
+<main>
+<h1>原生入口改为单会话票据（K03 / M4-3）：现状与三种方案（待负责人选择）</h1>
+<p>日期：2026-10-26　·　起因：M4-3；调研时在 EC2 发现入口登录可延续 30 天，已先做过渡修复（PR #11）</p>
+<h2>1．现状</h2>
+<ul><li><strong>入口怎么工作</strong>：会话页「在 KiroCrew 中打开」→ 平台核对是边界主人（R7）→ Worker 用本机密钥向 Gateway 要一个 token（<code>/api/token/local?ttl=1h</code>）→ 拼成 <code>&lt;原生域名&gt;/chat?sid=&lt;父会话&gt;&amp;token=…</code> → 浏览器打开后，Gateway 把它换成登录 Cookie。</li><li><strong>这个登录能做什么</strong>：它是<strong>整个 Gateway 的主人登录</strong>，<code>sid</code> 只决定打开哪一页。登录的人能看、能停该边界上的所有原生会话。</li><li><strong>能持续多久</strong>：
+<ul><li>访问 Cookie 1 小时；</li><li>Gateway 另发一条 30 天的刷新凭据（2026-10-26 在 EC2 实测确认）。<strong>过渡修复</strong>（PR #11，已部署）：所有公网中转把刷新答成「已吊销」，登录在访问 Cookie 到期时结束。</li></ul></li><li><strong>平台收不回</strong>：停用用户、取消共享，都碰不到 Gateway 里的登录；只能等它到期。</li><li><strong>影响范围</strong>：D49 以后入口只开放给边界主人，登录覆盖的是他自己的 Gateway，风险主要在「平台撤权后仍有至多 1 小时」与「共享环境的主人能看到别人的会话」（共享环境本就标明不分隔）。</li></ul>
+<p>KiroCrew 0.10.0 的 Gateway：</p>
+<ul><li><strong>没有</strong>按会话限定的登录；</li><li>有「不发刷新凭据」的声明（<code>no_refresh</code>），但 <code>/api/token/local</code> 设不了；</li><li>有吊销手段：吊销单个 Cookie（需要 Cookie 值，平台拿不到）、退出一条刷新链、<code>POST /api/logout</code>（本机密钥，结束该 Gateway 上的<strong>全部</strong>浏览器登录）。</li></ul>
+<h2>2．三种方案</h2>
+<h3>方案一 · 撤权即结束（平台侧，可马上做）</h3>
+<p>平台停用用户、取消其边界、或会话关闭时，让该边界的 Worker 调一次 <code>POST /api/logout</code>，结束这个 Gateway 上的全部浏览器登录。</p>
+<ul><li><strong>好处</strong>：不改 KiroCrew；撤权从「至多 1 小时」变成「立即」。一个边界只有一个主人，「全部登录」就是他自己的登录，不误伤别人。</li><li><strong>不足</strong>：登录仍覆盖整个 Gateway，不是单会话票据；共享环境（<code>personal</code>、<code>w1</code>）上会把主人的其他浏览器登录也一起结束。</li></ul>
+<h3>方案二 · 请 KiroCrew 提供按会话限定的登录（根本解决）</h3>
+<p>请 KiroCrew 在 <code>/api/token/local</code> 上支持两个参数：</p>
+<ul><li><code>slot=&lt;父会话&gt;</code>：token 带上 slot 声明，换成 Cookie 时保留；Gateway 只放行这个 slot 的接口与实时事件，用它现有的「应用 token」路径白名单和按 slot 过滤的事件机制实现。</li><li><code>no_refresh=1</code>：不发刷新凭据。</li></ul>
+<p>另需一个本机密钥保护的「按 slot 或 nonce 吊销」接口。平台侧：Worker 传 slot、记下 nonce；撤权、关闭会话时调吊销。</p>
+<ul><li><strong>好处</strong>：真正的单会话票据；撤权立即生效；不需要我们维护代理规则。</li><li><strong>不足</strong>：取决于 KiroCrew 的排期；原生页面里访问全局接口（会话列表等）的地方要能处理 403。</li></ul>
+<h3>方案三 · 平台票据 + 过滤代理（不改 KiroCrew）</h3>
+<p>平台给每个人、每个会话签自己的短期票据 Cookie。公网中转对每个请求和 WebSocket 升级都向平台核对（nginx <code>auth_request</code>），去掉浏览器带来的 Gateway Cookie，换上 Worker 签发的短期 Gateway 凭据。只放行页面资源和 <code>/api/chat/slots/&lt;父会话&gt;/*</code>，拦下会话列表、派生、配置与 <code>/api/auth/*</code>。</p>
+<ul><li><strong>好处</strong>：不等 KiroCrew，撤权立即生效。</li><li><strong>不足</strong>：
+<ul><li>Gateway 的实时事件流（<code>/api/ws</code>）会把<strong>所有</strong>会话的事件推给主人登录。要么逐帧过滤，要么拦下 WebSocket，后者会让页面失去实时更新。</li><li>放行清单要跟着 KiroCrew 每个版本调整，容易漏或误拦。</li></ul></li></ul>
+<h2>3．对比</h2>
+<div class="table"><table><thead><tr><th></th><th>方案一 · 撤权即结束</th><th>方案二 · KiroCrew 单会话登录</th><th>方案三 · 平台票据 + 过滤代理</th></tr></thead><tbody><tr><td>是单会话票据吗</td><td>否</td><td>是</td><td>是（靠代理）</td></tr><tr><td>撤权何时生效</td><td>立即</td><td>立即</td><td>立即</td></tr><tr><td>要改 KiroCrew 吗</td><td>不要</td><td>要</td><td>不要</td></tr><tr><td>我们的改动量</td><td>小</td><td>小（Worker 传参、吊销）</td><td>大（代理、票据、事件过滤）</td></tr><tr><td>长期维护</td><td>无</td><td>无</td><td>每个 KiroCrew 版本核对放行清单</td></tr><tr><td>主要风险</td><td>共享环境上会结束主人的其他登录</td><td>排期</td><td>实时事件流泄露或被拦</td></tr></tbody></table></div>
+<h2>4．我的建议</h2>
+<p><strong>先做方案一，同时向 KiroCrew 提方案二。</strong></p>
+<ul><li>方案一改动小、马上能做，让「撤权立即生效」成立；共享环境本就要退役（D49 第 3 期），误伤范围会越来越小。</li><li>方案二是根本解决，而且符合「以 KiroCrew 为基线、通过接口复用它的能力」的方向；需要 KiroCrew 支持的只是两个参数和一个吊销接口。</li><li>方案三维护成本高，WebSocket 的问题没有好的解法，不建议。</li></ul>
+<h2>5．需要负责人定的</h2>
+<ol><li>选哪种（或先一后二）。</li><li>方案一在共享环境上「结束主人的全部浏览器登录」是否可以接受。</li><li>方案二由谁向 KiroCrew 提需求。</li></ol>
+</main>
+</body>
+</html>
