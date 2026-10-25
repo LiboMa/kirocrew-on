@@ -86,8 +86,12 @@ export function Sidebar() {
   const filtered = !!filters.q || filters.group !== "all" || activeFilters(filters).length > 0;
   const where = (run: (typeof runs)[number]) => (run.team_id ? "Team · " + (allTeams.find((t) => t.id === run.team_id)?.name ?? run.team_id)
     : "个人 · " + (users.find((u) => u.id === run.owner_id)?.username ?? run.owner_id));
-  const line = (run: Run) => (allSessions || sharedSessions ? where(run) + (sharedSessions && run.access?.via === "share"
-    ? ` · ${run.access.role === "collaborator" ? "协作" : "查看"}${run.access.by ? ` · 由 ${run.access.by} 共享` : ""}` : "") : null);
+  // D74: a Session someone else took over says so in the list
+  const taken = (run: Run) => run.executed_by && run.executed_by.id !== me.id
+    ? `已由 ${run.executed_by.username ?? run.executed_by.id} 接手` : "";
+  const line = (run: Run) => [allSessions || sharedSessions ? where(run) + (sharedSessions && run.access?.via === "share"
+    ? ` · ${run.access.role === "collaborator" ? "协作" : "查看"}${run.access.by ? ` · 由 ${run.access.by} 共享` : ""}` : "") : "",
+  taken(run)].filter(Boolean).join(" · ") || null;
 
   return (
     <div className="flex min-h-0 flex-1 flex-col">

@@ -282,7 +282,7 @@ export interface KnowledgeItem {
 }
 
 /** D49: where a new Session would run, or where a Session may move (GET /v1/placement). */
-export type PlacementKind = "own" | "team" | "only" | "requested";
+export type PlacementKind = "own" | "team" | "only" | "requested" | "taken_over";
 
 /** D56: one page of GET /v1/runs?page=1 — the matching Sessions after the cursor, the next cursor and how many match. */
 export interface RunPage {
@@ -348,7 +348,12 @@ export interface Run {
   request?: { id: string; client: RequestClient } | null;
   admission_basis?: AdmissionBasis | null;
   /** D49: where it runs and, on a Team's environment for want of one's own boundary, why. */
-  placement?: { kind: PlacementKind; hint?: string } | null;
+  placement?: { kind: PlacementKind; hint?: string; from?: string; by?: string; by_name?: string } | null;
+  /** D74: a takeover being carried out (moving) or one that did not happen (failed), with why. */
+  takeover?: { state: "moving" | "failed"; to: string; from: string; by: string; by_name: string; requested_at: number;
+    reason?: string; code?: string } | null;
+  /** D74: the person it runs as when not its creator (taken over). */
+  executed_by?: { id: string; username?: string | null };
   /** D46 P6a: what the Session's Attempts used in total. */
   usage?: import("@/lib/usage").Usage | null;
   /** D46 P4: this Session's 「本次沉淀的知识」, and why a shared environment gathers none. */
@@ -407,7 +412,9 @@ export interface Run {
     /** D49 R10: whether the actor may continue, diagnose, confirm, add a note or answer an approval, and why not. */
     direct?: boolean; direct_reason?: string;
     /** D64: who may share it (its creator, a Team owner, an admin) and move it to another environment (never a share). */
-    share?: boolean; assign?: boolean };
+    share?: boolean; assign?: boolean;
+    /** D74: whether the actor may take it over to their own boundary, and why not. */
+    takeover?: boolean; takeover_reason?: string | null };
   /** D64: how the user reaches it — their own, their Team's, a share (viewer / collaborator) or an admin's oversight. */
   access?: { via: "owner" | "team" | "share" | "admin"; role?: string; by?: string | null };
   /** KiroCrew Agent planning: intent recognition, requirement enrichment and the generated tasks. */

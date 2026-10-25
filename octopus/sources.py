@@ -953,6 +953,51 @@ def project_dir(run):
     return expected
 
 
+def adopt_project(run, record, bundle):
+    """A Session's project taken over from another boundary (D74): its branch with the whole history, from ``bundle``,
+    as the same repository — the same commits, branch and baseline (``record``, the project record the platform kept),
+    so its candidates and reviews still hold. The bundle must hold this Session's branch alone, and the baseline must
+    be its ancestor; a cloned source keeps its origin, which agents cannot push to; a new project has none."""
+    run, bundle = Path(run), Path(bundle)
+    if not run.is_dir() or not (run / "workflow-run.json").is_file():
+        raise ValueError("缺少有效 Workflow Run。")
+    branch = "octopus/" + run.name
+    if not isinstance(record, dict) or record.get("branch") != branch or record.get("kind") not in {"new", "git"} \
+            or not re.fullmatch(r"[a-f0-9]{40}|[a-f0-9]{64}", str(record.get("commit", ""))):
+        raise ValueError("接手的项目记录无效：分支、来源类型或基线 commit 不符。")
+    workspace = run / "workspace"
+    if workspace.is_symlink():
+        raise ValueError("运行工作区不能是符号链接。")
+    workspace.mkdir(exist_ok=True)
+    destination = workspace / "project"
+    if destination.exists() or destination.is_symlink():
+        raise ValueError("项目目录已存在；接手只在新的工作区中进行。")
+    heads = _git(workspace, "bundle", "list-heads", str(bundle)).splitlines()
+    if len(heads) != 1 or heads[0].partition(" ")[2] != "refs/heads/" + branch:
+        raise ValueError("接手的内容须只含此会话的分支。")
+    staging = workspace / (".adopt-" + uuid.uuid4().hex)
+    try:
+        _git(workspace, "clone", "-q", "--no-hardlinks", "-b", branch, "--", str(bundle), str(staging))
+        head = _git(staging, "rev-parse", "HEAD")
+        if subprocess.run(["git", "-C", str(staging), "merge-base", "--is-ancestor", record["commit"], head],
+                          capture_output=True).returncode != 0:
+            raise ValueError("接手的分支不是从此会话的基线开始的。")
+        if record["kind"] == "git":
+            _git(staging, "remote", "set-url", "origin", record["source"])
+            _git(staging, "remote", "set-url", "--push", "origin", "DISABLED_NO_PUSH")
+        else:
+            _git(staging, "remote", "remove", "origin")
+        os.replace(staging, destination)
+    except (OSError, ValueError, subprocess.SubprocessError) as exc:
+        shutil.rmtree(staging, ignore_errors=True)
+        raise ValueError("接手的源码准备失败：" + scrub(exc)) from None
+    state = {"schema": 1, "status": "ready", "kind": record["kind"], "source": record.get("source"),
+             "requested_ref": record.get("requested_ref"), "directory": "workspace/project", "commit": record["commit"],
+             "branch": branch, "adopted": True, "at": time.time()}
+    _write(run, state)
+    return state
+
+
 def prepare_project(run, *, source=None, ref=None, new=False, auth=None):
     run = Path(run)
     if not run.is_dir() or not (run / "workflow-run.json").is_file():

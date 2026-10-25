@@ -167,6 +167,16 @@
           "more": "「公司」为平台全部用户（负责人 2026-10-22）。viewer 只读；collaborator 与普通 Team 成员相同（仍受 D49 R10）；全公司只能查看；删除、发布、改派、原生入口与 Request 不对共享开放；会话页「共享」、侧栏「共享给我」、MCP octopus_runs shared / access；迁移 12 shares，迁移器补跑缺失编号。EC2 5ec0681（2026-10-22）：迁移 12 已执行（库为 8、9、10、12，11 留给 D57）；以负责人账号共享给全公司（查看）与「Web应用开发组」（协作），列表、access、MCP 与「全公司只能查看」（400）核对通过，取消后为空，审计 share.create / share.delete 各 2。待负责人：用另一个账号在控制台核对查看与协作。"
         },
         {
+          "id": "m4-takeover",
+          "name": "M4-1b 接手共享来的会话（同一会话搬到自己的执行边界续作）",
+          "status": "deployed",
+          "ref": "D74 · EC2 53b35a1 · PR #10",
+          "deps": [
+            "m4-org"
+          ],
+          "more": "负责人 2026-10-25 选方案一「接手」。执行人 executor_id（迁移 14）与创建者分开：执行位置、额度、知识空间、凭证、发布、改派与原生入口看执行人；POST /v1/runs/<id>/takeover 登记后台搬迁：原 Worker 先提交对话中的改动，给出完整 bundle 与尝试文件（遮蔽凭证与 Worker Token），新 Worker /adopt 建同一工作区；开始与落地时再核对资格，失败留在原处可重试，创建者可接回。本机 HTTP 端到端 13/13；EC2 2026-10-26 部署 53b35a1：接手 12/12（自己的边界 already_yours、共享环境 not_needed、OpenAPI 与控制台）、API 14/14、同站 8/8、浏览器 13/13。MCP octopus_takeover 与状态里的 permissions / executed_by / takeover 已加（本机）；会话用量经手不止一人时按人拆开（usage.by）。待负责人：指定第二个人的个人执行环境，做一次真实的跨边界接手。"
+        },
+        {
           "id": "m4-k10",
           "name": "M4-2 Worker Token 移出数据库（K10）",
           "status": "accepted",

@@ -13,6 +13,8 @@ from octopus.domain import Service
 from octopus.security import authenticate, create_user, issue_token
 from octopus.server import server
 
+NOT_NEEDED = "会话在 Team 或共享的执行环境上，能续作的人都可以直接续作，不需要接手"   # D74: nothing to take over there
+
 PASSWORD = "Test-password-123!"
 
 
@@ -157,13 +159,13 @@ class SemanticsTests(AccessCase):
             # publish: False on alice's Session (a member, not its creator or a Team owner), True on his own (D38 A3).
             self.assertEqual(call("GET", f"/v1/runs/{rid}", self.tokens["bob"])[1]["permissions"],
                              {"operate": True, "delete": False, "native": False, "resume": True, "publish": False, "direct": True,
-                              "share": False, "assign": True})   # D64: who shares is who publishes
+                              "share": False, "assign": True, "takeover": False, "takeover_reason": NOT_NEEDED})   # D64: who shares is who publishes
             self.assertEqual(call("GET", f"/v1/runs/{mine}", self.tokens["bob"])[1]["permissions"],
                              {"operate": True, "delete": True, "native": False, "resume": True, "publish": True, "direct": True,
-                              "share": True, "assign": True})
+                              "share": True, "assign": True, "takeover": False, "takeover_reason": NOT_NEEDED})
             listed = {r["id"]: r["permissions"] for r in call("GET", "/v1/runs", self.tokens["bob"])[1]}
             self.assertEqual(listed[rid], {"operate": True, "delete": False, "native": False, "resume": True, "publish": False, "direct": True,
-                                           "share": False, "assign": True})
+                                           "share": False, "assign": True, "takeover": False, "takeover_reason": NOT_NEEDED})
 
     def test_viewer_cannot_edit_a_workflow_and_is_told_why(self):
         from octopus.security import Error
