@@ -860,9 +860,9 @@ class Worker:
 
     def pull_bundle(self, plan):
         """The bundle file of a pull: the branch since the baseline (a local clone of the repository has it), or its
-        whole history (``full``: a new project, or a clone without the baseline). The caller streams and removes it."""
-        bundle = plan["run"] / ".pull.bundle"
-        bundle.unlink(missing_ok=True)
+        whole history (``full``: a new project, or a clone without the baseline). The caller streams and removes it. Each
+        pull has a file of its own: a takeover (D74) and a person's pull may run at once."""
+        bundle = plan["run"] / f".pull-{secrets.token_hex(6)}.bundle"
         ref = "refs/heads/" + plan["branch"]
         try:
             workspace._git(plan["project"], "bundle", "create", "-q", str(bundle), ref, *([] if plan["full"] else ["^" + plan["base"]]))
