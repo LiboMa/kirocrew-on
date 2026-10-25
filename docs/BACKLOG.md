@@ -184,9 +184,9 @@
 - 控制台上传 bundle；控制台「复制 CLI 命令」。
 - 多个本地仓库关联同一会话（后写的生效）。
 - §7 验收 1 的四个客户端：Codex、Kiro IDE 待负责人在各自客户端核对 pull / sync。
-- 终审延后的次要项：~~`.pull.bundle` 固定路径（并发拉回互相干扰）~~（2026-10-26 修复：每次拉回各用一个文件，接手与拉回可同时进行）；API 允许 `head == old`（0 个文件的同步）；bundle 链接文档写 Read 而
-  `required_scope` 要求 execute（只读 Token 不能拉回）；20 MB 原始请求体在鉴权前读入内存；提交是否本仓库只比仓库不比 ref；login 在
-  已存在且权限较宽的文件上先写后 chmod、吊销登录 Token 失败时留下未保存的 30 天 Token；`report --json` 无效；`octopus -h` 不列使用者命令。
+- 终审延后的次要项：~~`.pull.bundle` 固定路径（并发拉回互相干扰）~~（2026-10-26 修复：每次拉回各用一个文件，接手与拉回可同时进行）；~~API 允许 `head == old`（0 个文件的同步）；bundle 链接文档写 Read 而
+  `required_scope` 要求 execute（只读 Token 不能拉回）；20 MB 原始请求体在鉴权前读入内存~~（2026-10-26 修复：409 `nothing_to_sync`；拉回为 read；先鉴权再读）；提交是否本仓库只比仓库不比 ref；~~login 在
+  已存在且权限较宽的文件上先写后 chmod、吊销登录 Token 失败时留下未保存的 30 天 Token~~（2026-10-26 修复：先收窄再写；先保存再吊销）；`report --json` 无效；`octopus -h` 不列使用者命令。
 
 ## D56 控制台过滤与 diff 的延后项（2026-10-22）
 

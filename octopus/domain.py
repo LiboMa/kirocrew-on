@@ -2180,6 +2180,7 @@ class Service:
         from .sources import SHA
         require(isinstance(head, str) and SHA.fullmatch(head) and isinstance(old, str) and SHA.fullmatch(old),
                 "head 与 old 须为完整的提交 ID")
+        require(head != old, "本地没有新的提交，不需要同步", 409, "nothing_to_sync")
         require(note is None or isinstance(note, str) and len(note) <= 2000, "说明最多 2000 个字符")
         require(isinstance(request_id, str) and re.fullmatch(r"[a-zA-Z0-9_.-]{8,100}", request_id), "需要 8–100 字符 request_id")
         body = {"request_id": request_id, "head": head, "old": old, "note": note,

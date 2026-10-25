@@ -700,15 +700,16 @@ CloudFront 只使用 us-east-1 的证书）：分发加上别名与证书（SNI�
   submit、pull 时写入；status、pull、sync 等省略会话 ID 时读取。MCP `octopus_link` 可手动关联。
 - **pull**：`POST /v1/runs/<id>/bundle` 给出 10 分钟的链接，`GET /bundle/<票据>/<id>.bundle`（`?full=1` 为完整历史）由 Worker 的
   `/pull/bundle` 生成，按发布同样核查疑似凭证与 `.env`（`bundle_secret_found`）。本地取为 `octopus/<run>` 分支，不覆盖该分支上本地自己的提交；
-  缺会话基线时自动取完整历史；同时写报告、计划与各任务交接。
+  缺会话基线时自动取完整历史；同时写报告、计划与各任务交接。拉回是读：只读（`read`）Token 与查看身份的共享对象都可以拉回（2026-10-26）。
 - **sync**：`POST /v1/runs/<id>/sync`（`application/octet-stream` 的 bundle，≤ 20 MB；查询参数 `request_id`、`expected_version`、`old`、`head`、
   `note`）。Worker 的 `/sync` 只在会话分支仍在 `old`、工作区没有未纳入候选的改动、`head` 是快进且新内容没有疑似凭证时移动分支与工作区；
-  拒绝码 `sync_not_fast_forward`、`sync_dirty`、`sync_secret_found`、`sync_too_large`。平台为最后一个写代码的任务（implement / deliver）
+  拒绝码 `sync_not_fast_forward`、`sync_dirty`、`sync_secret_found`、`sync_too_large`，`head` 等于 `old`（没有新提交）为 409 `nothing_to_sync`；
+  平台先鉴权（须 `execute`）再读请求体。平台为最后一个写代码的任务（implement / deliver）
   记一个「本地同步」Attempt（证据 `synced`：谁、几个提交、说明），有检查命令时照常运行与判定，其后的任务重新执行（审查绑定新候选）；
   修订「本地同步」、事件 `run.synced`。权限与续作相同；同一 `request_id` 只同步一次。Worker 早于 D58 时 409 `worker_outdated`。
 - **未推送提交**：在仓库内提交且源码是这个仓库的 origin 时，本地有 origin 没有的提交会先停下；`--push-base`（MCP `push_base`，须用户同意）
   先 `git push -u origin HEAD`，`--allow-unpushed` 按 origin 已有的提交提交。SSH 形式的 origin 按 HTTPS 提交（执行环境只用 HTTPS 克隆）。
-- **使用者命令行**：`octopus login --url <平台地址>`（Token 保存在 `~/.config/kirocrew-on/cli.json`，0600，标签「octopus CLI」，默认 30 天，`--expires 7d|30d|365d|never` 另选；
+- **使用者命令行**：`octopus login --url <平台地址>`（Token 保存在 `~/.config/kirocrew-on/cli.json`，0600——已有的文件先收窄权限再写入；先保存、再吊销登录用的临时 Token，标签「octopus CLI」，默认 30 天，`--expires 7d|30d|365d|never` 另选；
   Request 的 client 记为 `cli`），之后 `octopus submit / plan / status / watch / report / pull / sync / continue / approvals / search`，
   `--json` 输出 JSON，`--run` 指定会话。运维命令（serve、worker、connect、backup 等）不变。
 
