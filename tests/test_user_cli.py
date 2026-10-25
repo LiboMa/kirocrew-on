@@ -53,6 +53,21 @@ def run(args, api, cwd):
     return out.getvalue()
 
 
+class ReportAndHelpTests(unittest.TestCase):   # D58 final review: report --json printed text; octopus -h hid these commands
+    def test_report_as_json_carries_the_report(self):
+        with tempfile.TemporaryDirectory() as cwd:
+            out = run(["report", "--run", RID, "--json"], Api(), cwd)
+        self.assertEqual(json.loads(out), {"run_id": RID, "format": "md", "report": "# 报告\n"})
+
+    def test_the_top_level_help_names_the_users_commands(self):
+        from octopus import __main__ as entry
+        out = io.StringIO()
+        with redirect_stdout(out), self.assertRaises(SystemExit):
+            entry.main(["-h"])
+        for name in ("login", "submit", "status", "pull", "sync"):
+            self.assertIn(name, out.getvalue())
+
+
 class LoginTests(unittest.TestCase):
     def test_login_keeps_a_cli_token_only_for_its_owner(self):
         with tempfile.TemporaryDirectory() as home:

@@ -188,8 +188,9 @@ def run(argv, client, cwd):
         view = client.request("GET", f"/v1/runs/{rid}")
         return say(view, _plan_text(view))
     if args.command == "report":
-        text = client.text("GET", f"/v1/runs/{rid}/report?format={'html' if args.html else 'md'}")
-        return print(text)
+        fmt = "html" if args.html else "md"
+        text = client.text("GET", f"/v1/runs/{rid}/report?format={fmt}")
+        return say({"run_id": rid, "format": fmt, "report": text}, text)
     if args.command == "pull":
         result = local.pull(client, rid, cwd, checkout=args.checkout, full=args.full)
         return say(result, f"已拉回 {result['branch']}（{result['head'][:7]}）" + ("，已切换到该分支" if result["checked_out"] else "")
