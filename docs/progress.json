@@ -167,6 +167,16 @@
           "more": "「公司」为平台全部用户（负责人 2026-10-22）。viewer 只读；collaborator 与普通 Team 成员相同（仍受 D49 R10）；全公司只能查看；删除、发布、改派、原生入口与 Request 不对共享开放；会话页「共享」、侧栏「共享给我」、MCP octopus_runs shared / access；迁移 12 shares，迁移器补跑缺失编号。EC2 5ec0681（2026-10-22）：迁移 12 已执行（库为 8、9、10、12，11 留给 D57）；以负责人账号共享给全公司（查看）与「Web应用开发组」（协作），列表、access、MCP 与「全公司只能查看」（400）核对通过，取消后为空，审计 share.create / share.delete 各 2。待负责人：用另一个账号在控制台核对查看与协作。"
         },
         {
+          "id": "m4-takeover",
+          "name": "M4-1b 接手共享来的会话（同一会话搬到自己的执行边界续作）",
+          "status": "local",
+          "ref": "D74",
+          "deps": [
+            "m4-org"
+          ],
+          "more": "负责人 2026-10-25 选方案一「接手」。执行人 executor_id（迁移 14）与创建者分开：执行位置、额度、知识空间、凭证、发布与原生入口看执行人；POST /v1/runs/<id>/takeover 登记后台搬迁：原 Worker 先提交对话中的改动，给出完整 bundle 与尝试文件（/pull/attempts），新 Worker /adopt 建同一工作区；失败留在原处可重试，创建者可接回。控制台按钮、确认框、进行中与失败提示。待：EC2 两个人的边界实测。"
+        },
+        {
           "id": "m4-k10",
           "name": "M4-2 Worker Token 移出数据库（K10）",
           "status": "accepted",

@@ -303,7 +303,7 @@ def directs(db, actor, run):
         return None
     name = db.execute("SELECT username FROM users WHERE id=?", (holder,)).fetchone()
     return (f"此会话在 {name['username'] if name else '创建者'} 的执行边界上运行：只有边界主人能在上面下达指令（续作、诊断、确认计划、"
-            "补充说明、批准工具）" + ("；需要接手时请 Team owner 或管理员把会话改派到 Team 的环境" if run["team_id"] else ""))
+            "补充说明、批准工具）。")
 
 
 def moving(run):
@@ -662,6 +662,7 @@ class Service:
     def __init__(self, database):
         self.db = database
         self._opened, self._opened_lock = {}, threading.Lock()   # remote preview opening links already followed
+        self._moving = set()   # D74: the Sessions whose takeover is being carried out here
         from .credentials import CredentialStore
         self.credentials = CredentialStore(database)   # D35; the server sets its key file
 
@@ -1523,10 +1524,11 @@ class Service:
         return {"id": rid, "publish_policy": snapshot["publish_policy"]}
 
     def auto_publish_pending(self):
-        """Publish, as their creator, the completed Sessions whose policy asks for it (D47) — once per version: a publish
+        """Publish, as the person they run as (their creator unless taken over, D74), the completed Sessions whose policy
+        asks for it (D47) — once per version: a publish
         that cannot happen is recorded with its reason and waits for a person, the Session stays completed."""
         with self.db.read() as db:
-            rows = [dict(r) for r in db.execute("SELECT id, version, snapshot, owner_id FROM runs "
+            rows = [dict(r) for r in db.execute("SELECT id, version, snapshot, COALESCE(executor_id, owner_id) owner_id FROM runs "
                                                 "WHERE status='completed' AND lifecycle='open'")]
         for row in rows:
             snapshot = json.loads(row["snapshot"])
@@ -1749,8 +1751,9 @@ class Service:
                 "SELECT 1 FROM members WHERE team_id=? AND user_id=? AND role='owner'", (run["team_id"], actor["id"])).fetchone()
             own_removal = body["source"] is None and current and current["scope"] == "user" and \
                 (current.get("owner") or {}).get("id") == actor["id"]
-            require(run["owner_id"] == actor["id"] or team_owner or elevated(actor) or own_removal,
-                    "只有会话创建者、Team owner 或管理员可以更换凭证", 403, "forbidden")
+            require(run["owner_id"] == actor["id"] or executor_of(run) == actor["id"] or team_owner or elevated(actor)
+                    or own_removal, "只有会话创建者、执行人、Team owner 或管理员可以更换凭证", 403, "forbidden")
+            require(not moving(run), "正在接手到新的执行环境，请稍候", 409, "takeover_in_progress")
             summary = lambda value: {k: value[k] for k in ("id", "name", "scope", "hint")} if value else None
             bound = None
             if body["source"]:
@@ -2367,12 +2370,15 @@ class Service:
         value.update({key: snapshot.get(key) for key in ("name", "workflow_name", "workflow_version",
                                                        "selection", "match_mode", "match_reason", "purpose", "planning", "replan",
                                                        "admission", "admission_basis", "confirmed", "publish_policy", "publish_auto",
-                                                       "publish_target", "publish_suggestion", "placement")})
+                                                       "publish_target", "publish_suggestion", "placement", "takeover")})
         value["source"] = json.loads(value["source"])
         value["session_id"] = run["id"]
         value["quota_wait"] = quotas.waiting(snapshot, run) or None if run["status"] == "ready" else None   # D61
         creator = db.execute("SELECT username FROM users WHERE id=?", (run["owner_id"],)).fetchone()
         value["created_by"] = {"id": run["owner_id"], "username": creator["username"] if creator else None}
+        if executor_of(run) != run["owner_id"]:   # D74: taken over, it runs as someone else
+            executor = db.execute("SELECT username FROM users WHERE id=?", (executor_of(run),)).fetchone()
+            value["executed_by"] = {"id": executor_of(run), "username": executor["username"] if executor else None}
         value["publish"] = snapshot.get("publish")
         if not brief:
             from . import credentials as repo_credentials
@@ -2644,6 +2650,24 @@ class Service:
                     snapshot=dumps({**snapshot, "takeover": takeover}), version=version, updated=time.time())
                 return {"id": rid, "version": version, "takeover": takeover}
             return self._command(db, actor, "takeover", rid, body, execute)
+
+    def carry_takeovers(self, rid=None):
+        """Carry out the takeovers recorded and not yet done (D74 §4): the request's own one from its thread, and every
+        minute from serve those a restart interrupted. One move of a Session at a time."""
+        from . import takeover
+        with self.db.read() as db:
+            ids = [r["id"] for r in db.execute("SELECT id FROM runs WHERE json_extract(snapshot,'$.takeover.state')='moving'"
+                                               + (" AND id=?" if rid else ""), (rid,) if rid else ())]
+        for each in ids:
+            with self._opened_lock:
+                if each in self._moving:
+                    continue
+                self._moving.add(each)
+            try:
+                takeover.move(self, each)
+            finally:
+                with self._opened_lock:
+                    self._moving.discard(each)
 
     def operate(self, actor, rid, action, body):
         require(action in {"continue", "recover", "stop", "close", "reopen", "delete", "assign-worker"},

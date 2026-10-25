@@ -79,6 +79,8 @@
 <div class="table"><table><thead><tr><th>期</th><th>内容</th></tr></thead><tbody><tr><td>第 1 期（本次）</td><td>执行人字段与改为看执行人的地方、接手命令、引擎后台搬迁（第 4 节全部）、<code>/adopt</code> 与 <code>/pull/attempts</code>、接回、控制台按钮与确认框、权限、文档、测试、EC2 实测</td></tr><tr><td>第 2 期</td><td>MCP <code>octopus_takeover</code>；用量按人分开统计（尝试上记录执行人）；不在分支上的旧候选（被改写的、未移动的）随 bundle 带走；旧环境的工作区与原生会话的清理策略</td></tr></tbody></table></div>
 <h2>9．设计者决定（负责人可以改）</h2>
 <ol><li>执行人可以发布、补充说明、答复审批。会话以他的身份和凭证在跑，这些都是续作时会用到的。</li><li>接手不需要创建者同意。共享时给了「协作」，就代表允许对方接着做；创建者能在时间线看到，也随时可以接回。</li><li>旧环境上的工作区留着不删：它在创建者自己的环境上，是创建者的东西。</li></ol>
+<h2>10．实现时的取舍（2026-10-26）</h2>
+<ol><li><strong>谁来搬</strong>：搬迁不放进引擎的推进循环（它只推进进行中的会话），而由接手请求自己起一个后台线程完成；服务每分钟再检查一次，接着做被重启打断的接手。同一个会话同时只搬一次。</li><li><strong>接手期间也不能停止、关闭、删除</strong>：会话本来就停着，拦下这些命令可以避免搬到一半时原环境被关闭。</li><li><strong>尝试文件</strong>：除第 4 节列的四个文件，也带上 <code>context.json</code>；经平台按凭证规则遮蔽后再交给新边界（D57 §3.3）。新 Worker 只接受 <code>attempts/attempt-&lt;32 位&gt;/</code> 下的这五种文件和一个 <code>session.bundle</code>，其他一律拒绝（409 <code>adopt_invalid</code>）。</li><li><strong>项目记录</strong>：由原 Worker 随尝试文件给出（kind、基线、分支），平台核对来源与会话记录一致后交给新 Worker；不一致就不接手。</li><li><strong>对话中的改动</strong>：提交后记为任务的一个尝试（<code>checks_pass</code> 记为跳过：「接手前提交，没有运行检查」），其后已验收的任务按 D73 重置为待执行。<code>.env</code> 这类文件不会被提交，留在原环境。</li><li><strong>执行人也能更换凭证</strong>：凭证被记为「已撤下」时，执行人要能换上自己的凭证才能发布。</li><li><strong>接回时的旧目录</strong>：原边界上旧的工作区目录改名为 <code>&lt;run&gt;.before-&lt;时间&gt;-&lt;随机&gt;</code> 留存，不覆盖。</li></ol>
 </main>
 </body>
 </html>

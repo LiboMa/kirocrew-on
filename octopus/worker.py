@@ -883,7 +883,12 @@ class Worker:
         from . import takeover
         rid = body.get("run_id")
         require(isinstance(rid, str) and re.fullmatch(r"run-[a-f0-9]{32}", rid), "Run ID 无效")
-        root, files, total = self.path(rid) / "attempts", {}, 0
+        run = self.path(rid)
+        try:   # what the new boundary is to rebuild: the kind, the source and the baseline this Worker prepared
+            record = workspace.read_record(run)
+        except ValueError as exc:
+            raise Error(409, "workspace_missing", workspace.scrub(exc)) from None
+        root, files, total = run / "attempts", {}, 0
         for attempt in sorted(root.iterdir()) if root.is_dir() and not root.is_symlink() else ():
             if not takeover.ATTEMPT.fullmatch(attempt.name) or attempt.is_symlink() or not attempt.is_dir():
                 continue
@@ -894,7 +899,7 @@ class Worker:
                     total += len(text.encode())
                     require(total <= takeover.LIMIT, f"尝试记录超过 {takeover.LIMIT // 1048576} MB，无法接手", 413, "attempts_too_large")
                     files[f"{attempt.name}/{name}"] = text
-        return {"files": files}
+        return {"files": files, "project": record}
 
     def adopt(self, body, data):
         """A Session taken over to this boundary (D74): its branch from the bundle as the same workspace (the commits,
@@ -913,7 +918,7 @@ class Worker:
         with self.lock:
             aside = None
             if run.exists():
-                aside = run.with_name(f"{rid}.before-{int(time.time())}")
+                aside = run.with_name(f"{rid}.before-{int(time.time())}-{secrets.token_hex(3)}")
                 os.replace(run, aside)
             scratch = run.parent / f".adopt-{rid}-{secrets.token_hex(4)}.bundle"
             try:
@@ -940,7 +945,8 @@ class Worker:
                 raise
             finally:
                 scratch.unlink(missing_ok=True)
-            return {"native_parent": slot, "workspace": str(project), "project": record}
+            handoffs = {name.split("/")[0]: str(run / "attempts" / name) for name in files if name.endswith("/handoff.md")}
+            return {"native_parent": slot, "workspace": str(project), "project": record, "handoffs": handoffs}
 
     def sync(self, body, data):
         """A local fast-forward of the Session's branch, brought in from a bundle (D58 §6). The bundle is untrusted: its

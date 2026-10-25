@@ -2,6 +2,7 @@
 import argparse
 import getpass
 import json
+import logging
 import os
 from pathlib import Path
 import secrets
@@ -152,6 +153,10 @@ def main(argv=None):
                     httpd.service.auto_publish_pending()   # D47: Sessions that asked to be published on completion
                 except Exception as exc:
                     logging.error("Octopus auto publish failed (%s)", type(exc).__name__)
+                try:
+                    httpd.service.carry_takeovers()   # D74: a takeover a restart interrupted
+                except Exception as exc:
+                    logging.error("Octopus takeover failed (%s)", type(exc).__name__)
                 try:
                     httpd.service.sweep_apps()
                 except Exception as exc:

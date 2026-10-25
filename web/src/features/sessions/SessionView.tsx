@@ -1,6 +1,6 @@
 import {
-  CircleStop, Copy, Download, Eye, ExternalLink, FolderDown, ListRestart, MonitorPlay, MoreHorizontal, Power, RotateCcw, Stethoscope,
-  Share2,
+  ArrowRightLeft, CircleStop, Copy, Download, Eye, ExternalLink, FolderDown, ListRestart, MonitorPlay, MoreHorizontal, Power,
+  RotateCcw, Stethoscope, Share2,
   Trash2,
   UserCog,
 } from "lucide-react";
@@ -34,8 +34,8 @@ import { bindingLabel } from "@/lib/credentials";
 import { usageLine } from "@/lib/usage";
 import { clientLabel } from "@/lib/policies";
 import {
-  canContinue, canDelete, canRecover, canStop, closeAction, crewEntryReason, deleteReason, directReason, resumeReason,
-  shareAccess, statusText,
+  canContinue, canDelete, canRecover, canStop, canTakeOver, closeAction, crewEntryReason, deleteReason, directReason,
+  resumeReason, shareAccess, statusText,
 } from "@/lib/session";
 
 export function SessionView({ id }: { id: string }) {
@@ -101,6 +101,7 @@ export function SessionView({ id }: { id: string }) {
                   <> · 凭证：{bindingLabel(run.credentials.source)}
                     {run.credentials.source.unavailable && <span className="text-destructive">（已停用或删除，请更换后续作）</span>}</>
                 )}
+                {run.executed_by && <span id="run-executor"> · 执行人 {run.executed_by.username ?? run.executed_by.id}（已接手）</span>}
                 {run.credentials?.removed && <> · <span className="text-destructive">凭证「{run.credentials.removed.name}」已撤下</span></>}
                 <CredentialControl run={run} />
               </p>
@@ -120,6 +121,11 @@ export function SessionView({ id }: { id: string }) {
           <Button size="sm" onClick={() => open({ kind: "continue", run })} disabled={!canContinue(run)} id="run-continue">
             <ListRestart /> 续作
           </Button>
+          {canTakeOver(run) && (
+            <Button size="sm" variant="outline" onClick={() => open({ kind: "takeover", run })} id="run-takeover">
+              <ArrowRightLeft /> 接手到我的执行环境
+            </Button>
+          )}
           {!design && (
             <Button size="sm" variant="outline" onClick={actions.recover} disabled={!canRecover(run) || !!actions.busy} id="run-recover">
               <Stethoscope /> 请求协调者诊断
@@ -193,6 +199,22 @@ export function SessionView({ id }: { id: string }) {
         )}
       </header>
 
+      {run.takeover?.state === "moving" && (
+        <Alert id="takeover-moving" className="border-primary/30 bg-primary/5">
+          <AlertDescription>正在接手到 {run.takeover.by_name} 的执行环境…搬完后可以续作。</AlertDescription>
+        </Alert>
+      )}
+      {run.takeover?.state === "failed" && (
+        <Alert variant="destructive" id="takeover-failed" className="border-destructive/30 bg-destructive/5">
+          <AlertTitle>接手没有完成，会话仍在原执行环境上</AlertTitle>
+          <AlertDescription className="flex flex-wrap items-center gap-3">
+            <span>{run.takeover.reason}</span>
+            {canTakeOver(run) && (
+              <Button size="sm" variant="outline" onClick={() => open({ kind: "takeover", run })} id="takeover-retry">再试一次</Button>
+            )}
+          </AlertDescription>
+        </Alert>
+      )}
       {run.attention && run.status !== "waiting_worker" && run.status !== "awaiting_confirmation"
         && run.status !== "awaiting_acceptance" && (
         <Alert variant="destructive" id="run-attention" className="border-destructive/30 bg-destructive/5">
