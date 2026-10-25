@@ -308,6 +308,8 @@ class Engine:
     def tick(self, wait=True):
         with self.guard:
             busy = frozenset(self.inflight)
+        with self.db.read() as db:   # D74: a Session being taken over is not resumed or reconciled until it lands
+            busy |= {r["id"] for r in db.execute("SELECT id FROM runs WHERE json_extract(snapshot,'$.takeover.state')='moving'")}
         # Only this thread submits advances, and only after reconcile returns: in-flight Sessions are the
         # only ones an advance could be writing concurrently, so reconcile leaves them to their own advance.
         recovery.reconcile(self.db, skip=busy)

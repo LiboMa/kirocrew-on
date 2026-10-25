@@ -83,6 +83,17 @@ class ExecutorTests(ExecutorCase):
         with self.db.read() as db:
             self.assertFalse(bound_usable(db, credential, self.row(self.rid)))
 
+    def test_a_team_owners_own_credential_still_serves_a_team_session_nobody_took_over(self):
+        # As before D74: dave (the Team owner) binds his personal token to alice's Team Session; it runs as alice
+        from octopus.credentials import bound_usable
+        created, _ = self.start("alice")
+        with self.db.transaction() as db:
+            db.execute("INSERT INTO credentials(id,name,kind,host,scope,owner_id,access,hint,secret,created_by,created,updated)"
+                       " VALUES('cred-d','dave 的 GitHub','github_pat','github.com','user',?,'write','…9z','x',?,1,1)",
+                       (self.ids["dave"], self.ids["dave"]))
+            credential = db.execute("SELECT * FROM credentials WHERE id='cred-d'").fetchone()
+            self.assertTrue(bound_usable(db, credential, self.row(created["id"])))
+
     def test_the_executor_opens_the_native_entry_on_their_own_boundary(self):
         with self.db.read() as db:
             self.assertFalse(run_permissions(db, self.people["bob"], self.row(self.rid))["native"])   # alice's boundary

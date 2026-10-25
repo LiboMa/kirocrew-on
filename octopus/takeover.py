@@ -10,7 +10,7 @@ import time
 
 from . import chat_changes, credentials, evaluation, journal, knowledge, revisions, sources, transport
 from .db import dumps, uid
-from .domain import moving, worker_source
+from .domain import SETTLED, active_team, moving, own, run_access, space_workers, worker_source
 from .security import Error, require
 
 ATTEMPT = re.compile(r"attempt-[a-f0-9]{32}")
@@ -73,9 +73,10 @@ def move(service, rid):
         old = db.execute("SELECT config, retired FROM workers WHERE id=?", (run["worker_id"],)).fetchone()
         new = db.execute("SELECT * FROM workers WHERE id=?", (takeover["to"],)).fetchone()
         person = db.execute("SELECT id, username, admin FROM users WHERE id=? AND active=1", (takeover["by"],)).fetchone()
+        refused = _refused(db, run, takeover, person)   # as when it was asked for: the move may run much later
     try:
-        if person is None:
-            raise Error(409, "takeover_failed", "接手人的账号已停用")
+        if refused:
+            raise Error(409, "takeover_forbidden", refused)
         if new is None or not new["enabled"] or new["retired"]:
             raise Error(409, "takeover_failed", "要接手到的执行环境已停用或退役")
         actor = {**dict(person), "client": "takeover"}
@@ -89,8 +90,8 @@ def move(service, rid):
             project = _project(run, attempts.get("project"))
             _commit_chat(service, run, config, actor, project)
             bundle = _bundle(config, rid)
-            moved = _adopt(json.loads(new["config"]), rid, pack(bundle, _masked(attempts.get("files") or {})), project,
-                           _scope(run, takeover, new))
+            files = _masked(attempts.get("files") or {}, transport.worker_token(config))
+            moved = _adopt(json.loads(new["config"]), rid, pack(bundle, files), project, _scope(run, takeover, new))
         return _finish(service, rid, takeover, actor, moved)
     except Error as exc:
         if exc.status == 404 and exc.code in ("not_found", "worker_error"):
@@ -98,6 +99,24 @@ def move(service, rid):
         return _failed(service, rid, takeover, str(exc), exc.code)
     except Exception as exc:   # the class only: a message may carry transport details
         return _failed(service, rid, takeover, f"接手未完成（{type(exc).__name__}）", "takeover_failed")
+
+
+def _refused(db, run, takeover, person):
+    """Why the person who asked may no longer take the Session over (a share removed, left the Team, the boundary given
+    to someone else), or None. The command checked this when it was asked; the move checks it again when it starts and
+    when it lands."""
+    if person is None:
+        return "接手人的账号已停用"
+    actor = {**dict(person), "admin": 0}
+    try:
+        run_access(db, actor, run["id"], admin=False)
+        if run["team_id"]:
+            active_team(db, run["team_id"])
+    except Error:
+        return "接手人已不能续作这个会话（共享已取消或已离开 Team），没有接手"
+    if not any(w["id"] == takeover["to"] and own(w, person["id"]) for w in space_workers(db, person["id"], run["team_id"])):
+        return "要接手到的执行环境已不是接手人自己的，没有接手"
+    return None
 
 
 def _project(run, record):
@@ -147,9 +166,11 @@ def _bundle(config, rid):
     return data
 
 
-def _masked(files):
-    """The attempt files as the platform keeps what Agents wrote (D57 §3.3): a credential's text never moves."""
-    return {name: sources.mask_text(text)[0] for name, text in files.items() if isinstance(text, str)}
+def _masked(files, token=None):
+    """The attempt files as the platform keeps what Agents wrote (D57 §3.3): a credential's text never moves, nor the
+    token the platform calls the old Worker with (an Agent there may have printed it)."""
+    extra = (token,) if token else ()
+    return {name: sources.mask_text(text, extra)[0] for name, text in files.items() if isinstance(text, str)}
 
 
 def _scope(run, takeover, worker):
@@ -181,6 +202,14 @@ def _finish(service, rid, takeover, actor, moved):
         current = moving(run)
         if current is None or current.get("requested_at") != takeover["requested_at"]:
             return None
+        person = db.execute("SELECT id, username, admin FROM users WHERE id=? AND active=1", (actor["id"],)).fetchone()
+        refused = _refused(db, run, takeover, person)
+        if refused:
+            return _fail(db, rid, run, current, refused, "takeover_forbidden")
+        # Nothing may have started it again on the old boundary meanwhile (the Engine leaves a moving Session alone)
+        if run["worker_id"] != takeover["from"] or run["lifecycle"] != "open" or run["status"] not in SETTLED \
+                or run["status"] == "waiting_worker":
+            return _fail(db, rid, run, current, "会话在接手期间又开始执行或已关闭，没有接手；停下后可以再接手", "takeover_conflict")
         if moved:
             for row in db.execute("SELECT id, evidence FROM attempts WHERE run_id=?", (rid,)).fetchall():
                 evidence = json.loads(row["evidence"] or "{}")
@@ -232,14 +261,18 @@ def _rebound(db, pinned, run, actor, now):
 
 def _failed(service, rid, takeover, reason, code):
     """The takeover did not happen: why, on the Session, which stays where it was; it may be asked for again."""
-    reason = sources.mask_text(reason)[0]
     with service.db.transaction() as db:
         run = db.execute("SELECT * FROM runs WHERE id=?", (rid,)).fetchone()
         current = moving(run) if run else None
         if current is None or current.get("requested_at") != takeover["requested_at"]:
             return None
-        snapshot = json.loads(run["snapshot"])
-        snapshot["takeover"] = {**current, "state": "failed", "reason": reason, "code": code, "failed_at": time.time()}
-        journal.change(db, "runs", rid, journal.ENGINE, "run.takeover_failed", reason, event={"code": code},
-                       snapshot=dumps(snapshot), updated=time.time())
+        return _fail(db, rid, run, current, reason, code)
+
+
+def _fail(db, rid, run, current, reason, code):
+    reason = sources.mask_text(reason)[0]
+    snapshot = json.loads(run["snapshot"])
+    snapshot["takeover"] = {**current, "state": "failed", "reason": reason, "code": code, "failed_at": time.time()}
+    journal.change(db, "runs", rid, journal.ENGINE, "run.takeover_failed", reason, event={"code": code},
+                   snapshot=dumps(snapshot), updated=time.time())
     return "failed"

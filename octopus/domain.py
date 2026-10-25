@@ -1510,11 +1510,12 @@ class Service:
             snapshot, source = json.loads(run["snapshot"]), json.loads(run["source"])
             require(not general(source), NO_REPOSITORY, 409, "no_repository")
             self._new_repository_policy(db, actor, run["team_id"], source, policy)
-            if policy.get("repository") and run["owner_id"] != actor["id"]:   # the automatic publish runs as its creator
+            if policy.get("repository") and executor_of(run) != actor["id"]:   # it runs as the person it runs as (D74)
                 try:
-                    self._new_repository_policy(db, {"id": run["owner_id"]}, run["team_id"], source, policy)
+                    self._new_repository_policy(db, {"id": executor_of(run)}, run["team_id"], source, policy)
                 except Error:
-                    raise Error(403, "credential_forbidden", "自动发布以会话创建者的身份进行：请选择创建者可以使用的凭证") from None
+                    raise Error(403, "credential_forbidden", "自动发布以会话执行人（创建者，或接手的人）的身份进行："
+                                "请选择执行人可以使用的凭证") from None
             require(not policy["auto"] or source.get("type") == "git" or policy.get("repository") or snapshot.get("publish_target"),
                     "新建源码的会话自动发布需要新仓库（repository）与有写权限的凭证（credential）", 409, "publish_target_missing")
             snapshot["publish_policy"] = {**policy, "source": "user"}
@@ -2801,14 +2802,19 @@ class Service:
                 elif action == "assign-worker":
                     require(run["status"] == "waiting_worker" and run["lifecycle"] == "open",
                             "运行已分配 Worker 或已关闭", 409, "invalid_state")
-                    # The Session's own space, not the operator's (an admin may assign for someone else).
-                    target = self._worker(db, run["owner_id"], body.get("worker_id"), run["team_id"])
+                    # The Session's own space — of the person it runs as (D74) — not the operator's (an admin may assign
+                    # for someone else); one's own boundary is offered in one's own space and runs it as oneself.
+                    chosen = db.execute("SELECT * FROM workers WHERE id=?", (body.get("worker_id"),)).fetchone()
+                    person = actor["id"] if chosen is not None and own(chosen, actor["id"]) else executor_of(run)
+                    target = self._worker(db, person, body.get("worker_id"), run["team_id"])
                     # D49 R10: putting the work on a person's own boundary runs it as them: only they may
                     require(not own(target, target["owner_id"]) or target["owner_id"] == actor["id"],
                             "只有边界主人能把会话放到自己的执行边界上；其他人可以分配 Team 的环境", 403, "boundary_owner_only")
+                    if person != executor_of(run):
+                        fields.update(executor_id=person)
                     restart_budget(db, rid, who)   # waiting for an environment is not automatic work
                     # where it now runs, as the platform would have said (D49 R5; the hint was for the old choice)
-                    placed = {"kind": "own" if own(target, run["owner_id"]) else "team" if run["team_id"] else "only"}
+                    placed = {"kind": "own" if own(target, person) else "team" if run["team_id"] else "only"}
                     current = json.loads(db.execute("SELECT snapshot FROM runs WHERE id=?", (rid,)).fetchone()["snapshot"])
                     fields.update(snapshot=dumps({**current, "placement": placed}))   # after restart_budget's own write
                     if run["worker_id"] not in (None, body["worker_id"]):

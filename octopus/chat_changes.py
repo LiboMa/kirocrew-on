@@ -32,7 +32,7 @@ def _settled(service, actor, rid, version=None, directing=True):
     changed; None when the command would be refused anyway (its own checks then say why) or there is nothing to compare.
     ``directing=False``: only to look — a takeover's dialog (D74) shows it to someone the boundary does not take
     instructions from."""
-    from .domain import SETTLED, active_team, directs, run_access, unserved
+    from .domain import SETTLED, active_team, directs, moving, run_access, unserved
     with service.db.read() as db:
         try:
             run = run_access(db, actor, rid)
@@ -42,6 +42,7 @@ def _settled(service, actor, rid, version=None, directing=True):
             return None
         # the continue's own checks (operate): one it would refuse never reaches the Worker
         if (version is not None and version != run["version"]) or run["lifecycle"] != "open" or run["status"] not in SETTLED \
+                or moving(run) \
                 or not run["worker_id"] or not run["workspace"] or unserved(db, run) \
                 or (directing and directs(db, actor, run) is not None) \
                 or json.loads(run["snapshot"]).get("purpose") == "workflow_design":

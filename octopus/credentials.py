@@ -134,7 +134,7 @@ def bound_usable(db, row, run):
     person = (run["executor_id"] if "executor_id" in run.keys() else None) or run["owner_id"]
     if row["scope"] == "user":
         owner = db.execute("SELECT active FROM users WHERE id=?", (row["owner_id"],)).fetchone()
-        if owner is None or not owner["active"] or row["owner_id"] != person:
+        if owner is None or not owner["active"] or (person != run["owner_id"] and row["owner_id"] != person):
             return False
         return _member_role(db, row["owner_id"], run["team_id"]) is not None if run["team_id"] else True
     if row["scope"] == "team":
@@ -320,7 +320,7 @@ class CredentialStore:
     def material(self, run):
         """The bound credential, opened at the moment of a clone (spec §5.1): ``git_auth`` for the Worker, or None
         without a binding. A disabled, deleted or no longer matching credential is refused; each use is audited, with
-        the Session's creator as the one on whose behalf it is used."""
+        the person the Session runs as (its creator unless taken over, D74) as the one on whose behalf it is used."""
         from .domain import audit
         pinned = json.loads(run["snapshot"]).get("credentials") or {}
         bound = pinned.get("source")
@@ -343,7 +343,8 @@ class CredentialStore:
         secret = self.secret(row["id"])
         with self.db.transaction() as db:
             db.execute("UPDATE credentials SET last_used=? WHERE id=?", (time.time(), row["id"]))
-            audit(db, {"id": run["owner_id"]}, "credential.use", "credential", row["id"],
+            audit(db, {"id": (run["executor_id"] if "executor_id" in run.keys() else None) or run["owner_id"]},
+                  "credential.use", "credential", row["id"],
                   {"run_id": run["id"], "repo": path, "access": "read"})
         return {"kind": row["kind"], "host": row["host"], "username": username(row["kind"]), "secret": secret}
 

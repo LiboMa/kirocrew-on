@@ -79,6 +79,24 @@ class AdoptTests(unittest.TestCase):
         git(project, "bundle", "create", "-q", str(two), "refs/heads/" + record["branch"], "refs/heads/extra")
         with self.assertRaises(ValueError):   # one head only
             sources.adopt_project(self.new, record, two)
+        other = Path(self.tmp.name) / "other.bundle"   # one head, under another name than this Session's branch
+        git(project, "bundle", "create", "-q", str(other), "refs/heads/extra")
+        with self.assertRaises(ValueError):
+            sources.adopt_project(self.new, record, other)
+        self.assertFalse((self.new / "workspace/project").exists())
+
+    def test_a_baseline_that_is_not_an_ancestor_is_refused(self):
+        record = sources.prepare_project(self.old, new=True)
+        _, bundle = self.work(record)
+        project = self.old / "workspace/project"
+        git(project, "checkout", "-q", "--orphan", "elsewhere")   # a real commit, not on the Session's branch
+        git(project, "-c", "user.name=t", "-c", "user.email=t@t", "commit", "-q", "--allow-empty", "-m", "其他")
+        unrelated = git(project, "rev-parse", "HEAD")
+        git(project, "checkout", "-q", record["branch"])
+        single = Path(self.tmp.name) / "single.bundle"
+        git(project, "bundle", "create", "-q", str(single), "refs/heads/" + record["branch"])
+        with self.assertRaises(ValueError):   # the object is unknown to this bundle's history
+            sources.adopt_project(self.new, {**record, "commit": unrelated}, single)
 
 
 if __name__ == "__main__":

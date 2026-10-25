@@ -20,6 +20,9 @@ def git(cwd, *args):
     return subprocess.run(["git", *args], cwd=cwd, capture_output=True, text=True, check=True).stdout.strip()
 
 
+TOKENS = {"alice": "alice-worker-token-" + "Q" * 24, "bob": "bob-worker-token-" + "R" * 24}
+
+
 class Response(io.BytesIO):
     def __init__(self, data, headers):
         super().__init__(data)
@@ -62,7 +65,7 @@ class MoveCase(ExecutorCase):
             stub(worker)
         with self.db.transaction() as db:
             for wid, url in (("alice-b", "alice"), ("bob-b", "bob")):
-                db.execute("UPDATE workers SET config=? WHERE id=?", (dumps({"url": url, "token": url}), wid))
+                db.execute("UPDATE workers SET config=? WHERE id=?", (dumps({"url": url, "token": TOKENS[url]}), wid))
         self.wire = Wire({"alice": self.alice_w, "bob": self.bob_w})
         for name, fake in (("octopus.transport.worker_request", self.wire.request),
                            ("octopus.chat_changes.worker_request", self.wire.request),
@@ -182,6 +185,92 @@ class MoveTests(MoveCase):
             with patch("octopus.transport.worker_request", self.wire.request):
                 row = self.take_over()
         self.assertEqual(json.loads(row["snapshot"])["takeover"]["code"], "worker_outdated")
+
+
+class RaceTests(MoveCase):
+    """What changes while a move runs (final review of D74): the Session must not run again on the old boundary, and the
+    person taking it over must still be allowed to when it lands."""
+    def test_the_engine_leaves_a_moving_session_alone(self):
+        from octopus import waiting
+        from octopus.engine import Engine
+        with self.db.transaction() as db:   # its Worker was disabled under it, and is enabled again during the move
+            db.execute("UPDATE runs SET status='blocked', error=? WHERE id=?", (waiting.DISABLED, self.rid))
+        self.service.takeover(self.people["bob"], self.rid, {"request_id": "race-engine", "expected_version": self.row(self.rid)["version"]})
+        Engine(self.db).tick()
+        self.assertEqual(self.row(self.rid)["status"], "blocked")   # not resumed on alice's boundary while it moves
+
+    def test_a_session_that_started_again_is_not_moved(self):
+        adopt = self.wire.upload
+        def started(config, path, data, headers, timeout=120):
+            with self.db.transaction() as db:   # e.g. a resume that slipped in: a task is dispatched on alice's boundary
+                db.execute("UPDATE runs SET status='ready' WHERE id=?", (self.rid,))
+            return adopt(config, path, data, headers, timeout)
+        with patch("octopus.transport.worker_upload", started):
+            row = self.take_over()
+        self.assertEqual((row["worker_id"], row["executor_id"]), ("alice-b", None))
+        self.assertEqual(json.loads(row["snapshot"])["takeover"]["code"], "takeover_conflict")
+
+    def test_a_taker_who_lost_access_does_not_get_it(self):
+        self.service.takeover(self.people["bob"], self.rid, {"request_id": "race-unshared", "expected_version": self.row(self.rid)["version"]})
+        with self.db.transaction() as db:   # alice stopped sharing before the move ran (e.g. the platform was down)
+            db.execute("DELETE FROM shares WHERE id='share-1'")
+        self.service.carry_takeovers(self.rid)
+        row = self.row(self.rid)
+        self.assertEqual((row["worker_id"], row["executor_id"]), ("alice-b", None))
+        self.assertEqual(json.loads(row["snapshot"])["takeover"]["code"], "takeover_forbidden")
+        self.assertFalse(self.bob_w.path(self.rid).exists())   # nothing was sent to bob's boundary
+
+    def test_access_lost_during_the_transfer_stops_it_landing(self):
+        adopt = self.wire.upload
+        def unshared(config, path, data, headers, timeout=120):
+            answer = adopt(config, path, data, headers, timeout)
+            with self.db.transaction() as db:
+                db.execute("DELETE FROM shares WHERE id='share-1'")
+            return answer
+        with patch("octopus.transport.worker_upload", unshared):
+            row = self.take_over()
+        self.assertEqual((row["worker_id"], row["executor_id"]), ("alice-b", None))
+
+    def test_a_continue_during_the_move_commits_nothing_on_the_old_workspace(self):
+        self.service.takeover(self.people["bob"], self.rid, {"request_id": "race-continue", "expected_version": self.row(self.rid)["version"]})
+        (self.project / "late.py").write_text("y = 2\n")
+        with self.assertRaises(Error) as caught:
+            self.service.operate(self.people["alice"], self.rid, "continue", {
+                "request_id": "race-continue-2", "expected_version": self.row(self.rid)["version"], "task_id": "code"})
+        self.assertEqual(caught.exception.code, "takeover_in_progress")
+        self.assertEqual(git(self.project, "rev-parse", "HEAD"), self.head)   # D73's commit did not run first
+
+
+class MaskTests(MoveCase):
+    def test_a_credential_or_the_old_workers_token_in_a_handoff_never_reaches_the_new_boundary(self):
+        github = "ghp_" + "A1b2C3d4" * 5
+        handoff = self.alice_w.path(self.rid) / "attempts" / self.aid / "handoff.md"
+        handoff.write_text(f"# 交接\ntoken={github}\nworker={TOKENS['alice']}\n")
+        row = self.take_over()
+        moved = json.loads(dict(next(iter([self.attempt()])))["evidence"])["handoff_path"]
+        text = Path(moved).read_text()
+        self.assertTrue(moved.startswith(str(self.bob_w.root)))
+        self.assertNotIn(github, text)
+        self.assertNotIn(TOKENS["alice"], text)
+        self.assertEqual(row["worker_id"], "bob-b")
+
+    def attempt(self):
+        with self.db.read() as db:
+            return db.execute("SELECT evidence FROM attempts WHERE id=?", (self.aid,)).fetchone()
+
+
+class AssignTests(MoveCase):
+    def test_assigning_ones_own_boundary_to_a_taken_over_session_runs_it_as_oneself(self):
+        from octopus.domain import unserved
+        self.take_over()
+        with self.db.transaction() as db:   # bob's boundary went away: the Session waits for an environment
+            db.execute("UPDATE runs SET status='waiting_worker' WHERE id=?", (self.rid,))
+        self.service.operate(self.people["alice"], self.rid, "assign-worker", {
+            "request_id": "assign-own", "expected_version": self.row(self.rid)["version"], "worker_id": "alice-b"})
+        row = self.row(self.rid)
+        self.assertEqual((row["worker_id"], row["executor_id"]), ("alice-b", self.ids["alice"]))
+        with self.db.read() as db:
+            self.assertIsNone(unserved(db, row))
 
 
 class CredentialTests(MoveCase):

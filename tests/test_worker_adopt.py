@@ -94,6 +94,37 @@ class AdoptTests(unittest.TestCase):
                 self.assertEqual(caught.exception.code, "adopt_invalid")
                 self.assertFalse((self.new.path(RID) / "workspace" / "project").exists())
 
+    def test_links_and_anything_but_plain_files_are_refused(self):
+        bundle = self.old.pull_bundle(self.old.pull_plan({"run_id": RID, "full": True})).read_bytes()
+        buffer = io.BytesIO()
+        with tarfile.open(fileobj=buffer, mode="w") as archive:
+            info = tarfile.TarInfo("session.bundle")
+            info.size = len(bundle)
+            archive.addfile(info, io.BytesIO(bundle))
+            link = tarfile.TarInfo(f"attempts/{AID}/handoff.md")
+            link.type, link.linkname = tarfile.SYMTYPE, "/etc/passwd"
+            archive.addfile(link)
+        with self.assertRaises(Error) as caught:
+            self.new.adopt({"run_id": RID, "project": self.record, "knowledge_scope": None}, buffer.getvalue())
+        self.assertEqual(caught.exception.code, "adopt_invalid")
+
+    def test_the_route_takes_the_tar_and_its_header(self):
+        import base64
+        import threading
+        from octopus import transport
+        from octopus.worker import serve
+        httpd = serve(self.new, 0)
+        threading.Thread(target=httpd.serve_forever, daemon=True).start()
+        self.addCleanup(httpd.shutdown)
+        config = {"url": f"http://127.0.0.1:{httpd.server_address[1]}", "token": self.new.token}
+        header = base64.b64encode(json.dumps({"run_id": RID, "project": self.record, "knowledge_scope": None}).encode()).decode()
+        answer = transport.worker_upload(config, "/adopt", self.moved(), {"X-Octopus-Adopt": header})
+        self.assertEqual(answer["native_parent"], "octopus-" + RID)
+        self.assertIn(AID, answer["handoffs"])
+        files = transport.worker_request(config, "/pull/attempts", {"run_id": RID})
+        self.assertEqual(sorted(files["files"]), [f"{AID}/handoff.md", f"{AID}/outcome.json"])
+        self.assertEqual(files["project"]["branch"], "octopus/" + RID)
+
 
 if __name__ == "__main__":
     unittest.main()
