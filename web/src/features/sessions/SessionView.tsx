@@ -265,7 +265,9 @@ export function SessionView({ id }: { id: string }) {
         </section>
       )}
       {run.usage && (
-        <p id="run-usage" className="text-xs text-muted-foreground">本会话用量：{usageLine(run.usage)}</p>
+        <p id="run-usage" className="text-xs text-muted-foreground">本会话用量：{usageLine(run.usage)}
+          {!!run.usage.by?.length && <>（{run.usage.by.map((p) => `${p.username ?? p.id}：${usageLine(p)}`).join("；")}）</>}
+        </p>
       )}
       {run.recovery && (
         <p id="recovery-policy" className="text-xs text-muted-foreground">

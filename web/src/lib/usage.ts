@@ -3,6 +3,8 @@ export interface Usage {
   credits?: number; input_tokens?: number; output_tokens?: number; cache_read_tokens?: number; cache_write_tokens?: number;
   cost_usd?: number; seconds?: number; turns?: number; model?: string; tokens?: "unavailable";
   attempts?: number; tokens_unavailable?: number;
+  /** D74: per person it ran as, when a takeover made it more than one. */
+  by?: (Usage & { id: string; username?: string | null })[];
 }
 
 function count(n: number): string {

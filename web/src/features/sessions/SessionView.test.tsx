@@ -890,10 +890,13 @@ describe("session detail", () => {
     expect(screen.getByRole("button", { name: "再试一次" })).toBeInTheDocument();
   });
 
-  test("a Session someone took over names who runs it (D74)", async () => {
+  test("a Session someone took over names who runs it and what each person used (D74)", async () => {
     open(makeRun({ id: "run-ex", status: "completed", created_by: { id: "u1", username: "fixture-owner" },
-      executed_by: { id: "u2", username: "bob" } } as Partial<Run>));
+      executed_by: { id: "u2", username: "bob" },
+      usage: { credits: 5, attempts: 2, by: [{ id: "u1", username: "fixture-owner", credits: 3 }, { id: "u2", username: "bob", credits: 2 }] },
+    } as Partial<Run>));
     expect(await screen.findByText(/执行人 bob（已接手）/)).toBeInTheDocument();
+    expect(screen.getByText(/本会话用量：5 credits（fixture-owner：3 credits；bob：2 credits）/)).toBeInTheDocument();
   });
 
   test("only its creator is offered their own boundary for a waiting Session (D49 R10)", async () => {

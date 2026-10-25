@@ -2408,8 +2408,11 @@ class Service:
             value["tasks"].append(task)
         if not brief:
             from . import usage   # D46 P6a: what the Session's Attempts used
-            value["usage"] = usage.total([json.loads(r["evidence"] or "{}") for r in db.execute(
-                "SELECT evidence FROM attempts WHERE run_id=?", (run["id"],))])
+            rows = db.execute("SELECT evidence, created FROM attempts WHERE run_id=? ORDER BY created", (run["id"],)).fetchall()
+            value["usage"] = usage.total([json.loads(r["evidence"] or "{}") for r in rows])
+            split = usage.by_person(db, run, rows) if value["usage"] else None
+            if split:   # D74: taken over, it ran as more than one person
+                value["usage"]["by"] = split
         value["progress"] = {"accepted": sum(t["status"] == "accepted" for t in value["tasks"]),
                              "total": len(value["tasks"])}
         if detail:

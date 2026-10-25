@@ -273,6 +273,28 @@ class AssignTests(MoveCase):
             self.assertIsNone(unserved(db, row))
 
 
+class UsageTests(MoveCase):
+    def test_a_taken_over_sessions_usage_is_split_by_who_ran_it(self):
+        import time
+        with self.db.transaction() as db:   # alice's task used 3 credits before bob took it over
+            db.execute("UPDATE attempts SET evidence=json_set(evidence,'$.usage',json(?)) WHERE id=?",
+                       (dumps({"credits": 3, "seconds": 40}), self.aid))
+        self.take_over()
+        with self.db.transaction() as db:   # bob's continue used 2
+            db.execute("INSERT INTO attempts(id,run_id,task_id,number,spec,status,evidence,created,updated) "
+                       "VALUES('attempt-bob',?,'code',2,'{}','accepted',?,?,?)",
+                       (self.rid, dumps({"usage": {"credits": 2, "seconds": 20}}), time.time() + 5, time.time() + 5))
+        usage = self.service.run(self.people["alice"], self.rid)["usage"]
+        self.assertEqual((usage["credits"], usage["attempts"]), (5, 2))
+        self.assertEqual([(p["username"], p["credits"]) for p in usage["by"]], [("alice", 3), ("bob", 2)])
+
+    def test_one_persons_session_has_no_split(self):
+        with self.db.transaction() as db:
+            db.execute("UPDATE attempts SET evidence=json_set(evidence,'$.usage',json(?)) WHERE id=?",
+                       (dumps({"credits": 3}), self.aid))
+        self.assertNotIn("by", self.service.run(self.people["alice"], self.rid)["usage"])
+
+
 class CredentialTests(MoveCase):
     def setUp(self):
         super().setUp()
