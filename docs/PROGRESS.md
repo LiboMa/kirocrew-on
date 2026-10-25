@@ -1,9 +1,9 @@
 # 进度与完成记录
 
-> 由 `tools/progress.py` 生成（2026-10-26 01:47 CST）：任务状态取自 `docs/progress.json`，提交记录取自 git。看板：`docs/progress-dashboard.html`；实时看板：`python3 tools/progress.py --serve --ec2`（http://127.0.0.1:8765/）。
+> 由 `tools/progress.py` 生成（2026-10-26 02:22 CST）：任务状态取自 `docs/progress.json`，提交记录取自 git。看板：`docs/progress-dashboard.html`；实时看板：`python3 tools/progress.py --serve --ec2`（http://127.0.0.1:8765/）。
 
 - **本轮完成度**：87%　**MVP 完成度**：74%
-- **分支**：HEAD `decdbad`；自 `origin/main` 起 12 个提交——已推送 0、已部署 EC2 12、仅本机 0；EC2 运行 `decdbad`
+- **分支**：HEAD `6b686d1`；自 `origin/main` 起 16 个提交——已推送 0、已部署 EC2 16、仅本机 0；EC2 运行 `6b686d1`
 - **回归**：1861 后端 + 92 + 281 控制台 + 7 个浏览器测试；EC2 运行 12fbd9f；本地 main 已合并（fe49f81），MVP-0.1.1 在 feat/mvp-0.1.1
 
 ## 模块
@@ -43,8 +43,10 @@
 
 ## 完成记录（按决策，最近的在前）
 
-### D74（8 个提交：已部署 EC2 8）
+### D74（10 个提交：已部署 EC2 10）
 
+- `222b437` 2026-10-26 〔已部署 EC2〕 fix(worker): 每次拉回各用一个 bundle 文件——接手（D74）与 octopus pull 可能同时拉回同一会话；BACKLOG 记 D74 延后项，R10「改派停下的会话」由接手解决
+- `8650930` 2026-10-26 〔已部署 EC2〕 docs(progress): K03 过渡修复与 D74 用量拆分已部署 EC2（decdbad）
 - `8d67242` 2026-10-26 〔已部署 EC2〕 feat(usage): 接手后的会话用量按人拆开（D74）——每个尝试算在它创建时的执行人名下（按时间线里 executor_id 的变更），视图 usage.by，会话页列出各人用量
 - `2f49c9e` 2026-10-26 〔已部署 EC2〕 feat(mcp): octopus_takeover 与状态里的接手信息（D74）——octopus_status 带 permissions（direct / takeover 及原因）、executed_by 与 takeover；octopus_takeover 发起接手；Skill 写明先征得用户同意、等搬完再续作、失败原样转告
 - `dbb91ee` 2026-10-26 〔已部署 EC2〕 docs(progress): D74 接手已部署 EC2（53b35a1）与端到端结果
@@ -60,3 +62,11 @@
 - `53b35a1` 2026-10-26 〔已部署 EC2〕 fix(takeover): 终审修复——搬迁开始与落地时再核对接手资格；接手期间引擎不恢复、不核对该会话，落地时已在原环境又开始执行就不接手；续作的对话改动提交不在搬迁中进行；尝试文件也遮蔽原 Worker 的 Token；改派到自己的边界即以自己为执行人；未被接手的 Team 会话仍可用 Team owner 绑定的个人凭证；凭证使用审计与自动发布策略按执行人；回收线程不再被搬迁阻塞
 - `55efa79` 2026-10-26 〔已部署 EC2〕 fix(takeover): 交接路径改写经 journal（只记会话级事件）；时间线标题补上接手的三类事件；访问权限测试含 takeover
 - `7adb992` 2026-10-25 〔已部署 EC2〕 fix(security): 同站的会话预览不能借控制台的登录 Cookie——只凭 Cookie 的请求拒绝同站 / 跨站的子资源请求（Sec-Fetch-Site / -Mode，顶层打开与旧浏览器照旧）；「刷新模型」改为 POST（仍为 read 权限），核对 boundary、host_principal、isolation，事务内重读只更新能力字段；报告页与提示页 frame-ancestors 'none'
+
+### 未标记 · 其他（1 个提交：已部署 EC2 1）
+
+- `6b686d1` 2026-10-26 〔已部署 EC2〕 Merge branch 'feat/session-takeover' into fix/native-refresh-guard
+
+### 未标记 · 文档（1 个提交：已部署 EC2 1）
+
+- `ef81f01` 2026-10-26 〔已部署 EC2〕 docs(design): 原生入口改为单会话票据（K03 / M4-3）——现状（含 30 天刷新与过渡修复）与三种方案：撤权即结束、请 KiroCrew 提供按会话限定的登录、平台票据加过滤代理；建议先一后二
