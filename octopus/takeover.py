@@ -188,7 +188,9 @@ def _finish(service, rid, takeover, actor, moved):
                     path = (moved.get("handoffs") or {}).get(row["id"])
                     evidence = {**evidence, "handoff_path": path} if path else \
                         {k: v for k, v in evidence.items() if k != "handoff_path"}
-                    db.execute("UPDATE attempts SET evidence=? WHERE id=?", (dumps(evidence), row["id"]))
+                    # one Session-level event (run.taken_over below) says it; not one per Attempt
+                    journal.change(db, "attempts", row["id"], journal.person(actor), "run.taken_over", quiet=("evidence",),
+                                   evidence=dumps(evidence))
         snapshot = {k: v for k, v in json.loads(run["snapshot"]).items() if k != "takeover"}
         after = {**run, "executor_id": actor["id"], "worker_id": takeover["to"]}
         snapshot["credentials"] = _rebound(db, snapshot.get("credentials") or {}, after, actor, now)
