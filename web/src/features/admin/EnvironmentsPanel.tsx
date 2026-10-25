@@ -142,7 +142,7 @@ export function EnvironmentsPanel() {
     ];
     const more: Action[] = [
       { icon: RefreshCw, label: "刷新模型", name: "刷新模型：" + w.name, direct: true,
-        onSelect: direct(w, () => api("/workers/" + w.id + "/capabilities"), `已重新读取 ${w.name} 的模型目录`) },
+        onSelect: direct(w, () => api("/workers/" + w.id + "/capabilities", "POST", {}), `已重新读取 ${w.name} 的模型目录`) },
       ...(w.scope === "dedicated" && enabled ? [{ icon: Network, label: "设为共享环境", name: "设为共享环境：" + w.name, onSelect: open("share") }] : []),
       ...(dedicable ? [{ icon: Undo2, label: "改回专属环境", name: "改回专属环境：" + w.name, onSelect: open("dedicate") }] : []),
       // 停用 can be undone (启用), so only 退役 is set apart as dangerous; both still ask first.
@@ -502,7 +502,7 @@ export function MyEnvironmentsPanel() {
   const { workers, allTeams: teams, users } = useConsole();
   const client = useQueryClient();
   const motion = useRowMotion();
-  const refresh = (w: Worker) => api("/workers/" + w.id + "/capabilities")
+  const refresh = (w: Worker) => api("/workers/" + w.id + "/capabilities", "POST", {})
     .then(() => client.invalidateQueries({ queryKey: keys.workers }))
     .then(() => { motion.flash(w.id); toast.success(`已重新读取 ${w.name} 的模型目录`); }).catch((e: Error) => toast.error(e.message));
   const owner = (w: Worker) => w.scope === "shared" ? "共享环境"

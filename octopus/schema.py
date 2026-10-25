@@ -161,7 +161,7 @@ def openapi():
         "/v1/workers/{id}/connection": {"post": "ConnectionUpdate"},
         "/v1/workers/{id}/dedicate": {"post": "Empty"},
         "/v1/workers/{id}": {"patch": "Rename"}, "/v1/workers/{id}/retire": {"post": "Empty"},
-        "/v1/workers/{id}/capabilities": {"get": None},
+        "/v1/workers/{id}/capabilities": {"post": None},
         "/v1/tokens": {"get": None, "post": "Token"}, "/v1/tokens/{id}": {"delete": "Empty"}, "/v1/tokens/{id}/regenerate": {"post": None},
         "/v1/credentials": {"get": None, "post": "Credential"},
         "/v1/credentials/{id}": {"patch": "CredentialUpdate", "delete": "Empty"},

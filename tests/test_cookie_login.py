@@ -77,6 +77,32 @@ class CookieLoginTests(AccessCase):
         self.assertEqual((missing[0], missing[2].get("code")), (403, "origin"))
         self.assertIn(own[0], (200, 201))
 
+    def test_a_page_of_another_site_or_a_sibling_site_cannot_use_the_cookie(self):
+        # 2026-10-25: session previews (<run>.preview.tinyboat.blog) are same-site with the console, so SameSite=Strict
+        # still sends the cookie on their <img>, fetch(no-cors), <iframe> and EventSource. The browser says where a
+        # request comes from (Sec-Fetch-Site / -Mode): only the console itself, the address bar and a top-level
+        # navigation may use the cookie. Old browsers send neither header and keep working.
+        with self.http() as call:
+            set_cookie, _ = self.login(call)
+            jar = {"Cookie": self.cookie(set_cookie)}
+            sibling = self.raw(call, "GET", "/v1/me", headers={**jar, "Sec-Fetch-Site": "same-site", "Sec-Fetch-Mode": "no-cors",
+                                                               "Sec-Fetch-Dest": "image"})
+            framed = self.raw(call, "GET", "/v1/me", headers={**jar, "Sec-Fetch-Site": "same-site", "Sec-Fetch-Mode": "navigate",
+                                                              "Sec-Fetch-Dest": "iframe"})
+            foreign = self.raw(call, "GET", "/v1/me", headers={**jar, "Sec-Fetch-Site": "cross-site", "Sec-Fetch-Mode": "cors",
+                                                               "Sec-Fetch-Dest": "empty"})
+            own = self.raw(call, "GET", "/v1/me", headers={**jar, "Sec-Fetch-Site": "same-origin", "Sec-Fetch-Mode": "cors"})
+            typed = self.raw(call, "GET", "/v1/me", headers={**jar, "Sec-Fetch-Site": "none", "Sec-Fetch-Mode": "navigate"})
+            followed = self.raw(call, "GET", "/v1/me", headers={**jar, "Sec-Fetch-Site": "cross-site", "Sec-Fetch-Mode": "navigate",
+                                                                "Sec-Fetch-Dest": "document"})
+            old = self.raw(call, "GET", "/v1/me", headers=jar)
+            bearer = self.raw(call, "GET", "/v1/me", headers={"Authorization": "Bearer " + self.tokens["bob"],
+                                                              "Sec-Fetch-Site": "same-site", "Sec-Fetch-Mode": "cors"})
+        for refused in (sibling, framed, foreign):
+            self.assertEqual((refused[0], refused[2].get("code")), (403, "origin"))
+        for allowed in (own, typed, followed, old, bearer):   # a token in the header is not ambient: no cross-site risk
+            self.assertEqual(allowed[0], 200)
+
     def test_the_authorization_header_comes_first(self):
         with self.http() as call:
             set_cookie, _ = self.login(call)

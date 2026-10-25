@@ -165,7 +165,7 @@ describe("管理 › 执行环境", () => {
   });
 
   test("刷新模型 reads the environment's model catalogue again, at once", async () => {
-    const calls = start({ ...ENVIRONMENTS, "GET /workers/w1/capabilities": { models: {} } });
+    const calls = start({ ...ENVIRONMENTS, "POST /workers/w1/capabilities": { models: {} } });
     const list = await openSection("管理", "执行环境");
     await fromMenu(await rowOf(list, "personal"), "personal", "刷新模型");
     await waitFor(() => expect(calls.some((c) => c.path === "/v1/workers/w1/capabilities")).toBe(true));
@@ -412,7 +412,7 @@ describe("管理 › 执行环境", () => {
 
   test("a member refreshes models in 我的设置 but cannot edit, assign, disable or retire a Worker", async () => {
     const calls = start({ ...ONE_WORKER, "GET /me": { id: "u1", username: "fixture-owner", admin: 0, scopes: ["read", "execute", "manage"] },
-      "GET /workers/w1/capabilities": { models: {} } });
+      "POST /workers/w1/capabilities": { models: {} } });
     const mine = await openSection("我的设置", "执行环境");
     expect(within(mine).getAllByRole("columnheader").map((h) => h.textContent))
       .toEqual(["名称", "类型", "状态", "归属", "可用工具", "最近检查", "操作"]);
