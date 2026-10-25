@@ -1,0 +1,84 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>接手共享来的会话：技术设计（D74）</title>
+<!-- Generated from 2026-10-25-session-takeover-design.md by tools/md_to_html.py; edit the Markdown, then regenerate. -->
+<style>
+  :root { --ink: #172033; --muted: #5b6577; --line: #e3e7ef; --bg: #f6f8fb; --card: #ffffff; --brand: #5b4bdb; --brand-soft: #eeebff;
+          --native: #0e6f86; --native-soft: #e2f3f7; --poc: #4a5568; --poc-soft: #edf0f5;
+          --sans: -apple-system, BlinkMacSystemFont, "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", "Noto Sans CJK SC", sans-serif;
+          --mono: "SF Mono", Menlo, Consolas, monospace; }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--bg); color: var(--ink); font: 16px/1.75 var(--sans); }
+  main { max-width: 1040px; margin: 0 auto; padding: 56px 28px 96px; }
+  main > p, main > ul, main > ol, li > p { max-width: 44em; }
+  h1 { font-size: 32px; line-height: 1.3; margin: 0 0 16px; }
+  h2 { font-size: 23px; margin: 56px 0 10px; padding-top: 20px; border-top: 1px solid var(--line); }
+  h3 { font-size: 18px; margin: 28px 0 8px; }
+  p { margin: 0 0 14px; }
+  ul, ol { padding-left: 1.5em; margin: 0 0 14px; }
+  li { margin: 5px 0; }
+  li > ul, li > ol { margin: 6px 0 4px; }
+  code { font-family: var(--mono); font-size: 0.86em; background: #eef1f6; padding: 1px 5px; border-radius: 4px; }
+  pre { font-family: var(--mono); font-size: 13px; line-height: 1.6; background: #101828; color: #e7ecf5; padding: 16px 18px;
+        border-radius: 8px; overflow-x: auto; margin: 0 0 18px; }
+  pre code { background: none; padding: 0; color: inherit; font-size: inherit; }
+  .table { overflow-x: auto; margin: 14px 0 18px; background: var(--card); border: 1px solid var(--line); border-radius: 10px; }
+  table { border-collapse: collapse; width: 100%; font-size: 14px; line-height: 1.65; }
+  th, td { text-align: left; vertical-align: top; padding: 10px 14px; border-bottom: 1px solid var(--line); }
+  tr:last-child td { border-bottom: none; }
+  thead th { background: #f0f3f8; font-weight: 600; white-space: nowrap; }
+  strong { font-weight: 650; }
+  figure { margin: 18px 0 24px; }
+  .flow { display: flex; flex-wrap: wrap; align-items: stretch; gap: 10px 8px; list-style: none; padding: 0; margin: 0; }
+  .flow li { margin: 0; flex: 1 1 150px; background: var(--card); border: 1px solid var(--line); border-top: 3px solid var(--c, var(--brand));
+             border-radius: 8px; padding: 10px 12px; font-size: 14px; line-height: 1.5; }
+  .flow li b { display: block; font-size: 13px; color: var(--c, var(--brand)); margin-bottom: 2px; }
+  .flow .chat { --c: var(--native); } .flow .keep { --c: var(--poc); }
+  figcaption { font-size: 13px; color: var(--muted); margin-top: 8px; }
+  a:focus-visible { outline: 3px solid var(--brand); outline-offset: 2px; }
+  @media (max-width: 760px) { main { padding: 32px 18px 72px; } h1 { font-size: 26px; } }
+  @media print { body { background: #fff; } .table, .flow li { break-inside: avoid; } }
+</style>
+</head>
+<body>
+<main>
+<h1>接手共享来的会话：技术设计（D74）</h1>
+<p>日期：2026-10-25　·　负责人选定方案一「接手」（<code>docs/superpowers/specs/2026-10-25-collaborator-continue-options.md</code>）</p>
+<h2>1．要做到什么</h2>
+<p>协作者或 Team 成员遇到一个跑在别人个人执行环境上的会话，现在做不了任何下达指令的操作（R10）。接手要做到以下几点：</p>
+<ul><li><strong>同一个会话</strong>：协作者能把<strong>同一个会话</strong>搬到<strong>自己的执行环境</strong>，然后以自己的身份续作。</li><li><strong>身份、凭证、用量归接手人</strong>：搬过去以后，以接手人的系统用户、Kiro 登录、仓库凭证运行，用量和并发额度也算在接手人头上。</li><li><strong>历史原样保留</strong>：提交 ID 不变，已验收的任务、候选、审查绑定、修订历史、时间线都照旧对得上。</li><li><strong>可以接回</strong>：创建者想接回时用同一个命令，把会话搬回自己的执行环境。</li></ul>
+<p><strong>不做</strong>：</p>
+<ul><li>不搬 KiroCrew 原生聊天的上下文和记忆；接手后从平台记录的最新状态继续。</li><li>不搬被 <code>.gitignore</code> 忽略的文件（如 <code>node_modules</code>、<code>.env</code>、构建产物），新环境里的检查命令会重新生成它们。</li><li>不复制会话（方案三），也不委托（方案二）。</li></ul>
+<h2>2．概念：执行人</h2>
+<ul><li><strong>字段</strong>：新增 <code>runs.executor_id</code>（迁移 14），空值表示与 <code>owner_id</code> 相同。</li><li><strong>两个角色分开</strong>：
+<ul><li><code>owner_id</code>（创建者）保留：归属、删除权、列表里「我的」。</li><li><code>executor_id</code>（执行人）表示：会话现在在谁的执行环境上、以谁的身份跑。</li></ul></li><li><strong>改为看执行人的地方</strong>：</li></ul>
+<div class="table"><table><thead><tr><th>地方</th><th>现在看</th><th>改为看</th></tr></thead><tbody><tr><td>执行环境是否还服务这个会话（<code>unserved</code>、等待执行环境的自动恢复、同步、诊断、D73 收集）</td><td>创建者的空间</td><td>执行人的空间</td></tr><tr><td>并发额度（D61）</td><td>创建者</td><td>执行人</td></tr><tr><td>知识的空间（个人会话）</td><td>创建者</td><td>执行人（Team 会话仍按 Team）</td></tr><tr><td>仓库凭证</td><td>创建者固定的凭证</td><td>接手时改绑为执行人可用的凭证；没有可用的就记为「已移除」，此后不能发布</td></tr><tr><td>发布、补充说明、答复审批（<code>may_publish</code>）</td><td>创建者、Team owner、管理员</td><td>加上执行人</td></tr><tr><td>原生 KiroCrew 入口</td><td>边界主人（R7），共享来的人永远不行</td><td>执行人在自己的边界上可以打开</td></tr><tr><td>自动发布的执行身份</td><td>创建者</td><td>执行人</td></tr></tbody></table></div>
+<p>R10 不用改：它按会话所在环境的主人判断，接手后主人就是执行人，自然只有执行人能下达指令。创建者想再操作就「接回」。</p>
+<h2>3．谁能接手、什么时候能接手</h2>
+<p><code>POST /v1/runs/&lt;id&gt;/takeover {request_id, expected_version}</code>：</p>
+<ul><li><strong>谁</strong>：能续作这个会话的人（创建者、Team 成员、协作身份的共享对象），并且会话现在在<strong>别人</strong>的个人执行环境上（<code>directs()</code> 返回原因）。查看身份的人不行；管理员不因管理员身份获得接手权。</li><li><strong>搬到哪</strong>：操作者<strong>自己唯一的专属执行环境</strong>（<code>own(w, actor)</code>，与 D49 R2 的放置规则一致）。没有就 409 <code>no_own_environment</code>，提示联系管理员开通。</li><li><strong>什么时候</strong>：
+<ul><li>会话没关闭，且处于停下的状态（<code>SETTLED</code>）；</li><li>没有进行中的尝试、诊断、检查，也没有正在进行的接手；</li><li><code>expected_version</code> 等于当前版本，否则 409 <code>version_conflict</code>。</li></ul></li><li><strong>幂等</strong>：同一个 <code>request_id</code> 只接手一次，做法与续作相同。</li></ul>
+<p>命令本身只登记接手（<code>snapshot.takeover = {state: &quot;moving&quot;, to, by, from, requested_at}</code>）并返回 202。真正的搬迁由引擎在后台完成，因为大仓库的传输可能超过请求超时。接手进行期间，续作、诊断、同步、改派、开关预览一律返回 409 <code>takeover_in_progress</code>。</p>
+<h2>4．搬迁：引擎在后台做的事</h2>
+<div class="table"><table><thead><tr><th>#</th><th>在哪</th><th>做什么</th><th>失败时</th></tr></thead><tbody><tr><td>1</td><td>平台</td><td>停掉旧环境上的远程预览</td><td>继续（旧进程会被定时清理）</td></tr><tr><td>2</td><td>旧 Worker</td><td>有聊天里没提交的改动（D73 <code>pending</code>）时，先提交成「对话中的改动」：只提交、不跑检查，检查留到新环境再补；没有候选时以基线为父提交</td><td>有疑似凭证（<code>chat_secret</code>）时，接手失败，说明原因并请创建者处理</td></tr><tr><td>3</td><td>旧 Worker</td><td><code>/pull/bundle</code>（D58）打出会话分支的完整历史 bundle，上限 100 MB，同样做凭证检查</td><td>超过大小或有疑似凭证时，接手失败，说明原因</td></tr><tr><td>4</td><td>旧 Worker</td><td>新增 <code>/pull/attempts</code>：把各尝试里下游会读的文件（<code>handoff.md</code>、<code>outcome.json</code>、<code>decision.json</code>、<code>instructions.md</code>）打成 tar.gz，上限 20 MB</td><td>同上</td></tr><tr><td>5</td><td>新 Worker</td><td>新增 <code>/adopt</code>：bundle 与 tar 用原始字节发送，参数放在请求头。校验 bundle（只能有一个 head，即 <code>refs/heads/octopus/&lt;rid&gt;</code>，基线是它的祖先）→ 克隆到 <code>workspace/project</code> 并检出分支 → git 来源把 <code>origin</code> 设成源地址、禁止推送 → 原样写入平台给的 <code>project.json</code>（kind、source、requested_ref、基线 commit、branch）→ 展开尝试文件 → 写知识标记（按执行人的空间）与初始的 <code>untracked-seen.json</code> → 建 KiroCrew slot 与 <code>parent.json</code>（同 <code>/prepare</code>）→ 返回新的工作区路径和 slot 名</td><td>引擎重试 3 次，之后接手失败；旧环境原样不动</td></tr><tr><td>6</td><td>平台（一个事务）</td><td>写入 <code>worker_id</code>、<code>workspace</code>、<code>native_parent</code>、<code>executor_id</code>；把各尝试证据里的 <code>handoff_path</code> 改写为新路径；凭证改绑；<code>snapshot.placement = {kind: &quot;taken_over&quot;, from, by}</code>；清除 <code>snapshot.takeover</code>；版本加 1；记修订 <code>taken_over</code> 与事件 <code>run.taken_over</code></td><td>—</td></tr></tbody></table></div>
+<ul><li><strong>失败时的处理</strong>：<code>snapshot.takeover</code> 改为 <code>{state: &quot;failed&quot;, reason}</code>，记事件 <code>run.takeover_failed</code>，会话仍在原环境上、状态不变；控制台显示原因，可以再次接手。</li><li><strong>旧环境</strong>：不删除工作区，也不关闭原生会话，留给创建者自己查看。之后再做清理策略，见第 8 节。</li></ul>
+<h2>5．接回</h2>
+<p>就是创建者自己对这个会话执行「接手」：会话这时在执行人的环境上，R10 拦住了创建者，<code>directs()</code> 返回原因，同一套流程把会话搬回创建者的环境，执行人变回创建者。</p>
+<h2>6．控制台、MCP、文档</h2>
+<ul><li><strong>权限</strong>：<code>run_permissions</code> 增加 <code>takeover</code>（布尔）和 <code>takeover_reason</code>（为什么不能接手）。</li><li><strong>会话页</strong>：
+<ul><li>被 R10 拦住、<code>takeover</code> 为真时，「续作」旁边出现「接手到我的执行环境」。</li><li>点开是一个确认对话框，写清：会搬到你的执行环境；之后以你的身份、凭证和用量运行；创建者可以接回；原生聊天的上下文不跟过去。有聊天里没提交的改动时，列出文件名，说明会先提交（同 D73 的提醒）。</li><li>负责人在选方案一时已同意这一步确认。</li></ul></li><li><strong>进行中</strong>：会话页顶部显示「正在接手到你的执行环境…」；失败时显示原因和「再试一次」。</li><li><strong>时间线与通知</strong>：时间线记「bob 接手了会话（来自 alice 的执行环境）」；创建者的会话列表里，这个会话标「已由 bob 接手」。</li><li><strong>MCP</strong>：
+<ul><li><code>octopus_status</code> 的 <code>access</code> 与权限里带上 <code>takeover</code>；</li><li>新增 <code>octopus_takeover</code>（第 2 期）；</li><li>Skill 写明：被 R10 拦住时，可以接手。</li></ul></li><li><strong>文档</strong>：OPERATIONS 增加「接手共享来的会话」一节；D64 的共享说明里，协作者那一条补上接手；<code>/v1/openapi.json</code>。</li></ul>
+<h2>7．测试</h2>
+<ul><li><strong>单元测试与服务测试</strong>：
+<ul><li>谁能接手：协作者能；查看者不能；会话在自己环境上时不能；没有自己的环境时 409。</li><li>状态与版本的前置条件、幂等、接手进行中时其他命令返回 409。</li><li>执行人生效的地方：<code>unserved</code>、额度、知识空间、<code>may_publish</code>、原生入口、自动发布的身份。</li><li>搬迁事务：<code>handoff_path</code> 改写、凭证改绑、修订与事件；失败时保持原状。</li><li>接回。</li></ul></li><li><strong>Worker 测试</strong>：
+<ul><li><code>/adopt</code> 对 git、new、none 三种来源：提交 ID 不变，候选可检出，基线是祖先，<code>project.json</code> 原样；</li><li>拒绝多个 head、拒绝基线不是祖先的 bundle；</li><li>尝试文件展开后，<code>handoff.md</code> 可读。</li></ul></li><li><strong>端到端（本机两个 Worker）</strong>：A 的会话完成两个任务后共享给 B；B 接手后续作第三个任务，任务在 B 的 Worker 上执行，审查绑定到 A 时的候选；A 再接回。</li><li><strong>EC2 实测</strong>：用两个人的边界做一次真实接手。需要第二个账号，或者负责人指定的成员账号。</li></ul>
+<h2>8．分期</h2>
+<div class="table"><table><thead><tr><th>期</th><th>内容</th></tr></thead><tbody><tr><td>第 1 期（本次）</td><td>执行人字段与改为看执行人的地方、接手命令、引擎后台搬迁（第 4 节全部）、<code>/adopt</code> 与 <code>/pull/attempts</code>、接回、控制台按钮与确认框、权限、文档、测试、EC2 实测</td></tr><tr><td>第 2 期</td><td>MCP <code>octopus_takeover</code>；用量按人分开统计（尝试上记录执行人）；不在分支上的旧候选（被改写的、未移动的）随 bundle 带走；旧环境的工作区与原生会话的清理策略</td></tr></tbody></table></div>
+<h2>9．设计者决定（负责人可以改）</h2>
+<ol><li>执行人可以发布、补充说明、答复审批。会话以他的身份和凭证在跑，这些都是续作时会用到的。</li><li>接手不需要创建者同意。共享时给了「协作」，就代表允许对方接着做；创建者能在时间线看到，也随时可以接回。</li><li>旧环境上的工作区留着不删：它在创建者自己的环境上，是创建者的东西。</li></ol>
+</main>
+</body>
+</html>
