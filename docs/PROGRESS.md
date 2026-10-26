@@ -1,9 +1,9 @@
 # 进度与完成记录
 
-> 由 `tools/progress.py` 生成（2026-10-26 13:10 CST）：任务状态取自 `docs/progress.json`，提交记录取自 git。看板：`docs/progress-dashboard.html`；实时看板：`python3 tools/progress.py --serve --ec2`（http://127.0.0.1:8765/）。
+> 由 `tools/progress.py` 生成（2026-10-26 13:58 CST）：任务状态取自 `docs/progress.json`，提交记录取自 git。看板：`docs/progress-dashboard.html`；实时看板：`python3 tools/progress.py --serve --ec2`（http://127.0.0.1:8765/）。
 
 - **本轮完成度**：87%　**MVP 完成度**：74%
-- **分支**：HEAD `78f3d5a`；自 `origin/main` 起 25 个提交——已推送 0、已部署 EC2 25、仅本机 0；EC2 运行 `78f3d5a`
+- **分支**：HEAD `5a78786`；自 `origin/main` 起 27 个提交——已推送 0、已部署 EC2 27、仅本机 0；EC2 运行 `5a78786`
 - **回归**：1861 后端 + 92 + 281 控制台 + 7 个浏览器测试；EC2 运行 12fbd9f；本地 main 已合并（fe49f81），MVP-0.1.1 在 feat/mvp-0.1.1
 
 ## 模块
@@ -79,12 +79,17 @@
 - `55efa79` 2026-10-26 〔已部署 EC2〕 fix(takeover): 交接路径改写经 journal（只记会话级事件）；时间线标题补上接手的三类事件；访问权限测试含 takeover
 - `7adb992` 2026-10-25 〔已部署 EC2〕 fix(security): 同站的会话预览不能借控制台的登录 Cookie——只凭 Cookie 的请求拒绝同站 / 跨站的子资源请求（Sec-Fetch-Site / -Mode，顶层打开与旧浏览器照旧）；「刷新模型」改为 POST（仍为 read 权限），核对 boundary、host_principal、isolation，事务内重读只更新能力字段；报告页与提示页 frame-ancestors 'none'
 
+### 未标记 · 文档（3 个提交：已部署 EC2 3）
+
+- `4aa58db` 2026-10-26 〔已部署 EC2〕 docs(progress): 公开分享已部署 EC2（78f3d5a）与公网实测
+- `4ee44e2` 2026-10-26 〔已部署 EC2〕 docs(progress): 拉回各用一个文件已部署 EC2（6b686d1）
+- `ef81f01` 2026-10-26 〔已部署 EC2〕 docs(design): 原生入口改为单会话票据（K03 / M4-3）——现状（含 30 天刷新与过渡修复）与三种方案：撤权即结束、请 KiroCrew 提供按会话限定的登录、平台票据加过滤代理；建议先一后二
+
 ### 未标记 · 其他（2 个提交：已部署 EC2 2）
 
 - `8cfdc37` 2026-10-26 〔已部署 EC2〕 Merge branch 'fix/native-refresh-guard' into fix/d58-minors
 - `6b686d1` 2026-10-26 〔已部署 EC2〕 Merge branch 'feat/session-takeover' into fix/native-refresh-guard
 
-### 未标记 · 文档（2 个提交：已部署 EC2 2）
+### 未标记 · 功能（1 个提交：已部署 EC2 1）
 
-- `4ee44e2` 2026-10-26 〔已部署 EC2〕 docs(progress): 拉回各用一个文件已部署 EC2（6b686d1）
-- `ef81f01` 2026-10-26 〔已部署 EC2〕 docs(design): 原生入口改为单会话票据（K03 / M4-3）——现状（含 30 天刷新与过渡修复）与三种方案：撤权即结束、请 KiroCrew 提供按会话限定的登录、平台票据加过滤代理；建议先一后二
+- `5a78786` 2026-10-26 〔已部署 EC2〕 feat(console): 公开分享并入「预览产出」的下拉菜单——与预览产出是同一批内容，给没有账号的人看；不再单独占一个工具栏按钮，只对能分享的人显示
