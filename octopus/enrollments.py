@@ -2,6 +2,7 @@
 registers and under which name; the Worker brings its own URL and token with it (``octopus worker enroll``), so the token
 never passes through a person, a clipboard or a command history. Only the code's SHA-256 is kept. A code is used once,
 lasts 30 minutes unless chosen (a day at most), can be revoked, and is retired after five failed registrations."""
+import collections
 import hashlib
 import secrets
 import threading
@@ -87,14 +88,18 @@ def registered(db, eid, worker_id):
 
 
 class Sources:
-    """Enroll requests per source address in the last minute, in memory."""
+    """Enroll requests per source address in the last minute, in memory: each address keeps only its last PER_MINUTE
+    times, and addresses idle for a minute are dropped at most once a minute, so a flood costs constant work a request
+    (review 2026-10-26)."""
     def __init__(self):
-        self.lock, self.seen = threading.Lock(), {}
+        self.lock, self.seen, self.swept = threading.Lock(), {}, 0.0
 
     def allow(self, address, now):
         with self.lock:
-            recent = [t for t in self.seen.get(address, []) if now - t < 60]
-            if len(self.seen) > 10000:   # a flood of distinct addresses must not grow this without bound
-                self.seen = {k: v for k, v in self.seen.items() if v and now - v[-1] < 60}
-            self.seen[address] = recent + [now]
-            return len(recent) < PER_MINUTE
+            if now - self.swept >= 60:
+                self.seen = {k: v for k, v in self.seen.items() if now - v[-1] < 60}
+                self.swept = now
+            times = self.seen.setdefault(address, collections.deque(maxlen=PER_MINUTE))
+            allowed = len(times) < PER_MINUTE or now - times[0] >= 60
+            times.append(now)   # a refused try counts too: a flood stays refused until it stops for a minute
+            return allowed

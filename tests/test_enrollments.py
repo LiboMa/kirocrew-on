@@ -178,3 +178,25 @@ class ApiDocumentTests(EnrollmentCase):
         self.assertEqual(paths["/v1/workers/enroll"]["post"]["security"], [])   # no login: the code is the authority
         self.assertEqual(set(paths["/v1/workers/enrollments"]), {"get", "post"})
         self.assertIn("delete", paths["/v1/workers/enrollments/{id}"])
+
+
+class LimiterTests(EnrollmentCase):
+    def test_a_flood_from_one_source_costs_little_and_others_still_pass(self):   # review 2026-10-26
+        import time as clock
+        from octopus import enrollments
+        sources, now = enrollments.Sources(), 1000.0
+        start = clock.perf_counter()
+        allowed = sum(sources.allow("6.6.6.6", now + n * 0.0001) for n in range(200000))
+        self.assertLess(clock.perf_counter() - start, 2.0)   # constant work a request, not the length of its history
+        self.assertEqual(allowed, enrollments.PER_MINUTE)
+        self.assertLessEqual(len(sources.seen["6.6.6.6"]), enrollments.PER_MINUTE)
+        self.assertTrue(sources.allow("7.7.7.7", now + 30))
+        self.assertTrue(sources.allow("6.6.6.6", now + 200))   # a minute after its last try the source may try again
+
+    def test_many_sources_do_not_grow_the_table_without_bound(self):
+        from octopus import enrollments
+        sources = enrollments.Sources()
+        for n in range(30000):
+            sources.allow(f"10.0.{n // 250}.{n % 250}", 1000.0 + n * 0.01)
+        sources.allow("1.1.1.1", 2000.0)   # well past a minute after the earliest ones
+        self.assertLess(len(sources.seen), 30000)
