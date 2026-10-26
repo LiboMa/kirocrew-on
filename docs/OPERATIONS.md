@@ -1127,8 +1127,9 @@ Draft PR（GitHub）/ Draft MR（GitLab）。
 - **演示**：需要远程预览正在运行（由会话的人在会话页启动）；访客不能启动它，空闲 30 分钟无人访问照常停止。没运行时链接显示「演示当前没有在运行」。
 - **失效**：撤销、到期、分享人账号停用或不再能控制这个会话（离开 Team、不再是 Team owner）；每次请求都核对。会话关闭或删除时它的公开分享一并删除，
   重新打开会话也不会恢复。
-- **API 与 MCP**：`GET|POST /v1/runs/<id>/public-shares`、`DELETE /v1/runs/<id>/public-shares/<share>`、`POST …/<share>/code`；MCP `octopus_public_share`
-  （create / list / revoke / new_code）。新建、撤销、重新生成授权码都记审计（`public_share.create` / `.delete` / `.code`）。
+- **API**：`GET|POST /v1/runs/<id>/public-shares`、`DELETE /v1/runs/<id>/public-shares/<share>`、`POST …/<share>/code`。新建、撤销、重新生成授权码
+  都记审计（`public_share.create` / `.delete` / `.code`）。Coding Agent 没有公开分享的工具（与 D64「Coding Agent 没有共享工具」一致）：由人在控制台操作，
+  Skill 会请用户去会话页点「公开分享」。
 - **运维**：预览域名的 `/_kirocrew/` 本就转给 API；预览 nginx 的访问日志把 `/_kirocrew/s|open|enter/` 后面的令牌或票据记为 `-`。
   打开次数在内存里累计、每条分享至多每 30 秒写一次。
 
