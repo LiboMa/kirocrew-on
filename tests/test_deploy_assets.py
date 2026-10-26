@@ -274,6 +274,30 @@ class ScriptTests(unittest.TestCase):
         self.assertNotIn("$args", conf)
         self.assertNotIn("$request_uri", conf)
 
+    def test_the_native_entry_login_ends_with_its_access_cookie(self):
+        # K03 (2026-10-26, EC2): the Gateway gives the native entry a 30-day refresh chain (mc_refresh_<port>, Path=/api/auth)
+        # beside its crew_entry_ttl access cookie. Every public relay answers the refresh as a revoked chain does.
+        guard = (ROOT / "deploy/nginx/kirocrew-native-guard.conf").read_text()
+        self.assertIn("location = /api/auth/refresh {", guard)
+        # 2026-10-26: as a revoked chain the native page navigated to / after every load (its scheduler refreshes one hour
+        # before the access cookie ends — at once with a 1 h cookie): every 7–8 s a full reload. As a missing refresh
+        # cookie it backs off instead (1, 4, 16, 60 min) and shows its session-expired banner when the cookie ends.
+        self.assertIn("""return 401 '{"error":"no_refresh_cookie"}';""", guard)
+        self.assertNotIn("refresh_chain_revoked", guard.split("location")[1])
+        self.assertIn("default_type application/json;", guard)
+        for name in ("kirocrew-native.conf", "kirocrew-relay.conf", "kirocrew-boundary.conf"):
+            conf = (ROOT / "deploy/nginx" / name).read_text()
+            include = conf.index("include /etc/nginx/kirocrew-native-guard.conf;")
+            self.assertLess(conf.index("server {"), include, name)
+            self.assertLess(include, conf.index("location / {"), name)
+        text = (ROOT / "deploy/install/al2023.sh").read_text()
+        install = text.index('install -m 0644 "$TARGET/deploy/nginx/kirocrew-native-guard.conf" /etc/nginx/kirocrew-native-guard.conf')
+        self.assertLess(install, text.index("/etc/nginx/conf.d/kirocrew-native.conf.new"))
+        # relays rendered before the guard existed get it too, kept as they were when nginx refuses the change
+        self.assertIn("for relay in /etc/nginx/conf.d/kirocrew-relay-*.conf", text)
+        self.assertIn("kirocrew-native-guard.conf", text[text.index("for relay in /etc/nginx/conf.d/kirocrew-relay-*.conf"):])
+        self.assertIn("nginx -t -q || { restore_relays; nginx -t -q; }", text)
+
     def test_installer_publishes_the_native_entry_through_nginx(self):
         text = (ROOT / "deploy/install/al2023.sh").read_text()
         self.assertIn("deploy/nginx/kirocrew-native.conf", text)

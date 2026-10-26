@@ -170,11 +170,11 @@
           "id": "m4-takeover",
           "name": "M4-1b 接手共享来的会话（同一会话搬到自己的执行边界续作）",
           "status": "deployed",
-          "ref": "D74 · EC2 53b35a1 · PR #10",
+          "ref": "D74 · EC2 decdbad · PR #10",
           "deps": [
             "m4-org"
           ],
-          "more": "负责人 2026-10-25 选方案一「接手」。执行人 executor_id（迁移 14）与创建者分开：执行位置、额度、知识空间、凭证、发布、改派与原生入口看执行人；POST /v1/runs/<id>/takeover 登记后台搬迁：原 Worker 先提交对话中的改动，给出完整 bundle 与尝试文件（遮蔽凭证与 Worker Token），新 Worker /adopt 建同一工作区；开始与落地时再核对资格，失败留在原处可重试，创建者可接回。本机 HTTP 端到端 13/13；EC2 2026-10-26 部署 53b35a1：接手 12/12（自己的边界 already_yours、共享环境 not_needed、OpenAPI 与控制台）、API 14/14、同站 8/8、浏览器 13/13。MCP octopus_takeover 与状态里的 permissions / executed_by / takeover 已加（本机）；会话用量经手不止一人时按人拆开（usage.by）。待负责人：指定第二个人的个人执行环境，做一次真实的跨边界接手。"
+          "more": "负责人 2026-10-25 选方案一「接手」。执行人 executor_id（迁移 14）与创建者分开：执行位置、额度、知识空间、凭证、发布、改派与原生入口看执行人；POST /v1/runs/<id>/takeover 登记后台搬迁：原 Worker 先提交对话中的改动，给出完整 bundle 与尝试文件（遮蔽凭证与 Worker Token），新 Worker /adopt 建同一工作区；开始与落地时再核对资格，失败留在原处可重试，创建者可接回。本机 HTTP 端到端 13/13；EC2 2026-10-26 部署 53b35a1：接手 12/12（自己的边界 already_yours、共享环境 not_needed、OpenAPI 与控制台）、API 14/14、同站 8/8、浏览器 13/13。MCP octopus_takeover 与状态里的 permissions / executed_by / takeover 已加；会话用量经手不止一人时按人拆开（usage.by，EC2 decdbad）。待负责人：指定第二个人的个人执行环境，做一次真实的跨边界接手。"
         },
         {
           "id": "m4-k10",
@@ -186,8 +186,9 @@
         {
           "id": "m4-k03",
           "name": "M4-3 原生入口改为单 Session 票据（K03）",
-          "status": "todo",
-          "ref": "继承问题 K03"
+          "status": "doing",
+          "ref": "继承问题 K03 · PR #11",
+          "more": "2026-10-26 实测：入口登录除 1 小时的访问 Cookie 外，Gateway 另发 30 天刷新凭据（mc_refresh_<端口>），原生页面会续成新登录，平台收不回。过渡修复（EC2 decdbad）：所有公网中转把 /api/auth/refresh 答成 401 refresh_chain_revoked，登录在访问 Cookie 到期时结束；负责人边界与 personal 入口照常登录、刷新被拦已核对。根本解决（单 Session 票据）需要 KiroCrew 提供按 slot 限定的登录：方案待整理给负责人。"
         },
         {
           "id": "m4-quota",
