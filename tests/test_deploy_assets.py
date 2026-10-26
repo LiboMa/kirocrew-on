@@ -270,6 +270,44 @@ class ScriptTests(unittest.TestCase):
         self.assertNotEqual(subprocess.run(["bash", "-c", f'. "{ROOT}/deploy/install/arch-lib.sh"; ami_parameter ""'],
                                            capture_output=True, text=True).returncode, 0)
 
+    def test_litestream_replicates_only_the_platform_database(self):   # MVP 0.2.0 P1 Task 10 (P §5.2, S31)
+        config = yaml.safe_load((ROOT / "deploy/litestream/litestream.yml.template").read_text())
+        self.assertEqual([db["path"] for db in config["dbs"]], ["/var/lib/octopus/platform/octopus.sqlite3"])
+        replica = config["dbs"][0]["replica"]
+        self.assertEqual((replica["type"], replica["bucket"]), ("s3", "__STATE_BUCKET__"))
+        self.assertTrue(replica["path"].startswith("db/"))
+        self.assertRegex(replica["sync-interval"], r"^(1s|[0-9]{1,3}ms)$")   # RPO <= 5 s
+        self.assertEqual(config["snapshot"]["retention"], "72h")
+        unit = (ROOT / "deploy/litestream/octopus-litestream.service").read_text()   # not deploy/systemd: installed everywhere
+        self.assertIn("User=octopus", unit)
+        self.assertIn("ExecStart=/usr/local/bin/litestream replicate -config /etc/kirocrew-on/litestream.yml", unit)
+
+    def test_the_state_stack_grants_no_writer_to_hosts_with_agents(self):
+        text = (ROOT / "deploy/aws/kirocrew-on-state.yaml").read_text()
+        stack = yaml.load(text, Loader=CfnLoader)
+        for name, resource in stack["Resources"].items():
+            with self.subTest(name):
+                self.assertFalse(resource["Type"].startswith("AWS::CodeArtifact::"))   # the stateless pool's, not 0.2.0's
+                if resource["Type"] in ("AWS::IAM::ManagedPolicy", "AWS::IAM::Policy"):
+                    # attached by the cluster's control-plane role only (no Agents on it); never here to a role
+                    self.assertFalse({"Roles", "Users", "Groups"} & set(resource["Properties"]))
+        self.assertNotIn("checkpoints/", text)
+        self.assertNotIn("ImportValue", text)
+        platform = (ROOT / "deploy/aws/kirocrew-on-ec2.yaml").read_text()   # m1 and single-node hosts run Agents
+        for name in stack["Outputs"]:
+            self.assertNotIn(name, platform)
+        self.assertNotIn("litestream", platform.lower())
+
+    def test_litestream_is_not_installed_on_single_node(self):
+        text = (ROOT / "deploy/install/al2023.sh").read_text()
+        begin, end = text.index("# litestream:begin"), text.index("# litestream:end")
+        block = text[begin:end]
+        self.assertIn('if [ "${CONTROL_PLANE_ONLY:-}" = 1 ]; then', block.splitlines()[1])
+        outside = (text[:begin] + text[end:]).lower()
+        self.assertNotIn("litestream", outside.replace("# litestream:end", ""))
+        for part in ("$LITESTREAM_VERSION", "sha256sum -c", "octopus-litestream.service", "STATE_BUCKET"):
+            self.assertIn(part, block)
+
     def test_each_install_prunes_old_releases_first(self):
         text = (ROOT / "deploy/install/al2023.sh").read_text()
         prune = text.index('prune_releases /opt/kirocrew-on/releases "$(readlink -f /opt/kirocrew-on/current')

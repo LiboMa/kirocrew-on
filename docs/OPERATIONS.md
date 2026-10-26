@@ -1261,6 +1261,25 @@ $P restore-verify /var/lib/octopus/platform/backups/octopus-<时间>.json --into
 `restore-verify` 只接受空的独立目录，校验 sha256、完整性与各表行数。
 未覆盖：各 Coding 工具私有会话目录的语义一致性、远端仓库状态、原生 Gateway 内存中的任务。
 
+### 平台数据的持续备份与恢复（集群版控制面，MVP 0.2.0 P1）
+
+只用于集群版控制面主机（不跑任何边界）；单机版与 m1 不跑 Litestream（S31）：Litestream 要持续写 S3，而跑 Agent 的主机，其实例角色同机进程都能用。
+
+- **状态栈** `deploy/aws/kirocrew-on-state.yaml`：状态桶（版本控制、KMS 加密、只允许 TLS、禁止公开），`db/` 放数据库副本，P5 起 `escrow/` 放托管的密钥材料；托管策略 `ControlPlaneStateAccess` 只给控制面主机的角色，栈本身不附加给任何角色。
+- **安装**：`CONTROL_PLANE_ONLY=1 STATE_BUCKET=<StateBucketName> al2023.sh …` 才会装 Litestream（`deploy/versions.env` 固定版本，按 checksums 校验），写 `/etc/kirocrew-on/litestream.yml`（模板 `deploy/litestream/litestream.yml.template`：只复制 `/var/lib/octopus/platform/octopus.sqlite3`，`sync-interval: 1s`，快照每日一次，保留 72 h），启用 `octopus-litestream.service`（以 `octopus` 身份运行）。
+- **看复制**：`journalctl -u octopus-litestream`；`litestream ltx -config /etc/kirocrew-on/litestream.yml /var/lib/octopus/platform/octopus.sqlite3` 列出副本里的 LTX 文件。
+- **恢复**（新主机或温备上，先停 `octopus-api`）：
+
+```bash
+sudo -u octopus litestream restore -config /etc/kirocrew-on/litestream.yml -o /var/lib/octopus/restore/octopus.sqlite3 \
+  /var/lib/octopus/platform/octopus.sqlite3
+$P backup --source /var/lib/octopus/restore/octopus.sqlite3 --dest /var/lib/octopus/restore/check
+$P restore-verify /var/lib/octopus/restore/check/octopus-<时间>.json --into /var/lib/octopus/restore/verified
+# 校验通过后：把 verified/octopus.sqlite3 放到 /var/lib/octopus/platform/（属主 octopus，0600），再启动 octopus-api
+```
+
+云上验证（临时控制面主机，没有 Agent）随 P0 做：从 Litestream 恢复、`restore-verify` 通过、实测 RPO ≤ 5 s。
+
 ## 13．批准模式
 
 无人值守的执行边界在 `boundary-<边界>.toml` 中设置 `approval_mode = "auto"`（D14）：Worker 只对平台派发的 spawn 请求原生

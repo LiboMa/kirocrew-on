@@ -100,6 +100,7 @@ def build_parser(settings, environ=None):
                       help="MVP 0.2.0：签发一次性接入码供该 Worker 用 worker enroll 自行登记；已登记的返回 registered")
     backup_cmd = sub.add_parser("backup", help="平台数据库一致性备份")
     backup_cmd.add_argument("--dest", required=True)
+    backup_cmd.add_argument("--source", help="另一份数据库文件（如 litestream restore -o 的产物）；默认平台的数据库")
     archive = sub.add_parser("archive", help="目录归档（Worker 数据、执行边界）")
     archive.add_argument("source")
     archive.add_argument("--dest", required=True)
@@ -275,7 +276,8 @@ def main(argv=None):
                                              args.name, spare=args.spare, owner=args.owner, check_only=args.check_only)))
     elif args.command == "backup":
         from .backup import backup_database
-        print(dumps(backup_database(settings.data_dir / "octopus.sqlite3", Path(args.dest))))
+        print(dumps(backup_database(Path(args.source) if args.source else settings.data_dir / "octopus.sqlite3",
+                                    Path(args.dest))))
     elif args.command == "archive":
         from .backup import archive_directory
         print(dumps(archive_directory(Path(args.source), Path(args.dest), args.name, tuple(args.exclude))))

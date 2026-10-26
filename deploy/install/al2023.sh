@@ -462,6 +462,32 @@ WORKER_PORT="$(grep -E '^worker_port' "$BOUNDARY_TOML" | grep -oE '[0-9]+')"
   --token-file "$BASE/worker.token" --name "$BOUNDARY")
   # platform:end
 fi
+# litestream:begin
+if [ "${CONTROL_PLANE_ONLY:-}" = 1 ]; then   # MVP 0.2.0 (S31): a cluster control-plane host only, never one with Agents
+  [ -z "$WORKER_HOST" ] || { echo "CONTROL_PLANE_ONLY 不能与 WORKER_HOST 同用" >&2; exit 2; }
+  : "${STATE_BUCKET:?CONTROL_PLANE_ONLY=1 需要 STATE_BUCKET（kirocrew-on-state.yaml 的 StateBucketName）}"
+  [[ "$STATE_BUCKET" =~ ^[a-z0-9][a-z0-9.-]{1,61}[a-z0-9]$ ]] || { echo "STATE_BUCKET 不是有效的桶名" >&2; exit 2; }
+  log "Litestream $LITESTREAM_VERSION（平台数据持续复制到 s3://$STATE_BUCKET/db/）"
+  if [ "$KIRO_ARCH" = x86_64 ]; then LS_ARCH=x86_64; LS_SHA="$LITESTREAM_SHA256_X86_64"; else LS_ARCH=arm64; LS_SHA="$LITESTREAM_SHA256_AARCH64"; fi
+  if [ "$(/usr/local/bin/litestream version 2>/dev/null || true)" != "v$LITESTREAM_VERSION" ]; then
+    LS_TAR="litestream-$LITESTREAM_VERSION-linux-$LS_ARCH.tar.gz"
+    curl --proto '=https' -fsSL "https://github.com/benbjohnson/litestream/releases/download/v$LITESTREAM_VERSION/$LS_TAR" \
+      -o "$SCRATCH/$LS_TAR"
+    echo "$LS_SHA  $SCRATCH/$LS_TAR" | sha256sum -c -
+    tar -xzf "$SCRATCH/$LS_TAR" -C "$SCRATCH" litestream
+    install -m 0755 "$SCRATCH/litestream" /usr/local/bin/litestream
+  fi
+  sed -e "s#__STATE_BUCKET__#$STATE_BUCKET#" -e "s#__REGION__#$REGION#" \
+    /opt/kirocrew-on/current/deploy/litestream/litestream.yml.template > /etc/kirocrew-on/litestream.yml.new
+  chown root:octopus /etc/kirocrew-on/litestream.yml.new
+  chmod 0640 /etc/kirocrew-on/litestream.yml.new
+  mv -f /etc/kirocrew-on/litestream.yml.new /etc/kirocrew-on/litestream.yml
+  install -m 0644 /opt/kirocrew-on/current/deploy/litestream/octopus-litestream.service /etc/systemd/system/
+  systemctl daemon-reload
+  systemctl enable octopus-litestream.service >/dev/null
+  systemctl restart octopus-litestream.service
+fi
+# litestream:end
 # others:begin
 # D49: then every other boundary on this host, one at a time — after the platform is up, so one person's drain or a
 # Gateway that does not restart never holds up the API, personal or the others; failures are reported at the end.
