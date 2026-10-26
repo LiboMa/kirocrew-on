@@ -1221,6 +1221,33 @@ class Worker:
         record_file = self.root / "model-discovery.json"
         return json.loads(record_file.read_text()) if record_file.is_file() else {}
 
+    MEMINFO = Path("/proc/meminfo")
+
+    def capacity(self):
+        """How much room the host has and how much work this boundary runs (MVP 0.2.0, H §6.2), for the control plane to
+        place and scale by; what cannot be read is None — never an error in the health answer."""
+        memory = {}
+        try:
+            for line in self.MEMINFO.read_text().splitlines():
+                key, _, value = line.partition(":")
+                if key in ("MemTotal", "MemAvailable"):
+                    memory[key] = int(value.split()[0]) // 1024
+        except (OSError, ValueError, IndexError):
+            pass
+        try:
+            load1 = round(os.getloadavg()[0], 2)
+        except OSError:
+            load1 = None
+        running = sum(1 for d in self.root.glob("run-*/attempts/attempt-*/dispatch.json")
+                      if not (d.parent / "result-note.json").exists())
+        try:
+            subagents = json.loads((self.home / "config.json").read_text())["agent"]["max_subagents"]
+            subagents = subagents if isinstance(subagents, int) and not isinstance(subagents, bool) else None
+        except (OSError, ValueError, KeyError, TypeError):
+            subagents = None
+        return {"mem_total_mb": memory.get("MemTotal"), "mem_available_mb": memory.get("MemAvailable"),
+                "cpus": os.cpu_count(), "load1": load1, "running_attempts": running, "max_subagents": subagents}
+
     def health(self):
         # Descriptive boundary, not cryptographic proof of OS isolation. Given a boundary_id (MVP 0.2.0, S8), the boundary
         # is the same on any host its volume moves to; without one it is derived from the host, as before.
@@ -1238,6 +1265,7 @@ class Worker:
                 "skills": list(pack.CATALOG),   # D50: the skill pack it carries
                 "boundary": hashlib.sha256(boundary.encode()).hexdigest(),
                 **({"boundary_id": self.boundary_id} if self.boundary_id else {}),
+                "capacity": self.capacity(),   # MVP 0.2.0 (H §6.2)
                 "host_principal": hashlib.sha256(f"{socket.gethostname()}:{os.getuid()}".encode()).hexdigest(),
                 "routing_evidence": bool(self.routing_log and self.routing_log.is_file()),
                 "model_source": "KiroCrew provider_models.json; ACP session/new advertised cache",
