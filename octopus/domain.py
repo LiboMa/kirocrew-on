@@ -2291,6 +2291,20 @@ class Service:
         require(worker is not None and not worker["retired"], "页面暂不可用", 404, "not_found")
         return worker_request(json.loads(worker["config"]), "/files", {"run_id": share["run_id"], "path": relative})
 
+    def allocate_boundary(self, actor, body):
+        """A new boundary's identity and OS user id (MVP 0.2.0, S9), for ``deploy.sh boundary add``: an administrator's."""
+        from . import boundaries
+        require(elevated(actor), "只有平台管理员可以分配执行边界", 403, "forbidden")
+        require(isinstance(body, dict) and set(body) <= {"owner", "name"} and isinstance(body.get("owner"), str),
+                "需要 owner（平台用户名），可选 name")
+        with self.db.transaction() as db:
+            user = db.execute("SELECT id FROM users WHERE username=?", (body["owner"].lower(),)).fetchone()
+            require(user is not None, f"平台上没有用户 {body['owner']}", 404, "not_found")
+            row = boundaries.allocate(db, user["id"], body.get("name"))
+            audit(db, actor, "boundary.allocate", "boundary", row["id"], {"uid": row["uid"], "name": row["name"],
+                                                                           "owner": user["id"]})
+        return row
+
     def quotas(self, actor):
         """The actor's limit on running tasks and their Teams' (D61); an administrator also sees the default and each person's."""
         with self.db.read() as db:

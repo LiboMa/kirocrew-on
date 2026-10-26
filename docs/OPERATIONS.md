@@ -144,6 +144,9 @@ deploy/aws/deploy.sh boundary native alice         # 对外开通它的原生入
   （`octopus-gateway@alice.service.d/limits.conf`：`MemoryHigh` = ¾ × `MemoryMax`、`CPUQuota`、`TasksMax=4096`；Worker `MemoryMax=4G`，
   它也运行会话预览；两者 `OOMPolicy=continue`：超限时只结束那个进程，不停掉整个服务）、原生契约检查、启动两个服务，最后
   `bootstrap-worker --owner alice` 登记为 alice 的专属 Worker。**开通前先核对用户**（存在、尚无自己的执行环境；`--check-only`），不符时主机上什么也不留下。
+  新边界的 OS 用户 ID 与身份由平台分配（MVP 0.2.0 P1，S9）：`bootstrap-worker --allocate` 经 `POST /v1/admin/boundaries`
+  取得 `boundary_id` 与 UID = GID = 100000 + 序号（永不复用），`groupadd -g` / `useradd -u` 用它，`boundary_id` 写在 toml 第一行；
+  本机该 UID 已被占用时停止并说明。此前建的边界保留主机分配的 UID，P5 搬到用户卷时一次性改属主。
   不重启平台 API；重复执行只补缺（端口与配置不变；未给 `--memory` / `--cpu` 时资源上限沿用现有值）。`--owner` 按小写匹配平台用户。主机须已 `push` 过含 `boundary.sh` 的发布。登记后此人的会话即落到新边界：先完成 `kiro-login --boundary`。
 - `boundary native <名称>`（D49 第 3 期，2026-10-21）：建栈 `<平台栈>-native-<名称>`（`kirocrew-on-native.yaml`，只有一个 CloudFront 分发，带源站密钥），中转端口与 Worker 主机共用 `NativePort + 1`–`NativeRelayEnd`（安全组只放行 CloudFront）；在平台主机渲染
   `/etc/nginx/conf.d/kirocrew-relay-boundary-<名称>.conf`（只转发带源站密钥的请求到该边界的回环 Gateway），把边界的 `crew_url` 改为该分发，排空后重启它的 Gateway 与 Worker（Gateway 只信任 `crew_url` 这个来源）。

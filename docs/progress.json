@@ -438,7 +438,7 @@
         {
           "id": "v020-p1-3",
           "name": "P1-3 全局 UID 分配器（S9）",
-          "status": "todo",
+          "status": "local",
           "ref": "P1 Task 3"
         },
         {

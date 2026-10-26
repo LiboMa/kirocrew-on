@@ -208,6 +208,16 @@ CREATE TABLE IF NOT EXISTS public_shares(
 CREATE INDEX IF NOT EXISTS public_shares_run ON public_shares(run_id);
 """
 
+# MVP 0.2.0 (S9): every new boundary's identity and OS user id from the control plane; numbers are never reused, a
+# released boundary's name may be.
+BOUNDARIES = """
+CREATE TABLE IF NOT EXISTS boundaries(
+ id TEXT PRIMARY KEY, seq INTEGER NOT NULL UNIQUE, uid INTEGER NOT NULL UNIQUE, name TEXT NOT NULL,
+ user_id TEXT REFERENCES users(id), state TEXT NOT NULL DEFAULT 'allocated' CHECK(state IN ('allocated','ready','released')),
+ created REAL NOT NULL);
+CREATE UNIQUE INDEX IF NOT EXISTS boundaries_name ON boundaries(name) WHERE state != 'released';
+"""
+
 EXECUTOR = """
 ALTER TABLE runs ADD COLUMN executor_id TEXT REFERENCES users(id);
 """
@@ -216,7 +226,8 @@ MIGRATIONS = [(1, "baseline", BASELINE), (2, "environments", ENVIRONMENTS), (3, 
               (4, "teams_workers", TEAMS_WORKERS), (5, "apps", APPS), (6, "credentials", CREDENTIALS),
               (7, "knowledge", KNOWLEDGE), (8, "knowledge_kept", KNOWLEDGE_KEPT),
               (9, "requests_policies", REQUESTS_POLICIES), (10, "quotas", QUOTAS), (12, "shares", SHARES), (13, "marks", MARKS),
-              (14, "executor", EXECUTOR), (15, "public_shares", PUBLIC_SHARES)]   # 11: D57's (another branch)
+              (14, "executor", EXECUTOR), (15, "public_shares", PUBLIC_SHARES),
+              (16, "boundaries", BOUNDARIES)]   # 11: D57's (another branch)
 
 
 def _statements(script):

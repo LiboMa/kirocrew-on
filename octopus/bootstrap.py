@@ -41,3 +41,14 @@ def register_boundary_worker(api_url, username, password, worker_url, worker_tok
         return {"id": created["id"], "created": True}
     finally:
         client.request("POST", "/v1/logout", {})
+
+
+def allocate_boundary(api_url, username, password, owner, name):
+    """Log in as the admin and have the platform name a new boundary (MVP 0.2.0, S9): its boundary_id and OS user id."""
+    login = Client(api_url, "").request("POST", "/v1/login", {"username": username, "password": password})
+    client = Client(api_url, login["token"])
+    try:
+        return client.request("POST", "/v1/admin/boundaries", {"owner": owner, "name": name})
+    finally:
+        client.request("POST", "/v1/logout", {})
+

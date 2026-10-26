@@ -88,6 +88,7 @@ def build_parser(settings, environ=None):
     boot.add_argument("--owner", help="其专属执行环境的平台用户名（D49：每人一个边界；默认管理员本人）")
     boot.add_argument("--check-only", action="store_true", help="只核对 --owner（存在、尚无自己的执行环境），不登记")
     boot.add_argument("--spare", action="store_true", help="登记为空闲专属执行环境，由管理员在控制台分配给 Team")
+    boot.add_argument("--allocate", action="store_true", help="MVP 0.2.0：由平台为新边界分配 boundary_id 与全局 UID（需 --owner）")
     backup_cmd = sub.add_parser("backup", help="平台数据库一致性备份")
     backup_cmd.add_argument("--dest", required=True)
     archive = sub.add_parser("archive", help="目录归档（Worker 数据、执行边界）")
@@ -220,6 +221,12 @@ def main(argv=None):
     elif args.command == "bootstrap-worker":
         from .bootstrap import register_boundary_worker
         url = f"http://{probe_host(settings.api_host)}:{settings.api_port}"
+        if args.allocate:   # MVP 0.2.0 (S9): a new boundary's identity and OS user id, before it exists on the host
+            from .bootstrap import allocate_boundary
+            if not args.owner:
+                raise SystemExit("--allocate 需要 --owner")
+            print(dumps(allocate_boundary(url, args.username, os.environ[args.password_env], args.owner, args.name)))
+            return
         if not args.check_only and not (args.worker_url and args.token_file):
             raise SystemExit("bootstrap-worker 需要 --worker-url 与 --token-file（只核对用户时用 --check-only）")
         print(dumps(register_boundary_worker(url, args.username, os.environ[args.password_env], args.worker_url,

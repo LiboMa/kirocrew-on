@@ -53,7 +53,19 @@ platform --check-only >/dev/null
 
 log "边界 ${NAME}：OS 用户与目录"
 install -d -m 0700 "$BASE"
-id "$CREW" >/dev/null 2>&1 || useradd --system --home-dir "$BASE/home" --shell /bin/bash "$CREW"
+B_ID=""
+if ! id "$CREW" >/dev/null 2>&1; then
+  # MVP 0.2.0 (S9): a new boundary's identity and OS user id come from the platform, the same on every host that will
+  # mount its volume; a boundary made before keeps the id its host gave it.
+  ALLOC="$(platform --allocate)"
+  B_ID="$(printf '%s' "$ALLOC" | python3 -c 'import json,sys; print(json.load(sys.stdin)["id"])')"
+  B_UID="$(printf '%s' "$ALLOC" | python3 -c 'import json,sys; print(int(json.load(sys.stdin)["uid"]))')"
+  if getent passwd "$B_UID" >/dev/null || getent group "$B_UID" >/dev/null; then
+    echo "平台分配的 UID ${B_UID} 已被本机其他用户或组占用：请检查主机后重试" >&2; exit 3
+  fi
+  groupadd -g "$B_UID" "$CREW"
+  useradd -u "$B_UID" -g "$B_UID" --home-dir "$BASE/home" --shell /bin/bash "$CREW"
+fi
 chown "$CREW:$CREW" "$BASE"
 install -d -m 0700 -o "$CREW" -g "$CREW" "$BASE/home" "$BASE/worker" "$BASE/crew" "$BASE/kiro" "$BASE/logs"
 boundary_env "$NAME"
@@ -70,6 +82,8 @@ if [ ! -f "$TOML" ]; then
       -e "s#^crew_url = .*#crew_url = \"http://localhost:$((GATEWAY_PORT + 10000))\"#" \
       -e 's#^crew_entry_ttl = .*#crew_entry_ttl = "1h"#' \
       "$ON_CURRENT/deploy/config/boundary.toml.example" > "$TOML.new"
+  # MVP 0.2.0 (S8): its identity, on the first line (before the file's tables), in this root-owned configuration
+  [ -z "$B_ID" ] || sed -i "1i boundary_id = \"$B_ID\"" "$TOML.new"
   chown "root:$CREW" "$TOML.new"
   chmod 0640 "$TOML.new"
   mv -f "$TOML.new" "$TOML"

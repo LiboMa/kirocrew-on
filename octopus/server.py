@@ -890,6 +890,9 @@ def server(database, port=8918, host="127.0.0.1", allowed_hosts=(), origin_secre
                 if path == "/v1/admin/users":
                     require(method == "GET", "Method not allowed", 405)
                     return self.respond(service.admin_users(actor))
+                if path == "/v1/admin/boundaries":   # MVP 0.2.0 (S9): a new boundary's identity and OS user id
+                    require(method == "POST", "Method not allowed", 405)
+                    return self.respond(service.allocate_boundary(actor, body), 201)
                 if len(segments) in {5, 6} and segments[:3] == ["v1", "admin", "users"] and segments[4] == "tokens":
                     if len(segments) == 5:
                         require(method == "GET", "Method not allowed", 405)
