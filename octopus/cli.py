@@ -11,7 +11,7 @@ import uuid
 from pathlib import Path
 
 from . import local, mcp
-from .client import Client
+from .client import ApiError, Client
 from .policies import basis_text
 from .requests import CLI_LABEL
 
@@ -83,13 +83,16 @@ def login(url, username, password, home=None, expires="30d"):
     from .connect import TTL_DAYS
     token = signed.request("POST", "/v1/tokens", {"label": CLI_LABEL, "scopes": scopes, "expires_in": expires,
                                                   "ttl": min(TTL_DAYS[expires], 30) * 86400})   # before D62: ttl, ≤ 30 days
-    signed.request("DELETE", "/v1/tokens/" + answer["id"])
     path = config_path(home)
     path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
     fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+    os.fchmod(fd, 0o600)   # an earlier file keeps its mode on open: narrowed before the token is written into it
     with os.fdopen(fd, "w") as file:
         json.dump({"url": url, "token": token["token"], "username": username, "expires": token.get("expires")}, file)
-    os.chmod(path, 0o600)
+    try:   # saved first: a login token that cannot be revoked now expires on its own; an unsaved CLI token would not
+        signed.request("DELETE", "/v1/tokens/" + answer["id"])
+    except (OSError, ValueError, ApiError):
+        pass
     return {"username": username, "url": url, "expires": token.get("expires")}
 
 
@@ -185,8 +188,9 @@ def run(argv, client, cwd):
         view = client.request("GET", f"/v1/runs/{rid}")
         return say(view, _plan_text(view))
     if args.command == "report":
-        text = client.text("GET", f"/v1/runs/{rid}/report?format={'html' if args.html else 'md'}")
-        return print(text)
+        fmt = "html" if args.html else "md"
+        text = client.text("GET", f"/v1/runs/{rid}/report?format={fmt}")
+        return say({"run_id": rid, "format": fmt, "report": text}, text)
     if args.command == "pull":
         result = local.pull(client, rid, cwd, checkout=args.checkout, full=args.full)
         return say(result, f"已拉回 {result['branch']}（{result['head'][:7]}）" + ("，已切换到该分支" if result["checked_out"] else "")

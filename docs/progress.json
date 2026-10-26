@@ -358,6 +358,13 @@
           "name": "历史会话：收藏、置顶、删除、分享",
           "status": "deployed",
           "ref": "迁移 13 run_marks · 会话列表「⋯」 · EC2 828caee"
+        },
+        {
+          "id": "m3-d58-minors",
+          "name": "M3-4 补：本地 / 远端联动的终审延后项（安全底线）",
+          "status": "deployed",
+          "ref": "EC2 f2735ca · PR #12",
+          "more": "同步先鉴权再读 20 MB 请求体；拉回是读（只读 Token 与查看者可拉回）；空同步 409 nothing_to_sync；octopus login 先收窄权限再写 Token、先保存再吊销；每次拉回各用一个 bundle 文件。EC2 实测通过。"
         }
       ],
       "milestones": [

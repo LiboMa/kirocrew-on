@@ -1,16 +1,16 @@
 # 进度与完成记录
 
-> 由 `tools/progress.py` 生成（2026-10-26 02:22 CST）：任务状态取自 `docs/progress.json`，提交记录取自 git。看板：`docs/progress-dashboard.html`；实时看板：`python3 tools/progress.py --serve --ec2`（http://127.0.0.1:8765/）。
+> 由 `tools/progress.py` 生成（2026-10-26 03:04 CST）：任务状态取自 `docs/progress.json`，提交记录取自 git。看板：`docs/progress-dashboard.html`；实时看板：`python3 tools/progress.py --serve --ec2`（http://127.0.0.1:8765/）。
 
 - **本轮完成度**：87%　**MVP 完成度**：74%
-- **分支**：HEAD `6b686d1`；自 `origin/main` 起 16 个提交——已推送 0、已部署 EC2 16、仅本机 0；EC2 运行 `6b686d1`
+- **分支**：HEAD `f2735ca`；自 `origin/main` 起 18 个提交——已推送 0、已部署 EC2 18、仅本机 0；EC2 运行 `f2735ca`
 - **回归**：1861 后端 + 92 + 281 控制台 + 7 个浏览器测试；EC2 运行 12fbd9f；本地 main 已合并（fe49f81），MVP-0.1.1 在 feat/mvp-0.1.1
 
 ## 模块
 
 | 模块 | 完成度 | 已验收 | 已部署 · 待验收 | 本机完成 · 待部署 | 进行中 | 卡点 · 等外部 | 未开始 |
 |---|---|---|---|---|---|---|---|
-| MVP 里程碑（M1–M5） | 74% | 22 | 15 | 0 | 2 | 0 | 8 |
+| MVP 里程碑（M1–M5） | 74% | 22 | 16 | 0 | 2 | 0 | 8 |
 | D46 Agent 角色与提示体系 | 87% | 8 | 3 | 0 | 0 | 1 | 0 |
 | D49 每人一个执行边界 | 80% | 2 | 2 | 0 | 1 | 0 | 0 |
 | D50 编码技能包 | 100% | 2 | 0 | 0 | 0 | 0 | 0 |
@@ -56,6 +56,10 @@
 - `586ece7` 2026-10-25 〔已部署 EC2〕 feat(takeover): 执行人（D74 第 1 步）——runs.executor_id（迁移 14），会话以谁的身份运行与创建者分开；执行环境是否服务、并发额度、知识空间、个人凭证、补充说明 / 审批 / 发布、原生入口改按执行人；共享与删除知识仍归创建者
 - `3db3a15` 2026-10-25 〔已部署 EC2〕 docs(design): 协作者怎样续作共享来的会话——三种方案（负责人选方案一「接手」）与接手的技术设计（D74：执行人、接手命令、引擎后台搬迁、/adopt、接回、分期）
 
+### D58（1 个提交：已部署 EC2 1）
+
+- `f2735ca` 2026-10-26 〔已部署 EC2〕 fix(local): D58 终审延后项——同步先鉴权再读 20 MB 请求体；拉回是读（只读 Token 与查看者可拉回）；没有新提交的同步 409 nothing_to_sync；octopus login 先把已有文件收窄为 0600 再写 Token，先保存 CLI Token 再吊销登录用的临时 Token
+
 ### 未标记 · 修复（4 个提交：已部署 EC2 4）
 
 - `decdbad` 2026-10-26 〔已部署 EC2〕 fix(security): 原生入口的登录在访问 Cookie 到期时结束（K03）——Gateway 换取登录时另发 30 天的刷新凭据，原生页面用 /api/auth/refresh 续成新登录，平台既不能缩短也不能结束；所有公网中转包含 kirocrew-native-guard.conf，把刷新答成「刷新链已吊销」（401），页面回到需要登录的提示；部署时给此前渲染的中转补上 include，nginx 校验不过就还原并警告
@@ -63,10 +67,11 @@
 - `55efa79` 2026-10-26 〔已部署 EC2〕 fix(takeover): 交接路径改写经 journal（只记会话级事件）；时间线标题补上接手的三类事件；访问权限测试含 takeover
 - `7adb992` 2026-10-25 〔已部署 EC2〕 fix(security): 同站的会话预览不能借控制台的登录 Cookie——只凭 Cookie 的请求拒绝同站 / 跨站的子资源请求（Sec-Fetch-Site / -Mode，顶层打开与旧浏览器照旧）；「刷新模型」改为 POST（仍为 read 权限），核对 boundary、host_principal、isolation，事务内重读只更新能力字段；报告页与提示页 frame-ancestors 'none'
 
+### 未标记 · 文档（2 个提交：已部署 EC2 2）
+
+- `4ee44e2` 2026-10-26 〔已部署 EC2〕 docs(progress): 拉回各用一个文件已部署 EC2（6b686d1）
+- `ef81f01` 2026-10-26 〔已部署 EC2〕 docs(design): 原生入口改为单会话票据（K03 / M4-3）——现状（含 30 天刷新与过渡修复）与三种方案：撤权即结束、请 KiroCrew 提供按会话限定的登录、平台票据加过滤代理；建议先一后二
+
 ### 未标记 · 其他（1 个提交：已部署 EC2 1）
 
 - `6b686d1` 2026-10-26 〔已部署 EC2〕 Merge branch 'feat/session-takeover' into fix/native-refresh-guard
-
-### 未标记 · 文档（1 个提交：已部署 EC2 1）
-
-- `ef81f01` 2026-10-26 〔已部署 EC2〕 docs(design): 原生入口改为单会话票据（K03 / M4-3）——现状（含 30 天刷新与过渡修复）与三种方案：撤权即结束、请 KiroCrew 提供按会话限定的登录、平台票据加过滤代理；建议先一后二

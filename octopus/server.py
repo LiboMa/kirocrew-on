@@ -197,9 +197,10 @@ def required_scope(method, path):
             (path == "/v1/teams" and method == "POST") or \
             (segments[:2] == ["v1", "teams"] and len(segments) == 4 and segments[3] in {"archive", "environment"}):
         return "admin"
-    # A download is a read; /v1/workflows/<id>/archive (archiving a workflow) is not, hence no endswith() here.
+    # A download is a read — the source archive, a pull's bundle (D58; a viewer pulls, D64); /v1/workflows/<id>/archive
+    # (archiving a workflow) is not, hence no endswith() here.
     if method == "GET" or path in READ_POSTS or refresh or path.endswith("/preview") or \
-            (segments[:2] == ["v1", "runs"] and len(segments) == 4 and segments[3] == "archive") or \
+            (segments[:2] == ["v1", "runs"] and len(segments) == 4 and segments[3] in {"archive", "bundle"}) or \
             (segments[:2] == ["v1", "runs"] and len(segments) == 5 and segments[3:] == ["app", "open"]):
         return "read"
     return "execute" if path.startswith(("/v1/runs", "/v1/designs")) else "manage"
@@ -511,6 +512,7 @@ def server(database, port=8918, host="127.0.0.1", allowed_hosts=(), origin_secre
                         require(self.headers.get("Content-Type", "").split(";")[0] == "application/octet-stream",
                                 "需要 application/octet-stream")
                         require(0 < size <= SYNC_LIMIT, f"同步的内容须为 1 字节到 {SYNC_LIMIT // 1048576} MB", 413, "sync_too_large")
+                        scope(self.identity(method), "execute")   # up to 20 MB: read only for someone who may sync
                         raw = self.rfile.read(size)
                     # A cross-site DELETE always needs a CORS preflight, so it may come without a JSON body.
                     elif not (method == "DELETE" and size == 0):

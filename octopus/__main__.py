@@ -31,7 +31,9 @@ def settings_from_argv(argv, environ=None):
 
 def build_parser(settings, environ=None):
     environ = os.environ if environ is None else environ
-    parser = argparse.ArgumentParser(description=__doc__)
+    from .cli import COMMANDS
+    parser = argparse.ArgumentParser(description=__doc__, epilog="使用者命令（octopus login 之后在本机使用）：" + "、".join(COMMANDS)
+                                     + "；octopus <命令> -h 查看用法。")
     parser.add_argument("--config", help="TOML 配置文件；也可用 OCTOPUS_CONFIG")
     sub = parser.add_subparsers(dest="command", required=True)
     init = sub.add_parser("init")
