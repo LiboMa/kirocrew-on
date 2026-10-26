@@ -1,6 +1,6 @@
 {
   "_comment": "进度看板与 docs/PROGRESS.md 的唯一数据源：任务状态在这里维护；提交记录由 tools/progress.py 从 git 生成（负责人 2026-10-20）。",
-  "checks": "1861 后端 + 92 + 281 控制台 + 7 个浏览器测试；EC2 运行 12fbd9f；本地 main 已合并（fe49f81），MVP-0.1.1 在 feat/mvp-0.1.1",
+  "checks": "2036 后端 + 92 + 342 控制台 + 7 个浏览器测试；EC2 运行 c80dae6（MVP 0.2.0 P1，PR #15）",
   "status": {
     "accepted": {
       "label": "已验收",
@@ -413,7 +413,7 @@
         {
           "id": "v020-plan",
           "name": "0.2.0 规划：统一设计并入集成分支、路线图与 P1 计划、版本文档与 Presentation",
-          "status": "local",
+          "status": "deployed",
           "ref": "feat/mvp-0.2.0"
         },
         {
@@ -426,71 +426,72 @@
         {
           "id": "v020-p1-1",
           "name": "P1-1 登记时边界唯一性看全部 Worker（CE9）",
-          "status": "local",
-          "ref": "P1 Task 1"
+          "status": "deployed",
+          "ref": "P1 Task 1 · EC2 c80dae6"
         },
         {
           "id": "v020-p1-2",
           "name": "P1-2 boundary_id 进入 Worker 配置与健康信息（S8、CE3）",
-          "status": "local",
-          "ref": "P1 Task 2"
+          "status": "deployed",
+          "ref": "P1 Task 2 · EC2 c80dae6"
         },
         {
           "id": "v020-p1-3",
           "name": "P1-3 全局 UID 分配器（S9）",
-          "status": "local",
-          "ref": "P1 Task 3"
+          "status": "deployed",
+          "ref": "P1 Task 3 · EC2 c80dae6"
         },
         {
           "id": "v020-p1-4",
           "name": "P1-4 健康信息补容量字段",
-          "status": "local",
-          "ref": "P1 Task 4"
+          "status": "deployed",
+          "ref": "P1 Task 4 · EC2 c80dae6"
         },
         {
           "id": "v020-p1-5",
           "name": "P1-5 Engine 租约接口",
-          "status": "local",
-          "ref": "P1 Task 5"
+          "status": "deployed",
+          "ref": "P1 Task 5 · EC2 c80dae6"
         },
         {
           "id": "v020-p1-6",
           "name": "P1-6 接入码第 1 期（N）",
-          "status": "local",
-          "ref": "P1 Task 6"
+          "status": "deployed",
+          "ref": "P1 Task 6 · EC2 c80dae6",
+          "more": "EC2 主机端到端 13/13（签发、列表不含码、错码 404、失败计数、撤销）；用接入码真登记一个临时边界待负责人同意建测试用户"
         },
         {
           "id": "v020-p1-7",
           "name": "P1-7 有副作用的 GET 审计（CE12）",
-          "status": "local",
-          "ref": "P1 Task 7"
+          "status": "deployed",
+          "ref": "P1 Task 7 · EC2 c80dae6"
         },
         {
           "id": "v020-p1-8",
           "name": "P1-8 安装脚本支持 ARM64",
-          "status": "local",
-          "ref": "P1 Task 8",
+          "status": "deployed",
+          "ref": "P1 Task 8 · EC2 c80dae6",
           "more": "arm64 实机验收随 P0b"
         },
         {
           "id": "v020-p1-9",
           "name": "P1-9 打包：wheel、清单、签名",
-          "status": "local",
-          "ref": "P1 Task 9",
+          "status": "deployed",
+          "ref": "P1 Task 9 · EC2 c80dae6",
           "more": "可复现 wheel，版本 0.2.0rc1"
         },
         {
           "id": "v020-p1-10",
           "name": "P1-10 状态栈与 Litestream",
-          "status": "local",
-          "ref": "P1 Task 10",
-          "more": "云上恢复验证进行中"
+          "status": "deployed",
+          "ref": "P1 Task 10 · EC2 c80dae6",
+          "more": "云上验证：宕机恢复 4.4 s，restore-verify 通过，RPO 0.69 s"
         },
         {
           "id": "v020-p1-11",
           "name": "P1-11 平台指标（EMF）",
-          "status": "local",
-          "ref": "P1 Task 11"
+          "status": "deployed",
+          "ref": "P1 Task 11 · EC2 c80dae6"
         },
         {
           "id": "v020-p1-12",
