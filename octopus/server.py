@@ -992,28 +992,10 @@ def server(database, port=8918, host="127.0.0.1", allowed_hosts=(), origin_secre
                     team, user = body.get("team_id"), body.get("owner_id")
                     # A spare execution environment belongs to no space until an admin assigns it to a Team (D28, T4).
                     spare = body.get("spare") is True
-                    if spare:
-                        require(not team and not user, "空闲执行环境不绑定 Team 或 User")
-                        require(health.get("isolation") == "dedicated",
-                                "空闲执行环境须为专属隔离（dedicated）", 409, "isolation_required")
-                    else:
-                        require(bool(team) != bool(user), "Worker 必须唯一绑定 Team 或 User")
-                        require(not team or health.get("isolation") == "dedicated",
-                                "Team 执行需要专属 Worker；trusted-local 仅允许个人开发空间", 409, "isolation_required")
-                    config = {**config, "capabilities": health}
+                    workers.check_binding(health, team, user, spare)
                     with database.transaction() as db:
-                        if not spare:
-                            require(db.execute("SELECT 1 FROM teams WHERE id=?", (team,)).fetchone() if team else
-                                    db.execute("SELECT 1 FROM users WHERE id=?", (user,)).fetchone(),
-                                    "执行空间不存在", 404, "not_found")
-                            require(not team or team_environment(db, team) is None,
-                                    "该 Team 已有执行环境（含已停用的）", 409, "team_has_environment")
-                        workers.registration_conflicts(db, health, team, user, spare)   # CE9: one set of rules
-                        wid = uid("worker")
-                        db.execute("INSERT INTO workers(id,name,owner_id,team_id,config,scope) VALUES(?,?,?,?,?,?)",
-                                   (wid, name(body.get("name")), actor["id"] if spare else user, team,
-                                    dumps(workers.seal(config, service.credentials.key)),   # D59: never plaintext
-                                    "spare" if spare else "dedicated"))
+                        wid = workers.register(db, actor["id"], name(body.get("name")), team, user, spare, config, health,
+                                               service.credentials.key)
                         audit(db, actor, "worker.register", "worker", wid, {"scope": "spare" if spare else "dedicated",
                                                                             "team_id": team, "owner_id": None if spare else user})
                     return self.respond({"id": wid, "name": body["name"], "scope": "spare" if spare else "dedicated",

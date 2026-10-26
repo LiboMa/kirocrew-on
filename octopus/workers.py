@@ -43,3 +43,36 @@ def registration_conflicts(db, health, team, user, spare):
             require(previous.get("host_principal") != health.get("host_principal"),
                     "不同执行空间不能复用同一宿主账户；请使用独立账号/容器/主机", 409, "isolation_required")
 
+
+def check_binding(health, team, user, spare):
+    """Where a Worker may be bound, by what it reports (before any transaction): a spare one to no space and dedicated
+    (D28, T4); otherwise to exactly one Team or user, a Team's only when dedicated."""
+    from .security import require
+    if spare:
+        require(not team and not user, "空闲执行环境不绑定 Team 或 User")
+        require(health.get("isolation") == "dedicated", "空闲执行环境须为专属隔离（dedicated）", 409, "isolation_required")
+    else:
+        require(bool(team) != bool(user), "Worker 必须唯一绑定 Team 或 User")
+        require(not team or health.get("isolation") == "dedicated",
+                "Team 执行需要专属 Worker；trusted-local 仅允许个人开发空间", 409, "isolation_required")
+
+
+def register(db, holder, worker_name, team, user, spare, connection, health, key):
+    """Register a Worker inside the caller's transaction, by the same rules for every way of registering: its space exists,
+    a Team has no environment yet, its boundary and host account are new (registration_conflicts). The token is sealed
+    (D59). ``holder``: who holds a spare one (the registering administrator). Returns the Worker's id."""
+    import json
+    from .db import dumps, uid
+    from .domain import team_environment
+    from .security import require
+    if not spare:
+        require(db.execute("SELECT 1 FROM teams WHERE id=?", (team,)).fetchone() if team else
+                db.execute("SELECT 1 FROM users WHERE id=?", (user,)).fetchone(), "执行空间不存在", 404, "not_found")
+        require(not team or team_environment(db, team) is None, "该 Team 已有执行环境（含已停用的）", 409, "team_has_environment")
+    registration_conflicts(db, health, team, user, spare)
+    wid = uid("worker")
+    db.execute("INSERT INTO workers(id,name,owner_id,team_id,config,scope) VALUES(?,?,?,?,?,?)",
+               (wid, worker_name, holder if spare else user, team, dumps(seal({**connection, "capabilities": health}, key)),
+                "spare" if spare else "dedicated"))
+    return wid
+
