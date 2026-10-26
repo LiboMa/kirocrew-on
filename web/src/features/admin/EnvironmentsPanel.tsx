@@ -479,7 +479,7 @@ function IssuedCodeDialog({ issued, returnTo, onClose }: { issued: IssuedEnrollm
     <FormDialog title="接入码" closeLabel="我已保存" onClose={onClose} returnTo={returnTo}
       description={<>接入码只显示这一次，用一次即失效，{formatTime(issued.expires)} 前有效。Worker「{issued.name}」登记后会出现在列表里。</>}>
       {line("code", issued.code, "接入码")}
-      {line("command", issued.command, "在 Worker 主机上运行")}
+      {line("command", issued.command, "在 Worker 主机上以 root 运行")}
       <p className="text-xs text-muted-foreground">命令运行后粘贴接入码并回车；接入码不写在命令里，不会留在 shell 历史中。</p>
     </FormDialog>
   );

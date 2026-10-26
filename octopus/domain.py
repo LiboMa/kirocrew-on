@@ -2328,9 +2328,9 @@ class Service:
             audit(db, actor, "worker.enrollment", "enrollment", issued["id"], {"binding_kind": kind, "binding_id": binding,
                                                                                "name": worker_name, "expires": issued["expires"]})
         # The code is pasted at the prompt, so it stays out of ps and the shell history (scripts set OCTOPUS_ENROLL_CODE)
-        command = ("sudo PYTHONPATH=/opt/kirocrew-on/current /opt/kirocrew-on/venv/bin/python -m octopus "
+        command = ("PYTHONPATH=/opt/kirocrew-on/current /opt/kirocrew-on/venv/bin/python -m octopus "
                    f"--config /etc/kirocrew-on/boundary-<边界名>.toml worker enroll --code-stdin --platform {platform} "
-                   "--url https://<Worker 私网地址>:8943")   # as installed on a host; the token file is root's to read
+                   "--url https://<Worker 私网地址>:8943")   # as installed on a host, run as root (it reads the token file); D53: no sudo in code text
         return {**issued, "name": worker_name, "binding_kind": kind, "binding_id": binding, "command": command}
 
     def enrollments(self, actor):
