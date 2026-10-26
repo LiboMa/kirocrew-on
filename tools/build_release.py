@@ -26,6 +26,7 @@ import zipfile
 ROOT = Path(__file__).resolve().parents[1]
 PACKAGES = ("octopus", "composition")
 CARRIED = ("deploy", "skills")   # outside the packages in a checkout; octopus/_release in the wheel
+OWN = {"deploy/aws/stack.env"}   # this deployment's stack, domains and pins: not something to hand to another one
 STAMP = (1980, 1, 1, 0, 0, 0)
 
 
@@ -55,15 +56,16 @@ def node_sums(dist, given=None):
 
 
 def files():
-    """(name in the wheel, path) for every file the wheel carries, in a fixed order: what git tracks (or would) under the packages,
-    deploy/ and skills/ (nothing a checkout happens to hold besides), and the console build, which git ignores."""
-    tracked = subprocess.run(["git", "-C", str(ROOT), "ls-files", "-z", "--cached", "--others", "--exclude-standard", "--",
-                              *PACKAGES, *CARRIED], check=True, capture_output=True, text=True).stdout.split("\0")
+    """(name in the wheel, path) for every file the wheel carries, in a fixed order: what git tracks under the packages,
+    deploy/ and skills/ (an untracked file a checkout holds never ships), except a deployment's own settings, and the
+    console build, which git ignores."""
+    tracked = subprocess.run(["git", "-C", str(ROOT), "ls-files", "-z", "--cached", "--", *PACKAGES, *CARRIED], check=True,
+                             capture_output=True, text=True).stdout.split("\0")
     built = [p.relative_to(ROOT).as_posix() for p in (ROOT / "octopus/ui/dist").rglob("*") if p.is_file()]
     picked = []
     for relative in sorted(set(filter(None, tracked)) | set(built)):
         path = ROOT / relative
-        if not path.is_file() or "__pycache__" in relative or relative.endswith(".pyc"):
+        if not path.is_file() or "__pycache__" in relative or relative.endswith(".pyc") or relative in OWN:
             continue
         top = relative.split("/", 1)[0]
         picked.append((relative if top in PACKAGES else f"octopus/_release/{relative}", path))

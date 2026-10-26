@@ -28,6 +28,8 @@ class ReleaseBuildTests(unittest.TestCase):
                         str(root / "key.pem")], check=True, capture_output=True)
         subprocess.run(["openssl", "pkey", "-in", str(root / "key.pem"), "-pubout", "-out", str(root / "pub.pem")],
                        check=True, capture_output=True)
+        cls.probe = ROOT / "deploy/untracked-probe.txt"   # an untracked file in a packaged directory
+        cls.probe.write_text("must not ship")
         cls.out = root / "out"
         build_release.main(["--out", str(cls.out), "--node-sums", str(root / "SHASUMS256.txt"),
                             "--sign-key", str(root / "key.pem")])
@@ -36,6 +38,7 @@ class ReleaseBuildTests(unittest.TestCase):
 
     @classmethod
     def tearDownClass(cls):
+        cls.probe.unlink(missing_ok=True)
         cls.tmp.cleanup()
 
     def test_the_release_has_a_wheel_sums_and_a_manifest(self):
@@ -53,6 +56,9 @@ class ReleaseBuildTests(unittest.TestCase):
                      "octopus/_release/deploy/install/al2023.sh", "octopus/_release/skills/kirocrew-on/SKILL.md"):
             self.assertIn(name, names)
         self.assertFalse(any("__pycache__" in n or n.endswith(".pyc") for n in names))
+        # Review 2026-10-26: only what git tracks (no stray file a checkout holds), and no deployment's own settings
+        self.assertNotIn("octopus/_release/deploy/aws/stack.env", names)
+        self.assertNotIn("octopus/_release/deploy/untracked-probe.txt", names)
         self.assertIn("octopus/__main__.py,sha256=", record)   # every file's hash, as pip checks it
 
     def test_the_wheel_installs_and_runs(self):
