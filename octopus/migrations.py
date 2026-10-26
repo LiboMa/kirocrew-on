@@ -195,10 +195,16 @@ CREATE TABLE IF NOT EXISTS run_marks(
  pinned INTEGER NOT NULL DEFAULT 0, starred INTEGER NOT NULL DEFAULT 0, updated REAL NOT NULL, PRIMARY KEY(user_id, run_id));
 """
 
+# D74 (owner 2026-10-25): who a Session runs as — its creator until someone takes it over to their own boundary.
+EXECUTOR = """
+ALTER TABLE runs ADD COLUMN executor_id TEXT REFERENCES users(id);
+"""
+
 MIGRATIONS = [(1, "baseline", BASELINE), (2, "environments", ENVIRONMENTS), (3, "access", ACCESS),
               (4, "teams_workers", TEAMS_WORKERS), (5, "apps", APPS), (6, "credentials", CREDENTIALS),
               (7, "knowledge", KNOWLEDGE), (8, "knowledge_kept", KNOWLEDGE_KEPT),
-              (9, "requests_policies", REQUESTS_POLICIES), (10, "quotas", QUOTAS), (12, "shares", SHARES), (13, "marks", MARKS)]   # 11: D57's (another branch)
+              (9, "requests_policies", REQUESTS_POLICIES), (10, "quotas", QUOTAS), (12, "shares", SHARES), (13, "marks", MARKS),
+              (14, "executor", EXECUTOR)]   # 11: D57's (another branch)
 
 
 def _statements(script):

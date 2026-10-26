@@ -853,6 +853,52 @@ describe("session detail", () => {
     expect(screen.queryByRole("button", { name: /改派/ })).toBeNull();   // a move left the work behind (R10 review)
   });
 
+  test("a collaborator takes it over to their own boundary after one confirmation (D74)", async () => {
+    const shared = makeRun({ id: "run-t", status: "completed", version: 5, worker_id: "alice-b", native_parent: "octopus-run-t",
+      workspace: "/w/alice", created_by: { id: "u2", username: "alice" },
+      permissions: { operate: true, delete: false, native: false, publish: false, direct: false, takeover: true,
+        direct_reason: "此会话在 alice 的执行边界上运行：只有边界主人能在上面下达指令（续作、诊断、确认计划、补充说明、批准工具）。" } } as Partial<Run>);
+    const calls = open(shared, {
+      "GET /runs/run-t/chat-changes": { files: ["notes.md"], count: 1, commits: false },
+      "POST /runs/run-t/takeover": { id: "run-t", version: 6, takeover: { state: "moving", to: "bob-b", from: "alice-b" } },
+    });
+    expect(await screen.findByText(/可以把它接手到自己的执行环境后续作/, { selector: "#direct-hint" })).toBeInTheDocument();
+    await userEvent.click(screen.getByRole("button", { name: /接手到我的执行环境/ }));
+    const dialog = await screen.findByRole("dialog");
+    expect(dialog).toHaveTextContent("此会话在 alice 的执行环境上");
+    expect(dialog).toHaveTextContent("用量算在你名下");
+    await waitFor(() => expect(within(dialog).getByRole("note", { name: "对话中的改动" })).toHaveTextContent("notes.md"));
+    await userEvent.click(within(dialog).getByRole("button", { name: "接手" }));
+    await waitFor(() => expect(calls.find((c) => c.path === "/v1/runs/run-t/takeover")?.body).toMatchObject({ expected_version: 5 }));
+  });
+
+  test("while it moves nothing else runs it; a failure says why and may be tried again (D74)", async () => {
+    const moving = makeRun({ id: "run-mv", status: "completed", version: 6, worker_id: "alice-b", native_parent: "octopus-run-mv",
+      takeover: { state: "moving", to: "bob-b", from: "alice-b", by: "u1", by_name: "bob", requested_at: 1 },
+      permissions: { operate: true, delete: false, native: false, publish: true, direct: false, takeover: false } } as Partial<Run>);
+    open(moving);
+    expect(await screen.findByText(/正在接手到 bob 的执行环境/)).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /续作/ })).toBeDisabled();
+    expect(screen.getByRole("button", { name: /停止/ })).toBeDisabled();
+    window.history.replaceState(null, "", "/");
+    document.body.innerHTML = "";
+    open(makeRun({ id: "run-fl", status: "completed", version: 6, worker_id: "alice-b",
+      takeover: { state: "failed", to: "bob-b", from: "alice-b", by: "u1", by_name: "bob", requested_at: 1,
+        reason: "会话分支超过 100 MB，不能接手", code: "takeover_too_large" },
+      permissions: { operate: true, delete: false, direct: false, takeover: true } } as Partial<Run>));
+    expect(await screen.findByText("会话分支超过 100 MB，不能接手")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "再试一次" })).toBeInTheDocument();
+  });
+
+  test("a Session someone took over names who runs it and what each person used (D74)", async () => {
+    open(makeRun({ id: "run-ex", status: "completed", created_by: { id: "u1", username: "fixture-owner" },
+      executed_by: { id: "u2", username: "bob" },
+      usage: { credits: 5, attempts: 2, by: [{ id: "u1", username: "fixture-owner", credits: 3 }, { id: "u2", username: "bob", credits: 2 }] },
+    } as Partial<Run>));
+    expect(await screen.findByText(/执行人 bob（已接手）/)).toBeInTheDocument();
+    expect(screen.getByText(/本会话用量：5 credits（fixture-owner：3 credits；bob：2 credits）/)).toBeInTheDocument();
+  });
+
   test("only its creator is offered their own boundary for a waiting Session (D49 R10)", async () => {
     const waiting = makeRun({ id: "run-w2", status: "waiting_worker", version: 1, team_id: "team-1", owner_id: "u2" });
     open(waiting, { "GET /placement": { space: "team-1", hint: null, default: null,

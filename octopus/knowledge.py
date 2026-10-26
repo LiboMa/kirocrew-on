@@ -46,7 +46,8 @@ def platform(snapshot, task_id):
 
 
 def space(run):
-    return run["team_id"] or run["owner_id"]
+    """A Team Session's Team, else the person it runs as (D74: its creator unless taken over)."""
+    return run["team_id"] or (run["executor_id"] if "executor_id" in run.keys() and run["executor_id"] else run["owner_id"])
 
 
 def key(source, owner):

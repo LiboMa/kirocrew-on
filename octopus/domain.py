@@ -303,7 +303,31 @@ def directs(db, actor, run):
         return None
     name = db.execute("SELECT username FROM users WHERE id=?", (holder,)).fetchone()
     return (f"此会话在 {name['username'] if name else '创建者'} 的执行边界上运行：只有边界主人能在上面下达指令（续作、诊断、确认计划、"
-            "补充说明、批准工具）" + ("；需要接手时请 Team owner 或管理员把会话改派到 Team 的环境" if run["team_id"] else ""))
+            "补充说明、批准工具）。")
+
+
+def moving(run):
+    """The takeover the Engine is carrying out for this Session (D74), or None."""
+    takeover = json.loads(run["snapshot"]).get("takeover") or {}
+    return takeover if takeover.get("state") == "moving" else None
+
+
+def takeover_target(db, actor, run):
+    """Where the actor would take the Session over to (D74) and why not: ``(worker, reason, code)`` — their one own
+    boundary, while the Session runs on someone else's own boundary, has stopped and nothing else moves it."""
+    if moving(run):
+        return None, "正在接手到新的执行环境，请稍候", "takeover_in_progress"
+    holder = boundary_owner(db, run)
+    if holder is None:
+        return None, "会话在 Team 或共享的执行环境上，能续作的人都可以直接续作，不需要接手", "not_needed"
+    if holder == actor["id"]:
+        return None, "会话已经在你的执行环境上", "already_yours"
+    mine = [w for w in space_workers(db, actor["id"], run["team_id"]) if own(w, actor["id"])]
+    if len(mine) != 1:
+        return None, "你还没有自己的执行环境：请联系平台管理员开通后再接手", "no_own_environment"
+    if run["lifecycle"] != "open" or run["status"] not in SETTLED or run["status"] == "waiting_worker":
+        return None, "会话正在执行：请先等待结束或停止，再接手", "busy"
+    return mine[0], None, None
 
 
 def placement(db, user, team):
@@ -395,6 +419,15 @@ def restart_budget(db, rid, who):
     journal.change(db, "runs", rid, who, "run.budget", quiet=("snapshot",), snapshot=dumps({**snapshot, "budget_since": time.time()}))
 
 
+def executor_of(run):
+    """Who the Session runs as (D74): its creator, until someone took it over to their own boundary."""
+    try:
+        value = run["executor_id"]
+    except (KeyError, IndexError):
+        value = None
+    return value or run["owner_id"]
+
+
 def unserved(db, run):
     """Why the run's Worker no longer runs it (spec §6.2): None while it is enabled and still serves the run's space."""
     row = db.execute("SELECT enabled,retired FROM workers WHERE id=?", (run["worker_id"],)).fetchone()
@@ -402,9 +435,10 @@ def unserved(db, run):
         return "执行环境已退役"
     if not row["enabled"]:
         return "执行环境已停用"
-    if all(w["id"] != run["worker_id"] for w in space_workers(db, run["owner_id"], run["team_id"])):
+    person = executor_of(run)   # D74: the one it runs as — its creator unless taken over
+    if all(w["id"] != run["worker_id"] for w in space_workers(db, person, run["team_id"])):
         mine = db.execute("SELECT scope,team_id,owner_id FROM workers WHERE id=?", (run["worker_id"],)).fetchone()
-        if run["team_id"] and own(mine, run["owner_id"]):   # D49 R3: the creator's boundary served the Team while they were in it
+        if run["team_id"] and own(mine, person):   # D49 R3: the creator's boundary served the Team while they were in it
             return "会话创建者已不在该 Team：请 Team owner 或管理员把会话分配到 Team 的环境"
         return "执行环境已更换或已移出该空间"
     return None
@@ -563,10 +597,16 @@ def mapping(snapshot, task, evidence=None):
 
 
 def may_publish(db, actor, run):
-    """The creator, a Team owner or an admin (D35 §5.2): who may publish a Session and answer its approvals (D38 A3)."""
+    """The creator, a Team owner or an admin (D35 §5.2): who controls a Session — shares it, deletes its knowledge."""
     team_owner = bool(run["team_id"]) and db.execute(
         "SELECT 1 FROM members WHERE team_id=? AND user_id=? AND role='owner'", (run["team_id"], actor["id"])).fetchone()
     return run["owner_id"] == actor["id"] or bool(team_owner) or elevated(actor)
+
+
+def may_direct(db, actor, run):
+    """Who may publish a Session, add a note to its running turn and answer its approvals (D38 A3): those who control it,
+    and the one it runs as (D74) — a turn they took over runs on their boundary with their credentials."""
+    return may_publish(db, actor, run) or executor_of(run) == actor["id"]
 
 
 def run_permissions(db, actor, run):
@@ -578,7 +618,8 @@ def run_permissions(db, actor, run):
             return True
         except Error:
             return False
-    native, reason = allowed(admin=False, shares=False), None
+    # The native entry never opens through a share (K03), except to the one the Session runs as on their own boundary (D74)
+    native, reason = allowed(admin=False, shares=executor_of(run) == actor["id"]), None
     if native and run["worker_id"]:
         worker = db.execute("SELECT scope,owner_id,team_id FROM workers WHERE id=?", (run["worker_id"],)).fetchone()
         native = worker is None or worker["scope"] != "shared" or worker["owner_id"] == actor["id"]
@@ -591,8 +632,14 @@ def run_permissions(db, actor, run):
     archived = bool(run["team_id"]) and bool(
         (db.execute("SELECT archived FROM teams WHERE id=?", (run["team_id"],)).fetchone() or {"archived": 0})["archived"])
     instruct = directs(db, actor, run)   # D49 R10
+    # D74: take a Session on someone else's own boundary over to one's own — who may continue it, not through oversight
+    reach = allowed(admin=False)
+    _, refused, _ = takeover_target(db, actor, run) if reach else (None, "管理员不因管理员身份接手会话；查看者不能接手", None)
+    if archived and not refused:
+        refused = "Team 已归档，不能接手"
     return {"operate": allowed(), "delete": allowed(owner=True), "native": native, "resume": not archived,
-            "publish": may_publish(db, actor, run), "share": may_publish(db, actor, run),   # D64: a viewer only reads
+            "takeover": refused is None, **({"takeover_reason": refused} if refused else {}),
+            "publish": may_direct(db, actor, run), "share": may_publish(db, actor, run),   # D64: a viewer only reads
             "assign": allowed(shares=False), **({"native_reason": reason} if reason else {}),
             "direct": instruct is None, **({"direct_reason": instruct} if instruct else {})}
 
@@ -615,6 +662,7 @@ class Service:
     def __init__(self, database):
         self.db = database
         self._opened, self._opened_lock = {}, threading.Lock()   # remote preview opening links already followed
+        self._moving = set()   # D74: the Sessions whose takeover is being carried out here
         from .credentials import CredentialStore
         self.credentials = CredentialStore(database)   # D35; the server sets its key file
 
@@ -1181,8 +1229,8 @@ class Service:
         with self.db.read() as db:
             if rid:
                 run = run_access(db, actor, rid, shares=False)   # D64: for moving it, not for shares
-                user, team = run["owner_id"], run["team_id"]
-                options = space_workers(db, user, team)   # the Session's creator's, not the operator's (R4)
+                user, team = executor_of(run), run["team_id"]
+                options = space_workers(db, user, team)   # the one it runs as (D74; its creator unless taken over), not the operator's (R4)
                 placed = json.loads(run["snapshot"]).get("placement") or {}
                 answer = {"worker": next((w for w in options if w["id"] == run["worker_id"]), None),
                           "placement": placed.get("kind"), "hint": placed.get("hint"), "options": options}
@@ -1370,7 +1418,7 @@ class Service:
         require(mode == "interrupt", "只支持 interrupt：补充说明送入正在运行的这一轮")
         with self.db.read() as db:
             run = run_access(db, actor, rid)
-            require(may_publish(db, actor, run), "只有会话创建者、Team owner 或管理员可以补充说明", 403, "forbidden")
+            require(may_direct(db, actor, run), "只有会话创建者、执行人、Team owner 或管理员可以补充说明", 403, "forbidden")
             instruct = directs(db, actor, run)   # D49 R10
             require(instruct is None, instruct, 403, "boundary_owner_only")
             require(run_permissions(db, actor, run)["resume"], "Team 已归档，不能补充说明", 409, "team_archived")
@@ -1413,7 +1461,7 @@ class Service:
                 f"{body['origin']} 的批准须带 request_id 与 {key}（取自 octopus_approvals 的列表）")
         with self.db.read() as db:
             run = run_access(db, actor, rid)
-            require(may_publish(db, actor, run), "只有会话创建者、Team owner 或管理员可以答复批准请求", 403, "forbidden")
+            require(may_direct(db, actor, run), "只有会话创建者、执行人、Team owner 或管理员可以答复批准请求", 403, "forbidden")
             instruct = directs(db, actor, run)   # D49 R10
             require(instruct is None, instruct, 403, "boundary_owner_only")
             config, retired = self._app_worker(db, run["worker_id"])
@@ -1458,15 +1506,16 @@ class Service:
         policy = publish_policy(body)
         with self.db.transaction() as db:
             run = run_access(db, actor, rid)
-            require(may_publish(db, actor, run), "只有会话创建者、Team owner 或管理员可以设置发布", 403, "forbidden")
+            require(may_direct(db, actor, run), "只有会话创建者、执行人、Team owner 或管理员可以设置发布", 403, "forbidden")
             snapshot, source = json.loads(run["snapshot"]), json.loads(run["source"])
             require(not general(source), NO_REPOSITORY, 409, "no_repository")
             self._new_repository_policy(db, actor, run["team_id"], source, policy)
-            if policy.get("repository") and run["owner_id"] != actor["id"]:   # the automatic publish runs as its creator
+            if policy.get("repository") and executor_of(run) != actor["id"]:   # it runs as the person it runs as (D74)
                 try:
-                    self._new_repository_policy(db, {"id": run["owner_id"]}, run["team_id"], source, policy)
+                    self._new_repository_policy(db, {"id": executor_of(run)}, run["team_id"], source, policy)
                 except Error:
-                    raise Error(403, "credential_forbidden", "自动发布以会话创建者的身份进行：请选择创建者可以使用的凭证") from None
+                    raise Error(403, "credential_forbidden", "自动发布以会话执行人（创建者，或接手的人）的身份进行："
+                                "请选择执行人可以使用的凭证") from None
             require(not policy["auto"] or source.get("type") == "git" or policy.get("repository") or snapshot.get("publish_target"),
                     "新建源码的会话自动发布需要新仓库（repository）与有写权限的凭证（credential）", 409, "publish_target_missing")
             snapshot["publish_policy"] = {**policy, "source": "user"}
@@ -1476,10 +1525,11 @@ class Service:
         return {"id": rid, "publish_policy": snapshot["publish_policy"]}
 
     def auto_publish_pending(self):
-        """Publish, as their creator, the completed Sessions whose policy asks for it (D47) — once per version: a publish
+        """Publish, as the person they run as (their creator unless taken over, D74), the completed Sessions whose policy
+        asks for it (D47) — once per version: a publish
         that cannot happen is recorded with its reason and waits for a person, the Session stays completed."""
         with self.db.read() as db:
-            rows = [dict(r) for r in db.execute("SELECT id, version, snapshot, owner_id FROM runs "
+            rows = [dict(r) for r in db.execute("SELECT id, version, snapshot, COALESCE(executor_id, owner_id) owner_id FROM runs "
                                                 "WHERE status='completed' AND lifecycle='open'")]
         for row in rows:
             snapshot = json.loads(row["snapshot"])
@@ -1567,7 +1617,8 @@ class Service:
                 "只接受 branch、title、repository 与 credential")
         with self.db.read() as db:
             run = run_access(db, actor, rid)
-            require(may_publish(db, actor, run), "只有会话创建者、Team owner 或管理员可以发布", 403, "forbidden")
+            require(may_direct(db, actor, run), "只有会话创建者、执行人、Team owner 或管理员可以发布", 403, "forbidden")
+            require(not moving(run), "正在接手到新的执行环境，请稍候", 409, "takeover_in_progress")   # D74
             require(not general(json.loads(run["source"])), NO_REPOSITORY, 409, "no_repository")   # D65
             require(run["lifecycle"] == "open" and run["status"] in SETTLED and run["workspace"],
                     "会话执行结束后才能发布", 409, "publish_busy")
@@ -1701,8 +1752,9 @@ class Service:
                 "SELECT 1 FROM members WHERE team_id=? AND user_id=? AND role='owner'", (run["team_id"], actor["id"])).fetchone()
             own_removal = body["source"] is None and current and current["scope"] == "user" and \
                 (current.get("owner") or {}).get("id") == actor["id"]
-            require(run["owner_id"] == actor["id"] or team_owner or elevated(actor) or own_removal,
-                    "只有会话创建者、Team owner 或管理员可以更换凭证", 403, "forbidden")
+            require(run["owner_id"] == actor["id"] or executor_of(run) == actor["id"] or team_owner or elevated(actor)
+                    or own_removal, "只有会话创建者、执行人、Team owner 或管理员可以更换凭证", 403, "forbidden")
+            require(not moving(run), "正在接手到新的执行环境，请稍候", 409, "takeover_in_progress")
             summary = lambda value: {k: value[k] for k in ("id", "name", "scope", "hint")} if value else None
             bound = None
             if body["source"]:
@@ -1755,6 +1807,7 @@ class Service:
     def app_start(self, actor, rid):
         with self.db.read() as db:
             run = run_access(db, actor, rid)
+            require(not moving(run), "正在接手到新的执行环境，请稍候", 409, "takeover_in_progress")   # D74
             require(run_permissions(db, actor, run)["resume"], "Team 已归档，不能启动预览", 409, "team_archived")
             require(run["lifecycle"] == "open", "会话已关闭，请先重新打开", 409, "invalid_state")
             require(run["status"] in SETTLED, "会话正在执行任务，完成后再启动预览", 409, "app_busy")
@@ -2133,6 +2186,7 @@ class Service:
                 "bundle": hashlib.sha256(data).hexdigest()}   # the command's digest covers the bytes, not the bytes
         with self.db.read() as db:
             run = run_access(db, actor, rid)
+            require(not moving(run), "正在接手到新的执行环境，请稍候", 409, "takeover_in_progress")   # D74
             oversight = self._oversight(db, actor, rid)   # an elevated admin's: audited (A2)
             done = db.execute("SELECT hash, response FROM commands WHERE actor=? AND key=?", (actor["id"], request_id)).fetchone()
             if done is None:
@@ -2317,12 +2371,15 @@ class Service:
         value.update({key: snapshot.get(key) for key in ("name", "workflow_name", "workflow_version",
                                                        "selection", "match_mode", "match_reason", "purpose", "planning", "replan",
                                                        "admission", "admission_basis", "confirmed", "publish_policy", "publish_auto",
-                                                       "publish_target", "publish_suggestion", "placement")})
+                                                       "publish_target", "publish_suggestion", "placement", "takeover")})
         value["source"] = json.loads(value["source"])
         value["session_id"] = run["id"]
         value["quota_wait"] = quotas.waiting(snapshot, run) or None if run["status"] == "ready" else None   # D61
         creator = db.execute("SELECT username FROM users WHERE id=?", (run["owner_id"],)).fetchone()
         value["created_by"] = {"id": run["owner_id"], "username": creator["username"] if creator else None}
+        if executor_of(run) != run["owner_id"]:   # D74: taken over, it runs as someone else
+            executor = db.execute("SELECT username FROM users WHERE id=?", (executor_of(run),)).fetchone()
+            value["executed_by"] = {"id": executor_of(run), "username": executor["username"] if executor else None}
         value["publish"] = snapshot.get("publish")
         if not brief:
             from . import credentials as repo_credentials
@@ -2351,8 +2408,11 @@ class Service:
             value["tasks"].append(task)
         if not brief:
             from . import usage   # D46 P6a: what the Session's Attempts used
-            value["usage"] = usage.total([json.loads(r["evidence"] or "{}") for r in db.execute(
-                "SELECT evidence FROM attempts WHERE run_id=?", (run["id"],))])
+            rows = db.execute("SELECT evidence, created FROM attempts WHERE run_id=? ORDER BY created", (run["id"],)).fetchall()
+            value["usage"] = usage.total([json.loads(r["evidence"] or "{}") for r in rows])
+            split = usage.by_person(db, run, rows) if value["usage"] else None
+            if split:   # D74: taken over, it ran as more than one person
+                value["usage"]["by"] = split
         value["progress"] = {"accepted": sum(t["status"] == "accepted" for t in value["tasks"]),
                              "total": len(value["tasks"])}
         if detail:
@@ -2380,7 +2440,7 @@ class Service:
     @staticmethod
     def _space(db, run):
         """The run's space for the waiting_worker hint: Team name (None for a personal space) and enabled Workers."""
-        workers = len(space_workers(db, run["owner_id"], run["team_id"]))
+        workers = len(space_workers(db, executor_of(run), run["team_id"]))
         if run["team_id"]:
             team = db.execute("SELECT name FROM teams WHERE id=?", (run["team_id"],)).fetchone()
             return {"team": team["name"] if team else run["team_id"], "workers": workers,
@@ -2566,6 +2626,53 @@ class Service:
                     "停止的诊断不会自动再派。需要时点「请求协调者诊断」重新诊断；或在该任务上「配置并续作」。")
         return "协调者需要你处理具体阻塞", error, "按详情中协调者的说明处理后，点「请求协调者诊断」，或在该任务上「配置并续作」。"
 
+    def takeover(self, actor, rid, body):
+        """Take a Session that runs on someone else's own boundary over to one's own (D74): recorded here, carried out
+        by the Engine (the workspace moves as a git bundle, which may take longer than a request). Those who may
+        continue it may take it over — a collaborator, a Team member, its creator taking it back — never through an
+        administrator's oversight; a viewer only reads."""
+        require(isinstance(body, dict) and set(body) <= {"request_id", "expected_version"}, "只接受 request_id 与 expected_version")
+        with self.db.transaction() as db:
+            try:
+                run = run_access(db, actor, rid, admin=False)
+            except Error as exc:   # an administrator sees it through oversight: say why, as the native entry does
+                if exc.status == 404 and elevated(actor) and db.execute("SELECT 1 FROM runs WHERE id=?", (rid,)).fetchone():
+                    raise Error(403, "forbidden", "管理员不因管理员身份接手会话：接手会以你的身份运行别人的会话") from None
+                raise
+            if run["team_id"]:
+                active_team(db, run["team_id"])
+            def execute():
+                require(body.get("expected_version") == run["version"], "Session 版本已更新", 409, "version_conflict")
+                worker, reason, code = takeover_target(db, actor, run)
+                require(worker is not None, reason, 409, code)
+                snapshot = json.loads(run["snapshot"])
+                takeover = {"state": "moving", "to": worker["id"], "from": run["worker_id"], "by": actor["id"],
+                            "by_name": actor["username"], "requested_at": time.time()}
+                version = run["version"] + 1
+                journal.change(db, "runs", rid, journal.person(actor), "run.takeover_requested", event={
+                    "version": version, "to": worker["id"], "from": run["worker_id"]},
+                    snapshot=dumps({**snapshot, "takeover": takeover}), version=version, updated=time.time())
+                return {"id": rid, "version": version, "takeover": takeover}
+            return self._command(db, actor, "takeover", rid, body, execute)
+
+    def carry_takeovers(self, rid=None):
+        """Carry out the takeovers recorded and not yet done (D74 §4): the request's own one from its thread, and every
+        minute from serve those a restart interrupted. One move of a Session at a time."""
+        from . import takeover
+        with self.db.read() as db:
+            ids = [r["id"] for r in db.execute("SELECT id FROM runs WHERE json_extract(snapshot,'$.takeover.state')='moving'"
+                                               + (" AND id=?" if rid else ""), (rid,) if rid else ())]
+        for each in ids:
+            with self._opened_lock:
+                if each in self._moving:
+                    continue
+                self._moving.add(each)
+            try:
+                takeover.move(self, each)
+            finally:
+                with self._opened_lock:
+                    self._moving.discard(each)
+
     def operate(self, actor, rid, action, body):
         require(action in {"continue", "recover", "stop", "close", "reopen", "delete", "assign-worker"},
                 "不支持的操作")
@@ -2581,6 +2688,7 @@ class Service:
                 oversight = False
             except Error:
                 oversight = True   # allowed only as an elevated admin (A2): audited
+            require(not moving(run), "正在接手到新的执行环境，请稍候", 409, "takeover_in_progress")   # D74
             if run["team_id"] and action in {"continue", "recover", "reopen", "assign-worker"}:
                 active_team(db, run["team_id"])   # an archived Team's Sessions stay readable and stoppable (P3)
             if action in {"continue", "recover"}:
@@ -2697,14 +2805,19 @@ class Service:
                 elif action == "assign-worker":
                     require(run["status"] == "waiting_worker" and run["lifecycle"] == "open",
                             "运行已分配 Worker 或已关闭", 409, "invalid_state")
-                    # The Session's own space, not the operator's (an admin may assign for someone else).
-                    target = self._worker(db, run["owner_id"], body.get("worker_id"), run["team_id"])
+                    # The Session's own space — of the person it runs as (D74) — not the operator's (an admin may assign
+                    # for someone else); one's own boundary is offered in one's own space and runs it as oneself.
+                    chosen = db.execute("SELECT * FROM workers WHERE id=?", (body.get("worker_id"),)).fetchone()
+                    person = actor["id"] if chosen is not None and own(chosen, actor["id"]) else executor_of(run)
+                    target = self._worker(db, person, body.get("worker_id"), run["team_id"])
                     # D49 R10: putting the work on a person's own boundary runs it as them: only they may
                     require(not own(target, target["owner_id"]) or target["owner_id"] == actor["id"],
                             "只有边界主人能把会话放到自己的执行边界上；其他人可以分配 Team 的环境", 403, "boundary_owner_only")
+                    if person != executor_of(run):
+                        fields.update(executor_id=person)
                     restart_budget(db, rid, who)   # waiting for an environment is not automatic work
                     # where it now runs, as the platform would have said (D49 R5; the hint was for the old choice)
-                    placed = {"kind": "own" if own(target, run["owner_id"]) else "team" if run["team_id"] else "only"}
+                    placed = {"kind": "own" if own(target, person) else "team" if run["team_id"] else "only"}
                     current = json.loads(db.execute("SELECT snapshot FROM runs WHERE id=?", (rid,)).fetchone()["snapshot"])
                     fields.update(snapshot=dumps({**current, "placement": placed}))   # after restart_budget's own write
                     if run["worker_id"] not in (None, body["worker_id"]):

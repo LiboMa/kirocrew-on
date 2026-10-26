@@ -40,6 +40,7 @@
 - **识别顺序**：
   - API 先看 `Authorization` 头（CLI、MCP、API Token）；没有这个头时才看 Cookie。
   - 只凭 Cookie 的写入必须带本站 `Origin`，否则 403 `origin`。
+  - 只凭 Cookie 的请求，浏览器标明来自同站或跨站的子资源请求（`Sec-Fetch-Site` 为 `same-site` 或 `cross-site`，且不是顶层页面打开）一律 403 `origin`：会话预览 `*.preview.tinyboat.blog` 与控制台同站，`SameSite=Strict` 挡不住它们的图片、fetch、iframe 与事件流（2026-10-25）。控制台自己的请求、地址栏打开、从别处点链接打开不受影响；没有这个头的旧浏览器照旧；带 `Authorization` 头的 CLI、MCP 不受影响。
 - **退出**：「退出登录」同时撤销 Token、清除 Cookie。
 - **不接受 Cookie 的浏览器**（例如 Safari 经 `http://localhost` 隧道访问）：退回到只在当前标签页保存 Token。
 - **命令行不变**：`octopus login`、bootstrap、connect 不传 `remember`，仍是 1 天的 Token。
@@ -115,7 +116,7 @@ dev server 只在工作区写 `node_modules/.vite`；不需要把工作区拉回
 
 **Worker 管理**（管理员，「管理 › 执行环境」选中的那一行）：改名、「更新连接」（主机替换或 Token 轮换，新地址按登记规则重新核验）、
 「退役」（仍是某 Team 的执行环境或有进行中的会话时拒绝；退役后不再出现在列表与选择器中，它服务的个人空间失去该环境，历史会话保留引用）。
-该环境服务的全部用户（含共享环境上的个人与 Team 成员）都可以「刷新模型」。
+该环境服务的全部用户（含共享环境上的个人与 Team 成员）都可以「刷新模型」（`POST /v1/workers/<id>/capabilities`，2026-10-25 起不再接受 GET；执行边界、主机或隔离变了返回 409 `worker_changed`，由管理员「更新连接」）。
 
 Team 与执行环境的管理操作都写入审计（`GET /v1/admin/audit`）：`team.create|rename|archive|restore|environment|member.set|member.remove|member.leave`、
 `worker.register|rename|retire|enabled|share|dedicate|space.add|space.remove|connection`（不记录 Worker URL 与 Token）。
@@ -169,7 +170,8 @@ deploy/aws/deploy.sh boundary native alice         # 对外开通它的原生入
   - 在某人边界上的会话只有边界主人下达指令（R10）：续作、诊断、确认计划、补充说明与答复批准请求对其他成员与管理员返回 403
     `boundary_owner_only`（控制台停用并写明原因，`permissions.direct_reason`）；他们可以查看、停止、关闭、发布与确认验收。把等待执行环境的
     会话分配到某人的边界也只接受此人（其他人分配 Team 的环境）。停下的会话不改派（新环境会重新克隆，已完成任务的改动留在原边界）：
-    由创建者续作；创建者离开 Team 或边界停用后会话进入等待执行环境，再分配 Team 的环境。
+    由创建者续作，或由能续作它的人「接手」到自己的边界（D74，见「接手共享来的会话」）；创建者离开 Team 或边界停用后会话进入等待执行环境，
+    再分配 Team 的环境。
     Team 会话的 lessons 存于提交者的 Gateway、按 Team 空间标识区分；用量计入提交者的 kiro 账号。
 - 以后（第 3 期）：每个边界的公开原生入口、跨主机放置、空闲停 Gateway、退役共享 `personal`、按人的用量视图。
 
@@ -1089,7 +1091,8 @@ Draft PR（GitHub）/ Draft MR（GitLab）。
 - **共享给谁**：某个人（按用户名）、某个 Team（共享人自己所在、未归档的；管理员任意未归档的——该 Team 当时与之后的成员）、全公司（平台上全部有效用户）。
 - **角色**：查看（viewer）——会话详情、时间线与实时事件流、「KiroCrew 会话」观察、修订、变更记录、代码改动、报告与导出、远程预览、`octopus pull`、
   待批准列表；协作（collaborator）——与该会话 Team 的普通成员相同：再加续作、停止、请求诊断、确认计划、关闭 / 重新打开、开关预览、`octopus sync`，
-  仍受 D49 R10（别人的执行边界上只有边界主人能下达指令）约束。全公司只能是查看。
+  仍受 D49 R10（别人的执行边界上只有边界主人能下达指令）约束——会话在别人的个人执行边界上时，协作者可以把它「接手」到自己的边界后续作（D74）。
+  全公司只能是查看。
 - **不对共享开放**：删除、发布与发布策略、补充说明、答复审批、验收（这三项本来就只属于创建者、Team owner、管理员）、改派执行环境、更换凭证、
   删除沉淀的知识、原生 KiroCrew 入口；D55 的提交记录（Request）也不因共享可见。
 - **谁能共享**：创建者、Team 会话的 Team owner、平台管理员——会话页「共享」或 `GET|POST /v1/runs/<id>/shares`、`DELETE /v1/runs/<id>/shares/<share>`；
@@ -1097,6 +1100,40 @@ Draft PR（GitHub）/ Draft MR（GitLab）。
 - **看到哪里**：侧栏「共享给我」（`GET /v1/runs?shared=1`，MCP `octopus_runs` 的 `shared: true`）；会话页写明「你以 查看 / 协作 身份访问（由 X 共享）」，
   会话视图与 MCP 状态的 `access`。默认列表不含共享来的。
 - **取消**：下一个请求起生效，打开着的实时事件流一秒内收到 `access_revoked` 并关闭，预览按文件核对。**收不回**：已下载的导出与源码、已 `pull` 到本地的分支。
+
+### 接手共享来的会话（D74，负责人 2026-10-25 选方案一）
+
+会话在别人的个人执行边界上时（R10 只让边界主人下达指令），能续作它的人——协作者、Team 成员、想接回的创建者——可以把**同一个会话**
+搬到自己的执行边界，此后以自己的身份续作。设计：`docs/superpowers/specs/2026-10-25-session-takeover-design.md`。
+
+- **入口**：会话页「续作」旁的「接手到我的执行环境」，确认一次（负责人选方案一时已同意这一步）；对话框写明会搬到哪、之后以谁的身份运行、
+  原生聊天的上下文不跟过去、创建者可以接回，原执行环境里有对话中的改动时列出文件名。API：`POST /v1/runs/<id>/takeover {request_id, expected_version}`，
+  返回 202 与 `takeover: {state: "moving", to, from}`。
+- **条件**：会话已停下（完成、阻塞、失败、停止）、没关闭；操作者有**恰好一个**自己的专属边界（否则 409 `no_own_environment`）；会话不在 Team 或共享的环境上
+  （那里能续作的人都能直接续作，409 `not_needed`），也不在操作者自己的边界上（409 `already_yours`）。查看身份不能接手；管理员不因管理员身份接手（403）。
+  会话视图的 `permissions.takeover` / `takeover_reason` 给出能否接手与原因。
+- **搬迁**（平台后台进行，不占请求）：停掉原环境上的远程预览 → 原执行环境里对话中的改动先提交为「对话中的改动」候选（不跑检查；有疑似凭证时
+  接手失败，409 `chat_secret`，请创建者先在聊天里移除）→ 原 Worker 打出会话分支的完整 bundle（上限 100 MB，同 `pull` 的凭证检查）与各尝试的
+  交接、结论等文件（`/pull/attempts`，上限 20 MB，经平台遮蔽凭证）→ 新 Worker `/adopt` 建出同一个工作区（同一批提交、分支与基线；只接受这个会话分支
+  一个 head）并建原生父 Session → 一个事务里改为在新边界、以接手人运行：工作区、原生父 Session、各尝试的交接路径、`executor_id`，
+  `placement: {kind: "taken_over", from, by}`，版本加 1，修订 `taken_over`、事件 `run.taken_over`。
+  从未准备过工作区的会话只换执行人与环境，下次续作时在新环境准备。服务重启打断的接手每分钟自动接着做。
+- **接手期间**：续作、诊断、停止、关闭、开关预览、发布、同步、更换凭证一律 409 `takeover_in_progress`；会话页顶部显示「正在接手到 X 的执行环境…」。
+- **失败**：会话留在原环境、状态不变，`takeover: {state: "failed", reason, code}`，事件 `run.takeover_failed`；会话页写明原因并可「再试一次」。
+  搬迁开始与落地时都再核对接手资格（共享被取消、离开 Team、边界不再属于接手人：`takeover_forbidden`）；接手期间引擎不恢复这个会话，
+  落地时它若已在原环境又开始执行或已关闭则不接手（`takeover_conflict`）。
+  新 Worker 暂不可用时自动重试 3 次；Worker 版本较旧时 409 `worker_outdated`（部署后两边都升级即可）。
+- **之后归谁**：执行人（`executor_id`，视图 `executed_by`）决定会话在哪个边界上跑、用谁的并发额度（D61）与知识空间（个人会话）、
+  自动发布以谁的身份；执行人可以续作、诊断、补充说明、答复审批、发布与更换凭证，原生 KiroCrew 入口在他自己的边界上开放。
+  创建者仍是会话的主人（删除、共享、列表里「我的」），列表与会话页写明「已由 X 接手」，想接回就对会话再「接手」一次。
+- **凭证**：创建者的个人凭证不跟过去。仍可用的 Team / 平台凭证照旧；否则换成接手人可用的同一仓库凭证；没有就记为「已撤下」，发布前由执行人更换。
+- **不搬**：原生聊天的上下文与记忆、被 `.gitignore` 忽略的文件（`node_modules`、`.env`、构建产物，新环境的检查会重新生成）。
+  原执行环境里的工作区与原生会话保留不删（属于创建者）；接回时，原边界上旧的工作区目录改名为 `<run>.before-<时间>` 留存。
+- **MCP**：`octopus_status` 带 `permissions`（`direct` / `takeover` 及原因）、`executed_by` 与 `takeover`；`octopus_takeover {run_id, request_id, expected_version}`
+  发起接手（Skill 写明先征得用户同意，与控制台的确认一致）。
+- **用量**：会话用量（D46 P6a）在经手不止一人时按人拆开（`usage.by`，会话页「本会话用量：…（alice：…；bob：…）」）：每个尝试算在它创建时的执行人名下，
+  依据时间线里 `executor_id` 的变更（接手、改派）。
+- **第 2 期**：不在分支上的旧候选随 bundle 带走；旧工作区的清理策略。
 
 ### 用户、Token 与管理员权限（访问管理第 1 期）
 

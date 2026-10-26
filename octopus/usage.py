@@ -20,6 +20,29 @@ def total(evidences):
     return result
 
 
+def by_person(db, run, rows):
+    """D74: the Session's usage per person it ran as, when more than one did — an Attempt counts for whoever was its
+    executor when it was created, as the executor_id changes the journal recorded (a takeover, an assignment) say."""
+    import json
+    changes = []
+    for event in db.execute("SELECT payload, created FROM events WHERE run_id=? AND payload LIKE '%\"executor_id\"%' "
+                            "ORDER BY id", (run["id"],)):
+        moved = (json.loads(event["payload"]).get("changes") or {}).get("executor_id")
+        if isinstance(moved, list) and len(moved) == 2:
+            changes.append((event["created"], moved[1] or run["owner_id"]))
+    if not changes:
+        return None
+    people = {}
+    for row in rows:
+        person = next((who for at, who in reversed(changes) if at <= row["created"]), run["owner_id"])
+        people.setdefault(person, []).append(json.loads(row["evidence"] or "{}"))
+    if len(people) < 2:
+        return None
+    names = dict(db.execute(f"SELECT id, username FROM users WHERE id IN ({','.join('?' * len(people))})", tuple(people)).fetchall())
+    split = [{"id": person, "username": names.get(person), **(total(found) or {})} for person, found in people.items()]
+    return [item for item in split if item.get("attempts")] or None
+
+
 def _count(n):
     if n >= 1_000_000:
         return f"{n / 1_000_000:.1f}".rstrip("0").rstrip(".") + "M"

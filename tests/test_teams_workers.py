@@ -242,8 +242,33 @@ class WorkerManagementTests(TeamsWorkersCase):
     def test_models_refresh_is_open_to_every_space_the_environment_serves(self):
         health = {"isolation": "dedicated", "boundary": "b-s", "host_principal": "hp-b-s", "models": {"claude": ["x"]}}
         with patch("octopus.server.worker_request", return_value=health), self.http() as call:
-            self.assertEqual(call("GET", "/v1/workers/env-s/capabilities", self.tokens["bob"])[0], 200)
-            self.assertEqual(call("GET", "/v1/workers/env-s/capabilities", self.tokens["eve"])[0], 404)
+            self.assertEqual(call("POST", "/v1/workers/env-s/capabilities", self.tokens["bob"], {})[0], 200)
+            self.assertEqual(call("POST", "/v1/workers/env-s/capabilities", self.tokens["eve"], {})[0], 404)
+
+    def test_models_refresh_is_a_post_that_changes_nothing_but_the_catalogue(self):
+        # 2026-10-25: it writes the environment's record, so a GET (which a same-site preview page can trigger with
+        # the console's cookie) no longer does it; and a Worker whose isolation or host changed is refused like the
+        # Engine and the native entry refuse it, not taken as its new self.
+        health = {"isolation": "dedicated", "boundary": "b-s", "host_principal": "hp-b-s", "models": {"claude": ["x"]}}
+        with self.http() as call:
+            with patch("octopus.server.worker_request", return_value=health):
+                self.assertEqual(call("GET", "/v1/workers/env-s/capabilities", self.tokens["bob"])[0], 405)
+            for changed in ({"isolation": "trusted-local"}, {"host_principal": "hp-elsewhere"}):
+                with patch("octopus.server.worker_request", return_value={**health, **changed}):
+                    status, body = call("POST", "/v1/workers/env-s/capabilities", self.tokens["bob"], {})
+                self.assertEqual((status, body["code"]), (409, "worker_changed"), changed)
+
+            def moved_meanwhile(config, path, **_):   # an administrator replaces the connection while the probe runs
+                with self.db.transaction() as db:
+                    row = json.loads(db.execute("SELECT config FROM workers WHERE id='env-s'").fetchone()["config"])
+                    db.execute("UPDATE workers SET config=? WHERE id='env-s'", (json.dumps({**row, "url": "https://10.9.9.9:8943"}),))
+                return health
+            with patch("octopus.server.worker_request", side_effect=moved_meanwhile):
+                self.assertEqual(call("POST", "/v1/workers/env-s/capabilities", self.tokens["bob"], {})[0], 200)
+        with self.db.read() as db:
+            config = json.loads(db.execute("SELECT config FROM workers WHERE id='env-s'").fetchone()["config"])
+        self.assertEqual(config["url"], "https://10.9.9.9:8943")   # the new connection is kept
+        self.assertEqual(config["capabilities"]["models"], {"claude": ["x"]})
 
     def test_environment_operations_are_audited(self):
         self.service.worker_space(self.a, "env-s", {"user_id": self.e["id"]})

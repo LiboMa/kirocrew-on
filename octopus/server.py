@@ -188,14 +188,17 @@ def required_scope(method, path):
     """The token scope a route needs: platform administration needs admin (A3); writes to one's own configuration
     need manage; Session and design writes need execute; reads need read."""
     segments = path.strip("/").split("/")
-    if path.startswith("/v1/admin/") or (segments[:2] == ["v1", "workers"] and method != "GET") or \
+    # Refreshing an environment's model catalogue is open to the spaces it serves (spec §6.1): a read, made a POST only
+    # so a same-site page cannot trigger it with the console's cookie (2026-10-25).
+    refresh = segments[:2] == ["v1", "workers"] and len(segments) == 4 and segments[3] == "capabilities"
+    if path.startswith("/v1/admin/") or (segments[:2] == ["v1", "workers"] and method != "GET" and not refresh) or \
             (segments[:2] == ["v1", "credentials"] and len(segments) == 4 and segments[3] == "grants") or \
             (segments[:2] == ["v1", "users"] and (method != "GET" or len(segments) > 2)) or \
             (path == "/v1/teams" and method == "POST") or \
             (segments[:2] == ["v1", "teams"] and len(segments) == 4 and segments[3] in {"archive", "environment"}):
         return "admin"
     # A download is a read; /v1/workflows/<id>/archive (archiving a workflow) is not, hence no endswith() here.
-    if method == "GET" or path in READ_POSTS or path.endswith("/preview") or \
+    if method == "GET" or path in READ_POSTS or refresh or path.endswith("/preview") or \
             (segments[:2] == ["v1", "runs"] and len(segments) == 4 and segments[3] == "archive") or \
             (segments[:2] == ["v1", "runs"] and len(segments) == 5 and segments[3:] == ["app", "open"]):
         return "read"
@@ -309,7 +312,7 @@ def server(database, port=8918, host="127.0.0.1", allowed_hosts=(), origin_secre
             self.send_header("Cache-Control", "no-store")
             self.send_header("X-Content-Type-Options", "nosniff")
             self.send_header("Referrer-Policy", "no-referrer")
-            self.send_header("Content-Security-Policy", "default-src 'none'; style-src 'unsafe-inline'")
+            self.send_header("Content-Security-Policy", "default-src 'none'; style-src 'unsafe-inline'; frame-ancestors 'none'")
             self.end_headers()
             self.wfile.write(data)
 
@@ -375,7 +378,7 @@ def server(database, port=8918, host="127.0.0.1", allowed_hosts=(), origin_secre
             self.send_header("Content-Length", str(len(data)))
             self.send_header("Cache-Control", "no-store")
             self.send_header("X-Content-Type-Options", "nosniff")
-            self.send_header("Content-Security-Policy", "default-src 'none'; style-src 'unsafe-inline'; img-src data:")
+            self.send_header("Content-Security-Policy", "default-src 'none'; style-src 'unsafe-inline'; img-src data:; frame-ancestors 'none'")
             self.end_headers()
             self.wfile.write(data)
 
@@ -452,6 +455,14 @@ def server(database, port=8918, host="127.0.0.1", allowed_hosts=(), origin_secre
             if not header and (raw := cookie_token(self.headers.get("Cookie"))):
                 require(method == "GET" or bool(self.headers.get("Origin")), "跨站写入被拒绝：登录 Cookie 的写入须来自控制台",
                         403, "origin")
+                # 2026-10-25: the session previews are same-site with the console, so SameSite=Strict still sends the
+                # cookie with their images, fetches, frames and event streams. Only the console itself, the address bar
+                # and a top-level navigation may use it; a browser too old to say (no Sec-Fetch-Site) keeps working.
+                site = self.headers.get("Sec-Fetch-Site")
+                navigation = (self.headers.get("Sec-Fetch-Mode") == "navigate"
+                              and self.headers.get("Sec-Fetch-Dest", "document") == "document")
+                require(site in (None, "same-origin", "none") or navigation,
+                        "跨站请求被拒绝：登录 Cookie 只能由控制台使用", 403, "origin")
             with database.read() as db:
                 actor = authenticate(db, raw)
             now = time.time()
@@ -823,17 +834,23 @@ def server(database, port=8918, host="127.0.0.1", allowed_hosts=(), origin_secre
                         audit(db, actor, "worker.enabled", "worker", segments[2], {"enabled": body["enabled"]})
                     return self.respond({"ok": True, "enabled": body["enabled"]})
                 if len(segments) == 4 and segments[:2] == ["v1", "workers"] and segments[3] == "capabilities":
-                    require(method == "GET", "Method not allowed", 405)
+                    # A POST (2026-10-25): it writes the environment's record, and a GET is what a same-site preview page
+                    # can make the console's cookie send.
+                    require(method == "POST", "Method not allowed", 405)
                     # Everyone the environment serves may refresh its model catalogue (spec §6.1), shared ones included.
                     require(any(w["id"] == segments[2] for w in service.workers(actor)), "Worker 不存在或无权限", 404, "not_found")
                     with database.read() as db:
                         config = json.loads(db.execute("SELECT config FROM workers WHERE id=?", (segments[2],)).fetchone()["config"])
                     health = worker_request(config, "/health")
-                    require(health.get("boundary") == config["capabilities"]["boundary"],
-                            "Worker 执行边界发生变化，请由管理员核查", 409, "worker_changed")
-                    with database.transaction() as db:
+                    known = config["capabilities"]
+                    # As the Engine and the native entry check it: a boundary, host or isolation that changed is the
+                    # administrator's to look at (更新连接), not a new catalogue to take.
+                    require(all(health.get(key) == known.get(key) for key in ("boundary", "host_principal", "isolation")
+                                if key in known), "Worker 执行边界发生变化，请由管理员核查", 409, "worker_changed")
+                    with database.transaction() as db:   # read again: the connection may have been replaced meanwhile
+                        row = db.execute("SELECT config FROM workers WHERE id=?", (segments[2],)).fetchone()
                         db.execute("UPDATE workers SET config=? WHERE id=?",
-                                   (dumps({**config, "capabilities": health}), segments[2]))
+                                   (dumps({**json.loads(row["config"]), "capabilities": health}), segments[2]))
                     return self.respond(health)
                 if path == "/v1/workers":
                     if method == "GET":
@@ -1006,6 +1023,11 @@ def server(database, port=8918, host="127.0.0.1", allowed_hosts=(), origin_secre
                             if query.get("stream") == ["1"]:
                                 return self.events(actor, rid, after)
                             return self.respond(service.events(actor, rid, after))
+                        if action == "takeover" and method == "POST":   # D74: carried out in the background
+                            result = service.takeover(actor, rid, body)
+                            threading.Thread(target=service.carry_takeovers, args=(rid,), daemon=True,
+                                             name="octopus-takeover").start()
+                            return self.respond(result, 202)
                         if method == "POST":
                             return self.respond(service.operate(actor, rid, action, body))
                 raise Error(404, "not_found", "接口不存在")
