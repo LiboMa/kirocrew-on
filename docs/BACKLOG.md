@@ -166,6 +166,20 @@
 - ~~`Service.placement(team)` 不看归档~~（2026-10-20 修复：与新建会话一样 409 team_archived）；其他成员打开原生入口时得到「Worker 不属于本次执行空间」而非 R7 的原因；测试替身 `placementOf` 不含成员边界规则；
   「KiroCrew 建议默认用 default」没有测试。
 
+## MVP 0.2.0 P1 打底的终审延后项（2026-10-26）
+
+终审的严重与重要项已修（全局 UID 改 70000 + 序号、系统账号、分配可重复、找回 D49 主机测试、Litestream 改独立脚本、限流开销、wheel 内容、接入码命令）。以下为次要项：
+
+- **接入码失败计数可被绕开**：`worker_request` 原样转出 Worker 回的错误码，自称 `enrollment_invalid` 的「Worker」不计失败；`/health` 回列表或 `url` 非字符串时变成 500 也不计。改为按异常来源计数，Worker 的错误映射成固定码，并要求 health 为对象。
+- **接入码的 Worker URL**：持码人可填平台主机的回环地址探测本机端口；urllib 跟随重定向并带上 Authorization；`/health` 响应没有大小上限。非本机发起时拒绝回环 URL、关掉重定向、限制响应大小。
+- **`check` 的类型**：`in (True, False)` 也接受 1 / 0，改用 `isinstance(…, bool)`。
+- **签发人失效**：签发人被停用或不再是管理员后，他签的接入码仍可用；失败尝试与作废没有审计。
+- **N 要求「连续」失败 5 次作废**：现在是累计 5 次。
+- **Worker 容量的 `running_attempts`**：停止、失败或没写成结果的 Attempt 永远没有 `result-note.json`，计数只增不减；每次 `/health` 都 glob 全部历史 run。
+- **控制台接入码列表**：不轮询，Worker 登记后不刷新，用掉的码仍显示「未使用」；撤销遇 404（刚被用掉）时不刷新；N 里「新行高亮」没做。
+- **测试覆盖**：`test_get_side_effects` 不比 `audit` 表，文档列了但没请求到的路由直接放过，`/bundle`、`/archive` 未覆盖；限流测试没覆盖 `CloudFront-Viewer-Address`；没有控制台构建时 `test_release_build` 整组跳过（`regress.sh` 会先构建）。
+- **其他**：`kirocrew-on-worker-pool.yaml:44` 仍引用状态栈已删的输出 `WorkerPackagesReadPolicyArn`；wheel 用户不给配置时，指标日志写到当前目录下的 `state/logs`。
+
 ## D74 接手共享来的会话的延后项（2026-10-26）
 
 - 接手前提交的「对话中的改动」不加版本，在新环境也不补跑检查（提示里写明「接手前提交，没有运行检查」）；接手失败时它仍留在会话里（原环境的提交是真的）。
