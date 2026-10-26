@@ -413,7 +413,7 @@ describe("管理 › 执行环境", () => {
   test("登记 Worker 用接入码: the code and the command are shown once; the list keeps the code's entry, not its value (N §3)", async () => {
     const code = "kce_" + "c".repeat(43);
     const issued = { id: "enroll-1", code, expires: Date.now() / 1000 + 7200, name: "bob-host", binding_kind: "user", binding_id: "u2",
-      command: "octopus --config <边界>.toml worker enroll --code-stdin --platform https://console.test --url https://<Worker 私网地址>:8943" };
+      command: "sudo PYTHONPATH=/opt/kirocrew-on/current /opt/kirocrew-on/venv/bin/python -m octopus --config /etc/kirocrew-on/boundary-<边界名>.toml worker enroll --code-stdin --platform https://console.test --url https://<Worker 私网地址>:8943" };
     let listed: unknown[] = [];
     const calls = start({ ...ONE_WORKER, "GET /users": ENVIRONMENTS["GET /users"], "GET /workers/enrollments": () => listed,
       "POST /workers/enrollments": () => {

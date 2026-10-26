@@ -71,7 +71,7 @@ deploy/aws/deploy.sh admin-password  # 经 SSM 读取主机上的 /etc/kirocrew-
 - **签发**：控制台「管理 › 执行环境 › 登记 Worker」选「用接入码」，填名称、绑定空间（某人 / 某个 Team / 空闲专属环境）与有效期（30 分钟、2 小时、24 小时；
   API 为 `POST /v1/workers/enrollments {name, owner_id | team_id | spare, expires_in}`，60–86400 秒，默认 1800）。
   接入码（`kce_` 开头）与要运行的命令只显示这一次；库里只存 SHA-256。
-- **登记**：在 Worker 主机上运行 `octopus --config <边界>.toml worker enroll --code-stdin --platform https://<控制台域名> --url https://<私网地址>:8943`，
+- **登记**：在 Worker 主机上运行 `sudo PYTHONPATH=/opt/kirocrew-on/current /opt/kirocrew-on/venv/bin/python -m octopus --config /etc/kirocrew-on/boundary-<边界名>.toml worker enroll --code-stdin --platform https://<控制台域名> --url https://<私网地址>:8943`（读 `worker.token` 需要 root），
   粘贴接入码后回车（脚本用环境变量 `OCTOPUS_ENROLL_CODE`；`--code` 参数被拒绝，避免出现在 `ps` 与 shell 历史里；`--check` 只核对不登记）。
   Worker 读本边界的 `worker.token`，与地址一起交给 `POST /v1/workers/enroll`（不需登录）。平台照旧带 Token 调 `/health` 核实，
   按 `POST /v1/workers` 的全部规则校验，审计 `worker.enroll`（记签发人、接入码编号与绑定，不记地址与 Token）。

@@ -169,6 +169,10 @@ class CliTests(EnrollmentCase):
     def test_the_command_shown_reads_the_code_from_stdin(self):
         _, issued = self.issue()
         self.assertIn("--code-stdin", issued["command"])
+        # As installed on a host (no `octopus` on PATH; the token file is root's to read; review 2026-10-26)
+        self.assertTrue(issued["command"].startswith(
+            "sudo PYTHONPATH=/opt/kirocrew-on/current /opt/kirocrew-on/venv/bin/python -m octopus "
+            "--config /etc/kirocrew-on/boundary-<边界名>.toml worker enroll"), issued["command"])
 
 
 class ApiDocumentTests(EnrollmentCase):
