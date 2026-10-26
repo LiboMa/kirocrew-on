@@ -361,8 +361,11 @@ class ScriptTests(unittest.TestCase):
                      "proxy_set_header Upgrade $http_upgrade;", 'proxy_set_header X-Origin-Verify "";'):
             self.assertIn(part, conf)
         log_format = conf[conf.index("log_format"):conf.index(";", conf.index("log_format"))]
-        self.assertIn("$uri", log_format)
+        self.assertIn("$kirocrew_preview_logged", log_format)
         self.assertNotIn("$request_uri", log_format)   # opening links carry a ticket: the path only
+        # ...and the path without an opening ticket or a public share's token (D75 review)
+        self.assertIn("map $uri $kirocrew_preview_logged {", conf)
+        self.assertIn('"~^(?<kc_head>/_kirocrew/(s|open|enter)/)[^/]+(?<kc_tail>.*)$" "${kc_head}-${kc_tail}";', conf)
         self.assertEqual(set(re.findall(r"__[A-Z_]+__", conf)),
                          {"__PREVIEW_PORT__", "__API_PORT__", "__ORIGIN_SECRET__", "__PREVIEW_GATE__"})
         # Every request to the API proves it comes through this nginx (other processes on the host cannot).

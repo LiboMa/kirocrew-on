@@ -920,6 +920,7 @@ describe("session detail", () => {
       .toMatchObject({ kind: "pages", mode: "code", expires: "30d" }));
     expect(await within(dialog).findByText("4821")).toBeInTheDocument();
     expect(dialog).toHaveTextContent("打开 3 次");
+    expect(dialog).toHaveTextContent("不含源码、配置与数据库");
     await userEvent.click(within(dialog).getByRole("button", { name: "撤销" }));
     await waitFor(() => expect(calls.some((c) => c.method === "DELETE" && c.path === "/v1/runs/run-pub/public-shares/pshare-1")).toBe(true));
     expect(await within(dialog).findByText("还没有公开分享。")).toBeInTheDocument();

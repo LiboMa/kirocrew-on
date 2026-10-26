@@ -130,6 +130,45 @@ class DemoTests(HttpCase):
             self.assertEqual(call("GET", "/v1/preview-auth", headers=preview)[0], 403)
 
 
+class HttpReviewTests(HttpCase):   # the D75 security review, 2026-10-26
+    def test_the_code_page_lets_its_form_say_where_it_comes_from(self):   # C1: no-referrer makes a browser send Origin: null
+        with self.preview() as call:
+            share = self.share()
+            headers = call("GET", self.link(share))[1]
+            self.assertEqual(headers["Referrer-Policy"], "same-origin")
+
+    def test_a_new_code_ends_the_demo_too(self):   # I1: the demo cookie names the code it was opened with
+        with self.preview() as call:
+            share = self.share(kind="app")
+            with self.db.transaction() as db:
+                db.execute("INSERT INTO apps(run_id,worker_id,status,port,path,upstream,started,started_by,last_access) "
+                           "VALUES(?,'w-bob','running',47001,'/',?,1,?,1)",
+                           (self.rid, dumps({"url": "http://127.0.0.1:47001", "port": 47001}), self.b["id"]))
+            origin = {"Origin": f"https://{self.rid}.{DOMAIN}"}
+            grant = call("POST", self.link(share), body={"code": share["code"]}, headers=origin)[1]["Set-Cookie"].split(";")[0]
+            opening = call("GET", self.link(share), headers={"Cookie": grant})[1]["Location"]
+            preview = {"Cookie": call("GET", opening.replace("/open/", "/enter/"))[1]["Set-Cookie"].split(";")[0]}
+            self.assertEqual(call("GET", "/v1/preview-auth", headers=preview)[0], 204)
+            self.service.public_share_code(self.b, self.rid, share["id"])
+            self.assertEqual(call("GET", "/v1/preview-auth", headers=preview)[0], 403)
+
+    def test_visitors_see_no_internal_hints(self):   # M3
+        with self.preview() as call:
+            share = self.share(mode="open", entry="missing.html")
+            status, _, page = call("GET", self.link(share) + "/missing.html")
+            self.assertEqual(status, 404)
+            self.assertNotIn("文件不存在".encode(), page)
+            self.assertIn("分享的内容暂不可用".encode(), page)
+
+    def test_an_app_cookie_cannot_hide_the_grant(self):   # M6: a malformed cookie of the demo before ours
+        with self.preview() as call:
+            share = self.share()
+            origin = {"Origin": f"https://{self.rid}.{DOMAIN}"}
+            grant = call("POST", self.link(share), body={"code": share["code"]}, headers=origin)[1]["Set-Cookie"].split(";")[0]
+            status, headers, _ = call("GET", self.link(share), headers={"Cookie": 'bad="x; ' + grant})
+            self.assertEqual(status, 302)
+
+
 class ManageTests(HttpCase):
     def test_the_link_is_on_the_sessions_own_preview_origin(self):
         with self.preview():

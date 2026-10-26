@@ -153,10 +153,11 @@ class ContentTests(PublicShareCase):
                        "VALUES(?,'w-bob','running',47001,'/',?,1,?,1)",
                        (self.rid, dumps({"url": "http://127.0.0.1:47001", "port": 47001}), self.b["id"]))
         self.assertEqual(self.service.public_share_visit(share["token"], "1.1.1.1")["kind"], "app")
-        self.assertEqual(self.service.app_auth(self.rid, share["id"])["port"], 47001)
+        holder = public_shares.holder(share["id"], share["code"])
+        self.assertEqual(self.service.app_auth(self.rid, holder)["port"], 47001)
         self.service.delete_public_share(self.b, self.rid, share["id"])
         with self.assertRaises(Error):
-            self.service.app_auth(self.rid, share["id"])
+            self.service.app_auth(self.rid, holder)
 
     def test_a_pages_share_is_no_holder_of_the_app(self):
         share = self.share(mode="open")
@@ -166,6 +167,72 @@ class ContentTests(PublicShareCase):
                        (self.rid, dumps({"url": "http://127.0.0.1:47001", "port": 47001}), self.b["id"]))
         with self.assertRaises(Error):
             self.service.app_auth(self.rid, share["id"])
+
+
+class ReviewTests(PublicShareCase):   # the D75 security review, 2026-10-26
+    def test_a_code_tried_too_often_is_retired(self):   # I2: 9999 codes would otherwise be tried within days
+        share = self.share()
+        wrong = "0000" if share["code"] != "0000" else "1111"
+        now = time.time()
+        for n in range(public_shares.CODE_TRIES):   # spread over hours and visitors: no lock stops it
+            try:
+                self.service.public_share_check(share["token"], wrong, f"10.{n // 250}.{n % 250}.9", now=now + n * 130)
+            except Error:
+                pass
+        with self.assertRaises(Error) as caught:
+            self.service.public_share_check(share["token"], share["code"], "9.9.9.9", now=now + 200 * 130)
+        self.assertEqual(caught.exception.code, "share_code_retired")
+        listed = next(s for s in self.service.public_shares(self.b, self.rid)["shares"] if s["id"] == share["id"])
+        self.assertTrue(listed["code_retired"])
+        renewed = self.service.public_share_code(self.b, self.rid, share["id"])
+        self.assertFalse(renewed["code_retired"])
+        self.assertEqual(self.service.public_share_check(share["token"], renewed["code"], "9.9.9.9")["id"], share["id"])
+
+    def test_only_web_files_are_public(self):   # I3: not the project's source and configuration
+        self.files.update({"server/config.py": b"SECRET = 1", "data.db": b"x", "app.js": b"console.log(1)",
+                           "keys.js": b'const token = "ghp_' + b"A1b2C3d4" * 5 + b'";'})
+        share = self.share(mode="open")
+        self.assertEqual(self.service.public_share_file(share["token"], "app.js"), b"console.log(1)")
+        for path in ("server/config.py", "data.db", "keys.js"):
+            with self.subTest(path=path), self.assertRaises(Error) as caught:
+                self.service.public_share_file(share["token"], path)
+            self.assertEqual(caught.exception.status, 404)
+
+    def test_the_entry_is_settled_when_shared(self):   # I4: a visit does not walk the project on the Worker
+        share = self.share(mode="open")
+        self.assertEqual(share["entry"], "index.html")
+        with mock.patch("octopus.transport.worker_request", side_effect=AssertionError("no Worker call")):
+            self.assertEqual(self.service.public_share_visit(share["token"], "1.1.1.1")["entry"], "index.html")
+
+    def test_a_limited_visitor_opens_no_write(self):   # I4: tries refused before the database's write lock
+        share = self.share()
+        wrong = "0000" if share["code"] != "0000" else "1111"
+        for _ in range(public_shares.VISITOR_TRIES):
+            with self.assertRaises(Error):
+                self.service.public_share_check(share["token"], wrong, "5.5.5.5")
+        with mock.patch.object(self.db, "transaction", side_effect=AssertionError("a write transaction")):
+            with self.assertRaises(Error) as caught:
+                self.service.public_share_check(share["token"], wrong, "5.5.5.5")
+        self.assertEqual(caught.exception.code, "share_rate_limited")
+
+    def test_closing_the_session_ends_its_shares_for_good(self):   # M1: reopening does not bring them back
+        share = self.share(mode="open")
+        self.service.operate(self.b, self.rid, "close", {"request_id": "close-public-01",
+                                                         "expected_version": self.service.run(self.b, self.rid)["version"]})
+        with self.db.read() as db:
+            self.assertIsNone(db.execute("SELECT 1 FROM public_shares WHERE id=?", (share["id"],)).fetchone())
+
+    def test_a_sharer_who_may_no_longer_share_ends_the_share(self):   # M2
+        tid = self.team()
+        with self.db.transaction() as db:
+            db.execute("INSERT INTO members VALUES(?,?,'owner')", (tid, self.e["id"]))
+            db.execute("UPDATE runs SET team_id=? WHERE id=?", (tid, self.rid))
+        share = self.share(self.e, mode="open")   # eve shares as a Team owner
+        self.assertEqual(self.service.public_share_visit(share["token"], "1.1.1.1")["kind"], "pages")
+        with self.db.transaction() as db:
+            db.execute("UPDATE members SET role='member' WHERE team_id=? AND user_id=?", (tid, self.e["id"]))
+        with self.assertRaises(Error):
+            self.service.public_share_visit(share["token"], "1.1.1.1")
 
 
 if __name__ == "__main__":

@@ -6,7 +6,6 @@ import logging
 import hashlib
 import hmac
 import html
-from http.cookies import SimpleCookie
 import os
 import re
 import shutil
@@ -409,24 +408,24 @@ def server(database, port=8918, host="127.0.0.1", allowed_hosts=(), origin_secre
             (sandboxed as 「预览产出」) or the way into its running demo. Nothing here names a platform user."""
             token, _, relative = path[len(public_shares.PATH):].partition("/")
             try:
-                own = remote_preview.session_host(self.headers.get("X-Preview-Host"), preview_domain)
-                share = service.public_share_of(token)
-                require(own is None or share["run_id"] == own, "分享链接不存在或已失效", 404, "share_not_found")
                 address = (self.headers.get("CloudFront-Viewer-Address", "").rsplit(":", 1)[0]
                            or self.client_address[0])   # nginx passed it on from CloudFront (the gate proved that path)
-                cookie = SimpleCookie()
-                try:
-                    cookie.load(self.headers.get("Cookie", ""))
-                except Exception:
-                    pass
+                require(service._share_tries.visit(address, time.time()), "请求过于频繁，请稍后再试", 429, "share_rate_limited")
+                own = remote_preview.session_host(self.headers.get("X-Preview-Host"), preview_domain)
+                require(own or not preview_domain or remote_preview.plain_host(self.headers.get("X-Preview-Host")) == shared,
+                        "分享链接不存在或已失效", 404, "share_not_found")   # as preview_gate: no other spelling of the host
+                share = service.public_share_of(token)
+                require(own is None or share["run_id"] == own, "分享链接不存在或已失效", 404, "share_not_found")
                 jar = public_shares.cookie_name(token)
-                held = jar in cookie and public_shares.granted(cookie[jar].value, token, share["code"], signing_key)
+                held = public_shares.granted(public_shares.cookie_of(self.headers.get("Cookie"), jar), token, share["code"],
+                                             signing_key)
                 if method == "POST":
                     try:
                         share = service.public_share_check(token, body.get("code"), address)
                     except Error as exc:
-                        if exc.code in ("share_code_wrong", "share_rate_limited", "share_locked"):
-                            return self.share_code_page(token, str(exc), 401 if exc.code == "share_code_wrong" else 429)
+                        if exc.code in ("share_code_wrong", "share_rate_limited", "share_locked", "share_code_retired"):
+                            return self.share_code_page(token, str(exc), {"share_code_wrong": 401, "share_code_retired": 410}
+                                                        .get(exc.code, 429))
                         raise
                     value = public_shares.grant(token, share["code"], signing_key)
                     self.send_response(303)
@@ -454,16 +453,18 @@ def server(database, port=8918, host="127.0.0.1", allowed_hosts=(), origin_secre
                     raise
                 if visit["kind"] == "pages":
                     return self.redirect(public_shares.PATH + token + "/" + quote(visit["entry"]))
+                holder = public_shares.holder(visit["id"], visit["code"])
                 try:   # a demo: only while it runs; a visitor never starts it
-                    service.app_auth(visit["run_id"], visit["id"])
+                    service.app_auth(visit["run_id"], holder)
                 except Error:
                     return self.respond_page("演示当前没有在运行：请联系分享者在控制台启动远程预览后再打开此链接。", 409,
                                              title="KiroCrew ON 公开分享")
-                ticket = remote_preview.open_ticket(visit["run_id"], visit["id"], signing_key)
+                ticket = remote_preview.open_ticket(visit["run_id"], holder, signing_key)
                 return self.redirect("/_kirocrew/open/" + ticket)
-            except Error as exc:
-                return self.respond_page(str(exc) if exc.status in (404, 409) else "分享暂不可用", exc.status
-                                         if exc.status in (403, 404, 409, 429) else 503, title="KiroCrew ON 公开分享")
+            except Error as exc:   # a visitor reads our own words only, never a Worker's hint meant for the session's people
+                text = str(exc) if exc.code.startswith("share_") else "分享的内容暂不可用"
+                return self.respond_page(text, exc.status if exc.status in (403, 404, 409, 410, 429) else 503,
+                                         title="KiroCrew ON 公开分享")
 
         def share_code_page(self, token, error="", status=200):
             data = SHARE_PAGE.format(action=public_shares.PATH + token, error=(
@@ -473,7 +474,8 @@ def server(database, port=8918, host="127.0.0.1", allowed_hosts=(), origin_secre
             self.send_header("Content-Length", str(len(data)))
             self.send_header("Cache-Control", "no-store")
             self.send_header("X-Content-Type-Options", "nosniff")
-            self.send_header("Referrer-Policy", "no-referrer")
+            # same-origin, not no-referrer: under no-referrer a browser posts the form with Origin: null (D75 review)
+            self.send_header("Referrer-Policy", "same-origin")
             self.send_header("X-Robots-Tag", "noindex, nofollow")
             self.send_header("Content-Security-Policy", "default-src 'none'; style-src 'unsafe-inline'; form-action 'self'; "
                                                         "frame-ancestors 'none'; base-uri 'none'")

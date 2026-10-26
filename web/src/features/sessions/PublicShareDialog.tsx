@@ -36,7 +36,7 @@ export function PublicShareDialog({ run }: { run: Run }) {
 
   return (
     <FormDialog title="公开分享" kicker="PUBLIC" wide onClose={close} submitLabel="生成链接"
-      description="生成一条任何人都能打开的链接：互联网上的人不需要平台账号。需要授权码时，对方输入四位数字后才能看；连续输错会暂时锁定。页面按会话当前的产出提供；演示需要远程预览正在运行。随时可以撤销。"
+      description="生成一条任何人都能打开的链接：互联网上的人不需要平台账号。需要授权码时，对方输入四位数字后才能看；连续输错会暂时锁定，累计输错 100 次授权码作废。页面分享只提供网页会加载的文件（HTML、样式、脚本、图片、字体等），不含源码、配置与数据库，按会话当前的产出提供；演示需要远程预览正在运行。随时可以撤销。"
       onSubmit={unavailable ? undefined : async () => {
         const made = await api<PublicShare>(base, "POST", { kind, mode, expires });
         await refresh();
@@ -72,6 +72,7 @@ export function PublicShareDialog({ run }: { run: Run }) {
               <span className="font-medium">{KINDS[share.kind]}</span>
               <span className="text-xs text-muted-foreground">{MODES[share.mode]} · 到期 {when(share.expires)} · 打开 {share.views} 次</span>
               {share.locked_until && <span className="text-xs text-destructive">输错过多，已锁定至 {when(share.locked_until)}</span>}
+              {share.code_retired && <span className="text-xs text-destructive">授权码多次输错，已作废：请重新生成</span>}
             </div>
             {share.url && (
               <div className="flex items-center gap-2">

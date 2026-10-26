@@ -690,6 +690,8 @@ def call(client, name, args):
     if name == "octopus_public_share":   # D75
         base = "/v1/runs/" + quote(args["run_id"], safe="") + "/public-shares"
         action = args.get("action")
+        if action not in {"create", "list", "revoke", "new_code"}:
+            raise ValueError("action 只能是 create、list、revoke 或 new_code")
         if action == "list":
             return client.request("GET", base)
         if action == "create":

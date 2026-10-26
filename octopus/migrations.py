@@ -204,7 +204,7 @@ CREATE TABLE IF NOT EXISTS public_shares(
  kind TEXT NOT NULL CHECK(kind IN ('pages','app')), mode TEXT NOT NULL CHECK(mode IN ('code','open')), code TEXT,
  entry TEXT, created_by TEXT NOT NULL REFERENCES users(id), created REAL NOT NULL, expires REAL,
  views INTEGER NOT NULL DEFAULT 0, last_viewed REAL, failures INTEGER NOT NULL DEFAULT 0, failed_since REAL,
- locked_until REAL);
+ locked_until REAL, total_failures INTEGER NOT NULL DEFAULT 0, code_retired REAL);
 CREATE INDEX IF NOT EXISTS public_shares_run ON public_shares(run_id);
 """
 

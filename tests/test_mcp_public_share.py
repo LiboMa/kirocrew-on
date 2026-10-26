@@ -26,6 +26,11 @@ class PublicShareToolTests(unittest.TestCase):
         self.assertEqual(client.calls, [("POST", base, {"kind": "app", "mode": "open", "expires": "1d"}), ("GET", base, None),
                                         ("POST", base + "/pshare-1/code", {}), ("DELETE", base + "/pshare-1", None)])
 
+    def test_an_unknown_action_says_so(self):   # M9
+        with self.assertRaises(ValueError) as caught:
+            mcp.call(Client(), "octopus_public_share", {"run_id": RID, "action": "publish"})
+        self.assertIn("action", str(caught.exception))
+
     def test_the_tool_says_it_is_for_an_explicit_request(self):
         tool = next(t for t in mcp.TOOLS if t["name"] == "octopus_public_share")
         self.assertIn("只在用户明确要求公开分享时使用", tool["description"])

@@ -21,7 +21,16 @@ PER_RUN = 20
 GRANT_TTL = 12 * 3600   # what a right code opens, on this browser
 VISITOR_TRIES, VISITOR_WINDOW = 5, 600   # wrong codes one visitor may try on one share in ten minutes
 SHARE_TRIES, SHARE_WINDOW, LOCK = 30, 3600, 3600   # wrong codes on one share in an hour, then it locks for an hour
+CODE_TRIES = 100   # wrong codes one code takes in all: then it is retired (a 1 % chance to guess it), the sharer makes a new one
+VISITS, VISITS_WINDOW = 600, 60   # requests one visitor makes to public links in a minute
+VIEWS_EVERY = 30   # a share's views are written at most this often (seconds)
 PATH = "/_kirocrew/s/"
+# What a pages share serves: the files a web page loads — never the project's source, configuration or data (D75 review)
+WEB = frozenset({".html", ".htm", ".css", ".js", ".mjs", ".json", ".svg", ".png", ".jpg", ".jpeg", ".gif", ".webp", ".avif",
+                 ".ico", ".bmp", ".woff", ".woff2", ".ttf", ".otf", ".mp4", ".webm", ".mp3", ".wav", ".ogg", ".wasm",
+                 ".txt", ".csv", ".pdf"})
+NOT_WEB = re.compile(r"(^|/)(package(-lock)?|tsconfig[^/]*|jsconfig|composer|[^/]*(secret|credential|password|private)[^/]*)\.json$",
+                     re.IGNORECASE)
 
 
 def new_token():
@@ -60,6 +69,7 @@ def view(row, base=None):
                                  "last_viewed")}
     value["created_by"] = row["created_by"]
     value["locked_until"] = row["locked_until"] if (row["locked_until"] or 0) > time.time() else None
+    value["code_retired"] = bool(row["code_retired"])
     value["url"] = url(base, row["token"]) if base else None
     return value
 
@@ -85,16 +95,41 @@ def cookie_name(token):
     return "kirocrew_share_" + hashlib.sha256(token.encode()).hexdigest()[:12]
 
 
+def cookie_of(header, name):
+    """One cookie of a Cookie header, read part by part: a malformed cookie the demo set on this host hides nothing."""
+    for part in (header or "").split(";"):
+        key, _, value = part.strip().partition("=")
+        if key == name:
+            return value
+    return ""
+
+
+def holder(sid, code):
+    """The holder a demo share opens the remote preview as: the share, and the code it was opened with — a new code ends
+    the demo's cookie too."""
+    return f"{sid}:{hashlib.sha256((code or '').encode()).hexdigest()[:8]}"
+
+
+def web_file(relative):
+    """Whether a pages share serves this file: one a web page loads, by its suffix and name."""
+    suffix = ("." + relative.rsplit(".", 1)[-1].lower()) if "." in relative.rsplit("/", 1)[-1] else ""
+    return suffix in WEB and not NOT_WEB.search(relative)
+
+
 def active(db, token, now=None):
     """The share a token names while it may be seen: not expired, its Session open and its sharer's account active.
     404 otherwise — a stranger learns nothing of why."""
     now = now or time.time()
     require(isinstance(token, str) and TOKEN.fullmatch(token), "分享链接不存在或已失效", 404, "share_not_found")
-    row = db.execute("SELECT s.*, r.lifecycle, r.desired, r.worker_id, r.workspace, u.active sharer_active FROM public_shares s "
-                     "JOIN runs r ON r.id=s.run_id JOIN users u ON u.id=s.created_by WHERE s.token=?", (token,)).fetchone()
+    row = db.execute("SELECT s.*, r.lifecycle, r.desired, r.worker_id, r.workspace, r.owner_id, r.team_id, u.active sharer_active, "
+                     "u.admin sharer_admin FROM public_shares s JOIN runs r ON r.id=s.run_id JOIN users u ON u.id=s.created_by "
+                     "WHERE s.token=?", (token,)).fetchone()
     require(row is not None and (row["expires"] is None or row["expires"] > now) and row["lifecycle"] == "open"
             and row["desired"] not in {"close", "delete"} and row["sharer_active"],
             "分享链接不存在或已失效", 404, "share_not_found")
+    from .domain import may_publish   # the sharer must still control the Session (left its Team, no longer its owner)
+    sharer = {"id": row["created_by"], "admin": row["sharer_admin"], "scopes": ["admin"] if row["sharer_admin"] else []}
+    require(may_publish(db, sharer, row), "分享链接不存在或已失效", 404, "share_not_found")
     return dict(row)
 
 
@@ -109,6 +144,15 @@ class Tries:
             self.seen[(token, address)] = recent
             return len(recent) < VISITOR_TRIES
 
+    def visit(self, address, now):
+        """One request of a visitor to public links: False past VISITS a minute."""
+        with self.lock:
+            key = ("*", address)
+            recent = [t for t in self.seen.get(key, []) if now - t < VISITS_WINDOW]
+            recent.append(now)
+            self.seen[key] = recent
+            return len(recent) <= VISITS
+
     def failed(self, token, address, now):
         with self.lock:
             self.seen.setdefault((token, address), []).append(now)
@@ -117,25 +161,30 @@ class Tries:
                     del self.seen[key]
 
 
-def check(db, tries, token, code, address, now=None):
-    """The share a right code opens, or None for a wrong one — counted in ``db``, which the caller commits before it
-    answers 401; 429 when this visitor or the share has tried too often."""
-    now = now or time.time()
-    share = active(db, token, now)
+def admit(share, tries, address, now):
+    """Before a code is compared — and before any write: the share takes codes, is not locked, its code is not retired,
+    and this visitor has tries left (429 / 410 otherwise)."""
     require(share["mode"] == "code", "此分享无需授权码", 409, "share_open")
+    require(not share["code_retired"], "授权码多次输错，已作废：请联系分享者获取新的授权码", 410, "share_code_retired")
     require((share["locked_until"] or 0) <= now, "尝试次数过多，此分享已暂时锁定：请稍后再试，或请分享人重新生成授权码",
             429, "share_locked")
-    require(tries.allowed(token, address, now), "尝试次数过多：请 10 分钟后再试", 429, "share_rate_limited")
-    if isinstance(code, str) and re.fullmatch(r"[0-9]{4}", code) and hmac.compare_digest(code, share["code"] or ""):
-        if share["failures"]:
-            db.execute("UPDATE public_shares SET failures=0, failed_since=NULL WHERE id=?", (share["id"],))
-        return share
-    tries.failed(token, address, now)
-    since = share["failed_since"] if share["failed_since"] and now - share["failed_since"] < SHARE_WINDOW else now
-    failures = (share["failures"] if since == share["failed_since"] else 0) + 1
-    db.execute("UPDATE public_shares SET failures=?, failed_since=?, locked_until=? WHERE id=?",
-               (failures, since, now + LOCK if failures >= SHARE_TRIES else share["locked_until"], share["id"]))
-    return None
+    require(tries.allowed(share["token"], address, now), "尝试次数过多：请 10 分钟后再试", 429, "share_rate_limited")
+
+
+def right(share, code):
+    return isinstance(code, str) and re.fullmatch(r"[0-9]{4}", code) is not None and hmac.compare_digest(code, share["code"] or "")
+
+
+def failed(db, sid, now):
+    """A wrong code, counted on the share: an hour's 30 lock it for an hour; a code's 100 in all retire it."""
+    row = db.execute("SELECT failures, failed_since, locked_until, total_failures FROM public_shares WHERE id=?", (sid,)).fetchone()
+    if row is None:
+        return
+    fresh = row["failed_since"] and now - row["failed_since"] < SHARE_WINDOW
+    failures, total = (row["failures"] if fresh else 0) + 1, row["total_failures"] + 1
+    db.execute("UPDATE public_shares SET failures=?, failed_since=?, locked_until=?, total_failures=?, code_retired=? WHERE id=?",
+               (failures, row["failed_since"] if fresh else now, now + LOCK if failures >= SHARE_TRIES else row["locked_until"],
+                total, now if total >= CODE_TRIES else None, sid))
 
 
 def create(db, actor, run, body, now=None):

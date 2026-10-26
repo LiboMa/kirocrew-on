@@ -348,6 +348,8 @@ export interface PublicShare {
   id: string; run_id: string; token: string; kind: "pages" | "app"; mode: "code" | "open"; code: string | null;
   entry: string | null; url: string | null; created: number; created_by: string; expires: number | null;
   views: number; last_viewed: number | null; locked_until: number | null;
+  /** Wrong codes reached the limit: the code no longer opens it until a new one is made. */
+  code_retired?: boolean;
 }
 
 export interface Run {
