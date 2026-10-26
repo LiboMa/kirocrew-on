@@ -218,6 +218,15 @@ CREATE TABLE IF NOT EXISTS boundaries(
 CREATE UNIQUE INDEX IF NOT EXISTS boundaries_name ON boundaries(name) WHERE state != 'released';
 """
 
+# MVP 0.2.0 (N §5, S6): one-time Worker enrollment codes; only the code's SHA-256 is kept.
+WORKER_ENROLLMENTS = """
+CREATE TABLE IF NOT EXISTS worker_enrollments(
+ id TEXT PRIMARY KEY, code_hash TEXT NOT NULL UNIQUE, name TEXT NOT NULL,
+ binding_kind TEXT NOT NULL CHECK(binding_kind IN ('user','team','spare')), binding_id TEXT,
+ created_by TEXT NOT NULL REFERENCES users(id), created REAL NOT NULL, expires REAL NOT NULL, used REAL,
+ used_by_worker TEXT, failures INTEGER NOT NULL DEFAULT 0, revoked REAL);
+"""
+
 EXECUTOR = """
 ALTER TABLE runs ADD COLUMN executor_id TEXT REFERENCES users(id);
 """
@@ -227,7 +236,7 @@ MIGRATIONS = [(1, "baseline", BASELINE), (2, "environments", ENVIRONMENTS), (3, 
               (7, "knowledge", KNOWLEDGE), (8, "knowledge_kept", KNOWLEDGE_KEPT),
               (9, "requests_policies", REQUESTS_POLICIES), (10, "quotas", QUOTAS), (12, "shares", SHARES), (13, "marks", MARKS),
               (14, "executor", EXECUTOR), (15, "public_shares", PUBLIC_SHARES),
-              (16, "boundaries", BOUNDARIES)]   # 11: D57's (another branch)
+              (16, "boundaries", BOUNDARIES), (17, "worker_enrollments", WORKER_ENROLLMENTS)]   # 11: D57's (another branch)
 
 
 def _statements(script):

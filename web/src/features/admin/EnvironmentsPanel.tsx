@@ -1,10 +1,10 @@
 import { useState, type ReactNode } from "react";
 import { useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
-import { Archive, Network, Pencil, Plus, Power, PowerOff, RefreshCw, SquarePlus, Undo2, X } from "lucide-react";
+import { Archive, Check, Copy, Network, Pencil, Plus, Power, PowerOff, RefreshCw, SquarePlus, Undo2, X } from "lucide-react";
 import { api } from "@/api/client";
-import { keys, useEnvironments } from "@/api/hooks";
-import type { Environment, Tool, Worker } from "@/api/types";
+import { keys, useEnrollments, useEnvironments } from "@/api/hooks";
+import type { Enrollment, Environment, IssuedEnrollment, Tool, Worker } from "@/api/types";
 import { FormDialog } from "@/components/FormDialog";
 import { ListCard, ListEmpty, RowActions, type Action } from "@/components/ListCard";
 import { NativeSelect } from "@/components/NativeSelect";
@@ -95,6 +95,7 @@ type Space = { team_id?: string; user_id?: string };
 type Open = { kind: "register" }
   | { kind: "edit" | "assign" | "share" | "dedicate" | "disable" | "retire"; worker: Worker }
   | { kind: "remove"; worker: Worker; space: Space }
+  | { kind: "revoke-code"; code: Enrollment }
   | null;
 
 /** 管理 › 执行环境 (D28; PRD 2026-10-23, 管理 / 我的设置 in dialogs): every environment with its live status, the chosen
@@ -210,9 +211,20 @@ export function EnvironmentsPanel() {
           </Table>
         )}
       </ListCard>
+      <EnrollmentCodes spaceName={spaceName} onRevoke={(code) => setDialog({ kind: "revoke-code", code })} />
       {chosen && (
         <EnvironmentDetail key={chosen.id} worker={chosen} environment={environments.get(chosen.id)} spaceName={spaceName}
           onRemove={(space) => setDialog({ kind: "remove", worker: chosen, space })} />
+      )}
+      {dialog?.kind === "revoke-code" && (
+        <FormDialog title="撤销接入码" destructive submitLabel="撤销" onClose={() => setDialog(null)}
+          description={<>撤销后，接入码「{dialog.code.name}」不能再用来登记 Worker。已经登记的执行环境不受影响。</>}
+          onSubmit={async () => {
+            await api("/workers/enrollments/" + dialog.code.id, "DELETE", {});
+            await client.invalidateQueries({ queryKey: keys.enrollments });
+            setDialog(null);
+            toast.success("已撤销接入码 " + dialog.code.name);
+          }} />
       )}
       {dialog?.kind === "register" && (
         <RegisterDialog refresh={refresh} onClose={(made) => {
@@ -360,23 +372,49 @@ function Fields({ title, note, children }: { title: string; note?: ReactNode; ch
   );
 }
 
-/** 登记 Worker: a Gateway already started on a host, bound to a person, a Team or kept spare for a Team. The Worker
- * Token comes from that host and is typed in here: the platform issues no secret, so there is nothing to show once. */
+/** How long a new enrollment code lasts (N §4: 30 minutes by default, a day at most). */
+const CODE_LIFETIMES: [number, string][] = [[1800, "30 分钟"], [7200, "2 小时"], [86400, "24 小时"]];
+
+/** 登记 Worker: a Gateway already started on a host, bound to a person, a Team or kept spare for a Team — either with
+ * its address and token typed in here, or (用接入码, N §3) with a one-time code the Worker host uses to register itself,
+ * so its token never passes through a person. The code is shown once, on the dialog's second screen. */
 function RegisterDialog({ refresh, onClose }: { refresh: () => Promise<unknown>; onClose: (made?: { id: string; name: string }) => void }) {
   const { allTeams: teams, users, me } = useConsole();
-  const [form, setForm] = useState({ name: "", owner: "user:" + me.id, url: "", token: "" });
+  const client = useQueryClient();
+  const [form, setForm] = useState({ name: "", owner: "user:" + me.id, url: "", token: "", lifetime: "1800" });
+  const [method, setMethod] = useState<"connection" | "code">("connection");
+  const [issued, setIssued] = useState<IssuedEnrollment | null>(null);
+  const [opener] = useState(() => document.activeElement as HTMLElement | null);   // through both screens
+  if (issued) return <IssuedCodeDialog issued={issued} returnTo={opener} onClose={() => onClose()} />;
   return (
-    <FormDialog title="登记 Worker" submitLabel="登记" onClose={() => onClose()}
+    <FormDialog title="登记 Worker" submitLabel={method === "code" ? "签发接入码" : "登记"} onClose={() => onClose()}
       description="把已在主机上启动的 KiroCrew Gateway 登记为执行环境。Worker 连接凭据由管理员填写，普通用户不会获得；Gateway 与 Coding 工具的认证保留在 Worker 内。"
       onSubmit={async () => {
         const [kind, id] = form.owner.split(":");
         const name = form.name.trim();
-        const connection = { url: form.url.trim(), token: form.token };
-        const made = await api<{ id: string }>("/workers", "POST", kind === "spare" ? { name, spare: true, connection }
-          : { name, [kind === "team" ? "team_id" : "owner_id"]: id, connection });
+        const binding = kind === "spare" ? { spare: true } : { [kind === "team" ? "team_id" : "owner_id"]: id };
+        if (method === "code") {
+          setIssued(await api<IssuedEnrollment>("/workers/enrollments", "POST", { name, ...binding, expires_in: Number(form.lifetime) }));
+          await client.invalidateQueries({ queryKey: keys.enrollments });
+          return;
+        }
+        const made = await api<{ id: string }>("/workers", "POST", { name, ...binding, connection: { url: form.url.trim(), token: form.token } });
         await refresh();
         onClose({ id: made.id, name });
       }}>
+      <div className="grid gap-3 sm:grid-cols-2" role="radiogroup" aria-label="登记方式">
+        {([["connection", "填写连接", "填 Worker 的地址与访问 Token"],
+          ["code", "用接入码", "签发一次性接入码，Worker 主机凭它自己登记，Token 不经人手"]] as const).map(([value, title, detail]) => (
+          <label key={value}
+            className={cn("flex cursor-pointer flex-col gap-1 rounded-md border p-3 has-[:focus-visible]:ring-2 has-[:focus-visible]:ring-ring",
+              method === value ? "border-primary bg-primary/5" : "hover:bg-accent")}>
+            <input type="radio" name="register-method" value={value} checked={method === value} className="sr-only"
+              aria-label={title} onChange={() => setMethod(value)} />
+            <strong className="text-sm">{title}</strong>
+            <small className="text-xs text-muted-foreground">{detail}</small>
+          </label>
+        ))}
+      </div>
       <Fields title="环境">
         <div className="grid gap-3 sm:grid-cols-2">
           <div className="space-y-1.5">
@@ -394,6 +432,16 @@ function RegisterDialog({ refresh, onClose }: { refresh: () => Promise<unknown>;
           </div>
         </div>
       </Fields>
+      {method === "code" ? (
+        <Fields title="接入码" note="接入码只用一次，只显示一次；Worker 用它登记时，平台照样核验它的执行边界与隔离声明。">
+          <div className="space-y-1.5 sm:w-1/2">
+            <Label htmlFor="worker-code-lifetime">有效期</Label>
+            <NativeSelect id="worker-code-lifetime" value={form.lifetime} onChange={(e) => setForm({ ...form, lifetime: e.target.value })}>
+              {CODE_LIFETIMES.map(([value, label]) => <option key={value} value={String(value)}>{label}</option>)}
+            </NativeSelect>
+          </div>
+        </Fields>
+      ) : (
       <Fields title="连接" note="主机上 Worker 的地址与它的访问 Token；登记时平台会核验它的执行边界与隔离声明。">
         <div className="grid gap-3 sm:grid-cols-2">
           <div className="space-y-1.5">
@@ -407,7 +455,59 @@ function RegisterDialog({ refresh, onClose }: { refresh: () => Promise<unknown>;
           </div>
         </div>
       </Fields>
+      )}
     </FormDialog>
+  );
+}
+
+/** A new enrollment code and the command to run on the Worker host, shown this once (N §3). */
+function IssuedCodeDialog({ issued, returnTo, onClose }: { issued: IssuedEnrollment; returnTo: HTMLElement | null; onClose: () => void }) {
+  const [copied, setCopied] = useState("");
+  const copy = (what: string, value: string) => () => navigator.clipboard?.writeText(value).then(() => { setCopied(what); toast.success("已复制"); });
+  const line = (what: string, value: string, label: string) => (
+    <div className="space-y-1.5">
+      <p className="text-xs font-medium text-muted-foreground">{label}</p>
+      <div className="flex items-center gap-2 rounded-md border bg-muted/50 p-3">
+        <code className="secret min-w-0 flex-1 font-mono text-xs break-all">{value}</code>
+        <Button type="button" size="sm" variant={copied === what ? "secondary" : "outline"} aria-label={"复制" + label} onClick={copy(what, value)}>
+          {copied === what ? <Check /> : <Copy />}{copied === what ? "已复制" : "复制"}
+        </Button>
+      </div>
+    </div>
+  );
+  return (
+    <FormDialog title="接入码" closeLabel="我已保存" onClose={onClose} returnTo={returnTo}
+      description={<>接入码只显示这一次，用一次即失效，{formatTime(issued.expires)} 前有效。Worker「{issued.name}」登记后会出现在列表里。</>}>
+      {line("code", issued.code, "接入码")}
+      {line("command", issued.command, "在 Worker 主机上运行")}
+      <p className="text-xs text-muted-foreground">命令运行后粘贴接入码并回车；接入码不写在命令里，不会留在 shell 历史中。</p>
+    </FormDialog>
+  );
+}
+
+/** The unused enrollment codes (N §5), each revocable; the codes themselves are never shown again. */
+function EnrollmentCodes({ spaceName, onRevoke }: { spaceName: (space: Space) => string; onRevoke: (code: Enrollment) => void }) {
+  const query = useEnrollments(true);
+  const unused = (query.data ?? []).filter((e) => e.state === "unused");
+  if (!unused.length) return null;
+  const where = (e: Enrollment) => e.binding_kind === "spare" ? "空闲专属环境"
+    : spaceName(e.binding_kind === "team" ? { team_id: e.binding_id ?? "" } : { user_id: e.binding_id ?? "" });
+  return (
+    <section aria-label="接入码" className="space-y-2 rounded-md border p-4">
+      <h3 className="text-sm font-medium">接入码<span className="ml-2 text-xs font-normal text-muted-foreground">未使用 {unused.length} 个</span></h3>
+      <ul className="divide-y">
+        {unused.map((e) => (
+          <li key={e.id} className="flex items-center gap-3 py-2 text-sm">
+            <span className="font-medium">{e.name}</span>
+            <span className="text-xs text-muted-foreground">{where(e)}</span>
+            <span className="ml-auto text-xs text-muted-foreground tabular-nums">{formatTime(e.expires)} 前有效</span>
+            <Button type="button" size="sm" variant="outline" aria-label={"撤销接入码：" + e.name} onClick={() => onRevoke(e)}>
+              <X />撤销
+            </Button>
+          </li>
+        ))}
+      </ul>
+    </section>
   );
 }
 

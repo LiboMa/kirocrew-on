@@ -56,6 +56,13 @@ def build_parser(settings, environ=None):
     worker.add_argument("--routing-log", default=str(settings.routing_log))
     worker.add_argument("--isolation", choices=["dedicated", "trusted-local"], default=settings.worker_isolation)
     worker.add_argument("--approval-mode", choices=["", "auto", "interactive"], default=settings.approval_mode)
+    # N §3: `octopus worker enroll` registers this Worker with a one-time code (read from OCTOPUS_ENROLL_CODE or stdin)
+    worker.add_argument("action", nargs="?", choices=["enroll"])
+    worker.add_argument("--platform", help="worker enroll：控制台地址，如 https://kirocrew.example.com")
+    worker.add_argument("--url", help="worker enroll：平台访问本 Worker 的地址，如 https://10.0.1.20:8943")
+    worker.add_argument("--code-stdin", action="store_true", help="worker enroll：从标准输入读接入码")
+    worker.add_argument("--check", action="store_true", help="worker enroll：只核对，不登记")
+    worker.add_argument("--code", help=argparse.SUPPRESS)   # refused: it would show in ps and the shell history
     link = sub.add_parser("connect", help="让 Claude Code / Kiro CLI / Codex / Kiro IDE 经 MCP 连接 KiroCrew ON（写入 MCP 配置与使用说明）")
     link.add_argument("client", choices=["claude", "kiro", "codex", "kiro-ide"])
     link.add_argument("--url", required=True, help="平台地址，如 https://<分发>.cloudfront.net 或 http://127.0.0.1:8918")
@@ -89,6 +96,8 @@ def build_parser(settings, environ=None):
     boot.add_argument("--check-only", action="store_true", help="只核对 --owner（存在、尚无自己的执行环境），不登记")
     boot.add_argument("--spare", action="store_true", help="登记为空闲专属执行环境，由管理员在控制台分配给 Team")
     boot.add_argument("--allocate", action="store_true", help="MVP 0.2.0：由平台为新边界分配 boundary_id 与全局 UID（需 --owner）")
+    boot.add_argument("--issue-code", action="store_true",
+                      help="MVP 0.2.0：签发一次性接入码供该 Worker 用 worker enroll 自行登记；已登记的返回 registered")
     backup_cmd = sub.add_parser("backup", help="平台数据库一致性备份")
     backup_cmd.add_argument("--dest", required=True)
     archive = sub.add_parser("archive", help="目录归档（Worker 数据、执行边界）")
@@ -112,6 +121,31 @@ def build_parser(settings, environ=None):
             p.add_argument("--after", type=int, default=0)
             p.add_argument("--once", action="store_true", help="Read one bounded SSE connection")
     return parser
+
+
+def enroll_worker(args):
+    """Register this Worker with a one-time enrollment code (N §3): the code from OCTOPUS_ENROLL_CODE or standard input,
+    never an argument; the token from this boundary's own token file, so it never passes through a person."""
+    from . import client as api
+    if args.code is not None:
+        raise SystemExit("接入码不从命令行参数读取（会留在 ps 与 shell 历史里）：用环境变量 OCTOPUS_ENROLL_CODE 或 --code-stdin")
+    if not args.platform or not args.url:
+        raise SystemExit("worker enroll 需要 --platform <控制台地址> 与 --url <平台访问本 Worker 的地址>")
+    pasted = lambda: getpass.getpass("接入码：") if sys.stdin.isatty() else sys.stdin.readline()
+    code = (pasted() if args.code_stdin else os.environ.get("OCTOPUS_ENROLL_CODE", "")).strip()
+    if not code:
+        raise SystemExit("没有接入码：设置环境变量 OCTOPUS_ENROLL_CODE，或用 --code-stdin 从标准输入传入")
+    token_path = Path(args.token_file)
+    if not token_path.exists():
+        raise SystemExit(f"Worker Token 文件不存在（{token_path}）：先启动一次本边界的 Worker，它会生成 Token")
+    body = {"code": code, "url": args.url, "token": token_path.read_text().strip()}
+    if args.check:
+        body["check"] = True
+    try:
+        result = api.Client(args.platform, "").request("POST", "/v1/workers/enroll", body)
+    except (api.ApiError, ValueError) as exc:
+        raise SystemExit(f"登记失败：{exc}") from None
+    print(json.dumps(result, ensure_ascii=False))
 
 
 def main(argv=None):
@@ -173,6 +207,8 @@ def main(argv=None):
                 # Worker calls can block for minutes; their outcome is reconciled from durable state on restart.
                 print("KiroCrew ON API: 在途推进未在宽限期内结束；状态已持久化，重启后核对", flush=True)
                 os._exit(0)
+    elif args.command == "worker" and args.action == "enroll":
+        return enroll_worker(args)
     elif args.command == "worker":
         from .worker import Worker, discovery_loop, serve
         token_path = Path(args.token_file)
@@ -226,6 +262,11 @@ def main(argv=None):
             if not args.owner:
                 raise SystemExit("--allocate 需要 --owner")
             print(dumps(allocate_boundary(url, args.username, os.environ[args.password_env], args.owner, args.name)))
+            return
+        if args.issue_code:   # N §3: the Worker registers itself with it; its token never leaves its host
+            from .bootstrap import issue_enrollment
+            print(dumps(issue_enrollment(url, args.username, os.environ[args.password_env], args.name, spare=args.spare,
+                                         owner=args.owner)))
             return
         if not args.check_only and not (args.worker_url and args.token_file):
             raise SystemExit("bootstrap-worker 需要 --worker-url 与 --token-file（只核对用户时用 --check-only）")

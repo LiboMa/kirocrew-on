@@ -582,14 +582,30 @@ worker_native() {  # the platform host relays the Worker host's native distribut
 }
 
 worker_register() {  # register the Worker host as a spare execution environment; an admin assigns it to a Team (D28)
-  local name=$1 stack=$2 worker platform ip token="dry-run-token" script
+  local name=$1 stack=$2 worker platform ip domain console issued code="dry-run-code" token="dry-run-token" script
   worker="$(output InstanceId "$stack")"; platform="$(output InstanceId)"; ip="$(output PrivateIp "$stack")"
+  domain="$(output CloudFrontDomain)"; console="$(output ConsoleDomain)"
+  [ "$console" != "None" ] && [ -n "$console" ] || console="$domain"
   [ -n "$DRY" ] || [[ "$ip" =~ ^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$ ]] || { echo "无法取得 Worker 主机私网地址：$ip" >&2; exit 1; }
-  # The token travels in an SSM command, so it stays in the SSM command history (same trade-off as admin-password).
-  [ -n "$DRY" ] || token="$(remote "$worker" "cat /var/lib/octopus/boundaries/$name/worker.token" | tr -d '[:space:]')"
-  [ -n "$DRY" ] || [[ "$token" =~ ^[A-Za-z0-9_-]{32,}$ ]] || { echo "未读到有效的 Worker Token" >&2; exit 1; }
-  script="set -euo pipefail; T=\$(mktemp); trap 'rm -f \$T' EXIT; printf '%s' '$token' > \$T; cd /opt/kirocrew-on/current; OCTOPUS_ADMIN_PASSWORD=\"\$(cat /etc/kirocrew-on/admin-password)\" PYTHONPATH=/opt/kirocrew-on/current /opt/kirocrew-on/venv/bin/python -m octopus --config /etc/kirocrew-on/platform.toml bootstrap-worker --spare --worker-url https://$ip:$WORKER_TLS_PORT --token-file \$T --name $name"
-  if [ -n "$DRY" ]; then printf '%s\n' "${script//$token/****}"; return; fi
+  local admin="cd /opt/kirocrew-on/current; OCTOPUS_ADMIN_PASSWORD=\"\$(cat /etc/kirocrew-on/admin-password)\" PYTHONPATH=/opt/kirocrew-on/current /opt/kirocrew-on/venv/bin/python -m octopus --config /etc/kirocrew-on/platform.toml bootstrap-worker --spare"
+  # MVP 0.2.0 (N §3): a one-time code issued on the platform host; the Worker host registers itself with it through the
+  # console's address, its token read from its own file. Only the code, used once within 30 minutes, is in the SSM
+  # command history, no longer the token.
+  script="set -euo pipefail; $admin --issue-code --name $name"
+  if [ -n "$DRY" ]; then printf '%s\n' "$script"; issued='{"code": "dry-run-code"}'; else issued="$(remote "$platform" "$script")"; fi
+  code="$(printf '%s' "$issued" | python3 -c 'import json,sys; print(json.loads(sys.stdin.read().strip().splitlines()[-1]).get("code", ""))')"
+  if [ -n "$code" ]; then
+    [ -n "$DRY" ] || [[ "$code" =~ ^kce_[A-Za-z0-9_-]{32,}$ ]] || { echo "未取得有效的接入码" >&2; exit 1; }
+    script="set -euo pipefail; cd /opt/kirocrew-on/current; OCTOPUS_ENROLL_CODE='$code' PYTHONPATH=/opt/kirocrew-on/current /opt/kirocrew-on/venv/bin/python -m octopus --config /etc/kirocrew-on/boundary-$name.toml worker enroll --platform https://$console --url https://$ip:$WORKER_TLS_PORT --token-file /var/lib/octopus/boundaries/$name/worker.token"
+    if [ -n "$DRY" ]; then printf '%s\n' "${script//$code/****}"; return; fi
+    remote "$worker" "$script"
+    return
+  fi
+  # Registered before (a re-run after the host was replaced): its connection is refreshed with its new token, which
+  # then travels in an SSM command as before this change.
+  token="$(remote "$worker" "cat /var/lib/octopus/boundaries/$name/worker.token" | tr -d '[:space:]')"
+  [[ "$token" =~ ^[A-Za-z0-9_-]{32,}$ ]] || { echo "未读到有效的 Worker Token" >&2; exit 1; }
+  script="set -euo pipefail; T=\$(mktemp); trap 'rm -f \$T' EXIT; printf '%s' '$token' > \$T; $admin --worker-url https://$ip:$WORKER_TLS_PORT --token-file \$T --name $name"
   remote "$platform" "$script"
 }
 

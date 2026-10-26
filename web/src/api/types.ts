@@ -83,6 +83,33 @@ export interface Worker {
   capabilities: WorkerCapabilities;
 }
 
+/** GET /v1/workers/enrollments (administrators, N §5): a one-time Worker enrollment code, without the code. */
+export interface Enrollment {
+  id: string;
+  name: string;
+  binding_kind: "user" | "team" | "spare";
+  binding_id: string | null;
+  created_by: string;
+  created: number;
+  expires: number;
+  used: number | null;
+  used_by_worker: string | null;
+  failures: number;
+  revoked: number | null;
+  state: "unused" | "used" | "revoked" | "retired" | "expired";
+}
+
+/** POST /v1/workers/enrollments: the code and the command to run on the Worker host, returned only this once. */
+export interface IssuedEnrollment {
+  id: string;
+  code: string;
+  expires: number;
+  name: string;
+  binding_kind: Enrollment["binding_kind"];
+  binding_id: string | null;
+  command: string;
+}
+
 /** GET /v1/admin/environments (administrators, D28): one execution environment with its bindings, load and live health. */
 export interface Environment {
   id: string;

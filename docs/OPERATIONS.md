@@ -65,6 +65,21 @@ deploy/aws/deploy.sh admin-password  # 经 SSM 读取主机上的 /etc/kirocrew-
 `{"name":"personal","owner_id":"<用户 ID>","connection":{"url":"http://127.0.0.1:8928","token":"<worker.token 内容>"}}`。
 平台用户 `octopus` 与执行用户 `crew-personal` 不同，Worker 可登记给普通用户。
 
+**用一次性接入码登记（MVP 0.2.0 P1，N §3–§5）**：Token 不经人手，也不进命令历史。
+
+- **签发**：控制台「管理 › 执行环境 › 登记 Worker」选「用接入码」，填名称、绑定空间（某人 / 某个 Team / 空闲专属环境）与有效期（30 分钟、2 小时、24 小时；
+  API 为 `POST /v1/workers/enrollments {name, owner_id | team_id | spare, expires_in}`，60–86400 秒，默认 1800）。
+  接入码（`kce_` 开头）与要运行的命令只显示这一次；库里只存 SHA-256。
+- **登记**：在 Worker 主机上运行 `octopus --config <边界>.toml worker enroll --code-stdin --platform https://<控制台域名> --url https://<私网地址>:8943`，
+  粘贴接入码后回车（脚本用环境变量 `OCTOPUS_ENROLL_CODE`；`--code` 参数被拒绝，避免出现在 `ps` 与 shell 历史里；`--check` 只核对不登记）。
+  Worker 读本边界的 `worker.token`，与地址一起交给 `POST /v1/workers/enroll`（不需登录）。平台照旧带 Token 调 `/health` 核实，
+  按 `POST /v1/workers` 的全部规则校验，审计 `worker.enroll`（记签发人、接入码编号与绑定，不记地址与 Token）。
+- **规则**：接入码只能用一次（同时使用也只有一个成功）；错误、过期、已用或已撤销的码一律 404 `enrollment_invalid`，不会去调 Worker；
+  每个来源每分钟最多 10 次（429）。登记失败（Worker 不可达、规则拒绝）时码保持未用，可修正后重试；失败 5 次即作废。
+- **撤销**：执行环境页的「接入码」小节列出未用的码，可撤销（`DELETE /v1/workers/enrollments/<id>`）；`GET /v1/workers/enrollments` 不含码本身。
+- **脚本**：`deploy.sh boundary add` 与 `worker-host register` 的**首次**登记改用接入码（`bootstrap-worker --issue-code` 签发，Worker 自己 `worker enroll`），
+  `worker-host register` 不再经 SSM 读取 Token，SSM 命令历史里只剩一次性的接入码。已登记过的（重跑、换主机）仍由 `bootstrap-worker` 更新连接。
+
 ## 3．访问
 
 ```bash
@@ -143,7 +158,7 @@ deploy/aws/deploy.sh boundary native alice         # 对外开通它的原生入
   Worker 9001–9100 中第一个空闲端口；`worker_isolation = "dedicated"`；`crew_url` 为本机回环，经 `tunnel --boundary` 打开）、资源上限
   （`octopus-gateway@alice.service.d/limits.conf`：`MemoryHigh` = ¾ × `MemoryMax`、`CPUQuota`、`TasksMax=4096`；Worker `MemoryMax=4G`，
   它也运行会话预览；两者 `OOMPolicy=continue`：超限时只结束那个进程，不停掉整个服务）、原生契约检查、启动两个服务，最后
-  `bootstrap-worker --owner alice` 登记为 alice 的专属 Worker。**开通前先核对用户**（存在、尚无自己的执行环境；`--check-only`），不符时主机上什么也不留下。
+  登记为 alice 的专属 Worker（MVP 0.2.0：首次用一次性接入码，Worker 自己 `worker enroll`；重跑时 `bootstrap-worker --owner alice` 更新连接）。**开通前先核对用户**（存在、尚无自己的执行环境；`--check-only`），不符时主机上什么也不留下。
   新边界的 OS 用户 ID 与身份由平台分配（MVP 0.2.0 P1，S9）：`bootstrap-worker --allocate` 经 `POST /v1/admin/boundaries`
   取得 `boundary_id` 与 UID = GID = 100000 + 序号（永不复用），`groupadd -g` / `useradd -u` 用它，`boundary_id` 写在 toml 第一行；
   本机该 UID 已被占用时停止并说明。此前建的边界保留主机分配的 UID，P5 搬到用户卷时一次性改属主。
@@ -196,7 +211,7 @@ deploy/aws/deploy.sh worker-host add w1     # up → push → tls → native →
 | `worker-host push <名称>` | 安装已提交的 HEAD（Worker 主机模式）；写入 `crew_url = https://<该主机的分发域名>` 与 nginx 配置 |
 | `worker-host tls <名称>` | 私钥留在 Worker 主机，平台私有 CA 签发证书（SAN：私网 IP 与 `<名称>.worker.kirocrew-on`）。旧证书没有 DNS 名称时重跑本步（私钥不变） |
 | `worker-host native <名称>` | 在平台主机写入 `/etc/nginx/conf.d/kirocrew-relay-<名称>.conf`（0640 root:nginx，密钥只从主机上的文件读取），`nginx -t` 失败即撤回；最后经中转实测一次 |
-| `worker-host register <名称>` | 登记为空闲执行环境；已登记时更新连接（重新核验健康与隔离） |
+| `worker-host register <名称>` | 登记为空闲执行环境：平台主机签发一次性接入码，Worker 主机经控制台域名 `worker enroll` 自行登记（MVP 0.2.0，Token 不经 SSM）；已登记时更新连接（重新核验健康与隔离） |
 | `kiro-login --host <名称>` | `crew-<名称>` 的 kiro-cli 设备码登录；看到 “Logged in successfully” 即结束本次登录，以 `kiro-cli whoami` 为准 |
 
 原生入口链路：浏览器 → 该主机的 CloudFront 分发 → 平台主机 nginx `:<中转端口>`（校验 `X-Origin-Verify`，规则与 8919 相同）

@@ -20,7 +20,7 @@ import sqlite3
 import struct
 from urllib.parse import parse_qs, quote, unquote, urlsplit
 
-from . import __version__, public_shares, remote_preview, workers
+from . import __version__, enrollments, public_shares, remote_preview, workers
 from .db import dumps, uid
 from .domain import Service, audit, name, team_environment
 from .security import (Error, authenticate, check_password, create_user, elevated, expiry, issue_token, regenerate_token, require,
@@ -202,7 +202,8 @@ def required_scope(method, path):
     # Refreshing an environment's model catalogue is open to the spaces it serves (spec §6.1): a read, made a POST only
     # so a same-site page cannot trigger it with the console's cookie (2026-10-25).
     refresh = segments[:2] == ["v1", "workers"] and len(segments) == 4 and segments[3] == "capabilities"
-    if path.startswith("/v1/admin/") or (segments[:2] == ["v1", "workers"] and method != "GET" and not refresh) or \
+    if path.startswith(("/v1/admin/", "/v1/workers/enrollments")) or \
+            (segments[:2] == ["v1", "workers"] and method != "GET" and not refresh) or \
             (segments[:2] == ["v1", "credentials"] and len(segments) == 4 and segments[3] == "grants") or \
             (segments[:2] == ["v1", "users"] and (method != "GET" or len(segments) > 2)) or \
             (path == "/v1/teams" and method == "POST") or \
@@ -297,6 +298,7 @@ def server(database, port=8918, host="127.0.0.1", allowed_hosts=(), origin_secre
     signing_key = preview_key(database.root)
     hosts, local_hosts = set(), set()
     failures, limiter_lock = {}, threading.Lock()
+    enroll_sources = enrollments.Sources()   # N §4: enroll requests per source, right or wrong
 
     shared = remote_preview.plain_host(urlsplit(preview_url).hostname) if preview_url else ""   # the preview distribution's own name
 
@@ -569,6 +571,45 @@ def server(database, port=8918, host="127.0.0.1", allowed_hosts=(), origin_secre
                 self.close_connection = True
                 logging.error("Download of %s not recorded (%s)", rid, type(exc).__name__)
 
+        def enroll(self, body):
+            """A Worker registering itself with a one-time code (N §3–§4): a wrong, late or used code is a cheap 404 before
+            anything else; then the Worker's /health is checked with its own token (outside any transaction), and every
+            rule of POST /v1/workers applies. A failed registration counts against the code; ``check`` only verifies."""
+            require(enroll_sources.allow(client_ip(self, self.origin_verified), time.time()), "请求过于频繁，请稍后再试",
+                    429, "rate_limited")
+            require(isinstance(body, dict), "请求体须为 JSON 对象")
+            with database.read() as db:
+                code = enrollments.live(db, body.get("code"))
+            kind, binding = code["binding_kind"], code["binding_id"]
+            team, user, spare = (binding if kind == "team" else None), (binding if kind == "user" else None), kind == "spare"
+
+            class Checked(Exception):
+                pass
+            try:
+                require(set(body) <= {"code", "url", "token", "check"} and body.get("check", False) in (True, False),
+                        "请求体为 {code, url, token}，可选 check")
+                connection = {"url": body.get("url"), "token": body.get("token")}
+                health = validate_worker(connection)
+                workers.check_binding(health, team, user, spare)
+                with database.transaction() as db:
+                    enrollments.consume(db, code["id"])   # first: a code another request used meanwhile is 404, not 409
+                    wid = workers.register(db, code["created_by"], code["name"], team, user, spare, connection, health,
+                                           service.credentials.key)
+                    if body.get("check"):
+                        raise Checked()   # every rule passed: roll back, the code stays unused
+                    enrollments.registered(db, code["id"], wid)
+                    audit(db, {"id": code["created_by"]}, "worker.enroll", "worker", wid,
+                          {"enrollment": code["id"], "binding_kind": kind, "binding_id": binding,
+                           "scope": "spare" if spare else "dedicated"})
+            except Checked:
+                return self.respond({"ok": True, "name": code["name"], "scope": "spare" if spare else "dedicated"})
+            except Error as exc:
+                if exc.code != "enrollment_invalid":
+                    with database.transaction() as db:
+                        enrollments.failed(db, code["id"])
+                raise
+            return self.respond({"id": wid, "name": code["name"], "scope": "spare" if spare else "dedicated"}, 201)
+
         def identity(self, method):
             # The Authorization header comes first (API clients, the CLI, a console without the cookie); else the
             # session cookie (D67), whose writes must also say they come from this console: a browser sends Origin
@@ -709,6 +750,9 @@ def server(database, port=8918, host="127.0.0.1", allowed_hosts=(), origin_secre
                         failures.pop(address, None)
                     return self.respond(token, headers=[("Set-Cookie", session_cookie(token["token"],
                                                                                       REMEMBER if remember else None))])
+
+                if method == "POST" and path == "/v1/workers/enroll":   # N §3: no login; the one-time code is the authority
+                    return self.enroll(body)
 
                 actor = self.identity(method)
                 if path == "/v1/logout" and method == "POST":
@@ -910,6 +954,16 @@ def server(database, port=8918, host="127.0.0.1", allowed_hosts=(), origin_secre
                 if path == "/v1/admin/environments":
                     require(method == "GET", "Method not allowed", 405)
                     return self.respond(service.environments(actor))
+                if path == "/v1/workers/enrollments":   # N §5: one-time enrollment codes, an administrator's
+                    require(method in {"GET", "POST"}, "Method not allowed", 405)
+                    if method == "GET":
+                        return self.respond(service.enrollments(actor))
+                    origin = self.headers.get("Origin") or ""   # dispatch refused a foreign one: the console's address
+                    return self.respond(service.issue_enrollment(actor, body, origin if origin.startswith("https://")
+                                                                 else "https://<控制台域名>"), 201)
+                if len(segments) == 4 and segments[:3] == ["v1", "workers", "enrollments"]:
+                    require(method == "DELETE", "Method not allowed", 405)
+                    return self.respond(service.revoke_enrollment(actor, segments[3]))
                 if len(segments) == 3 and segments[:2] == ["v1", "workers"]:
                     require(method == "PATCH", "Method not allowed", 405)
                     return self.respond(service.rename_worker(actor, segments[2], body))

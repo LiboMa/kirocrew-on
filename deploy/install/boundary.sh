@@ -111,5 +111,16 @@ done
 [ -s "$BASE/worker.token" ] || { echo "Worker 未生成 $BASE/worker.token：journalctl -u octopus-worker@$NAME" >&2; exit 1; }
 
 log "边界 ${NAME}：登记为 $OWNER 的专属执行环境"
-platform --worker-url "http://127.0.0.1:$WORKER_PORT" --token-file "$BASE/worker.token"
+# MVP 0.2.0 (N §3): a new Worker registers itself with a one-time code, its token read from its own file; one the
+# platform has already (a re-run) has its connection refreshed by bootstrap-worker as before.
+ISSUED="$(platform --issue-code)"
+CODE="$(printf '%s' "$ISSUED" | python3 -c 'import json,sys; print(json.load(sys.stdin).get("code", ""))')"
+if [ -n "$CODE" ]; then
+  API="$(printf '%s' "$ISSUED" | python3 -c 'import json,sys; print(json.load(sys.stdin)["platform"])')"
+  ( cd "$ON_CURRENT"
+    OCTOPUS_ENROLL_CODE="$CODE" PYTHONPATH="$ON_CURRENT" "$PLATFORM_PYTHON" -m octopus --config "$TOML" worker enroll \
+      --platform "$API" --url "http://127.0.0.1:$WORKER_PORT" --token-file "$BASE/worker.token" )
+else
+  platform --worker-url "http://127.0.0.1:$WORKER_PORT" --token-file "$BASE/worker.token"
+fi
 log "完成：边界 ${NAME}（${OWNER}）。下一步：$OWNER 用自己的账号执行 deploy/aws/deploy.sh kiro-login --boundary $NAME"

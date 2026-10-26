@@ -58,6 +58,7 @@ Worker 有三种范围（`workers.scope`，D28）：**专属**（`dedicated`，�
 | 规则 | 代码 |
 |---|---|
 | 只有平台管理员能登记 Worker（控制台「执行环境 · Worker」或 `POST /v1/workers`）；`spare: true` 登记为空闲执行环境，必须 `dedicated` 且执行边界从未登记过（含已停用） | `server.py`（`POST /v1/workers`） |
+| 一次性接入码（MVP 0.2.0，N §3）：只有管理员签发，绑定与名称签发时定死；Worker 凭码自己登记（`POST /v1/workers/enroll`），走与 `POST /v1/workers` 同一段规则（`workers.check_binding`、`workers.register`）；码只用一次、可撤销、失败 5 次作废，错误的码一律 404 | `enrollments.py`、`server.py`（`enroll`） |
 | 专属 Worker 只绑定**一个**用户或**一个** Team；Team 的专属 Worker 必须是 `dedicated`，`trusted-local` 只用于个人空间 | `server.py`（`POST /v1/workers`） |
 | 平台自身的宿主账号只能作为管理员本机验证用的 `trusted-local` Worker | `server.py`（`POST /v1/workers`） |
 | 同一 Gateway 边界不能登记两次（与全部 Worker 比对，含已停用、已退役的，MVP 0.2.0 P1）；不同空间不能共用同一宿主账号（主机名 + uid） | `workers.registration_conflicts` |

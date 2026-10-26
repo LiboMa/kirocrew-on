@@ -410,6 +410,53 @@ describe("管理 › 执行环境", () => {
     expect(screen.getByRole("dialog", { name: "登记 Worker" })).toBeInTheDocument();
   });
 
+  test("登记 Worker 用接入码: the code and the command are shown once; the list keeps the code's entry, not its value (N §3)", async () => {
+    const code = "kce_" + "c".repeat(43);
+    const issued = { id: "enroll-1", code, expires: Date.now() / 1000 + 7200, name: "bob-host", binding_kind: "user", binding_id: "u2",
+      command: "octopus --config <边界>.toml worker enroll --code-stdin --platform https://console.test --url https://<Worker 私网地址>:8943" };
+    let listed: unknown[] = [];
+    const calls = start({ ...ONE_WORKER, "GET /users": ENVIRONMENTS["GET /users"], "GET /workers/enrollments": () => listed,
+      "POST /workers/enrollments": () => {
+        listed = [{ id: "enroll-1", name: "bob-host", binding_kind: "user", binding_id: "u2", created_by: "u1", created: 1,
+          expires: issued.expires, used: null, used_by_worker: null, failures: 0, revoked: null, state: "unused" }];
+        return new Response(JSON.stringify(issued), { status: 201 });
+      } });
+    const list = await openSection("管理", "执行环境");
+    await userEvent.click(within(list).getByRole("button", { name: "登记 Worker" }));
+    const dialog = await screen.findByRole("dialog", { name: "登记 Worker" });
+    await userEvent.click(within(dialog).getByRole("radio", { name: "用接入码" }));
+    expect(within(dialog).queryByLabelText("Worker Token")).toBeNull();   // the Worker brings its own token
+    await userEvent.type(within(dialog).getByLabelText("名称"), "bob-host");
+    await userEvent.selectOptions(within(dialog).getByLabelText("绑定空间"), "user:u2");
+    await userEvent.selectOptions(within(dialog).getByLabelText("有效期"), "7200");
+    await userEvent.click(within(dialog).getByRole("button", { name: "签发接入码" }));
+    await waitFor(() => expect(calls.find((c) => c.method === "POST" && c.path === "/v1/workers/enrollments")?.body)
+      .toEqual({ name: "bob-host", owner_id: "u2", expires_in: 7200 }));
+    const shown = await screen.findByRole("dialog", { name: "接入码" });
+    expect(within(shown).getByText(code)).toBeInTheDocument();
+    expect(within(shown).getByText(issued.command)).toBeInTheDocument();
+    await userEvent.click(within(shown).getByRole("button", { name: "我已保存" }));
+    await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
+    expect(screen.queryByText(code)).toBeNull();   // shown once
+    const codes = await within(list).findByRole("region", { name: "接入码" });
+    expect(within(codes).getByText("bob-host")).toBeInTheDocument();
+    expect(within(codes).getByText(/个人 · dev1/)).toBeInTheDocument();
+  });
+
+  test("an unused enrollment code is revoked after confirming", async () => {
+    let listed: unknown[] = [{ id: "enroll-1", name: "bob-host", binding_kind: "spare", binding_id: null, created_by: "u1", created: 1,
+      expires: Date.now() / 1000 + 600, used: null, used_by_worker: null, failures: 0, revoked: null, state: "unused" }];
+    const calls = start({ ...ONE_WORKER, "GET /workers/enrollments": () => listed,
+      "DELETE /workers/enrollments/enroll-1": () => { listed = []; return { ok: true }; } });
+    const list = await openSection("管理", "执行环境");
+    const codes = await within(list).findByRole("region", { name: "接入码" });
+    await userEvent.click(within(codes).getByRole("button", { name: "撤销接入码：bob-host" }));
+    const dialog = await screen.findByRole("dialog", { name: "撤销接入码" });
+    await userEvent.click(within(dialog).getByRole("button", { name: "撤销" }));
+    await waitFor(() => expect(calls.some((c) => c.method === "DELETE" && c.path === "/v1/workers/enrollments/enroll-1")).toBe(true));
+    await waitFor(() => expect(within(list).queryByRole("region", { name: "接入码" })).toBeNull());
+  });
+
   test("a member refreshes models in 我的设置 but cannot edit, assign, disable or retire a Worker", async () => {
     const calls = start({ ...ONE_WORKER, "GET /me": { id: "u1", username: "fixture-owner", admin: 0, scopes: ["read", "execute", "manage"] },
       "POST /workers/w1/capabilities": { models: {} } });

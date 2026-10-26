@@ -221,6 +221,13 @@ class ScriptTests(unittest.TestCase):
             with self.subTest(name):
                 self.assertIsNone(re.search(r"(\benv|--)\s[^;|&\n]*OCTOPUS_ADMIN_PASSWORD=", joined))
 
+    def test_a_new_boundary_enrolls_itself_with_a_one_time_code(self):   # MVP 0.2.0 (N §3)
+        text = (ROOT / "deploy/install/boundary.sh").read_text()
+        issue = text.index("platform --issue-code")
+        self.assertLess(issue, text.index("worker enroll"))
+        self.assertIn('OCTOPUS_ENROLL_CODE="$CODE"', text)
+        self.assertIn('platform --worker-url "http://127.0.0.1:$WORKER_PORT" --token-file "$BASE/worker.token"', text)   # a re-run
+
     def test_each_install_prunes_old_releases_first(self):
         text = (ROOT / "deploy/install/al2023.sh").read_text()
         prune = text.index('prune_releases /opt/kirocrew-on/releases "$(readlink -f /opt/kirocrew-on/current')
@@ -528,8 +535,13 @@ class ScriptTests(unittest.TestCase):
             self.assertIn(part, tls.stdout)
         register = deploy("worker-host", "register", "w1")
         self.assertEqual(register.returncode, 0, register.stderr)
-        self.assertIn("bootstrap-worker --spare", register.stdout)
-        self.assertIn("--worker-url https://", register.stdout)
+        # MVP 0.2.0 (N §3): a one-time code issued on the platform host; the Worker host registers itself with it, so its
+        # token never travels in an SSM command; an already registered host is refreshed with bootstrap-worker as before
+        self.assertIn("bootstrap-worker --spare --issue-code", register.stdout)
+        self.assertIn("worker enroll", register.stdout)
+        self.assertIn("OCTOPUS_ENROLL_CODE", register.stdout)
+        self.assertIn("--url https://", register.stdout)
+        self.assertNotIn("cat /var/lib/octopus/boundaries/w1/worker.token", register.stdout)
         login = deploy("kiro-login", "--host", "w1")
         self.assertEqual(login.returncode, 0, login.stderr)
         self.assertIn("crew-w1", login.stdout + login.stderr)

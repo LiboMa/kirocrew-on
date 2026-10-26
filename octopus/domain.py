@@ -2305,6 +2305,47 @@ class Service:
                                                                            "owner": user["id"]})
         return row
 
+    def issue_enrollment(self, actor, body, platform):
+        """A one-time code that registers one Worker where the administrator binds it (N §3–§5); the code and the command
+        to run on the Worker host are shown only in this answer."""
+        from . import enrollments
+        require(elevated(actor), "只有平台管理员可以签发接入码", 403, "forbidden")
+        require(isinstance(body, dict) and set(body) <= {"name", "owner_id", "team_id", "spare", "expires_in"},
+                "需要 name，以及 owner_id、team_id、spare 三者之一，可选 expires_in")
+        spare = body.get("spare") is True
+        require(sum((bool(body.get("owner_id")), bool(body.get("team_id")), spare)) == 1,
+                "接入码须唯一绑定一个用户、一个 Team，或空闲执行环境（spare）")
+        kind, binding = ("spare", None) if spare else ("team", body["team_id"]) if body.get("team_id") else ("user", body["owner_id"])
+        worker_name = name(body.get("name"))
+        with self.db.transaction() as db:
+            if kind == "user":
+                require(db.execute("SELECT 1 FROM users WHERE id=? AND active=1", (binding,)).fetchone(), "用户不存在", 404,
+                        "not_found")
+            elif kind == "team":
+                require(db.execute("SELECT 1 FROM teams WHERE id=?", (binding,)).fetchone(), "Team 不存在", 404, "not_found")
+                require(team_environment(db, binding) is None, "该 Team 已有执行环境（含已停用的）", 409, "team_has_environment")
+            issued = enrollments.issue(db, actor["id"], worker_name, kind, binding, body.get("expires_in"))
+            audit(db, actor, "worker.enrollment", "enrollment", issued["id"], {"binding_kind": kind, "binding_id": binding,
+                                                                               "name": worker_name, "expires": issued["expires"]})
+        # The code is pasted at the prompt, so it stays out of ps and the shell history (scripts set OCTOPUS_ENROLL_CODE)
+        command = (f"octopus --config <边界>.toml worker enroll --code-stdin --platform {platform} "
+                   "--url https://<Worker 私网地址>:8943")
+        return {**issued, "name": worker_name, "binding_kind": kind, "binding_id": binding, "command": command}
+
+    def enrollments(self, actor):
+        from . import enrollments
+        require(elevated(actor), "只有平台管理员可以查看接入码", 403, "forbidden")
+        with self.db.read() as db:
+            return enrollments.listed(db)
+
+    def revoke_enrollment(self, actor, eid):
+        from . import enrollments
+        require(elevated(actor), "只有平台管理员可以撤销接入码", 403, "forbidden")
+        with self.db.transaction() as db:
+            enrollments.revoke(db, eid)
+            audit(db, actor, "worker.enrollment_revoke", "enrollment", eid)
+        return {"ok": True}
+
     def quotas(self, actor):
         """The actor's limit on running tasks and their Teams' (D61); an administrator also sees the default and each person's."""
         with self.db.read() as db:

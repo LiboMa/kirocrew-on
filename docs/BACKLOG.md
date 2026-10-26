@@ -20,7 +20,8 @@
 ## 客户端与控制台（原 M3）
 - `octopus connect` 扩展到 Codex 与 Kiro IDE；CLI 命令集（submit / plan / confirm / status / watch / report / approvals / search）。
 - 控制台：服务端分页、按仓库 / 分支 / 阶段 / 工具 / 客户端 / 提交者 / 时间过滤、全文搜索；详情中的 diff、门禁与报告。
-- Worker 自助接入（一次性接入码，Worker 启动时自行登记 URL 与 Token），本地全栈启动时自动登记 Worker——设计见 `docs/superpowers/specs/2026-10-24-worker-enrollment-design.md`——负责人 2026-10-24 决定放到 MVP 0.2.0，并入「MVP 0.2.0 重要更新」的 Worker 自助申请。
+- ~~Worker 自助接入（一次性接入码，Worker 启动时自行登记 URL 与 Token）~~——MVP 0.2.0 P1 Task 6 已做（接口、`worker enroll`、控制台「用接入码」与接入码列表、`boundary add` / `worker-host register` 首次登记改用接入码）。
+  - 仍待做：本地全栈（`tools/local_stack.sh`）启动后自动建管理员并用接入码登记本机 Worker（N §5 最后一条）；用接入码更换连接（轮换 Token、换主机，N 第 2 期以后）。
 - 旧版控制台 `/classic/` 在 React 版功能对齐并经负责人确认后移除。
 
 ## 共享与组织（原 M4）

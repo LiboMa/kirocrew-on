@@ -121,6 +121,11 @@ def openapi():
         "Recover": obj({**command, "rediagnose": {"type": "boolean", "deprecated": True}}, ["request_id", "expected_version"]),
         "AssignWorker": obj({**command, "worker_id": text}, ["request_id", "expected_version", "worker_id"]),
         "Empty": obj({}), "Error": obj({"error": text, "code": text}, ["error", "code"]),
+        # MVP 0.2.0 (N §5): a one-time enrollment code, and the Worker registering itself with it
+        "Enrollment": obj({"name": text, "owner_id": text, "team_id": text, "spare": {"type": "boolean"},
+                           "expires_in": {"type": "integer", "minimum": 60, "maximum": 86400, "default": 1800}}, ["name"]),
+        "Enroll": obj({"code": text, "url": text, "token": {"type": "string", "minLength": 32},
+                       "check": {"type": "boolean", "default": False}}, ["code", "url", "token"]),
     }
     schemas["Recover"]["description"] = ("Execute scope. Starts a Coordinator diagnosis of the Session's failed task, every time "
                                          "it is asked (D71: no hold after earlier waits; rediagnose is accepted and not needed).")
@@ -134,6 +139,14 @@ def openapi():
     schemas["User"]["description"] = "Administrator only. worker_id: optional shared execution environment for the user's personal space."
     schemas["Share"]["description"] = "Every Session's agents in a shared environment run as one OS account and can read each other's sources, tool logins and memory."
     schemas["ConnectionUpdate"]["description"] = "Administrator only. A replaced Worker host keeps serving its spaces; the new endpoint is re-validated like a registration (same isolation, boundary not used by another Worker)."
+    schemas["Enrollment"]["description"] = ("Administrator only. A one-time code that registers one Worker under name, bound "
+                                            "to exactly one owner_id / team_id, or spare=true. The code (kce_…) is returned "
+                                            "only once; only its SHA-256 is kept. Lasts expires_in seconds (default 30 min, "
+                                            "at most a day); five failed registrations retire it.")
+    schemas["Enroll"]["description"] = ("No login: the code is the authority (octopus worker enroll). The platform checks "
+                                        "the Worker's /health with its token and applies every rule of POST /v1/workers. A "
+                                        "wrong, expired, used or revoked code is 404 enrollment_invalid; 10 requests a "
+                                        "minute per source. check=true verifies everything and registers nothing.")
     schemas["Space"]["description"] = "Exactly one of team_id or user_id. A spare environment can only be given to a Team."
     schemas["Rename"]["description"] = "A Team: its owners or an administrator. A Worker: administrator only."
     schemas["TeamArchive"]["description"] = "Administrator only. An archived Team takes no new Sessions or members; its Sessions stay readable and stoppable; its execution environment is kept."
@@ -152,6 +165,8 @@ def openapi():
         "/v1/workflows/{id}/shares": {"post": "Grant", "delete": "Grant"},
         "/v1/workflows/{id}/archive": {"post": "Archive"},
         "/v1/workers": {"get": None, "post": "Worker"},
+        "/v1/workers/enrollments": {"get": None, "post": "Enrollment"}, "/v1/workers/enrollments/{id}": {"delete": "Empty"},
+        "/v1/workers/enroll": {"post": "Enroll"},
         "/v1/placement": {"get": None},
         "/v1/admin/environments": {"get": None}, "/v1/admin/audit": {"get": None},
         "/v1/me/password": {"post": "PasswordChange"}, "/v1/users/{id}/password": {"post": "PasswordReset"},
@@ -204,7 +219,8 @@ def openapi():
              ("/v1/workers/{id}/share", "post"), ("/v1/workers/{id}/spaces", "post"),
              ("/v1/workers/{id}/spaces", "delete"), ("/v1/workers/{id}/connection", "post"),
              ("/v1/workers/{id}/dedicate", "post"), ("/v1/teams", "post"), ("/v1/teams/{id}/archive", "post"),
-             ("/v1/teams/{id}/environment", "post"), ("/v1/workers/{id}", "patch"), ("/v1/workers/{id}/retire", "post")}
+             ("/v1/teams/{id}/environment", "post"), ("/v1/workers/{id}", "patch"), ("/v1/workers/{id}/retire", "post"),
+             ("/v1/workers/enrollments", "get"), ("/v1/workers/enrollments", "post"), ("/v1/workers/enrollments/{id}", "delete")}
     users_admin = {("/v1/users/{id}/password", "post"), ("/v1/users/{id}/active", "post"), ("/v1/users/{id}/admin", "post"),
                    ("/v1/admin/users", "get"), ("/v1/admin/users/{id}/tokens", "get")}
     paths = {}
@@ -222,7 +238,7 @@ def openapi():
                 op["parameters"] = [{"in": "path", "name": "id", "required": True, "schema": text}]
             if schema:
                 op["requestBody"] = {"required": True, "content": {"application/json": {"schema": ref(schema)}}}
-            if path == "/v1/login":
+            if path in ("/v1/login", "/v1/workers/enroll"):
                 op["security"] = []
             if (path, method) in admin:
                 op["tags"] = ["执行环境（管理员）"]

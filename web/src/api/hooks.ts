@@ -2,7 +2,7 @@ import { useEffect, useState } from "react";
 import { useInfiniteQuery, useQuery, useQueryClient } from "@tanstack/react-query";
 import { api } from "@/api/client";
 import { followRunEvents, type StreamState } from "@/api/events";
-import type { ApprovalList, AppPreview, AttemptDiff, ChangeEntry, Credential, Environment, Me, Observation, Placement, Policy, RevisionDiff, RevisionEntry, Run, RunEvent, RunPage, Team, Template, User, Worker, Workflow, Quotas } from "@/api/types";
+import type { ApprovalList, AppPreview, AttemptDiff, ChangeEntry, Credential, Enrollment, Environment, Me, Observation, Placement, Policy, RevisionDiff, RevisionEntry, Run, RunEvent, RunPage, Team, Template, User, Worker, Workflow, Quotas } from "@/api/types";
 
 export const keys = {
   me: ["me"] as const,
@@ -14,6 +14,7 @@ export const keys = {
   templates: ["templates"] as const,
   tokens: ["tokens"] as const,
   environments: ["admin", "environments"] as const,
+  enrollments: ["workers", "enrollments"] as const,
   run: (id: string) => ["run", id] as const,
   observe: (id: string) => ["observe", id] as const,
   app: (id: string) => ["app", id] as const,
@@ -77,6 +78,11 @@ export function useRunCount(params: string, allSessions: boolean) {
 export function useEnvironments(enabled: boolean) {
   return useQuery({ queryKey: keys.environments, queryFn: () => api<Environment[]>("/admin/environments"), enabled,
     retry: false, ...every(30_000) });
+}
+
+/** The Worker enrollment codes (administrators, N §5): unused ones and those of the last week, never the code itself. */
+export function useEnrollments(enabled: boolean) {
+  return useQuery({ queryKey: keys.enrollments, queryFn: () => api<Enrollment[]>("/workers/enrollments"), enabled, retry: false });
 }
 
 /** The newest `limit` messages of a run's native Session; refreshed every 5 s while the run is active. */
