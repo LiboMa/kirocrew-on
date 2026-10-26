@@ -320,6 +320,13 @@ cat /var/lib/octopus/boundaries/personal/gateway-runtime.json                   
 
 API 访问日志不记录 token、请求体或查询串；Engine 只记录异常类名。
 
+**平台指标（MVP 0.2.0 P1，设计 §12.1）**：API 每分钟向 `/var/log/kirocrew-on/metrics.emf.log` 追加一行 CloudWatch EMF（命名空间 `KiroCrewOn`，维度 `Service=kirocrew-on`，单位 Count）。
+
+- 指标：`sessions_running`、`sessions_waiting_worker`、`sessions_quota_wait`、`attempts_running`、`workers_enabled`、`workers_unhealthy`（健康信息 15 分钟以上未更新）、`apps_running`、`takeovers_moving`、`public_shares_active`。
+- 文件超过 10 MB 时改名为 `.1`，只保留一代。
+- 管理员可以读 `GET /v1/admin/metrics`，内容相同。
+- 由主机上的 CloudWatch Agent 收这个文件；平台进程不调 AWS API，主机角色因此不需要 `PutMetricData`。告警（SNS）随 P3 的数据面栈一起做。
+
 ## 8．认证与过期
 
 - Claude Code 与 Codex 经实例角色使用 Bedrock：实例角色需要 `bedrock:InvokeModel*`（Claude）与 `bedrock-mantle:CreateInference`（Codex 的 amazon-bedrock 提供方）。

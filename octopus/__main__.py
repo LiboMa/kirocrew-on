@@ -198,6 +198,16 @@ def main(argv=None):
                 except Exception as exc:
                     print(f"KiroCrew ON API: 远程预览回收失败（{type(exc).__name__}）", file=sys.stderr, flush=True)
         threading.Thread(target=sweep, daemon=True, name="octopus-app-sweep").start()
+
+        def measure():   # MVP 0.2.0 (design §12.1): one EMF line a minute for the host's CloudWatch agent
+            from . import metrics
+            settings.log_dir.mkdir(parents=True, exist_ok=True)
+            while not engine.stopping.wait(60):
+                try:
+                    metrics.publish(db, settings.log_dir / "metrics.emf.log", time.time())
+                except Exception as exc:
+                    logging.error("Octopus metrics failed (%s)", type(exc).__name__)
+        threading.Thread(target=measure, daemon=True, name="octopus-metrics").start()
         print(f"KiroCrew ON API: http://{args.host}:{httpd.server_address[1]}", flush=True)
         try:
             httpd.serve_forever()

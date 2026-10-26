@@ -168,7 +168,7 @@ def openapi():
         "/v1/workers/enrollments": {"get": None, "post": "Enrollment"}, "/v1/workers/enrollments/{id}": {"delete": "Empty"},
         "/v1/workers/enroll": {"post": "Enroll"},
         "/v1/placement": {"get": None},
-        "/v1/admin/environments": {"get": None}, "/v1/admin/audit": {"get": None},
+        "/v1/admin/environments": {"get": None}, "/v1/admin/audit": {"get": None}, "/v1/admin/metrics": {"get": None},
         "/v1/me/password": {"post": "PasswordChange"}, "/v1/users/{id}/password": {"post": "PasswordReset"},
         "/v1/users/{id}/active": {"post": "Active"}, "/v1/users/{id}/admin": {"post": "AdminFlag"},
         "/v1/admin/users": {"get": None}, "/v1/admin/users/{id}/tokens": {"get": None},
@@ -246,6 +246,11 @@ def openapi():
                 op["tags"] = ["用户与权限（管理员）"]
                 op["description"] = ("Administrator only (admin scope). Deactivating or resetting a user revokes all of "
                                      "their tokens; the last active admin and a Team's only active owner are protected.")
+            if path == "/v1/admin/metrics":
+                op["description"] = ("Administrator only. The platform's counts now (Sessions running, waiting for a Worker or "
+                                     "a quota, Attempts running, Workers enabled and unhealthy, demos running, takeovers "
+                                     "moving, public shares active), as the API's EMF log line carries them every minute "
+                                     "(namespace KiroCrewOn).")
             if path == "/v1/admin/environments":
                 op["description"] = "Administrator only. Every execution environment with its scope, owner, Team or shared spaces (with names), enabled, active_runs and live health (reachable=false when its Worker does not answer within a few seconds; never fails the listing). No tokens."
             if path.endswith("/crew-entry"):

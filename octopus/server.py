@@ -951,6 +951,9 @@ def server(database, port=8918, host="127.0.0.1", allowed_hosts=(), origin_secre
                             require(query[key][0].isdigit(), f"{key} 须为非负整数")
                             paging[key] = int(query[key][0])
                     return self.respond(service.audit_log(actor, **paging))
+                if path == "/v1/admin/metrics":   # MVP 0.2.0 (design §12.1): the counts the EMF log carries
+                    require(method == "GET", "Method not allowed", 405)
+                    return self.respond(service.metrics(actor))
                 if path == "/v1/admin/environments":
                     require(method == "GET", "Method not allowed", 405)
                     return self.respond(service.environments(actor))

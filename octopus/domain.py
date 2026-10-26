@@ -2346,6 +2346,14 @@ class Service:
             audit(db, actor, "worker.enrollment_revoke", "enrollment", eid)
         return {"ok": True}
 
+    def metrics(self, actor):
+        """The platform's counts now (MVP 0.2.0, design §12.1), as each minute's EMF line carries them."""
+        from . import metrics
+        require(elevated(actor), "只有平台管理员可以查看平台指标", 403, "forbidden")
+        now = time.time()
+        with self.db.read() as db:
+            return {**metrics.snapshot(db, now), "at": now}
+
     def quotas(self, actor):
         """The actor's limit on running tasks and their Teams' (D61); an administrator also sees the default and each person's."""
         with self.db.read() as db:
