@@ -1302,3 +1302,14 @@ npm --prefix web run test:browser       # 浏览器回归：React 与 /classic/ 
 ```
 
 浏览器回归只使用 `tests/mvp_browser_fixture.py` 的临时 HTTP/SQLite 数据，不连接 Worker、不调用 Coding 工具。
+
+## 15．发布物（MVP 0.2.0 P1）
+
+`npm --prefix web run build && python3 tools/build_release.py --out dist/release [--sign-key <PEM 私钥>] [--channel preview]`
+只用标准库生成：
+
+- `kirocrew_on-<版本>-py3-none-any.whl`：`octopus`、`composition`、控制台构建 `octopus/ui/dist`，以及放在 `octopus/_release/` 下的 `deploy/` 与 `skills/`（代码经 `octopus.release.path()` 找到它们：检出里用检出的，装了 wheel 用 wheel 里的）。命令为 `kirocrew-on`（即 `python -m octopus`）；没有运行依赖。文件顺序与时间戳固定，同一提交构建出同一个哈希。
+- `manifest.json`（结构见 `deploy/release/manifest.schema.json`）：版本、频道、wheel 的 sha256，以及这一版测过的组合，取自 `deploy/versions.env`：KiroCrew 的提交与版本、Node 版本及 x64 / arm64 包的 sha256（从 nodejs.org 的 `SHASUMS256.txt` 读，可用 `--node-sums` 指定文件）、kiro-cli、Claude Code、Codex、OpenCode。
+- `SHA256SUMS`；给了 `--sign-key` 时另有 `manifest.sig`，用 `openssl dgst -sha256 -verify <公钥> -signature manifest.sig manifest.json` 验证。
+
+本期只产出、不上传：公开前只发内部 `preview` 频道（设计 §17 #9 的默认）；托管（S3 + CloudFront）与 KMS 签名随 P2 的 CI 一起做。

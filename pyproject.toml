@@ -1,0 +1,12 @@
+# KiroCrew ON (MVP 0.2.0 P1, S1): the release wheel is built by tools/build_release.py with the standard library only;
+# this file holds its metadata. The version is octopus.__version__.
+[project]
+name = "kirocrew-on"
+dynamic = ["version"]
+description = "KiroCrew ON: a team development platform on KiroCrew's native execution"
+readme = "README.md"
+requires-python = ">=3.11"
+dependencies = []
+
+[project.scripts]
+kirocrew-on = "octopus.__main__:main"
