@@ -1285,7 +1285,7 @@ $P restore-verify /var/lib/octopus/restore/check/octopus-<时间>.json --into /v
 # 校验通过后：把 verified/octopus.sqlite3 放到 /var/lib/octopus/platform/（属主 octopus，0600），再启动 octopus-api
 ```
 
-云上验证（临时控制面主机，没有 Agent）随 P0 做：从 Litestream 恢复、`restore-verify` 通过、实测 RPO ≤ 5 s。
+云上验证（2026-10-26，临时 arm64 主机，没有 Agent）：每 20 ms 写一行，主机 `sysrq` 宕机后在另一台主机上恢复，用时 4.4 s，`restore-verify` 通过，RPO 0.69 s（`docs/research/2026-10-26-p0-results.md` 第 4 节）。
 
 ## 13．批准模式
 

@@ -421,7 +421,7 @@
           "name": "P0 实测（13 项，≤ $20）",
           "status": "doing",
           "ref": "设计 §16",
-          "more": "负责人 2026-10-26 批准（≤ $20），T5 由负责人设备码登录"
+          "more": "T1–T4、T7、T9、T10 完成，T8 进行中；T5/T6/T11/T13 待 arm64 上的 KiroCrew ON 与负责人登录"
         },
         {
           "id": "v020-p1-1",
@@ -456,46 +456,48 @@
         {
           "id": "v020-p1-6",
           "name": "P1-6 接入码第 1 期（N）",
-          "status": "todo",
+          "status": "local",
           "ref": "P1 Task 6"
         },
         {
           "id": "v020-p1-7",
           "name": "P1-7 有副作用的 GET 审计（CE12）",
-          "status": "todo",
+          "status": "local",
           "ref": "P1 Task 7"
         },
         {
           "id": "v020-p1-8",
           "name": "P1-8 安装脚本支持 ARM64",
-          "status": "todo",
+          "status": "local",
           "ref": "P1 Task 8",
-          "more": "arm64 实机验收与 P0 一起，需批准新开机器"
+          "more": "arm64 实机验收随 P0b"
         },
         {
           "id": "v020-p1-9",
           "name": "P1-9 打包：wheel、清单、签名",
-          "status": "todo",
-          "ref": "P1 Task 9"
+          "status": "local",
+          "ref": "P1 Task 9",
+          "more": "可复现 wheel，版本 0.2.0rc1"
         },
         {
           "id": "v020-p1-10",
           "name": "P1-10 状态栈与 Litestream",
-          "status": "todo",
+          "status": "local",
           "ref": "P1 Task 10",
-          "more": "云上恢复验证需批准临时控制面主机"
+          "more": "云上恢复验证进行中"
         },
         {
           "id": "v020-p1-11",
           "name": "P1-11 平台指标（EMF）",
-          "status": "todo",
+          "status": "local",
           "ref": "P1 Task 11"
         },
         {
           "id": "v020-p1-12",
           "name": "P1-12 KiroCrew 升到正式版（可能单列 P1b）",
-          "status": "todo",
-          "ref": "P1 Task 12"
+          "status": "doing",
+          "ref": "P1 Task 12",
+          "more": "调研 v0.10.0（相对钉住提交 1009 个提交）"
         },
         {
           "id": "v020-p2",
