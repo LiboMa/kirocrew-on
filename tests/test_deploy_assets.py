@@ -299,14 +299,19 @@ class ScriptTests(unittest.TestCase):
         self.assertNotIn("litestream", platform.lower())
 
     def test_litestream_is_not_installed_on_single_node(self):
-        text = (ROOT / "deploy/install/al2023.sh").read_text()
-        begin, end = text.index("# litestream:begin"), text.index("# litestream:end")
-        block = text[begin:end]
-        self.assertIn('if [ "${CONTROL_PLANE_ONLY:-}" = 1 ]; then', block.splitlines()[1])
-        outside = (text[:begin] + text[end:]).lower()
-        self.assertNotIn("litestream", outside.replace("# litestream:end", ""))
-        for part in ("$LITESTREAM_VERSION", "sha256sum -c", "octopus-litestream.service", "STATE_BUCKET"):
-            self.assertIn(part, block)
+        # Review 2026-10-26: al2023.sh always sets up a boundary, so it never installs Litestream; litestream.sh does, and
+        # only on a host that runs no boundary (a control-plane host, S31).
+        self.assertNotIn("litestream", (ROOT / "deploy/install/al2023.sh").read_text().lower())
+        script = (ROOT / "deploy/install/litestream.sh").read_text()
+        for part in ("$LITESTREAM_VERSION", "sha256sum -c", "octopus-litestream.service", "STATE_BUCKET", "host_arch"):
+            self.assertIn(part, script)
+        with tempfile.TemporaryDirectory() as tmp:
+            etc = Path(tmp)
+            (etc / "boundary-personal.toml").write_text('worker_port = 8928\n')
+            done = subprocess.run(["bash", str(ROOT / "deploy/install/litestream.sh")], capture_output=True, text=True,
+                                  env={**os.environ, "ETC": str(etc), "STATE_BUCKET": "kc-state-test"})
+            self.assertEqual(done.returncode, 2, done.stderr)
+            self.assertIn("boundary-personal", done.stderr)
 
     def test_each_install_prunes_old_releases_first(self):
         text = (ROOT / "deploy/install/al2023.sh").read_text()
@@ -316,7 +321,7 @@ class ScriptTests(unittest.TestCase):
 
     def test_scripts_are_valid_bash_without_mac_assumptions(self):
         for name in ("deploy/install/al2023.sh", "deploy/install/boundary-lib.sh", "deploy/install/boundary.sh", "deploy/aws/deploy.sh",
-                     "deploy/install/arch-lib.sh"):
+                     "deploy/install/arch-lib.sh", "deploy/install/litestream.sh"):
             script = ROOT / name
             subprocess.run(["bash", "-n", str(script)], check=True)
             text = script.read_text()

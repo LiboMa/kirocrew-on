@@ -1273,7 +1273,7 @@ $P restore-verify /var/lib/octopus/platform/backups/octopus-<时间>.json --into
 只用于集群版控制面主机（不跑任何边界）；单机版与 m1 不跑 Litestream（S31）：Litestream 要持续写 S3，而跑 Agent 的主机，其实例角色同机进程都能用。
 
 - **状态栈** `deploy/aws/kirocrew-on-state.yaml`：状态桶（版本控制、KMS 加密、只允许 TLS、禁止公开），`db/` 放数据库副本，P5 起 `escrow/` 放托管的密钥材料；托管策略 `ControlPlaneStateAccess` 只给控制面主机的角色，栈本身不附加给任何角色。
-- **安装**：`CONTROL_PLANE_ONLY=1 STATE_BUCKET=<StateBucketName> al2023.sh …` 才会装 Litestream（`deploy/versions.env` 固定版本，按 checksums 校验），写 `/etc/kirocrew-on/litestream.yml`（模板 `deploy/litestream/litestream.yml.template`：只复制 `/var/lib/octopus/platform/octopus.sqlite3`，`sync-interval: 1s`，快照每日一次，保留 72 h），启用 `octopus-litestream.service`（以 `octopus` 身份运行）。
+- **安装**：`STATE_BUCKET=<StateBucketName> bash deploy/install/litestream.sh`（root）。主机上有任何执行边界（`/etc/kirocrew-on/boundary-*.toml`）时拒绝执行；`al2023.sh` 不装 Litestream。它装上 Litestream（`deploy/versions.env` 固定版本，按 checksums 校验），写 `/etc/kirocrew-on/litestream.yml`（模板 `deploy/litestream/litestream.yml.template`：只复制 `/var/lib/octopus/platform/octopus.sqlite3`，`sync-interval: 1s`，快照每日一次，保留 72 h），启用 `octopus-litestream.service`（以 `octopus` 身份运行）。
 - **看复制**：`journalctl -u octopus-litestream`；`litestream ltx -config /etc/kirocrew-on/litestream.yml /var/lib/octopus/platform/octopus.sqlite3` 列出副本里的 LTX 文件。
 - **恢复**（新主机或温备上，先停 `octopus-api`）：
 
