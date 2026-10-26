@@ -469,7 +469,8 @@ if [ "${CONTROL_PLANE_ONLY:-}" = 1 ]; then   # MVP 0.2.0 (S31): a cluster contro
   [[ "$STATE_BUCKET" =~ ^[a-z0-9][a-z0-9.-]{1,61}[a-z0-9]$ ]] || { echo "STATE_BUCKET 不是有效的桶名" >&2; exit 2; }
   log "Litestream $LITESTREAM_VERSION（平台数据持续复制到 s3://$STATE_BUCKET/db/）"
   if [ "$KIRO_ARCH" = x86_64 ]; then LS_ARCH=x86_64; LS_SHA="$LITESTREAM_SHA256_X86_64"; else LS_ARCH=arm64; LS_SHA="$LITESTREAM_SHA256_AARCH64"; fi
-  if [ "$(/usr/local/bin/litestream version 2>/dev/null || true)" != "v$LITESTREAM_VERSION" ]; then
+  LS_HAVE="$(/usr/local/bin/litestream version 2>/dev/null || true)"   # 0.5.17 prints "0.5.17"
+  if [ "${LS_HAVE#v}" != "$LITESTREAM_VERSION" ]; then
     LS_TAR="litestream-$LITESTREAM_VERSION-linux-$LS_ARCH.tar.gz"
     curl --proto '=https' -fsSL "https://github.com/benbjohnson/litestream/releases/download/v$LITESTREAM_VERSION/$LS_TAR" \
       -o "$SCRATCH/$LS_TAR"
