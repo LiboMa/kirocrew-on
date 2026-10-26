@@ -1,5 +1,5 @@
 import {
-  ArrowRightLeft, CircleStop, Copy, Download, Eye, ExternalLink, FolderDown, Globe, ListRestart, MonitorPlay, MoreHorizontal,
+  ArrowRightLeft, CircleStop, Copy, Download, Eye, ExternalLink, FolderDown, ListRestart, MonitorPlay, MoreHorizontal,
   Power, RotateCcw, Stethoscope, Share2,
   Trash2,
   UserCog,
@@ -153,12 +153,6 @@ export function SessionView({ id }: { id: string }) {
               <Share2 /> 共享
             </Button>
           )}
-          {run.permissions?.share && !design && (
-            <Button size="sm" variant="outline" onClick={() => open({ kind: "public-share", run })} id="run-public-share"
-              disabled={!run.worker_id} title={run.worker_id ? "生成任何人都能打开的链接（可设四位授权码）" : "会话尚未分配执行环境"}>
-              <Globe /> 公开分享
-            </Button>
-          )}
           {app?.openable && (
             <Button size="sm" onClick={actions.openApp} id="run-open-app">
               <MonitorPlay /> 打开远程预览
@@ -168,7 +162,8 @@ export function SessionView({ id }: { id: string }) {
             <Button size="sm" variant="outline" onClick={actions.preview} disabled={!run.worker_id} id="run-preview">
               <Eye /> 预览产出
             </Button>
-            <PreviewPages run={run} />
+            <PreviewPages run={run}
+              onPublicShare={run.permissions?.share && !design ? () => open({ kind: "public-share", run }) : undefined} />
           </span>
           <Button size="sm" variant="outline" onClick={actions.stop} disabled={!canStop(run) || !!actions.busy} id="run-stop">
             <CircleStop /> 停止

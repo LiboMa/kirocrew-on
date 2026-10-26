@@ -66,7 +66,8 @@
 <ul><li><code>GET /_kirocrew/s/&lt;令牌&gt;</code>：
 <ul><li>需要授权码且还没有授权时，显示输入页；</li><li>页面分享跳到入口页 <code>…/&lt;令牌&gt;/&lt;入口&gt;</code>，访问次数加 1；</li><li>演示分享签一个以「这条分享」为持有人的打开链接，经现有的 <code>/_kirocrew/open</code> 进入应用。</li></ul></li><li><code>POST /_kirocrew/s/&lt;令牌&gt;</code>（表单 <code>code=1234</code>）：核对授权码，正确时设授权 Cookie 并跳转。</li><li><code>GET /_kirocrew/s/&lt;令牌&gt;/&lt;路径&gt;</code>：页面分享的文件，由 Worker 的 <code>/files</code> 读取（同样不提供 <code>.env</code>、<code>.git</code> 等点开头的路径，单文件至多 5 MB）。</li></ul></li><li><strong>演示的持有人</strong>：<code>app_auth</code> 接受以 <code>pshare-</code> 开头的持有人：分享有效、是这个会话的演示分享，并且应用在运行。访客的访问照常刷新 <code>last_access</code>。</li><li><strong>MCP</strong>：不提供（实施时改定）。D64 已定「Coding Agent 没有共享工具」：公开到互联网比在公司内共享更敏感，同样只由人在控制台操作；Skill 会请用户去会话页点「公开分享」。</li></ul>
 <h2>5．控制台</h2>
-<p>会话页「共享」旁增加「公开分享」。对话框分两部分：</p>
+<p>入口放在会话页「预览产出」旁的下拉菜单里，排在本会话产出的页面列表下面：「公开分享…」。负责人 2026-10-26 指出两者逻辑上相通，都是预览产出，公开分享只是给没有账号的人看，所以不另设工具栏按钮。只有能分享的人才看到这一项。</p>
+<p>点开是一个对话框，分两部分：</p>
 <ul><li><strong>新建</strong>：选内容（页面 / 演示）、模式（需要授权码 / 无需授权码）、有效期；</li><li><strong>已有分享</strong>：链接、授权码、到期时间、访问次数、是否被锁定，以及复制、重新生成授权码、撤销。</li></ul>
 <h2>6．测试</h2>
 <ul><li><strong>服务测试</strong>：谁能分享；有效与失效的各种情况；授权码正确与错误；每个访客地址与每条分享的限次和锁定；重新生成授权码；演示持有人的 <code>app_auth</code>。</li><li><strong>HTTP 测试</strong>：经网关头请求公开路由；页面带沙箱 CSP 与 <code>noindex</code>；表单 POST 的 Origin 按预览主机核对；按会话的主机不接受别的会话的令牌。</li><li><strong>控制台测试</strong>：对话框的新建与列表。</li><li><strong>EC2 实测</strong>：两种模式各建一条，用无头浏览器从公网打开：错误授权码被拒、正确的能看到页面；撤销后链接立即失效。</li></ul>

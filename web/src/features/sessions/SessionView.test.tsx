@@ -911,7 +911,9 @@ describe("session detail", () => {
       "POST /runs/run-pub/public-shares": () => { listed = [share]; return share; },
       "DELETE /runs/run-pub/public-shares/pshare-1": () => { listed = []; return { id: "pshare-1", deleted: true }; },
     });
-    await userEvent.click(await screen.findByRole("button", { name: /公开分享/ }));
+    expect(screen.queryByRole("button", { name: /公开分享/ })).toBeNull();   // under 预览产出, not a toolbar button of its own
+    await userEvent.click(await screen.findByRole("button", { name: "选择预览页面" }));
+    await userEvent.click(await screen.findByRole("menuitem", { name: /公开分享/ }));
     const dialog = await screen.findByRole("dialog");
     expect(dialog).toHaveTextContent("还没有公开分享");
     await userEvent.selectOptions(within(dialog).getByLabelText("有效期"), "30d");
@@ -926,11 +928,20 @@ describe("session detail", () => {
     expect(await within(dialog).findByText("还没有公开分享。")).toBeInTheDocument();
   });
 
+  test("only those who may share see it among the preview's pages (D75)", async () => {
+    open(makeRun({ id: "run-ro", status: "completed", worker_id: "w1", permissions: { operate: true, delete: false, share: false } } as Partial<Run>),
+      { "POST /runs/run-ro/preview": { url: "/preview/t/index.html", entry: "index.html", pages: [] } });
+    await userEvent.click(await screen.findByRole("button", { name: "选择预览页面" }));
+    await screen.findByText("本会话产出的页面");
+    expect(screen.queryByRole("menuitem", { name: /公开分享/ })).toBeNull();
+  });
+
   test("without a preview domain a public link cannot be made (D75)", async () => {
     const run = makeRun({ id: "run-nopub", status: "completed", worker_id: "w1",
       permissions: { operate: true, delete: true, share: true } } as Partial<Run>);
     open(run, { "GET /runs/run-nopub/public-shares": { shares: [], available: false } });
-    await userEvent.click(await screen.findByRole("button", { name: /公开分享/ }));
+    await userEvent.click(await screen.findByRole("button", { name: "选择预览页面" }));
+    await userEvent.click(await screen.findByRole("menuitem", { name: /公开分享/ }));
     expect(await screen.findByRole("alert")).toHaveTextContent("平台尚未配置预览域名");
   });
 
