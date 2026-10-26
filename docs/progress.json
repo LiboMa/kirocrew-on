@@ -494,10 +494,10 @@
         },
         {
           "id": "v020-p1-12",
-          "name": "P1-12 KiroCrew 升到正式版（可能单列 P1b）",
-          "status": "doing",
+          "name": "P1-12 KiroCrew 升到正式版 v0.10.0（拆为 P1b）",
+          "status": "blocked",
           "ref": "P1 Task 12",
-          "more": "调研 v0.10.0（相对钉住提交 1009 个提交）"
+          "more": "会改变原生页面的体验（Dashboard 默认出现、「重启 Gateway」按钮等）；待负责人确认这些变化与「重启 Gateway」的处理方式（docs/research/2026-10-26-kirocrew-upgrade.md）"
         },
         {
           "id": "v020-p2",
