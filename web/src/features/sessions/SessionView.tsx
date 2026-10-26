@@ -1,6 +1,6 @@
 import {
-  ArrowRightLeft, CircleStop, Copy, Download, Eye, ExternalLink, FolderDown, ListRestart, MonitorPlay, MoreHorizontal, Power,
-  RotateCcw, Stethoscope, Share2,
+  ArrowRightLeft, CircleStop, Copy, Download, Eye, ExternalLink, FolderDown, ListRestart, MonitorPlay, MoreHorizontal,
+  Power, RotateCcw, Stethoscope, Share2,
   Trash2,
   UserCog,
 } from "lucide-react";
@@ -162,7 +162,8 @@ export function SessionView({ id }: { id: string }) {
             <Button size="sm" variant="outline" onClick={actions.preview} disabled={!run.worker_id} id="run-preview">
               <Eye /> 预览产出
             </Button>
-            <PreviewPages run={run} />
+            <PreviewPages run={run}
+              onPublicShare={run.permissions?.share && !design ? () => open({ kind: "public-share", run }) : undefined} />
           </span>
           <Button size="sm" variant="outline" onClick={actions.stop} disabled={!canStop(run) || !!actions.busy} id="run-stop">
             <CircleStop /> 停止

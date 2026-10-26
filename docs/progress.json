@@ -177,6 +177,13 @@
           "more": "负责人 2026-10-25 选方案一「接手」。执行人 executor_id（迁移 14）与创建者分开：执行位置、额度、知识空间、凭证、发布、改派与原生入口看执行人；POST /v1/runs/<id>/takeover 登记后台搬迁：原 Worker 先提交对话中的改动，给出完整 bundle 与尝试文件（遮蔽凭证与 Worker Token），新 Worker /adopt 建同一工作区；开始与落地时再核对资格，失败留在原处可重试，创建者可接回。本机 HTTP 端到端 13/13；EC2 2026-10-26 部署 53b35a1：接手 12/12（自己的边界 already_yours、共享环境 not_needed、OpenAPI 与控制台）、API 14/14、同站 8/8、浏览器 13/13。MCP octopus_takeover 与状态里的 permissions / executed_by / takeover 已加；会话用量经手不止一人时按人拆开（usage.by，EC2 decdbad）。待负责人：指定第二个人的个人执行环境，做一次真实的跨边界接手。"
         },
         {
+          "id": "m4-public",
+          "name": "M4-1c 公开分享：页面与演示给互联网用户（四位授权码 / 无授权）",
+          "status": "deployed",
+          "ref": "D75 · EC2 78f3d5a · PR #14",
+          "more": "负责人 2026-10-26。预览域名上的不可猜链接；授权码模式防爆破（每访客 10 分钟 5 次、每分享 1 小时 30 次锁 1 小时）；页面沙箱、noindex；演示以分享为持有人进入远程预览；撤销、到期、会话关闭、分享人停用即失效。控制台「公开分享」与 API（Coding Agent 没有公开分享工具，与 D64 一致）。 EC2 公网实测 9/9（授权码页、错码被拒、正确码打开、沙箱、无授权、撤销即 404）；日志不记令牌。演示分享待有运行中的预览时实测。"
+        },
+        {
           "id": "m4-k10",
           "name": "M4-2 Worker Token 移出数据库（K10）",
           "status": "accepted",

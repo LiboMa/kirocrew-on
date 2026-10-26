@@ -54,6 +54,8 @@ def openapi():
         "AdminFlag": obj({"admin": {"type": "boolean"}}, ["admin"]),
         "ConnectionUpdate": obj({"connection": ref("Connection")}, ["connection"]),
         "Share": obj({"confirm": {"const": True}}, ["confirm"]),
+        "PublicShare": obj({"kind": {"type": "string", "enum": ["pages", "app"]}, "mode": {"type": "string", "enum": ["code", "open"]},
+                            "expires": {"type": "string", "enum": ["1d", "7d", "30d", "never"]}, "entry": text}),
         "Space": obj({"team_id": text, "user_id": text}),
         "Rename": obj({"name": text}, ["name"]),
         "AppAction": obj({"action": {"type": "string", "enum": ["start", "stop"]}}, ["action"]),
@@ -174,6 +176,8 @@ def openapi():
         "/v1/quotas": {"get": None, "post": "Quota"},
         "/v1/runs/{id}/marks": {"post": "Marks"},
         "/v1/runs/{id}/shares": {"get": None, "post": "Share"}, "/v1/runs/{id}/shares/{share}": {"delete": "Empty"},
+        "/v1/runs/{id}/public-shares": {"get": None, "post": "PublicShare"},
+        "/v1/runs/{id}/public-shares/{share}": {"delete": "Empty"}, "/v1/runs/{id}/public-shares/{share}/code": {"post": "Empty"},
         "/v1/runs/{id}/events": {"get": None}, "/v1/runs/{id}/export": {"get": None},
         "/v1/runs/{id}/crew-entry": {"post": "Empty"}, "/v1/runs/{id}/preview": {"post": "Empty"},
         "/v1/runs/{id}/observe": {"get": None}, "/v1/runs/{id}/chat-changes": {"get": None},
@@ -348,6 +352,19 @@ def openapi():
                                      "the branch, worker_outdated for an older Worker.")
                 op["parameters"].append({"in": "path", "name": "attempt", "required": True, "schema": text})
                 op["operationId"] = "get_v1_runs_id_attempts_attempt_diff"
+            if path.startswith("/v1/runs/{id}/public-shares"):   # D75
+                op["description"] = {
+                    ("/v1/runs/{id}/public-shares", "get"): "Read scope. The Session's public links (D75) — with their access codes "
+                    "— for its creator, a Team owner or an administrator; available is false without a preview domain.",
+                    ("/v1/runs/{id}/public-shares", "post"): "Execute scope. A link anyone on the Internet can open, on the Session's "
+                    "own preview origin: its pages (kind pages; entry, else the first page) or its running demo (kind app), with a "
+                    "four-digit access code (mode code) or open; expires 1d, 7d (default), 30d or never. Answers the link (url) and "
+                    "code. Wrong codes: 5 per visitor in 10 minutes, 30 per share in an hour locks it for an hour. Audited.",
+                    ("/v1/runs/{id}/public-shares/{share}", "delete"): "Execute scope. Revoke a public link: it ends at once. Audited.",
+                    ("/v1/runs/{id}/public-shares/{share}/code", "post"): "Execute scope. A new access code: what the old one opened asks "
+                    "again, and a lock ends. Audited."}[(path, method)]
+                if "{share}" in path:
+                    op["parameters"].append({"in": "path", "name": "share", "required": True, "schema": text})
             if path.startswith("/v1/runs/{id}/shares"):   # D64
                 op["description"] = {
                     ("/v1/runs/{id}/shares", "get"): "Read scope. Who the Session is shared with — for its creator, a Team owner or an administrator.",

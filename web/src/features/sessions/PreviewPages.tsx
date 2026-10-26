@@ -1,17 +1,18 @@
 import { useState } from "react";
-import { ChevronDown } from "lucide-react";
+import { ChevronDown, Globe } from "lucide-react";
 import { api } from "@/api/client";
 import type { Run } from "@/api/types";
 import { Button } from "@/components/ui/button";
 import {
-  DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuLabel, DropdownMenuTrigger,
+  DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuLabel, DropdownMenuSeparator, DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 
 type Page = { path: string; url: string };
 
 /** Every HTML page the Session produced (EC2 2026-10-22: reports in report/ and artifacts/<name>/), each opened with the
- * Session's ten-minute preview link; 「预览产出」 next to it opens the best one. */
-export function PreviewPages({ run }: { run: Run }) {
+ * Session's ten-minute preview link; 「预览产出」 next to it opens the best one. Below them, for those who may share the
+ * Session, 「公开分享…」 (D75): the same output, for people without an account. */
+export function PreviewPages({ run, onPublicShare }: { run: Run; onPublicShare?: () => void }) {
   const [pages, setPages] = useState<Page[] | null>(null);
   const [error, setError] = useState("");
 
@@ -40,6 +41,15 @@ export function PreviewPages({ run }: { run: Run }) {
             <span className="truncate font-mono text-xs">{page.path}</span>
           </DropdownMenuItem>
         ))}
+        {onPublicShare && (
+          <>
+            <DropdownMenuSeparator />
+            <DropdownMenuItem onSelect={onPublicShare} id="run-public-share">
+              <Globe /> 公开分享…
+              <span className="ml-auto pl-3 text-[11px] text-muted-foreground">给没有账号的人看</span>
+            </DropdownMenuItem>
+          </>
+        )}
       </DropdownMenuContent>
     </DropdownMenu>
   );

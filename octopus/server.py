@@ -20,7 +20,7 @@ import sqlite3
 import struct
 from urllib.parse import parse_qs, quote, unquote, urlsplit
 
-from . import __version__, remote_preview, workers
+from . import __version__, public_shares, remote_preview, workers
 from .db import dumps, uid
 from .domain import Service, audit, name, team_environment
 from .security import (Error, authenticate, check_password, create_user, elevated, expiry, issue_token, regenerate_token, require,
@@ -96,6 +96,17 @@ PREVIEW_TTL = 600  # B6: ten minutes; every file it serves re-checks its holder'
 SYNC_LIMIT = 20 * 1024 * 1024   # D58: the local commits one sync brings in (as the Worker's)
 PREVIEW_POLICY = ("sandbox allow-scripts allow-forms allow-popups allow-modals allow-downloads; "
                   "default-src * data: blob: 'unsafe-inline' 'unsafe-eval'; frame-ancestors 'self'")
+
+
+def preview_type(relative):
+    """The content type a previewed project file is served with."""
+    suffix = Path(relative).suffix.lower()
+    return TYPES.get(suffix) or {
+        ".json": "application/json", ".jpg": "image/jpeg", ".jpeg": "image/jpeg", ".gif": "image/gif",
+        ".webp": "image/webp", ".mjs": "text/javascript; charset=utf-8", ".txt": "text/plain; charset=utf-8",
+        ".md": "text/plain; charset=utf-8", ".wasm": "application/wasm", ".woff": "font/woff",
+        ".ttf": "font/ttf", ".glb": "model/gltf-binary", ".gltf": "model/gltf+json",
+    }.get(suffix, "application/octet-stream")
 
 
 def preview_key(root):
@@ -236,9 +247,28 @@ def console_file(path):
 
 
 # The preview domain's own pages (D36 §5.2): plain HTML, no script, nothing of the console.
-PREVIEW_PAGE = ("<!doctype html><html lang=\"zh-CN\"><head><meta charset=\"utf-8\"><title>KiroCrew ON 远程预览</title>{head}"
+PREVIEW_PAGE = ("<!doctype html><html lang=\"zh-CN\"><head><meta charset=\"utf-8\"><title>{title}</title>{head}"
                 "<style>body{{font:15px/1.6 system-ui,sans-serif;max-width:36rem;margin:18vh auto;padding:0 1.5rem;color:#333}}"
-                "</style></head><body><h1 style=\"font-size:1.2rem\">KiroCrew ON 远程预览</h1><p>{text}</p></body></html>")
+                "</style></head><body><h1 style=\"font-size:1.2rem\">{title}</h1><p>{text}</p></body></html>")
+# D75: the access-code page of a public share — the one form posted through the preview gate
+SHARE_FORM = re.compile(r"/_kirocrew/s/[A-Za-z0-9_-]{24}")
+SHARE_PAGE = ("<!doctype html><html lang=\"zh-CN\"><head><meta charset=\"utf-8\"><meta name=\"viewport\" "
+              "content=\"width=device-width,initial-scale=1\"><meta name=\"robots\" content=\"noindex,nofollow\">"
+              "<title>输入授权码 · KiroCrew ON 公开分享</title><style>"
+              "body{{font:15px/1.6 system-ui,-apple-system,'PingFang SC',sans-serif;background:#f6f8f9;color:#1f2a30;margin:0}}"
+              "main{{max-width:22rem;margin:16vh auto;padding:2rem;background:#fff;border:1px solid #dfe5e8;border-radius:6px}}"
+              "h1{{font-size:1.15rem;margin:0 0 .4rem}}p{{margin:.3rem 0 1.1rem;color:#5b6870}}"
+              "input{{font:600 1.6rem/1 ui-monospace,monospace;letter-spacing:.6em;text-align:center;width:100%;box-sizing:border-box;"
+              "padding:.55rem .6rem .55rem 1.2rem;border:1px solid #c9d3d8;border-radius:4px}}"
+              "input:focus{{outline:2px solid #0d9488;outline-offset:1px;border-color:#0d9488}}"
+              "button{{margin-top:1rem;width:100%;padding:.6rem;font:600 1rem system-ui,sans-serif;color:#fff;background:#0d9488;"
+              "border:0;border-radius:4px;cursor:pointer}}button:hover{{background:#0f766e}}"
+              ".error{{color:#b42318;margin:.8rem 0 0}}</style></head><body><main>"
+              "<h1>输入授权码</h1><p>分享者给了你一个四位数字的授权码。</p>"
+              "<form method=\"post\" action=\"{action}\"><label for=\"code\" style=\"position:absolute;left:-9999px\">授权码</label>"
+              "<input id=\"code\" name=\"code\" inputmode=\"numeric\" pattern=\"[0-9]{{4}}\" maxlength=\"4\" "
+              "autocomplete=\"one-time-code\" required autofocus><button type=\"submit\">查看</button>{error}</form>"
+              "</main></body></html>")
 
 
 def server(database, port=8918, host="127.0.0.1", allowed_hosts=(), origin_secret=None, preview_url="", preview_domain="",
@@ -248,6 +278,9 @@ def server(database, port=8918, host="127.0.0.1", allowed_hosts=(), origin_secre
         raise ValueError("源站密钥为空或过短（至少 32 个字符）；检查 origin_secret_file")
     service = Service(database)
     service.credentials.configured = credentials_key_file
+    # D75: public links live on the Session's own preview origin, else the shared one; none without a preview domain
+    service.public_base = lambda rid: (remote_preview.session_url(preview_domain, rid) if preview_domain
+                                       else preview_url.rstrip("/") if preview_url else None)
     from . import transport
     try:   # D59: Worker tokens are stored sealed with the D35 key
         key = service.credentials.key
@@ -303,8 +336,8 @@ def server(database, port=8918, host="127.0.0.1", allowed_hosts=(), origin_secre
             self.send_header("Cache-Control", "no-store")
             self.end_headers()
 
-        def respond_page(self, text, status=200, head="", headers=()):
-            data = PREVIEW_PAGE.format(head=head, text=html.escape(text)).encode()
+        def respond_page(self, text, status=200, head="", headers=(), title="KiroCrew ON 远程预览"):
+            data = PREVIEW_PAGE.format(head=head, text=html.escape(text), title=html.escape(title)).encode()
             self.send_response(status)
             for key, value in headers:
                 self.send_header(key, value)
@@ -370,6 +403,93 @@ def server(database, port=8918, host="127.0.0.1", allowed_hosts=(), origin_secre
                 return self.respond_page(str(exc), exc.status if exc.status in (401, 403, 404, 409) else 403)
             return self.respond_page("页面不存在", 404)
 
+        def public_share(self, method, path, body):
+            """A public share (D75) on the preview domain: the access-code page and its form, then the pages it shares
+            (sandboxed as 「预览产出」) or the way into its running demo. Nothing here names a platform user."""
+            token, _, relative = path[len(public_shares.PATH):].partition("/")
+            try:
+                address = (self.headers.get("CloudFront-Viewer-Address", "").rsplit(":", 1)[0]
+                           or self.client_address[0])   # nginx passed it on from CloudFront (the gate proved that path)
+                require(service._share_tries.visit(address, time.time()), "请求过于频繁，请稍后再试", 429, "share_rate_limited")
+                own = remote_preview.session_host(self.headers.get("X-Preview-Host"), preview_domain)
+                require(own or not preview_domain or remote_preview.plain_host(self.headers.get("X-Preview-Host")) == shared,
+                        "分享链接不存在或已失效", 404, "share_not_found")   # as preview_gate: no other spelling of the host
+                share = service.public_share_of(token)
+                require(own is None or share["run_id"] == own, "分享链接不存在或已失效", 404, "share_not_found")
+                jar = public_shares.cookie_name(token)
+                held = public_shares.granted(public_shares.cookie_of(self.headers.get("Cookie"), jar), token, share["code"],
+                                             signing_key)
+                if method == "POST":
+                    try:
+                        share = service.public_share_check(token, body.get("code"), address)
+                    except Error as exc:
+                        if exc.code in ("share_code_wrong", "share_rate_limited", "share_locked", "share_code_retired"):
+                            return self.share_code_page(token, str(exc), {"share_code_wrong": 401, "share_code_retired": 410}
+                                                        .get(exc.code, 429))
+                        raise
+                    value = public_shares.grant(token, share["code"], signing_key)
+                    self.send_response(303)
+                    self.send_header("Location", public_shares.PATH + token)
+                    self.send_header("Set-Cookie", f"{jar}={value}; Path={public_shares.PATH}{token}; Secure; HttpOnly; "
+                                                   f"SameSite=Lax; Max-Age={public_shares.GRANT_TTL}")
+                    self.send_header("Content-Length", "0")
+                    self.send_header("Cache-Control", "no-store")
+                    self.send_header("Referrer-Policy", "no-referrer")
+                    self.end_headers()
+                    return
+                if relative:   # a file of a pages share
+                    if share["mode"] == "code" and not held:
+                        if self.headers.get("Sec-Fetch-Dest", "document") == "document":
+                            return self.redirect(public_shares.PATH + token)
+                        return self.respond_status(403)
+                    relative = unquote(relative)
+                    data = service.public_share_file(token, relative)
+                    return self.respond_preview(data, preview_type(relative), robots=True)
+                try:
+                    visit = service.public_share_visit(token, address, granted=held)
+                except Error as exc:
+                    if exc.code == "share_code_required":
+                        return self.share_code_page(token)
+                    raise
+                if visit["kind"] == "pages":
+                    return self.redirect(public_shares.PATH + token + "/" + quote(visit["entry"]))
+                holder = public_shares.holder(visit["id"], visit["code"])
+                try:   # a demo: only while it runs; a visitor never starts it
+                    service.app_auth(visit["run_id"], holder)
+                except Error:
+                    return self.respond_page("演示当前没有在运行：请联系分享者在控制台启动远程预览后再打开此链接。", 409,
+                                             title="KiroCrew ON 公开分享")
+                ticket = remote_preview.open_ticket(visit["run_id"], holder, signing_key)
+                return self.redirect("/_kirocrew/open/" + ticket)
+            except Error as exc:   # a visitor reads our own words only, never a Worker's hint meant for the session's people
+                text = str(exc) if exc.code.startswith("share_") else "分享的内容暂不可用"
+                return self.respond_page(text, exc.status if exc.status in (403, 404, 409, 410, 429) else 503,
+                                         title="KiroCrew ON 公开分享")
+
+        def share_code_page(self, token, error="", status=200):
+            data = SHARE_PAGE.format(action=public_shares.PATH + token, error=(
+                f'<p class="error" role="alert">{html.escape(error)}</p>' if error else "")).encode()
+            self.send_response(status)
+            self.send_header("Content-Type", "text/html; charset=utf-8")
+            self.send_header("Content-Length", str(len(data)))
+            self.send_header("Cache-Control", "no-store")
+            self.send_header("X-Content-Type-Options", "nosniff")
+            # same-origin, not no-referrer: under no-referrer a browser posts the form with Origin: null (D75 review)
+            self.send_header("Referrer-Policy", "same-origin")
+            self.send_header("X-Robots-Tag", "noindex, nofollow")
+            self.send_header("Content-Security-Policy", "default-src 'none'; style-src 'unsafe-inline'; form-action 'self'; "
+                                                        "frame-ancestors 'none'; base-uri 'none'")
+            self.end_headers()
+            self.wfile.write(data)
+
+        def redirect(self, location):
+            self.send_response(302)
+            self.send_header("Location", location)
+            self.send_header("Content-Length", "0")
+            self.send_header("Cache-Control", "no-store")
+            self.send_header("Referrer-Policy", "no-referrer")
+            self.end_headers()
+
         def respond_report(self, data, rid, fmt):
             """A Session's Feature report (D37 phase 2): HTML shown as a page with nothing it may load or run, Markdown as
             a file."""
@@ -383,7 +503,7 @@ def server(database, port=8918, host="127.0.0.1", allowed_hosts=(), origin_secre
             self.end_headers()
             self.wfile.write(data)
 
-        def respond_preview(self, data, kind, status=200):
+        def respond_preview(self, data, kind, status=200, robots=False):
             # The previewed app runs sandboxed in an opaque origin: it cannot read the console's storage or call its API
             # as the user. Module scripts from that origin are cross-origin requests, hence the CORS header.
             self.send_response(status)
@@ -394,6 +514,8 @@ def server(database, port=8918, host="127.0.0.1", allowed_hosts=(), origin_secre
             self.send_header("Referrer-Policy", "no-referrer")
             self.send_header("Access-Control-Allow-Origin", "*")
             self.send_header("Content-Security-Policy", PREVIEW_POLICY)
+            if robots:   # D75: a public share is for those it was sent to, not for search engines
+                self.send_header("X-Robots-Tag", "noindex, nofollow")
             self.end_headers()
             self.wfile.write(data)
 
@@ -505,10 +627,17 @@ def server(database, port=8918, host="127.0.0.1", allowed_hosts=(), origin_secre
                 body = {}
                 if method != "GET":
                     origin = self.headers.get("Origin")
-                    require(not origin or urlsplit(origin).netloc == self.headers.get("Host"), "跨站写入被拒绝", 403, "origin")
+                    # D75: the access-code form of a public share is posted on the preview host (nginx names it)
+                    form = method == "POST" and SHARE_FORM.fullmatch(path) is not None
+                    require(not origin or urlsplit(origin).netloc == self.headers.get("X-Preview-Host" if form else "Host"),
+                            "跨站写入被拒绝", 403, "origin")
                     size = int(self.headers.get("Content-Length", "0"))
                     raw = None
-                    if method == "POST" and re.fullmatch(r"/v1/runs/[^/]+/sync", path):   # D58: a git bundle, as it is
+                    if form:
+                        require(self.headers.get("Content-Type", "").split(";")[0] == "application/x-www-form-urlencoded"
+                                and 0 < size <= 512, "请求无效")
+                        body = {k: v[-1] for k, v in parse_qs(self.rfile.read(size).decode(errors="replace")).items()}
+                    elif method == "POST" and re.fullmatch(r"/v1/runs/[^/]+/sync", path):   # D58: a git bundle, as it is
                         require(self.headers.get("Content-Type", "").split(";")[0] == "application/octet-stream",
                                 "需要 application/octet-stream")
                         require(0 < size <= SYNC_LIMIT, f"同步的内容须为 1 字节到 {SYNC_LIMIT // 1048576} MB", 413, "sync_too_large")
@@ -532,20 +661,17 @@ def server(database, port=8918, host="127.0.0.1", allowed_hosts=(), origin_secre
                     rid, holder = preview_run(ticket, signing_key)
                     relative = unquote(relative) or "index.html"
                     data = service.preview_file(rid, relative, holder)
-                    kind = TYPES.get(Path(relative).suffix.lower()) or {
-                        ".json": "application/json", ".jpg": "image/jpeg", ".jpeg": "image/jpeg", ".gif": "image/gif",
-                        ".webp": "image/webp", ".mjs": "text/javascript; charset=utf-8", ".txt": "text/plain; charset=utf-8",
-                        ".md": "text/plain; charset=utf-8", ".wasm": "application/wasm", ".woff": "font/woff",
-                        ".ttf": "font/ttf", ".glb": "model/gltf-binary", ".gltf": "model/gltf+json",
-                    }.get(Path(relative).suffix.lower(), "application/octet-stream")
-                    return self.respond_preview(data, kind)
+                    return self.respond_preview(data, preview_type(relative))
                 if path == "/v1/preview-auth" or path.startswith("/_kirocrew/"):
                     # Only the preview domain's nginx on this host: through the console's distribution these are absent,
                     # and with an origin secret the nginx proves itself with the gate (other local processes cannot).
                     gate = self.headers.get("X-Preview-Gate", "")
-                    require(method == "GET" and local and not self.origin_verified and (
+                    require((method == "GET" or method == "POST" and SHARE_FORM.fullmatch(path)) and local
+                            and not self.origin_verified and (
                         not origin_secret or hmac.compare_digest(gate, remote_preview.gate_value(origin_secret))),
                         "Not found", 404, "not_found")
+                    if path.startswith(public_shares.PATH):   # D75: anyone with the link, through the preview gate
+                        return self.public_share(method, path, body)
                     return self.preview_gate(path)
                 if method == "GET" and path.startswith("/bundle/"):   # D58: the pull bundle, for the link's holder
                     ticket, _, filename = path[len("/bundle/"):].partition("/")
@@ -947,6 +1073,18 @@ def server(database, port=8918, host="127.0.0.1", allowed_hosts=(), origin_secre
                     require(limit is None or limit.isdigit(), "limit 须为 1–200 的整数")
                     return self.respond(service.requests(actor, status=one("status"), q=one("q"), client=one("client"),
                                                          limit=int(limit) if limit else None))
+                if len(segments) in {4, 5, 6} and segments[:2] == ["v1", "runs"] and segments[3] == "public-shares":   # D75
+                    rid = segments[2]
+                    if len(segments) == 6:
+                        require(method == "POST" and segments[5] == "code", "Method not allowed", 405)
+                        return self.respond(service.public_share_code(actor, rid, segments[4]))
+                    if len(segments) == 5:
+                        require(method == "DELETE", "Method not allowed", 405)
+                        return self.respond(service.delete_public_share(actor, rid, segments[4]))
+                    require(method in {"GET", "POST"}, "Method not allowed", 405)
+                    if method == "POST":
+                        return self.respond(service.create_public_share(actor, rid, body), 201)
+                    return self.respond(service.public_shares(actor, rid))
                 if len(segments) in {4, 5} and segments[:2] == ["v1", "runs"] and segments[3] == "shares":   # D64
                     rid = segments[2]
                     if len(segments) == 5:
