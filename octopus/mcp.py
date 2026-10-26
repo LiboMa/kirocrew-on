@@ -148,6 +148,14 @@ TOOLS = [
                                                 "异步：返回 takeover.state=moving，用 octopus_status 等它消失（成功）或变为 failed（看 reason）。",
      "inputSchema": object_schema({"run_id": STRING, "request_id": STRING, "expected_version": {"type": "integer"}},
                                  ["run_id", "request_id", "expected_version"])},
+    {"name": "octopus_public_share", "description": "公开分享（D75）：生成任何人都能在互联网上打开的链接（不需要平台账号），分享会话产出的页面"
+                                                    "（kind=pages）或运行中的演示（kind=app，需要远程预览正在运行）；mode=code 需要四位授权码，open 无需授权码；"
+                                                    "expires 为 1d、7d（默认）、30d 或 never。action：create 新建、list 列出（含授权码）、revoke 撤销、"
+                                                    "new_code 重新生成授权码。只在用户明确要求公开分享时使用；把 url 与授权码原样交给用户。",
+     "inputSchema": object_schema({"run_id": STRING, "action": {"enum": ["create", "list", "revoke", "new_code"]},
+                                  "kind": {"enum": ["pages", "app"]}, "mode": {"enum": ["code", "open"]},
+                                  "expires": {"enum": ["1d", "7d", "30d", "never"]}, "entry": STRING, "share_id": STRING},
+                                 ["run_id", "action"])},
     {"name": "octopus_control", "description": "停止、关闭、重新打开 Session；删除要求完整 Session ID 确认，并先备份。",
      "inputSchema": object_schema({"run_id": STRING, "request_id": STRING, "expected_version": {"type": "integer"},
                                   "action": {"enum": ["stop", "close", "reopen", "delete"]}, "confirmation": STRING},
@@ -679,6 +687,19 @@ def call(client, name, args):
     if name == "octopus_publish_policy":   # D47
         return client.request("POST", "/v1/runs/" + quote(args["run_id"], safe="") + "/publish-policy",
                               {k: args[k] for k in ("auto", "repository", "credential") if k in args})
+    if name == "octopus_public_share":   # D75
+        base = "/v1/runs/" + quote(args["run_id"], safe="") + "/public-shares"
+        action = args.get("action")
+        if action == "list":
+            return client.request("GET", base)
+        if action == "create":
+            return client.request("POST", base, {k: args[k] for k in ("kind", "mode", "expires", "entry") if args.get(k)})
+        need(args, "share_id")
+        if action == "revoke":
+            return client.request("DELETE", base + "/" + quote(args["share_id"], safe=""))
+        if action == "new_code":
+            return client.request("POST", base + "/" + quote(args["share_id"], safe="") + "/code", {})
+        raise ValueError("action 只能是 create、list、revoke 或 new_code")
     if name == "octopus_takeover":   # D74
         return client.request("POST", "/v1/runs/" + quote(args["run_id"], safe="") + "/takeover",
                               {"request_id": args["request_id"], "expected_version": args["expected_version"]})

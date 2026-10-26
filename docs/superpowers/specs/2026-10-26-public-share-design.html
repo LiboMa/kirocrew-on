@@ -1,0 +1,75 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>公开分享：把会话的页面与演示分享给互联网用户（D75）</title>
+<!-- Generated from 2026-10-26-public-share-design.md by tools/md_to_html.py; edit the Markdown, then regenerate. -->
+<style>
+  :root { --ink: #172033; --muted: #5b6577; --line: #e3e7ef; --bg: #f6f8fb; --card: #ffffff; --brand: #5b4bdb; --brand-soft: #eeebff;
+          --native: #0e6f86; --native-soft: #e2f3f7; --poc: #4a5568; --poc-soft: #edf0f5;
+          --sans: -apple-system, BlinkMacSystemFont, "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", "Noto Sans CJK SC", sans-serif;
+          --mono: "SF Mono", Menlo, Consolas, monospace; }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--bg); color: var(--ink); font: 16px/1.75 var(--sans); }
+  main { max-width: 1040px; margin: 0 auto; padding: 56px 28px 96px; }
+  main > p, main > ul, main > ol, li > p { max-width: 44em; }
+  h1 { font-size: 32px; line-height: 1.3; margin: 0 0 16px; }
+  h2 { font-size: 23px; margin: 56px 0 10px; padding-top: 20px; border-top: 1px solid var(--line); }
+  h3 { font-size: 18px; margin: 28px 0 8px; }
+  p { margin: 0 0 14px; }
+  ul, ol { padding-left: 1.5em; margin: 0 0 14px; }
+  li { margin: 5px 0; }
+  li > ul, li > ol { margin: 6px 0 4px; }
+  code { font-family: var(--mono); font-size: 0.86em; background: #eef1f6; padding: 1px 5px; border-radius: 4px; }
+  pre { font-family: var(--mono); font-size: 13px; line-height: 1.6; background: #101828; color: #e7ecf5; padding: 16px 18px;
+        border-radius: 8px; overflow-x: auto; margin: 0 0 18px; }
+  pre code { background: none; padding: 0; color: inherit; font-size: inherit; }
+  .table { overflow-x: auto; margin: 14px 0 18px; background: var(--card); border: 1px solid var(--line); border-radius: 10px; }
+  table { border-collapse: collapse; width: 100%; font-size: 14px; line-height: 1.65; }
+  th, td { text-align: left; vertical-align: top; padding: 10px 14px; border-bottom: 1px solid var(--line); }
+  tr:last-child td { border-bottom: none; }
+  thead th { background: #f0f3f8; font-weight: 600; white-space: nowrap; }
+  strong { font-weight: 650; }
+  figure { margin: 18px 0 24px; }
+  .flow { display: flex; flex-wrap: wrap; align-items: stretch; gap: 10px 8px; list-style: none; padding: 0; margin: 0; }
+  .flow li { margin: 0; flex: 1 1 150px; background: var(--card); border: 1px solid var(--line); border-top: 3px solid var(--c, var(--brand));
+             border-radius: 8px; padding: 10px 12px; font-size: 14px; line-height: 1.5; }
+  .flow li b { display: block; font-size: 13px; color: var(--c, var(--brand)); margin-bottom: 2px; }
+  .flow .chat { --c: var(--native); } .flow .keep { --c: var(--poc); }
+  figcaption { font-size: 13px; color: var(--muted); margin-top: 8px; }
+  a:focus-visible { outline: 3px solid var(--brand); outline-offset: 2px; }
+  @media (max-width: 760px) { main { padding: 32px 18px 72px; } h1 { font-size: 26px; } }
+  @media print { body { background: #fff; } .table, .flow li { break-inside: avoid; } }
+</style>
+</head>
+<body>
+<main>
+<h1>公开分享：把会话的页面与演示分享给互联网用户（D75）</h1>
+<p>日期：2026-10-26　·　负责人需求：「快速将开发好的 html 以及 demo 分享给 Public，使 Internet 用户可以使用授权码（四位）轻松看到预览结果；可以生成有授权的和无授权的两种模式」。负责人要求直接规划并实施，下面的取舍为设计者的决定。</p>
+<h2>1．做到什么</h2>
+<ul><li>会话的创建者（以及 Team owner、管理员，与 D64 共享相同）在会话页点「公开分享」，得到一条链接。</li><li>拿到链接的任何人不需要平台账号：
+<ul><li><strong>授权码模式</strong>：输入四位数字授权码后就能看；</li><li><strong>无授权模式</strong>：打开就能看。</li></ul></li><li>能分享两种内容：
+<ul><li><strong>页面</strong>：会话产出的 HTML（与「预览产出」同一批页面）；</li><li><strong>演示</strong>：运行中的应用（远程预览）。</li></ul></li><li>分享人随时可以撤销、重新生成授权码；链接到期自动失效。</li></ul>
+<p><strong>不做（第 1 期）</strong>：</p>
+<ul><li>访客启动或重启演示：演示要由会话的人在控制台启动；空闲 30 分钟无人访问时照常停止。</li><li>快照：页面按会话<strong>当前</strong>的工作区提供，会话续作后链接看到的是新版本。</li><li>自定义授权码、访客名单、按访客统计。</li></ul>
+<h2>2．放在哪里：预览域名，不放控制台域名</h2>
+<p>公开内容一律放在预览域名上：<code>https://&lt;会话 ID&gt;.&lt;preview_domain&gt;/_kirocrew/s/&lt;令牌&gt;</code>；未配置按会话的预览域名时，放在共享的 <code>preview_url</code>。</p>
+<ul><li><strong>为什么不放控制台域名</strong>：任何平台用户都能公开挂出任意 HTML。放在控制台域名下，就等于能在官方登录站点的地址下放一个仿冒登录页。</li><li><strong>页面的隔离</strong>：页面与「预览产出」一样，用 CSP <code>sandbox</code> 在不透明源中运行，读不到同一主机上演示的 Cookie 与存储。</li><li><strong>转发</strong>：预览域名的 nginx 已经把 <code>/_kirocrew/</code> 转给 API（带网关头），这里不需要改 nginx。</li></ul>
+<h2>3．链接、授权码与防爆破</h2>
+<ul><li><strong>令牌</strong>：144 位随机数（<code>secrets.token_urlsafe(18)</code>），不可猜；授权码是第二道。</li><li><strong>授权码</strong>：由平台生成四位数字，分享人可以重新生成。重新生成会让此前的授权立即失效，并解除锁定。</li><li><strong>授权</strong>：访客输入正确的授权码后，得到一个只对这条链接路径有效的 Cookie（<code>HttpOnly</code>、<code>Secure</code>、<code>SameSite=Lax</code>、12 小时，平台签名）；每次请求仍核对分享是否有效。</li><li><strong>防爆破</strong>：
+<ul><li>每条分享、每个访客地址，10 分钟内最多错 5 次；</li><li>每条分享 1 小时内累计错 30 次即锁定 1 小时。</li><li>计数存在数据库里，重启不丢；访客地址取 CloudFront 的 <code>CloudFront-Viewer-Address</code>，只在经过预览网关时才信任。</li></ul></li><li><strong>有效期</strong>：1 天、7 天（默认）、30 天、永久。</li></ul>
+<p>分享在以下任一情况下失效：撤销、到期、会话关闭或删除、分享人账号停用；演示还要求应用正在运行。</p>
+<h2>4．数据与接口</h2>
+<ul><li><strong>迁移 15</strong>：<code>public_shares(id, run_id, token, kind &#x27;pages&#x27;|&#x27;app&#x27;, mode &#x27;code&#x27;|&#x27;open&#x27;, code, entry, created_by, created, expires, views, last_viewed, failures, failed_since, locked_until)</code>。</li><li><strong>平台接口</strong>（登录后，<code>may_publish</code>：创建者、Team owner、管理员；每次操作都审计）：
+<ul><li><code>GET|POST /v1/runs/&lt;id&gt;/public-shares</code>：<code>POST</code> 的参数为 <code>{kind, mode, expires, entry?}</code>；</li><li><code>DELETE /v1/runs/&lt;id&gt;/public-shares/&lt;share&gt;</code>；</li><li><code>POST /v1/runs/&lt;id&gt;/public-shares/&lt;share&gt;/code</code>：重新生成授权码。</li><li>返回里带完整链接 <code>url</code> 与授权码。每个会话最多 20 条。</li></ul></li><li><strong>公开路由</strong>（预览域名，经 nginx 网关）：
+<ul><li><code>GET /_kirocrew/s/&lt;令牌&gt;</code>：
+<ul><li>需要授权码且还没有授权时，显示输入页；</li><li>页面分享跳到入口页 <code>…/&lt;令牌&gt;/&lt;入口&gt;</code>，访问次数加 1；</li><li>演示分享签一个以「这条分享」为持有人的打开链接，经现有的 <code>/_kirocrew/open</code> 进入应用。</li></ul></li><li><code>POST /_kirocrew/s/&lt;令牌&gt;</code>（表单 <code>code=1234</code>）：核对授权码，正确时设授权 Cookie 并跳转。</li><li><code>GET /_kirocrew/s/&lt;令牌&gt;/&lt;路径&gt;</code>：页面分享的文件，由 Worker 的 <code>/files</code> 读取（同样不提供 <code>.env</code>、<code>.git</code> 等点开头的路径，单文件至多 5 MB）。</li></ul></li><li><strong>演示的持有人</strong>：<code>app_auth</code> 接受以 <code>pshare-</code> 开头的持有人：分享有效、是这个会话的演示分享，并且应用在运行。访客的访问照常刷新 <code>last_access</code>。</li><li><strong>MCP</strong>：新增 <code>octopus_public_share</code>（create / list / revoke / new_code）。Skill 写明：只在用户要求公开分享时使用，并把链接与授权码交给用户。</li></ul>
+<h2>5．控制台</h2>
+<p>会话页「共享」旁增加「公开分享」。对话框分两部分：</p>
+<ul><li><strong>新建</strong>：选内容（页面 / 演示）、模式（需要授权码 / 无需授权码）、有效期；</li><li><strong>已有分享</strong>：链接、授权码、到期时间、访问次数、是否被锁定，以及复制、重新生成授权码、撤销。</li></ul>
+<h2>6．测试</h2>
+<ul><li><strong>服务测试</strong>：谁能分享；有效与失效的各种情况；授权码正确与错误；每个访客地址与每条分享的限次和锁定；重新生成授权码；演示持有人的 <code>app_auth</code>。</li><li><strong>HTTP 测试</strong>：经网关头请求公开路由；页面带沙箱 CSP 与 <code>noindex</code>；表单 POST 的 Origin 按预览主机核对；按会话的主机不接受别的会话的令牌。</li><li><strong>控制台测试</strong>：对话框的新建与列表。</li><li><strong>EC2 实测</strong>：两种模式各建一条，用无头浏览器从公网打开：错误授权码被拒、正确的能看到页面；撤销后链接立即失效。</li></ul>
+</main>
+</body>
+</html>

@@ -663,6 +663,8 @@ class Service:
         self.db = database
         self._opened, self._opened_lock = {}, threading.Lock()   # remote preview opening links already followed
         self._moving = set()   # D74: the Sessions whose takeover is being carried out here
+        from .public_shares import Tries
+        self._share_tries = Tries()   # D75: wrong access codes per visitor (the share's own count is in the database)
         from .credentials import CredentialStore
         self.credentials = CredentialStore(database)   # D35; the server sets its key file
 
@@ -1883,13 +1885,22 @@ class Service:
         not closing, and its app runs."""
         now = now or time.time()
         with self.db.read() as db:
-            user = db.execute("SELECT id,admin FROM users WHERE id=? AND active=1", (holder,)).fetchone()
-            try:
-                require(user is not None, "预览不可用", 404, "not_found")
-                run = run_access(db, {"id": user["id"], "admin": user["admin"],
-                                      "scopes": ["read"] + (["admin"] if user["admin"] else [])}, rid, read=True)
-            except Error:
-                raise Error(403, "app_forbidden", "无权查看此会话的远程预览") from None
+            if str(holder).startswith("pshare-"):   # D75: a demo share is the holder, for anyone with its link
+                from . import public_shares as public
+                share = db.execute("SELECT token FROM public_shares WHERE id=? AND run_id=? AND kind='app'", (holder, rid)).fetchone()
+                try:
+                    require(share is not None, "预览不可用", 404, "not_found")
+                    run = public.active(db, share["token"], now)
+                except Error:
+                    raise Error(403, "app_forbidden", "此公开分享已失效") from None
+            else:
+                user = db.execute("SELECT id,admin FROM users WHERE id=? AND active=1", (holder,)).fetchone()
+                try:
+                    require(user is not None, "预览不可用", 404, "not_found")
+                    run = run_access(db, {"id": user["id"], "admin": user["admin"],
+                                          "scopes": ["read"] + (["admin"] if user["admin"] else [])}, rid, read=True)
+                except Error:
+                    raise Error(403, "app_forbidden", "无权查看此会话的远程预览") from None
             row = db.execute("SELECT * FROM apps WHERE run_id=?", (rid,)).fetchone()
         require(row is not None and row["status"] == "running" and run["lifecycle"] == "open"
                 and run["desired"] not in {"close", "delete"}, "远程预览已停止", 403, "app_stopped")
@@ -2140,6 +2151,114 @@ class Service:
             audit(db, actor, "share.delete", "run", rid, {"share": sid, "kind": row["kind"], "subject": row["subject"] or None,
                                                           "role": row["role"]})
             return {"id": sid, "deleted": True}
+
+    # D75: public shares — the sharer's side (who controls the Session, as for D64 shares) and the visitor's (no account)
+    public_base = None   # set by the server: where a Session's public links live (D75)
+
+    def _public_base(self, rid):
+        """Where a Session's public links live: its own preview origin, else the shared one; None when not configured."""
+        return self.public_base(rid) if self.public_base else None
+
+    def public_shares(self, actor, rid):
+        from . import public_shares as public
+        with self.db.read() as db:
+            run = run_access(db, actor, rid, read=True)
+            require(may_publish(db, actor, run), "只有会话的创建者、Team owner 或平台管理员可以管理公开分享", 403, "forbidden")
+            rows = db.execute("SELECT * FROM public_shares WHERE run_id=? AND (expires IS NULL OR expires>?) ORDER BY created DESC",
+                              (rid, time.time())).fetchall()
+        return {"shares": [public.view(row, self._public_base(rid)) for row in rows],
+                "available": self.public_base is None or bool(self._public_base(rid))}
+
+    def create_public_share(self, actor, rid, body):
+        from . import public_shares as public
+        with self.db.transaction() as db:
+            run = run_access(db, actor, rid, read=True)
+            require(may_publish(db, actor, run), "只有会话的创建者、Team owner 或平台管理员可以公开分享", 403, "forbidden")
+            if run["team_id"]:
+                active_team(db, run["team_id"])
+            require(run["lifecycle"] == "open", "会话已关闭或删除，不能公开分享", 409, "invalid_state")
+            require(run["worker_id"], "会话尚未分配执行环境，没有可分享的内容", 409, "no_preview")
+            require(self.public_base is None or self._public_base(rid),
+                    "平台尚未配置预览域名，不能公开分享：请平台管理员配置远程预览", 409, "share_unavailable")
+            row = public.create(db, actor, run, body)
+            audit(db, actor, "public_share.create", "run", rid, {"share": row["id"], "kind": row["kind"], "mode": row["mode"],
+                                                                  "expires": row["expires"]})
+        return public.view(row, self._public_base(rid))
+
+    def delete_public_share(self, actor, rid, sid):
+        with self.db.transaction() as db:
+            run = run_access(db, actor, rid, read=True)
+            require(may_publish(db, actor, run), "只有会话的创建者、Team owner 或平台管理员可以撤销公开分享", 403, "forbidden")
+            row = db.execute("SELECT * FROM public_shares WHERE id=? AND run_id=?", (sid, rid)).fetchone()
+            require(row is not None, "公开分享不存在", 404, "not_found")
+            db.execute("DELETE FROM public_shares WHERE id=?", (sid,))
+            audit(db, actor, "public_share.delete", "run", rid, {"share": sid, "kind": row["kind"], "views": row["views"]})
+        return {"id": sid, "deleted": True}
+
+    def public_share_code(self, actor, rid, sid):
+        """A new access code: every browser the old one opened asks again, and a lock ends."""
+        from . import public_shares as public
+        with self.db.transaction() as db:
+            run = run_access(db, actor, rid, read=True)
+            require(may_publish(db, actor, run), "只有会话的创建者、Team owner 或平台管理员可以重新生成授权码", 403, "forbidden")
+            row = db.execute("SELECT * FROM public_shares WHERE id=? AND run_id=?", (sid, rid)).fetchone()
+            require(row is not None, "公开分享不存在", 404, "not_found")
+            require(row["mode"] == "code", "此分享无需授权码", 409, "share_open")
+            db.execute("UPDATE public_shares SET code=?, failures=0, failed_since=NULL, locked_until=NULL WHERE id=?",
+                       (public.new_code(), sid))
+            audit(db, actor, "public_share.code", "run", rid, {"share": sid})
+            row = db.execute("SELECT * FROM public_shares WHERE id=?", (sid,)).fetchone()
+        return public.view(row, self._public_base(rid))
+
+    def public_share_check(self, token, code, address, now=None):
+        """A visitor's access code: the share it opens, or why not (wrong, too many tries, locked)."""
+        from . import public_shares as public
+        with self.db.transaction() as db:
+            share = public.check(db, self._share_tries, token, code, address, now)
+        require(share is not None, "授权码不正确", 401, "share_code_wrong")   # after the failure was committed
+        return share
+
+    def public_share_visit(self, token, address, granted=False, now=None):
+        """A visitor opening a link: the share, with the page it opens on (pages) — the code asked first unless it is open
+        or this browser already gave it. Counted as one view."""
+        from . import public_shares as public
+        with self.db.read() as db:
+            share = public.active(db, token, now)
+        if share["mode"] == "code" and not granted:
+            raise Error(401, "share_code_required", "需要授权码")
+        if share["kind"] == "pages":
+            entry = share["entry"] or self._public_worker(share, "")["entry"]
+        else:
+            entry = None
+        try:
+            with self.db.transaction() as db:
+                db.execute("UPDATE public_shares SET views=views+1, last_viewed=? WHERE id=?", (now or time.time(), share["id"]))
+        except sqlite3.OperationalError:
+            pass   # a busy database must not keep a visitor out
+        return {"id": share["id"], "run_id": share["run_id"], "kind": share["kind"], "mode": share["mode"], "entry": entry,
+                "code": share["code"]}
+
+    def public_share_file(self, token, relative):
+        """One file of a pages share, read from the Session's workspace as 「预览产出」 reads it."""
+        import base64
+        from . import public_shares as public
+        with self.db.read() as db:
+            share = public.active(db, token)
+        require(share["kind"] == "pages", "页面不存在", 404, "not_found")
+        return base64.b64decode(self._public_worker(share, relative)["content"])
+
+    def public_share_of(self, token):
+        """The share a token names while it may be seen (the server checks the visitor's grant against its code)."""
+        from . import public_shares as public
+        with self.db.read() as db:
+            return public.active(db, token)
+
+    def _public_worker(self, share, relative):
+        from .transport import worker_request
+        with self.db.read() as db:
+            worker = db.execute("SELECT config, retired FROM workers WHERE id=?", (share["worker_id"],)).fetchone()
+        require(worker is not None and not worker["retired"], "页面暂不可用", 404, "not_found")
+        return worker_request(json.loads(worker["config"]), "/files", {"run_id": share["run_id"], "path": relative})
 
     def quotas(self, actor):
         """The actor's limit on running tasks and their Teams' (D61); an administrator also sees the default and each person's."""

@@ -1,6 +1,7 @@
 import type { Dialog } from "@/features/console/context";
 import { LaunchWizard } from "@/features/launch/LaunchWizard";
 import { AssignWorkerDialog, ContinueDialog, ControlDialog, TakeoverDialog } from "@/features/sessions/dialogs";
+import { PublicShareDialog } from "@/features/sessions/PublicShareDialog";
 import { RunShareDialog } from "@/features/sessions/RunShareDialog";
 import { ShareDialog } from "@/features/workflows/ShareDialog";
 import { WorkflowEditor } from "@/features/workflows/WorkflowEditor";
@@ -25,6 +26,8 @@ export function DialogHost({ dialog }: { dialog: Dialog | null }) {
       return <ControlDialog run={dialog.run} action={dialog.action} />;
     case "takeover":
       return <TakeoverDialog run={dialog.run} />;
+    case "public-share":
+      return <PublicShareDialog run={dialog.run} />;
     default:
       return null;
   }

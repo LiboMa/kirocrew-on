@@ -1,6 +1,6 @@
 import {
-  ArrowRightLeft, CircleStop, Copy, Download, Eye, ExternalLink, FolderDown, ListRestart, MonitorPlay, MoreHorizontal, Power,
-  RotateCcw, Stethoscope, Share2,
+  ArrowRightLeft, CircleStop, Copy, Download, Eye, ExternalLink, FolderDown, Globe, ListRestart, MonitorPlay, MoreHorizontal,
+  Power, RotateCcw, Stethoscope, Share2,
   Trash2,
   UserCog,
 } from "lucide-react";
@@ -151,6 +151,12 @@ export function SessionView({ id }: { id: string }) {
           {run.permissions?.share && (
             <Button size="sm" variant="outline" onClick={() => open({ kind: "run-share", run })} id="run-share">
               <Share2 /> 共享
+            </Button>
+          )}
+          {run.permissions?.share && !design && (
+            <Button size="sm" variant="outline" onClick={() => open({ kind: "public-share", run })} id="run-public-share"
+              disabled={!run.worker_id} title={run.worker_id ? "生成任何人都能打开的链接（可设四位授权码）" : "会话尚未分配执行环境"}>
+              <Globe /> 公开分享
             </Button>
           )}
           {app?.openable && (

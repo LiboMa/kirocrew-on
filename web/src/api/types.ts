@@ -343,6 +343,13 @@ export interface KnowledgeProposal {
   reason?: string;
 }
 
+/** D75: a public link of a Session — its pages or its running demo, with a four-digit code or open. */
+export interface PublicShare {
+  id: string; run_id: string; token: string; kind: "pages" | "app"; mode: "code" | "open"; code: string | null;
+  entry: string | null; url: string | null; created: number; created_by: string; expires: number | null;
+  views: number; last_viewed: number | null; locked_until: number | null;
+}
+
 export interface Run {
   /** D55: the submission this Session came from; none for a Session from before. */
   request?: { id: string; client: RequestClient } | null;
