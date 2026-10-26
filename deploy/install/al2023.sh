@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Idempotent host preparation for Amazon Linux 2023 x86_64. deploy/aws/deploy.sh runs it as root through SSM:
+# Idempotent host preparation for Amazon Linux 2023 (x86_64 or aarch64). deploy/aws/deploy.sh runs it as root through SSM:
 #   KIROCREW_ON_RELEASE=<commit> CF_DOMAIN=<dxxxx.cloudfront.net> [CONSOLE_DOMAIN=<控制台自定义域名>] ORIGIN_SECRET_PARAM=/kirocrew-on/<stack>/origin-secret \
 #   AWS_REGION=us-east-1 bash <release>/deploy/install/al2023.sh <boundary>
 # Writes no tool credentials: Claude Code and Codex use Amazon Bedrock through the instance role; kiro-cli needs a
@@ -21,6 +21,10 @@ log() { printf '[%s] %s\n' "$(date -u +%H:%M:%S)" "$*"; }
 # The steps of each boundary on this host (D49: one per person; the platform host may carry several).
 # shellcheck source=boundary-lib.sh
 . "$SOURCE/deploy/install/boundary-lib.sh"
+# MVP 0.2.0 P1 (P §5.6): Node and kiro-cli builds for this host's CPU; another architecture stops here, before any change
+# shellcheck source=arch-lib.sh
+. "$SOURCE/deploy/install/arch-lib.sh"
+host_arch
 SCRATCH="$(mktemp -d)"
 cleanup() { rm -rf "$SCRATCH"; [ -z "${BOUNDARY_DRAINING:-}" ] || rm -f "$BOUNDARY_DRAINING"; }   # never a stale mark
 trap cleanup EXIT
@@ -96,7 +100,8 @@ log "Node.js（$NODE_DIST，按 SHASUMS256.txt 校验）"
 NODE_ROOT=/opt/kirocrew-node
 if [ ! -x "$NODE_ROOT/bin/node" ]; then
   curl --proto '=https' -fsSL "https://nodejs.org/dist/$NODE_DIST/SHASUMS256.txt" -o "$SCRATCH/SHASUMS256.txt"
-  NODE_TARBALL="$(grep -oE 'node-v[0-9.]+-linux-x64\.tar\.xz' "$SCRATCH/SHASUMS256.txt" | head -1)"
+  NODE_TARBALL="$(node_tarball "$SCRATCH/SHASUMS256.txt")"
+  [ -n "$NODE_TARBALL" ] || { echo "Node $NODE_DIST 没有 linux-$NODE_ARCH 的发布包" >&2; exit 3; }
   curl --proto '=https' -fsSL "https://nodejs.org/dist/$NODE_DIST/$NODE_TARBALL" -o "$SCRATCH/$NODE_TARBALL"
   (cd "$SCRATCH" && grep " $NODE_TARBALL\$" SHASUMS256.txt | sha256sum -c -)
   install -d "$NODE_ROOT"
@@ -177,9 +182,10 @@ if ! command -v kiro-cli >/dev/null 2>&1; then
   if [ "$KIRO_CLI_VERSION" != "latest" ] && [ "$KIRO_CLI_VERSION" != "$RESOLVED" ]; then
     echo "kiro-cli 清单版本 $RESOLVED 与固定版本 $KIRO_CLI_VERSION 不一致" >&2; exit 3
   fi
-  KIRO_SHA256="$(jq -r '.packages[] | select(.fileType=="zip" and .architecture=="x86_64" and (.download|contains("musl")|not)) | .sha256' \
-    "$SCRATCH/kirocli-manifest.json" | head -1)"
-  curl --proto '=https' --tlsv1.2 -fsSL "https://desktop-release.q.us-east-1.amazonaws.com/$RESOLVED/kirocli-x86_64-linux.zip" \
+  read -r KIRO_DOWNLOAD KIRO_SHA256 <<<"$(kiro_package "$SCRATCH/kirocli-manifest.json")"
+  [[ "$KIRO_DOWNLOAD" == "$RESOLVED/kirocli-$KIRO_ARCH-linux.zip" ]] && [[ "$KIRO_SHA256" =~ ^[0-9a-f]{64}$ ]] || {
+    echo "kiro-cli 清单里没有 $KIRO_ARCH 的 zip 包（或其 sha256）" >&2; exit 3; }
+  curl --proto '=https' --tlsv1.2 -fsSL "https://desktop-release.q.us-east-1.amazonaws.com/$KIRO_DOWNLOAD" \
     -o "$SCRATCH/kirocli.zip"
   echo "$KIRO_SHA256  $SCRATCH/kirocli.zip" | sha256sum -c -
   unzip -q "$SCRATCH/kirocli.zip" -d "$SCRATCH"

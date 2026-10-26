@@ -228,6 +228,48 @@ class ScriptTests(unittest.TestCase):
         self.assertIn('OCTOPUS_ENROLL_CODE="$CODE"', text)
         self.assertIn('platform --worker-url "http://127.0.0.1:$WORKER_PORT" --token-file "$BASE/worker.token"', text)   # a re-run
 
+    def test_the_installer_picks_node_and_kiro_by_architecture(self):   # MVP 0.2.0 P1 Task 8 (P §5.6)
+        text = (ROOT / "deploy/install/al2023.sh").read_text()
+        self.assertNotIn("linux-x64", text)
+        self.assertNotIn("x86_64.zip", text)
+        self.assertNotIn('.architecture=="x86_64"', text)
+        sums = "abc  node-v22.23.3-linux-arm64.tar.xz\nabd  node-v22.23.3-linux-x64.tar.xz\nabe  node-v22.23.3-linux-x64.tar.gz\n"
+        manifest = json.dumps({"version": "2.34.0", "packages": [
+            {"architecture": "x86_64", "fileType": "zip", "download": "2.34.0/kirocli-x86_64-linux-musl.zip", "sha256": "m"},
+            {"architecture": "x86_64", "fileType": "zip", "download": "2.34.0/kirocli-x86_64-linux.zip", "sha256": "x"},
+            {"architecture": "aarch64", "fileType": "zip", "download": "2.34.0/kirocli-aarch64-linux.zip", "sha256": "a"}]})
+        with tempfile.TemporaryDirectory() as directory:
+            Path(directory, "SHASUMS256.txt").write_text(sums)
+            Path(directory, "manifest.json").write_text(manifest)
+            for machine, node, kiro in (("x86_64", "node-v22.23.3-linux-x64.tar.xz", "2.34.0/kirocli-x86_64-linux.zip x"),
+                                        ("aarch64", "node-v22.23.3-linux-arm64.tar.xz", "2.34.0/kirocli-aarch64-linux.zip a")):
+                with self.subTest(machine):
+                    done = subprocess.run(["bash", "-c", f'. "{ROOT}/deploy/install/arch-lib.sh"; host_arch {machine}; '
+                                           f'node_tarball "{directory}/SHASUMS256.txt"; kiro_package "{directory}/manifest.json"'],
+                                          capture_output=True, text=True)
+                    self.assertEqual(done.returncode, 0, done.stderr)
+                    self.assertEqual(done.stdout.split("\n")[:2], [node, kiro])
+
+    def test_an_unsupported_architecture_stops_with_a_reason(self):
+        done = subprocess.run(["bash", "-c", f'. "{ROOT}/deploy/install/arch-lib.sh"; host_arch riscv64 && echo went-on'],
+                              capture_output=True, text=True)
+        self.assertNotEqual(done.returncode, 0)
+        self.assertNotIn("went-on", done.stdout)
+        self.assertIn("riscv64", done.stderr)
+
+    def test_deploy_picks_the_ami_of_the_instance_type(self):
+        text = (ROOT / "deploy/aws/deploy.sh").read_text()
+        self.assertIn("describe-instance-types", text)
+        self.assertNotIn("al2023-ami-kernel-default-x86_64", text)   # chosen by the instance type's architecture
+        for archs, arch in (("i386 x86_64", "x86_64"), ("arm64", "arm64")):   # ProcessorInfo.SupportedArchitectures
+            with self.subTest(archs):
+                done = subprocess.run(["bash", "-c", f'. "{ROOT}/deploy/install/arch-lib.sh"; ami_parameter "{archs}"'],
+                                      capture_output=True, text=True)
+                self.assertEqual(done.returncode, 0, done.stderr)
+                self.assertEqual(done.stdout.strip(), f"/aws/service/ami-amazon-linux-latest/al2023-ami-kernel-default-{arch}")
+        self.assertNotEqual(subprocess.run(["bash", "-c", f'. "{ROOT}/deploy/install/arch-lib.sh"; ami_parameter ""'],
+                                           capture_output=True, text=True).returncode, 0)
+
     def test_each_install_prunes_old_releases_first(self):
         text = (ROOT / "deploy/install/al2023.sh").read_text()
         prune = text.index('prune_releases /opt/kirocrew-on/releases "$(readlink -f /opt/kirocrew-on/current')
@@ -235,7 +277,8 @@ class ScriptTests(unittest.TestCase):
         self.assertIn('find /opt/kirocrew-on/incoming -mindepth 1 -maxdepth 1 -mmin +1440 ! -name "*$RELEASE*"', text)
 
     def test_scripts_are_valid_bash_without_mac_assumptions(self):
-        for name in ("deploy/install/al2023.sh", "deploy/install/boundary-lib.sh", "deploy/install/boundary.sh", "deploy/aws/deploy.sh"):
+        for name in ("deploy/install/al2023.sh", "deploy/install/boundary-lib.sh", "deploy/install/boundary.sh", "deploy/aws/deploy.sh",
+                     "deploy/install/arch-lib.sh"):
             script = ROOT / name
             subprocess.run(["bash", "-n", str(script)], check=True)
             text = script.read_text()

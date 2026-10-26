@@ -1,6 +1,7 @@
 # KiroCrew ON 运维手册
 
 适用范围：M1 单机部署（EC2 Amazon Linux 2023 x86_64，一个个人执行边界 `personal`）与本机 macOS 端到端环境。
+安装脚本自 MVP 0.2.0 P1 起也支持 aarch64（Graviton）：`al2023.sh` 按 `uname -m` 选 Node 与 kiro-cli 的构建（`deploy/install/arch-lib.sh`），其他架构在改动主机前停止；`deploy.sh up` 与 `worker-host up` 按机型的 CPU 架构（`describe-instance-types`）选 AL2023 AMI，已有主机保持原 AMI。arm64 主机的实机验收与 P0 一起做。
 §2–§8、§12 的 EC2 命令已于 2026-10-11 在 us-east-1 实测，结果见 `docs/handover/M1-EC2-EVIDENCE.md`。
 本地端到端（macOS）的步骤见 §14。
 
@@ -207,7 +208,7 @@ deploy/aws/deploy.sh worker-host add w1     # up → push → tls → native →
 
 | 步骤 | 作用 |
 |---|---|
-| `worker-host up <名称>` | 栈 `<平台栈>-worker-<名称>`：实例、安全组（仅平台安全组可访问 8943 / 8944）、该主机的原生入口 CloudFront 分发（源站 = 平台主机的中转端口，注入同一个源站密钥）。中转端口在平台的 `NativePort + 1`–`NATIVE_RELAY_END`（`stack.env`，默认 8920–8929）中分配，已有栈保持原端口 |
+| `worker-host up <名称>` | 栈 `<平台栈>-worker-<名称>`（机型 `WORKER_INSTANCE_TYPE`；AMI：`WORKER_IMAGE_ID`，否则沿用栈自己的，否则与平台同架构时用平台的，否则取该架构最新的 AL2023，如 Graviton 机型）：实例、安全组（仅平台安全组可访问 8943 / 8944）、该主机的原生入口 CloudFront 分发（源站 = 平台主机的中转端口，注入同一个源站密钥）。中转端口在平台的 `NativePort + 1`–`NATIVE_RELAY_END`（`stack.env`，默认 8920–8929）中分配，已有栈保持原端口 |
 | `worker-host push <名称>` | 安装已提交的 HEAD（Worker 主机模式）；写入 `crew_url = https://<该主机的分发域名>` 与 nginx 配置 |
 | `worker-host tls <名称>` | 私钥留在 Worker 主机，平台私有 CA 签发证书（SAN：私网 IP 与 `<名称>.worker.kirocrew-on`）。旧证书没有 DNS 名称时重跑本步（私钥不变） |
 | `worker-host native <名称>` | 在平台主机写入 `/etc/nginx/conf.d/kirocrew-relay-<名称>.conf`（0640 root:nginx，密钥只从主机上的文件读取），`nginx -t` 失败即撤回；最后经中转实测一次 |

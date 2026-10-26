@@ -18,6 +18,8 @@ set -euo pipefail
 cd "$(dirname "$0")/../.."
 # shellcheck source=stack.env
 source deploy/aws/stack.env
+# shellcheck source=../install/arch-lib.sh
+source deploy/install/arch-lib.sh
 TEMPLATE=deploy/aws/kirocrew-on-ec2.yaml
 WORKER_TEMPLATE=deploy/aws/kirocrew-on-worker.yaml
 NATIVE_TEMPLATE=deploy/aws/kirocrew-on-native.yaml
@@ -188,6 +190,17 @@ PY
   echo "$arn"
 }
 
+instance_archs() {  # instance_archs TYPE: the CPU architectures an instance type supports ("x86_64 i386", "arm64")
+  query "x86_64" ec2 describe-instance-types --instance-types "$1" \
+    --query 'InstanceTypes[0].ProcessorInfo.SupportedArchitectures' --output text
+}
+
+latest_image() {  # latest_image TYPE: the latest AL2023 AMI for the instance type's architecture (MVP 0.2.0 P1: Graviton too)
+  local parameter
+  parameter="$(ami_parameter "$(instance_archs "$1" | tr '\t' ' ')")" || return 1
+  query ami-dryrun ssm get-parameter --name "$parameter" --query Parameter.Value --output text
+}
+
 up() {
   run cloudformation validate-template --template-body "file://$TEMPLATE" >/dev/null
   local status prefix_list zone="${AVAILABILITY_ZONE:-}" image="${IMAGE_ID:-}" current origin type
@@ -206,8 +219,7 @@ up() {
   [ -n "$zone" ] || zone="$(query us-east-1a ec2 describe-instance-type-offerings --location-type availability-zone \
     --filters "Name=instance-type,Values=$INSTANCE_TYPE" --query 'sort(InstanceTypeOfferings[].Location)[0]' --output text)"
   [ -n "$zone" ] && [ "$zone" != "None" ] || { echo "$REGION 没有提供 $INSTANCE_TYPE 的可用区" >&2; exit 2; }
-  [ -n "$image" ] || image="$(query ami-dryrun ssm get-parameter \
-    --name /aws/service/ami-amazon-linux-latest/al2023-ami-kernel-default-x86_64 --query Parameter.Value --output text)"
+  [ -n "$image" ] || image="$(latest_image "$INSTANCE_TYPE")" || exit 2
   [ -n "$status" ] || echo "首次创建：可用区 ${zone}，AMI ${image}；创建后写入 deploy/aws/stack.env 的 AVAILABILITY_ZONE 与 IMAGE_ID" >&2
   # The console's own domain (optional): its zone and certificate are looked up, never kept in the repository.
   local console="${CONSOLE_DOMAIN:-}" console_zone_id="" console_certificate_arn=""
@@ -440,6 +452,17 @@ worker_up() {  # the Worker host stack in the platform's VPC and subnet, admitte
     --output text 2>/dev/null || true)"
   type=UPDATE
   [ -n "$status" ] || type=CREATE
+  # The host's image: WORKER_IMAGE_ID, else the stack's own (a different one would replace the host), else the
+  # platform's when the architectures match, else the latest AL2023 for this instance type (a Graviton Worker host).
+  local wtype="${WORKER_INSTANCE_TYPE:-$INSTANCE_TYPE}" image="${WORKER_IMAGE_ID:-}"
+  [ -n "$image" ] || [ -z "$status" ] || image="$(stack_parameter "$stack" ImageId)"
+  [ -n "$image" ] && [ "$image" != None ] || {
+    if [ "$(ami_parameter "$(instance_archs "$wtype" | tr '\t' ' ')")" = "$(ami_parameter "$(instance_archs "$INSTANCE_TYPE" | tr '\t' ' ')")" ]; then
+      image="${IMAGE_ID:-$(output ImageId)}"
+    else
+      image="$(latest_image "$wtype")" || exit 2
+    fi
+  }
   relay="$(relay_port "$stack")"
   domain="$(output HostOriginDomain)"
   [ -n "$DRY" ] || [[ "$domain" == ec2-* ]] || { echo "平台栈没有输出 HostOriginDomain：先执行 deploy.sh up" >&2; exit 2; }
@@ -448,7 +471,7 @@ worker_up() {  # the Worker host stack in the platform's VPC and subnet, admitte
   [[ "$origin" =~ ^[A-Za-z0-9_-]{32,}$ ]] || {
     echo "源站密钥格式不符：平台主机的中转只接受 32 位以上的字母、数字、- 或 _（与 kirocrew-native.conf 相同）" >&2; exit 2; }
   (umask 077; ORIGIN_VALUE="$origin" python3 - "$(output VpcId)" "$(output SubnetId)" "$(output HostSecurityGroupId)" \
-    "${IMAGE_ID:-$(output ImageId)}" "${WORKER_INSTANCE_TYPE:-$INSTANCE_TYPE}" "${WORKER_VOLUME_SIZE_GIB:-$VOLUME_SIZE_GIB}" \
+    "$image" "$wtype" "${WORKER_VOLUME_SIZE_GIB:-$VOLUME_SIZE_GIB}" \
     "$(output ArtifactBucket)" "$WORKER_TLS_PORT" "$STACK_NAME" "$WORKER_GATEWAY_TLS_PORT" "$relay" "$domain" \
     "$WORKER_PREVIEW_TLS_PORT" > "$WORK/worker-parameters.json" <<'PY'
 import json, os, sys
