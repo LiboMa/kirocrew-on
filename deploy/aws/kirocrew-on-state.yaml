@@ -1,0 +1,213 @@
+AWSTemplateFormatVersion: "2010-09-09"
+Description: >-
+  KiroCrew ON session state (stateless Worker pool design, docs/superpowers/specs/2026-10-23-stateless-worker-pool-design.md):
+  the session-state bucket that holds session checkpoints (checkpoints/) and the platform database replica (db/,
+  Litestream), its KMS key, the CodeArtifact package sources the Workers install dependencies from, and the managed
+  policies the platform host and the Workers attach. Only the platform host may read or write the bucket: a Worker's
+  instance role is usable by every process on its host, the agents included, so no Worker role is ever given it.
+
+Parameters:
+  CheckpointInfrequentAccessDays:
+    Type: Number
+    Default: 30
+    MinValue: 30
+    Description: Days after which a checkpoint moves to S3 Standard-IA (30 is the S3 minimum)
+  NoncurrentVersionDays:
+    Type: Number
+    Default: 30
+    MinValue: 1
+    Description: Days an overwritten or deleted checkpoint version is kept before it expires
+  DatabaseNoncurrentVersionDays:
+    Type: Number
+    Default: 7
+    MinValue: 1
+    Description: Days an old Litestream object version under db/ is kept (Litestream keeps its own retention as well)
+  CodeArtifactDomainName:
+    Type: String
+    Default: kirocrew-on
+    AllowedPattern: "^[a-z][a-z0-9-]{1,49}$"
+
+Resources:
+  StateKey:
+    Type: AWS::KMS::Key
+    Properties:
+      Description: KiroCrew ON session state (checkpoints and the platform database replica)
+      EnableKeyRotation: true
+      KeyPolicy:
+        Version: "2012-10-17"
+        Statement:
+          # Use is granted through IAM (the managed policy below); the key policy only delegates to the account.
+          - Sid: AccountDelegatesToIam
+            Effect: Allow
+            Principal: {AWS: !Sub "arn:${AWS::Partition}:iam::${AWS::AccountId}:root"}
+            Action: "kms:*"
+            Resource: "*"
+      Tags: [{Key: Project, Value: kirocrew-on}]
+
+  StateKeyAlias:
+    Type: AWS::KMS::Alias
+    Properties:
+      AliasName: !Sub "alias/${AWS::StackName}"
+      TargetKeyId: !Ref StateKey
+
+  SessionStateBucket:
+    Type: AWS::S3::Bucket
+    DeletionPolicy: Retain
+    UpdateReplacePolicy: Retain
+    Properties:
+      VersioningConfiguration: {Status: Enabled}
+      BucketEncryption:
+        ServerSideEncryptionConfiguration:
+          - ServerSideEncryptionByDefault:
+              SSEAlgorithm: aws:kms
+              KMSMasterKeyID: !GetAtt StateKey.Arn
+            BucketKeyEnabled: true
+      PublicAccessBlockConfiguration:
+        BlockPublicAcls: true
+        BlockPublicPolicy: true
+        IgnorePublicAcls: true
+        RestrictPublicBuckets: true
+      OwnershipControls:
+        Rules: [{ObjectOwnership: BucketOwnerEnforced}]
+      LifecycleConfiguration:
+        Rules:
+          - Id: checkpoints
+            Status: Enabled
+            Prefix: checkpoints/
+            Transitions:
+              - StorageClass: STANDARD_IA
+                TransitionInDays: !Ref CheckpointInfrequentAccessDays
+            NoncurrentVersionExpiration:
+              NoncurrentDays: !Ref NoncurrentVersionDays
+          - Id: database-replica
+            Status: Enabled
+            Prefix: db/
+            NoncurrentVersionExpiration:
+              NoncurrentDays: !Ref DatabaseNoncurrentVersionDays
+          - Id: incomplete-uploads
+            Status: Enabled
+            AbortIncompleteMultipartUpload:
+              DaysAfterInitiation: 7
+      Tags: [{Key: Project, Value: kirocrew-on}]
+
+  SessionStateBucketPolicy:
+    Type: AWS::S3::BucketPolicy
+    Properties:
+      Bucket: !Ref SessionStateBucket
+      PolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Sid: TlsOnly
+            Effect: Deny
+            Principal: "*"
+            Action: "s3:*"
+            Resource:
+              - !GetAtt SessionStateBucket.Arn
+              - !Sub "${SessionStateBucket.Arn}/*"
+            Condition:
+              Bool: {"aws:SecureTransport": "false"}
+
+  # Dependencies the Workers install come through CodeArtifact (a shared cache without a shared file system):
+  # Workers read the "packages" repository only; it pulls from npmjs and PyPI through the two stores.
+  PackagesDomain:
+    Type: AWS::CodeArtifact::Domain
+    Properties:
+      DomainName: !Ref CodeArtifactDomainName
+      Tags: [{Key: Project, Value: kirocrew-on}]
+
+  NpmStore:
+    Type: AWS::CodeArtifact::Repository
+    Properties:
+      DomainName: !GetAtt PackagesDomain.Name
+      RepositoryName: npm-store
+      Description: Upstream cache of the public npm registry
+      ExternalConnections: [public:npmjs]
+      Tags: [{Key: Project, Value: kirocrew-on}]
+
+  PypiStore:
+    Type: AWS::CodeArtifact::Repository
+    Properties:
+      DomainName: !GetAtt PackagesDomain.Name
+      RepositoryName: pypi-store
+      Description: Upstream cache of the public Python Package Index
+      ExternalConnections: [public:pypi]
+      Tags: [{Key: Project, Value: kirocrew-on}]
+
+  PackagesRepository:
+    Type: AWS::CodeArtifact::Repository
+    Properties:
+      DomainName: !GetAtt PackagesDomain.Name
+      RepositoryName: packages
+      Description: What the Workers install from (npm and Python, through the upstream stores)
+      Upstreams: [!GetAtt NpmStore.Name, !GetAtt PypiStore.Name]
+      Tags: [{Key: Project, Value: kirocrew-on}]
+
+  # For the platform host's role only (kirocrew-on-ec2.yaml HostRole): checkpoints and the database replica.
+  PlatformStateAccess:
+    Type: AWS::IAM::ManagedPolicy
+    Properties:
+      Description: KiroCrew ON platform host - session checkpoints and the database replica (never a Worker role)
+      PolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Sid: ListOwnPrefixes
+            Effect: Allow
+            Action: [s3:ListBucket, s3:ListBucketVersions]
+            Resource: !GetAtt SessionStateBucket.Arn
+            Condition:
+              StringLike: {"s3:prefix": ["checkpoints/*", "db/*", "checkpoints/", "db/"]}
+          - Sid: BucketLocation
+            Effect: Allow
+            Action: [s3:GetBucketLocation]
+            Resource: !GetAtt SessionStateBucket.Arn
+          - Sid: ReadWriteState
+            Effect: Allow
+            Action: [s3:GetObject, s3:GetObjectVersion, s3:PutObject, s3:DeleteObject, s3:AbortMultipartUpload]
+            Resource:
+              - !Sub "${SessionStateBucket.Arn}/checkpoints/*"
+              - !Sub "${SessionStateBucket.Arn}/db/*"
+          - Sid: UseStateKey
+            Effect: Allow
+            Action: [kms:Encrypt, kms:Decrypt, kms:GenerateDataKey, kms:DescribeKey]
+            Resource: !GetAtt StateKey.Arn
+
+  # For Worker roles (fixed Worker hosts and the pool): read dependencies, nothing else.
+  WorkerPackagesRead:
+    Type: AWS::IAM::ManagedPolicy
+    Properties:
+      Description: KiroCrew ON Workers - read packages from CodeArtifact
+      PolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Sid: DomainToken
+            Effect: Allow
+            Action: [codeartifact:GetAuthorizationToken]
+            Resource: !GetAtt PackagesDomain.Arn
+          - Sid: ReadPackages
+            Effect: Allow
+            Action: [codeartifact:GetRepositoryEndpoint, codeartifact:ReadFromRepository]
+            Resource: !GetAtt PackagesRepository.Arn
+          - Sid: BearerTokenForCodeArtifact
+            Effect: Allow
+            Action: [sts:GetServiceBearerToken]
+            Resource: "*"
+            Condition:
+              StringEquals: {"sts:AWSServiceName": codeartifact.amazonaws.com}
+
+Outputs:
+  SessionStateBucketName:
+    Value: !Ref SessionStateBucket
+  SessionStateBucketArn:
+    Value: !GetAtt SessionStateBucket.Arn
+  StateKeyArn:
+    Value: !GetAtt StateKey.Arn
+  CodeArtifactDomain:
+    Value: !GetAtt PackagesDomain.Name
+  CodeArtifactRepository:
+    Value: !GetAtt PackagesRepository.Name
+  PlatformStateAccessPolicyArn:
+    Description: Attach to the platform host role (kirocrew-on-ec2.yaml HostRole) for checkpoints and Litestream
+    Value: !Ref PlatformStateAccess
+  WorkerPackagesReadPolicyArn:
+    Description: Attach to Worker roles (kirocrew-on-worker.yaml, kirocrew-on-worker-pool.yaml)
+    Value: !Ref WorkerPackagesRead
