@@ -254,10 +254,11 @@ class Worker:
     def __init__(self, root, token, gateway_port=5476, crew_home=None, isolation="trusted-local", routing_log=None,
                  crew_url=None, approval_mode="", crew_entry_ttl="8h", kiro_cli=None, path_prepend=(),
                  tool_paths=None, adapters_dir=None, preview_tls_port=0, preview_tls_name="", disabled_tools=("opencode",),
-                 crew_yolo=True):
+                 crew_yolo=True, boundary_id=""):
         self.root = Path(root).resolve()
         self.disabled_tools = frozenset(disabled_tools)   # reported unavailable, so nothing plans, switches to or runs them
         self.crew_yolo = crew_yolo   # the boundary's standing YOLO: without it a continuation cannot ask for auto approval
+        self.boundary_id = boundary_id   # MVP 0.2.0 (S8): the control plane's name for this boundary, from its configuration
         self.root.mkdir(parents=True, exist_ok=True, mode=0o700)
         self.token, self.port = token, gateway_port
         self._sync_guard, self._sync_locks = threading.Lock(), {}   # D58: one sync at a time per Session
@@ -1221,8 +1222,9 @@ class Worker:
         return json.loads(record_file.read_text()) if record_file.is_file() else {}
 
     def health(self):
-        # Descriptive boundary, not cryptographic proof of OS isolation.
-        boundary = f"{socket.gethostname()}:{os.getuid()}:{self.home}"
+        # Descriptive boundary, not cryptographic proof of OS isolation. Given a boundary_id (MVP 0.2.0, S8), the boundary
+        # is the same on any host its volume moves to; without one it is derived from the host, as before.
+        boundary = f"{self.boundary_id}:{os.getuid()}" if self.boundary_id else f"{socket.gethostname()}:{os.getuid()}:{self.home}"
         advertised = self.advertised()
         return {"version": __version__, "isolation": self.isolation, "workflow_design": True,
                 "spawn_approval": "auto" if self.approval_mode == "auto" else "interactive",
@@ -1235,6 +1237,7 @@ class Worker:
                 "steer": True,        # D46 P5b: a running task may be given a note
                 "skills": list(pack.CATALOG),   # D50: the skill pack it carries
                 "boundary": hashlib.sha256(boundary.encode()).hexdigest(),
+                **({"boundary_id": self.boundary_id} if self.boundary_id else {}),
                 "host_principal": hashlib.sha256(f"{socket.gethostname()}:{os.getuid()}".encode()).hexdigest(),
                 "routing_evidence": bool(self.routing_log and self.routing_log.is_file()),
                 "model_source": "KiroCrew provider_models.json; ACP session/new advertised cache",

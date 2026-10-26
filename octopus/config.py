@@ -24,11 +24,13 @@ INTS = {"api_port": (1, 65535), "worker_port": (1, 65535), "gateway_port": (1, 6
         "preview_tls_port": (1, 65535)}
 FLOATS = {"retry_unavailable": (0.0, 600.0), "shutdown_grace": (0.0, 300.0)}
 STRINGS = {"api_host", "worker_host", "public_url", "crew_url", "worker_isolation", "approval_mode", "crew_entry_ttl",
-           "preview_tls_name", "preview_url", "preview_domain"}
+           "preview_tls_name", "preview_url", "preview_domain", "boundary_id"}
 APPROVAL = ("", "auto", "interactive")
 BOOLS = {"crew_yolo"}
 # Lifetime of the native browser login minted for "open in KiroCrew": 1–480 minutes or 1–8 hours (K03).
 ENTRY_TTL = re.compile(r"(?:[1-9]|[1-9][0-9]|[1-3][0-9]{2}|4[0-7][0-9]|480)m|[1-8]h")
+# MVP 0.2.0 (S8, CE3): a boundary's identity given by the control plane in the rendered configuration, never from a volume.
+BOUNDARY_ID = re.compile(r"bnd-[0-9a-f]{32}")
 HOST = re.compile(r"^[A-Za-z0-9.\-]+(:\d{1,5})?$|^\[[0-9A-Fa-f:]+\](:\d{1,5})?$")
 
 
@@ -75,6 +77,9 @@ class Settings:
     # A Worker host's nginx preview port and the name its certificate carries (D36 §5.2); unset on the platform host.
     preview_tls_port: int = 0
     preview_tls_name: str = ""
+    # MVP 0.2.0 (S8): the boundary's identity from the control plane; empty for the boundaries of before (their identity
+    # stays derived from the host, unchanged).
+    boundary_id: str = ""
     kirocrew_python: Path | None = None
     adapters_dir: Path | None = None
     # Secret CloudFront adds as X-Origin-Verify; when set, only verified (or host-local) requests are served.
@@ -164,6 +169,8 @@ def _layer(values, base):
                 raise ConfigError("approval_mode 只能是 auto 或 interactive（留空表示不指定）")
             if key == "crew_entry_ttl" and not ENTRY_TTL.fullmatch(value):
                 raise ConfigError("crew_entry_ttl 只能是 1–480m 或 1–8h")
+            if key == "boundary_id" and value and not BOUNDARY_ID.fullmatch(value):
+                raise ConfigError("boundary_id 须为 bnd- 加 32 位十六进制小写")
             if key == "preview_url" and value and not re.fullmatch(r"https?://[A-Za-z0-9.\-]+(:\d{1,5})?/?", value):
                 raise ConfigError("preview_url 只能是 https://<域名>[:端口]")
             if key == "preview_domain" and value and not re.fullmatch(

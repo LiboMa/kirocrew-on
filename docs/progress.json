@@ -432,7 +432,7 @@
         {
           "id": "v020-p1-2",
           "name": "P1-2 boundary_id 进入 Worker 配置与健康信息（S8、CE3）",
-          "status": "todo",
+          "status": "local",
           "ref": "P1 Task 2"
         },
         {

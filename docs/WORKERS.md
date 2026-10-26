@@ -60,7 +60,8 @@ Worker 有三种范围（`workers.scope`，D28）：**专属**（`dedicated`，�
 | 只有平台管理员能登记 Worker（控制台「执行环境 · Worker」或 `POST /v1/workers`）；`spare: true` 登记为空闲执行环境，必须 `dedicated` 且执行边界从未登记过（含已停用） | `server.py`（`POST /v1/workers`） |
 | 专属 Worker 只绑定**一个**用户或**一个** Team；Team 的专属 Worker 必须是 `dedicated`，`trusted-local` 只用于个人空间 | `server.py`（`POST /v1/workers`） |
 | 平台自身的宿主账号只能作为管理员本机验证用的 `trusted-local` Worker | `server.py`（`POST /v1/workers`） |
-| 同一 Gateway 边界不能登记两次；不同空间不能共用同一宿主账号（主机名 + uid） | `server.py`（`POST /v1/workers`） |
+| 同一 Gateway 边界不能登记两次（与全部 Worker 比对，含已停用、已退役的，MVP 0.2.0 P1）；不同空间不能共用同一宿主账号（主机名 + uid） | `workers.registration_conflicts` |
+| 边界身份：平台在渲染出的 Worker 配置里给出 `boundary_id`（MVP 0.2.0，S8）时，健康信息里的 `boundary` = sha256(`boundary_id`:uid)，换主机不变；没有 `boundary_id` 的边界照旧由主机名、uid 与 crew 目录推导。`boundary_id` 只从配置读，不从用户卷读（CE3）；`host_principal` 仍由主机名推导 | `worker.py`（`health`）、`config.py`（`boundary_id`） |
 | 把专属 Worker 设为共享须管理员确认，原所属空间继续由它服务；之后由管理员把 Team 或用户的个人空间加入或移出 | `Service.share_worker`、`Service.worker_space` |
 | 只有平台管理员能创建 Team，创建时必须指定 Team owner 与执行环境（共享环境或空闲环境）；空闲环境分配后成为该 Team 的专属环境，只分配一次 | `Service.create_team`、`give_environment`、`assign_spare` |
 | 一个 Team 同一时间只有一个执行环境（`worker_spaces` 的部分唯一索引与 `give_environment` 校验） | `migrations.ENVIRONMENTS` |
