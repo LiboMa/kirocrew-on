@@ -17,10 +17,11 @@ export const ACTIVE_STATES = new Set([
 export const ATTENTION_STATES = new Set(["blocked", "failed", "waiting_worker", "waiting_approval", "dispatch_unknown",
   "awaiting_confirmation", "awaiting_acceptance"]);
 
-export type Tone = "neutral" | "active" | "success" | "warning" | "danger";
+/** Owner 2026-10-26: done is blue, running is green, a problem is red (failed, paused) or yellow (waiting, unsure). */
+export type Tone = "neutral" | "active" | "done" | "warning" | "danger";
 
 export function stateTone(status: string): Tone {
-  if (status === "accepted" || status === "completed") return "success";
+  if (status === "accepted" || status === "completed") return "done";
   if (status === "blocked" || status === "failed") return "danger";
   if (status === "waiting_worker" || status === "waiting_approval" || status === "dispatch_unknown" || status === "stopped" ||
       status === "awaiting_confirmation" || status === "awaiting_acceptance") return "warning";

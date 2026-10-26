@@ -3,8 +3,8 @@ import { STATES, stateTone, type Tone } from "@/lib/labels";
 
 const TONES: Record<Tone, string> = {
   neutral: "bg-muted text-muted-foreground border-border",
-  active: "bg-primary/10 text-primary border-primary/20",
-  success: "bg-success/10 text-success border-success/20",
+  active: "bg-success/10 text-success border-success/20",
+  done: "bg-done/10 text-done border-done/20",
   warning: "bg-warning/10 text-warning border-warning/25",
   danger: "bg-destructive/10 text-destructive border-destructive/20",
 };

@@ -1,9 +1,9 @@
 # 进度与完成记录
 
-> 由 `tools/progress.py` 生成（2026-10-26 15:42 CST）：任务状态取自 `docs/progress.json`，提交记录取自 git。看板：`docs/progress-dashboard.html`；实时看板：`python3 tools/progress.py --serve --ec2`（http://127.0.0.1:8765/）。
+> 由 `tools/progress.py` 生成（2026-10-26 20:45 CST）：任务状态取自 `docs/progress.json`，提交记录取自 git。看板：`docs/progress-dashboard.html`；实时看板：`python3 tools/progress.py --serve --ec2`（http://127.0.0.1:8765/）。
 
-- **本轮完成度**：63%　**MVP 完成度**：73%
-- **分支**：HEAD `b69b19c`；自 `origin/main` 起 46 个提交——已推送 0、已部署 EC2 27、仅本机 19；EC2 运行 `5a78786`
+- **本轮完成度**：76%　**MVP 完成度**：73%
+- **分支**：HEAD `babf39f`；自 `origin/main` 起 65 个提交——已推送 0、已部署 EC2 27、仅本机 38；EC2 运行 `5a78786`
 - **回归**：1861 后端 + 92 + 281 控制台 + 7 个浏览器测试；EC2 运行 12fbd9f；本地 main 已合并（fe49f81），MVP-0.1.1 在 feat/mvp-0.1.1
 
 ## 模块
@@ -11,7 +11,7 @@
 | 模块 | 完成度 | 已验收 | 已部署 · 待验收 | 本机完成 · 待部署 | 进行中 | 卡点 · 等外部 | 未开始 |
 |---|---|---|---|---|---|---|---|
 | MVP 里程碑（M1–M5） | 73% | 22 | 17 | 0 | 2 | 0 | 9 |
-| MVP 0.2.0 部署模式、自助 Worker 与 Worker 池 | 3% | 0 | 0 | 1 | 0 | 2 | 15 |
+| MVP 0.2.0 部署模式、自助 Worker 与 Worker 池 | 42% | 0 | 0 | 12 | 1 | 2 | 3 |
 | D46 Agent 角色与提示体系 | 87% | 8 | 3 | 0 | 0 | 1 | 0 |
 | D49 每人一个执行边界 | 80% | 2 | 2 | 0 | 1 | 0 | 0 |
 | D50 编码技能包 | 100% | 2 | 0 | 0 | 0 | 0 | 0 |
@@ -75,8 +75,13 @@
 
 - `df72489` 2026-10-24 〔仅本机〕 docs(design): Worker 自助接入——管理员签发一次性接入码（定好登记到哪里），Worker 主机执行 worker enroll 自行登记，平台照旧带 Token 核实 /health；Token 不经人手、不进 SSM 命令历史；本地全栈自动登记；待负责人确认三点。BACKLOG 记录登记的两处不一致、K10 已由 D59 完成
 
-### 未标记 · 文档（20 个提交：已部署 EC2 3、仅本机 17）
+### 未标记 · 文档（25 个提交：已部署 EC2 3、仅本机 22）
 
+- `babf39f` 2026-10-26 〔仅本机〕 docs(research): KiroCrew 升到正式版 v0.10.0 的调研（P1 Task 12，S32）——会改变原生页面体验，拆为 P1b 待负责人确认
+- `2953304` 2026-10-26 〔仅本机〕 docs: MVP 0.2.0 进度（P1 11/12 完成）与 P0 实测结果
+- `f1fbff7` 2026-10-26 〔仅本机〕 docs(research): 有副作用的 GET 请求审计（MVP 0.2.0 P1 Task 7，CE12）
+- `97acd34` 2026-10-26 〔仅本机〕 docs(plan): 记录负责人 2026-10-26 的决定——批准 P0 实测资源、可用性 99.5%（方案 A）、温备密钥材料 KMS 托管、独立域名稍后提供
+- `4e0cfa6` 2026-10-26 〔仅本机〕 docs(plan): MVP 0.2.0 路线图与 P1 打底实施计划；版本文档 MVP-0.2.0 与 Presentation；进度看板加 0.2.0 各期；BACKLOG 注明草稿已合并成一份设计与计划
 - `b69b19c` 2026-10-26 〔仅本机〕 docs(design): 0.2.0 统一设计的出处草稿入库——无状态 Worker 池设计（P）与状态栈、Worker 池 CloudFormation 草稿（未部署，供 P1 状态栈与 Litestream、P3 数据面栈参照）
 - `a826ad1` 2026-10-24 〔仅本机〕 docs(plan): 0.2.0 规划补上「控制面 + 数据面」的分工、不变式与现在偏离的五处（负责人 2026-10-24 的归纳）
 - `cfb3ebb` 2026-10-23 〔仅本机〕 docs(plan): MVP 0.2.0 核心——高可用与自动扩容规划草案（待负责人评审）：现状单点、平台层三方案（推荐先做温备 + Litestream）、执行环境改为一组 Worker 并按平台的积压信号扩缩、M0–M5 分期与验收、不新增等待的做法、待决定问题
@@ -98,8 +103,22 @@
 - `d3273f8` 2026-10-24 〔仅本机〕 docs: 进度看板加 Worker 自助接入（设计待确认）
 - `4d5c0eb` 2026-10-24 〔仅本机〕 docs: MVP 0.2.0 重要更新——两种部署模式（单机版、集群版）与 Worker 自助申请、共享 / 专用 Worker、每人一块 EBS 改挂即迁移（负责人 2026-10-24）
 
-### 未标记 · 修复（6 个提交：已部署 EC2 6）
+### 未标记 · 功能（9 个提交：已部署 EC2 1、仅本机 8）
 
+- `bbb106f` 2026-10-26 〔仅本机〕 feat(metrics): 平台指标，每分钟一行 CloudWatch EMF（MVP 0.2.0 P1 Task 11，设计 §12.1）
+- `f4ff0ae` 2026-10-26 〔仅本机〕 feat(deploy): 状态栈与 Litestream（MVP 0.2.0 P1 Task 10，P §5.1–5.2，S31）
+- `9d9478e` 2026-10-26 〔仅本机〕 feat(release): wheel、清单与签名（MVP 0.2.0 P1 Task 9，S1）
+- `06b2b0a` 2026-10-26 〔仅本机〕 feat(deploy): 安装脚本与 AMI 选择支持 ARM64（MVP 0.2.0 P1 Task 8，P §5.6）
+- `5c7bf67` 2026-10-26 〔仅本机〕 feat(workers): 一次性接入码登记 Worker（MVP 0.2.0 P1 Task 6，N §3–§5）
+- `f4f347c` 2026-10-26 〔仅本机〕 feat(worker): 健康信息补容量字段——内存、CPU、负载、运行中的尝试数与 max_subagents，读不到的为 null 不影响健康检查（MVP 0.2.0 P1 Task 4）
+- `4f442d8` 2026-10-26 〔仅本机〕 feat(boundaries): 全局 UID 分配器——新边界的 boundary_id 与 UID = GID = 100000 + 序号由平台分配、永不复用（迁移 16、POST /v1/admin/boundaries、bootstrap-worker --allocate）；boundary.sh 只对新边界用它 groupadd -g / useradd -u 并把 boundary_id 写进 toml，旧边界不变（MVP 0.2.0 P1 Task 3，S9）
+- `9726d25` 2026-10-26 〔仅本机〕 feat(worker): boundary_id 进入 Worker 配置与健康信息——有 boundary_id 时边界身份为 sha256(boundary_id:uid)，换主机不变；只从渲染出的配置读、不从用户卷读；没有它的旧边界身份逐字节不变（MVP 0.2.0 P1 Task 2，S8、CE3）
+- `5a78786` 2026-10-26 〔已部署 EC2〕 feat(console): 公开分享并入「预览产出」的下拉菜单——与预览产出是同一批内容，给没有账号的人看；不再单独占一个工具栏按钮，只对能分享的人显示
+
+### 未标记 · 修复（8 个提交：已部署 EC2 6、仅本机 2）
+
+- `7ff843b` 2026-10-26 〔仅本机〕 fix(deploy): Litestream 已装同版本时不再重装（0.5.17 的 version 不带 v）
+- `eb1571a` 2026-10-26 〔仅本机〕 fix(workers): 登记时边界唯一性看全部 Worker（含已停用、已退役的）——一块卷的身份不能再登记给另一个人；登记规则抽成 workers.registration_conflicts，供接入码共用（MVP 0.2.0 P1 Task 1，CE9）
 - `b10f299` 2026-10-26 〔已部署 EC2〕 fix(share): 公开分享安全审查的修复——授权码页改为 same-origin（no-referrer 让浏览器带 Origin: null，表单必被拒）；重新生成授权码也结束演示 Cookie（持有人带授权码摘要）；一个授权码累计错 100 次作废；页面分享只提供网页文件且不含疑似凭证；限次在写事务前判断、打开次数合并写入、入口页建时确定、每访客每分钟 600 请求；会话关闭即删除分享；分享人失去控制权即失效；访客只看平台提示；Cookie 逐段解析；主机核对一致；读授权码记审计；预览日志不记令牌；MCP 先核对 action
 - `5b24b98` 2026-10-26 〔已部署 EC2〕 fix(native): 刷新拦截改答「没有刷新凭据」，不再答「刷新链已吊销」——原生页面在访问 Cookie 到期前 1 小时刷新（1 小时的 Cookie 一打开就刷新），收到「已吊销」会跳回首页，每 7–8 秒整页重载一次；改答 no_refresh_cookie 后它按 1/4/16/60 分钟退避，到期时显示登录过期提示
 - `decdbad` 2026-10-26 〔已部署 EC2〕 fix(security): 原生入口的登录在访问 Cookie 到期时结束（K03）——Gateway 换取登录时另发 30 天的刷新凭据，原生页面用 /api/auth/refresh 续成新登录，平台既不能缩短也不能结束；所有公网中转包含 kirocrew-native-guard.conf，把刷新答成「刷新链已吊销」（401），页面回到需要登录的提示；部署时给此前渲染的中转补上 include，nginx 校验不过就还原并警告
@@ -107,12 +126,15 @@
 - `55efa79` 2026-10-26 〔已部署 EC2〕 fix(takeover): 交接路径改写经 journal（只记会话级事件）；时间线标题补上接手的三类事件；访问权限测试含 takeover
 - `7adb992` 2026-10-25 〔已部署 EC2〕 fix(security): 同站的会话预览不能借控制台的登录 Cookie——只凭 Cookie 的请求拒绝同站 / 跨站的子资源请求（Sec-Fetch-Site / -Mode，顶层打开与旧浏览器照旧）；「刷新模型」改为 POST（仍为 read 权限），核对 boundary、host_principal、isolation，事务内重读只更新能力字段；报告页与提示页 frame-ancestors 'none'
 
-### 未标记 · 其他（3 个提交：已部署 EC2 2、仅本机 1）
+### 未标记 · 其他（5 个提交：已部署 EC2 2、仅本机 3）
 
+- `900d6b3` 2026-10-26 〔仅本机〕 refactor(workers): Worker 登记的绑定规则与登记事务抽成 workers.check_binding / workers.register——控制台登记与接入码走同一段代码（MVP 0.2.0 P1 Task 6 前置）
+- `f48b416` 2026-10-26 〔仅本机〕 refactor(engine): 单主改为租约接口——FileLease 即原来的 engine.lock 文件锁，Engine 可注入别的租约（温备用，P5）；行为不变（MVP 0.2.0 P1 Task 5）
 - `b0469c9` 2026-10-26 〔仅本机〕 Merge remote-tracking branch 'origin/docs/mvp-020-inputs' into feat/mvp-0.2.0
 - `8cfdc37` 2026-10-26 〔已部署 EC2〕 Merge branch 'fix/native-refresh-guard' into fix/d58-minors
 - `6b686d1` 2026-10-26 〔已部署 EC2〕 Merge branch 'feat/session-takeover' into fix/native-refresh-guard
 
-### 未标记 · 功能（1 个提交：已部署 EC2 1）
+### 未标记 · 测试（2 个提交：仅本机 2）
 
-- `5a78786` 2026-10-26 〔已部署 EC2〕 feat(console): 公开分享并入「预览产出」的下拉菜单——与预览产出是同一批内容，给没有账号的人看；不再单独占一个工具栏按钮，只对能分享的人显示
+- `8dd7ad4` 2026-10-26 〔仅本机〕 test(p0): MVP 0.2.0 P0 实测脚本与结果（T1–T4、T7–T10）及 Litestream 云上验证
+- `40177df` 2026-10-26 〔仅本机〕 test(deploy): deploy.sh 的安全测试带上 arch-lib.sh，并覆盖新栈按机型架构选 AMI
