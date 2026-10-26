@@ -1,9 +1,9 @@
 # 进度与完成记录
 
-> 由 `tools/progress.py` 生成（2026-10-26 15:33 CST）：任务状态取自 `docs/progress.json`，提交记录取自 git。看板：`docs/progress-dashboard.html`；实时看板：`python3 tools/progress.py --serve --ec2`（http://127.0.0.1:8765/）。
+> 由 `tools/progress.py` 生成（2026-10-26 15:42 CST）：任务状态取自 `docs/progress.json`，提交记录取自 git。看板：`docs/progress-dashboard.html`；实时看板：`python3 tools/progress.py --serve --ec2`（http://127.0.0.1:8765/）。
 
-- **本轮完成度**：92%　**MVP 完成度**：73%
-- **分支**：HEAD `1eb4a26`；自 `origin/main` 起 28 个提交——已推送 0、已部署 EC2 27、仅本机 1；EC2 运行 `5a78786`
+- **本轮完成度**：63%　**MVP 完成度**：73%
+- **分支**：HEAD `b69b19c`；自 `origin/main` 起 46 个提交——已推送 0、已部署 EC2 27、仅本机 19；EC2 运行 `5a78786`
 - **回归**：1861 后端 + 92 + 281 控制台 + 7 个浏览器测试；EC2 运行 12fbd9f；本地 main 已合并（fe49f81），MVP-0.1.1 在 feat/mvp-0.1.1
 
 ## 模块
@@ -11,6 +11,7 @@
 | 模块 | 完成度 | 已验收 | 已部署 · 待验收 | 本机完成 · 待部署 | 进行中 | 卡点 · 等外部 | 未开始 |
 |---|---|---|---|---|---|---|---|
 | MVP 里程碑（M1–M5） | 73% | 22 | 17 | 0 | 2 | 0 | 9 |
+| MVP 0.2.0 部署模式、自助 Worker 与 Worker 池 | 3% | 0 | 0 | 1 | 0 | 2 | 15 |
 | D46 Agent 角色与提示体系 | 87% | 8 | 3 | 0 | 0 | 1 | 0 |
 | D49 每人一个执行边界 | 80% | 2 | 2 | 0 | 1 | 0 | 0 |
 | D50 编码技能包 | 100% | 2 | 0 | 0 | 0 | 0 | 0 |
@@ -70,6 +71,33 @@
 - `07c0dad` 2026-10-26 〔已部署 EC2〕 docs(progress): D58 延后项已部署 EC2（f2735ca）
 - `f2735ca` 2026-10-26 〔已部署 EC2〕 fix(local): D58 终审延后项——同步先鉴权再读 20 MB 请求体；拉回是读（只读 Token 与查看者可拉回）；没有新提交的同步 409 nothing_to_sync；octopus login 先把已有文件收窄为 0600 再写 Token，先保存 CLI Token 再吊销登录用的临时 Token
 
+### D59（1 个提交：仅本机 1）
+
+- `df72489` 2026-10-24 〔仅本机〕 docs(design): Worker 自助接入——管理员签发一次性接入码（定好登记到哪里），Worker 主机执行 worker enroll 自行登记，平台照旧带 Token 核实 /health；Token 不经人手、不进 SSM 命令历史；本地全栈自动登记；待负责人确认三点。BACKLOG 记录登记的两处不一致、K10 已由 D59 完成
+
+### 未标记 · 文档（20 个提交：已部署 EC2 3、仅本机 17）
+
+- `b69b19c` 2026-10-26 〔仅本机〕 docs(design): 0.2.0 统一设计的出处草稿入库——无状态 Worker 池设计（P）与状态栈、Worker 池 CloudFormation 草稿（未部署，供 P1 状态栈与 Litestream、P3 数据面栈参照）
+- `a826ad1` 2026-10-24 〔仅本机〕 docs(plan): 0.2.0 规划补上「控制面 + 数据面」的分工、不变式与现在偏离的五处（负责人 2026-10-24 的归纳）
+- `cfb3ebb` 2026-10-23 〔仅本机〕 docs(plan): MVP 0.2.0 核心——高可用与自动扩容规划草案（待负责人评审）：现状单点、平台层三方案（推荐先做温备 + Litestream）、执行环境改为一组 Worker 并按平台的积压信号扩缩、M0–M5 分期与验收、不新增等待的做法、待决定问题
+- `54d9a40` 2026-10-25 〔仅本机〕 docs(design): 0.2.0 统一设计按 kirocrew-on-ce 复审补三点（CE11、CE12、Token 措辞）
+- `7202a58` 2026-10-25 〔仅本机〕 docs(design): 0.2.0 统一设计并入 kirocrew-on-ce 审阅意见（2026-10-25，CE1–CE10）
+- `bbd3e5a` 2026-10-25 〔仅本机〕 docs(design): 0.2.0 统一设计按实施者视角检查修订（设计者决定 S29–S35）
+- `0d68764` 2026-10-25 〔仅本机〕 docs(design): MVP 0.2.0 部署模式、Worker 自助申请与 Worker 池统一设计（合并 worker-pool、HA 规划、enrollment 与负责人决定）
+- `1eb4a26` 2026-10-26 〔仅本机〕 docs(progress): 公开分享入口并入预览产出，已部署 EC2（5a78786）
+- `4aa58db` 2026-10-26 〔已部署 EC2〕 docs(progress): 公开分享已部署 EC2（78f3d5a）与公网实测
+- `4ee44e2` 2026-10-26 〔已部署 EC2〕 docs(progress): 拉回各用一个文件已部署 EC2（6b686d1）
+- `ef81f01` 2026-10-26 〔已部署 EC2〕 docs(design): 原生入口改为单会话票据（K03 / M4-3）——现状（含 30 天刷新与过渡修复）与三种方案：撤权即结束、请 KiroCrew 提供按会话限定的登录、平台票据加过滤代理；建议先一后二
+- `894ce39` 2026-10-25 〔仅本机〕 docs: BACKLOG 记录同站缓解已做（PR #9：GET 排查、Sec-Fetch-Site、刷新模型改 POST、frame-ancestors）与仍待的限流
+- `4570a19` 2026-10-25 〔仅本机〕 docs: BACKLOG 记录预览域名与控制台同站（tinyboat.blog）——现有的防护、挡不住的情形与修法（0.2.0 设计审阅时发现）
+- `9fae8d5` 2026-10-25 〔仅本机〕 docs: MVP 0.2.0——EBS 卷迁移评估（可行性与成本），缩容按选项 A、尽可能不缩容（负责人 2026-10-25）
+- `79d1636` 2026-10-25 〔仅本机〕 docs: 进度看板——发布两项已完成（PR #5–#7 已合并到 main）；「下一步」改为当前待负责人决定的事
+- `9140e8c` 2026-10-25 〔仅本机〕 docs: MVP 0.2.0 重要更新——认证信息不用 Secrets Manager、随用户的 EBS 卷走；缩容待评估卷移动的可行性与成本（负责人 2026-10-25）
+- `22192cd` 2026-10-24 〔仅本机〕 docs: Worker 自助接入放到 MVP 0.2.0（负责人 2026-10-24），并入 0.2.0 的 Worker 自助申请；设计状态、BACKLOG 与进度看板
+- `7086085` 2026-10-24 〔仅本机〕 docs: MVP 0.2.0 重要更新——Kiro CLI 由用户自己用设备码登录（负责人 2026-10-24 确认）
+- `d3273f8` 2026-10-24 〔仅本机〕 docs: 进度看板加 Worker 自助接入（设计待确认）
+- `4d5c0eb` 2026-10-24 〔仅本机〕 docs: MVP 0.2.0 重要更新——两种部署模式（单机版、集群版）与 Worker 自助申请、共享 / 专用 Worker、每人一块 EBS 改挂即迁移（负责人 2026-10-24）
+
 ### 未标记 · 修复（6 个提交：已部署 EC2 6）
 
 - `b10f299` 2026-10-26 〔已部署 EC2〕 fix(share): 公开分享安全审查的修复——授权码页改为 same-origin（no-referrer 让浏览器带 Origin: null，表单必被拒）；重新生成授权码也结束演示 Cookie（持有人带授权码摘要）；一个授权码累计错 100 次作废；页面分享只提供网页文件且不含疑似凭证；限次在写事务前判断、打开次数合并写入、入口页建时确定、每访客每分钟 600 请求；会话关闭即删除分享；分享人失去控制权即失效；访客只看平台提示；Cookie 逐段解析；主机核对一致；读授权码记审计；预览日志不记令牌；MCP 先核对 action
@@ -79,15 +107,9 @@
 - `55efa79` 2026-10-26 〔已部署 EC2〕 fix(takeover): 交接路径改写经 journal（只记会话级事件）；时间线标题补上接手的三类事件；访问权限测试含 takeover
 - `7adb992` 2026-10-25 〔已部署 EC2〕 fix(security): 同站的会话预览不能借控制台的登录 Cookie——只凭 Cookie 的请求拒绝同站 / 跨站的子资源请求（Sec-Fetch-Site / -Mode，顶层打开与旧浏览器照旧）；「刷新模型」改为 POST（仍为 read 权限），核对 boundary、host_principal、isolation，事务内重读只更新能力字段；报告页与提示页 frame-ancestors 'none'
 
-### 未标记 · 文档（4 个提交：已部署 EC2 3、仅本机 1）
+### 未标记 · 其他（3 个提交：已部署 EC2 2、仅本机 1）
 
-- `1eb4a26` 2026-10-26 〔仅本机〕 docs(progress): 公开分享入口并入预览产出，已部署 EC2（5a78786）
-- `4aa58db` 2026-10-26 〔已部署 EC2〕 docs(progress): 公开分享已部署 EC2（78f3d5a）与公网实测
-- `4ee44e2` 2026-10-26 〔已部署 EC2〕 docs(progress): 拉回各用一个文件已部署 EC2（6b686d1）
-- `ef81f01` 2026-10-26 〔已部署 EC2〕 docs(design): 原生入口改为单会话票据（K03 / M4-3）——现状（含 30 天刷新与过渡修复）与三种方案：撤权即结束、请 KiroCrew 提供按会话限定的登录、平台票据加过滤代理；建议先一后二
-
-### 未标记 · 其他（2 个提交：已部署 EC2 2）
-
+- `b0469c9` 2026-10-26 〔仅本机〕 Merge remote-tracking branch 'origin/docs/mvp-020-inputs' into feat/mvp-0.2.0
 - `8cfdc37` 2026-10-26 〔已部署 EC2〕 Merge branch 'fix/native-refresh-guard' into fix/d58-minors
 - `6b686d1` 2026-10-26 〔已部署 EC2〕 Merge branch 'feat/session-takeover' into fix/native-refresh-guard
 

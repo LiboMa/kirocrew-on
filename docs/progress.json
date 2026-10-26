@@ -405,6 +405,126 @@
       ]
     },
     {
+      "id": "mvp020",
+      "title": "MVP 0.2.0 部署模式、自助 Worker 与 Worker 池",
+      "scope": "round",
+      "desc": "统一设计 2026-10-25；路线图与 P1 计划 2026-10-26。分支 feat/mvp-0.2.0。",
+      "items": [
+        {
+          "id": "v020-plan",
+          "name": "0.2.0 规划：统一设计并入集成分支、路线图与 P1 计划、版本文档与 Presentation",
+          "status": "local",
+          "ref": "feat/mvp-0.2.0"
+        },
+        {
+          "id": "v020-p0",
+          "name": "P0 实测（13 项，≤ $20）",
+          "status": "blocked",
+          "ref": "设计 §16",
+          "more": "待负责人批准测试资源并配合 T5 设备码登录（设计 §17 #13）"
+        },
+        {
+          "id": "v020-p1-1",
+          "name": "P1-1 登记时边界唯一性看全部 Worker（CE9）",
+          "status": "todo",
+          "ref": "P1 Task 1"
+        },
+        {
+          "id": "v020-p1-2",
+          "name": "P1-2 boundary_id 进入 Worker 配置与健康信息（S8、CE3）",
+          "status": "todo",
+          "ref": "P1 Task 2"
+        },
+        {
+          "id": "v020-p1-3",
+          "name": "P1-3 全局 UID 分配器（S9）",
+          "status": "todo",
+          "ref": "P1 Task 3"
+        },
+        {
+          "id": "v020-p1-4",
+          "name": "P1-4 健康信息补容量字段",
+          "status": "todo",
+          "ref": "P1 Task 4"
+        },
+        {
+          "id": "v020-p1-5",
+          "name": "P1-5 Engine 租约接口",
+          "status": "todo",
+          "ref": "P1 Task 5"
+        },
+        {
+          "id": "v020-p1-6",
+          "name": "P1-6 接入码第 1 期（N）",
+          "status": "todo",
+          "ref": "P1 Task 6"
+        },
+        {
+          "id": "v020-p1-7",
+          "name": "P1-7 有副作用的 GET 审计（CE12）",
+          "status": "todo",
+          "ref": "P1 Task 7"
+        },
+        {
+          "id": "v020-p1-8",
+          "name": "P1-8 安装脚本支持 ARM64",
+          "status": "todo",
+          "ref": "P1 Task 8",
+          "more": "arm64 实机验收与 P0 一起，需批准新开机器"
+        },
+        {
+          "id": "v020-p1-9",
+          "name": "P1-9 打包：wheel、清单、签名",
+          "status": "todo",
+          "ref": "P1 Task 9"
+        },
+        {
+          "id": "v020-p1-10",
+          "name": "P1-10 状态栈与 Litestream",
+          "status": "todo",
+          "ref": "P1 Task 10",
+          "more": "云上恢复验证需批准临时控制面主机"
+        },
+        {
+          "id": "v020-p1-11",
+          "name": "P1-11 平台指标（EMF）",
+          "status": "todo",
+          "ref": "P1 Task 11"
+        },
+        {
+          "id": "v020-p1-12",
+          "name": "P1-12 KiroCrew 升到正式版（可能单列 P1b）",
+          "status": "todo",
+          "ref": "P1 Task 12"
+        },
+        {
+          "id": "v020-p2",
+          "name": "P2 单机版一键安装",
+          "status": "todo",
+          "ref": "设计 §15"
+        },
+        {
+          "id": "v020-p3",
+          "name": "P3 集群版底座（只开放给管理员）",
+          "status": "blocked",
+          "ref": "设计 §15",
+          "more": "待 P0（T5、T6、T13）与独立可注册域名（§17 #8）"
+        },
+        {
+          "id": "v020-p4",
+          "name": "P4 自助申请与切换",
+          "status": "todo",
+          "ref": "设计 §15"
+        },
+        {
+          "id": "v020-p5",
+          "name": "P5 迁移现有部署与平台温备",
+          "status": "todo",
+          "ref": "设计 §15"
+        }
+      ]
+    },
+    {
       "id": "d46",
       "title": "D46 Agent 角色与提示体系",
       "scope": "round",

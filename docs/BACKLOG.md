@@ -364,8 +364,8 @@
   - EBS 只能挂在同一可用区的实例上：用户的卷、共享池与专用 Worker 默认同一可用区；跨可用区要先快照再恢复，只用于故障转移。
   - 单台实例可挂的卷有上限（Nitro 一般二十几块，扣除根卷与网卡）：它决定一台共享主机最多放几人，扩容信号要同时看 CPU、内存与剩余挂载位。
   - 各主机上执行用户的 UID 须全局统一，由控制面分配，否则卷上文件属主对不上。
-- **待负责人确认：**
-- **与已有草稿的关系：** `feat/stateless-worker-pool`（`.worktrees/worker-pool`，未提交：会话租约、S3 检查点、Worker 池、Litestream）与 `docs/mvp-0.2.0-ha-scaling`（`.worktrees/mvp-020-ha`，e268b69、7bc7b73：平台高可用、按负载扩容、控制面 / 数据面分工）。本节的「每人一块 EBS、改挂即迁移」取代其中「工作区靠 git bundle 搬家」作为主路径（bundle 保留为跨可用区与备份手段）〔设计者决定〕；三者合并成一份设计与一份实施计划后再开工。
+- **待负责人确认**：见统一设计 §17 与路线图第 3 节。
+- **与已有草稿的关系：** `feat/stateless-worker-pool`（`.worktrees/worker-pool`，未提交：会话租约、S3 检查点、Worker 池、Litestream）与 `docs/mvp-0.2.0-ha-scaling`（`.worktrees/mvp-020-ha`，e268b69、7bc7b73：平台高可用、按负载扩容、控制面 / 数据面分工）。本节的「每人一块 EBS、改挂即迁移」取代其中「工作区靠 git bundle 搬家」作为主路径（bundle 保留为跨可用区与备份手段）〔设计者决定〕；三者合并成一份设计与一份实施计划后再开工——2026-10-25 合并为统一设计（`docs/superpowers/specs/2026-10-25-mvp-0.2.0-deployment-and-worker-pool-design.md`），2026-10-26 写成路线图与 P1 实施计划（`docs/superpowers/plans/2026-10-26-mvp-0.2.0-roadmap.md`、`…-p1-foundation.md`），在 `feat/mvp-0.2.0` 上实施。
 
 ## 稳定性（2026-10-22 发现）
 
