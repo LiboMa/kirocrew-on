@@ -426,7 +426,7 @@
         {
           "id": "v020-p1-1",
           "name": "P1-1 登记时边界唯一性看全部 Worker（CE9）",
-          "status": "todo",
+          "status": "local",
           "ref": "P1 Task 1"
         },
         {

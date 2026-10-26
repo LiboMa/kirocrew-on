@@ -390,7 +390,7 @@
 ## 执行环境登记的两处不一致（2026-10-24 设计 Worker 自助接入时发现）
 
 - ~~`GET /v1/workers/<id>/capabilities`（刷新模型）只核对 `boundary`~~（2026-10-25 修复，PR #9：改为 POST，同时核对 `host_principal` 与 `isolation`，在事务里重读后只更新能力字段，不再覆盖同时发生的「更新连接」）。
-- 非 spare 的 Worker 登记时只与**已启用**的 Worker 比对 `boundary`：已停用 Worker 的边界可以再登记给另一个人或 Team。
+- ~~非 spare 的 Worker 登记时只与**已启用**的 Worker 比对 `boundary`：已停用 Worker 的边界可以再登记给另一个人或 Team。~~（2026-10-26 修复，MVP 0.2.0 P1 Task 1：`workers.registration_conflicts` 与全部 Worker 比对，含已停用、已退役的）
 
 ## 预览域名与控制台同站（2026-10-25，0.2.0 设计审阅时发现）
 

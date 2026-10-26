@@ -1005,20 +1005,7 @@ def server(database, port=8918, host="127.0.0.1", allowed_hosts=(), origin_secre
                                     "执行空间不存在", 404, "not_found")
                             require(not team or team_environment(db, team) is None,
                                     "该 Team 已有执行环境（含已停用的）", 409, "team_has_environment")
-                        local_principal = hashlib.sha256(f"{socket.gethostname()}:{os.getuid()}".encode()).hexdigest()
-                        if health.get("host_principal") == local_principal:
-                            owner = db.execute("SELECT admin FROM users WHERE id=?", (user,)).fetchone() if user else None
-                            require(owner and owner["admin"] and health.get("isolation") == "trusted-local",
-                                    "平台宿主账号仅用于管理员本机验证；Team 和普通用户须使用独立执行账号/容器/主机",
-                                    409, "isolation_required")
-                        # A spare boundary must never have been registered, not even on a disabled Worker (T4).
-                        others = "SELECT config,team_id,owner_id FROM workers" + ("" if spare else " WHERE enabled=1")
-                        for row in db.execute(others):
-                            previous = json.loads(row["config"])["capabilities"]
-                            require(previous.get("boundary") != health.get("boundary"), "该 Gateway 边界已登记", 409, "worker_conflict")
-                            if spare or (team, user) != (row["team_id"], row["owner_id"]):
-                                require(previous.get("host_principal") != health.get("host_principal"),
-                                        "不同执行空间不能复用同一宿主账户；请使用独立账号/容器/主机", 409, "isolation_required")
+                        workers.registration_conflicts(db, health, team, user, spare)   # CE9: one set of rules
                         wid = uid("worker")
                         db.execute("INSERT INTO workers(id,name,owner_id,team_id,config,scope) VALUES(?,?,?,?,?,?)",
                                    (wid, name(body.get("name")), actor["id"] if spare else user, team,
