@@ -516,8 +516,16 @@
         {
           "id": "v020-p2",
           "name": "P2 单机版一键安装",
-          "status": "todo",
-          "ref": "设计 §15"
+          "status": "local",
+          "ref": "P2 计划 Task 1–8",
+          "more": "本机完成（2026-10-28）：install.sh 预检与验签安装、dnf / apt 分支、CloudFront 小栈与主机角色核对、控制台登录 Kiro、控制台新建边界（root 服务经 systemd path 单元）、部署套件 kirocrew-on single native / backup / up 与「管理 › 部署」、Docker 渠道。待终审修复、EC2 部署与端到端。"
+        },
+        {
+          "id": "v020-p2-acceptance",
+          "name": "P2 验收：4 台新 EC2 各装一次（第 9 项）",
+          "status": "blocked",
+          "ref": "P2 计划 Task 9",
+          "more": "需负责人批准新开 4 台 EC2（约 $3，做完删除）"
         },
         {
           "id": "v020-p3",

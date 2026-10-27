@@ -27,12 +27,14 @@
 |---|---|---|
 | P0 实测 | 在一次性测试资源上测 13 项：卸挂时延、挂卷上限、登录能否随卷走、共享主机的内存互扰等；费用 ≤ $20 | **负责人 2026-10-26 已批准**。T1–T4、T7–T10 已完成（见第 4 节）；T5、T6、T11、T13 要在 arm64 上装好 KiroCrew ON 后做，T5 需负责人用设备码登录 |
 | **P1 打底** | 新边界由平台分配身份与全局 UID；修好两处登记不一致；人工接入改用一次性接入码；Engine 租约接口；健康信息补容量；打包（wheel + 签名清单）；安装脚本支持 ARM64；Litestream；平台指标；KiroCrew 升到正式版；有副作用的 GET 审计 | **11 / 12 已完成并部署到 EC2**（2026-10-26，`c80dae6`，PR #15，见第 3 节）。EC2 上的端到端：主机检查 13/13，控制台浏览器检查 13/13，原生页面没有循环刷新。用户体验不变，只有管理员的「登记 Worker」多了「用接入码」。KiroCrew 升级拆成 **P1b**，待负责人确认（见第 9 节） |
-| P2 单机版一键安装 | `install.sh` 支持四种系统 / 架构组合，加 pip、Docker；控制台里的 Kiro 设备码 | **进行中**：实施计划 9 项（`docs/superpowers/plans/2026-10-27-mvp-0.2.0-p2-single-node.md`）；第 5 项「在控制台登录 Kiro」已完成 |
+| **P2 单机版一键安装** | `install.sh` 支持四种系统 / 架构组合，加 pip、Docker；控制台里的 Kiro 设备码 | **8 / 9 本机完成**（2026-10-28，实施计划 `docs/superpowers/plans/2026-10-27-mvp-0.2.0-p2-single-node.md`，见第 3 节）。第 9 项验收要新开 4 台 EC2，待负责人批准（见第 9 节） |
 | P3 集群版底座 | 主机代理、用户卷、Host 路由的原生入口、迁移编排；只开放给管理员 | 待 P0 实测（不另购域名：原生入口用 `*.native.tinyboat.blog`，隔离按设计 §8.2a） |
 | P4 自助申请与切换 | 普通用户申请共享 / 专用主机，双向切换 | 待 P3 |
 | P5 迁移现有部署与温备 | `personal` 退役，现有边界搬到用户卷，温备与演练 | 待 P4 |
 
-## 3．P1 打底已完成的内容
+## 3．已完成的内容
+
+### P1 打底
 
 | 项 | 做了什么 | 谁会看到 |
 |---|---|---|
@@ -46,6 +48,19 @@
 | 打包 | 只用标准库构建可复现的 wheel、清单（含这一版测过的组合）与校验和，可选签名；命令 `kirocrew-on`；版本号 0.2.0rc1 | 无（给 P2 的一键安装用） |
 | Litestream | 状态栈只留状态桶；Litestream 只装在集群版控制面主机上（不跑 Agent），每秒同步，恢复后用 `backup --source` + `restore-verify` 校验 | 无（给 P5 的温备用） |
 | 平台指标 | 每分钟一行 CloudWatch EMF（命名空间 `KiroCrewOn`）：进行中 / 等 Worker / 等配额的会话、失联的 Worker、运行中的演示等；管理员也可读 `GET /v1/admin/metrics` | 管理员（API） |
+
+### P2 单机版一键安装
+
+| 项 | 做了什么 | 谁会看到 |
+|---|---|---|
+| **一行安装** | `curl -fsSL https://<下载域名>/install.sh \| sudo sh`。先预检，不满足的项一次列全后退出，什么也不改：系统（AL2023、Ubuntu 22.04 / 24.04）、CPU 架构（x86_64 照装，开头结尾各提示一次推荐 ARM64）、root、systemd、磁盘、内存、EC2 实例元数据。`--check` 只做预检 | 安装的人 |
+| 按系统的安装步骤 | dnf / apt 两套包名；Python 3.12 用系统的，Ubuntu 22.04 用 uv 管理的 CPython；SELinux 打端口标签，AppArmor 不需要。AL2023 上的命令与原来逐条一致 | 无 |
+| **验签安装** | 取频道（`--channel stable \| preview`、`--version`）的发布物：先用内嵌公钥验清单签名（没有签名不装），再核对版本与 wheel 的 sha256；任何一项不符都停在改动之前。pip 渠道：`pip install kirocrew-on` 后 `sudo kirocrew-on setup`，走同一套步骤。发布工具另出频道索引（PEP 503，链接带 `#sha256=`） | 安装的人 |
+| **CloudFront 小栈与权限** | 默认建 `kirocrew-on-single`：Elastic IP、只放行 CloudFront 的入站规则、控制台 / 原生 / 预览三个分发、每日快照。源站密钥在主机上生成，不离开主机。缺权限时列出要的权限；装完核对主机角色只剩 Bedrock 调用（与 SSM），否则列出要卸下的策略。`--no-cloudfront` 只经 SSM 端口转发 | 安装的人 |
+| **在控制台登录 Kiro** | 执行环境的主人在「我的设置 › 执行环境」点「登录 Kiro」，对话框给出验证地址与设备码，授权后自动确认。设备码只给主人看，不进审计和日志；同一边界同时只有一个登录 | 每个人 |
+| **新建边界** | 单机版的「管理 › 执行环境 › 新建边界」：选属主，几分钟后得到他自己的边界。平台 API 不提权，只留下名称与用户名；root 一侧的服务再校验一遍，只运行 `boundary.sh`；进度、输出与下一步都在页面上，失败的可以再试一次 | 管理员 |
+| **部署套件** | `kirocrew-on single native <边界> \| backup --bucket <桶> \| up`，在管理员电脑或 CloudShell 上用管理员凭证运行，主机上不留凭证：给边界开公网原生入口（最多 9 个）、平台数据的异地备份（只能写一个对象、15 分钟内有效的预签名 URL）、更新栈。「管理 › 部署」记下待执行的变更与命令，套件执行完回报 | 管理员 |
+| Docker 渠道 | 一个容器、一个边界，用于试用；Agent 不以 root 运行，依赖与主机相同；多架构镜像交给 CI | 试用的人 |
 
 ## 4．P0 实测的主要结论
 
@@ -72,12 +87,16 @@
 
 - **版本号**：平台与 Worker 上报 `0.2.0rc1`，控制台包版本为 `0.2.0-rc.1`。
 - **数据库**：
-  - 启动时自动从 15 迁移到 17，新增表 `boundaries` 与 `worker_enrollments`；迁移前自动备份（`octopus-v15-<时间>.sqlite3`）。
-  - 回退到 0.1.x 时，旧版本遇到 17 会拒绝启动：用这份备份恢复，再启动旧版本。
+  - 启动时自动从 15 迁移到 19：新增表 `boundaries`、`worker_enrollments`、`aws_requests`，`tokens` 多一列 `kind`；迁移前自动备份（`octopus-v15-<时间>.sqlite3`）。
+  - 回退到 0.1.x 时，旧版本遇到 19 会拒绝启动：用这份备份恢复，再启动旧版本。
 - **新的管理员接口**：
   - `POST` / `GET /v1/workers/enrollments`、`DELETE /v1/workers/enrollments/<id>`；
   - `POST /v1/admin/boundaries`；
-  - `GET /v1/admin/metrics`。
+  - `GET /v1/admin/metrics`；
+  - `GET` / `POST /v1/admin/boundaries/provision`（新建边界，单机版）；
+  - `GET` / `POST /v1/admin/aws-requests`、`POST /v1/admin/aws-requests/<id>/done`（部署套件的待执行项）。
+- **新的用户接口**：`POST` / `GET /v1/workers/<id>/kiro-sign-in`（在控制台登录 Kiro，只给该执行环境的主人）。
+- **新的命令**：`kirocrew-on setup`（pip 渠道）、`kirocrew-on single …`（部署套件）；主机上有 `/usr/local/bin/kirocrew-on`。
 - **新的公开接口**：`POST /v1/workers/enroll`，不需登录，凭接入码。
 - **Worker 的登记方式**：
   - `deploy.sh boundary add` 与 `worker-host register` 的首次登记改用一次性接入码，`worker-host register` 不再经 SSM 读取 Token；
@@ -88,7 +107,9 @@
 - **发布物**：`tools/build_release.py` 生成 wheel、清单与校验和，可选签名；本期只产出、不上传。
 - **用户看得见的变化**：
   - 管理员的「登记 Worker」多了「用接入码」；
-  - 状态配色改为完成为蓝、运行中为绿、有问题为红或黄（负责人 2026-10-26）。
+  - 会话与任务的状态：已完成为绿、进行中为蓝（负责人 2026-10-27）；有问题为红或黄；
+  - 「我的设置 › 执行环境」多了「登录 Kiro」，Kiro 登录过期的提示改为由执行环境的主人在这里登录；
+  - 单机版上管理员多了「新建边界」与「管理 › 部署」。
 - **部署后要重新登录一次控制台**：Token 从这一版起记下签发方式。新建账号、重设密码、设为管理员、恢复已停用的账号只认控制台登录，Coding Agent 与 API Token 做不了。此前的登录没有这个记录，一律按 API Token 算。
 - **域名不变**：控制台、预览、将来的原生入口都在 `tinyboat.blog` 下，隔离做法见设计 §8.2a。
 
@@ -106,11 +127,18 @@
   - Litestream 在宕机后恢复，用时 4.4 s，`restore-verify` 通过，RPO 0.69 s；
   - 这一版的 wheel 在 arm64 的 AL2023 上直接安装运行。
 
+- **P2**（2026-10-28）：全量回归（Task 1–4 之后的干净检出）旧版测试 92、控制台 346、后端 2120，全部通过；之后每项的测试见实施计划的记录（控制台 351）。在控制台登录 Kiro 已在 EC2 上用真实 kiro-cli 核对过输出的解析；其余待部署后的端到端与第 9 项验收。
+
 ## 8．已知问题与后续
 
 - **P1b**：KiroCrew 升到正式版 v0.10.0 会改变原生页面的体验，等负责人确认（见第 9 节）。
 - **P0b**：T5、T6、T11、T13 要在 arm64 上装好 KiroCrew ON 后做；T5 需负责人用设备码登录。
 - **接入码的次要项**：失败计数可被绕开、Worker URL 的回环与重定向、签发人失效后码仍有效、控制台列表不自动刷新等，记在 BACKLOG。
+- **P2 的后续**：
+  - Docker 镜像本机未构建，由 CI 构建并试跑；
+  - 装完核对主机角色的结果只在安装输出里，控制台不标红；
+  - 安装用的 AK/SK 只从环境变量读，不提供交互输入；
+  - 改动更新域名的 `latest.json` 可以让安装回到较旧的已签名版本（版本号与签名仍须相符）。
 - **同一域名下的残余风险**：Agent 做的演示页可以把 `tinyboat.blog` 的 Cookie 写满，让这个浏览器暂时打不开（读不到、也改不了任何人的数据）。清除该域名的站点数据即可恢复（OPERATIONS「会话独立预览域名」）。
 
 ## 9．需要负责人决定的
@@ -132,5 +160,6 @@
 | 1 | 用户没填 Key 时，是否沿用平台的 Bedrock | P4 |
 | 2 | 逐项批准新增等待（申请时等开机、升级时搬家等） | P4、P5 |
 | 3 | **KiroCrew 升到正式版 v0.10.0（P1b）**：控制台、会话、MCP 不变，但原生 KiroCrew 页面会有变化——Dashboard 状态区默认出现；错误卡片上多了「重启 Gateway」按钮；批准可以「1 小时 / 今天之内」信任；Subagents 卡片列出工具调用、排队卡片写明在等多少内存；Agent 列表多了 `kirocrew-team-lead`（接手一个目标，自己做小项、其余派发成子会话并巡检；它开的子会话不经平台的配额与排队）。其中「重启 Gateway」会重启成不带我们组合层的 Gateway，需要选：由组合层接管重启（建议），或在入口拦下（`docs/research/2026-10-26-kirocrew-upgrade.md`） | P1b |
+| 4 | **P2 验收（第 9 项）**：新开 4 台 EC2（AL2023 与 Ubuntu 24.04 各一台 arm64、一台 x86_64，xlarge，根卷 50 GiB），各用一条命令装通并跑一个真实会话（Claude 经 Bedrock），核对重跑、提示、角色权限、`single native` 与 `single backup`，做完删除；约 $3 | P2 收尾 |
 
 其余事项已有默认，按默认推进（设计 §17）。

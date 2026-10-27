@@ -1348,7 +1348,7 @@ npm --prefix web run test:browser       # 浏览器回归：React 与 /classic/ 
 
 浏览器回归只使用 `tests/mvp_browser_fixture.py` 的临时 HTTP/SQLite 数据，不连接 Worker、不调用 Coding 工具。
 
-## 15．发布物（MVP 0.2.0 P1）
+## 15．发布物（MVP 0.2.0 P1、P2）
 
 `npm --prefix web run build && python3 tools/build_release.py --out dist/release [--sign-key <PEM 私钥>] [--channel preview]`
 只用标准库生成：
@@ -1357,4 +1357,80 @@ npm --prefix web run test:browser       # 浏览器回归：React 与 /classic/ 
 - `manifest.json`（结构见 `deploy/release/manifest.schema.json`）：版本、频道、wheel 的 sha256，以及这一版测过的组合，取自 `deploy/versions.env`：KiroCrew 的提交与版本、Node 版本及 x64 / arm64 包的 sha256（从 nodejs.org 的 `SHASUMS256.txt` 读，可用 `--node-sums` 指定文件）、kiro-cli、Claude Code、Codex、OpenCode。
 - `SHA256SUMS`；给了 `--sign-key` 时另有 `manifest.sig`，用 `openssl dgst -sha256 -verify <公钥> -signature manifest.sig manifest.json` 验证。
 
-本期只产出、不上传：公开前只发内部 `preview` 频道（设计 §17 #9 的默认）；托管（S3 + CloudFront）与 KMS 签名随 P2 的 CI 一起做。
+频道（MVP 0.2.0 P2）：再加 `--index <feed 目录> --downloads https://<下载域名>/releases --feed https://<更新域名>/feed`（必须同时给 `--sign-key`），另出：
+
+- `<feed>/<频道>/latest.json`（install.sh 不带 `--version` 时读它）与 `versions.json`；
+- `<feed>/<频道>/simple/kirocrew-on/index.html`：PEP 503 索引，链接带 `#sha256=`（pip 渠道：`pip install --pre kirocrew-on --extra-index-url https://<更新域名>/feed/<频道>/simple/`）；
+- 版本目录里的 `install.sh`：写入了两个地址与签名公钥的那一份（仓库里的 `deploy/install/install.sh` 没有，只能 `--check` 或 `--source`）。
+
+目录布局：`<根>/releases/<版本>/`（字节，签过名）与 `<根>/feed/<频道>/`（可变的指针）。托管（S3 + CloudFront）与 KMS 签名随 CI 一起做；在那之前只发内部 `preview` 频道（设计 §17 #9 的默认）。
+
+## 16．单机版（MVP 0.2.0 P2，设计 §4.2）
+
+### 一行安装
+
+在一台 EC2 上（推荐 Graviton、AL2023 arm64、根卷 ≥ 50 GiB）：
+
+```
+curl -fsSL https://<下载域名>/install.sh | sudo sh                        # stable 频道的最新版
+curl -fsSL https://<下载域名>/install.sh | sudo sh -s -- --channel preview  # 或 --version 0.2.0rc1
+curl -fsSL https://<下载域名>/install.sh | sudo sh -s -- --check            # 只做预检
+```
+
+- **预检**（`install.sh` 本身，POSIX sh，经管道运行时 Ubuntu 上是 dash）：
+  - 支持 AL2023 与 Ubuntu 22.04 / 24.04，aarch64 或 x86_64；x86_64 照装，开头和结尾各提示一次推荐 ARM64；
+  - 其他系统列出受支持的系统后以退出码 2 结束；
+  - 一次列出所有不满足的项（root、systemd、空闲磁盘 ≥ 40 GiB——已装过的主机重跑只要 5 GiB、内存 ≥ 7.5 GiB、IMDSv2 可达），退出码 2，什么也不改。
+- **取发布物**：先用内嵌公钥验 `manifest.sig`（没有签名不装），再核对清单里的版本与 wheel 的 sha256；任何一项不符都以退出码 3 停在改动之前。验过的 wheel 展开在 `/opt/kirocrew-on/incoming/<版本>/`，然后执行同一套安装步骤（`al2023.sh`，按 `os-lib.sh` 分 dnf / apt；Ubuntu 22.04 的 Python 3.12 由 uv 管理）。
+- **CloudFront**：默认建小栈 `kirocrew-on-single`（`deploy/install/single-stack.sh up`），包括：
+  - Elastic IP；
+  - 主机安全组上一条只放行 CloudFront 源站前缀列表的规则；
+  - 控制台、原生、预览三个分发，以及给更多边界用的 9 个原生槽位；
+  - DLM 每日快照，按实例标签 `Backup=kirocrew-on-single`。
+  - 源站密钥在主机上生成，只写本机 `/etc/kirocrew-on/origin-secret`，重跑不换。
+  - `--no-cloudfront` 不建栈，控制台只经 SSM 端口转发打开（`portNumber=8918`，`http://localhost:8918`）。
+- **安装用的权限**：给实例角色临时加上 `deploy/aws/kirocrew-on-single-install-policy.json`，或用有这些权限的 AK/SK（`sudo -E sh` 或 `sudo AWS_ACCESS_KEY_ID=… AWS_SECRET_ACCESS_KEY=… sh`，只在本次安装的进程里使用，不写盘）。缺权限时脚本列出需要的操作后以退出码 4 结束。
+- **装完核对主机角色**（`single-stack.sh check-role`，S29）：用 `iam:SimulatePrincipalPolicy` 查角色是否还有写权限；有则打印要卸下的策略（保留 Bedrock 调用与 `AmazonSSMManagedInstanceCore`）。安装照常完成，结尾提示「主机角色的核对没有通过」。
+- **结尾**打印控制台地址、管理员 `admin`、初始密码（只打印这一次，另存在 root 0600 的 `/etc/kirocrew-on/admin-password`）与下一步：在「我的设置 › 执行环境」里点「登录 Kiro」。
+- **重跑**：每一步只补缺；栈没有变化时不执行变更集，含资源替换的变更集一律拒绝。
+- **pip 渠道**：`pip install kirocrew-on` 后 `sudo kirocrew-on setup`：把装好的包排成同样的布局，交给 `install.sh --source` 执行预检与同一套步骤（不下载，pip 已按索引的 `#sha256=` 校验）。
+- 主机上的 `kirocrew-on` 命令（`/usr/local/bin/kirocrew-on`）运行当前发布，例如 `sudo kirocrew-on --config /etc/kirocrew-on/platform.toml backup --dest <目录>`。
+
+### 新建边界（控制台）
+
+「管理 › 执行环境」右上角的「新建边界」（只在单机版上出现，需要控制台登录的管理员）：选属主，名称留空时用属主的用户名。
+
+- 平台 API 以 `NoNewPrivileges` 运行，从不提权：它校验属主（存在、未停用、还没有自己的专属执行环境）与名称（同 `boundary.sh`），只把名称与用户名写进 `/var/lib/octopus/platform/boundary-requests/`。
+- `octopus-boundary-provision.path` 发现请求后启动 root 的一次性服务（`deploy/install/boundary-provision.py`）：
+  - 不跟随链接，只读 octopus 用户的普通文件；
+  - 按 `boundary.sh` 的规则再校验一遍，只以这两个参数运行 `boundary.sh`，一次一个；
+  - 进度写进 `/var/lib/octopus/boundary-provision/`（root 所有、octopus 组只读），像令牌的字符串先遮掉。
+- 控制台显示排队 / 进行中 / 已完成 / 没有完成、脚本输出与下一步；失败的「再试一次」只补缺。新边界的原生入口先只经本机端口转发；要公网入口时运行下面的 `kirocrew-on single native <边界>`。
+- 审计：`boundary.provision`（名称与属主）。
+
+### 部署套件（`kirocrew-on single`，在你的电脑或 CloudShell 上运行）
+
+装完后主机角色只留 Bedrock 调用权限，之后要改 AWS 的事由管理员在主机外用自己的凭证（aws CLI 的）执行；要在主机上做的经 SSM，管理员凭证不去主机。
+
+| 命令 | 做什么 |
+|---|---|
+| `kirocrew-on single native <边界>` | 在栈里给该边界开一个原生分发（槽位 1–9，中转端口 8920–8928，源站密钥沿用栈里的值），再经 SSM 让主机渲染中转、改写 `crew_url` 并重启该边界（`deploy/install/boundary-native.sh`） |
+| `kirocrew-on single backup --bucket <桶>` | 本机为一个对象签一条 15 分钟内有效的 PUT 预签名 URL，经 SSM 让主机做一致性备份并上传到 `s3://<桶>/kirocrew-on/backups/<实例>/<时间>.tar.gz`；用 `kirocrew-on restore-verify` 在别处核对 |
+| `kirocrew-on single up` | 按这个版本的模板更新栈，保留栈里所有值 |
+
+公共参数：`--region`（或 `AWS_REGION`）、`--stack`（默认 `kirocrew-on-single`）。「管理 › 部署」记下待执行的变更（`aws_requests`，参数里只有名称）并给出要运行的命令；命令带 `--request <编号> --platform <控制台地址> --token-file <管理员 API Token 文件>` 时，执行完回报，控制台不再显示命令。
+
+### Docker 渠道（试用：一个容器、一个边界）
+
+```
+docker build -t kirocrew-on:<版本> --build-arg VERSION=<版本> .
+docker run -d --name kirocrew-on -p 127.0.0.1:8918:8918 -v kirocrew-on:/var/lib/octopus -e AWS_REGION=us-east-1 \
+  --cap-add SYS_ADMIN --security-opt apparmor=unconfined kirocrew-on:<版本>
+```
+
+- 依赖与主机相同，全部来自 `deploy/versions.env`、每个下载都校验；
+- API 以 octopus 运行，Gateway、Worker 与所有 Agent 以 crew-personal 运行；
+- 配置与数据在卷里，首次启动在 `docker logs` 打印一次管理员密码；
+- Claude Code 与 Codex 经 Bedrock，需要给容器 AWS 凭证（EC2 上把实例元数据的跳数设为 2）；
+- 原生 KiroCrew 入口不从容器里提供；
+- 多架构镜像由 CI 构建。
