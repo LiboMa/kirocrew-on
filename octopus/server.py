@@ -781,7 +781,7 @@ def server(database, port=8918, host="127.0.0.1", allowed_hosts=(), origin_secre
                     require(method == "GET", "Method not allowed", 405)
                     return self.respond({k: v for k, v in actor.items() if k not in {"token_id", "last_used"}})
                 if path == "/v1/users":
-                    with database.transaction() as db:
+                    with database.transaction() as db:   # answered after the commit (test_respond_after_commit)
                         if method == "POST":
                             require(elevated(actor), "需要平台管理员", 403, "forbidden")
                             console_login(actor)   # an account an Agent's token made would be one it can sign in as
@@ -794,9 +794,11 @@ def server(database, port=8918, host="127.0.0.1", allowed_hosts=(), origin_secre
                                 require(shared is not None, "只能分配共享执行环境", 409, "worker_unavailable")
                                 db.execute("INSERT INTO worker_spaces(worker_id,user_id) VALUES(?,?)",
                                            (body["worker_id"], created["id"]))
-                            return self.respond(created, 201)
-                        require(method == "GET", "Method not allowed", 405)
-                        return self.respond([dict(r) for r in db.execute("SELECT id,username FROM users WHERE active=1 ORDER BY username")])
+                            answer = (created, 201)
+                        else:
+                            require(method == "GET", "Method not allowed", 405)
+                            answer = ([dict(r) for r in db.execute("SELECT id,username FROM users WHERE active=1 ORDER BY username")], 200)
+                    return self.respond(*answer)
                 if segments[:2] == ["v1", "credentials"]:
                     store = service.credentials
                     if len(segments) == 2:
@@ -824,18 +826,20 @@ def server(database, port=8918, host="127.0.0.1", allowed_hosts=(), origin_secre
                             # login name is the login's alone (peer review 2026-10-27).
                             require(str(body.get("label", "API")).strip().lower() != "web login",
                                     "「Web login」保留给控制台登录，请换一个名称", 400, "label_reserved")
-                            return self.respond(issue_token(db, actor["id"], requested, body.get("label", "API"),
-                                                            body.get("ttl", 86400), body.get("expires_in")), 201)
-                        return self.respond([{**dict(r), "expires": expiry(r["expires"]), "current": r["id"] == actor.get("token_id")}
-                                             for r in db.execute("SELECT id,label,scopes,expires,last_used FROM tokens WHERE user_id=? "
-                                                                 "AND expires>? ORDER BY expires DESC", (actor["id"], time.time()))])
+                            answer = (issue_token(db, actor["id"], requested, body.get("label", "API"),
+                                                  body.get("ttl", 86400), body.get("expires_in")), 201)
+                        else:
+                            answer = ([{**dict(r), "expires": expiry(r["expires"]), "current": r["id"] == actor.get("token_id")}
+                                       for r in db.execute("SELECT id,label,scopes,expires,last_used FROM tokens WHERE user_id=? "
+                                                           "AND expires>? ORDER BY expires DESC", (actor["id"], time.time()))], 200)
+                    return self.respond(*answer)   # after the commit: a token handed out can be used at once
                 if len(segments) == 4 and segments[:2] == ["v1", "tokens"] and segments[3] == "regenerate":
                     require(method == "POST", "Method not allowed", 405)
                     require(isinstance(body, dict) and set(body) <= {"expires_in"}, "只接受 expires_in")
                     with database.transaction() as db:
-                        return self.respond(regenerate_token(db, actor["id"], segments[2], body.get("expires_in"),
-                                                             actor.get("token_id"), actor["scopes"],
-                                                             actor.get("token_kind", "api")))
+                        fresh = regenerate_token(db, actor["id"], segments[2], body.get("expires_in"), actor.get("token_id"),
+                                                 actor["scopes"], actor.get("token_kind", "api"))
+                    return self.respond(fresh)
                 if len(segments) == 3 and segments[:2] == ["v1", "tokens"] and method == "DELETE":
                     with database.transaction() as db:
                         db.execute("DELETE FROM tokens WHERE id=? AND user_id=?", (segments[2], actor["id"]))
