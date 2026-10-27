@@ -458,7 +458,7 @@
           "name": "P1-6 接入码第 1 期（N）",
           "status": "deployed",
           "ref": "P1 Task 6 · EC2 c80dae6",
-          "more": "EC2 主机端到端 13/13（签发、列表不含码、错码 404、失败计数、撤销）；用接入码真登记一个临时边界待负责人同意建测试用户"
+          "more": "EC2 2026-10-27：deploy.sh boundary add 用接入码登记临时边界 e2e-enroll——UID 70001 系统账号、无从属 ID、toml 首行 boundary_id、Worker 归测试用户且 Token 已密封、接入码已用并关联该 Worker、审计不含地址与 Token；重跑走更新连接；验收后停用、退役、停服务、停用测试用户。主机检查 13/13"
         },
         {
           "id": "v020-p1-7",

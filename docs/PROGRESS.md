@@ -1,9 +1,9 @@
 # 进度与完成记录
 
-> 由 `tools/progress.py` 生成（2026-10-26 22:27 CST）：任务状态取自 `docs/progress.json`，提交记录取自 git。看板：`docs/progress-dashboard.html`；实时看板：`python3 tools/progress.py --serve --ec2`（http://127.0.0.1:8765/）。
+> 由 `tools/progress.py` 生成（2026-10-27 09:13 CST）：任务状态取自 `docs/progress.json`，提交记录取自 git。看板：`docs/progress-dashboard.html`；实时看板：`python3 tools/progress.py --serve --ec2`（http://127.0.0.1:8765/）。
 
 - **本轮完成度**：80%　**MVP 完成度**：73%
-- **分支**：HEAD `c80dae6`；自 `origin/main` 起 73 个提交——已推送 0、已部署 EC2 73、仅本机 0；EC2 运行 `c80dae6`
+- **分支**：HEAD `879dc48`；自 `origin/main` 起 74 个提交——已推送 0、已部署 EC2 73、仅本机 1；EC2 运行 `c80dae6`
 - **回归**：2036 后端 + 92 + 342 控制台 + 7 个浏览器测试；EC2 运行 c80dae6（MVP 0.2.0 P1，PR #15）
 
 ## 模块
@@ -83,8 +83,9 @@
 
 - `df72489` 2026-10-24 〔已部署 EC2〕 docs(design): Worker 自助接入——管理员签发一次性接入码（定好登记到哪里），Worker 主机执行 worker enroll 自行登记，平台照旧带 Token 核实 /health；Token 不经人手、不进 SSM 命令历史；本地全栈自动登记；待负责人确认三点。BACKLOG 记录登记的两处不一致、K10 已由 D59 完成
 
-### 未标记 · 文档（26 个提交：已部署 EC2 26）
+### 未标记 · 文档（27 个提交：已部署 EC2 26、仅本机 1）
 
+- `879dc48` 2026-10-26 〔仅本机〕 docs: MVP 0.2.0 P1 已部署到 EC2（c80dae6）与端到端结果；进度看板更新
 - `4258cd1` 2026-10-26 〔已部署 EC2〕 docs: BACKLOG 记录 MVP 0.2.0 P1 终审的次要延后项
 - `babf39f` 2026-10-26 〔已部署 EC2〕 docs(research): KiroCrew 升到正式版 v0.10.0 的调研（P1 Task 12，S32）——会改变原生页面体验，拆为 P1b 待负责人确认
 - `2953304` 2026-10-26 〔已部署 EC2〕 docs: MVP 0.2.0 进度（P1 11/12 完成）与 P0 实测结果
