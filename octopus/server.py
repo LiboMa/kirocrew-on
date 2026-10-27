@@ -820,6 +820,10 @@ def server(database, port=8918, host="127.0.0.1", allowed_hosts=(), origin_secre
                         if method == "POST":
                             requested = body.get("scopes", actor["scopes"])
                             require(isinstance(requested, list) and set(requested) <= set(actor["scopes"]), "不能扩大 Token scope", 403, "forbidden")
+                            # The label says where its holder's actions come from (journal, Requests): the console's
+                            # login name is the login's alone (peer review 2026-10-27).
+                            require(str(body.get("label", "API")).strip().lower() != "web login",
+                                    "「Web login」保留给控制台登录，请换一个名称", 400, "label_reserved")
                             return self.respond(issue_token(db, actor["id"], requested, body.get("label", "API"),
                                                             body.get("ttl", 86400), body.get("expires_in")), 201)
                         return self.respond([{**dict(r), "expires": expiry(r["expires"]), "current": r["id"] == actor.get("token_id")}
