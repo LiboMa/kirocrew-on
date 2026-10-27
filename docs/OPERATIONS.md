@@ -332,7 +332,7 @@ API 访问日志不记录 token、请求体或查询串；Engine 只记录异常
 ## 8．认证与过期
 
 - Claude Code 与 Codex 经实例角色使用 Bedrock：实例角色需要 `bedrock:InvokeModel*`（Claude）与 `bedrock-mantle:CreateInference`（Codex 的 amazon-bedrock 提供方）。
-- **在控制台登录 Kiro（MVP 0.2.0，设计 §6.4）**：执行环境的主人在「我的设置 › 执行环境」该行点「登录 Kiro」，对话框显示验证地址与设备码，在浏览器完成授权后自动确认（设备码 15 分钟内有效）。
+- **在控制台登录 Kiro（MVP 0.2.0，设计 §6.4）**：执行环境的主人在「我的设置 › 执行环境」该行点「登录 Kiro」（管理员没有这一页，在「管理 › 执行环境」自己那一行的菜单里），对话框显示验证地址与设备码，在浏览器完成授权后自动确认（设备码 15 分钟内有效）。
   - Worker 本就以边界用户运行，自己在一个伪终端里执行 `kiro-cli login --use-device-flow`，不需要 root；同一时间每个边界只有一个登录，再点一次显示同一个码；已登录时直接返回。
   - 只有该执行环境的主人（`workers.owner_id`）能发起和看到设备码，管理员也不行；地址与设备码只在内存里，不写审计和日志，审计 `worker.kiro_login` 只记发起。
   - 接口：`POST` / `GET /v1/workers/<id>/kiro-sign-in`（Worker 侧 `/kiro/login`、`/kiro/login/status`）。
@@ -1391,7 +1391,7 @@ curl -fsSL https://<下载域名>/install.sh | sudo sh -s -- --check            
   - `--no-cloudfront` 不建栈，控制台只经 SSM 端口转发打开（`portNumber=8918`，`http://localhost:8918`）。
 - **安装用的权限**：给实例角色临时加上 `deploy/aws/kirocrew-on-single-install-policy.json`，或用有这些权限的 AK/SK（`sudo -E sh` 或 `sudo AWS_ACCESS_KEY_ID=… AWS_SECRET_ACCESS_KEY=… sh`，只在本次安装的进程里使用，不写盘）。缺权限时脚本列出需要的操作后以退出码 4 结束。
 - **装完核对主机角色**（`single-stack.sh check-role`，S29）：用 `iam:SimulatePrincipalPolicy` 查角色是否还有写权限；有则打印要卸下的策略（保留 Bedrock 调用与 `AmazonSSMManagedInstanceCore`）。安装照常完成，结尾提示「主机角色的核对没有通过」。
-- **结尾**打印控制台地址、管理员 `admin`、初始密码（只打印这一次，另存在 root 0600 的 `/etc/kirocrew-on/admin-password`）与下一步：在「我的设置 › 执行环境」里点「登录 Kiro」。
+- **结尾**打印控制台地址、管理员 `admin`、初始密码（只打印这一次，另存在 root 0600 的 `/etc/kirocrew-on/admin-password`）与下一步：在「管理 › 执行环境」该行的菜单里点「登录 Kiro」。
 - **重跑**：每一步只补缺；栈没有变化时不执行变更集，含资源替换的变更集一律拒绝。
 - **pip 渠道**：`pip install kirocrew-on` 后 `sudo kirocrew-on setup`：把装好的包排成同样的布局，交给 `install.sh --source` 执行预检与同一套步骤（不下载，pip 已按索引的 `#sha256=` 校验）。
 - 主机上的 `kirocrew-on` 命令（`/usr/local/bin/kirocrew-on`）运行当前发布，例如 `sudo kirocrew-on --config /etc/kirocrew-on/platform.toml backup --dest <目录>`。

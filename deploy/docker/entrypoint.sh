@@ -2,7 +2,7 @@
 # The Docker channel's processes (MVP 0.2.0 P2 Task 8, S25): one platform and one boundary, personal, in one container.
 # It starts as root only to prepare the volume and the configuration; the API runs as octopus, the Gateway and the
 # Worker — and so every Agent — as crew-personal. The first start prints the administrator's password once (docker
-# logs); Kiro signs in from the console (「我的设置 › 执行环境」 › 「登录 Kiro」). When one process ends, the container ends
+# logs); Kiro signs in from the console (「管理 › 执行环境」, the row's 「登录 Kiro」). When one process ends, the container ends
 # with it and the restart policy brings all three back.
 set -euo pipefail
 BOUNDARY=personal
@@ -65,7 +65,7 @@ WORKER_PORT="$(grep -E '^worker_port' "$TOML" | grep -oE '[0-9]+')"
   --name "$BOUNDARY" >/dev/null)
 log "KiroCrew ON 已启动：http://localhost:8918（docker run 时 -p 127.0.0.1:8918:8918），管理员 admin"
 [ -z "$NEW_ADMIN" ] || log "初始密码：${ADMIN_PASSWORD}（只打印这一次；另存在卷里的 etc/admin-password）"
-log "下一步：登录控制台，在「我的设置 › 执行环境」里点「登录 Kiro」"
+log "下一步：登录控制台，在「管理 › 执行环境」该行的菜单里点「登录 Kiro」"
 wait -n "${PIDS[@]}"
 status=$?
 log "有进程退出（${status}），容器随之结束"

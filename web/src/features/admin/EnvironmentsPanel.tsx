@@ -27,7 +27,7 @@ export function healthText(environment: Environment) {
   if (!h.reachable) return `不可达：${h.error}`;
   let origin = "";
   try { origin = h.crew_origin ? " · 原生入口 " + new URL(h.crew_origin).host : ""; } catch { /* not a URL: omitted */ }
-  const login = h.tool_auth?.kiro === "expired" ? " · kiro-cli 登录已过期（边界主人可在「我的设置 › 执行环境」里登录 Kiro）" : "";
+  const login = h.tool_auth?.kiro === "expired" ? " · kiro-cli 登录已过期（由执行环境的主人点「登录 Kiro」重新登录）" : "";
   return `可达${h.version ? " · v" + h.version : ""}${origin} · 进行中会话 ${active}${login}`;
 }
 
@@ -98,13 +98,14 @@ type Open = { kind: "register" }
   | { kind: "remove"; worker: Worker; space: Space }
   | { kind: "revoke-code"; code: Enrollment }
   | { kind: "provision" }
+  | { kind: "kiro"; worker: Worker }
   | null;
 
 /** 管理 › 执行环境 (D28; PRD 2026-10-23, 管理 / 我的设置 in dialogs): every environment with its live status, the chosen
  * one's detail below. The page only lists and shows; registering, editing, assigning, sharing and every dangerous step
  * (停用, 退役, taking a space away) happen in a dialog opened from 「登记 Worker」 or the row. */
 export function EnvironmentsPanel() {
-  const { workers, allTeams: teams, users } = useConsole();
+  const { workers, allTeams: teams, users, me } = useConsole();
   const client = useQueryClient();
   const query = useEnvironments(true);
   const provisions = useProvisions(true);
@@ -152,6 +153,9 @@ export function EnvironmentsPanel() {
         ? [{ icon: SquarePlus, label: "分配到空间", name: "分配到空间：" + w.name, onSelect: open("assign") }] : []),
     ];
     const more: Action[] = [
+      // an administrator has no 我的设置 › 执行环境: the environments they own sign Kiro in here (§6.4, owner only)
+      ...(enabled && w.owner_id === me.id
+        ? [{ icon: KeyRound, label: "登录 Kiro", name: "登录 Kiro：" + w.name, onSelect: () => setDialog({ kind: "kiro", worker: w }) }] : []),
       { icon: RefreshCw, label: "刷新模型", name: "刷新模型：" + w.name, direct: true,
         onSelect: direct(w, () => api("/workers/" + w.id + "/capabilities", "POST", {}), `已重新读取 ${w.name} 的模型目录`) },
       ...(w.scope === "dedicated" && enabled ? [{ icon: Network, label: "设为共享环境", name: "设为共享环境：" + w.name, onSelect: open("share") }] : []),
@@ -233,6 +237,13 @@ export function EnvironmentsPanel() {
           onRemove={(space) => setDialog({ kind: "remove", worker: chosen, space })} />
       )}
       {dialog?.kind === "provision" && <ProvisionDialog onClose={() => setDialog(null)} />}
+      {dialog?.kind === "kiro" && (
+        <KiroLoginDialog worker={dialog.worker} onClose={(done) => {
+          const signed = dialog.worker;
+          setDialog(null);
+          if (done) void changed(signed.id, "已登录 Kiro：" + signed.name);
+        }} />
+      )}
       {dialog?.kind === "revoke-code" && (
         <FormDialog title="撤销接入码" destructive submitLabel="撤销" onClose={() => setDialog(null)}
           description={<>撤销后，接入码「{dialog.code.name}」不能再用来登记 Worker。已经登记的执行环境不受影响。</>}

@@ -109,7 +109,7 @@ describe("管理 › 执行环境", () => {
     const shared = await rowOf(list, "personal");
     expect(within(shared).getByRole("button", { name: "编辑：personal" })).toBeInTheDocument();
     expect(within(shared).getByRole("button", { name: "分配到空间：personal" })).toBeInTheDocument();
-    expect(await menuItems(shared, "personal")).toEqual(["刷新模型", "停用…", "退役…"]);
+    expect(await menuItems(shared, "personal")).toEqual(["登录 Kiro…", "刷新模型", "停用…", "退役…"]);   // fixture-owner's own
     // A disabled one takes no spaces; it is enabled again from the menu.
     const disabled = await rowOf(list, "old-host");
     expect(within(disabled).queryByRole("button", { name: "分配到空间：old-host" })).toBeNull();
@@ -548,6 +548,23 @@ describe("管理 › 执行环境", () => {
     expect(await screen.findByText("已登录 Kiro：personal")).toBeInTheDocument();
     expect(calls.filter((c) => c.path === "/v1/workers/w1/kiro-sign-in" && c.method === "POST")).toHaveLength(1);
   }, 15000);
+
+  test("an administrator signs their own environment's Kiro in from 管理 › 执行环境 (they have no 我的设置 › 执行环境)", async () => {
+    const calls = start({ ...ENVIRONMENTS, "POST /workers/w1/kiro-sign-in": { state: "done" } });
+    const list = await openSection("管理", "执行环境");
+    const row = await rowOf(list, "personal");
+    expect(await menuItems(row, "personal")).toContain("登录 Kiro…");
+    expect(await menuItems(await rowOf(list, "old-host"), "old-host")).not.toContain("登录 Kiro…");   // u1's too, but 停用
+    await fromMenu(row, "personal", "登录 Kiro");
+    expect(await screen.findByText("已登录 Kiro：personal")).toBeInTheDocument();
+    expect(calls.filter((c) => c.path === "/v1/workers/w1/kiro-sign-in" && c.method === "POST")).toHaveLength(1);
+  });
+
+  test("an administrator gets no Kiro login for an environment someone else owns", async () => {
+    start({ ...ENVIRONMENTS, "GET /workers": ENVIRONMENTS["GET /workers"].map((w) => ({ ...w, owner_id: "u2" })) });
+    const list = await openSection("管理", "执行环境");
+    expect(await menuItems(await rowOf(list, "personal"), "personal")).not.toContain("登录 Kiro…");
+  });
 
   test("an environment someone else owns offers no Kiro login", async () => {
     start({ ...ONE_WORKER, "GET /me": { id: "u2", username: "dev1", admin: 0, scopes: ["read", "execute", "manage"] } });

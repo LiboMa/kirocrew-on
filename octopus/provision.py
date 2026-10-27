@@ -75,7 +75,7 @@ class Provisions:
             item.update(id=path.stem, log=lines)
             if item["state"] == "done":
                 item["next"] = (f"需要从公网打开 KiroCrew 时，请管理员在自己电脑或 CloudShell 上运行 kirocrew-on single native "
-                                f"{item['name']}；在此之前经本机端口转发使用。{item['owner']} 在「我的设置 › 执行环境」里登录 Kiro。")
+                                f"{item['name']}；在此之前经本机端口转发使用。{item['owner']} 在「我的设置 › 执行环境」（管理员在「管理 › 执行环境」该行的菜单里）点「登录 Kiro」。")
             recorded.append(item)
         recorded.sort(key=lambda item: item.get("started") or 0, reverse=True)
         return found + recorded[:KEPT]

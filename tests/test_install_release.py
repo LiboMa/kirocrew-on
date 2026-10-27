@@ -110,7 +110,7 @@ class ReleaseInstallTests(unittest.TestCase):
             self.assertTrue((self.stage / name).is_file(), name)   # laid out as a checkout: al2023.sh copies the tree
         self.assertTrue(os.access(self.stage / "deploy/install/boundary.sh", os.X_OK))   # modes come back from the wheel
         self.assertIn("s3cret-initial", done.stdout)   # printed this once
-        self.assertIn("「我的设置 › 执行环境」", done.stdout)
+        self.assertIn("「管理 › 执行环境」", done.stdout)   # the single-node edition's owner is its administrator
         again = self.install("--channel", "preview")
         self.assertEqual(again.returncode, 0, again.stderr)
         self.assertNotIn("s3cret-initial", again.stdout)   # a rerun only fills in, and keeps the password to itself

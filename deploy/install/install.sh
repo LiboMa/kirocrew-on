@@ -237,7 +237,7 @@ finish() {
   else
     printf '%s\n' "密码：首次安装时已打印；忘了可运行 sudo cat /etc/kirocrew-on/admin-password"
   fi
-  printf '%s\n' "下一步：登录控制台，在「我的设置 › 执行环境」里点「登录 Kiro」，用设备码登录 Kiro，然后就可以提交会话。"
+  printf '%s\n' "下一步：登录控制台，在「管理 › 执行环境」该行的菜单里点「登录 Kiro」，用设备码登录 Kiro，然后就可以提交会话。"
   [ "$ROLE_CHECK" = 0 ] || printf '%s\n' "注意：主机角色的核对没有通过（见上面的说明）。"
   [ "$ARCH" = aarch64 ] || printf '%s\n' "$RECOMMEND"
 }

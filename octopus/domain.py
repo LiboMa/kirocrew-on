@@ -2889,7 +2889,7 @@ class Service:
                 action = ("失败后检查到 Kiro 登录正常（未见过期，或检查前已恢复），平台不会自动重跑：确认后在该任务上「配置并续作」。")
             else:   # the platform reads Kiro's login and continues on its own (D43)
                 title = "等待 Kiro 登录恢复"
-                action = ("请边界主人在「我的设置 › 执行环境」里点「登录 Kiro」，用自己的账号授权页面给出的设备码。"
+                action = ("请执行环境的主人点「登录 Kiro」：在「我的设置 › 执行环境」（管理员在「管理 › 执行环境」该行的菜单里），用自己的账号授权页面给出的设备码。"
                           "登录恢复后自动继续（平台每分钟检查一次）。")
         elif failure in {"auth", "model"}:
             title = "等待处理认证、权限或模型配置"

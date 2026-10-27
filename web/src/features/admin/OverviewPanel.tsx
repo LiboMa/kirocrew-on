@@ -35,7 +35,7 @@ export function OverviewPanel() {
   const issues = live.flatMap((w) => {
     const e = health.get(w.id);
     if (e && !e.health.reachable) return [`${w.name}：不可达（${e.health.error}）`];
-    if (kiroLogin(w, e) === "expired") return [`${w.name}：kiro-cli 登录已过期，请边界主人在「我的设置 › 执行环境」里登录 Kiro`];
+    if (kiroLogin(w, e) === "expired") return [`${w.name}：kiro-cli 登录已过期，由执行环境的主人点「登录 Kiro」重新登录`];
     return [];
   });
   const figures: Figure[] = [
