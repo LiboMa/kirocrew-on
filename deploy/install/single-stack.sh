@@ -74,15 +74,22 @@ up() {
     call cloudformation wait stack-delete-complete --stack-name "$STACK"
     status=""
   fi
-  type=UPDATE
-  [ -n "$status" ] || type=CREATE
-  python3 -I - "$WORK/parameters.json" "$SECRET" "$EC2_INSTANCE_ID" "$group" "$prefix" <<'KC_PARAMS'
+  type=UPDATE kept=""
+  if [ -n "$status" ]; then   # what the stack has besides these four (the boundaries' native slots) is left as it is
+    kept="$(call cloudformation describe-stacks --stack-name "$STACK" --query 'Stacks[0].Parameters[].ParameterKey' \
+      --output text)"
+  else
+    type=CREATE
+  fi
+  python3 -I - "$WORK/parameters.json" "$SECRET" "$EC2_INSTANCE_ID" "$group" "$prefix" "$kept" <<'KC_PARAMS'
 import json, os, sys
-path, secret, instance, group, prefix = sys.argv[1:]
+path, secret, instance, group, prefix, kept = sys.argv[1:]
 values = {"InstanceId": instance, "SecurityGroupId": group, "CloudFrontPrefixListId": prefix,
           "OriginSecret": open(secret).read().strip()}
+parameters = [{"ParameterKey": k, "ParameterValue": v} for k, v in values.items()]
+parameters += [{"ParameterKey": k, "UsePreviousValue": True} for k in kept.split() if k not in values and k != "None"]
 with open(os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600), "w") as file:   # the secret: a file, not argv
-    json.dump([{"ParameterKey": k, "ParameterValue": v} for k, v in values.items()], file)
+    json.dump(parameters, file)
 KC_PARAMS
   change="kirocrew-on-$(date -u +%Y%m%d%H%M%S)"
   echo "CloudFront 栈 $STACK（${type}；首次创建分发需要几分钟）" >&2

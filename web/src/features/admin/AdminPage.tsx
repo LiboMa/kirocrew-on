@@ -1,3 +1,4 @@
+import { DeployPanel } from "@/features/admin/DeployPanel";
 import { EnvironmentsPanel } from "@/features/admin/EnvironmentsPanel";
 import { OverviewPanel } from "@/features/admin/OverviewPanel";
 import { UsersPanel } from "@/features/admin/UsersPanel";
@@ -22,6 +23,7 @@ export function AdminPage() {
       {current === "teams" && <TeamPanel />}
       {current === "access" && <><TokensPanel /><CredentialsPanel /></>}
       {current === "quotas" && <QuotasPanel />}
+      {current === "deploy" && <DeployPanel />}
     </PageShell>
   );
 }

@@ -2367,6 +2367,59 @@ class Service:
             return {"available": False, "items": []}
         return {"available": True, "items": self.provisioning.items()}
 
+    AWS_KINDS = {"native": {"boundary"}, "backup": {"bucket"}, "up": set()}
+
+    def request_aws_change(self, actor, body, platform):
+        """An AWS change the deployment kit is to make (S29): the platform never calls an AWS write API on the
+        single-node edition; it keeps what is waiting and the command an administrator runs off the host."""
+        from .provision import valid_name
+        require(elevated(actor), "只有平台管理员可以记录待执行的 AWS 变更", 403, "forbidden")
+        require(isinstance(body, dict) and set(body) <= {"kind", "params"} and body.get("kind") in self.AWS_KINDS,
+                "kind 只能是 native、backup 或 up")
+        kind, params = body["kind"], body.get("params") or {}
+        require(isinstance(params, dict) and set(params) == self.AWS_KINDS[kind], "参数不对：native 要 boundary，backup 要 bucket")
+        if kind == "native":
+            require(valid_name(params["boundary"]), "边界名称不对")
+        if kind == "backup":
+            require(isinstance(params["bucket"], str) and re.fullmatch(r"[a-z0-9][a-z0-9.-]{1,61}[a-z0-9]", params["bucket"]),
+                    "S3 桶名不对")
+        rid = uid("awr")
+        with self.db.transaction() as db:
+            db.execute("INSERT INTO aws_requests(id,kind,params,created_by,created) VALUES(?,?,?,?,?)",
+                       (rid, kind, dumps(params), actor["id"], time.time()))
+            audit(db, actor, "aws_request.create", "aws_request", rid, {"kind": kind, **params})
+            row = db.execute("SELECT * FROM aws_requests WHERE id=?", (rid,)).fetchone()
+        return self._aws_request(row, platform)
+
+    @staticmethod
+    def _aws_request(row, platform):
+        params = json.loads(row["params"])
+        words = {"native": [params.get("boundary", "")], "backup": ["--bucket", params.get("bucket", "")], "up": []}[row["kind"]]
+        command = " ".join(["kirocrew-on", "single", row["kind"], *words, "--request", row["id"], "--platform", platform,
+                            "--token-file", "<管理员 API Token 文件>"])
+        return {"id": row["id"], "kind": row["kind"], "params": params, "state": row["state"], "created": row["created"],
+                "finished": row["finished"], "result": json.loads(row["result"]) if row["result"] else None, "command": command}
+
+    def aws_requests(self, actor, platform):
+        require(elevated(actor), "只有平台管理员可以查看待执行的 AWS 变更", 403, "forbidden")
+        with self.db.read() as db:
+            rows = db.execute("SELECT * FROM aws_requests ORDER BY state!='pending', created DESC LIMIT 50").fetchall()
+        return {"items": [self._aws_request(row, platform) for row in rows]}
+
+    def report_aws_request(self, actor, rid, body):
+        """The kit's report: done or failed, with what it made (a domain, an object key; never a credential)."""
+        require(elevated(actor), "只有平台管理员可以回报 AWS 变更", 403, "forbidden")
+        require(isinstance(body, dict) and body.get("state") in ("done", "failed") and isinstance(body.get("result", {}), dict),
+                "需要 state（done 或 failed）与可选的 result")
+        result = {k: v for k, v in body.get("result", {}).items() if isinstance(v, (str, int)) and len(str(v)) <= 500}
+        with self.db.transaction() as db:
+            row = db.execute("SELECT state FROM aws_requests WHERE id=?", (rid,)).fetchone()
+            require(row is not None, "没有这一项", 404, "not_found")
+            db.execute("UPDATE aws_requests SET state=?,finished=?,result=? WHERE id=?",
+                       (body["state"], time.time(), dumps(result), rid))
+            audit(db, actor, "aws_request.report", "aws_request", rid, {"state": body["state"]})
+        return {"id": rid, "state": body["state"]}
+
     def enrollments(self, actor):
         from . import enrollments
         require(elevated(actor), "只有平台管理员可以查看接入码", 403, "forbidden")

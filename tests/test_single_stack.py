@@ -35,6 +35,8 @@ if "describe-managed-prefix-lists" in args: out("pl-3b927c52")
 if "describe-instances" in args: out("sg-0123abcd")
 if "create-tags" in args: out("")
 if "describe-stacks" in args:
+    if "ParameterKey" in joined:
+        out("\t".join(state.get("parameters", [])) or "None")
     if "Outputs" in joined:
         out("\t".join(f"{k}\t{v}" for k, v in state["outputs"].items()))
     if state.get("exists"): out("CREATE_COMPLETE")
@@ -97,16 +99,18 @@ class TemplateTests(unittest.TestCase):
         self.assertNotIn("CidrIp", ingress[0])
         distributions = [r["Properties"]["DistributionConfig"] for r in resources.values()
                          if r["Type"] == "AWS::CloudFront::Distribution"]
-        self.assertEqual(len(distributions), 3)
+        self.assertEqual(len(distributions), 3 + 9)   # and one per extra boundary's native chat (8920–8928)
         ports = set()
         for config in distributions:
             origin = config["Origins"][0]
             self.assertEqual(origin["OriginCustomHeaders"], [{"HeaderName": "X-Origin-Verify", "HeaderValue": {"Ref": "OriginSecret"}}])
             self.assertEqual(config["DefaultCacheBehavior"]["ViewerProtocolPolicy"], "redirect-to-https")
-            ports.add(origin["CustomOriginConfig"]["HTTPPort"]["Ref"])
-        self.assertEqual(ports, {"ApiPort", "NativePort", "PreviewPort"})
+            port = origin["CustomOriginConfig"]["HTTPPort"]
+            ports.add(port["Ref"] if isinstance(port, dict) else port)
+        self.assertEqual(ports, {"ApiPort", "NativePort", "PreviewPort", *range(8920, 8929)})
         self.assertTrue(load()["Parameters"]["OriginSecret"]["NoEcho"])
-        self.assertEqual(set(load()["Outputs"]), {"ConsoleDomain", "NativeDomain", "PreviewDomain", "PublicIp"})
+        self.assertEqual({k for k in load()["Outputs"] if not k.startswith("NativeRelayDomain")},
+                         {"ConsoleDomain", "NativeDomain", "PreviewDomain", "PublicIp"})
 
 
 class StackScriptCase(unittest.TestCase):
@@ -161,10 +165,15 @@ class StackTests(StackScriptCase):
     def test_a_rerun_keeps_the_secret_and_a_stack_without_changes_is_fine(self):
         self.run_script("up", str(self.dir / "first"))
         secret = (self.fs / "etc/kirocrew-on/origin-secret").read_text()
-        self.state.update(exists=True, no_changes=True)
+        self.state.update(exists=True, no_changes=True, parameters=["InstanceId", "SecurityGroupId", "CloudFrontPrefixListId",
+                                                                     "OriginSecret", "NativeRelay1", "NativeRelay2"])
         self.log.unlink()
         done = self.run_script("up", str(self.dir / "second"))
         self.assertEqual(done.returncode, 0, done.stderr)
+        params = json.loads(next(c for c in self.calls() if c.startswith("PARAMS "))[len("PARAMS "):])
+        # the boundaries' native entries (kirocrew-on single native) survive a rerun of install.sh
+        self.assertIn({"ParameterKey": "NativeRelay1", "UsePreviousValue": True}, params)
+        self.assertIn({"ParameterKey": "NativeRelay2", "UsePreviousValue": True}, params)
         self.assertEqual((self.fs / "etc/kirocrew-on/origin-secret").read_text(), secret)
         self.assertIn("--change-set-type UPDATE", next(c for c in self.calls() if "create-change-set" in c))
         self.assertFalse(any("execute-change-set" in c for c in self.calls()))

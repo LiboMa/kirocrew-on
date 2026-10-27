@@ -103,6 +103,18 @@ export interface Provisions {
   items: Provision[];
 }
 
+/** An AWS change the deployment kit (kirocrew-on single) is to make off the host (MVP 0.2.0 P2, S29). */
+export interface AwsRequest {
+  id: string;
+  kind: "native" | "backup" | "up";
+  params: Record<string, string>;
+  state: "pending" | "done" | "failed";
+  created: number;
+  finished: number | null;
+  result: Record<string, string | number> | null;
+  command: string;
+}
+
 export interface Enrollment {
   id: string;
   name: string;

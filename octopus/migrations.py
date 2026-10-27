@@ -233,6 +233,15 @@ TOKEN_KIND = """
 ALTER TABLE tokens ADD COLUMN kind TEXT NOT NULL DEFAULT 'api' CHECK(kind IN ('login','api'));
 """
 
+# MVP 0.2.0 P2 Task 7 (S29): the AWS changes waiting for the deployment kit (kirocrew-on single), which runs off the host
+# with the administrator's credentials and reports back; the parameters hold names only, never a secret.
+AWS_REQUESTS = """
+CREATE TABLE IF NOT EXISTS aws_requests(
+ id TEXT PRIMARY KEY, kind TEXT NOT NULL CHECK(kind IN ('native','backup','up')), params TEXT NOT NULL,
+ state TEXT NOT NULL DEFAULT 'pending' CHECK(state IN ('pending','done','failed')),
+ created_by TEXT NOT NULL REFERENCES users(id), created REAL NOT NULL, finished REAL, result TEXT);
+"""
+
 EXECUTOR = """
 ALTER TABLE runs ADD COLUMN executor_id TEXT REFERENCES users(id);
 """
@@ -243,7 +252,7 @@ MIGRATIONS = [(1, "baseline", BASELINE), (2, "environments", ENVIRONMENTS), (3, 
               (9, "requests_policies", REQUESTS_POLICIES), (10, "quotas", QUOTAS), (12, "shares", SHARES), (13, "marks", MARKS),
               (14, "executor", EXECUTOR), (15, "public_shares", PUBLIC_SHARES),
               (16, "boundaries", BOUNDARIES), (17, "worker_enrollments", WORKER_ENROLLMENTS),
-              (18, "token_kind", TOKEN_KIND)]   # 11: D57's (another branch)
+              (18, "token_kind", TOKEN_KIND), (19, "aws_requests", AWS_REQUESTS)]   # 11: D57's (another branch)
 
 
 def _statements(script):

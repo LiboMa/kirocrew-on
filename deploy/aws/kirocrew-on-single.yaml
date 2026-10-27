@@ -38,8 +38,63 @@ Parameters:
     Default: 8929
     Description: 主机 nginx 端口：远程预览，校验源站密钥后经 auth_request 转发到会话应用
 
+  NativeRelay1:
+    Type: String
+    Default: ""
+    AllowedPattern: "^$|^[a-z][a-z0-9-]{1,19}$"
+    Description: 用中转端口 8920 的边界（kirocrew-on single native <边界> 填写；空：不用）
+  NativeRelay2:
+    Type: String
+    Default: ""
+    AllowedPattern: "^$|^[a-z][a-z0-9-]{1,19}$"
+    Description: 用中转端口 8921 的边界（kirocrew-on single native <边界> 填写；空：不用）
+  NativeRelay3:
+    Type: String
+    Default: ""
+    AllowedPattern: "^$|^[a-z][a-z0-9-]{1,19}$"
+    Description: 用中转端口 8922 的边界（kirocrew-on single native <边界> 填写；空：不用）
+  NativeRelay4:
+    Type: String
+    Default: ""
+    AllowedPattern: "^$|^[a-z][a-z0-9-]{1,19}$"
+    Description: 用中转端口 8923 的边界（kirocrew-on single native <边界> 填写；空：不用）
+  NativeRelay5:
+    Type: String
+    Default: ""
+    AllowedPattern: "^$|^[a-z][a-z0-9-]{1,19}$"
+    Description: 用中转端口 8924 的边界（kirocrew-on single native <边界> 填写；空：不用）
+  NativeRelay6:
+    Type: String
+    Default: ""
+    AllowedPattern: "^$|^[a-z][a-z0-9-]{1,19}$"
+    Description: 用中转端口 8925 的边界（kirocrew-on single native <边界> 填写；空：不用）
+  NativeRelay7:
+    Type: String
+    Default: ""
+    AllowedPattern: "^$|^[a-z][a-z0-9-]{1,19}$"
+    Description: 用中转端口 8926 的边界（kirocrew-on single native <边界> 填写；空：不用）
+  NativeRelay8:
+    Type: String
+    Default: ""
+    AllowedPattern: "^$|^[a-z][a-z0-9-]{1,19}$"
+    Description: 用中转端口 8927 的边界（kirocrew-on single native <边界> 填写；空：不用）
+  NativeRelay9:
+    Type: String
+    Default: ""
+    AllowedPattern: "^$|^[a-z][a-z0-9-]{1,19}$"
+    Description: 用中转端口 8928 的边界（kirocrew-on single native <边界> 填写；空：不用）
+
 Conditions:
   IsUsEast1: !Equals [!Ref "AWS::Region", us-east-1]
+  HasNativeRelay1: !Not [!Equals [!Ref NativeRelay1, ""]]
+  HasNativeRelay2: !Not [!Equals [!Ref NativeRelay2, ""]]
+  HasNativeRelay3: !Not [!Equals [!Ref NativeRelay3, ""]]
+  HasNativeRelay4: !Not [!Equals [!Ref NativeRelay4, ""]]
+  HasNativeRelay5: !Not [!Equals [!Ref NativeRelay5, ""]]
+  HasNativeRelay6: !Not [!Equals [!Ref NativeRelay6, ""]]
+  HasNativeRelay7: !Not [!Equals [!Ref NativeRelay7, ""]]
+  HasNativeRelay8: !Not [!Equals [!Ref NativeRelay8, ""]]
+  HasNativeRelay9: !Not [!Equals [!Ref NativeRelay9, ""]]
 
 Resources:
   OriginIngress:
@@ -166,6 +221,332 @@ Resources:
           CloudFrontDefaultCertificate: true
       Tags: [{Key: Project, Value: kirocrew-on}]
 
+  # kirocrew-on single native <boundary> (S30): one more boundary's public native chat, relayed by the host's nginx on
+  # port 8919 + slot to that boundary's loopback Gateway; the origin secret stays the stack's own (UsePreviousValue).
+  NativeRelayDistribution1:
+    Type: AWS::CloudFront::Distribution
+    Condition: HasNativeRelay1
+    Properties:
+      DistributionConfig:
+        Enabled: true
+        Comment: !Sub "KiroCrew ON native chat of ${NativeRelay1} (${AWS::StackName})"
+        HttpVersion: http2and3
+        IPV6Enabled: true
+        PriceClass: PriceClass_100
+        Origins:
+          - Id: kirocrew-native-relay
+            DomainName: !If
+              - IsUsEast1
+              - !Join ["", ["ec2-", !Join ["-", !Split [".", !Ref HostAddress]], ".compute-1.amazonaws.com"]]
+              - !Join ["", ["ec2-", !Join ["-", !Split [".", !Ref HostAddress]], !Sub ".${AWS::Region}.compute.amazonaws.com"]]
+            CustomOriginConfig:
+              HTTPPort: 8920
+              OriginProtocolPolicy: http-only
+              OriginReadTimeout: 60
+              OriginKeepaliveTimeout: 5
+            OriginCustomHeaders:
+              - HeaderName: X-Origin-Verify
+                HeaderValue: !Ref OriginSecret
+        DefaultCacheBehavior:
+          TargetOriginId: kirocrew-native-relay
+          ViewerProtocolPolicy: redirect-to-https
+          AllowedMethods: [GET, HEAD, OPTIONS, PUT, PATCH, POST, DELETE]
+          CachedMethods: [GET, HEAD]
+          CachePolicyId: 4135ea2d-6df8-44a3-9df3-4b5a84be39ad        # Managed-CachingDisabled
+          OriginRequestPolicyId: 33f36d7e-f396-46d9-90e0-52428a34d9dc # Managed-AllViewerAndCloudFrontHeaders-2022-06
+          Compress: false
+        ViewerCertificate:
+          CloudFrontDefaultCertificate: true
+      Tags: [{Key: Project, Value: kirocrew-on}]
+
+  NativeRelayDistribution2:
+    Type: AWS::CloudFront::Distribution
+    Condition: HasNativeRelay2
+    Properties:
+      DistributionConfig:
+        Enabled: true
+        Comment: !Sub "KiroCrew ON native chat of ${NativeRelay2} (${AWS::StackName})"
+        HttpVersion: http2and3
+        IPV6Enabled: true
+        PriceClass: PriceClass_100
+        Origins:
+          - Id: kirocrew-native-relay
+            DomainName: !If
+              - IsUsEast1
+              - !Join ["", ["ec2-", !Join ["-", !Split [".", !Ref HostAddress]], ".compute-1.amazonaws.com"]]
+              - !Join ["", ["ec2-", !Join ["-", !Split [".", !Ref HostAddress]], !Sub ".${AWS::Region}.compute.amazonaws.com"]]
+            CustomOriginConfig:
+              HTTPPort: 8921
+              OriginProtocolPolicy: http-only
+              OriginReadTimeout: 60
+              OriginKeepaliveTimeout: 5
+            OriginCustomHeaders:
+              - HeaderName: X-Origin-Verify
+                HeaderValue: !Ref OriginSecret
+        DefaultCacheBehavior:
+          TargetOriginId: kirocrew-native-relay
+          ViewerProtocolPolicy: redirect-to-https
+          AllowedMethods: [GET, HEAD, OPTIONS, PUT, PATCH, POST, DELETE]
+          CachedMethods: [GET, HEAD]
+          CachePolicyId: 4135ea2d-6df8-44a3-9df3-4b5a84be39ad        # Managed-CachingDisabled
+          OriginRequestPolicyId: 33f36d7e-f396-46d9-90e0-52428a34d9dc # Managed-AllViewerAndCloudFrontHeaders-2022-06
+          Compress: false
+        ViewerCertificate:
+          CloudFrontDefaultCertificate: true
+      Tags: [{Key: Project, Value: kirocrew-on}]
+
+  NativeRelayDistribution3:
+    Type: AWS::CloudFront::Distribution
+    Condition: HasNativeRelay3
+    Properties:
+      DistributionConfig:
+        Enabled: true
+        Comment: !Sub "KiroCrew ON native chat of ${NativeRelay3} (${AWS::StackName})"
+        HttpVersion: http2and3
+        IPV6Enabled: true
+        PriceClass: PriceClass_100
+        Origins:
+          - Id: kirocrew-native-relay
+            DomainName: !If
+              - IsUsEast1
+              - !Join ["", ["ec2-", !Join ["-", !Split [".", !Ref HostAddress]], ".compute-1.amazonaws.com"]]
+              - !Join ["", ["ec2-", !Join ["-", !Split [".", !Ref HostAddress]], !Sub ".${AWS::Region}.compute.amazonaws.com"]]
+            CustomOriginConfig:
+              HTTPPort: 8922
+              OriginProtocolPolicy: http-only
+              OriginReadTimeout: 60
+              OriginKeepaliveTimeout: 5
+            OriginCustomHeaders:
+              - HeaderName: X-Origin-Verify
+                HeaderValue: !Ref OriginSecret
+        DefaultCacheBehavior:
+          TargetOriginId: kirocrew-native-relay
+          ViewerProtocolPolicy: redirect-to-https
+          AllowedMethods: [GET, HEAD, OPTIONS, PUT, PATCH, POST, DELETE]
+          CachedMethods: [GET, HEAD]
+          CachePolicyId: 4135ea2d-6df8-44a3-9df3-4b5a84be39ad        # Managed-CachingDisabled
+          OriginRequestPolicyId: 33f36d7e-f396-46d9-90e0-52428a34d9dc # Managed-AllViewerAndCloudFrontHeaders-2022-06
+          Compress: false
+        ViewerCertificate:
+          CloudFrontDefaultCertificate: true
+      Tags: [{Key: Project, Value: kirocrew-on}]
+
+  NativeRelayDistribution4:
+    Type: AWS::CloudFront::Distribution
+    Condition: HasNativeRelay4
+    Properties:
+      DistributionConfig:
+        Enabled: true
+        Comment: !Sub "KiroCrew ON native chat of ${NativeRelay4} (${AWS::StackName})"
+        HttpVersion: http2and3
+        IPV6Enabled: true
+        PriceClass: PriceClass_100
+        Origins:
+          - Id: kirocrew-native-relay
+            DomainName: !If
+              - IsUsEast1
+              - !Join ["", ["ec2-", !Join ["-", !Split [".", !Ref HostAddress]], ".compute-1.amazonaws.com"]]
+              - !Join ["", ["ec2-", !Join ["-", !Split [".", !Ref HostAddress]], !Sub ".${AWS::Region}.compute.amazonaws.com"]]
+            CustomOriginConfig:
+              HTTPPort: 8923
+              OriginProtocolPolicy: http-only
+              OriginReadTimeout: 60
+              OriginKeepaliveTimeout: 5
+            OriginCustomHeaders:
+              - HeaderName: X-Origin-Verify
+                HeaderValue: !Ref OriginSecret
+        DefaultCacheBehavior:
+          TargetOriginId: kirocrew-native-relay
+          ViewerProtocolPolicy: redirect-to-https
+          AllowedMethods: [GET, HEAD, OPTIONS, PUT, PATCH, POST, DELETE]
+          CachedMethods: [GET, HEAD]
+          CachePolicyId: 4135ea2d-6df8-44a3-9df3-4b5a84be39ad        # Managed-CachingDisabled
+          OriginRequestPolicyId: 33f36d7e-f396-46d9-90e0-52428a34d9dc # Managed-AllViewerAndCloudFrontHeaders-2022-06
+          Compress: false
+        ViewerCertificate:
+          CloudFrontDefaultCertificate: true
+      Tags: [{Key: Project, Value: kirocrew-on}]
+
+  NativeRelayDistribution5:
+    Type: AWS::CloudFront::Distribution
+    Condition: HasNativeRelay5
+    Properties:
+      DistributionConfig:
+        Enabled: true
+        Comment: !Sub "KiroCrew ON native chat of ${NativeRelay5} (${AWS::StackName})"
+        HttpVersion: http2and3
+        IPV6Enabled: true
+        PriceClass: PriceClass_100
+        Origins:
+          - Id: kirocrew-native-relay
+            DomainName: !If
+              - IsUsEast1
+              - !Join ["", ["ec2-", !Join ["-", !Split [".", !Ref HostAddress]], ".compute-1.amazonaws.com"]]
+              - !Join ["", ["ec2-", !Join ["-", !Split [".", !Ref HostAddress]], !Sub ".${AWS::Region}.compute.amazonaws.com"]]
+            CustomOriginConfig:
+              HTTPPort: 8924
+              OriginProtocolPolicy: http-only
+              OriginReadTimeout: 60
+              OriginKeepaliveTimeout: 5
+            OriginCustomHeaders:
+              - HeaderName: X-Origin-Verify
+                HeaderValue: !Ref OriginSecret
+        DefaultCacheBehavior:
+          TargetOriginId: kirocrew-native-relay
+          ViewerProtocolPolicy: redirect-to-https
+          AllowedMethods: [GET, HEAD, OPTIONS, PUT, PATCH, POST, DELETE]
+          CachedMethods: [GET, HEAD]
+          CachePolicyId: 4135ea2d-6df8-44a3-9df3-4b5a84be39ad        # Managed-CachingDisabled
+          OriginRequestPolicyId: 33f36d7e-f396-46d9-90e0-52428a34d9dc # Managed-AllViewerAndCloudFrontHeaders-2022-06
+          Compress: false
+        ViewerCertificate:
+          CloudFrontDefaultCertificate: true
+      Tags: [{Key: Project, Value: kirocrew-on}]
+
+  NativeRelayDistribution6:
+    Type: AWS::CloudFront::Distribution
+    Condition: HasNativeRelay6
+    Properties:
+      DistributionConfig:
+        Enabled: true
+        Comment: !Sub "KiroCrew ON native chat of ${NativeRelay6} (${AWS::StackName})"
+        HttpVersion: http2and3
+        IPV6Enabled: true
+        PriceClass: PriceClass_100
+        Origins:
+          - Id: kirocrew-native-relay
+            DomainName: !If
+              - IsUsEast1
+              - !Join ["", ["ec2-", !Join ["-", !Split [".", !Ref HostAddress]], ".compute-1.amazonaws.com"]]
+              - !Join ["", ["ec2-", !Join ["-", !Split [".", !Ref HostAddress]], !Sub ".${AWS::Region}.compute.amazonaws.com"]]
+            CustomOriginConfig:
+              HTTPPort: 8925
+              OriginProtocolPolicy: http-only
+              OriginReadTimeout: 60
+              OriginKeepaliveTimeout: 5
+            OriginCustomHeaders:
+              - HeaderName: X-Origin-Verify
+                HeaderValue: !Ref OriginSecret
+        DefaultCacheBehavior:
+          TargetOriginId: kirocrew-native-relay
+          ViewerProtocolPolicy: redirect-to-https
+          AllowedMethods: [GET, HEAD, OPTIONS, PUT, PATCH, POST, DELETE]
+          CachedMethods: [GET, HEAD]
+          CachePolicyId: 4135ea2d-6df8-44a3-9df3-4b5a84be39ad        # Managed-CachingDisabled
+          OriginRequestPolicyId: 33f36d7e-f396-46d9-90e0-52428a34d9dc # Managed-AllViewerAndCloudFrontHeaders-2022-06
+          Compress: false
+        ViewerCertificate:
+          CloudFrontDefaultCertificate: true
+      Tags: [{Key: Project, Value: kirocrew-on}]
+
+  NativeRelayDistribution7:
+    Type: AWS::CloudFront::Distribution
+    Condition: HasNativeRelay7
+    Properties:
+      DistributionConfig:
+        Enabled: true
+        Comment: !Sub "KiroCrew ON native chat of ${NativeRelay7} (${AWS::StackName})"
+        HttpVersion: http2and3
+        IPV6Enabled: true
+        PriceClass: PriceClass_100
+        Origins:
+          - Id: kirocrew-native-relay
+            DomainName: !If
+              - IsUsEast1
+              - !Join ["", ["ec2-", !Join ["-", !Split [".", !Ref HostAddress]], ".compute-1.amazonaws.com"]]
+              - !Join ["", ["ec2-", !Join ["-", !Split [".", !Ref HostAddress]], !Sub ".${AWS::Region}.compute.amazonaws.com"]]
+            CustomOriginConfig:
+              HTTPPort: 8926
+              OriginProtocolPolicy: http-only
+              OriginReadTimeout: 60
+              OriginKeepaliveTimeout: 5
+            OriginCustomHeaders:
+              - HeaderName: X-Origin-Verify
+                HeaderValue: !Ref OriginSecret
+        DefaultCacheBehavior:
+          TargetOriginId: kirocrew-native-relay
+          ViewerProtocolPolicy: redirect-to-https
+          AllowedMethods: [GET, HEAD, OPTIONS, PUT, PATCH, POST, DELETE]
+          CachedMethods: [GET, HEAD]
+          CachePolicyId: 4135ea2d-6df8-44a3-9df3-4b5a84be39ad        # Managed-CachingDisabled
+          OriginRequestPolicyId: 33f36d7e-f396-46d9-90e0-52428a34d9dc # Managed-AllViewerAndCloudFrontHeaders-2022-06
+          Compress: false
+        ViewerCertificate:
+          CloudFrontDefaultCertificate: true
+      Tags: [{Key: Project, Value: kirocrew-on}]
+
+  NativeRelayDistribution8:
+    Type: AWS::CloudFront::Distribution
+    Condition: HasNativeRelay8
+    Properties:
+      DistributionConfig:
+        Enabled: true
+        Comment: !Sub "KiroCrew ON native chat of ${NativeRelay8} (${AWS::StackName})"
+        HttpVersion: http2and3
+        IPV6Enabled: true
+        PriceClass: PriceClass_100
+        Origins:
+          - Id: kirocrew-native-relay
+            DomainName: !If
+              - IsUsEast1
+              - !Join ["", ["ec2-", !Join ["-", !Split [".", !Ref HostAddress]], ".compute-1.amazonaws.com"]]
+              - !Join ["", ["ec2-", !Join ["-", !Split [".", !Ref HostAddress]], !Sub ".${AWS::Region}.compute.amazonaws.com"]]
+            CustomOriginConfig:
+              HTTPPort: 8927
+              OriginProtocolPolicy: http-only
+              OriginReadTimeout: 60
+              OriginKeepaliveTimeout: 5
+            OriginCustomHeaders:
+              - HeaderName: X-Origin-Verify
+                HeaderValue: !Ref OriginSecret
+        DefaultCacheBehavior:
+          TargetOriginId: kirocrew-native-relay
+          ViewerProtocolPolicy: redirect-to-https
+          AllowedMethods: [GET, HEAD, OPTIONS, PUT, PATCH, POST, DELETE]
+          CachedMethods: [GET, HEAD]
+          CachePolicyId: 4135ea2d-6df8-44a3-9df3-4b5a84be39ad        # Managed-CachingDisabled
+          OriginRequestPolicyId: 33f36d7e-f396-46d9-90e0-52428a34d9dc # Managed-AllViewerAndCloudFrontHeaders-2022-06
+          Compress: false
+        ViewerCertificate:
+          CloudFrontDefaultCertificate: true
+      Tags: [{Key: Project, Value: kirocrew-on}]
+
+  NativeRelayDistribution9:
+    Type: AWS::CloudFront::Distribution
+    Condition: HasNativeRelay9
+    Properties:
+      DistributionConfig:
+        Enabled: true
+        Comment: !Sub "KiroCrew ON native chat of ${NativeRelay9} (${AWS::StackName})"
+        HttpVersion: http2and3
+        IPV6Enabled: true
+        PriceClass: PriceClass_100
+        Origins:
+          - Id: kirocrew-native-relay
+            DomainName: !If
+              - IsUsEast1
+              - !Join ["", ["ec2-", !Join ["-", !Split [".", !Ref HostAddress]], ".compute-1.amazonaws.com"]]
+              - !Join ["", ["ec2-", !Join ["-", !Split [".", !Ref HostAddress]], !Sub ".${AWS::Region}.compute.amazonaws.com"]]
+            CustomOriginConfig:
+              HTTPPort: 8928
+              OriginProtocolPolicy: http-only
+              OriginReadTimeout: 60
+              OriginKeepaliveTimeout: 5
+            OriginCustomHeaders:
+              - HeaderName: X-Origin-Verify
+                HeaderValue: !Ref OriginSecret
+        DefaultCacheBehavior:
+          TargetOriginId: kirocrew-native-relay
+          ViewerProtocolPolicy: redirect-to-https
+          AllowedMethods: [GET, HEAD, OPTIONS, PUT, PATCH, POST, DELETE]
+          CachedMethods: [GET, HEAD]
+          CachePolicyId: 4135ea2d-6df8-44a3-9df3-4b5a84be39ad        # Managed-CachingDisabled
+          OriginRequestPolicyId: 33f36d7e-f396-46d9-90e0-52428a34d9dc # Managed-AllViewerAndCloudFrontHeaders-2022-06
+          Compress: false
+        ViewerCertificate:
+          CloudFrontDefaultCertificate: true
+      Tags: [{Key: Project, Value: kirocrew-on}]
+
   # S31: the single-node edition's backup of record is a daily snapshot of the host (every volume it has), by DLM's own
   # service role; install.sh tags the instance Backup=<stack>.
   SnapshotRole:
@@ -204,3 +585,30 @@ Outputs:
     Value: !GetAtt PreviewDistribution.DomainName
   PublicIp:
     Value: !Ref HostAddress
+  NativeRelayDomain1:
+    Condition: HasNativeRelay1
+    Value: !GetAtt NativeRelayDistribution1.DomainName
+  NativeRelayDomain2:
+    Condition: HasNativeRelay2
+    Value: !GetAtt NativeRelayDistribution2.DomainName
+  NativeRelayDomain3:
+    Condition: HasNativeRelay3
+    Value: !GetAtt NativeRelayDistribution3.DomainName
+  NativeRelayDomain4:
+    Condition: HasNativeRelay4
+    Value: !GetAtt NativeRelayDistribution4.DomainName
+  NativeRelayDomain5:
+    Condition: HasNativeRelay5
+    Value: !GetAtt NativeRelayDistribution5.DomainName
+  NativeRelayDomain6:
+    Condition: HasNativeRelay6
+    Value: !GetAtt NativeRelayDistribution6.DomainName
+  NativeRelayDomain7:
+    Condition: HasNativeRelay7
+    Value: !GetAtt NativeRelayDistribution7.DomainName
+  NativeRelayDomain8:
+    Condition: HasNativeRelay8
+    Value: !GetAtt NativeRelayDistribution8.DomainName
+  NativeRelayDomain9:
+    Condition: HasNativeRelay9
+    Value: !GetAtt NativeRelayDistribution9.DomainName

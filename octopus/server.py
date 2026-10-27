@@ -986,6 +986,16 @@ def server(database, port=8918, host="127.0.0.1", allowed_hosts=(), origin_secre
                 if path == "/v1/admin/environments":
                     require(method == "GET", "Method not allowed", 405)
                     return self.respond(service.environments(actor))
+                if path == "/v1/admin/aws-requests":   # MVP 0.2.0 P2 Task 7 (S29): what the deployment kit is to do
+                    require(method in {"GET", "POST"}, "Method not allowed", 405)
+                    origin = self.headers.get("Origin") or ""
+                    console = origin if origin.startswith("https://") else "https://<控制台地址>"
+                    if method == "GET":
+                        return self.respond(service.aws_requests(actor, console))
+                    return self.respond(service.request_aws_change(actor, body, console), 201)
+                if len(segments) == 5 and segments[:3] == ["v1", "admin", "aws-requests"] and segments[4] == "done":
+                    require(method == "POST", "Method not allowed", 405)
+                    return self.respond(service.report_aws_request(actor, segments[3], body))
                 if path == "/v1/admin/boundaries/provision":   # MVP 0.2.0 P2 Task 6: 「新建边界」 on this host
                     require(method in {"GET", "POST"}, "Method not allowed", 405)
                     if method == "GET":

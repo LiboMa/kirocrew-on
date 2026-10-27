@@ -106,6 +106,7 @@ def build_parser(settings, environ=None):
     archive.add_argument("--dest", required=True)
     archive.add_argument("--name", required=True)
     archive.add_argument("--exclude", action="append", default=[])
+    sub.add_parser("single", help="单机版的部署套件（在你的电脑或 CloudShell 上用管理员凭证运行）：native、backup、up；kirocrew-on single -h")
     sub.add_parser("setup", help="pip 渠道：在本机完成单机版的系统级安装（预检、依赖、边界与服务；需要 root）")
     verify = sub.add_parser("restore-verify", help="在独立目录恢复并校验备份")
     verify.add_argument("manifest")
@@ -155,6 +156,9 @@ def main(argv=None):
     words = sys.argv[1:] if argv is None else argv
     if words and words[0] in cli.COMMANDS:   # D58: the user's commands (login, submit, status …), not the operations ones
         return cli.main(list(words))
+    if words and words[0] == "single":   # MVP 0.2.0 P2: the single-node edition's deployment kit, run off the host
+        from .single import main as kit
+        return kit(list(words[1:]))
     settings, _ = settings_from_argv(argv)
     args = build_parser(settings).parse_args(argv)
     if args.command == "init":
