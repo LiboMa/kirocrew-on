@@ -48,6 +48,13 @@ install_packages() {  # the system packages, nginx and (where the system has it)
   esac
 }
 
+install_aws_cli() {  # the AWS CLI v2 from the system's own signed channel (AL2023 ships it; Ubuntu has it as a snap)
+  case "$PKG" in
+    dnf) dnf install -y -q awscli-2 ;;
+    apt) snap install aws-cli --classic; PATH="$PATH:/snap/bin" ;;
+  esac
+}
+
 install_python() {  # PYTHON: Python 3.12 — the system's, or on Ubuntu 22.04 a CPython uv manages (uv checks its hashes)
   if [ "$OS_ID:$OS_VERSION" != ubuntu:22.04 ]; then
     PYTHON="$(command -v "$PYTHON_PACKAGE")"

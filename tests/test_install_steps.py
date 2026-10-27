@@ -102,6 +102,17 @@ class PackageTests(StepsCase):
         self.assertNotIn("went-on", done.stdout)
 
 
+class AwsCliTests(StepsCase):
+    def test_the_aws_cli_comes_from_each_systems_own_signed_channel(self):   # single-stack.sh needs it; Ubuntu lacks it
+        self.fake("dnf")
+        self.fake("snap")
+        self.assertEqual(self.run_lib("install_aws_cli").returncode, 0)
+        self.assertEqual(self.run_lib("install_aws_cli", "ubuntu", "24.04").returncode, 0)
+        self.assertEqual(self.recorded(), ["dnf install -y -q awscli-2", "snap install aws-cli --classic"])
+        self.assertIn('command -v aws >/dev/null 2>&1 || { . "$HERE/os-lib.sh"; os_detect; install_aws_cli; }',
+                      (ROOT / "deploy/install/single-stack.sh").read_text())
+
+
 class PythonTests(StepsCase):
     def uv_tarball(self, arch="aarch64"):
         uv = textwrap.dedent(f'''\

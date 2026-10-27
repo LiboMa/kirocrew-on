@@ -221,6 +221,10 @@ if [ -n "${ORIGIN_SECRET_PARAM:-}" ]; then
   chown root:octopus /etc/kirocrew-on/origin-secret.new
   chmod 0640 /etc/kirocrew-on/origin-secret.new
   mv -f /etc/kirocrew-on/origin-secret.new /etc/kirocrew-on/origin-secret
+elif [ -s /etc/kirocrew-on/origin-secret ]; then
+  # the single-node edition makes it on the host (install.sh, single-stack.sh) before the octopus user exists
+  chown root:octopus /etc/kirocrew-on/origin-secret
+  chmod 0640 /etc/kirocrew-on/origin-secret
 fi
 if [ ! -f /etc/kirocrew-on/platform.toml ]; then
   install -m 0640 -o root -g octopus "$TARGET/deploy/config/platform.toml.example" /etc/kirocrew-on/platform.toml

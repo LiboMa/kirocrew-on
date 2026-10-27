@@ -3,6 +3,8 @@
 #   curl -fsSL https://<下载域名>/install.sh | sudo sh                 安装 stable 频道的最新版，或补齐上次没装完的部分
 #   curl -fsSL https://<下载域名>/install.sh | sudo sh -s -- --channel preview | --version 0.2.0rc1
 #   curl -fsSL https://<下载域名>/install.sh | sudo sh -s -- --check    只做预检，不改动任何东西
+# CloudFront：用实例角色或本 shell 里的 AK/SK 建小栈 kirocrew-on-single（single-stack.sh；--no-cloudfront 不建，只经 SSM 端口
+# 转发访问），装完核对主机角色只剩 Bedrock 调用与 SSM 的权限（S29）。
 # 经管道运行时 Ubuntu 的 sh 是 dash，所以本文件只用 POSIX sh；验签之后的安装步骤交给发布物里的 al2023.sh（bash）。
 # 发布物：manifest.sig 先用下面内嵌的公钥验签，wheel 再按清单的 sha256 校验，任何一项不符都停在改动之前（不提供只校验
 # 哈希的退路）。地址与公钥由 tools/build_release.py --index 写入；仓库里的这份没有，只能 --check 或 --source。
@@ -31,6 +33,7 @@ usage() {
   --version <版本>    装指定的版本，例如 0.2.0rc1
   --from <目录>       从本地目录取发布物（目录里是 feed/<频道>/latest.json 与 releases/<版本>/）
   --source <目录>     已展开的发布（kirocrew-on setup 用）：不下载，直接执行安装步骤
+  --no-cloudfront     不建 CloudFront 分发：控制台只经 SSM 端口转发访问
 KC_USAGE
   exit "$1"
 }
@@ -71,6 +74,8 @@ metadata() {  # EC2_REGION and EC2_INSTANCE_ID from IMDSv2, or a line in PROBLEM
   fi
   EC2_REGION=$(curl -fsS --max-time 2 -H "X-aws-ec2-metadata-token: ${token}" "${imds}/latest/meta-data/placement/region")
   EC2_INSTANCE_ID=$(curl -fsS --max-time 2 -H "X-aws-ec2-metadata-token: ${token}" "${imds}/latest/meta-data/instance-id")
+  EC2_ROLE=$(curl -fsS --max-time 2 -H "X-aws-ec2-metadata-token: ${token}" \
+             "${imds}/latest/meta-data/iam/security-credentials/" 2>/dev/null | head -1) || EC2_ROLE=""
 }
 
 requirements() {  # root, systemd, disk and memory; every unmet one goes into PROBLEMS
@@ -111,7 +116,7 @@ preflight() {  # stops with code 2 before any change when this host cannot take 
   requirements
   metadata
   [ -z "$PROBLEMS" ] || fail "这台机器还不能安装 KiroCrew ON 单机版：${PROBLEMS}"
-  export OS_ID OS_VERSION PKG ARCH EC2_REGION EC2_INSTANCE_ID
+  export OS_ID OS_VERSION PKG ARCH EC2_REGION EC2_INSTANCE_ID EC2_ROLE
 }
 
 conclude() {
@@ -156,8 +161,6 @@ take_release() {  # STAGE: the release VERSION (or the channel's latest), signat
   for tool in openssl python3 sha256sum; do
     command -v "$tool" >/dev/null 2>&1 || release_fail "需要 ${tool}。"
   done
-  WORK=$(mktemp -d)
-  trap 'rm -rf "$WORK"' EXIT
   if [ -z "$VERSION" ]; then
     fetch feed "$CHANNEL/latest.json" "$WORK/latest.json" || release_fail "频道 ${CHANNEL} 里还没有发布（取不到 ${CHANNEL}/latest.json）。"
     VERSION=$(json_line "$WORK/latest.json" version)
@@ -200,16 +203,34 @@ KC_UNPACK
 
 valid_version() { printf '%s' "$1" | grep -Eq '^[0-9]+(\.[0-9]+)*((a|b|rc)[0-9]+)?(\.post[0-9]+)?(\.dev[0-9]+)?$'; }
 
+domain() {  # domain KEY: a value single-stack.sh wrote, read rather than sourced
+  sed -n "s/^$1=\([A-Za-z0-9.-]*\)\$/\1/p" "$WORK/domains" | head -1
+}
+
+cloudfront() {  # CF_DOMAIN, NATIVE_DOMAIN, PREVIEW_DOMAIN from the stack kirocrew-on-single (made or updated)
+  CF_DOMAIN="" NATIVE_DOMAIN="" PREVIEW_DOMAIN=""
+  [ -z "$NO_CLOUDFRONT" ] || return 0
+  bash "$STAGE/deploy/install/single-stack.sh" up "$WORK/domains" || exit $?
+  CF_DOMAIN=$(domain CF_DOMAIN) NATIVE_DOMAIN=$(domain NATIVE_DOMAIN) PREVIEW_DOMAIN=$(domain PREVIEW_DOMAIN)
+}
+
 run_steps() {  # the install steps of the release in STAGE (al2023.sh: every one of them fills in only what is missing)
   NEW_PASSWORD=""
   [ -s "$ADMIN_FILE" ] || NEW_PASSWORD=1
-  KIROCREW_ON_RELEASE="$VERSION" AWS_REGION="$EC2_REGION" bash "$STAGE/deploy/install/al2023.sh" "$BOUNDARY" ||
+  KIROCREW_ON_RELEASE="$VERSION" AWS_REGION="$EC2_REGION" CF_DOMAIN="$CF_DOMAIN" NATIVE_DOMAIN="$NATIVE_DOMAIN" \
+    PREVIEW_DOMAIN="$PREVIEW_DOMAIN" bash "$STAGE/deploy/install/al2023.sh" "$BOUNDARY" ||
     { printf '%s\n' "安装步骤没有完成（原因见上面的输出）。处理后再运行一次即可：已完成的步骤会跳过，只补缺。" >&2; exit 1; }
+  ROLE_CHECK=0
+  bash "$STAGE/deploy/install/single-stack.sh" check-role || ROLE_CHECK=$?
 }
 
 finish() {
   printf '\n完成：KiroCrew ON %s 单机版\n' "$VERSION"
-  printf '控制台：先在你的电脑上运行 aws ssm start-session --region %s --target %s --document-name AWS-StartPortForwardingSession --parameters portNumber=8918,localPortNumber=8918，再打开 http://localhost:8918\n' "$EC2_REGION" "$EC2_INSTANCE_ID"
+  if [ -n "$CF_DOMAIN" ]; then
+    printf '控制台：https://%s/\n' "$CF_DOMAIN"
+  else
+    printf '控制台：先在你的电脑上运行 aws ssm start-session --region %s --target %s --document-name AWS-StartPortForwardingSession --parameters portNumber=8918,localPortNumber=8918，再打开 http://localhost:8918\n' "$EC2_REGION" "$EC2_INSTANCE_ID"
+  fi
   printf '%s\n' "管理员：admin"
   if [ -n "$NEW_PASSWORD" ] && [ -s "$ADMIN_FILE" ]; then
     printf '初始密码：%s（只打印这一次；另存在 /etc/kirocrew-on/admin-password，仅 root 可读）\n' "$(cat "$ADMIN_FILE")"
@@ -217,10 +238,11 @@ finish() {
     printf '%s\n' "密码：首次安装时已打印；忘了可运行 sudo cat /etc/kirocrew-on/admin-password"
   fi
   printf '%s\n' "下一步：登录控制台，在「我的设置 › 执行环境」里点「登录 Kiro」，用设备码登录 Kiro，然后就可以提交会话。"
+  [ "$ROLE_CHECK" = 0 ] || printf '%s\n' "注意：主机角色的核对没有通过（见上面的说明）。"
   [ "$ARCH" = aarch64 ] || printf '%s\n' "$RECOMMEND"
 }
 
-CHECK="" CHANNEL=stable VERSION="" FROM="" SOURCE=""
+CHECK="" CHANNEL=stable VERSION="" FROM="" SOURCE="" NO_CLOUDFRONT=""
 while [ $# -gt 0 ]; do
   case "$1" in
     --check) CHECK=1 ;;
@@ -228,6 +250,7 @@ while [ $# -gt 0 ]; do
     --version) [ $# -ge 2 ] || usage 2; VERSION=$2; shift ;;
     --from) [ $# -ge 2 ] || usage 2; FROM=$2; shift ;;
     --source) [ $# -ge 2 ] || usage 2; SOURCE=$2; shift ;;
+    --no-cloudfront) NO_CLOUDFRONT=1 ;;
     -h|--help) usage 0 ;;
     *) printf '不认识的选项：%s\n' "$1" >&2; usage 2 ;;
   esac
@@ -243,6 +266,8 @@ if [ -n "$CHECK" ]; then
   [ "$ARCH" = aarch64 ] || printf '%s\n' "$RECOMMEND"
   exit 0
 fi
+WORK=$(mktemp -d)
+trap 'rm -rf "$WORK"' EXIT
 if [ -n "$SOURCE" ]; then
   [ -f "$SOURCE/deploy/install/al2023.sh" ] || fail "${SOURCE} 不是展开的发布（没有 deploy/install/al2023.sh）"
   [ -n "$VERSION" ] || fail "--source 需要同时给出 --version"
@@ -250,5 +275,6 @@ if [ -n "$SOURCE" ]; then
 else
   take_release
 fi
+cloudfront
 run_steps
 finish

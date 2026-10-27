@@ -21,7 +21,14 @@ import build_release   # noqa: E402
 SHELL = shutil.which("dash") or "/bin/sh"
 SUMS = "a1  node-v22.23.3-linux-x64.tar.xz\nb2  node-v22.23.3-linux-arm64.tar.xz\n"
 STEPS = '''#!/bin/sh
-printf '%s\\n' "$* KIROCREW_ON_RELEASE=$KIROCREW_ON_RELEASE AWS_REGION=$AWS_REGION" >> "$CALLS"
+case "$1" in
+  */single-stack.sh)
+    printf '%s\\n' "$1 $2 EC2_INSTANCE_ID=$EC2_INSTANCE_ID" >> "$CALLS"
+    [ "$2" != up ] || printf 'CF_DOMAIN=d1console.cloudfront.net\\nNATIVE_DOMAIN=d2native.cloudfront.net\\nPREVIEW_DOMAIN=d3preview.cloudfront.net\\n' > "$3"
+    [ "$2" != check-role ] || exit "${ROLE_EXIT:-0}"
+    exit 0 ;;
+esac
+printf '%s\\n' "$* KIROCREW_ON_RELEASE=$KIROCREW_ON_RELEASE AWS_REGION=$AWS_REGION CF_DOMAIN=$CF_DOMAIN" >> "$CALLS"
 if [ -n "${MAKE_PASSWORD:-}" ]; then mkdir -p "$INSTALL_FS_ROOT/etc/kirocrew-on"; echo s3cret-initial > "$INSTALL_FS_ROOT/etc/kirocrew-on/admin-password"; fi
 exit "${STEPS_EXIT:-0}"
 '''
@@ -91,8 +98,12 @@ class ReleaseInstallTests(unittest.TestCase):
     def test_a_verified_release_is_unpacked_and_handed_to_the_install_steps(self):
         done = self.install("--channel", "preview", MAKE_PASSWORD="1")
         self.assertEqual(done.returncode, 0, done.stderr)
-        self.assertEqual(self.steps_ran(), [f"{self.stage}/deploy/install/al2023.sh personal "
-                                            f"KIROCREW_ON_RELEASE={self.version} AWS_REGION=us-east-1"])
+        self.assertEqual(self.steps_ran(), [
+            f"{self.stage}/deploy/install/single-stack.sh up EC2_INSTANCE_ID=i-0abc123",   # CloudFront before the steps
+            f"{self.stage}/deploy/install/al2023.sh personal KIROCREW_ON_RELEASE={self.version} AWS_REGION=us-east-1 "
+            "CF_DOMAIN=d1console.cloudfront.net",
+            f"{self.stage}/deploy/install/single-stack.sh check-role EC2_INSTANCE_ID=i-0abc123"])
+        self.assertIn("控制台：https://d1console.cloudfront.net/", done.stdout)
         for name in ("octopus/__main__.py", "composition/gateway.py", "octopus/ui/dist/index.html", "deploy/install/al2023.sh",
                      "deploy/versions.env", "skills/kirocrew-on/SKILL.md", "package.json", "package-lock.json",
                      "requirements-workflow.txt"):
@@ -148,6 +159,19 @@ class ReleaseInstallTests(unittest.TestCase):
                 done = self.install(*args)
                 self.assertEqual(done.returncode, 2)
                 self.assertEqual(self.steps_ran(), [])
+
+    def test_without_cloudfront_no_stack_is_made_and_the_console_is_reached_through_ssm(self):
+        done = self.install("--channel", "preview", "--no-cloudfront")
+        self.assertEqual(done.returncode, 0, done.stderr)
+        steps = self.steps_ran()
+        self.assertFalse(any(" up " in step for step in steps))
+        self.assertTrue(steps[0].endswith("CF_DOMAIN="))
+        self.assertIn("AWS-StartPortForwardingSession", done.stdout)
+
+    def test_a_role_that_still_writes_is_pointed_out_at_the_end(self):
+        done = self.install("--channel", "preview", ROLE_EXIT="10")
+        self.assertEqual(done.returncode, 0, done.stderr)   # the platform is up; the role is the administrator's to trim
+        self.assertIn("主机角色的核对没有通过", done.stdout)
 
     def test_failed_steps_say_a_rerun_only_fills_in(self):
         done = self.install("--channel", "preview", STEPS_EXIT="5")
