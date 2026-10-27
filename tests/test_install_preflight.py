@@ -4,6 +4,7 @@ check reads its data from a place the PREFLIGHT_* variables can point at."""
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 import os
 from pathlib import Path
+import re
 import shutil
 import subprocess
 import tempfile
@@ -160,8 +161,8 @@ class PreflightTests(unittest.TestCase):
     def test_it_is_posix_sh(self):
         text = INSTALL.read_text()
         self.assertTrue(text.startswith("#!/bin/sh\n"))
-        for bashism in ("[[", "local ", "function ", "$'", "echo -e", "<<<", "pipefail"):
-            self.assertNotIn(bashism, text, bashism)
+        for bashism in (r"\[\[", r"\blocal ", r"\bfunction ", r"(^|[\s=(])\$'", r"echo -e", r"<<<", r"pipefail"):
+            self.assertFalse(re.search(bashism, text, re.M), bashism)   # $' as ANSI-C quoting, not a regex's end anchor
         subprocess.run([SHELL, "-n", str(INSTALL)], check=True)
 
 

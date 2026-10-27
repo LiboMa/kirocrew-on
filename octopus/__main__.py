@@ -106,6 +106,7 @@ def build_parser(settings, environ=None):
     archive.add_argument("--dest", required=True)
     archive.add_argument("--name", required=True)
     archive.add_argument("--exclude", action="append", default=[])
+    sub.add_parser("setup", help="pip 渠道：在本机完成单机版的系统级安装（预检、依赖、边界与服务；需要 root）")
     verify = sub.add_parser("restore-verify", help="在独立目录恢复并校验备份")
     verify.add_argument("manifest")
     verify.add_argument("--into", required=True)
@@ -286,6 +287,9 @@ def main(argv=None):
         print(dumps(register_boundary_worker(url, args.username, os.environ[args.password_env], args.worker_url,
                                              Path(args.token_file).read_text().strip() if args.token_file else None,
                                              args.name, spare=args.spare, owner=args.owner, check_only=args.check_only)))
+    elif args.command == "setup":
+        from .installer import setup
+        setup()
     elif args.command == "backup":
         from .backup import backup_database
         print(dumps(backup_database(Path(args.source) if args.source else settings.data_dir / "octopus.sqlite3",

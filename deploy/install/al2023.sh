@@ -141,8 +141,9 @@ if [ ! -f "$TARGET/.installed" ]; then
   rm -rf "$TARGET"
   cp -a "$SOURCE" "$TARGET"
   (cd "$TARGET" && npm ci --omit=dev --no-audit --no-fund)
-  # React console: built on the host into octopus/ui/dist (the repository carries sources and the lockfile only).
-  [ -n "$WORKER_HOST" ] || (cd "$TARGET/web" && npm ci --no-audit --no-fund && npm run build)
+  # React console: built on the host into octopus/ui/dist (the repository carries sources and the lockfile only); a
+  # release unpacked from the wheel (install.sh) has it built already and no web/.
+  [ -n "$WORKER_HOST" ] || [ ! -d "$TARGET/web" ] || (cd "$TARGET/web" && npm ci --no-audit --no-fund && npm run build)
   touch "$TARGET/.installed"
 fi
 [ -x /opt/kirocrew-on/venv/bin/python ] || "$PYTHON" -m venv /opt/kirocrew-on/venv
@@ -377,6 +378,7 @@ done
 log "切换到已通过检查的发布 $RELEASE 与 KiroCrew $KIROCREW_VERSION"
 ln -sfn "$TARGET" /opt/kirocrew-on/current
 ln -sfn "$KC" /opt/kirocrew/current
+install -m 0755 "$TARGET/deploy/install/kirocrew-on" /usr/local/bin/kirocrew-on   # the CLI of the release now current
 
 if [ -z "$WORKER_HOST" ]; then
   # platform:begin

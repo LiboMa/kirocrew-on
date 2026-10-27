@@ -1,7 +1,7 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "title": "KiroCrew ON release manifest (MVP 0.2.0, S1)",
-  "description": "What a release is and what it was tested with; tools/build_release.py writes it, install.sh checks the wheel against it and, when manifest.sig is there, the signature first.",
+  "description": "What a release is and what it was tested with; tools/build_release.py writes it. install.sh checks manifest.sig first (an unsigned release is refused), then the wheel against it.",
   "type": "object",
   "required": ["version", "channel", "wheel", "pins"],
   "additionalProperties": false,
@@ -15,7 +15,7 @@
       "required": ["kirocrew", "node", "kiro_cli", "claude_code", "codex"],
       "properties": {
         "kirocrew": {"type": "object", "required": ["version"],
-                     "properties": {"git_ref": {"type": "string"}, "wheel_sha256": {"type": "string"}, "version": {"type": "string"}}},
+                     "properties": {"source": {"enum": ["git", "wheel"]}, "git_ref": {"type": "string"}, "wheel_sha256": {"type": "string"}, "version": {"type": "string"}}},
         "node": {"type": "object", "required": ["version", "sha256"],
                  "properties": {"version": {"type": "string"},
                                 "sha256": {"type": "object", "required": ["x64", "arm64"],

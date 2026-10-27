@@ -89,7 +89,8 @@ class ReleaseBuildTests(unittest.TestCase):
         pins = dict(line.split("=", 1) for line in (ROOT / "deploy/versions.env").read_text().splitlines()
                     if line and not line.startswith("#") and "=" in line)
         got = self.manifest["pins"]
-        self.assertEqual(got["kirocrew"], {"git_ref": pins["KIROCREW_GIT_REF"], "version": pins["KIROCREW_ACCEPTED_VERSION"]})
+        self.assertEqual(got["kirocrew"], {"source": "git", "git_ref": pins["KIROCREW_GIT_REF"],
+                                           "version": pins["KIROCREW_ACCEPTED_VERSION"]})
         self.assertEqual(got["node"], {"version": pins["NODE_DIST"], "sha256": {"x64": "a1", "arm64": "b2"}})
         self.assertEqual((got["kiro_cli"], got["claude_code"], got["codex"]),
                          (pins["KIRO_CLI_VERSION"], pins["CLAUDE_CODE_VERSION"], pins["CODEX_VERSION"]))
