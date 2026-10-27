@@ -98,6 +98,12 @@ if [ ! -f "$TOML" ]; then
   # Its own OS user, so dedicated; the native entry is the local end of `deploy.sh tunnel --boundary` (D49 R8).
   # MVP 0.2.0 (S8): its identity on the first line (before the file's tables), in this root-owned configuration
   { [ -z "$B_ID" ] || printf 'boundary_id = "%s"\n' "$B_ID"
+  # MVP 0.2.0 (§6.4): kiro-cli signs in from the console the way this host's other boundaries do (top-level keys, so
+  # before the file's tables)
+  for other in "$ETC"/boundary-*.toml; do
+    [ -f "$other" ] && grep -qE '^kiro_(license|identity_provider|idc_region) = ' "$other" || continue
+    grep -E '^kiro_(license|identity_provider|idc_region) = "[A-Za-z0-9.:/_~-]*"$' "$other"; break
+  done
   sed -e "s#/boundaries/personal/#/boundaries/$NAME/#g" \
       -e "s#^worker_port = .*#worker_port = $WORKER_PORT#" -e "s#^gateway_port = .*#gateway_port = $GATEWAY_PORT#" \
       -e 's#^worker_isolation = .*#worker_isolation = "dedicated"#' \

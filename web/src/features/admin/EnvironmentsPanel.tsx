@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState, type ReactNode } from "react";
 import { useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
-import { Archive, Check, Copy, Network, Pencil, Plus, Power, PowerOff, RefreshCw, SquarePlus, Undo2, X } from "lucide-react";
+import { Archive, Check, Copy, KeyRound, Network, Pencil, Plus, Power, PowerOff, RefreshCw, SquarePlus, Undo2, X } from "lucide-react";
 import { api } from "@/api/client";
 import { keys, useEnrollments, useEnvironments } from "@/api/hooks";
 import type { Enrollment, Environment, IssuedEnrollment, Tool, Worker } from "@/api/types";
@@ -605,8 +605,53 @@ function AssignDialog({ worker: w, onAssign, onClose }: {
 
 /** 我的设置 › 执行环境 for someone who is not an administrator: the environments serving them, read-only; anyone served
  * may refresh an environment's model catalogue (spec §6.1). */
+/** Kiro signed in from the console with a device code (MVP 0.2.0, §6.4): the environment's owner opens the address, enters
+ * the code, and the dialog sees the login finish. The code is shown here only and nowhere kept. */
+function KiroLoginDialog({ worker, onClose }: { worker: Worker; onClose: (done?: boolean) => void }) {
+  type Login = { state: "idle" | "starting" | "waiting" | "done" | "failed"; url?: string; code?: string; expires?: number };
+  const [login, setLogin] = useState<Login | null>(null);
+  const [error, setError] = useState("");
+  const [copied, setCopied] = useState(false);
+  const path = "/workers/" + worker.id + "/kiro-login";
+  useEffect(() => {
+    let live = true;
+    let timer: number | undefined;
+    const settle = (next: Login) => {
+      if (!live) return;
+      if (next.state === "done") return onClose(true);
+      setLogin(next);
+      if (next.state === "waiting" || next.state === "starting") timer = window.setTimeout(poll, 3000);
+    };
+    const poll = () => void api<Login>(path).then(settle).catch((e: Error) => live && setError(e.message));
+    void api<Login>(path, "POST", {}).then(settle).catch((e: Error) => live && setError(e.message));
+    return () => { live = false; window.clearTimeout(timer); };
+  }, []);   // once per dialog: a second login request would only report the same code
+  return (
+    <FormDialog title="登录 Kiro" onClose={() => onClose()}
+      description={<>为执行环境「{worker.name}」登录 kiro-cli。在浏览器里打开下面的地址、输入设备码；完成后这里会自动确认。</>}>
+      {error && <p role="alert" className="text-sm text-destructive">{error}</p>}
+      {!error && !login && <p className="text-sm text-muted-foreground">正在取得设备码…</p>}
+      {login?.state === "waiting" && login.url && login.code && (
+        <div className="space-y-3">
+          <a href={login.url} target="_blank" rel="noopener noreferrer" className="block text-sm break-all text-primary underline">{login.url}</a>
+          <div className="flex items-center gap-2 rounded-md border bg-muted/50 p-3">
+            <code className="min-w-0 flex-1 font-mono text-lg tracking-widest">{login.code}</code>
+            <Button type="button" size="sm" variant={copied ? "secondary" : "outline"} aria-label="复制设备码"
+              onClick={() => navigator.clipboard?.writeText(login.code ?? "").then(() => setCopied(true))}>
+              {copied ? <Check /> : <Copy />}{copied ? "已复制" : "复制"}
+            </Button>
+          </div>
+          {login.expires && <p className="text-xs text-muted-foreground">设备码在 {formatTime(login.expires)} 前有效。</p>}
+        </div>
+      )}
+      {login?.state === "failed" && <p role="alert" className="text-sm text-destructive">登录没有完成（设备码过期或被拒绝），关闭后可以再试一次。</p>}
+    </FormDialog>
+  );
+}
+
 export function MyEnvironmentsPanel() {
-  const { workers, allTeams: teams, users } = useConsole();
+  const { workers, allTeams: teams, users, me } = useConsole();
+  const [signing, setSigning] = useState<Worker | null>(null);
   const client = useQueryClient();
   const motion = useRowMotion();
   const refresh = (w: Worker) => api("/workers/" + w.id + "/capabilities", "POST", {})
@@ -645,6 +690,9 @@ export function MyEnvironmentsPanel() {
                     <TableCell className="pr-4 text-right">
                       <RowActions menu={"执行环境操作：" + w.name} actions={[
                         { icon: RefreshCw, label: "刷新模型", name: "刷新模型：" + w.name, onSelect: () => void refresh(w) },
+                        // only its owner: the code signs the environment in as whoever enters it (§6.4)
+                        ...(w.owner_id === me.id ? [{ icon: KeyRound, label: "登录 Kiro", name: "登录 Kiro：" + w.name,
+                          onSelect: () => setSigning(w) }] : []),
                       ]} />
                     </TableCell>
                   </TableRow>
@@ -654,6 +702,14 @@ export function MyEnvironmentsPanel() {
           </Table>
         )}
       </ListCard>
+      {signing && <KiroLoginDialog worker={signing} onClose={(done) => {
+        setSigning(null);
+        if (done) {
+          void client.invalidateQueries({ queryKey: keys.workers });
+          motion.flash(signing.id);
+          toast.success("已登录 Kiro：" + signing.name);
+        }
+      }} />}
     </Panel>
   );
 }

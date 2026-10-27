@@ -332,6 +332,12 @@ API 访问日志不记录 token、请求体或查询串；Engine 只记录异常
 ## 8．认证与过期
 
 - Claude Code 与 Codex 经实例角色使用 Bedrock：实例角色需要 `bedrock:InvokeModel*`（Claude）与 `bedrock-mantle:CreateInference`（Codex 的 amazon-bedrock 提供方）。
+- **在控制台登录 Kiro（MVP 0.2.0，设计 §6.4）**：执行环境的主人在「我的设置 › 执行环境」该行点「登录 Kiro」，对话框显示验证地址与设备码，在浏览器完成授权后自动确认（设备码 15 分钟内有效）。
+  - Worker 本就以边界用户运行，自己在一个伪终端里执行 `kiro-cli login --use-device-flow`，不需要 root；同一时间每个边界只有一个登录，再点一次显示同一个码；已登录时直接返回。
+  - 只有该执行环境的主人（`workers.owner_id`）能发起和看到设备码，管理员也不行；地址与设备码只在内存里，不写审计和日志，审计 `worker.kiro_login` 只记发起。
+  - 接口：`POST` / `GET /v1/workers/<id>/kiro-login`（Worker 侧 `/kiro/login`、`/kiro/login/status`）。
+  - 登录方式取自边界配置的 `kiro_license`、`kiro_identity_provider`、`kiro_idc_region`；`deploy.sh push` 与 `worker-host push` 把 `stack.env` 的 `KIRO_LICENSE`、`KIRO_IDC_START_URL`、`KIRO_IDC_REGION` 写进主机上每个边界的配置；`boundary add` 新建的边界沿用同机其他边界的这三项。
+  - 下面的 `deploy.sh kiro-login` 仍然可用。
 - Kiro CLI：`deploy/aws/deploy.sh kiro-login` 经 SSM Run Command 在主机上以 crew-personal 运行 `kiro-cli login --use-device-flow`（带 `stack.env` 中的 `KIRO_LICENSE`、`KIRO_IDC_START_URL`、`KIRO_IDC_REGION`）。kiro-cli 即使给齐参数仍有交互提示、无终端时失败，因此在 `script(1)` 伪终端中运行并自动回车；脚本打印验证地址与设备码，在浏览器完成授权后自动确认（设备码 15 分钟内有效，过期重新执行）。日志：`/var/lib/octopus/boundaries/personal/logs/kiro-login.log`。不需要本机安装 session-manager-plugin。
 
 ### 控制台自定义域名

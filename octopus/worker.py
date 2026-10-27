@@ -254,7 +254,7 @@ class Worker:
     def __init__(self, root, token, gateway_port=5476, crew_home=None, isolation="trusted-local", routing_log=None,
                  crew_url=None, approval_mode="", crew_entry_ttl="8h", kiro_cli=None, path_prepend=(),
                  tool_paths=None, adapters_dir=None, preview_tls_port=0, preview_tls_name="", disabled_tools=("opencode",),
-                 crew_yolo=True, boundary_id=""):
+                 crew_yolo=True, boundary_id="", kiro_license="", kiro_identity_provider="", kiro_idc_region=""):
         self.root = Path(root).resolve()
         self.disabled_tools = frozenset(disabled_tools)   # reported unavailable, so nothing plans, switches to or runs them
         self.crew_yolo = crew_yolo   # the boundary's standing YOLO: without it a continuation cannot ask for auto approval
@@ -277,6 +277,12 @@ class Worker:
         # "auto": this unattended boundary asks KiroCrew for native auto approval on platform spawns (D14).
         self.approval_mode = approval_mode
         self.kiro_cli, self._login = kiro_cli, (0.0, None)
+        # MVP 0.2.0 (§6.4): the device-code login run from the console, with the deployment's license and IAM Identity
+        # Center settings (deploy/aws/stack.env's KIRO_*); one at a time, kept in memory
+        self.kiro_login_flags = ([*(["--license", kiro_license] if kiro_license else []),
+                                  *(["--identity-provider", kiro_identity_provider] if kiro_identity_provider else []),
+                                  *(["--region", kiro_idc_region] if kiro_identity_provider and kiro_idc_region else [])])
+        self._device_login = None
         self.tool_paths = {**(tool_paths or {}), **({"kiro_cli": kiro_cli} if kiro_cli else {})}
         self.search = [*([adapters_dir] if adapters_dir else []), *path_prepend]
         from .apps import Apps
@@ -304,7 +310,7 @@ class Worker:
         now = time.monotonic()
         if self._login[1] is not None and now - self._login[0] < 60:
             return self._login[1]
-        binary = self.kiro_cli or shutil.which("kiro-cli") or shutil.which("kiro-cli", path=str(Path.home() / ".local/bin"))
+        binary = self._kiro_binary()
         state = "unknown"
         if binary:
             try:
@@ -320,6 +326,36 @@ class Worker:
                 state = "unknown"
         self._login = (now, state)
         return state
+
+    def _kiro_binary(self):
+        return self.kiro_cli or shutil.which("kiro-cli") or shutil.which("kiro-cli", path=str(Path.home() / ".local/bin"))
+
+    def kiro_login_start(self, body):
+        """Start kiro-cli's device-code login, or report the one in progress (§6.4): {state, url, code, expires} while
+        it waits for the person; done when this boundary is already signed in."""
+        from .kiro_login import DeviceLogin
+        self._login = (0.0, None)   # read the login state afresh
+        if self.tool_auth() == "ok":
+            return {"state": "done"}
+        binary = self._kiro_binary()
+        require(binary, "这个执行环境没有安装 kiro-cli", 409, "kiro_cli_missing")
+        if self._device_login is None or self._device_login.view()["state"] in ("done", "failed", "idle"):
+            self._device_login = DeviceLogin([str(binary), "login", "--use-device-flow", *self.kiro_login_flags],
+                                             on_done=lambda: setattr(self, "_login", (0.0, None)))
+        return self._device_login.start()
+
+    def kiro_login_status(self, body):
+        if self._device_login is not None:
+            state = self._device_login.view()
+            if state["state"] != "idle":
+                return state
+        self._login = (0.0, None)
+        return {"state": "done" if self.tool_auth() == "ok" else "idle"}
+
+    def kiro_login_stop(self, body=None):
+        if self._device_login is not None:
+            self._device_login.stop()
+        return {"ok": True}
 
     def tools(self):
         """Whether each Coding tool can be started on this boundary (D38 §3.1): its configured path, else its command on
@@ -2169,7 +2205,8 @@ def serve(worker, port=8928, host="127.0.0.1"):
                                "/verify/status": worker.verify_status, "/approvals": worker.approvals,
                                "/approvals/answer": worker.approvals_answer, "/attempt/stop": worker.attempt_stop,
                                "/knowledge/write": worker.knowledge_write, "/knowledge/forget": worker.knowledge_forget,
-                               "/steer": worker.steer, "/pull/attempts": worker.pull_attempts}
+                               "/steer": worker.steer, "/pull/attempts": worker.pull_attempts,
+                               "/kiro/login": worker.kiro_login_start, "/kiro/login/status": worker.kiro_login_status}
                     require(self.path in methods and self.command == "POST", "接口不存在", 404, "not_found")
                     result = methods[self.path](body)
                 status = 200

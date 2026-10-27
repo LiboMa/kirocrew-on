@@ -235,6 +235,7 @@ class InstallerTests(unittest.TestCase):
         block = self.text[self.text.index("# others:begin"):self.text.index("# others:end")]
         calls = []
         stubs = ('other_boundaries() { echo alice; echo bob; echo carol; }\nboundary_env() { :; }\nboundary_codex() { :; }\n'
+                 'kiro_login_settings() { :; }\n'
                  'log() { echo "LOG $*"; }\n'
                  'systemctl() { :; }\nboundary_restart() { echo "restart $1"; [ "$1" != bob ]; }\nBOUNDARY=personal KC=/k\n')
         result = subprocess.run(["bash", "-c", "set -euo pipefail\n" + stubs + block + "\necho END"], capture_output=True, text=True)
@@ -325,6 +326,14 @@ class BoundaryScriptTests(HostCase):
         self.assertIn("enroll code from the environment", calls)
         self.assertNotIn("kce_code", calls)   # never on a command line
         self.assertNotIn("--worker-url", calls)
+
+    def test_a_new_boundary_signs_kiro_in_the_way_the_others_do(self):   # MVP 0.2.0 P2 Task 5 (§6.4)
+        self.config("personal", worker_port=8928, gateway_port=5476, kiro_license='"pro"',
+                    kiro_identity_provider='"https://d-9067e1d68a.awsapps.com/start"', kiro_idc_region='"us-east-1"')
+        self.add("bob", "--owner", "bob", new_user="crew-bob")
+        config = self.config_of("bob")
+        self.assertEqual((config["kiro_license"], config["kiro_identity_provider"], config["kiro_idc_region"]),
+                         ("pro", "https://d-9067e1d68a.awsapps.com/start", "us-east-1"))
 
     def test_an_id_inside_a_subordinate_range_stops_before_the_user_is_made(self):
         subuid = self.root / "subuid"

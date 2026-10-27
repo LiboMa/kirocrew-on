@@ -165,6 +165,15 @@ class TemplateTests(unittest.TestCase):
         self.assertIn('merge_hosts /etc/kirocrew-on/platform.toml "$CF_DOMAIN" ${CONSOLE_DOMAIN:+"$CONSOLE_DOMAIN"} localhost:18918',
                       installer)
 
+    def test_every_boundary_learns_how_kiro_signs_in_from_the_console(self):   # MVP 0.2.0 P2 Task 5 (§6.4)
+        deploy = (ROOT / "deploy/aws/deploy.sh").read_text()
+        installer = (ROOT / "deploy/install/al2023.sh").read_text()
+        for part in ("KIRO_LICENSE={kiro_license}", "KIRO_IDC_START_URL={kiro_start}", "KIRO_IDC_REGION={kiro_region}"):
+            self.assertIn(part, deploy)
+        self.assertIn('kiro_login_settings "$BOUNDARY_TOML"', installer)
+        self.assertIn('kiro_login_settings "/etc/kirocrew-on/boundary-$OTHER.toml"', installer)
+        self.assertIn('[[ "${KIRO_IDC_START_URL:-}" =~', installer)   # a value from stack.env, checked before it is written
+
     def test_the_installer_gives_agents_a_headless_browser(self):
         # EC2 2026-10-19 (run-48f02d32): Playwright's Chromium lacked 16 system libraries (exit 127), so reviews and the
         # D50 frontend checks could not open the page; every host (platform and Worker hosts) installs them on each push

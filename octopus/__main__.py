@@ -232,7 +232,9 @@ def main(argv=None):
                       kiro_cli=settings.tools.get("kiro_cli"), path_prepend=settings.path_prepend,
                       tool_paths=settings.tools, adapters_dir=settings.adapters_dir,
                       preview_tls_port=settings.preview_tls_port, preview_tls_name=settings.preview_tls_name,
-                      disabled_tools=settings.disabled_tools, crew_yolo=settings.crew_yolo, boundary_id=settings.boundary_id)
+                      disabled_tools=settings.disabled_tools, crew_yolo=settings.crew_yolo, boundary_id=settings.boundary_id,
+                      kiro_license=settings.kiro_license, kiro_identity_provider=settings.kiro_identity_provider,
+                      kiro_idc_region=settings.kiro_idc_region)
         httpd = serve(node, args.port, args.host)
         signal.signal(signal.SIGTERM, lambda *_: threading.Thread(target=httpd.shutdown, daemon=True).start())
         # D51: each Coding tool's models are found without anyone asking (owner 2026-10-20)

@@ -239,6 +239,16 @@ chmod 0640 /etc/kirocrew-on/credentials.key
 chmod 0644 /etc/kirocrew-on/worker-ca.pem
   # platform:end
 fi
+# MVP 0.2.0 (§6.4): how kiro-cli signs in when the console starts its device-code login (stack.env's KIRO_*), written
+# into every boundary's configuration; each value is checked before it reaches a file
+[[ "${KIRO_LICENSE:-}" =~ ^(|free|pro)$ ]] || { echo "KIRO_LICENSE 只能是 free 或 pro" >&2; exit 2; }
+[[ "${KIRO_IDC_START_URL:-}" =~ ^(|https://[A-Za-z0-9.-]+(/[A-Za-z0-9._~/-]*)?)$ ]] || { echo "KIRO_IDC_START_URL 无效" >&2; exit 2; }
+[[ "${KIRO_IDC_REGION:-}" =~ ^(|[a-z]{2}(-[a-z]+)+-[0-9])$ ]] || { echo "KIRO_IDC_REGION 无效" >&2; exit 2; }
+kiro_login_settings() {  # kiro_login_settings TOML
+  [ -z "${KIRO_LICENSE:-}" ] || toml_set "$1" kiro_license "\"$KIRO_LICENSE\""
+  [ -z "${KIRO_IDC_START_URL:-}" ] || toml_set "$1" kiro_identity_provider "\"$KIRO_IDC_START_URL\""
+  [ -z "${KIRO_IDC_REGION:-}" ] || toml_set "$1" kiro_idc_region "\"$KIRO_IDC_REGION\""
+}
 BOUNDARY_TOML="/etc/kirocrew-on/boundary-$BOUNDARY.toml"
 if [ ! -f "$BOUNDARY_TOML" ]; then
   sed "s#/boundaries/personal/#/boundaries/$BOUNDARY/#g" \
@@ -246,6 +256,7 @@ if [ ! -f "$BOUNDARY_TOML" ]; then
   chown "root:$CREW" "$BOUNDARY_TOML"
   chmod 0640 "$BOUNDARY_TOML"
 fi
+kiro_login_settings "$BOUNDARY_TOML"
 if [ -n "$WORKER_HOST" ]; then
   log "Worker 主机：专属边界，nginx 以 TLS 端口 ${WORKER_TLS_PORT:=8943} 转发回环 Worker、${GATEWAY_TLS_PORT:=8944} 转发回环 Gateway"
   toml_set "$BOUNDARY_TOML" worker_isolation '"dedicated"'
@@ -469,6 +480,7 @@ FAILED_BOUNDARIES=""
 for OTHER in $(other_boundaries "$BOUNDARY"); do
   systemctl is-enabled --quiet "octopus-worker@$OTHER" || { log "边界 ${OTHER}：已停用（systemctl disable），不重启"; continue; }
   log "边界 ${OTHER}：升级"
+  kiro_login_settings "/etc/kirocrew-on/boundary-$OTHER.toml"
   boundary_env "$OTHER"
   boundary_codex "$OTHER"   # settings an existing boundary's Codex lacks (web search off), read by its next task
   systemctl enable "octopus-gateway@$OTHER" "octopus-worker@$OTHER" >/dev/null

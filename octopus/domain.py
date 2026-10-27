@@ -2355,6 +2355,24 @@ class Service:
         with self.db.read() as db:
             return {**metrics.snapshot(db, now), "at": now}
 
+    def kiro_login(self, actor, wid, start):
+        """Sign a boundary's kiro-cli in with a device code from the console (MVP 0.2.0, §6.4): its owner only — not an
+        administrator either: the code signs the boundary in as whoever enters it. The address and code pass through
+        and are kept nowhere; the audit records that a login was started, not what it showed."""
+        from . import transport
+        with self.db.read() as db:
+            row = db.execute("SELECT id, owner_id, config FROM workers WHERE id=? AND retired=0", (wid,)).fetchone()
+        require(row is not None and row["owner_id"] == actor["id"], "执行环境不存在或不是你的", 404, "not_found")
+        answer = transport.worker_request(json.loads(row["config"]), "/kiro/login" if start else "/kiro/login/status", {},
+                                          timeout=20)
+        require(isinstance(answer, dict) and answer.get("state") in ("idle", "starting", "waiting", "done", "failed"),
+                "执行环境未返回登录状态", 503, "worker_unavailable")
+        if start:
+            with self.db.transaction() as db:
+                audit(db, actor, "worker.kiro_login", "worker", wid, {"state": answer["state"]})
+        keep = ("state", "url", "code", "expires") if answer["state"] == "waiting" else ("state",)
+        return {key: answer[key] for key in keep if key in answer}
+
     def quotas(self, actor):
         """The actor's limit on running tasks and their Teams' (D61); an administrator also sees the default and each person's."""
         with self.db.read() as db:

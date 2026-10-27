@@ -24,7 +24,8 @@ INTS = {"api_port": (1, 65535), "worker_port": (1, 65535), "gateway_port": (1, 6
         "preview_tls_port": (1, 65535)}
 FLOATS = {"retry_unavailable": (0.0, 600.0), "shutdown_grace": (0.0, 300.0)}
 STRINGS = {"api_host", "worker_host", "public_url", "crew_url", "worker_isolation", "approval_mode", "crew_entry_ttl",
-           "preview_tls_name", "preview_url", "preview_domain", "boundary_id"}
+           "preview_tls_name", "preview_url", "preview_domain", "boundary_id", "kiro_license", "kiro_identity_provider",
+           "kiro_idc_region"}
 APPROVAL = ("", "auto", "interactive")
 BOOLS = {"crew_yolo"}
 # Lifetime of the native browser login minted for "open in KiroCrew": 1–480 minutes or 1–8 hours (K03).
@@ -80,6 +81,10 @@ class Settings:
     # MVP 0.2.0 (S8): the boundary's identity from the control plane; empty for the boundaries of before (their identity
     # stays derived from the host, unchanged).
     boundary_id: str = ""
+    # MVP 0.2.0 (§6.4): kiro-cli's device-code login from the console — the license and IAM Identity Center to sign in with
+    kiro_license: str = ""
+    kiro_identity_provider: str = ""
+    kiro_idc_region: str = ""
     kirocrew_python: Path | None = None
     adapters_dir: Path | None = None
     # Secret CloudFront adds as X-Origin-Verify; when set, only verified (or host-local) requests are served.
@@ -171,6 +176,12 @@ def _layer(values, base):
                 raise ConfigError("crew_entry_ttl 只能是 1–480m 或 1–8h")
             if key == "boundary_id" and value and not BOUNDARY_ID.fullmatch(value):
                 raise ConfigError("boundary_id 须为 bnd- 加 32 位十六进制小写")
+            if key == "kiro_license" and value not in ("", "free", "pro"):
+                raise ConfigError("kiro_license 只能是 free 或 pro（留空表示由 kiro-cli 询问）")
+            if key == "kiro_identity_provider" and value and not re.fullmatch(r"https://[A-Za-z0-9.\-]+(/[A-Za-z0-9._~/-]*)?", value):
+                raise ConfigError("kiro_identity_provider 须为 IAM Identity Center 的开始地址，如 https://d-xxxx.awsapps.com/start")
+            if key == "kiro_idc_region" and value and not re.fullmatch(r"[a-z]{2}(-[a-z]+)+-\d", value):
+                raise ConfigError("kiro_idc_region 须为区域代码，如 us-east-1")
             if key == "preview_url" and value and not re.fullmatch(r"https?://[A-Za-z0-9.\-]+(:\d{1,5})?/?", value):
                 raise ConfigError("preview_url 只能是 https://<域名>[:端口]")
             if key == "preview_domain" and value and not re.fullmatch(

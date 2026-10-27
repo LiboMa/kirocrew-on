@@ -267,15 +267,19 @@ push() {
   git archive --format=tar.gz --prefix="kirocrew-on-$sha/" -o "$archive" HEAD
   run s3 cp "$archive" "s3://$bucket/releases/$sha.tar.gz" --only-show-errors
   python3 - "$sha" "$bucket" "$domain" "$PARAMS" "$REGION" "$BOUNDARY" "$native" "$NATIVE_PORT" "$console" "$preview" \
-    "$PREVIEW_PORT" "$session" > "$WORK/commands.json" <<'PY'
-import json, sys
-sha, bucket, domain, params, region, boundary, native, native_port, console, preview, preview_port, session = sys.argv[1:]
+    "$PREVIEW_PORT" "$session" "${KIRO_LICENSE:-}" "${KIRO_IDC_START_URL:-}" "${KIRO_IDC_REGION:-}" > "$WORK/commands.json" <<'PY'
+import json, shlex, sys
+(sha, bucket, domain, params, region, boundary, native, native_port, console, preview, preview_port, session,
+ kiro_license, kiro_start, kiro_region) = sys.argv[1:]
+kiro_license, kiro_start, kiro_region = (shlex.quote(v) for v in (kiro_license, kiro_start, kiro_region))
 d = "/opt/kirocrew-on/incoming"
 script = (f"set -euo pipefail; mkdir -p {d}; aws s3 cp s3://{bucket}/releases/{sha}.tar.gz {d}/{sha}.tar.gz "
           f"--region {region} --only-show-errors; rm -rf {d}/kirocrew-on-{sha}; tar -xzf {d}/{sha}.tar.gz -C {d}; "
           f"KIROCREW_ON_RELEASE={sha} CF_DOMAIN={domain} CONSOLE_DOMAIN={console} NATIVE_DOMAIN={native} "
           f"NATIVE_PORT={native_port} PREVIEW_DOMAIN={preview} PREVIEW_PORT={preview_port} "
           f"PREVIEW_SESSION_DOMAIN={session} "
+          # MVP 0.2.0 (§6.4): how kiro-cli signs in when the console starts its device-code login
+          f"KIRO_LICENSE={kiro_license} KIRO_IDC_START_URL={kiro_start} KIRO_IDC_REGION={kiro_region} "
           f"ORIGIN_SECRET_PARAM={params}/origin-secret "
           f"AWS_REGION={region} "
           f"bash {d}/kirocrew-on-{sha}/deploy/install/al2023.sh {boundary}")
@@ -499,14 +503,16 @@ worker_push() {  # the committed HEAD, installed in Worker host mode (WORKER_HOS
   git archive --format=tar.gz --prefix="kirocrew-on-$sha/" -o "$archive" HEAD
   run s3 cp "$archive" "s3://$bucket/releases/$sha.tar.gz" --only-show-errors
   python3 - "$sha" "$bucket" "$REGION" "$name" "$WORKER_TLS_PORT" "$WORKER_GATEWAY_TLS_PORT" "$native" \
-    "$WORKER_PREVIEW_TLS_PORT" > "$WORK/commands.json" <<'PY'
-import json, sys
-sha, bucket, region, name, port, gateway_port, native, preview_port = sys.argv[1:]
+    "$WORKER_PREVIEW_TLS_PORT" "${KIRO_LICENSE:-}" "${KIRO_IDC_START_URL:-}" "${KIRO_IDC_REGION:-}" > "$WORK/commands.json" <<'PY'
+import json, shlex, sys
+sha, bucket, region, name, port, gateway_port, native, preview_port, kiro_license, kiro_start, kiro_region = sys.argv[1:]
+kiro_license, kiro_start, kiro_region = (shlex.quote(v) for v in (kiro_license, kiro_start, kiro_region))
 d = "/opt/kirocrew-on/incoming"
 script = (f"set -euo pipefail; mkdir -p {d}; aws s3 cp s3://{bucket}/releases/{sha}.tar.gz {d}/{sha}.tar.gz "
           f"--region {region} --only-show-errors; rm -rf {d}/kirocrew-on-{sha}; tar -xzf {d}/{sha}.tar.gz -C {d}; "
           f"WORKER_HOST=1 WORKER_TLS_PORT={port} GATEWAY_TLS_PORT={gateway_port} NATIVE_DOMAIN={native} "
           f"WORKER_PREVIEW_TLS_PORT={preview_port} "
+          f"KIRO_LICENSE={kiro_license} KIRO_IDC_START_URL={kiro_start} KIRO_IDC_REGION={kiro_region} "
           f"KIROCREW_ON_RELEASE={sha} AWS_REGION={region} "
           f"bash {d}/kirocrew-on-{sha}/deploy/install/al2023.sh {name}")
 print(json.dumps({"commands": [script], "executionTimeout": ["3600"]}))
