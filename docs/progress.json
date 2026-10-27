@@ -1,6 +1,6 @@
 {
   "_comment": "进度看板与 docs/PROGRESS.md 的唯一数据源：任务状态在这里维护；提交记录由 tools/progress.py 从 git 生成（负责人 2026-10-20）。",
-  "checks": "2055 后端 + 92 + 344 控制台 + 7 个浏览器测试；EC2 运行 45d3087（MVP 0.2.0 P1 与安全修复，PR #15）",
+  "checks": "2168 后端 + 92 + 354 控制台测试；EC2 运行 9b587ec（MVP 0.2.0 P2，PR #15）",
   "status": {
     "accepted": {
       "label": "已验收",
@@ -510,15 +510,15 @@
         {
           "id": "v020-p2-plan",
           "name": "P2 实施计划（9 项）",
-          "status": "local",
-          "ref": "docs/superpowers/plans/2026-10-27-mvp-0.2.0-p2-single-node.md"
+          "status": "deployed",
+          "ref": "EC2 9b587ec"
         },
         {
           "id": "v020-p2",
           "name": "P2 单机版一键安装",
-          "status": "local",
-          "ref": "P2 计划 Task 1–8",
-          "more": "本机完成（2026-10-28）：install.sh 预检与验签安装、dnf / apt 分支、CloudFront 小栈与主机角色核对、控制台登录 Kiro、控制台新建边界（root 服务经 systemd path 单元）、部署套件 kirocrew-on single native / backup / up 与「管理 › 部署」、Docker 渠道。待终审修复、EC2 部署与端到端。"
+          "status": "deployed",
+          "ref": "EC2 9b587ec",
+          "more": "P2 Task 1–8 已部署 EC2（2026-10-28）：install.sh 预检与验签安装、dnf / apt 分支、CloudFront 小栈与主机角色核对、控制台登录 Kiro、控制台新建边界（root 服务经 systemd path 单元）、部署套件 kirocrew-on single native / backup / up 与「管理 › 部署」、Docker 渠道。终审 3 严重 11 重要已修；回归 92 + 354 + 2168 通过；EC2 主机 17/17、浏览器 8/8。一行安装的验收见下一项。"
         },
         {
           "id": "v020-p2-acceptance",
