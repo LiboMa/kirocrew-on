@@ -227,6 +227,12 @@ CREATE TABLE IF NOT EXISTS worker_enrollments(
  used_by_worker TEXT, failures INTEGER NOT NULL DEFAULT 0, revoked REAL);
 """
 
+# Peer review 2026-10-27: how a token was issued — 'login' only from POST /v1/login, 'api' for every other way (tokens from
+# before this are 'api': nothing proves they came from a login). Account management needs a login token.
+TOKEN_KIND = """
+ALTER TABLE tokens ADD COLUMN kind TEXT NOT NULL DEFAULT 'api' CHECK(kind IN ('login','api'));
+"""
+
 EXECUTOR = """
 ALTER TABLE runs ADD COLUMN executor_id TEXT REFERENCES users(id);
 """
@@ -236,7 +242,8 @@ MIGRATIONS = [(1, "baseline", BASELINE), (2, "environments", ENVIRONMENTS), (3, 
               (7, "knowledge", KNOWLEDGE), (8, "knowledge_kept", KNOWLEDGE_KEPT),
               (9, "requests_policies", REQUESTS_POLICIES), (10, "quotas", QUOTAS), (12, "shares", SHARES), (13, "marks", MARKS),
               (14, "executor", EXECUTOR), (15, "public_shares", PUBLIC_SHARES),
-              (16, "boundaries", BOUNDARIES), (17, "worker_enrollments", WORKER_ENROLLMENTS)]   # 11: D57's (another branch)
+              (16, "boundaries", BOUNDARIES), (17, "worker_enrollments", WORKER_ENROLLMENTS),
+              (18, "token_kind", TOKEN_KIND)]   # 11: D57's (another branch)
 
 
 def _statements(script):

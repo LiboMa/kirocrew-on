@@ -12,9 +12,10 @@ QUIET = {"updated"}   # timestamps change on every write and are not a change wo
 LONG = 500
 
 
-def client(label):
-    """Where a user's change came from, by the label of the token that made it."""
-    return "console" if label == "Web login" else "mcp" if "MCP" in (label or "") else "api"
+def client(label, kind="api"):
+    """Where a user's change came from: the console when its token came from a login (by how it was issued, never by
+    its free-text label); else a Coding Agent's or the API's, by the label."""
+    return "console" if kind == "login" else "mcp" if "MCP" in (label or "") else "api"
 
 
 def person(actor):

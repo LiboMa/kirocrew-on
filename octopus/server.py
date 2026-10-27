@@ -23,7 +23,7 @@ from urllib.parse import parse_qs, quote, unquote, urlsplit
 from . import __version__, enrollments, public_shares, remote_preview, workers
 from .db import dumps, uid
 from .domain import Service, audit, name, team_environment
-from .security import (Error, authenticate, check_password, create_user, elevated, expiry, issue_token, regenerate_token, require,
+from .security import (Error, authenticate, check_password, console_login, create_user, elevated, expiry, issue_token, regenerate_token, require,
                        scope)
 from . import transport
 from .transport import validate_worker, worker_request
@@ -759,7 +759,7 @@ def server(database, port=8918, host="127.0.0.1", allowed_hosts=(), origin_secre
                                           (str(body.get("username", "")).lower(),)).fetchone()
                         require(user is not None and check_password(body.get("password"), user["password"]),
                                 "用户名或密码错误", 401, "unauthorized")
-                        token = issue_token(db, user["id"], label="Web login", ttl=REMEMBER if remember else 86400)
+                        token = issue_token(db, user["id"], label="Web login", ttl=REMEMBER if remember else 86400, kind="login")
                         db.execute("UPDATE users SET last_login=? WHERE id=?", (time.time(), user["id"]))
                         db.execute("DELETE FROM tokens WHERE expires<?", (time.time(),))
                     with limiter_lock:
@@ -784,6 +784,7 @@ def server(database, port=8918, host="127.0.0.1", allowed_hosts=(), origin_secre
                     with database.transaction() as db:
                         if method == "POST":
                             require(elevated(actor), "需要平台管理员", 403, "forbidden")
+                            console_login(actor)   # an account an Agent's token made would be one it can sign in as
                             created = create_user(db, body.get("username"), body.get("password"), body.get("admin", False))
                             audit(db, actor, "user.create", "user", created["id"], {"admin": created["admin"]})
                             if body.get("worker_id"):
@@ -833,7 +834,8 @@ def server(database, port=8918, host="127.0.0.1", allowed_hosts=(), origin_secre
                     require(isinstance(body, dict) and set(body) <= {"expires_in"}, "只接受 expires_in")
                     with database.transaction() as db:
                         return self.respond(regenerate_token(db, actor["id"], segments[2], body.get("expires_in"),
-                                                             actor.get("token_id"), actor["scopes"]))
+                                                             actor.get("token_id"), actor["scopes"],
+                                                             actor.get("token_kind", "api")))
                 if len(segments) == 3 and segments[:2] == ["v1", "tokens"] and method == "DELETE":
                     with database.transaction() as db:
                         db.execute("DELETE FROM tokens WHERE id=? AND user_id=?", (segments[2], actor["id"]))

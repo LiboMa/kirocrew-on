@@ -19,4 +19,5 @@ class TokenLabelTests(AccessCase):
             labels = [r[0] for r in db.execute("SELECT label FROM tokens WHERE user_id=?", (self.b["id"],))]
         # only the console's own login carries it
         self.assertEqual([l for l in labels if l.strip().lower() == "web login"], ["Web login"])
-        self.assertEqual((client("Web login"), client("claude MCP")), ("console", "mcp"))
+        # the console is named by how a token was issued, never by its label (test_token_kind)
+        self.assertEqual((client("Web login", "login"), client("Web login"), client("claude MCP")), ("console", "api", "mcp"))

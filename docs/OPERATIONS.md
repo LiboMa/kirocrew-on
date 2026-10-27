@@ -1209,6 +1209,14 @@ Draft PR（GitHub）/ Draft MR（GitLab）。
 - **用户**：控制台「管理 › 用户」是一张表（用户名与管理员标记、状态、所在 Team、执行环境、最近登录、进行中的会话），工具栏可按用户名或 Team 搜索；「新建用户」在对话框里只填用户名与初始密码（可同时为个人空间分配共享环境）；每行「重设密码」「加入 Team」在行内，「⋯」里有改执行环境、Token（查看与撤销）、设为 / 取消管理员、停用 / 启用，每项都在对话框里完成并先说明后果（2026-10-24 改版，见 docs/design/2026-10-24-qingyan.md）；停用与重设密码立即撤销该用户全部 Token，
   会话照常执行；至少保留一位有效管理员，Team 唯一的有效 owner 不能被停用。「我的设置 › 修改密码」（账户菜单也可进入）后，本人其他登录与 Token 失效。
   API：`POST /v1/me/password`、`POST /v1/users/<id>/password|active|admin`、`GET /v1/admin/users`、`GET|DELETE /v1/admin/users/<id>/tokens[/<tid>]`。
+- **新建账号与重设密码只认控制台登录（2026-10-27）**：
+  - 每枚 Token 记下签发方式（`tokens.kind`）：只有 `POST /v1/login` 发出的是 `login`，其余都是 `api`，包括 `octopus connect`、控制台「API 与 Coding Agent 接入」与 `octopus login`。
+  - `POST /v1/users`（新建）与 `POST /v1/users/<id>/password`（重设）用 `api` Token 调用时返回 403 `console_login_required`。原因：Agent 持有的管理员 Token 原本能借此新建一个自己知道密码的管理员，或改掉别人的密码后登录。
+  - 重设自己的密码只能走「我的设置 › 修改密码」（`/v1/me/password`，要输入原密码），否则返回 400 `use_me_password`。
+  - 停用、启用、设为 / 取消管理员、撤销他人 Token 仍可经 API，出事时用 Agent 或脚本也能及时收权。
+  - 用 `api` Token 重新生成一枚 `login` Token，得到的是 `api` Token。
+  - 控制台里的「来自控制台」也按签发方式判断，不再看 Token 名称；名称「Web login」保留给登录，签发时会被拒绝（400 `label_reserved`）。
+  - **部署后需要重新登录一次控制台**：此前的登录 Token 没有记录签发方式，一律算作 `api`。
 - **管理员越权**：可查看并操作全部会话（控制台侧栏「全部会话」，`GET /v1/runs?all=1`），原生 KiroCrew 入口不因管理员身份开放；
   越权操作与用户管理写入审计（`GET /v1/admin/audit`）。
 - **Token 有效期（D62）**：签发时选 7 天、30 天、365 天或永不过期——控制台「API 与 Coding Agent 接入」的「有效期」（默认 30 天）、

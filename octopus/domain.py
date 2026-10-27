@@ -14,7 +14,7 @@ import unicodedata
 
 from . import journal, policies, quotas, remote_preview, requests as submissions
 from .db import dumps, uid
-from .security import Error, check_password, elevated, expiry, password_hash, require
+from .security import Error, check_password, console_login, elevated, expiry, password_hash, require
 
 TOOLS = ("kiro", "claude", "codex", "opencode")
 ROLES = {"viewer": 1, "runner": 2, "editor": 3, "owner": 4}
@@ -3122,6 +3122,11 @@ class Service:
         return row
 
     def reset_password(self, actor, uid, body):
+        """An administrator sets someone else's password, from a console login only: through an Agent's or the API's
+        token it would hand the account to whatever holds that token (peer review 2026-10-27)."""
+        require(elevated(actor), "需要平台管理员", 403, "forbidden")
+        console_login(actor)
+        require(uid != actor["id"], "改自己的密码请在「我的设置」里进行，需要输入原密码", 400, "use_me_password")
         with self.db.transaction() as db:
             self._target(db, actor, uid)
             db.execute("UPDATE users SET password=? WHERE id=?", (password_hash(body.get("password")), uid))
