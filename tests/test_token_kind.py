@@ -46,10 +46,22 @@ class TokenKindTests(AccessCase):
             status, answer = call("POST", f"/v1/users/{self.a['id']}/password", console, {"password": NEW})
             self.assertEqual((status, answer["code"]), (400, "use_me_password"))
 
-    def test_taking_access_away_still_works_through_the_api(self):
+    def test_taking_access_away_still_works_through_the_api_giving_it_back_does_not(self):
         with self.http() as call:
             self.assertEqual(call("POST", f"/v1/users/{self.e['id']}/active", self.tokens["alice"], {"active": False})[0], 200)
-            self.assertEqual(call("POST", f"/v1/users/{self.e['id']}/active", self.tokens["alice"], {"active": True})[0], 200)
+            status, answer = call("POST", f"/v1/users/{self.e['id']}/active", self.tokens["alice"], {"active": True})
+            self.assertEqual((status, answer["code"]), (403, "console_login_required"))
+            console = self.login(call, "alice")
+            self.assertEqual(call("POST", f"/v1/users/{self.e['id']}/active", console, {"active": True})[0], 200)
+
+    def test_granting_admin_needs_a_console_login_but_taking_it_away_does_not(self):
+        # an existing account whose password someone else holds must not be raised through an Agent's token (peer review)
+        with self.http() as call:
+            status, answer = call("POST", f"/v1/users/{self.e['id']}/admin", self.tokens["alice"], {"admin": True})
+            self.assertEqual((status, answer["code"]), (403, "console_login_required"))
+            console = self.login(call, "alice")
+            self.assertEqual(call("POST", f"/v1/users/{self.e['id']}/admin", console, {"admin": True})[0], 200)
+            self.assertEqual(call("POST", f"/v1/users/{self.e['id']}/admin", self.tokens["alice"], {"admin": False})[0], 200)
 
     def test_regenerating_a_login_token_from_an_api_token_yields_an_api_token(self):
         with self.http() as call:

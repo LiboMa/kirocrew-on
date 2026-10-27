@@ -3136,6 +3136,9 @@ class Service:
 
     def set_active(self, actor, uid, body):
         require(isinstance(body.get("active"), bool), "active 必须为布尔值")
+        if body["active"]:   # giving access back needs a console login, as granting it does; taking it away does not
+            require(elevated(actor), "需要平台管理员", 403, "forbidden")
+            console_login(actor)
         with self.db.transaction() as db:
             row = self._target(db, actor, uid)
             if not body["active"] and row["active"]:
@@ -3153,6 +3156,9 @@ class Service:
 
     def set_admin(self, actor, uid, body):
         require(isinstance(body.get("admin"), bool), "admin 必须为布尔值")
+        if body["admin"]:   # granting needs a console login; taking it away stays open to tokens, for incident response
+            require(elevated(actor), "需要平台管理员", 403, "forbidden")
+            console_login(actor)
         with self.db.transaction() as db:
             row = self._target(db, actor, uid)
             if not body["admin"] and row["admin"] and row["active"]:

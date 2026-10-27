@@ -136,9 +136,10 @@ def authenticate(db, raw):
 
 
 def console_login(actor):
-    """Creating an account or setting someone's password: only with a token that came from a console login (someone
-    typed the password), never an Agent's or the API's (peer review 2026-10-27)."""
-    require(actor.get("token_kind") == "login", "这项操作只能用控制台登录进行（Coding Agent 与 API Token 不能新建账号或重置密码）；已在控制台里的，请退出后重新登录一次",
+    """What grants access — creating an account, setting someone's password, making someone an administrator, restoring
+    a deactivated account — only with a token that came from a console login (someone typed the password), never an
+    Agent's or the API's; what takes access away stays open to them, for incident response (peer review 2026-10-27)."""
+    require(actor.get("token_kind") == "login", "这项操作只能用控制台登录进行（Coding Agent 与 API Token 不能新建账号、重设密码、设为管理员或恢复已停用的账号）；已在控制台里的，请退出后重新登录一次",
             403, "console_login_required")
 
 

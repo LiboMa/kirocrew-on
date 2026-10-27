@@ -38,7 +38,7 @@ KiroCrew ON 在远端执行开发任务：KiroCrew 的 Kiro Agent 先识别意�
      设为环境变量 `OCTOPUS_API_TOKEN` 后再执行，命令直接使用该 Token。
    - 平台管理员需要经 Agent 管理用户、Team 或执行环境时，可加 `--admin`：Token 额外含 admin、7 天有效。
      这枚 Token 能停用用户、更换 Team 的执行环境，只在本人设备上使用。日常建议用普通连接，需要管理时再单独连一个，用完撤销。
-     新建账号与重设密码只能在控制台登录后进行，Agent 做不了，不要尝试。
+     新建账号、重设密码、设为管理员、恢复已停用的账号只能在控制台登录后进行，Agent 做不了，不要尝试。
    - 在 Claude Code 中，可以建议用户输入 `! <命令>` 在当前会话里运行。
    - Codex、OpenCode、Kiro IDE 或其他 MCP 客户端：按 `{{KIROCREW_ON_REPO}}/docs/CONNECT.md` 手动配置。
 3. 连接后要**新开一个会话（或重启客户端）**才会加载这些工具；告诉用户这一点，不要假装已经可以调用。
