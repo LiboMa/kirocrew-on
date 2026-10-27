@@ -115,6 +115,15 @@ export interface AwsRequest {
   command: string;
 }
 
+/** install.sh's check of the host role (MVP 0.2.0 P2, S29), as 管理 › 部署 shows it. */
+export interface HostRole {
+  state: "ok" | "writes" | "unchecked" | "none";
+  role: string;
+  allowed: string[];
+  commands: string[];
+  checked: number;
+}
+
 export interface Enrollment {
   id: string;
   name: string;

@@ -29,7 +29,6 @@ ON_CURRENT="${ON_CURRENT:-/opt/kirocrew-on/current}"
 NODE_ROOT="${NODE_ROOT:-/opt/kirocrew-node}"
 REGION="${AWS_REGION:-us-east-1}"
 PLATFORM_PYTHON="${PLATFORM_PYTHON:-/opt/kirocrew-on/venv/bin/python}"
-ADMIN_FILE="${ADMIN_FILE:-/etc/kirocrew-on/admin-password}"
 log() { printf '[%s] %s\n' "$(date -u +%H:%M:%S)" "$*"; }
 # shellcheck source=boundary-lib.sh
 . "$HERE/boundary-lib.sh"
@@ -41,9 +40,14 @@ KIROCREW_VERSION="$("$KC/venv/bin/python" -c 'import kiro_crew; print(kiro_crew.
 CREW="crew-$NAME"
 BASE="$DATA/$NAME"
 TOML="$ETC/boundary-$NAME.toml"
-platform() {  # bootstrap-worker as the admin: the password reaches it in its environment only, never a command line
+platform() {  # bootstrap-worker as the admin, with a short-lived token the platform's own user mints here for each call
+  # (review 2026-10-28: the initial password may have been changed in the console since); in the environment only, never
+  # a command line, and revoked by the bootstrap's logout
+  local token
+  token="$(runuser -u octopus -- env PYTHONPATH="$ON_CURRENT" "$PLATFORM_PYTHON" -m octopus --config "$ETC/platform.toml" \
+    local-token --label "boundary.sh $NAME" --ttl 900)"
   ( cd "$ON_CURRENT"
-    OCTOPUS_ADMIN_PASSWORD="$(cat "$ADMIN_FILE")" PYTHONPATH="$ON_CURRENT" \
+    OCTOPUS_ADMIN_TOKEN="$token" PYTHONPATH="$ON_CURRENT" \
       "$PLATFORM_PYTHON" -m octopus --config "$ETC/platform.toml" bootstrap-worker "$@" --name "$NAME" --owner "$OWNER" )
 }
 

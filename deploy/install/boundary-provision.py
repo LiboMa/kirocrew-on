@@ -81,6 +81,16 @@ def main(argv=None):
     args = parser.parse_args(argv)
     owner_uid = args.owner_uid if args.owner_uid is not None else pwd.getpwnam("octopus").pw_uid
     requests, results = Path(args.requests), Path(args.results)
+    # one at a time, so anything still "running" now was cut short (a restart, the unit's timeout): say so, and let it
+    # run again (review 2026-10-28)
+    for left in results.glob("prv-*.json"):
+        try:
+            result = json.loads(left.read_text())
+        except (OSError, ValueError):
+            continue
+        if ID.fullmatch(left.stem) and result.get("state") == "running":
+            record(results, left.stem, {**result, "state": "failed", "error": "中断（服务重启或超时）：再试一次只补缺",
+                                        "finished": time.time()})
     while True:   # what arrives while one runs is taken next
         waiting = []
         for entry in os.scandir(requests):

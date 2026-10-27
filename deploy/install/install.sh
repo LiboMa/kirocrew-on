@@ -34,6 +34,8 @@ usage() {
   --from <目录>       从本地目录取发布物（目录里是 feed/<频道>/latest.json 与 releases/<版本>/）
   --source <目录>     已展开的发布（kirocrew-on setup 用）：不下载，直接执行安装步骤
   --no-cloudfront     不建 CloudFront 分发：控制台只经 SSM 端口转发访问
+  --kiro-license <free|pro>、--kiro-identity-provider <https://…/start>、--kiro-region <区域>
+                      在控制台登录 Kiro 时用的方式（Pro / IAM Identity Center）；不给时 kiro-cli 按它的默认方式登录
 KC_USAGE
   exit "$1"
 }
@@ -207,17 +209,35 @@ domain() {  # domain KEY: a value single-stack.sh wrote, read rather than source
   sed -n "s/^$1=\([A-Za-z0-9.-]*\)\$/\1/p" "$WORK/domains" | head -1
 }
 
+over_ssh() {  # is this install running in an SSH session? (sudo drops SSH_CONNECTION, so look for sshd above us)
+  case "${PREFLIGHT_SSH:-}" in 1) return 0 ;; 0) return 1 ;; esac
+  pid=$$
+  for _ in 1 2 3 4 5 6 7 8 9 10; do
+    pid=$(ps -o ppid= -p "$pid" 2>/dev/null | tr -d ' ')
+    [ -n "$pid" ] && [ "$pid" != 0 ] && [ "$pid" != 1 ] || return 1
+    [ "$(ps -o comm= -p "$pid" 2>/dev/null)" != sshd ] || return 0
+  done
+  return 1
+}
+
 cloudfront() {  # CF_DOMAIN, NATIVE_DOMAIN, PREVIEW_DOMAIN from the stack kirocrew-on-single (made or updated)
-  CF_DOMAIN="" NATIVE_DOMAIN="" PREVIEW_DOMAIN=""
+  CF_DOMAIN="" NATIVE_DOMAIN="" PREVIEW_DOMAIN="" PUBLIC_IP=""
   [ -z "$NO_CLOUDFRONT" ] || return 0
+  if over_ssh; then   # review 2026-10-28: the Elastic IP replaces the address this session came in on
+    printf '%s\n' "注意：CloudFront 栈会给这台主机换上一个 Elastic IP，经 SSH 运行时 SSH 会断开。断开后在 EC2 控制台查到新的公网 IP，重新连上再运行一次同一条命令即可（已完成的步骤会跳过）；经 SSM 会话运行不受影响。"
+  fi
   bash "$STAGE/deploy/install/single-stack.sh" up "$WORK/domains" || exit $?
   CF_DOMAIN=$(domain CF_DOMAIN) NATIVE_DOMAIN=$(domain NATIVE_DOMAIN) PREVIEW_DOMAIN=$(domain PREVIEW_DOMAIN)
+  PUBLIC_IP=$(domain PUBLIC_IP)
 }
 
 run_steps() {  # the install steps of the release in STAGE (al2023.sh: every one of them fills in only what is missing)
   NEW_PASSWORD=""
   [ -s "$ADMIN_FILE" ] || NEW_PASSWORD=1
-  SINGLE_NODE=1 KIROCREW_ON_RELEASE="$VERSION" AWS_REGION="$EC2_REGION" CF_DOMAIN="$CF_DOMAIN" NATIVE_DOMAIN="$NATIVE_DOMAIN" \
+  # The installer's AK/SK (if any) are for the stack only: the steps run npm, pip and the Agents' checks, so not them
+  env -u AWS_ACCESS_KEY_ID -u AWS_SECRET_ACCESS_KEY -u AWS_SESSION_TOKEN -u AWS_PROFILE \
+    KIRO_LICENSE="$KIRO_LICENSE" KIRO_IDC_START_URL="$KIRO_IDC_START_URL" KIRO_IDC_REGION="$KIRO_IDC_REGION" \
+    SINGLE_NODE=1 KIROCREW_ON_RELEASE="$VERSION" AWS_REGION="$EC2_REGION" CF_DOMAIN="$CF_DOMAIN" NATIVE_DOMAIN="$NATIVE_DOMAIN" \
     PREVIEW_DOMAIN="$PREVIEW_DOMAIN" bash "$STAGE/deploy/install/al2023.sh" "$BOUNDARY" ||
     { printf '%s\n' "安装步骤没有完成（原因见上面的输出）。处理后再运行一次即可：已完成的步骤会跳过，只补缺。" >&2; exit 1; }
   ROLE_CHECK=0
@@ -228,6 +248,7 @@ finish() {
   printf '\n完成：KiroCrew ON %s 单机版\n' "$VERSION"
   if [ -n "$CF_DOMAIN" ]; then
     printf '控制台：https://%s/\n' "$CF_DOMAIN"
+    [ -z "$PUBLIC_IP" ] || printf '公网 IP：%s（Elastic IP；SSH 用这个地址）\n' "$PUBLIC_IP"
   else
     printf '控制台：先在你的电脑上运行 aws ssm start-session --region %s --target %s --document-name AWS-StartPortForwardingSession --parameters portNumber=8918,localPortNumber=8918，再打开 http://localhost:8918\n' "$EC2_REGION" "$EC2_INSTANCE_ID"
   fi
@@ -242,7 +263,7 @@ finish() {
   [ "$ARCH" = aarch64 ] || printf '%s\n' "$RECOMMEND"
 }
 
-CHECK="" CHANNEL=stable VERSION="" FROM="" SOURCE="" NO_CLOUDFRONT=""
+CHECK="" CHANNEL=stable VERSION="" FROM="" SOURCE="" NO_CLOUDFRONT="" KIRO_LICENSE="" KIRO_IDC_START_URL="" KIRO_IDC_REGION=""
 while [ $# -gt 0 ]; do
   case "$1" in
     --check) CHECK=1 ;;
@@ -251,6 +272,9 @@ while [ $# -gt 0 ]; do
     --from) [ $# -ge 2 ] || usage 2; FROM=$2; shift ;;
     --source) [ $# -ge 2 ] || usage 2; SOURCE=$2; shift ;;
     --no-cloudfront) NO_CLOUDFRONT=1 ;;
+    --kiro-license) [ $# -ge 2 ] || usage 2; KIRO_LICENSE=$2; shift ;;
+    --kiro-identity-provider) [ $# -ge 2 ] || usage 2; KIRO_IDC_START_URL=$2; shift ;;
+    --kiro-region) [ $# -ge 2 ] || usage 2; KIRO_IDC_REGION=$2; shift ;;
     -h|--help) usage 0 ;;
     *) printf '不认识的选项：%s\n' "$1" >&2; usage 2 ;;
   esac
@@ -259,6 +283,11 @@ done
 case "$CHANNEL" in stable|preview) ;; *) fail "频道只有 stable 与 preview：${CHANNEL}" ;; esac
 [ -z "$VERSION" ] || valid_version "$VERSION" || fail "版本号不对：${VERSION}（例如 0.2.0 或 0.2.0rc1）"
 [ -z "$FROM" ] || [ -d "$FROM" ] || fail "没有这个目录：${FROM}"
+# the same checks al2023.sh makes before writing them into each boundary's configuration (§6.4)
+case "$KIRO_LICENSE" in ""|free|pro) ;; *) fail "--kiro-license 只能是 free 或 pro" ;; esac
+[ -z "$KIRO_IDC_START_URL" ] || printf '%s' "$KIRO_IDC_START_URL" | grep -Eq '^https://[A-Za-z0-9.-]+(/[A-Za-z0-9._~/-]*)?$' ||
+  fail "--kiro-identity-provider 要是 https:// 开头的 IAM Identity Center 起始地址"
+[ -z "$KIRO_IDC_REGION" ] || printf '%s' "$KIRO_IDC_REGION" | grep -Eq '^[a-z]{2}(-[a-z]+)+-[0-9]$' || fail "--kiro-region 不对：${KIRO_IDC_REGION}"
 
 preflight
 conclude

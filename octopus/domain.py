@@ -2368,6 +2368,8 @@ class Service:
         return {"available": True, "items": self.provisioning.items()}
 
     AWS_KINDS = {"native": {"boundary"}, "backup": {"bucket"}, "up": set()}
+    # install.sh's check of the host role (single-stack.sh check-role, S29): 管理 › 部署 shows it until it passes
+    HOST_ROLE = Path("/etc/kirocrew-on/host-role.json")
 
     def request_aws_change(self, actor, body, platform):
         """An AWS change the deployment kit is to make (S29): the platform never calls an AWS write API on the
@@ -2404,7 +2406,12 @@ class Service:
         require(elevated(actor), "只有平台管理员可以查看待执行的 AWS 变更", 403, "forbidden")
         with self.db.read() as db:
             rows = db.execute("SELECT * FROM aws_requests ORDER BY state!='pending', created DESC LIMIT 50").fetchall()
-        return {"items": [self._aws_request(row, platform) for row in rows]}
+        try:
+            role = json.loads(self.HOST_ROLE.read_text())
+            role = {key: role.get(key) for key in ("state", "role", "allowed", "commands", "checked")}
+        except (OSError, ValueError, AttributeError):
+            role = None
+        return {"items": [self._aws_request(row, platform) for row in rows], "host_role": role}
 
     def report_aws_request(self, actor, rid, body):
         """The kit's report: done or failed, with what it made (a domain, an object key; never a credential)."""

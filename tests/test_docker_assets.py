@@ -54,6 +54,12 @@ class DockerTests(unittest.TestCase):
         self.assertNotIn("boundary.sh", ENTRY + DOCKERFILE)
         self.assertNotIn("SINGLE_NODE", ENTRY + BUILD)   # no 「新建边界」 in a container: one person's trial
 
+    def test_every_start_registers_with_a_minted_token(self):   # review 2026-10-28: the password may have changed
+        block = ENTRY[ENTRY.index("bootstrap-worker") - 400:ENTRY.index("bootstrap-worker") + 200]
+        self.assertIn("local-token", ENTRY)
+        self.assertIn('OCTOPUS_ADMIN_TOKEN="$ADMIN_TOKEN"', block)
+        self.assertNotIn('OCTOPUS_ADMIN_PASSWORD="$ADMIN_PASSWORD" PYTHONPATH', block)
+
     def test_the_build_context_leaves_out_local_state(self):
         ignored = (ROOT / ".dockerignore").read_text().split()
         for path in (".git", ".venv", "node_modules", "web/node_modules", "deploy/aws/stack.env", ".worktrees"):

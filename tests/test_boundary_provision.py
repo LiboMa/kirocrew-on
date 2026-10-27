@@ -183,6 +183,14 @@ class ProcessorTests(unittest.TestCase):
         for rid in ("prv-0000000000000003", "prv-0000000000000004", "prv-0000000000000005", "prv-0000000000000006"):
             self.assertEqual(self.result(rid)["state"], "failed")
 
+    def test_one_left_running_by_a_restart_is_marked_interrupted_so_it_can_run_again(self):   # review 2026-10-28
+        (self.results / "prv-0000000000000009.json").write_text(json.dumps(
+            {"id": "prv-0000000000000009", "name": "bob", "owner": "bob", "state": "running", "started": 1.0}))
+        self.assertEqual(self.process().returncode, 0)
+        result = self.result("prv-0000000000000009")
+        self.assertEqual(result["state"], "failed")
+        self.assertIn("中断", result["error"])
+
     def test_links_foreign_files_and_odd_names_are_never_followed(self):
         secret = self.dir / "secret.json"
         secret.write_text(json.dumps({"name": "eve", "owner": "eve"}))

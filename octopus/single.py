@@ -146,13 +146,8 @@ def backup(args):
     credentials = aws(args.region, "configure", "export-credentials", "--format", "process")
     key = f"kirocrew-on/backups/{params['InstanceId']}/{time.strftime('%Y%m%dT%H%M%SZ', time.gmtime())}.tar.gz"
     url = presign("PUT", args.bucket, key, args.region, credentials, EXPIRES)
-    script = "\n".join([
-        "set -euo pipefail",
-        'D="$(mktemp -d)"; trap \'rm -rf "$D"\' EXIT',
-        'kirocrew-on --config /etc/kirocrew-on/platform.toml backup --dest "$D/backup" >/dev/null',
-        'tar -czf "$D/backup.tar.gz" -C "$D" backup',
-        f"curl -fsS --upload-file \"$D/backup.tar.gz\" '{url}'",
-        'stat -c %s "$D/backup.tar.gz"'])
+    # SSM runs this with sh (dash on Ubuntu): a heredoc into the release's bash script, the URL on its standard input
+    script = f"bash /opt/kirocrew-on/current/deploy/install/backup-upload.sh <<'KC_URL'\n{url}\nKC_URL"
     size = on_host(args.region, params["InstanceId"], script).strip().splitlines()[-1:]
     print(f"已上传 s3://{args.bucket}/{key}（{size[0] if size else '?'} 字节）；用 kirocrew-on restore-verify 可在别处核对")
     return {"bucket": args.bucket, "key": key}

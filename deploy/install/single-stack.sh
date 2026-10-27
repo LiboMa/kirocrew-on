@@ -67,15 +67,29 @@ up() {
     --query 'Reservations[0].Instances[0].SecurityGroups[0].GroupId' --output text)"
   [[ "$group" =~ ^sg-[0-9a-f]+$ ]] || { echo "找不到实例 $EC2_INSTANCE_ID 的安全组（${group}）" >&2; exit 1; }
   call ec2 create-tags --resources "$EC2_INSTANCE_ID" --tags "Key=Backup,Value=$STACK" >/dev/null   # DLM's daily snapshots
-  status="$(aws --region "$REGION" cloudformation describe-stacks --stack-name "$STACK" --query 'Stacks[0].StackStatus' \
-    --output text 2>/dev/null || true)"
-  if [ "$status" = ROLLBACK_COMPLETE ]; then   # a first attempt that failed leaves a stack that can only be deleted
-    call cloudformation delete-stack --stack-name "$STACK"
-    call cloudformation wait stack-delete-complete --stack-name "$STACK"
-    status=""
-  fi
+  # Review 2026-10-28: a rerun after any failure lands on a stack in some state; each one has its way forward.
+  while :; do
+    status="$(aws --region "$REGION" cloudformation describe-stacks --stack-name "$STACK" --query 'Stacks[0].StackStatus' \
+      --output text 2>/dev/null || true)"
+    case "$status" in
+      *_IN_PROGRESS)
+        [ "$status" != REVIEW_IN_PROGRESS ] || break   # a first change set that never ran: create it again
+        echo "栈 $STACK 正在变更（${status}），等它结束" >&2
+        sleep "${STACK_POLL:-10}" ;;
+      ROLLBACK_COMPLETE)   # a first attempt that failed leaves a stack that can only be deleted
+        call cloudformation delete-stack --stack-name "$STACK"
+        call cloudformation wait stack-delete-complete --stack-name "$STACK"
+        status=""
+        break ;;
+      *_FAILED)
+        echo "栈 $STACK 处于 ${status}：先在 CloudFormation 控制台处理（删除栈时可以保留删不掉的资源），再运行一次 install.sh" >&2
+        exit 5 ;;
+      *) break ;;
+    esac
+  done
   type=UPDATE kept=""
-  if [ -n "$status" ]; then   # what the stack has besides these four (the boundaries' native slots) is left as it is
+  if [ -n "$status" ] && [ "$status" != REVIEW_IN_PROGRESS ]; then
+    # what the stack has besides these four (the boundaries' native slots) is left as it is
     kept="$(call cloudformation describe-stacks --stack-name "$STACK" --query 'Stacks[0].Parameters[].ParameterKey' \
       --output text)"
   else
@@ -134,9 +148,24 @@ KC_PARAMS
   printf 'CF_DOMAIN=%s\nNATIVE_DOMAIN=%s\nPREVIEW_DOMAIN=%s\nPUBLIC_IP=%s\n' "$console" "$native" "$preview" "$ip" > "$out"
 }
 
+record_role() {  # record_role STATE [ALLOWED] [COMMANDS]: the outcome, for 管理 › 部署 to show until it is fixed
+  install -d -m 0755 "$ETC"
+  python3 -I - "$ETC/host-role.json" "$1" "${EC2_ROLE:-}" "${2:-}" "${3:-}" <<'KC_ROLE_PY'
+import json, os, sys, time
+path, state, role, allowed, commands = sys.argv[1:]
+record = {"state": state, "role": role, "allowed": allowed.split(), "commands": [c for c in commands.split("\n") if c],
+          "checked": time.time()}
+with open(path + ".new", "w") as file:
+    json.dump(record, file)
+os.chmod(path + ".new", 0o644)
+os.replace(path + ".new", path)
+KC_ROLE_PY
+}
+
 check_role() {
-  local arn allowed attached inline policy name
+  local arn allowed attached inline policy name commands=""
   if [ -z "${EC2_ROLE:-}" ]; then
+    record_role none
     echo "这台实例没有角色：Claude Code 与 Codex 经 Amazon Bedrock 调用模型，需要实例角色带 bedrock:InvokeModel*（远程运维另需 AmazonSSMManagedInstanceCore）" >&2
     exit 12
   fi
@@ -144,10 +173,12 @@ check_role() {
      ! allowed="$(aws --region "$REGION" iam simulate-principal-policy --policy-source-arn "$arn" --action-names "${WRITES[@]}" \
        --query "EvaluationResults[?EvalDecision=='allowed'].EvalActionName" --output text 2>/dev/null)"; then
     echo "无法核对主机角色 $EC2_ROLE 的权限（需要 iam:GetRole、iam:SimulatePrincipalPolicy、iam:ListAttachedRolePolicies、iam:ListRolePolicies）：请自行确认它只剩 Bedrock 调用与 SSM 的权限" >&2
+    record_role unchecked
     exit 11
   fi
   if [ -z "$allowed" ] || [ "$allowed" = None ]; then
     echo "主机角色 $EC2_ROLE 只剩 Bedrock 调用与 SSM 的权限：同机的 Agent 不能用它改动 AWS 资源"
+    record_role ok
     return 0
   fi
   attached="$(aws --region "$REGION" iam list-attached-role-policies --role-name "$EC2_ROLE" \
@@ -158,13 +189,16 @@ check_role() {
     for policy in $attached; do
       case "$policy" in None|*/AmazonSSMManagedInstanceCore) continue ;; esac
       echo "  aws iam detach-role-policy --role-name $EC2_ROLE --policy-arn $policy"
+      commands="$commands"$'\n'"aws iam detach-role-policy --role-name $EC2_ROLE --policy-arn $policy"
     done
     for name in $inline; do
       [ "$name" = None ] && continue
       echo "  内联策略 ${name}：只含 bedrock:InvokeModel* 时保留，否则 aws iam delete-role-policy --role-name $EC2_ROLE --policy-name $name"
+      commands="$commands"$'\n'"aws iam delete-role-policy --role-name $EC2_ROLE --policy-name $name（只含 bedrock:InvokeModel* 时保留）"
     done
     echo "只保留 Bedrock 的调用权限与 AmazonSSMManagedInstanceCore；卸下后再运行一次 install.sh，它会重新核对。"
   } >&2
+  record_role writes "$allowed" "$commands"
   exit 10
 }
 

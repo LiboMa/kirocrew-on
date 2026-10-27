@@ -21,10 +21,12 @@ import build_release   # noqa: E402
 SHELL = shutil.which("dash") or "/bin/sh"
 SUMS = "a1  node-v22.23.3-linux-x64.tar.xz\nb2  node-v22.23.3-linux-arm64.tar.xz\n"
 STEPS = '''#!/bin/sh
+printf '%s %s\\n' "${1##*/}" "${AWS_SECRET_ACCESS_KEY:+has-keys}" >> "$CALLS.keys"
+printf '%s|%s|%s|%s\\n' "${1##*/}" "${KIRO_LICENSE:-}" "${KIRO_IDC_START_URL:-}" "${KIRO_IDC_REGION:-}" >> "$CALLS.kiro"
 case "$1" in
   */single-stack.sh)
     printf '%s\\n' "$1 $2 EC2_INSTANCE_ID=$EC2_INSTANCE_ID" >> "$CALLS"
-    [ "$2" != up ] || printf 'CF_DOMAIN=d1console.cloudfront.net\\nNATIVE_DOMAIN=d2native.cloudfront.net\\nPREVIEW_DOMAIN=d3preview.cloudfront.net\\n' > "$3"
+    [ "$2" != up ] || printf 'CF_DOMAIN=d1console.cloudfront.net\\nNATIVE_DOMAIN=d2native.cloudfront.net\\nPREVIEW_DOMAIN=d3preview.cloudfront.net\\nPUBLIC_IP=203.0.113.7\\n' > "$3"
     [ "$2" != check-role ] || exit "${ROLE_EXIT:-0}"
     exit 0 ;;
 esac
@@ -106,7 +108,9 @@ class ReleaseInstallTests(unittest.TestCase):
         self.assertIn("控制台：https://d1console.cloudfront.net/", done.stdout)
         for name in ("octopus/__main__.py", "composition/gateway.py", "octopus/ui/dist/index.html", "deploy/install/al2023.sh",
                      "deploy/versions.env", "skills/kirocrew-on/SKILL.md", "package.json", "package-lock.json",
-                     "requirements-workflow.txt"):
+                     "requirements-workflow.txt",
+                     # review 2026-10-28: boundary_check runs the native contract tests of the release being installed
+                     "tests/native/test_native_contract.py", "tests/kirocrew_contract.json"):
             self.assertTrue((self.stage / name).is_file(), name)   # laid out as a checkout: al2023.sh copies the tree
         self.assertTrue(os.access(self.stage / "deploy/install/boundary.sh", os.X_OK))   # modes come back from the wheel
         self.assertIn("s3cret-initial", done.stdout)   # printed this once
@@ -160,6 +164,15 @@ class ReleaseInstallTests(unittest.TestCase):
                 self.assertEqual(done.returncode, 2)
                 self.assertEqual(self.steps_ran(), [])
 
+    def test_over_ssh_it_says_the_connection_will_drop_and_where_the_host_is_afterwards(self):   # review 2026-10-28
+        done = self.install("--channel", "preview", PREFLIGHT_SSH="1")
+        self.assertEqual(done.returncode, 0, done.stderr)
+        notice = done.stdout.index("SSH 会断开")
+        self.assertLess(notice, done.stdout.index("控制台：https://"))
+        self.assertIn("公网 IP：203.0.113.7", done.stdout)
+        self.assertNotIn("SSH 会断开", self.install("--channel", "preview", PREFLIGHT_SSH="0").stdout)
+        self.assertNotIn("SSH 会断开", self.install("--channel", "preview", "--no-cloudfront", PREFLIGHT_SSH="1").stdout)
+
     def test_without_cloudfront_no_stack_is_made_and_the_console_is_reached_through_ssm(self):
         done = self.install("--channel", "preview", "--no-cloudfront")
         self.assertEqual(done.returncode, 0, done.stderr)
@@ -172,6 +185,24 @@ class ReleaseInstallTests(unittest.TestCase):
         done = self.install("--channel", "preview", ROLE_EXIT="10")
         self.assertEqual(done.returncode, 0, done.stderr)   # the platform is up; the role is the administrator's to trim
         self.assertIn("主机角色的核对没有通过", done.stdout)
+
+    def test_the_installers_keys_reach_the_stack_step_only(self):   # review 2026-10-28: not npm, pip or the Agents
+        done = self.install("--channel", "preview", AWS_ACCESS_KEY_ID="AKIAINSTALLER0000001", AWS_SECRET_ACCESS_KEY="s" * 40,
+                            AWS_SESSION_TOKEN="t" * 40)
+        self.assertEqual(done.returncode, 0, done.stderr)
+        keys = Path(str(self.calls) + ".keys").read_text().split("\n")
+        self.assertIn("single-stack.sh has-keys", keys)
+        self.assertIn("al2023.sh ", keys)
+
+    def test_how_kiro_signs_in_is_set_at_install(self):   # review 2026-10-28 (§6.4): Pro / IAM Identity Center
+        done = self.install("--channel", "preview", "--kiro-license", "pro", "--kiro-identity-provider",
+                            "https://d-9067e1d68a.awsapps.com/start", "--kiro-region", "us-east-1")
+        self.assertEqual(done.returncode, 0, done.stderr)
+        self.assertIn("al2023.sh|pro|https://d-9067e1d68a.awsapps.com/start|us-east-1",
+                      Path(str(self.calls) + ".kiro").read_text().splitlines())
+        for args in (("--kiro-license", "gold"), ("--kiro-identity-provider", "http://x"), ("--kiro-region", "east")):
+            with self.subTest(args):
+                self.assertEqual(self.install("--channel", "preview", *args).returncode, 2)
 
     def test_failed_steps_say_a_rerun_only_fills_in(self):
         done = self.install("--channel", "preview", STEPS_EXIT="5")
@@ -226,7 +257,8 @@ class IndexTests(unittest.TestCase):
 class CommandTests(unittest.TestCase):
     def test_kirocrew_on_runs_the_current_release_as_the_services_do(self):
         script = (ROOT / "deploy/install/kirocrew-on").read_text()
-        self.assertIn("PYTHONPATH=/opt/kirocrew-on/current exec /opt/kirocrew-on/venv/bin/python -m octopus", script)
+        # -P: never the current directory first on sys.path (root may run it inside an Agent's workspace)
+        self.assertIn("PYTHONPATH=/opt/kirocrew-on/current exec /opt/kirocrew-on/venv/bin/python -P -m octopus", script)
         self.assertIn('install -m 0755 "$TARGET/deploy/install/kirocrew-on" /usr/local/bin/kirocrew-on',
                       (ROOT / "deploy/install/al2023.sh").read_text().split("ln -sfn \"$TARGET\" /opt/kirocrew-on/current", 1)[1])
         local = script.replace("/opt/kirocrew-on/current", str(ROOT)).replace("/opt/kirocrew-on/venv/bin/python", sys.executable)
@@ -242,26 +274,50 @@ class PrebuiltConsoleTests(unittest.TestCase):
 
 
 class SetupTests(unittest.TestCase):
-    """The pip channel: `sudo kirocrew-on setup` lays the installed package out as install.sh unpacks a wheel, then runs
-    install.sh on it (preflight and the same install steps)."""
+    """The pip channel (review 2026-10-28): `sudo kirocrew-on setup` runs the install.sh its wheel carries — the one with
+    the release's addresses and public key written in — for its own version, so the release it installs is downloaded and
+    verified like any other; pip's own check of the index is not trusted alone."""
     def test_setup_needs_root(self):
         from octopus import installer
         with mock.patch("os.geteuid", return_value=1000), self.assertRaises(SystemExit) as stop:
             installer.setup()
         self.assertIn("root", str(stop.exception))
 
-    def test_the_installed_package_is_laid_out_like_an_unpacked_release_and_install_sh_runs_on_it(self):
+    def test_a_published_package_runs_its_signed_install_sh_for_its_own_version(self):
         from octopus import __version__, installer
-        with tempfile.TemporaryDirectory() as tmp, mock.patch("os.geteuid", return_value=0), \
-                mock.patch("os.execvp") as run:
-            installer.setup(incoming=Path(tmp))
-            stage = Path(tmp) / f"{__version__}-pip"
-            for name in ("octopus/__main__.py", "composition/gateway.py", "deploy/install/al2023.sh", "skills/kirocrew-on/SKILL.md",
-                         "package.json", "requirements-workflow.txt"):
-                self.assertTrue((stage / name).is_file(), name)
-            self.assertFalse(any("__pycache__" in str(p) for p in stage.rglob("*")))
-            run.assert_called_once_with("sh", ["sh", str(stage / "deploy/install/install.sh"), "--source", str(stage),
-                                               "--version", __version__])
+        with tempfile.TemporaryDirectory() as tmp:
+            script = Path(tmp) / "install.sh"
+            script.write_text("#!/bin/sh\nPUBLIC_KEY='-----BEGIN PUBLIC KEY-----\nabc\n-----END PUBLIC KEY-----'\n")
+            with mock.patch("os.geteuid", return_value=0), mock.patch("os.execvp") as run, \
+                    mock.patch("octopus.release.path", return_value=script):
+                installer.setup()
+            run.assert_called_once_with("sh", ["sh", str(script), "--version", __version__])
+
+    def test_a_package_without_the_release_key_installs_nothing(self):
+        from octopus import installer
+        with mock.patch("os.geteuid", return_value=0), mock.patch("os.execvp") as run, self.assertRaises(SystemExit) as stop:
+            installer.setup()   # this checkout's install.sh has only the placeholders
+        run.assert_not_called()
+        self.assertIn("公钥", str(stop.exception))
+
+
+@unittest.skipUnless((ROOT / "octopus/ui/dist/index.html").is_file(), "先构建控制台：npm --prefix web run build")
+class StampedWheelTests(unittest.TestCase):
+    def test_the_wheel_of_an_indexed_release_carries_the_stamped_install_sh(self):
+        import zipfile
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            (root / "SHASUMS256.txt").write_text(SUMS)
+            subprocess.run(["openssl", "genpkey", "-algorithm", "RSA", "-out", str(root / "key.pem")], check=True,
+                           capture_output=True)
+            build_release.main(["--out", str(root / "out"), "--node-sums", str(root / "SHASUMS256.txt"), "--sign-key",
+                                str(root / "key.pem"), "--index", str(root / "feed"), "--downloads",
+                                "https://downloads.example/releases", "--feed", "https://updates.example/feed"])
+            wheel = next((root / "out").glob("*.whl"))
+            with zipfile.ZipFile(wheel) as archive:
+                carried = archive.read("octopus/_release/deploy/install/install.sh").decode()
+            self.assertEqual(carried, (root / "out/install.sh").read_text())
+            self.assertIn("-----BEGIN PUBLIC KEY-----", carried)
 
 
 if __name__ == "__main__":

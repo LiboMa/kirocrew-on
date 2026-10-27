@@ -45,6 +45,17 @@ describe("管理 › 部署 (MVP 0.2.0 P2, S29)", () => {
     expect(await screen.findByText("已记录：异地备份")).toBeInTheDocument();
   });
 
+  test("a host role that can still write stays in red until it is trimmed", async () => {
+    start({ "GET /admin/aws-requests": { items: [], host_role: { state: "writes", role: "kirocrew-on-host",
+      allowed: ["cloudformation:CreateStack"], commands: ["aws iam detach-role-policy --role-name kirocrew-on-host --policy-arn arn:x"],
+      checked: 1_790_000_000 } } });
+    const page = await openSection("管理", "部署");
+    const alert = await within(page).findByRole("alert");
+    expect(alert).toHaveTextContent("主机角色 kirocrew-on-host 仍有写权限");
+    expect(alert).toHaveTextContent("cloudformation:CreateStack");
+    expect(alert).toHaveTextContent("aws iam detach-role-policy --role-name kirocrew-on-host --policy-arn arn:x");
+  });
+
   test("nothing waiting says how changes get here", async () => {
     start({ "GET /admin/aws-requests": { items: [] } });
     const page = await openSection("管理", "部署");

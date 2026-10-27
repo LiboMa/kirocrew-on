@@ -1360,8 +1360,9 @@ npm --prefix web run test:browser       # 浏览器回归：React 与 /classic/ 
 频道（MVP 0.2.0 P2）：再加 `--index <feed 目录> --downloads https://<下载域名>/releases --feed https://<更新域名>/feed`（必须同时给 `--sign-key`），另出：
 
 - `<feed>/<频道>/latest.json`（install.sh 不带 `--version` 时读它）与 `versions.json`；
-- `<feed>/<频道>/simple/kirocrew-on/index.html`：PEP 503 索引，链接带 `#sha256=`（pip 渠道：`pip install --pre kirocrew-on --extra-index-url https://<更新域名>/feed/<频道>/simple/`）；
-- 版本目录里的 `install.sh`：写入了两个地址与签名公钥的那一份（仓库里的 `deploy/install/install.sh` 没有，只能 `--check` 或 `--source`）。
+- `<feed>/<频道>/simple/kirocrew-on/index.html`：PEP 503 索引，链接带 `#sha256=`（pip 渠道：`pip install --pre kirocrew-on --index-url https://<更新域名>/feed/<频道>/simple/`；不要用 `--extra-index-url`，否则 PyPI 上同名的更高版本会胜出）；
+- 版本目录里的 `install.sh`：写入了两个地址与签名公钥的那一份；wheel 里带的也是这一份（`kirocrew-on setup` 运行它）。仓库里的 `deploy/install/install.sh` 没有，只能 `--check` 或 `--source`。
+- wheel 另带 `tests/native` 与 `tests/kirocrew_contract.json`：每次安装在切换前跑的原生契约检查要用。
 
 目录布局：`<根>/releases/<版本>/`（字节，签过名）与 `<根>/feed/<频道>/`（可变的指针）。托管（S3 + CloudFront）与 KMS 签名随 CI 一起做；在那之前只发内部 `preview` 频道（设计 §17 #9 的默认）。
 
@@ -1388,13 +1389,17 @@ curl -fsSL https://<下载域名>/install.sh | sudo sh -s -- --check            
   - 控制台、原生、预览三个分发，以及给更多边界用的 9 个原生槽位；
   - DLM 每日快照，按实例标签 `Backup=kirocrew-on-single`。
   - 源站密钥在主机上生成，只写本机 `/etc/kirocrew-on/origin-secret`，重跑不换。
-  - `--no-cloudfront` 不建栈，控制台只经 SSM 端口转发打开（`portNumber=8918`，`http://localhost:8918`）。
-- **安装用的权限**：给实例角色临时加上 `deploy/aws/kirocrew-on-single-install-policy.json`，或用有这些权限的 AK/SK（`sudo -E sh` 或 `sudo AWS_ACCESS_KEY_ID=… AWS_SECRET_ACCESS_KEY=… sh`，只在本次安装的进程里使用，不写盘）。缺权限时脚本列出需要的操作后以退出码 4 结束。
-- **装完核对主机角色**（`single-stack.sh check-role`，S29）：用 `iam:SimulatePrincipalPolicy` 查角色是否还有写权限；有则打印要卸下的策略（保留 Bedrock 调用与 `AmazonSSMManagedInstanceCore`）。安装照常完成，结尾提示「主机角色的核对没有通过」。
+  - `--no-cloudfront` 不建栈：API 只监听本机回环、不要求源站密钥，控制台只经 SSM 端口转发打开（`portNumber=8918`，`http://localhost:8918`）。之后去掉这个选项再运行一次，就建栈并改为监听 CloudFront。
+  - 关联 Elastic IP 会换掉这台主机原来的公网 IP：经 SSH 运行时脚本先提示，连接断开后从 EC2 控制台查到新 IP、重新连上再运行一次即可（只补缺）；经 SSM 会话运行不受影响。结尾打印新的公网 IP。
+  - 重跑时栈在任何状态都有出路：上次没执行的首个变更集重新创建，正在变更的等它结束，`ROLLBACK_COMPLETE` 删掉重建，`*_FAILED` 说明要在 CloudFormation 控制台处理后再运行（退出码 5）。
+- **安装用的权限**：给实例角色临时加上 `deploy/aws/kirocrew-on-single-install-policy.json`，或用有这些权限的 AK/SK（`sudo -E sh` 或 `sudo AWS_ACCESS_KEY_ID=… AWS_SECRET_ACCESS_KEY=… sh`）。AK/SK 只给建栈与核对角色的步骤用，安装步骤（npm、pip、契约检查）看不到，也不写盘。缺权限时脚本列出需要的操作后以退出码 4 结束。策略里的 IAM 权限只够建 DLM 的服务角色：只能挂 DLM 的服务策略、只能交给 `dlm.amazonaws.com`，也包括失败回滚时删除已建资源的权限。
+- **装完核对主机角色**（`single-stack.sh check-role`，S29）：用 `iam:SimulatePrincipalPolicy` 查角色是否还有写权限；有则打印要卸下的策略（保留 Bedrock 调用与 `AmazonSSMManagedInstanceCore`）。安装照常完成，结尾提示「主机角色的核对没有通过」；结果记在 `/etc/kirocrew-on/host-role.json`，「管理 › 部署」一直标红（没能核对、没有角色时标黄），直到某次运行核对通过。
+- **Kiro 的登录方式**：`--kiro-license free|pro`、`--kiro-identity-provider https://<IAM Identity Center 起始地址>`、`--kiro-region <区域>` 写进每个边界的配置，控制台「登录 Kiro」按它登录；不给时沿用上次的设置。
+- **管理员密码改了以后**：安装重跑、新建边界、Docker 重启都不再用 `/etc/kirocrew-on/admin-password`，而是由平台用户在本机签发一个最长 1 小时的管理员 Token（`octopus local-token`），用完即注销；那个文件只在首次安装时用来建管理员。
 - **结尾**打印控制台地址、管理员 `admin`、初始密码（只打印这一次，另存在 root 0600 的 `/etc/kirocrew-on/admin-password`）与下一步：在「管理 › 执行环境」该行的菜单里点「登录 Kiro」。
 - **重跑**：每一步只补缺；栈没有变化时不执行变更集，含资源替换的变更集一律拒绝。
-- **pip 渠道**：`pip install kirocrew-on` 后 `sudo kirocrew-on setup`：把装好的包排成同样的布局，交给 `install.sh --source` 执行预检与同一套步骤（不下载，pip 已按索引的 `#sha256=` 校验）。
-- 主机上的 `kirocrew-on` 命令（`/usr/local/bin/kirocrew-on`）运行当前发布，例如 `sudo kirocrew-on --config /etc/kirocrew-on/platform.toml backup --dest <目录>`。
+- **pip 渠道**：`pip install --pre kirocrew-on --index-url https://<更新域名>/feed/<频道>/simple/` 后 `sudo kirocrew-on setup`：运行 wheel 里带的、写有发布公钥的 `install.sh`，安装这个版本，即同样下载、验签、再执行同一套步骤。不是从发布频道装的包没有公钥，什么也不装。
+- 主机上的 `kirocrew-on` 命令（`/usr/local/bin/kirocrew-on`）运行当前发布（不会先从当前目录导入），例如 `sudo kirocrew-on --config /etc/kirocrew-on/platform.toml backup --dest <目录>`。
 
 ### 新建边界（控制台）
 
@@ -1405,7 +1410,7 @@ curl -fsSL https://<下载域名>/install.sh | sudo sh -s -- --check            
   - 不跟随链接，只读 octopus 用户的普通文件；
   - 按 `boundary.sh` 的规则再校验一遍，只以这两个参数运行 `boundary.sh`，一次一个；
   - 进度写进 `/var/lib/octopus/boundary-provision/`（root 所有、octopus 组只读），像令牌的字符串先遮掉。
-- 控制台显示排队 / 进行中 / 已完成 / 没有完成、脚本输出与下一步；失败的「再试一次」只补缺。新边界的原生入口先只经本机端口转发；要公网入口时运行下面的 `kirocrew-on single native <边界>`。
+- 控制台显示排队 / 进行中 / 已完成 / 没有完成、脚本输出与下一步；失败的「再试一次」只补缺。服务重启或超时打断的，下次启动时记为「中断」，可以再试。新边界的原生入口先只经本机端口转发；要公网入口时运行下面的 `kirocrew-on single native <边界>`。
 - 审计：`boundary.provision`（名称与属主）。
 
 ### 部署套件（`kirocrew-on single`，在你的电脑或 CloudShell 上运行）
@@ -1415,7 +1420,7 @@ curl -fsSL https://<下载域名>/install.sh | sudo sh -s -- --check            
 | 命令 | 做什么 |
 |---|---|
 | `kirocrew-on single native <边界>` | 在栈里给该边界开一个原生分发（槽位 1–9，中转端口 8920–8928，源站密钥沿用栈里的值），再经 SSM 让主机渲染中转、改写 `crew_url` 并重启该边界（`deploy/install/boundary-native.sh`） |
-| `kirocrew-on single backup --bucket <桶>` | 本机为一个对象签一条 15 分钟内有效的 PUT 预签名 URL，经 SSM 让主机做一致性备份并上传到 `s3://<桶>/kirocrew-on/backups/<实例>/<时间>.tar.gz`；用 `kirocrew-on restore-verify` 在别处核对 |
+| `kirocrew-on single backup --bucket <桶>` | 本机为一个对象签一条 15 分钟内有效的 PUT 预签名 URL，经 SSM 让主机以平台用户做一致性备份并上传到 `s3://<桶>/kirocrew-on/backups/<实例>/<时间>.tar.gz`（`deploy/install/backup-upload.sh`，URL 只经标准输入给 curl）；用 `kirocrew-on restore-verify` 在别处核对 |
 | `kirocrew-on single up` | 按这个版本的模板更新栈，保留栈里所有值 |
 
 公共参数：`--region`（或 `AWS_REGION`）、`--stack`（默认 `kirocrew-on-single`）。「管理 › 部署」记下待执行的变更（`aws_requests`，参数里只有名称）并给出要运行的命令；命令带 `--request <编号> --platform <控制台地址> --token-file <管理员 API Token 文件>` 时，执行完回报，控制台不再显示命令。

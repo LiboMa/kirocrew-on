@@ -284,7 +284,9 @@ class BoundaryScriptTests(HostCase):
             'else echo \'{"id": "enroll-1", "code": "kce_code", "expires": 1, "platform": "http://127.0.0.1:8918"}\'; fi ;;\n'
             f'  *"worker enroll"*) [ -n "$OCTOPUS_ENROLL_CODE" ] && echo "enroll code from the environment" >> {self.calls}; '
             f'touch {registered}; echo \'{{"id": "worker-1"}}\' ;;\n'
-            'esac\n')
+            'esac\n'
+            f'case "$*" in *bootstrap-worker*) echo "as admin with token=${{OCTOPUS_ADMIN_TOKEN:-none}} '
+            f'password=${{OCTOPUS_ADMIN_PASSWORD:-none}}" >> {self.calls} ;; esac\n')
         self.platform.chmod(0o755)
         (self.root / "admin-password").write_text("not-for-output-0123456789")
 
@@ -326,6 +328,17 @@ class BoundaryScriptTests(HostCase):
         self.assertIn("enroll code from the environment", calls)
         self.assertNotIn("kce_code", calls)   # never on a command line
         self.assertNotIn("--worker-url", calls)
+
+    def test_it_acts_as_the_administrator_with_a_token_minted_here_not_the_initial_password(self):   # review 2026-10-28
+        self.config("personal", worker_port=8928, gateway_port=5476)
+        (self.root / "admin-password").unlink()   # changed in the console long ago: the file is no longer the password
+        self.add("bob", "--owner", "bob", new_user="crew-bob")
+        calls = self.calls.read_text()
+        self.assertIn("runuser -u octopus -- env", calls)
+        self.assertIn("local-token --label boundary.sh bob", calls)
+        lines = [line for line in calls.splitlines() if line.startswith("as admin")]
+        self.assertTrue(lines)
+        self.assertEqual(set(lines), {"as admin with token=0 password=none"})   # the stub runuser printed 0
 
     def test_a_new_boundary_signs_kiro_in_the_way_the_others_do(self):   # MVP 0.2.0 P2 Task 5 (§6.4)
         self.config("personal", worker_port=8928, gateway_port=5476, kiro_license='"pro"',
@@ -370,7 +383,7 @@ class BoundaryScriptTests(HostCase):
         self.assertIn("--owner alice", calls)
         self.assertTrue((self.root / "systemd/octopus-gateway@alice.service.d/limits.conf").is_file())
         self.assertNotIn("not-for-output", result.stdout + result.stderr)
-        self.assertIn("kiro-login --boundary alice", result.stdout)
+        self.assertIn("alice 在控制台「我的设置 › 执行环境」里登录 Kiro", result.stdout)   # MVP 0.2.0 P2: from the console
 
     def test_adding_again_only_fills_in(self):
         self.add("alice", "--owner", "alice")

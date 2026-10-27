@@ -9,3 +9,4 @@ User=root
 EnvironmentFile=-/etc/kirocrew-on/provision.env
 ExecStart=/opt/kirocrew-on/venv/bin/python -I /opt/kirocrew-on/current/deploy/install/boundary-provision.py
 TimeoutStartSec=1h
+KillSignal=SIGTERM

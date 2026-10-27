@@ -106,6 +106,9 @@ def build_parser(settings, environ=None):
     archive.add_argument("--dest", required=True)
     archive.add_argument("--name", required=True)
     archive.add_argument("--exclude", action="append", default=[])
+    local = sub.add_parser("local-token", help="部署脚本用：在本机为管理员签发一个短期 Token（以平台用户运行，它能写平台数据库）")
+    local.add_argument("--label", required=True)
+    local.add_argument("--ttl", type=int, default=900, help="秒，60–3600")
     sub.add_parser("single", help="单机版的部署套件（在你的电脑或 CloudShell 上用管理员凭证运行）：native、backup、up；kirocrew-on single -h")
     sub.add_parser("setup", help="pip 渠道：在本机完成单机版的系统级安装（预检、依赖、边界与服务；需要 root）")
     verify = sub.add_parser("restore-verify", help="在独立目录恢复并校验备份")
@@ -283,18 +286,28 @@ def main(argv=None):
             from .bootstrap import allocate_boundary
             if not args.owner:
                 raise SystemExit("--allocate 需要 --owner")
-            print(dumps(allocate_boundary(url, args.username, os.environ[args.password_env], args.owner, args.name)))
+            print(dumps(allocate_boundary(url, args.username, os.environ.get(args.password_env, ""), args.owner, args.name)))
             return
         if args.issue_code:   # N §3: the Worker registers itself with it; its token never leaves its host
             from .bootstrap import issue_enrollment
-            print(dumps(issue_enrollment(url, args.username, os.environ[args.password_env], args.name, spare=args.spare,
+            print(dumps(issue_enrollment(url, args.username, os.environ.get(args.password_env, ""), args.name, spare=args.spare,
                                          owner=args.owner)))
             return
         if not args.check_only and not (args.worker_url and args.token_file):
             raise SystemExit("bootstrap-worker 需要 --worker-url 与 --token-file（只核对用户时用 --check-only）")
-        print(dumps(register_boundary_worker(url, args.username, os.environ[args.password_env], args.worker_url,
+        print(dumps(register_boundary_worker(url, args.username, os.environ.get(args.password_env, ""), args.worker_url,
                                              Path(args.token_file).read_text().strip() if args.token_file else None,
                                              args.name, spare=args.spare, owner=args.owner, check_only=args.check_only)))
+    elif args.command == "local-token":
+        # Review 2026-10-28: boundary.sh and install reruns act as the administrator with this, not the initial password
+        from .security import issue_token
+        db = Database(settings.data_dir)
+        with db.transaction() as conn:
+            row = conn.execute("SELECT id FROM users WHERE admin=1 AND active=1 ORDER BY created LIMIT 1").fetchone()
+            if row is None:
+                raise SystemExit("平台上没有可用的管理员")
+            print(issue_token(conn, row["id"], ["read", "execute", "manage", "admin"], label=args.label,
+                              ttl=min(max(args.ttl, 60), 3600))["token"])
     elif args.command == "setup":
         from .installer import setup
         setup()

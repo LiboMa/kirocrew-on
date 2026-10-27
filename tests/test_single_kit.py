@@ -130,7 +130,10 @@ class BackupTests(KitCase):
         self.state["ssm_out"] = "123456\n"
         self.assertEqual(self.kit("backup", "--bucket", "my-backups"), 0)
         [command] = self.lines("COMMAND ")
-        url = re.search(r"'(https://[^']+)'", command).group(1)
+        # review 2026-10-28: SSM runs commands with sh (dash on Ubuntu): only a heredoc into the release's bash script
+        self.assertTrue(command.startswith("bash /opt/kirocrew-on/current/deploy/install/backup-upload.sh <<'KC_URL' ⏎ "), command)
+        self.assertNotIn("pipefail", command)
+        url = re.search(r"(https://\S+)", command).group(1)
         parts = urllib.parse.urlsplit(url)
         query = dict(urllib.parse.parse_qsl(parts.query))
         self.assertEqual(parts.netloc, "my-backups.s3.us-east-1.amazonaws.com")
@@ -138,8 +141,9 @@ class BackupTests(KitCase):
         self.assertLessEqual(int(query["X-Amz-Expires"]), 900)
         self.assertEqual(query["X-Amz-SignedHeaders"], "host")
         self.assertTrue(query["X-Amz-Credential"].startswith(KEY_ID + "/"))
-        self.assertIn("kirocrew-on --config /etc/kirocrew-on/platform.toml backup --dest", command)
-        self.assertIn("curl -fsS --upload-file", command)
+        script = (Path(single.__file__).parents[1] / "deploy/install/backup-upload.sh").read_text()
+        self.assertIn("runuser -u octopus -- /usr/local/bin/kirocrew-on --config /etc/kirocrew-on/platform.toml backup --dest", script)
+        self.assertIn("curl -fsS -K -", script)   # the URL reaches curl on its standard input, never its argv
         for secret in (SECRET_KEY, urllib.parse.quote(SECRET_KEY, safe="")):   # no admin credential reaches the host
             self.assertNotIn(secret, command)
         self.assertNotIn("AWS_SECRET_ACCESS_KEY", command)
@@ -182,6 +186,15 @@ class PendingTests(AccessCase, KitCase):
                 with self.subTest(body):
                     self.assertEqual(call("POST", "/v1/admin/aws-requests", self.tokens["alice-console"], body)[0], 400)
             self.assertEqual(call("POST", "/v1/admin/aws-requests", self.tokens["bob"], {"kind": "up", "params": {}})[0], 403)
+            role = Path(self.dir / "host-role.json")
+            role.write_text(json.dumps({"state": "writes", "role": "kirocrew-on-host", "allowed": ["ec2:RunInstances"],
+                                        "commands": ["aws iam detach-role-policy --role-name kirocrew-on-host --policy-arn x"],
+                                        "checked": 1.0}))
+            with mock.patch("octopus.domain.Service.HOST_ROLE", role):   # install.sh's check-role, shown until fixed
+                answer = call("GET", "/v1/admin/aws-requests", self.tokens["alice-console"])[1]
+            self.assertEqual((answer["host_role"]["state"], answer["host_role"]["allowed"]), ("writes", ["ec2:RunInstances"]))
+            with mock.patch("octopus.domain.Service.HOST_ROLE", self.dir / "absent.json"):
+                self.assertIsNone(call("GET", "/v1/admin/aws-requests", self.tokens["alice-console"])[1]["host_role"])
             listed = call("GET", "/v1/admin/aws-requests", self.tokens["alice-console"])[1]["items"]
             self.assertEqual([(i["id"], i["state"]) for i in listed], [(made["id"], "pending")])
             token = self.dir / "token"

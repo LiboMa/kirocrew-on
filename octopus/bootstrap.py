@@ -1,5 +1,18 @@
 """First-time deployment bootstrap through the public API; safe to re-run."""
+import os
+
 from .client import Client
+
+
+def admin(api_url, username, password):
+    """A client acting as the administrator: with the token the scripts minted on this host (OCTOPUS_ADMIN_TOKEN, from
+    `octopus local-token`; review 2026-10-28: the initial password may have been changed since), else by logging in.
+    Each caller logs out at the end, which revokes either."""
+    token = os.environ.get("OCTOPUS_ADMIN_TOKEN")
+    if token:
+        return Client(api_url, token)
+    login = Client(api_url, "").request("POST", "/v1/login", {"username": username, "password": password})
+    return Client(api_url, login["token"])
 
 
 def register_boundary_worker(api_url, username, password, worker_url, worker_token, name, spare=False, owner=None,
@@ -9,8 +22,7 @@ def register_boundary_worker(api_url, username, password, worker_url, worker_tok
     spare: register it as a spare execution environment (D28) for an admin to assign to a Team later.
     owner: the username whose own dedicated Worker it is (D49: one boundary per person); default the admin.
     check_only: only check the owner (it exists, has no other own environment), before a boundary is provisioned."""
-    login = Client(api_url, "").request("POST", "/v1/login", {"username": username, "password": password})
-    client = Client(api_url, login["token"])
+    client = admin(api_url, username, password)
     try:
         me = client.request("GET", "/v1/me")
         if owner is not None:
@@ -55,8 +67,7 @@ def issue_enrollment(api_url, username, password, name, spare=False, owner=None)
     itself with (``octopus worker enroll``), so its token never leaves its host: ``{id, code, expires, platform}``. A
     Worker the scripts registered before under that name gets no code: ``{registered: <id>}`` (refresh it with
     register_boundary_worker)."""
-    login = Client(api_url, "").request("POST", "/v1/login", {"username": username, "password": password})
-    client = Client(api_url, login["token"])
+    client = admin(api_url, username, password)
     try:
         me = client.request("GET", "/v1/me")
         if owner is not None:
@@ -76,8 +87,7 @@ def issue_enrollment(api_url, username, password, name, spare=False, owner=None)
 
 def allocate_boundary(api_url, username, password, owner, name):
     """Log in as the admin and have the platform name a new boundary (MVP 0.2.0, S9): its boundary_id and OS user id."""
-    login = Client(api_url, "").request("POST", "/v1/login", {"username": username, "password": password})
-    client = Client(api_url, login["token"])
+    client = admin(api_url, username, password)
     try:
         return client.request("POST", "/v1/admin/boundaries", {"owner": owner, "name": name})
     finally:

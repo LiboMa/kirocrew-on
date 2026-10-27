@@ -34,7 +34,9 @@ import zipfile
 ROOT = Path(__file__).resolve().parents[1]
 PACKAGES = ("octopus", "composition")
 # outside the packages in a checkout; octopus/_release in the wheel (install.sh puts them back where a checkout has them)
-CARRIED = ("deploy", "skills", "package.json", "package-lock.json", "requirements-workflow.txt")
+# tests/native and its contract: the native check every install runs before it switches (deploy/install/boundary-lib.sh)
+CARRIED = ("deploy", "skills", "package.json", "package-lock.json", "requirements-workflow.txt", "tests/native",
+           "tests/kirocrew_contract.json")
 OWN = {"deploy/aws/stack.env"}   # this deployment's stack, domains and pins: not something to hand to another one
 STAMP = (1980, 1, 1, 0, 0, 0)
 
@@ -85,7 +87,9 @@ def record_hash(data):
     return "sha256=" + base64.urlsafe_b64encode(hashlib.sha256(data).digest()).rstrip(b"=").decode()
 
 
-def build_wheel(out, ver):
+def build_wheel(out, ver, replaced=None):
+    """The wheel; ``replaced`` gives some carried files other content (the stamped install.sh of an indexed release)."""
+    replaced = replaced or {}
     if not (ROOT / "octopus/ui/dist/index.html").is_file():
         raise SystemExit("没有控制台构建：先执行 npm --prefix web run build")
     project = tomllib.loads((ROOT / "pyproject.toml").read_text())["project"]
@@ -107,7 +111,7 @@ def build_wheel(out, ver):
             archive.writestr(entry, data)
             record.append(f"{name},{record_hash(data)},{len(data)}")
         for name, path in files():
-            add(name, path.read_bytes(), 0o755 if path.stat().st_mode & 0o111 else 0o644)
+            add(name, replaced.get(name, path.read_bytes()), 0o755 if path.stat().st_mode & 0o111 else 0o644)
         for name, text in meta.items():
             add(name, text.encode())
         add(f"{info}/RECORD", ("\n".join(record + [f"{info}/RECORD,,"]) + "\n").encode())
@@ -118,7 +122,7 @@ def sha256(path):
     return hashlib.sha256(path.read_bytes()).hexdigest()
 
 
-def installer(out, downloads, feed, sign_key):
+def stamped(downloads, feed, sign_key):
     """``install.sh`` with where releases live and the public key their manifests are signed with."""
     public = subprocess.run(["openssl", "pkey", "-in", sign_key, "-pubout"], check=True, capture_output=True,
                             text=True).stdout.strip()
@@ -128,10 +132,7 @@ def installer(out, downloads, feed, sign_key):
         if text.count(placeholder) != 1:
             raise SystemExit(f"install.sh 里找不到 {placeholder}")
         text = text.replace(placeholder, value)
-    path = out / "install.sh"
-    path.write_text(text)
-    path.chmod(0o755)
-    return path
+    return text
 
 
 def index(feed, channel, ver, wheel, downloads, requires):
@@ -170,7 +171,9 @@ def main(argv=None):
     out = Path(args.out)
     out.mkdir(parents=True, exist_ok=True)
     ver, pins = version(), pins_file()
-    wheel = build_wheel(out, ver)
+    # an indexed release's wheel carries the same stamped install.sh, which `kirocrew-on setup` runs (pip channel)
+    script = stamped(args.downloads, args.feed, args.sign_key) if args.index else None
+    wheel = build_wheel(out, ver, {"octopus/_release/deploy/install/install.sh": script.encode()} if script else None)
     manifest = {
         "version": ver, "channel": args.channel, "wheel": {"name": wheel.name, "sha256": sha256(wheel)},
         # KiroCrew is built from this pinned commit until it ships a release wheel (S26's preconditions, P1b)
@@ -186,7 +189,9 @@ def main(argv=None):
                         str(out / "manifest.json")], check=True)
     names = [wheel.name, "manifest.json"] + (["manifest.sig"] if args.sign_key else [])
     if args.index:
-        names.append(installer(out, args.downloads, args.feed, args.sign_key).name)
+        (out / "install.sh").write_text(script)
+        (out / "install.sh").chmod(0o755)
+        names.append("install.sh")
         project = tomllib.loads((ROOT / "pyproject.toml").read_text())["project"]
         index(Path(args.index), args.channel, ver, wheel, args.downloads, project["requires-python"])
     (out / "SHA256SUMS").write_text("".join(f"{sha256(out / n)}  {n}\n" for n in names))

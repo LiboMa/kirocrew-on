@@ -1,4 +1,5 @@
 #!/bin/sh
 # /usr/local/bin/kirocrew-on (al2023.sh installs it): the CLI of the release /opt/kirocrew-on/current points at, run as the
 # services run it (MVP 0.2.0 P2): `kirocrew-on backup`, `kirocrew-on --config /etc/kirocrew-on/platform.toml …`.
-PYTHONPATH=/opt/kirocrew-on/current exec /opt/kirocrew-on/venv/bin/python -m octopus "$@"
+# -P: the current directory is never put first on sys.path (root may run it inside an Agent's workspace)
+PYTHONPATH=/opt/kirocrew-on/current exec /opt/kirocrew-on/venv/bin/python -P -m octopus "$@"

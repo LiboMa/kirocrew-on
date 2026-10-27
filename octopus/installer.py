@@ -1,36 +1,17 @@
-"""`sudo kirocrew-on setup`: the pip channel's system steps (MVP 0.2.0 P2 Task 3, design §4.4). pip installed the package;
-this lays it out as install.sh unpacks a verified wheel — the packages, with deploy/, skills/ and the npm and pip lists
-where a checkout has them — and runs install.sh on it, so both channels share the preflight and every install step."""
+"""`sudo kirocrew-on setup`: the pip channel's system steps (MVP 0.2.0 P2 Task 3, design §4.4). The wheel a channel
+publishes carries install.sh with the release's addresses and public key written in (tools/build_release.py --index);
+setup runs that install.sh for the package's own version, so the release it installs is downloaded and verified like
+any other (review 2026-10-28: pip's check of an index on another domain is not trusted alone) and both channels share
+the preflight and every install step. A package built without --index has no key and installs nothing."""
 import os
-from pathlib import Path
-import shutil
 
 from . import __version__, release
 
-INCOMING = Path("/opt/kirocrew-on/incoming")
-CARRIED = ("deploy", "skills", "package.json", "package-lock.json", "requirements-workflow.txt")
-SKIP = shutil.ignore_patterns("__pycache__", "*.pyc", "_release")
 
-
-def assemble(stage):
-    import composition
-    if stage.exists():
-        shutil.rmtree(stage)
-    stage.mkdir(parents=True)
-    shutil.copytree(release.PACKAGE, stage / "octopus", ignore=SKIP)
-    shutil.copytree(Path(composition.__file__).resolve().parent, stage / "composition", ignore=SKIP)
-    for name in CARRIED:
-        source = release.path(name)
-        if source.is_dir():
-            shutil.copytree(source, stage / name, ignore=SKIP)
-        else:
-            shutil.copy2(source, stage / name)
-
-
-def setup(incoming=INCOMING):
+def setup():
     if os.geteuid() != 0:
         raise SystemExit("需要 root：请以 root 身份运行 kirocrew-on setup")
-    stage = incoming / f"{__version__}-pip"
-    assemble(stage)
-    script = stage / "deploy/install/install.sh"
-    os.execvp("sh", ["sh", str(script), "--source", str(stage), "--version", __version__])
+    script = release.path("deploy/install/install.sh")
+    if "-----BEGIN PUBLIC KEY-----" not in script.read_text():
+        raise SystemExit("这个包没有发布公钥（不是从发布频道装的）：请用发布站点上的 install.sh 安装")
+    os.execvp("sh", ["sh", str(script), "--version", __version__])

@@ -39,6 +39,10 @@ if "describe-stacks" in args:
         out("\t".join(state.get("parameters", [])) or "None")
     if "Outputs" in joined:
         out("\t".join(f"{k}\t{v}" for k, v in state["outputs"].items()))
+    if state.get("statuses"):   # one status per read, the last one kept
+        status = state["statuses"].pop(0) if len(state["statuses"]) > 1 else state["statuses"][0]
+        json.dump(state, open(os.environ["FAKE_STATE"], "w"))
+        out(status)
     if state.get("exists"): out("CREATE_COMPLETE")
     sys.stderr.write("Stack with id kirocrew-on-single does not exist\n"); sys.exit(255)
 if "create-change-set" in args:
@@ -50,7 +54,7 @@ if "wait" in args:
 if "describe-change-set" in args:
     if "StatusReason" in joined: out("The submitted information didn't contain changes.")
     out(state.get("replaced", "None"))
-if "execute-change-set" in args or "delete-change-set" in args: out("")
+if "execute-change-set" in args or "delete-change-set" in args or "delete-stack" in args: out("")
 if "get-role" in args: out("arn:aws:iam::123456789012:role/kirocrew-on-host")
 if "simulate-principal-policy" in args:
     if state.get("simulate_denied"): deny("SimulatePrincipalPolicy")
@@ -186,6 +190,29 @@ class StackTests(StackScriptCase):
         self.assertIn("HostAddress", done.stderr)
         self.assertFalse(any("execute-change-set" in c for c in self.calls()))
 
+    def test_a_first_change_set_that_never_ran_is_created_again(self):   # review 2026-10-28: REVIEW_IN_PROGRESS
+        self.state.update(statuses=["REVIEW_IN_PROGRESS"])
+        self.assertEqual(self.run_script("up", str(self.dir / "domains")).returncode, 0)
+        self.assertIn("--change-set-type CREATE", next(c for c in self.calls() if "create-change-set" in c))
+
+    def test_a_stack_still_changing_is_waited_for(self):
+        self.state.update(statuses=["CREATE_IN_PROGRESS", "CREATE_IN_PROGRESS", "CREATE_COMPLETE"])
+        done = self.run_script("up", str(self.dir / "domains"), STACK_POLL="0")
+        self.assertEqual(done.returncode, 0, done.stderr)
+        calls = self.calls()
+        create = next(i for i, c in enumerate(calls) if "create-change-set" in c)
+        self.assertEqual(sum("StackStatus" in c for c in calls[:create]), 3)   # read until it settled
+        self.assertIn("--change-set-type UPDATE", calls[create])
+
+    def test_a_stack_that_failed_to_roll_back_says_what_to_do(self):
+        for status in ("ROLLBACK_FAILED", "DELETE_FAILED", "UPDATE_ROLLBACK_FAILED"):
+            with self.subTest(status):
+                self.state.update(statuses=[status])
+                done = self.run_script("up", str(self.dir / "domains"))
+                self.assertEqual(done.returncode, 5)
+                self.assertIn(status, done.stderr)
+                self.assertIn("CloudFormation", done.stderr)
+
     def test_missing_permissions_print_what_the_install_needs(self):
         self.state.update(deny=True)
         done = self.run_script("up", str(self.dir / "domains"))
@@ -214,6 +241,12 @@ class RoleTests(StackScriptCase):
         for action in ("cloudformation:CreateStack", "ec2:AuthorizeSecurityGroupIngress", "iam:PassRole", "s3:PutObject"):
             self.assertIn(action, simulate)
         self.assertNotIn("bedrock:", simulate)
+        self.assertEqual(self.recorded_role()["state"], "ok")
+
+    def recorded_role(self):   # what the console's 管理 › 部署 shows until it is fixed (review 2026-10-28)
+        path = self.fs / "etc/kirocrew-on/host-role.json"
+        self.assertEqual(path.stat().st_mode & 0o777, 0o644)
+        return json.loads(path.read_text())
 
     def test_write_permissions_left_on_the_role_name_the_policies_to_remove(self):
         self.state.update(allowed=["cloudformation:CreateStack", "ec2:AllocateAddress"],
@@ -227,17 +260,54 @@ class RoleTests(StackScriptCase):
                       "arn:aws:iam::123456789012:policy/kirocrew-on-single-install", done.stderr)
         self.assertNotIn("--policy-arn arn:aws:iam::aws:policy/AmazonSSMManagedInstanceCore", done.stderr)   # SSM stays
         self.assertIn("bedrock-invoke", done.stderr)
+        recorded = self.recorded_role()
+        self.assertEqual((recorded["state"], recorded["role"], recorded["allowed"]),
+                         ("writes", "kirocrew-on-host", ["cloudformation:CreateStack", "ec2:AllocateAddress"]))
+        self.assertIn("aws iam detach-role-policy --role-name kirocrew-on-host --policy-arn "
+                      "arn:aws:iam::123456789012:policy/kirocrew-on-single-install", recorded["commands"])
 
     def test_a_check_it_cannot_make_says_so(self):
         self.state.update(simulate_denied=True)
         done = self.run_script("check-role")
         self.assertEqual(done.returncode, 11)
         self.assertIn("iam:SimulatePrincipalPolicy", done.stderr)
+        self.assertEqual(self.recorded_role()["state"], "unchecked")
 
     def test_no_role_at_all_is_reported(self):
         done = self.run_script("check-role", EC2_ROLE="")
         self.assertEqual(done.returncode, 12)
         self.assertIn("bedrock:InvokeModel", done.stderr)
+        self.assertEqual(self.recorded_role()["state"], "none")
+
+
+class AccessTests(unittest.TestCase):
+    """Review 2026-10-28: without CloudFront there is no origin secret, so the API must not ask for one — and then it
+    listens on loopback only (the SSM port forward reaches it there); with CloudFront it listens for it and checks it."""
+    def apply(self, cf):
+        with tempfile.TemporaryDirectory() as tmp:
+            toml = Path(tmp) / "platform.toml"
+            shutil.copy(ROOT / "deploy/config/platform.toml.example", toml)
+            done = subprocess.run(["bash", "-c", f'. "{ROOT}/deploy/install/single-lib.sh"; PYTHON=python3; '
+                                   f'single_node_access "{toml}" "{cf}"; single_node_access "{toml}" "{cf}"'],
+                                  capture_output=True, text=True)
+            self.assertEqual(done.returncode, 0, done.stderr)
+            import tomllib
+            return tomllib.loads(toml.read_text())
+
+    def test_without_cloudfront_loopback_only_and_no_secret_file(self):
+        settings = self.apply("")
+        self.assertEqual(settings["api_host"], "127.0.0.1")
+        self.assertNotIn("origin_secret_file", settings)
+
+    def test_with_cloudfront_the_secret_is_checked(self):
+        settings = self.apply("d1console.cloudfront.net")
+        self.assertEqual((settings["api_host"], settings["origin_secret_file"]), ("0.0.0.0", "/etc/kirocrew-on/origin-secret"))
+
+    def test_al2023_sh_applies_it_before_the_api_starts(self):
+        text = (ROOT / "deploy/install/al2023.sh").read_text()
+        call = text.index('single_node_access /etc/kirocrew-on/platform.toml "${CF_DOMAIN:-}"')
+        self.assertLess(text.index("install -m 0640 -o root -g octopus \"$TARGET/deploy/config/platform.toml.example\""), call)
+        self.assertLess(call, text.index("systemctl restart octopus-api"))
 
 
 class InstallerTests(unittest.TestCase):
@@ -247,6 +317,21 @@ class InstallerTests(unittest.TestCase):
         self.assertIn('bash "$STAGE/deploy/install/single-stack.sh" up', text)
         self.assertIn('bash "$STAGE/deploy/install/single-stack.sh" check-role', text)
         self.assertLess(text.index("single-stack.sh\" up"), text.index("bash \"$STAGE/deploy/install/al2023.sh\""))
+
+    def test_the_install_policy_lets_a_failed_stack_roll_back_and_cannot_make_an_administrator(self):
+        policy = json.loads((ROOT / "deploy/aws/kirocrew-on-single-install-policy.json").read_text())
+        actions = {a for statement in policy["Statement"] for a in statement["Action"]}
+        for action in ("cloudfront:DeleteDistribution", "ec2:ReleaseAddress", "ec2:DisassociateAddress",
+                       "ec2:RevokeSecurityGroupIngress", "iam:DeleteRole", "iam:DetachRolePolicy", "dlm:DeleteLifecyclePolicy"):
+            self.assertIn(action, actions)   # a rollback deletes what the failed create made
+        for statement in policy["Statement"]:
+            if {"iam:AttachRolePolicy", "iam:DetachRolePolicy"} & set(statement["Action"]):
+                self.assertEqual(statement["Condition"], {"ArnEquals": {"iam:PolicyARN": [
+                    "arn:aws:iam::aws:policy/service-role/AWSDataLifecycleManagerServiceRole"]}})
+            if "iam:PassRole" in statement["Action"]:
+                self.assertEqual(statement["Condition"], {"StringEquals": {"iam:PassedToService": "dlm.amazonaws.com"}})
+                self.assertEqual(statement["Action"], ["iam:PassRole"])
+            self.assertNotIn("iam:PutRolePolicy", statement["Action"])
 
     def test_the_install_policy_lists_what_single_stack_needs(self):
         policy = json.loads((ROOT / "deploy/aws/kirocrew-on-single-install-policy.json").read_text())

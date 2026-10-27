@@ -2,7 +2,7 @@ import { useEffect, useState } from "react";
 import { useInfiniteQuery, useQuery, useQueryClient } from "@tanstack/react-query";
 import { api } from "@/api/client";
 import { followRunEvents, type StreamState } from "@/api/events";
-import type { ApprovalList, AwsRequest, AppPreview, AttemptDiff, ChangeEntry, Credential, Enrollment, Environment, Me, Observation, Placement, Policy, Provisions, RevisionDiff, RevisionEntry, Run, RunEvent, RunPage, Team, Template, User, Worker, Workflow, Quotas } from "@/api/types";
+import type { ApprovalList, AwsRequest, HostRole, AppPreview, AttemptDiff, ChangeEntry, Credential, Enrollment, Environment, Me, Observation, Placement, Policy, Provisions, RevisionDiff, RevisionEntry, Run, RunEvent, RunPage, Team, Template, User, Worker, Workflow, Quotas } from "@/api/types";
 
 export const keys = {
   me: ["me"] as const,
@@ -91,7 +91,7 @@ export function useEnrollments(enabled: boolean) {
 
 /** 管理 › 部署: the AWS changes waiting for the deployment kit, read again every 30 s (the kit reports back). */
 export function useAwsRequests(enabled: boolean) {
-  return useQuery({ queryKey: keys.awsRequests, queryFn: () => api<{ items: AwsRequest[] }>("/admin/aws-requests"), enabled,
+  return useQuery({ queryKey: keys.awsRequests, queryFn: () => api<{ items: AwsRequest[]; host_role: HostRole | null }>("/admin/aws-requests"), enabled,
     retry: false, ...every(30_000) });
 }
 

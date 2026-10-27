@@ -60,7 +60,10 @@ PIDS+=($!)
 runuser -u octopus -- env PYTHONPATH="$CURRENT" /opt/kirocrew-on/venv/bin/python -m octopus --config "$ETC/platform.toml" wait-ready --api --timeout 60
 for _ in $(seq 1 30); do [ -s "$BASE/worker.token" ] && break; sleep 1; done   # the Worker writes it on its first start
 WORKER_PORT="$(grep -E '^worker_port' "$TOML" | grep -oE '[0-9]+')"
-(cd "$CURRENT" && OCTOPUS_ADMIN_PASSWORD="$ADMIN_PASSWORD" PYTHONPATH="$CURRENT" /opt/kirocrew-on/venv/bin/python -m octopus \
+# as the administrator with a short-lived token minted here: the password may have been changed in the console since
+ADMIN_TOKEN="$(cd "$CURRENT" && runuser -u octopus -- env PYTHONPATH="$CURRENT" /opt/kirocrew-on/venv/bin/python -m octopus \
+  --config "$ETC/platform.toml" local-token --label "docker $BOUNDARY" --ttl 900)"
+(cd "$CURRENT" && OCTOPUS_ADMIN_TOKEN="$ADMIN_TOKEN" PYTHONPATH="$CURRENT" /opt/kirocrew-on/venv/bin/python -m octopus \
   --config "$ETC/platform.toml" bootstrap-worker --worker-url "http://127.0.0.1:$WORKER_PORT" --token-file "$BASE/worker.token" \
   --name "$BOUNDARY" >/dev/null)
 log "KiroCrew ON 已启动：http://localhost:8918（docker run 时 -p 127.0.0.1:8918:8918），管理员 admin"

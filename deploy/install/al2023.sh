@@ -229,6 +229,11 @@ fi
 if [ ! -f /etc/kirocrew-on/platform.toml ]; then
   install -m 0640 -o root -g octopus "$TARGET/deploy/config/platform.toml.example" /etc/kirocrew-on/platform.toml
 fi
+if [ -n "${SINGLE_NODE:-}" ]; then   # MVP 0.2.0 P2: with CloudFront check its origin secret; without, loopback only
+  # shellcheck source=single-lib.sh
+  . "$SOURCE/deploy/install/single-lib.sh"
+  single_node_access /etc/kirocrew-on/platform.toml "${CF_DOMAIN:-}"
+fi
 if [ -n "${CF_DOMAIN:-}" ]; then
   merge_hosts /etc/kirocrew-on/platform.toml "$CF_DOMAIN" ${CONSOLE_DOMAIN:+"$CONSOLE_DOMAIN"} localhost:18918
 fi
@@ -476,7 +481,10 @@ systemctl enable octopus-api >/dev/null
 systemctl restart octopus-api
 log "注册执行边界 Worker（已注册时跳过）"
 WORKER_PORT="$(grep -E '^worker_port' "$BOUNDARY_TOML" | grep -oE '[0-9]+')"
-(cd /opt/kirocrew-on/current && OCTOPUS_ADMIN_PASSWORD="$ADMIN_PASSWORD" PYTHONPATH=/opt/kirocrew-on/current \
+# As the administrator with a short-lived token minted here (review 2026-10-28: the console may have changed the password)
+ADMIN_TOKEN="$(cd /opt/kirocrew-on/current && runuser -u octopus -- env PYTHONPATH=/opt/kirocrew-on/current "${OCTO[@]}" \
+  local-token --label "install $BOUNDARY" --ttl 900)"
+(cd /opt/kirocrew-on/current && OCTOPUS_ADMIN_TOKEN="$ADMIN_TOKEN" PYTHONPATH=/opt/kirocrew-on/current \
   "${OCTO[@]}" bootstrap-worker --worker-url "http://127.0.0.1:$WORKER_PORT" \
   --token-file "$BASE/worker.token" --name "$BOUNDARY")
   # platform:end

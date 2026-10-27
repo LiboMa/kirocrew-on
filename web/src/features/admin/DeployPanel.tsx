@@ -4,7 +4,7 @@ import { toast } from "sonner";
 import { Check, Copy, Plus } from "lucide-react";
 import { api } from "@/api/client";
 import { keys, useAwsRequests } from "@/api/hooks";
-import type { AwsRequest } from "@/api/types";
+import type { AwsRequest, HostRole } from "@/api/types";
 import { FormDialog } from "@/components/FormDialog";
 import { NativeSelect } from "@/components/NativeSelect";
 import { Panel } from "@/components/Panel";
@@ -44,6 +44,7 @@ export function DeployPanel() {
       description="单机版装完后，主机角色只留 Bedrock 调用权限：给边界开公网原生入口、异地备份、更新栈这些要改 AWS 的事，由管理员在自己电脑或 CloudShell 上用部署套件 kirocrew-on single 执行。这里记下待执行的变更和要运行的命令；执行完，部署套件会回报。"
       actions={<Button type="button" onClick={() => setAdding(true)}><Plus />记录变更</Button>}>
       {query.error && <p className="text-sm text-destructive">读取失败：{query.error.message}</p>}
+      {query.data?.host_role && query.data.host_role.state !== "ok" && <RoleWarning role={query.data.host_role} />}
       {!query.isLoading && !items.length && !query.error && (
         <p className="text-sm text-muted-foreground">还没有待执行的 AWS 变更。需要时点「记录变更」，再按给出的命令运行部署套件。</p>
       )}
@@ -77,6 +78,28 @@ export function DeployPanel() {
       )}
       {adding && <RecordDialog onClose={() => setAdding(false)} />}
     </Panel>
+  );
+}
+
+/** What install.sh found on the host role (S29), shown until a later run finds Bedrock and SSM only. */
+function RoleWarning({ role }: { role: HostRole }) {
+  const red = role.state === "writes";
+  return (
+    <div role="alert" className={cn("space-y-1.5 rounded-md border p-3 text-sm",
+      red ? "border-destructive/30 bg-destructive/5 text-destructive" : "border-warning/30 bg-warning/5")}>
+      <p className="font-medium">
+        {red ? `主机角色 ${role.role} 仍有写权限（${role.allowed.join("、")}）：同机所有进程都能用它，包括 Agent。`
+          : role.state === "none" ? "这台实例没有角色：Claude Code 与 Codex 经 Amazon Bedrock 调用模型，需要实例角色带 bedrock:InvokeModel*。"
+          : `安装时没能核对主机角色 ${role.role} 的权限：请自行确认它只剩 Bedrock 调用与 SSM 的权限。`}
+      </p>
+      {red && role.commands.length > 0 && (
+        <>
+          <p className="text-xs">在你电脑或 CloudShell 上卸下安装用的权限，再运行一次 install.sh 重新核对：</p>
+          <pre className="rounded-sm bg-background/70 p-2 font-mono text-xs whitespace-pre-wrap text-foreground">{role.commands.join("\n")}</pre>
+        </>
+      )}
+      <p className="text-xs text-muted-foreground">核对于 {formatTime(role.checked)}</p>
+    </div>
   );
 }
 
