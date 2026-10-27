@@ -461,6 +461,17 @@ if [ -n "$WORKER_HOST" ] && [ -n "${WORKER_PREVIEW_TLS_PORT:-}" ] && [ -s "$BASE
 fi
 if [ -z "$WORKER_HOST" ]; then
   # platform:begin
+if [ -n "${SINGLE_NODE:-}" ]; then
+  # MVP 0.2.0 P2 Task 6 (S30): 「新建边界」 from the console. The API (NoNewPrivileges) only leaves a name and a user name
+  # in its own directory; a root oneshot started by this path unit checks them again and runs boundary.sh with them.
+  install -d -m 0700 -o octopus -g octopus /var/lib/octopus/platform/boundary-requests
+  install -d -m 2750 -o root -g octopus /var/lib/octopus/boundary-provision
+  printf 'AWS_REGION=%s\n' "$REGION" > /etc/kirocrew-on/provision.env
+  install -m 0644 /opt/kirocrew-on/current/deploy/systemd/octopus-boundary-provision.path /etc/systemd/system/
+  systemctl daemon-reload
+  systemctl enable --now octopus-boundary-provision.path >/dev/null
+  toml_set /etc/kirocrew-on/platform.toml boundary_provisioning true
+fi
 systemctl enable octopus-api >/dev/null
 systemctl restart octopus-api
 log "注册执行边界 Worker（已注册时跳过）"

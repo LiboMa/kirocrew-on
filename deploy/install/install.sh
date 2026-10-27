@@ -217,7 +217,7 @@ cloudfront() {  # CF_DOMAIN, NATIVE_DOMAIN, PREVIEW_DOMAIN from the stack kirocr
 run_steps() {  # the install steps of the release in STAGE (al2023.sh: every one of them fills in only what is missing)
   NEW_PASSWORD=""
   [ -s "$ADMIN_FILE" ] || NEW_PASSWORD=1
-  KIROCREW_ON_RELEASE="$VERSION" AWS_REGION="$EC2_REGION" CF_DOMAIN="$CF_DOMAIN" NATIVE_DOMAIN="$NATIVE_DOMAIN" \
+  SINGLE_NODE=1 KIROCREW_ON_RELEASE="$VERSION" AWS_REGION="$EC2_REGION" CF_DOMAIN="$CF_DOMAIN" NATIVE_DOMAIN="$NATIVE_DOMAIN" \
     PREVIEW_DOMAIN="$PREVIEW_DOMAIN" bash "$STAGE/deploy/install/al2023.sh" "$BOUNDARY" ||
     { printf '%s\n' "安装步骤没有完成（原因见上面的输出）。处理后再运行一次即可：已完成的步骤会跳过，只补缺。" >&2; exit 1; }
   ROLE_CHECK=0

@@ -484,6 +484,51 @@ describe("管理 › 执行环境", () => {
     expect(await rowOf(list, "bob-host")).toHaveAttribute("data-fresh", "true");
   });
 
+  test("an administrator adds a boundary on this host with 新建边界 and follows it to the end (MVP 0.2.0 P2, S30)", async () => {
+    let posted = false;
+    let reads = 0;
+    const running = { id: "prv-1", name: "dev1", owner: "dev1", state: "running", started: 1_790_000_000,
+      log: ["[00:00:01] 边界 dev1：核对平台用户 dev1", "[00:00:03] 边界 dev1：OS 用户与目录"] };
+    const done = { ...running, state: "done", exit: 0, finished: 1_790_000_300,
+      next: "需要从公网打开 KiroCrew 时，请管理员在自己电脑或 CloudShell 上运行 kirocrew-on single native dev1；在此之前经本机端口转发使用。" };
+    const calls = start({ ...ENVIRONMENTS,
+      "GET /admin/boundaries/provision": () => ({ available: true, items: !posted ? [] : ++reads < 2 ? [running] : [done] }),
+      "POST /admin/boundaries/provision": () => { posted = true; return { id: "prv-1", name: "dev1", owner: "dev1", state: "queued" }; } });
+    const list = await openSection("管理", "执行环境");
+    await userEvent.click(await within(list).findByRole("button", { name: "新建边界" }));
+    const dialog = await screen.findByRole("dialog", { name: "新建边界" });
+    await userEvent.selectOptions(within(dialog).getByLabelText("属主"), "u2");
+    expect(within(dialog).getByLabelText("边界名称")).toHaveAttribute("placeholder", "dev1");   // boundary.sh's rule
+    await userEvent.click(within(dialog).getByRole("button", { name: "新建" }));
+    expect(await screen.findByText("已开始新建边界 dev1")).toBeInTheDocument();
+    expect(calls.find((c) => c.method === "POST" && c.path === "/v1/admin/boundaries/provision")?.body).toEqual({ owner_id: "u2" });
+    const section = await within(list).findByRole("region", { name: "新建边界" });
+    expect(await within(section).findByText("进行中")).toBeInTheDocument();
+    expect(within(section).getByText("[00:00:03] 边界 dev1：OS 用户与目录")).toBeInTheDocument();
+    expect(await within(section).findByText("已完成", {}, { timeout: 8000 })).toBeInTheDocument();
+    expect(within(section).getByText(/kirocrew-on single native dev1/)).toBeInTheDocument();
+  }, 15000);
+
+  test("a host without the root service offers no 新建边界", async () => {
+    start({ ...ENVIRONMENTS, "GET /admin/boundaries/provision": { available: false, items: [] } });
+    const list = await openSection("管理", "执行环境");
+    await within(list).findByRole("button", { name: "登记 Worker" });
+    expect(within(list).queryByRole("button", { name: "新建边界" })).toBeNull();
+  });
+
+  test("a failed boundary says how and offers to run it again", async () => {
+    const calls = start({ ...ENVIRONMENTS, "GET /admin/boundaries/provision": { available: true, items: [
+      { id: "prv-2", name: "dev1", owner: "dev1", state: "failed", exit: 3, started: 1_790_000_000, finished: 1_790_000_100,
+        log: ["平台分配的 UID 70001 已被本机其他用户或组占用：请检查主机后重试"] }] },
+      "POST /admin/boundaries/provision": { id: "prv-3", name: "dev1", owner: "dev1", state: "queued" } });
+    const list = await openSection("管理", "执行环境");
+    const section = await within(list).findByRole("region", { name: "新建边界" });
+    expect(within(section).getByText("没有完成（退出码 3）")).toBeInTheDocument();
+    await userEvent.click(within(section).getByRole("button", { name: "再试一次：dev1" }));
+    await waitFor(() => expect(calls.find((c) => c.method === "POST" && c.path === "/v1/admin/boundaries/provision")?.body)
+      .toEqual({ owner_id: "u2", name: "dev1" }));
+  });
+
   test("the owner signs the environment's Kiro in with a device code from 我的设置 (MVP 0.2.0, §6.4)", async () => {
     let polls = 0;
     const calls = start({ ...ONE_WORKER, "GET /me": { id: "u1", username: "fixture-owner", admin: 0, scopes: ["read", "execute", "manage"] },

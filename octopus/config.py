@@ -27,7 +27,7 @@ STRINGS = {"api_host", "worker_host", "public_url", "crew_url", "worker_isolatio
            "preview_tls_name", "preview_url", "preview_domain", "boundary_id", "kiro_license", "kiro_identity_provider",
            "kiro_idc_region"}
 APPROVAL = ("", "auto", "interactive")
-BOOLS = {"crew_yolo"}
+BOOLS = {"crew_yolo", "boundary_provisioning"}
 # Lifetime of the native browser login minted for "open in KiroCrew": 1–480 minutes or 1–8 hours (K03).
 ENTRY_TTL = re.compile(r"(?:[1-9]|[1-9][0-9]|[1-3][0-9]{2}|4[0-7][0-9]|480)m|[1-8]h")
 # MVP 0.2.0 (S8, CE3): a boundary's identity given by the control plane in the rendered configuration, never from a volume.
@@ -74,6 +74,8 @@ class Settings:
     # KiroCrew's standing YOLO on this boundary (agent.dangerously_skip_permissions, re-applied at every Gateway start):
     # on by the owner's direction (2026-10-15); false returns to approving each tool request (D38 phase 2 then has work).
     crew_yolo: bool = True
+    # MVP 0.2.0 P2 Task 6: the host runs octopus-boundary-provision (single-node edition), so the console can add boundaries
+    boundary_provisioning: bool = False
     crew_entry_ttl: str = "8h"
     # A Worker host's nginx preview port and the name its certificate carries (D36 §5.2); unset on the platform host.
     preview_tls_port: int = 0

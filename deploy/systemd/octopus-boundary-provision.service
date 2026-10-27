@@ -1,0 +1,11 @@
+[Unit]
+Description=KiroCrew ON: add the boundaries the console asked for, one at a time (root; boundary.sh only)
+After=octopus-api.service
+
+[Service]
+Type=oneshot
+User=root
+# AWS_REGION for the new boundary's Bedrock settings (al2023.sh writes it)
+EnvironmentFile=-/etc/kirocrew-on/provision.env
+ExecStart=/opt/kirocrew-on/venv/bin/python -I /opt/kirocrew-on/current/deploy/install/boundary-provision.py
+TimeoutStartSec=1h

@@ -180,9 +180,13 @@ def main(argv=None):
             print(f"警告：worker_ca_file {ca} 不存在；HTTPS Worker 只按系统证书库校验", file=sys.stderr)
             ca = None
         transport.configure(ca)
+        provisioning = None
+        if settings.boundary_provisioning:   # the single-node edition's root service is installed (al2023.sh SINGLE_NODE)
+            from .provision import REQUESTS, Provisions
+            provisioning = Provisions(settings.data_dir / REQUESTS)
         httpd = server(db, args.port, args.host, allowed_hosts=settings.allowed_hosts, origin_secret=secret,
                        preview_url=settings.preview_url, preview_domain=settings.preview_domain, credentials_key_file=settings.credentials_key_file,
-                       credentials_private_hosts=settings.credentials_private_hosts)
+                       credentials_private_hosts=settings.credentials_private_hosts, provisioning=provisioning)
         signal.signal(signal.SIGTERM, lambda *_: threading.Thread(target=httpd.shutdown, daemon=True).start())
         engine.start()
 

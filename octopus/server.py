@@ -276,12 +276,13 @@ SHARE_PAGE = ("<!doctype html><html lang=\"zh-CN\"><head><meta charset=\"utf-8\"
 
 
 def server(database, port=8918, host="127.0.0.1", allowed_hosts=(), origin_secret=None, preview_url="", preview_domain="",
-           credentials_key_file=None, credentials_private_hosts=()):
+           credentials_key_file=None, credentials_private_hosts=(), provisioning=None):
     if origin_secret is not None and len(origin_secret) < 32:
         # An empty or truncated secret file must fail closed instead of turning origin enforcement off.
         raise ValueError("源站密钥为空或过短（至少 32 个字符）；检查 origin_secret_file")
     service = Service(database)
     service.credentials.configured = credentials_key_file
+    service.provisioning = provisioning
     # D75: public links live on the Session's own preview origin, else the shared one; none without a preview domain
     service.public_base = lambda rid: (remote_preview.session_url(preview_domain, rid) if preview_domain
                                        else preview_url.rstrip("/") if preview_url else None)
@@ -985,6 +986,11 @@ def server(database, port=8918, host="127.0.0.1", allowed_hosts=(), origin_secre
                 if path == "/v1/admin/environments":
                     require(method == "GET", "Method not allowed", 405)
                     return self.respond(service.environments(actor))
+                if path == "/v1/admin/boundaries/provision":   # MVP 0.2.0 P2 Task 6: 「新建边界」 on this host
+                    require(method in {"GET", "POST"}, "Method not allowed", 405)
+                    if method == "GET":
+                        return self.respond(service.provisions(actor))
+                    return self.respond(service.provision_boundary(actor, body), 202)
                 if path == "/v1/workers/enrollments":   # N §5: one-time enrollment codes, an administrator's
                     require(method in {"GET", "POST"}, "Method not allowed", 405)
                     if method == "GET":

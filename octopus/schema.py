@@ -122,6 +122,7 @@ def openapi():
         "AssignWorker": obj({**command, "worker_id": text}, ["request_id", "expected_version", "worker_id"]),
         "Empty": obj({}), "Error": obj({"error": text, "code": text}, ["error", "code"]),
         # MVP 0.2.0 (N §5): a one-time enrollment code, and the Worker registering itself with it
+        "ProvisionBoundary": obj({"owner_id": text, "name": text}, ["owner_id"]),
         "Enrollment": obj({"name": text, "owner_id": text, "team_id": text, "spare": {"type": "boolean"},
                            "expires_in": {"type": "integer", "minimum": 60, "maximum": 86400, "default": 1800}}, ["name"]),
         "Enroll": obj({"code": text, "url": text, "token": {"type": "string", "minLength": 32},
@@ -165,6 +166,7 @@ def openapi():
         "/v1/workflows/{id}/shares": {"post": "Grant", "delete": "Grant"},
         "/v1/workflows/{id}/archive": {"post": "Archive"},
         "/v1/workers": {"get": None, "post": "Worker"},
+        "/v1/admin/boundaries/provision": {"get": None, "post": "ProvisionBoundary"},
         "/v1/workers/enrollments": {"get": None, "post": "Enrollment"}, "/v1/workers/enrollments/{id}": {"delete": "Empty"},
         "/v1/workers/enroll": {"post": "Enroll"},
         "/v1/placement": {"get": None},
@@ -221,7 +223,8 @@ def openapi():
              ("/v1/workers/{id}/spaces", "delete"), ("/v1/workers/{id}/connection", "post"),
              ("/v1/workers/{id}/dedicate", "post"), ("/v1/teams", "post"), ("/v1/teams/{id}/archive", "post"),
              ("/v1/teams/{id}/environment", "post"), ("/v1/workers/{id}", "patch"), ("/v1/workers/{id}/retire", "post"),
-             ("/v1/workers/enrollments", "get"), ("/v1/workers/enrollments", "post"), ("/v1/workers/enrollments/{id}", "delete")}
+             ("/v1/workers/enrollments", "get"), ("/v1/workers/enrollments", "post"), ("/v1/workers/enrollments/{id}", "delete"),
+             ("/v1/admin/boundaries/provision", "get"), ("/v1/admin/boundaries/provision", "post")}
     users_admin = {("/v1/users/{id}/password", "post"), ("/v1/users/{id}/active", "post"), ("/v1/users/{id}/admin", "post"),
                    ("/v1/admin/users", "get"), ("/v1/admin/users/{id}/tokens", "get")}
     paths = {}

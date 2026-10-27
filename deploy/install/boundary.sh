@@ -149,4 +149,4 @@ if [ -n "$CODE" ]; then
 else
   platform --worker-url "http://127.0.0.1:$WORKER_PORT" --token-file "$BASE/worker.token"
 fi
-log "完成：边界 ${NAME}（${OWNER}）。下一步：$OWNER 用自己的账号执行 deploy/aws/deploy.sh kiro-login --boundary $NAME"
+log "完成：边界 ${NAME}（${OWNER}）。下一步：$OWNER 在控制台「我的设置 › 执行环境」里登录 Kiro"

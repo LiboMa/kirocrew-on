@@ -84,6 +84,25 @@ export interface Worker {
 }
 
 /** GET /v1/workers/enrollments (administrators, N §5): a one-time Worker enrollment code, without the code. */
+/** 「新建边界」 on this host (MVP 0.2.0 P2, S30): a request the root service takes, and what it recorded. */
+export interface Provision {
+  id: string;
+  name: string;
+  owner: string;
+  state: "queued" | "running" | "done" | "failed";
+  exit?: number | null;
+  error?: string | null;
+  started: number | null;
+  finished?: number | null;
+  log: string[];
+  next?: string;
+}
+
+export interface Provisions {
+  available: boolean;
+  items: Provision[];
+}
+
 export interface Enrollment {
   id: string;
   name: string;

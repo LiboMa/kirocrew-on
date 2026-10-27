@@ -668,6 +668,7 @@ class Service:
         self._share_views = {}   # D75: share → (views not yet written, when last written)
         from .credentials import CredentialStore
         self.credentials = CredentialStore(database)   # D35; the server sets its key file
+        self.provisioning = None   # MVP 0.2.0 P2 Task 6: octopus.provision.Provisions where the root service is installed
 
     def teams(self, actor):
         """The actor's Teams; an admin sees every Team (role None where not a member). Each carries its environment."""
@@ -2332,6 +2333,39 @@ class Service:
                    f"--config /etc/kirocrew-on/boundary-<边界名>.toml worker enroll --code-stdin --platform {platform} "
                    "--url https://<Worker 私网地址>:8943")   # as installed on a host, run as root (it reads the token file); D53: no sudo in code text
         return {**issued, "name": worker_name, "binding_kind": kind, "binding_id": binding, "command": command}
+
+    def provision_boundary(self, actor, body):
+        """「新建边界」 on this host (design §4.2.5, S30): checked here, carried out by the root service; a rerun only fills
+        in what is missing, as boundary.sh does."""
+        from .provision import boundary_name, valid_name
+        require(elevated(actor), "只有平台管理员可以新建边界", 403, "forbidden")
+        console_login(actor)   # it runs a root step on the host: never an Agent's or an API token's to start
+        require(self.provisioning is not None, "这台主机没有开启控制台新建边界（单机版提供；集群版由部署套件新建）", 409,
+                "provisioning_unavailable")
+        require(isinstance(body, dict) and set(body) <= {"owner_id", "name"} and isinstance(body.get("owner_id"), str),
+                "需要 owner_id，可选 name")
+        with self.db.read() as db:
+            person = db.execute("SELECT id,username FROM users WHERE id=? AND active=1", (body["owner_id"],)).fetchone()
+            require(person is not None, "用户不存在或已停用", 404, "not_found")
+            title = body.get("name") or boundary_name(person["username"])
+            require(valid_name(title), "边界名称为小写字母开头的 2–20 位小写字母、数字或连字符，不能是 personal", 400)
+            require(not db.execute("SELECT 1 FROM workers WHERE owner_id=? AND team_id IS NULL AND scope='dedicated' AND enabled=1 "
+                                   "AND retired=0 AND name!=?", (person["id"], title)).fetchone(),
+                    f"{person['username']} 已有自己的执行环境：每人一个边界", 409, "has_own_environment")
+            require(not db.execute("SELECT 1 FROM workers WHERE name=? AND retired=0 AND (owner_id IS NULL OR owner_id!=?)",
+                                   (title, person["id"])).fetchone(), f"名称 {title} 已被其他执行环境使用", 409, "name_taken")
+        require(not self.provisioning.busy(title), f"边界 {title} 正在新建", 409, "provision_in_progress")
+        owner = person["username"].lower()   # boundary.sh and the platform keep user names in lower case
+        item = self.provisioning.submit(title, owner)
+        with self.db.transaction() as db:
+            audit(db, actor, "boundary.provision", "boundary", item["id"], {"name": title, "owner": owner})
+        return item
+
+    def provisions(self, actor):
+        require(elevated(actor), "只有平台管理员可以查看新建边界的进度", 403, "forbidden")
+        if self.provisioning is None:
+            return {"available": False, "items": []}
+        return {"available": True, "items": self.provisioning.items()}
 
     def enrollments(self, actor):
         from . import enrollments

@@ -3,8 +3,8 @@ import { useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
 import { Archive, Check, Copy, KeyRound, Network, Pencil, Plus, Power, PowerOff, RefreshCw, SquarePlus, Undo2, X } from "lucide-react";
 import { api } from "@/api/client";
-import { keys, useEnrollments, useEnvironments } from "@/api/hooks";
-import type { Enrollment, Environment, IssuedEnrollment, Tool, Worker } from "@/api/types";
+import { keys, useEnrollments, useEnvironments, useProvisions } from "@/api/hooks";
+import type { Enrollment, Environment, IssuedEnrollment, Provision, Tool, Worker } from "@/api/types";
 import { FormDialog } from "@/components/FormDialog";
 import { ListCard, ListEmpty, RowActions, type Action } from "@/components/ListCard";
 import { NativeSelect } from "@/components/NativeSelect";
@@ -35,7 +35,7 @@ export const scopeLabel = (w: Pick<Worker, "scope" | "capabilities">) =>
   w.scope === "shared" ? "共享" : w.scope === "spare" ? "空闲专属" : w.capabilities.isolation === "dedicated" ? "专属" : "个人本机";
 
 type Status = "ok" | "down" | "disabled" | "unknown";
-type Tone = "ok" | "down" | "muted";
+type Tone = "ok" | "info" | "down" | "muted";
 const STATUS: Record<Status, { text: string; tone: Tone }> = {
   ok: { text: "可达", tone: "ok" },
   down: { text: "不可达", tone: "down" },
@@ -73,6 +73,7 @@ export const troubled = (worker: Worker, environment: Environment | undefined) =
 
 const TONES: Record<Tone, string> = {
   ok: "bg-success/10 text-success",
+  info: "bg-info/10 text-info",
   down: "bg-destructive/10 text-destructive",
   muted: "bg-muted text-muted-foreground",
 };
@@ -96,6 +97,7 @@ type Open = { kind: "register" }
   | { kind: "edit" | "assign" | "share" | "dedicate" | "disable" | "retire"; worker: Worker }
   | { kind: "remove"; worker: Worker; space: Space }
   | { kind: "revoke-code"; code: Enrollment }
+  | { kind: "provision" }
   | null;
 
 /** 管理 › 执行环境 (D28; PRD 2026-10-23, 管理 / 我的设置 in dialogs): every environment with its live status, the chosen
@@ -105,6 +107,7 @@ export function EnvironmentsPanel() {
   const { workers, allTeams: teams, users } = useConsole();
   const client = useQueryClient();
   const query = useEnvironments(true);
+  const provisions = useProvisions(true);
   const environments = new Map((query.data ?? []).map((e) => [e.id, e]));
   const [picked, setPicked] = useState("");
   const [dialog, setDialog] = useState<Open>(null);
@@ -165,7 +168,12 @@ export function EnvironmentsPanel() {
   return (
     <Panel title="执行环境"
       description="每个 Worker 对应一个 KiroCrew Gateway。状态每 30 秒自动读取一次，列表上方的刷新按钮可立即刷新状态；isolation 字段是部署声明，不能替代实际操作系统隔离。"
-      actions={<Button type="button" onClick={() => setDialog({ kind: "register" })}><Plus />登记 Worker</Button>}>
+      actions={<>
+        {provisions.data?.available && (
+          <Button type="button" variant="outline" onClick={() => setDialog({ kind: "provision" })}><Plus />新建边界</Button>
+        )}
+        <Button type="button" onClick={() => setDialog({ kind: "register" })}><Plus />登记 Worker</Button>
+      </>}>
       {query.error && <p className="text-sm text-destructive">状态读取失败：{query.error.message}</p>}
       <ListCard label="执行环境列表" search={search} onSearch={setSearch} searchLabel="搜索执行环境名称"
         onRefresh={() => void refresh()} refreshing={query.isFetching} summary={`共 ${workers.length} 个`}>
@@ -219,10 +227,12 @@ export function EnvironmentsPanel() {
         )}
       </ListCard>
       <EnrollmentCodes spaceName={spaceName} onRevoke={(code) => setDialog({ kind: "revoke-code", code })} />
+      <ProvisionList items={provisions.data?.items ?? []} />
       {chosen && (
         <EnvironmentDetail key={chosen.id} worker={chosen} environment={environments.get(chosen.id)} spaceName={spaceName}
           onRemove={(space) => setDialog({ kind: "remove", worker: chosen, space })} />
       )}
+      {dialog?.kind === "provision" && <ProvisionDialog onClose={() => setDialog(null)} />}
       {dialog?.kind === "revoke-code" && (
         <FormDialog title="撤销接入码" destructive submitLabel="撤销" onClose={() => setDialog(null)}
           description={<>撤销后，接入码「{dialog.code.name}」不能再用来登记 Worker。已经登记的执行环境不受影响。</>}
@@ -513,6 +523,93 @@ function EnrollmentCodes({ spaceName, onRevoke }: { spaceName: (space: Space) =>
             </Button>
           </li>
         ))}
+      </ul>
+    </section>
+  );
+}
+
+/** The name boundary.sh gives a person's boundary by default (octopus/provision.py boundary_name), or "". */
+export function boundaryName(username: string) {
+  const name = username.toLowerCase().replace(/[^a-z0-9-]/g, "-").replace(/-{2,}/g, "-").replace(/^-+|-+$/g, "")
+    .replace(/^[^a-z]+/, "").slice(0, 20).replace(/-+$/, "");
+  return /^[a-z][a-z0-9-]{1,19}$/.test(name) && name !== "personal" ? name : "";
+}
+
+/** 新建边界 (MVP 0.2.0 P2, S30): a boundary on this host for one person — its own OS user, Gateway and Worker — made by
+ * the host's root service and registered as that person's own environment. */
+function ProvisionDialog({ onClose }: { onClose: () => void }) {
+  const { users, workers } = useConsole();
+  const client = useQueryClient();
+  const owns = (id: string) => workers.some((w) => w.owner_id === id && !w.team_id && w.scope === "dedicated" && w.enabled);
+  const [owner, setOwner] = useState(() => users.find((u) => !owns(u.id))?.id ?? users[0]?.id ?? "");
+  const [title, setTitle] = useState("");
+  const suggested = boundaryName(users.find((u) => u.id === owner)?.username ?? "");
+  return (
+    <FormDialog title="新建边界" submitLabel="新建" onClose={onClose}
+      description="在这台主机上为所选用户新建一个执行边界：独立的系统账号、KiroCrew Gateway 与 Worker，完成后登记为其专属执行环境。需要几分钟；原生入口先只经本机端口转发打开。"
+      onSubmit={async () => {
+        const made = await api<Provision>("/admin/boundaries/provision", "POST", { owner_id: owner, ...(title.trim() ? { name: title.trim() } : {}) });
+        await client.invalidateQueries({ queryKey: keys.provisions });
+        onClose();
+        toast.success("已开始新建边界 " + made.name);
+      }}>
+      <Fields title="属主" note="每人一个边界；已有专属执行环境的用户不能再建。">
+        <NativeSelect id="provision-owner" aria-label="属主" value={owner} onChange={(e) => setOwner(e.target.value)}>
+          {users.map((u) => <option key={u.id} value={u.id}>{u.username}{owns(u.id) ? "（已有专属执行环境）" : ""}</option>)}
+        </NativeSelect>
+      </Fields>
+      <Fields title="边界名称" note="小写字母开头的 2–20 位小写字母、数字或连字符；留空用属主的用户名。">
+        <Input aria-label="边界名称" value={title} placeholder={suggested} onChange={(e) => setTitle(e.target.value)} />
+      </Fields>
+    </FormDialog>
+  );
+}
+
+const PROVISION_STATE = { queued: ["info", "排队中"], running: ["info", "进行中"], done: ["ok", "已完成"], failed: ["down", "没有完成"] } as const;
+
+/** What 新建边界 asked for on this host, newest first: its state, the script's latest output and what comes next. */
+function ProvisionList({ items }: { items: Provision[] }) {
+  const { users } = useConsole();
+  const client = useQueryClient();
+  if (!items.length) return null;
+  const again = (p: Provision) => () => {
+    const owner = users.find((u) => u.username.toLowerCase() === p.owner)?.id;
+    if (!owner) return void toast.error(`找不到用户 ${p.owner}`);
+    void api<Provision>("/admin/boundaries/provision", "POST", { owner_id: owner, name: p.name })
+      .then(() => client.invalidateQueries({ queryKey: keys.provisions })).then(() => toast.success("已重新开始新建边界 " + p.name))
+      .catch((e: Error) => toast.error(e.message));
+  };
+  return (
+    <section aria-label="新建边界" className="space-y-2 rounded-md border p-4">
+      <h3 className="text-sm font-medium">新建边界</h3>
+      <ul className="divide-y">
+        {items.slice(0, 5).map((p) => {
+          const [tone, text] = PROVISION_STATE[p.state];
+          return (
+            <li key={p.id} className="space-y-1.5 py-2 text-sm">
+              <div className="flex items-center gap-3">
+                <span className="font-medium">{p.name}</span>
+                <span className="text-xs text-muted-foreground">{p.owner}</span>
+                <Pill tone={tone}>{p.state === "failed" && p.exit != null ? `${text}（退出码 ${p.exit}）` : text}</Pill>
+                {p.started && <span className="ml-auto text-xs text-muted-foreground tabular-nums">{formatTime(p.started)}</span>}
+                {p.state === "failed" && (
+                  <Button type="button" size="sm" variant="outline" aria-label={"再试一次：" + p.name} onClick={again(p)}>
+                    <RefreshCw />再试一次
+                  </Button>
+                )}
+              </div>
+              {p.error && <p className="text-xs text-destructive">{p.error}</p>}
+              {p.state === "running" && p.log.length > 0 && <p className="text-xs text-muted-foreground">{p.log[p.log.length - 1]}</p>}
+              {p.state === "done" && p.next && <p className="text-xs text-muted-foreground">{p.next}</p>}
+              {p.log.length > 0 && (
+                <details className="text-xs">
+                  <summary className="cursor-pointer text-muted-foreground">输出（{p.log.length} 行）</summary>
+                  <pre className="mt-1 max-h-48 overflow-auto rounded-sm bg-muted/50 p-2 whitespace-pre-wrap">{p.log.join("\n")}</pre>
+                </details>
+              )}
+            </li>
+          );
+        })}
       </ul>
     </section>
   );
