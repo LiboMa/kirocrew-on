@@ -283,7 +283,6 @@ def server(database, port=8918, host="127.0.0.1", allowed_hosts=(), origin_secre
     # D75: public links live on the Session's own preview origin, else the shared one; none without a preview domain
     service.public_base = lambda rid: (remote_preview.session_url(preview_domain, rid) if preview_domain
                                        else preview_url.rstrip("/") if preview_url else None)
-    from . import transport
     try:   # D59: Worker tokens are stored sealed with the D35 key
         key = service.credentials.key
     except Error as exc:   # fail closed without taking the API down (as worker_ca_file): sealed tokens answer worker_secret
