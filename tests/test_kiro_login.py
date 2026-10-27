@@ -112,12 +112,12 @@ class PlatformLoginTests(AccessCase):
 
     def test_only_the_boundarys_owner_signs_its_kiro_in(self):
         with self.http() as call, mock.patch("octopus.transport.worker_request", self.worker):
-            status, answer = call("POST", "/v1/workers/w-bob/kiro-login", self.tokens["bob"], {})
+            status, answer = call("POST", "/v1/workers/w-bob/kiro-sign-in", self.tokens["bob"], {})
             self.assertEqual((status, answer["code"]), (200, "ABCD-EFGH"))
-            self.assertEqual(call("GET", "/v1/workers/w-bob/kiro-login", self.tokens["bob"])[1]["state"], "done")
+            self.assertEqual(call("GET", "/v1/workers/w-bob/kiro-sign-in", self.tokens["bob"])[1]["state"], "done")
             for other in ("alice", "eve"):   # an administrator included: the code is the owner's alone (§6.4)
                 with self.subTest(other=other):
-                    self.assertEqual(call("POST", "/v1/workers/w-bob/kiro-login", self.tokens[other], {})[0], 404)
+                    self.assertEqual(call("POST", "/v1/workers/w-bob/kiro-sign-in", self.tokens[other], {})[0], 404)
         with self.db.read() as db:
             details = [r[0] for r in db.execute("SELECT detail FROM audit WHERE action='worker.kiro_login'")]
         self.assertEqual(len(details), 1)

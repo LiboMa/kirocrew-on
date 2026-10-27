@@ -1496,7 +1496,7 @@ class Worker:
                 return self.reconcile(run, parent, attempt, value)
             if login == "expired":
                 # Refused before anything is recorded or spawned: the platform dispatches this Attempt again later.
-                raise Error(503, "tool_auth_expired", "Worker 上 kiro-cli 登录已过期：请平台管理员发起 kiro 重新登录")
+                raise Error(503, "tool_auth_expired", "Worker 上 kiro-cli 登录已过期：请边界主人在「我的设置 › 执行环境」里点「登录 Kiro」")
             folder.mkdir(parents=True, exist_ok=True)
             handoff = folder / "handoff.md"
             context = {"input": body["input"], "task": spec, "upstream": body.get("upstream", []),

@@ -203,7 +203,7 @@ def required_scope(method, path):
     # Refreshing an environment's model catalogue is open to the spaces it serves (spec §6.1): a read, made a POST only
     # so a same-site page cannot trigger it with the console's cookie (2026-10-25).
     refresh = segments[:2] == ["v1", "workers"] and len(segments) == 4 and segments[3] == "capabilities"
-    if segments[:2] == ["v1", "workers"] and len(segments) == 4 and segments[3] == "kiro-login":
+    if segments[:2] == ["v1", "workers"] and len(segments) == 4 and segments[3] == "kiro-sign-in":
         return "read" if method == "GET" else "manage"   # one's own boundary's sign-in, not platform administration
     if path.startswith(("/v1/admin/", "/v1/workers/enrollments")) or \
             (segments[:2] == ["v1", "workers"] and method != "GET" and not refresh) or \
@@ -998,7 +998,7 @@ def server(database, port=8918, host="127.0.0.1", allowed_hosts=(), origin_secre
                 if len(segments) == 3 and segments[:2] == ["v1", "workers"]:
                     require(method == "PATCH", "Method not allowed", 405)
                     return self.respond(service.rename_worker(actor, segments[2], body))
-                if len(segments) == 4 and segments[:2] == ["v1", "workers"] and segments[3] == "kiro-login":
+                if len(segments) == 4 and segments[:2] == ["v1", "workers"] and segments[3] == "kiro-sign-in":
                     require(method in {"GET", "POST"}, "Method not allowed", 405)   # MVP 0.2.0 (§6.4): the owner's
                     return self.respond(service.kiro_login(actor, segments[2], method == "POST"))
                 if len(segments) == 4 and segments[:2] == ["v1", "workers"] and segments[3] == "retire":

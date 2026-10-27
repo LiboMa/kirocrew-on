@@ -487,9 +487,9 @@ describe("管理 › 执行环境", () => {
   test("the owner signs the environment's Kiro in with a device code from 我的设置 (MVP 0.2.0, §6.4)", async () => {
     let polls = 0;
     const calls = start({ ...ONE_WORKER, "GET /me": { id: "u1", username: "fixture-owner", admin: 0, scopes: ["read", "execute", "manage"] },
-      "POST /workers/w1/kiro-login": { state: "waiting", url: "https://device.example/activate", code: "ABCD-EFGH",
+      "POST /workers/w1/kiro-sign-in": { state: "waiting", url: "https://device.example/activate", code: "ABCD-EFGH",
         expires: Date.now() / 1000 + 600 },
-      "GET /workers/w1/kiro-login": () => (++polls < 2 ? { state: "waiting", url: "https://device.example/activate",
+      "GET /workers/w1/kiro-sign-in": () => (++polls < 2 ? { state: "waiting", url: "https://device.example/activate",
         code: "ABCD-EFGH", expires: Date.now() / 1000 + 600 } : { state: "done" }) });
     const mine = await openSection("我的设置", "执行环境");
     const row = (await within(mine).findByText("personal")).closest("tr") as HTMLElement;
@@ -501,7 +501,7 @@ describe("管理 › 执行环境", () => {
     expect(link).toHaveAttribute("rel", expect.stringContaining("noopener"));
     await waitFor(() => expect(screen.queryByRole("dialog", { name: "登录 Kiro" })).toBeNull(), { timeout: 8000 });
     expect(await screen.findByText("已登录 Kiro：personal")).toBeInTheDocument();
-    expect(calls.filter((c) => c.path === "/v1/workers/w1/kiro-login" && c.method === "POST")).toHaveLength(1);
+    expect(calls.filter((c) => c.path === "/v1/workers/w1/kiro-sign-in" && c.method === "POST")).toHaveLength(1);
   }, 15000);
 
   test("an environment someone else owns offers no Kiro login", async () => {

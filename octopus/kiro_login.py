@@ -45,7 +45,7 @@ class DeviceLogin:
                 finally:
                     os.close(slave)
                 self.state, self.url, self.code, self.expires = "starting", None, None, time.time() + LIFETIME
-                threading.Thread(target=self._follow, args=(self.proc, master), daemon=True, name="kiro-login").start()
+                threading.Thread(target=self._follow, args=(self.proc, master), daemon=True, name="kiro-device-sign-in").start()
         end = time.time() + wait
         while time.time() < end and self.view()["state"] == "starting":
             time.sleep(0.05)
