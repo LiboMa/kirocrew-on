@@ -17,7 +17,8 @@ export const ACTIVE_STATES = new Set([
 export const ATTENTION_STATES = new Set(["blocked", "failed", "waiting_worker", "waiting_approval", "dispatch_unknown",
   "awaiting_confirmation", "awaiting_acceptance"]);
 
-/** Owner 2026-10-26: done is blue, running is green, a problem is red (failed, paused) or yellow (waiting, unsure). */
+/** Owner 2026-10-27 (Session and task statuses): done is green, in progress is blue, a problem is red (failed, paused) or
+ * yellow (waiting, unsure). */
 export type Tone = "neutral" | "active" | "done" | "warning" | "danger";
 
 export function stateTone(status: string): Tone {
