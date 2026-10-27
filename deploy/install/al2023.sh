@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
-# Idempotent host preparation for Amazon Linux 2023 (x86_64 or aarch64). deploy/aws/deploy.sh runs it as root through SSM:
+# Idempotent host preparation for Amazon Linux 2023 and Ubuntu 22.04 / 24.04 (x86_64 or aarch64; what differs is in
+# os-lib.sh). deploy/aws/deploy.sh runs it as root through SSM, install.sh after its preflight:
 #   KIROCREW_ON_RELEASE=<commit> CF_DOMAIN=<dxxxx.cloudfront.net> [CONSOLE_DOMAIN=<控制台自定义域名>] ORIGIN_SECRET_PARAM=/kirocrew-on/<stack>/origin-secret \
 #   AWS_REGION=us-east-1 bash <release>/deploy/install/al2023.sh <boundary>
 # Writes no tool credentials: Claude Code and Codex use Amazon Bedrock through the instance role; kiro-cli needs a
@@ -25,15 +26,19 @@ log() { printf '[%s] %s\n' "$(date -u +%H:%M:%S)" "$*"; }
 # shellcheck source=arch-lib.sh
 . "$SOURCE/deploy/install/arch-lib.sh"
 host_arch
+# MVP 0.2.0 P2 (§4.2.2): package names, Python 3.12, SELinux or AppArmor and nginx's group by system
+# shellcheck source=os-lib.sh
+. "$SOURCE/deploy/install/os-lib.sh"
+os_detect
+ARCH="$KIRO_ARCH"
 SCRATCH="$(mktemp -d)"
 cleanup() { rm -rf "$SCRATCH"; [ -z "${BOUNDARY_DRAINING:-}" ] || rm -f "$BOUNDARY_DRAINING"; }   # never a stale mark
 trap cleanup EXIT
 
 log "系统依赖"
-dnf install -y -q git tar gzip xz jq unzip make gcc gcc-c++ nginx "$PYTHON_PACKAGE" "$PYTHON_PACKAGE-pip" "$PYTHON_PACKAGE-devel"
-# What the Agents' Playwright Chromium needs to open a page (reviews, frontend checks; EC2 2026-10-19 lacked all 16).
-dnf install -y -q nss nspr libdrm libX11 libXcomposite libXdamage libXext libXfixes libXrandr alsa-lib atk at-spi2-atk at-spi2-core cairo cups-libs mesa-libgbm pango libxcb libxkbcommon
-PYTHON="$(command -v "$PYTHON_PACKAGE")"
+install_packages
+install_python
+log "Python $("$PYTHON" -c 'import platform; print(platform.python_version())')（$PYTHON）"
 merge_hosts() {  # add hosts to platform.toml allowed_hosts, keeping the entries already there
   "$PYTHON" - "$@" <<'PY'
 import re, sys, tomllib
@@ -270,12 +275,7 @@ if [ -n "$WORKER_HOST" ]; then
   sed -e "s#__WORKER_TLS_PORT__#$WORKER_TLS_PORT#g" -e "s#__WORKER_PORT__#$WORKER_PORT#g" \
     -e "s#__GATEWAY_TLS_PORT__#$GATEWAY_TLS_PORT#g" -e "s#__GATEWAY_PORT__#$GATEWAY_PORT#g" \
     "$TARGET/deploy/nginx/kirocrew-worker.conf" > /etc/kirocrew-on/nginx-worker.conf
-  if command -v getenforce >/dev/null 2>&1 && [ "$(getenforce)" = Enforcing ]; then
-    setsebool -P httpd_can_network_connect 1
-    for port in "$WORKER_TLS_PORT" "$GATEWAY_TLS_PORT"; do
-      semanage port -a -t http_port_t -p tcp "$port" 2>/dev/null || semanage port -m -t http_port_t -p tcp "$port"
-    done
-  fi
+  label_port "$WORKER_TLS_PORT" "$GATEWAY_TLS_PORT"
   # Loaded once deploy.sh worker-host tls has installed the certificate; until then nginx -t would fail.
   if [ -s /etc/kirocrew-on/worker-tls.crt ]; then
     install -m 0644 /etc/kirocrew-on/nginx-worker.conf /etc/nginx/conf.d/kirocrew-worker.conf
@@ -306,13 +306,10 @@ print(open(template).read().replace("__ORIGIN_SECRET__", secret).replace("__NATI
       .replace("__GATEWAY_PORT__", gateway_port), end="")
 PY
   umask 022
-  chown root:nginx /etc/nginx/conf.d/kirocrew-native.conf.new
+  chown "root:$NGINX_GROUP" /etc/nginx/conf.d/kirocrew-native.conf.new
   chmod 0640 /etc/nginx/conf.d/kirocrew-native.conf.new
   mv -f /etc/nginx/conf.d/kirocrew-native.conf.new /etc/nginx/conf.d/kirocrew-native.conf
-  if command -v getenforce >/dev/null 2>&1 && [ "$(getenforce)" = Enforcing ]; then
-    setsebool -P httpd_can_network_connect 1
-    semanage port -a -t http_port_t -p tcp "$NATIVE_PORT" 2>/dev/null || semanage port -m -t http_port_t -p tcp "$NATIVE_PORT"
-  fi
+  label_port "$NATIVE_PORT"
   # Relays rendered before the guard existed (deploy.sh worker-host native / boundary native) include it from now on;
   # one nginx refuses is put back as it was, with a warning, rather than stopping the release.
   PATCHED_RELAYS=""
@@ -351,13 +348,10 @@ if [ -n "${PREVIEW_DOMAIN:-}" ]; then
   render_preview "$TARGET/deploy/nginx/kirocrew-preview.conf" /etc/kirocrew-on/origin-secret "$PREVIEW_PORT" "$API_PORT" \
     > /etc/nginx/conf.d/kirocrew-preview.conf.new
   umask 022
-  chown root:nginx /etc/nginx/conf.d/kirocrew-preview.conf.new
+  chown "root:$NGINX_GROUP" /etc/nginx/conf.d/kirocrew-preview.conf.new
   chmod 0640 /etc/nginx/conf.d/kirocrew-preview.conf.new
   mv -f /etc/nginx/conf.d/kirocrew-preview.conf.new /etc/nginx/conf.d/kirocrew-preview.conf
-  if command -v getenforce >/dev/null 2>&1 && [ "$(getenforce)" = Enforcing ]; then
-    setsebool -P httpd_can_network_connect 1
-    semanage port -a -t http_port_t -p tcp "$PREVIEW_PORT" 2>/dev/null || semanage port -m -t http_port_t -p tcp "$PREVIEW_PORT"
-  fi
+  label_port "$PREVIEW_PORT"
   if ! nginx -t -q; then   # never leave a configuration nginx rejects for its next restart
     rm -f /etc/nginx/conf.d/kirocrew-preview.conf
     echo "远程预览的 nginx 配置未通过 nginx -t，已移除" >&2
@@ -447,13 +441,10 @@ if [ -n "$WORKER_HOST" ] && [ -n "${WORKER_PREVIEW_TLS_PORT:-}" ] && [ -s "$BASE
   ( umask 077; render_worker_preview "$TARGET/deploy/nginx/kirocrew-worker-preview.conf" "$BASE/worker.token" \
       "$WORKER_PREVIEW_TLS_PORT" > /etc/kirocrew-on/nginx-worker-preview.conf.new )
   mv -f /etc/kirocrew-on/nginx-worker-preview.conf.new /etc/kirocrew-on/nginx-worker-preview.conf
-  if command -v getenforce >/dev/null 2>&1 && [ "$(getenforce)" = Enforcing ]; then
-    semanage port -a -t http_port_t -p tcp "$WORKER_PREVIEW_TLS_PORT" 2>/dev/null ||
-      semanage port -m -t http_port_t -p tcp "$WORKER_PREVIEW_TLS_PORT"
-  fi
+  label_port "$WORKER_PREVIEW_TLS_PORT"
   # Loaded once deploy.sh worker-host tls has installed the certificate (it installs this file too).
   if [ -s /etc/kirocrew-on/worker-tls.crt ]; then
-    install -m 0640 -o root -g nginx /etc/kirocrew-on/nginx-worker-preview.conf /etc/nginx/conf.d/kirocrew-worker-preview.conf
+    install -m 0640 -o root -g "$NGINX_GROUP" /etc/kirocrew-on/nginx-worker-preview.conf /etc/nginx/conf.d/kirocrew-worker-preview.conf
     if ! nginx -t -q; then
       rm -f /etc/nginx/conf.d/kirocrew-worker-preview.conf
       echo "远程预览的 nginx 配置未通过 nginx -t，已移除" >&2
