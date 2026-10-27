@@ -1088,6 +1088,9 @@ Draft PR（GitHub）/ Draft MR（GitLab）。
     设置的上级域 Cookie 不经过 nginx，会被浏览器发给 `tinyboat.blog` 的其他站点（如 `keycloak.tinyboat.blog`）。控制台的 Token
     存在 `sessionStorage`，不受影响。负责人 2026-10-14 选择沿用 `tinyboat.blog`；改用专用域名只需改 `PREVIEW_SESSION_DOMAIN`
     并重新 `up`、`push`。
+  - **不另购域名**（负责人 2026-10-14 已定，2026-10-27 重申；0.2.0 的原生入口也沿用 `tinyboat.blog`，隔离按设计 §8.2a）。
+    Cookie 被灌满时，这个浏览器打开 `tinyboat.blog` 下的页面会失败（请求超过 CloudFront 的大小上限）。
+    恢复：在浏览器设置里清除 `tinyboat.blog` 的站点数据，或用无痕窗口，再重新登录控制台。读不到、也改不了任何人的数据。
 - **同源防护**（共用的 cloudfront.net 预览域：所有会话的应用同源）：
   - nginx 拒绝 Service Worker 脚本请求（`Service-Worker` 头），所以应用无法注册 Service Worker。
   - 代理的响应一律为 `Cache-Control: no-cache`，并忽略应用发出的 `X-Accel-*`。
