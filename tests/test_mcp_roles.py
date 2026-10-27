@@ -198,12 +198,13 @@ class AdminToolTests(unittest.TestCase):
     def test_user_actions(self):
         cases = {"list": [("GET", "/v1/admin/users", None)],
                  "deactivate": [("POST", "/v1/users/u2/active", {"active": False})],
-                 "activate": [("POST", "/v1/users/u2/active", {"active": True})],
-                 "promote": [("POST", "/v1/users/u2/admin", {"admin": True})],
                  "demote": [("POST", "/v1/users/u2/admin", {"admin": False})]}
         for action, expected in cases.items():
             with self.subTest(action=action):
                 self.assertEqual(self.calls("octopus_admin_users", {"action": action, "username": "bob"}), expected)
+        for action in ("promote", "activate"):   # granting access: a console login only (peer review 2026-10-27)
+            with self.subTest(action=action), self.assertRaises(ValueError):
+                self.calls("octopus_admin_users", {"action": action, "username": "bob"})
 
     def test_an_unknown_username_is_not_found_and_nothing_is_written(self):
         client = Fake({("GET", "/v1/admin/users"): USERS})

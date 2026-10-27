@@ -22,7 +22,8 @@
   --accent: #e6f6f4;
   --accent-foreground: #0f766e;
   --destructive: #dc2626;
-  --success: #059669;
+  --success: #16a34a;   /* done and healthy (owner 2026-10-27: a finished Session or task is green) */
+  --info: #2563eb;      /* in progress (owner 2026-10-27: a running Session or task is blue) */
   --warning: #d97706;
   --border: #e2e8f0;
   --input: #dbe2ea;
@@ -47,7 +48,8 @@
   --accent: rgba(20, 184, 166, 0.14);
   --accent-foreground: #5eead4;
   --destructive: #f87171;
-  --success: #34d399;
+  --success: #4ade80;
+  --info: #60a5fa;
   --warning: #fbbf24;
   --border: #1e293b;
   --input: #273449;
@@ -82,6 +84,7 @@
   --color-accent-foreground: var(--accent-foreground);
   --color-destructive: var(--destructive);
   --color-success: var(--success);
+  --color-info: var(--info);
   --color-warning: var(--warning);
   --color-border: var(--border);
   --color-input: var(--input);

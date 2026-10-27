@@ -11,10 +11,10 @@ NAMES = {"console": "控制台", "cli": "CLI", "claude": "Claude Code", "kiro": 
 CLI_LABEL = "octopus CLI"   # the label of the token `octopus login` keeps (D58)
 
 
-def client_of(label):
+def client_of(label, kind="api"):
     """The client a token was issued for: the console's login, a Coding Agent `octopus connect` set up ("<client> MCP",
     octopus/connect.py), or anything else that calls the API."""
-    if label == "Web login":
+    if kind == "login":   # by how the token was issued, never by its label (peer review 2026-10-27)
         return "console"
     if label == CLI_LABEL:
         return "cli"
@@ -37,7 +37,7 @@ def register(db, actor, key, team, goal, source, explicit, policy, now):
     rid = uid("request")
     db.execute("INSERT INTO requests(id,owner_id,team_id,key,client,input,source,explicit,policy,created) "
                "VALUES(?,?,?,?,?,?,?,?,?,?)",
-               (rid, actor["id"], team, key, client_of(actor.get("token_label")), goal, dumps(source), dumps(explicit),
+               (rid, actor["id"], team, key, client_of(actor.get("token_label"), actor.get("token_kind", "api")), goal, dumps(source), dumps(explicit),
                 dumps(policy), now))
     return rid
 

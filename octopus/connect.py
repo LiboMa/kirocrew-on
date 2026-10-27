@@ -20,11 +20,13 @@ import sys
 import time
 import tomllib
 
+from . import release
+
 NAME = "kirocrew-on"
 CLIENTS = ("claude", "kiro", "codex", "kiro-ide")
 ROOT = Path(__file__).resolve().parent.parent
 
-SKILL = ROOT / "skills" / NAME / "SKILL.md"
+SKILL = release.path(f"skills/{NAME}/SKILL.md")   # the checkout's, or the installed wheel's copy
 
 
 def skill(url, repo=ROOT):

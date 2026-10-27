@@ -165,13 +165,25 @@ class TemplateTests(unittest.TestCase):
         self.assertIn('merge_hosts /etc/kirocrew-on/platform.toml "$CF_DOMAIN" ${CONSOLE_DOMAIN:+"$CONSOLE_DOMAIN"} localhost:18918',
                       installer)
 
+    def test_every_boundary_learns_how_kiro_signs_in_from_the_console(self):   # MVP 0.2.0 P2 Task 5 (§6.4)
+        deploy = (ROOT / "deploy/aws/deploy.sh").read_text()
+        installer = (ROOT / "deploy/install/al2023.sh").read_text()
+        for part in ("KIRO_LICENSE={kiro_license}", "KIRO_IDC_START_URL={kiro_start}", "KIRO_IDC_REGION={kiro_region}"):
+            self.assertIn(part, deploy)
+        self.assertIn('kiro_login_settings "$BOUNDARY_TOML"', installer)
+        self.assertIn('kiro_login_settings "/etc/kirocrew-on/boundary-$OTHER.toml"', installer)
+        self.assertIn('[[ "${KIRO_IDC_START_URL:-}" =~', installer)   # a value from stack.env, checked before it is written
+
     def test_the_installer_gives_agents_a_headless_browser(self):
         # EC2 2026-10-19 (run-48f02d32): Playwright's Chromium lacked 16 system libraries (exit 127), so reviews and the
         # D50 frontend checks could not open the page; every host (platform and Worker hosts) installs them on each push
-        installer = (ROOT / "deploy/install/al2023.sh").read_text()
+        # MVP 0.2.0 P2: the names live in os-lib.sh (dnf and apt; tests/test_install_steps.py), al2023.sh installs them
+        self.assertIn("\ninstall_packages\n", (ROOT / "deploy/install/al2023.sh").read_text())
+        browser = subprocess.run(["bash", "-c", f'. "{ROOT}/deploy/install/os-lib.sh"; PKG=dnf; os_packages browser'],
+                                 capture_output=True, text=True).stdout.split()
         for package in ("libX11", "libXcomposite", "libXdamage", "libXext", "libXfixes", "libXrandr", "alsa-lib", "atk",
                         "at-spi2-atk", "at-spi2-core", "cairo", "cups-libs", "mesa-libgbm", "pango", "libxcb", "libxkbcommon"):
-            self.assertRegex(installer, r"dnf install -y -q [^\n]*(?<![\w-])" + re.escape(package) + r"(?![\w-])", package)
+            self.assertIn(package, browser)
 
     def test_role_grants_ssm_bedrock_and_scoped_storage(self):
         role = of_type(self.r, "AWS::IAM::Role")
@@ -221,6 +233,98 @@ class ScriptTests(unittest.TestCase):
             with self.subTest(name):
                 self.assertIsNone(re.search(r"(\benv|--)\s[^;|&\n]*OCTOPUS_ADMIN_PASSWORD=", joined))
 
+    def test_a_new_boundary_enrolls_itself_with_a_one_time_code(self):   # MVP 0.2.0 (N §3)
+        text = (ROOT / "deploy/install/boundary.sh").read_text()
+        issue = text.index("platform --issue-code")
+        self.assertLess(issue, text.index("worker enroll"))
+        self.assertIn('OCTOPUS_ENROLL_CODE="$CODE"', text)
+        self.assertIn('platform --worker-url "http://127.0.0.1:$WORKER_PORT" --token-file "$BASE/worker.token"', text)   # a re-run
+
+    def test_the_installer_picks_node_and_kiro_by_architecture(self):   # MVP 0.2.0 P1 Task 8 (P §5.6)
+        text = (ROOT / "deploy/install/al2023.sh").read_text()
+        self.assertNotIn("linux-x64", text)
+        self.assertNotIn("x86_64.zip", text)
+        self.assertNotIn('.architecture=="x86_64"', text)
+        sums = "abc  node-v22.23.3-linux-arm64.tar.xz\nabd  node-v22.23.3-linux-x64.tar.xz\nabe  node-v22.23.3-linux-x64.tar.gz\n"
+        manifest = json.dumps({"version": "2.34.0", "packages": [
+            {"architecture": "x86_64", "fileType": "zip", "download": "2.34.0/kirocli-x86_64-linux-musl.zip", "sha256": "m"},
+            {"architecture": "x86_64", "fileType": "zip", "download": "2.34.0/kirocli-x86_64-linux.zip", "sha256": "x"},
+            {"architecture": "aarch64", "fileType": "zip", "download": "2.34.0/kirocli-aarch64-linux.zip", "sha256": "a"}]})
+        with tempfile.TemporaryDirectory() as directory:
+            Path(directory, "SHASUMS256.txt").write_text(sums)
+            Path(directory, "manifest.json").write_text(manifest)
+            for machine, node, kiro in (("x86_64", "node-v22.23.3-linux-x64.tar.xz", "2.34.0/kirocli-x86_64-linux.zip x"),
+                                        ("aarch64", "node-v22.23.3-linux-arm64.tar.xz", "2.34.0/kirocli-aarch64-linux.zip a")):
+                with self.subTest(machine):
+                    done = subprocess.run(["bash", "-c", f'. "{ROOT}/deploy/install/arch-lib.sh"; host_arch {machine}; '
+                                           f'node_tarball "{directory}/SHASUMS256.txt"; kiro_package "{directory}/manifest.json"'],
+                                          capture_output=True, text=True)
+                    self.assertEqual(done.returncode, 0, done.stderr)
+                    self.assertEqual(done.stdout.split("\n")[:2], [node, kiro])
+
+    def test_an_unsupported_architecture_stops_with_a_reason(self):
+        done = subprocess.run(["bash", "-c", f'. "{ROOT}/deploy/install/arch-lib.sh"; host_arch riscv64 && echo went-on'],
+                              capture_output=True, text=True)
+        self.assertNotEqual(done.returncode, 0)
+        self.assertNotIn("went-on", done.stdout)
+        self.assertIn("riscv64", done.stderr)
+
+    def test_deploy_picks_the_ami_of_the_instance_type(self):
+        text = (ROOT / "deploy/aws/deploy.sh").read_text()
+        self.assertIn("describe-instance-types", text)
+        self.assertNotIn("al2023-ami-kernel-default-x86_64", text)   # chosen by the instance type's architecture
+        for archs, arch in (("i386 x86_64", "x86_64"), ("arm64", "arm64")):   # ProcessorInfo.SupportedArchitectures
+            with self.subTest(archs):
+                done = subprocess.run(["bash", "-c", f'. "{ROOT}/deploy/install/arch-lib.sh"; ami_parameter "{archs}"'],
+                                      capture_output=True, text=True)
+                self.assertEqual(done.returncode, 0, done.stderr)
+                self.assertEqual(done.stdout.strip(), f"/aws/service/ami-amazon-linux-latest/al2023-ami-kernel-default-{arch}")
+        self.assertNotEqual(subprocess.run(["bash", "-c", f'. "{ROOT}/deploy/install/arch-lib.sh"; ami_parameter ""'],
+                                           capture_output=True, text=True).returncode, 0)
+
+    def test_litestream_replicates_only_the_platform_database(self):   # MVP 0.2.0 P1 Task 10 (P §5.2, S31)
+        config = yaml.safe_load((ROOT / "deploy/litestream/litestream.yml.template").read_text())
+        self.assertEqual([db["path"] for db in config["dbs"]], ["/var/lib/octopus/platform/octopus.sqlite3"])
+        replica = config["dbs"][0]["replica"]
+        self.assertEqual((replica["type"], replica["bucket"]), ("s3", "__STATE_BUCKET__"))
+        self.assertTrue(replica["path"].startswith("db/"))
+        self.assertRegex(replica["sync-interval"], r"^(1s|[0-9]{1,3}ms)$")   # RPO <= 5 s
+        self.assertEqual(config["snapshot"]["retention"], "72h")
+        unit = (ROOT / "deploy/litestream/octopus-litestream.service").read_text()   # not deploy/systemd: installed everywhere
+        self.assertIn("User=octopus", unit)
+        self.assertIn("ExecStart=/usr/local/bin/litestream replicate -config /etc/kirocrew-on/litestream.yml", unit)
+
+    def test_the_state_stack_grants_no_writer_to_hosts_with_agents(self):
+        text = (ROOT / "deploy/aws/kirocrew-on-state.yaml").read_text()
+        stack = yaml.load(text, Loader=CfnLoader)
+        for name, resource in stack["Resources"].items():
+            with self.subTest(name):
+                self.assertFalse(resource["Type"].startswith("AWS::CodeArtifact::"))   # the stateless pool's, not 0.2.0's
+                if resource["Type"] in ("AWS::IAM::ManagedPolicy", "AWS::IAM::Policy"):
+                    # attached by the cluster's control-plane role only (no Agents on it); never here to a role
+                    self.assertFalse({"Roles", "Users", "Groups"} & set(resource["Properties"]))
+        self.assertNotIn("checkpoints/", text)
+        self.assertNotIn("ImportValue", text)
+        platform = (ROOT / "deploy/aws/kirocrew-on-ec2.yaml").read_text()   # m1 and single-node hosts run Agents
+        for name in stack["Outputs"]:
+            self.assertNotIn(name, platform)
+        self.assertNotIn("litestream", platform.lower())
+
+    def test_litestream_is_not_installed_on_single_node(self):
+        # Review 2026-10-26: al2023.sh always sets up a boundary, so it never installs Litestream; litestream.sh does, and
+        # only on a host that runs no boundary (a control-plane host, S31).
+        self.assertNotIn("litestream", (ROOT / "deploy/install/al2023.sh").read_text().lower())
+        script = (ROOT / "deploy/install/litestream.sh").read_text()
+        for part in ("$LITESTREAM_VERSION", "sha256sum -c", "octopus-litestream.service", "STATE_BUCKET", "host_arch"):
+            self.assertIn(part, script)
+        with tempfile.TemporaryDirectory() as tmp:
+            etc = Path(tmp)
+            (etc / "boundary-personal.toml").write_text('worker_port = 8928\n')
+            done = subprocess.run(["bash", str(ROOT / "deploy/install/litestream.sh")], capture_output=True, text=True,
+                                  env={**os.environ, "ETC": str(etc), "STATE_BUCKET": "kc-state-test"})
+            self.assertEqual(done.returncode, 2, done.stderr)
+            self.assertIn("boundary-personal", done.stderr)
+
     def test_each_install_prunes_old_releases_first(self):
         text = (ROOT / "deploy/install/al2023.sh").read_text()
         prune = text.index('prune_releases /opt/kirocrew-on/releases "$(readlink -f /opt/kirocrew-on/current')
@@ -228,7 +332,10 @@ class ScriptTests(unittest.TestCase):
         self.assertIn('find /opt/kirocrew-on/incoming -mindepth 1 -maxdepth 1 -mmin +1440 ! -name "*$RELEASE*"', text)
 
     def test_scripts_are_valid_bash_without_mac_assumptions(self):
-        for name in ("deploy/install/al2023.sh", "deploy/install/boundary-lib.sh", "deploy/install/boundary.sh", "deploy/aws/deploy.sh"):
+        for name in ("deploy/install/al2023.sh", "deploy/install/boundary-lib.sh", "deploy/install/boundary.sh", "deploy/aws/deploy.sh",
+                     "deploy/install/arch-lib.sh", "deploy/install/litestream.sh", "deploy/install/install.sh",
+                     "deploy/install/os-lib.sh", "deploy/install/single-stack.sh", "deploy/install/single-lib.sh",
+                     "deploy/install/boundary-native.sh", "deploy/install/backup-upload.sh"):
             script = ROOT / name
             subprocess.run(["bash", "-n", str(script)], check=True)
             text = script.read_text()
@@ -528,8 +635,13 @@ class ScriptTests(unittest.TestCase):
             self.assertIn(part, tls.stdout)
         register = deploy("worker-host", "register", "w1")
         self.assertEqual(register.returncode, 0, register.stderr)
-        self.assertIn("bootstrap-worker --spare", register.stdout)
-        self.assertIn("--worker-url https://", register.stdout)
+        # MVP 0.2.0 (N §3): a one-time code issued on the platform host; the Worker host registers itself with it, so its
+        # token never travels in an SSM command; an already registered host is refreshed with bootstrap-worker as before
+        self.assertIn("bootstrap-worker --spare --issue-code", register.stdout)
+        self.assertIn("worker enroll", register.stdout)
+        self.assertIn("OCTOPUS_ENROLL_CODE", register.stdout)
+        self.assertIn("--url https://", register.stdout)
+        self.assertNotIn("cat /var/lib/octopus/boundaries/w1/worker.token", register.stdout)
         login = deploy("kiro-login", "--host", "w1")
         self.assertEqual(login.returncode, 0, login.stderr)
         self.assertIn("crew-w1", login.stdout + login.stderr)

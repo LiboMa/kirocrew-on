@@ -1,0 +1,15 @@
+# MVP 0.2.0 (P §5.2, S31): the platform database replicated continuously to the state bucket's db/ (RPO <= 5 s).
+# Only on a cluster control-plane host (al2023.sh with CONTROL_PLANE_ONLY=1), whose role may write the bucket; a host that
+# runs Agents never replicates. al2023.sh fills in __STATE_BUCKET__ and __REGION__; objects are encrypted by the bucket's
+# KMS key (kirocrew-on-state.yaml).
+snapshot:
+  interval: 24h
+  retention: 72h
+dbs:
+  - path: /var/lib/octopus/platform/octopus.sqlite3
+    replica:
+      type: s3
+      bucket: __STATE_BUCKET__
+      path: db/octopus.sqlite3
+      region: __REGION__
+      sync-interval: 1s

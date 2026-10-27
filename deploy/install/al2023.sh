@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
-# Idempotent host preparation for Amazon Linux 2023 x86_64. deploy/aws/deploy.sh runs it as root through SSM:
+# Idempotent host preparation for Amazon Linux 2023 and Ubuntu 22.04 / 24.04 (x86_64 or aarch64; what differs is in
+# os-lib.sh). deploy/aws/deploy.sh runs it as root through SSM, install.sh after its preflight:
 #   KIROCREW_ON_RELEASE=<commit> CF_DOMAIN=<dxxxx.cloudfront.net> [CONSOLE_DOMAIN=<控制台自定义域名>] ORIGIN_SECRET_PARAM=/kirocrew-on/<stack>/origin-secret \
 #   AWS_REGION=us-east-1 bash <release>/deploy/install/al2023.sh <boundary>
 # Writes no tool credentials: Claude Code and Codex use Amazon Bedrock through the instance role; kiro-cli needs a
@@ -21,15 +22,23 @@ log() { printf '[%s] %s\n' "$(date -u +%H:%M:%S)" "$*"; }
 # The steps of each boundary on this host (D49: one per person; the platform host may carry several).
 # shellcheck source=boundary-lib.sh
 . "$SOURCE/deploy/install/boundary-lib.sh"
+# MVP 0.2.0 P1 (P §5.6): Node and kiro-cli builds for this host's CPU; another architecture stops here, before any change
+# shellcheck source=arch-lib.sh
+. "$SOURCE/deploy/install/arch-lib.sh"
+host_arch
+# MVP 0.2.0 P2 (§4.2.2): package names, Python 3.12, SELinux or AppArmor and nginx's group by system
+# shellcheck source=os-lib.sh
+. "$SOURCE/deploy/install/os-lib.sh"
+os_detect
+ARCH="$KIRO_ARCH"
 SCRATCH="$(mktemp -d)"
 cleanup() { rm -rf "$SCRATCH"; [ -z "${BOUNDARY_DRAINING:-}" ] || rm -f "$BOUNDARY_DRAINING"; }   # never a stale mark
 trap cleanup EXIT
 
 log "系统依赖"
-dnf install -y -q git tar gzip xz jq unzip make gcc gcc-c++ nginx "$PYTHON_PACKAGE" "$PYTHON_PACKAGE-pip" "$PYTHON_PACKAGE-devel"
-# What the Agents' Playwright Chromium needs to open a page (reviews, frontend checks; EC2 2026-10-19 lacked all 16).
-dnf install -y -q nss nspr libdrm libX11 libXcomposite libXdamage libXext libXfixes libXrandr alsa-lib atk at-spi2-atk at-spi2-core cairo cups-libs mesa-libgbm pango libxcb libxkbcommon
-PYTHON="$(command -v "$PYTHON_PACKAGE")"
+install_packages
+install_python
+log "Python $("$PYTHON" -c 'import platform; print(platform.python_version())')（$PYTHON）"
 merge_hosts() {  # add hosts to platform.toml allowed_hosts, keeping the entries already there
   "$PYTHON" - "$@" <<'PY'
 import re, sys, tomllib
@@ -96,7 +105,8 @@ log "Node.js（$NODE_DIST，按 SHASUMS256.txt 校验）"
 NODE_ROOT=/opt/kirocrew-node
 if [ ! -x "$NODE_ROOT/bin/node" ]; then
   curl --proto '=https' -fsSL "https://nodejs.org/dist/$NODE_DIST/SHASUMS256.txt" -o "$SCRATCH/SHASUMS256.txt"
-  NODE_TARBALL="$(grep -oE 'node-v[0-9.]+-linux-x64\.tar\.xz' "$SCRATCH/SHASUMS256.txt" | head -1)"
+  NODE_TARBALL="$(node_tarball "$SCRATCH/SHASUMS256.txt")"
+  [ -n "$NODE_TARBALL" ] || { echo "Node $NODE_DIST 没有 linux-$NODE_ARCH 的发布包" >&2; exit 3; }
   curl --proto '=https' -fsSL "https://nodejs.org/dist/$NODE_DIST/$NODE_TARBALL" -o "$SCRATCH/$NODE_TARBALL"
   (cd "$SCRATCH" && grep " $NODE_TARBALL\$" SHASUMS256.txt | sha256sum -c -)
   install -d "$NODE_ROOT"
@@ -131,8 +141,9 @@ if [ ! -f "$TARGET/.installed" ]; then
   rm -rf "$TARGET"
   cp -a "$SOURCE" "$TARGET"
   (cd "$TARGET" && npm ci --omit=dev --no-audit --no-fund)
-  # React console: built on the host into octopus/ui/dist (the repository carries sources and the lockfile only).
-  [ -n "$WORKER_HOST" ] || (cd "$TARGET/web" && npm ci --no-audit --no-fund && npm run build)
+  # React console: built on the host into octopus/ui/dist (the repository carries sources and the lockfile only); a
+  # release unpacked from the wheel (install.sh) has it built already and no web/.
+  [ -n "$WORKER_HOST" ] || [ ! -d "$TARGET/web" ] || (cd "$TARGET/web" && npm ci --no-audit --no-fund && npm run build)
   touch "$TARGET/.installed"
 fi
 [ -x /opt/kirocrew-on/venv/bin/python ] || "$PYTHON" -m venv /opt/kirocrew-on/venv
@@ -177,9 +188,10 @@ if ! command -v kiro-cli >/dev/null 2>&1; then
   if [ "$KIRO_CLI_VERSION" != "latest" ] && [ "$KIRO_CLI_VERSION" != "$RESOLVED" ]; then
     echo "kiro-cli 清单版本 $RESOLVED 与固定版本 $KIRO_CLI_VERSION 不一致" >&2; exit 3
   fi
-  KIRO_SHA256="$(jq -r '.packages[] | select(.fileType=="zip" and .architecture=="x86_64" and (.download|contains("musl")|not)) | .sha256' \
-    "$SCRATCH/kirocli-manifest.json" | head -1)"
-  curl --proto '=https' --tlsv1.2 -fsSL "https://desktop-release.q.us-east-1.amazonaws.com/$RESOLVED/kirocli-x86_64-linux.zip" \
+  read -r KIRO_DOWNLOAD KIRO_SHA256 <<<"$(kiro_package "$SCRATCH/kirocli-manifest.json")"
+  [[ "$KIRO_DOWNLOAD" == "$RESOLVED/kirocli-$KIRO_ARCH-linux.zip" ]] && [[ "$KIRO_SHA256" =~ ^[0-9a-f]{64}$ ]] || {
+    echo "kiro-cli 清单里没有 $KIRO_ARCH 的 zip 包（或其 sha256）" >&2; exit 3; }
+  curl --proto '=https' --tlsv1.2 -fsSL "https://desktop-release.q.us-east-1.amazonaws.com/$KIRO_DOWNLOAD" \
     -o "$SCRATCH/kirocli.zip"
   echo "$KIRO_SHA256  $SCRATCH/kirocli.zip" | sha256sum -c -
   unzip -q "$SCRATCH/kirocli.zip" -d "$SCRATCH"
@@ -209,9 +221,18 @@ if [ -n "${ORIGIN_SECRET_PARAM:-}" ]; then
   chown root:octopus /etc/kirocrew-on/origin-secret.new
   chmod 0640 /etc/kirocrew-on/origin-secret.new
   mv -f /etc/kirocrew-on/origin-secret.new /etc/kirocrew-on/origin-secret
+elif [ -s /etc/kirocrew-on/origin-secret ]; then
+  # the single-node edition makes it on the host (install.sh, single-stack.sh) before the octopus user exists
+  chown root:octopus /etc/kirocrew-on/origin-secret
+  chmod 0640 /etc/kirocrew-on/origin-secret
 fi
 if [ ! -f /etc/kirocrew-on/platform.toml ]; then
   install -m 0640 -o root -g octopus "$TARGET/deploy/config/platform.toml.example" /etc/kirocrew-on/platform.toml
+fi
+if [ -n "${SINGLE_NODE:-}" ]; then   # MVP 0.2.0 P2: with CloudFront check its origin secret; without, loopback only
+  # shellcheck source=single-lib.sh
+  . "$SOURCE/deploy/install/single-lib.sh"
+  single_node_access /etc/kirocrew-on/platform.toml "${CF_DOMAIN:-}"
 fi
 if [ -n "${CF_DOMAIN:-}" ]; then
   merge_hosts /etc/kirocrew-on/platform.toml "$CF_DOMAIN" ${CONSOLE_DOMAIN:+"$CONSOLE_DOMAIN"} localhost:18918
@@ -233,6 +254,16 @@ chmod 0640 /etc/kirocrew-on/credentials.key
 chmod 0644 /etc/kirocrew-on/worker-ca.pem
   # platform:end
 fi
+# MVP 0.2.0 (§6.4): how kiro-cli signs in when the console starts its device-code login (stack.env's KIRO_*), written
+# into every boundary's configuration; each value is checked before it reaches a file
+[[ "${KIRO_LICENSE:-}" =~ ^(|free|pro)$ ]] || { echo "KIRO_LICENSE 只能是 free 或 pro" >&2; exit 2; }
+[[ "${KIRO_IDC_START_URL:-}" =~ ^(|https://[A-Za-z0-9.-]+(/[A-Za-z0-9._~/-]*)?)$ ]] || { echo "KIRO_IDC_START_URL 无效" >&2; exit 2; }
+[[ "${KIRO_IDC_REGION:-}" =~ ^(|[a-z]{2}(-[a-z]+)+-[0-9])$ ]] || { echo "KIRO_IDC_REGION 无效" >&2; exit 2; }
+kiro_login_settings() {  # kiro_login_settings TOML
+  [ -z "${KIRO_LICENSE:-}" ] || toml_set "$1" kiro_license "\"$KIRO_LICENSE\""
+  [ -z "${KIRO_IDC_START_URL:-}" ] || toml_set "$1" kiro_identity_provider "\"$KIRO_IDC_START_URL\""
+  [ -z "${KIRO_IDC_REGION:-}" ] || toml_set "$1" kiro_idc_region "\"$KIRO_IDC_REGION\""
+}
 BOUNDARY_TOML="/etc/kirocrew-on/boundary-$BOUNDARY.toml"
 if [ ! -f "$BOUNDARY_TOML" ]; then
   sed "s#/boundaries/personal/#/boundaries/$BOUNDARY/#g" \
@@ -240,6 +271,7 @@ if [ ! -f "$BOUNDARY_TOML" ]; then
   chown "root:$CREW" "$BOUNDARY_TOML"
   chmod 0640 "$BOUNDARY_TOML"
 fi
+kiro_login_settings "$BOUNDARY_TOML"
 if [ -n "$WORKER_HOST" ]; then
   log "Worker 主机：专属边界，nginx 以 TLS 端口 ${WORKER_TLS_PORT:=8943} 转发回环 Worker、${GATEWAY_TLS_PORT:=8944} 转发回环 Gateway"
   toml_set "$BOUNDARY_TOML" worker_isolation '"dedicated"'
@@ -253,12 +285,7 @@ if [ -n "$WORKER_HOST" ]; then
   sed -e "s#__WORKER_TLS_PORT__#$WORKER_TLS_PORT#g" -e "s#__WORKER_PORT__#$WORKER_PORT#g" \
     -e "s#__GATEWAY_TLS_PORT__#$GATEWAY_TLS_PORT#g" -e "s#__GATEWAY_PORT__#$GATEWAY_PORT#g" \
     "$TARGET/deploy/nginx/kirocrew-worker.conf" > /etc/kirocrew-on/nginx-worker.conf
-  if command -v getenforce >/dev/null 2>&1 && [ "$(getenforce)" = Enforcing ]; then
-    setsebool -P httpd_can_network_connect 1
-    for port in "$WORKER_TLS_PORT" "$GATEWAY_TLS_PORT"; do
-      semanage port -a -t http_port_t -p tcp "$port" 2>/dev/null || semanage port -m -t http_port_t -p tcp "$port"
-    done
-  fi
+  label_port "$WORKER_TLS_PORT" "$GATEWAY_TLS_PORT"
   # Loaded once deploy.sh worker-host tls has installed the certificate; until then nginx -t would fail.
   if [ -s /etc/kirocrew-on/worker-tls.crt ]; then
     install -m 0644 /etc/kirocrew-on/nginx-worker.conf /etc/nginx/conf.d/kirocrew-worker.conf
@@ -289,13 +316,10 @@ print(open(template).read().replace("__ORIGIN_SECRET__", secret).replace("__NATI
       .replace("__GATEWAY_PORT__", gateway_port), end="")
 PY
   umask 022
-  chown root:nginx /etc/nginx/conf.d/kirocrew-native.conf.new
+  chown "root:$NGINX_GROUP" /etc/nginx/conf.d/kirocrew-native.conf.new
   chmod 0640 /etc/nginx/conf.d/kirocrew-native.conf.new
   mv -f /etc/nginx/conf.d/kirocrew-native.conf.new /etc/nginx/conf.d/kirocrew-native.conf
-  if command -v getenforce >/dev/null 2>&1 && [ "$(getenforce)" = Enforcing ]; then
-    setsebool -P httpd_can_network_connect 1
-    semanage port -a -t http_port_t -p tcp "$NATIVE_PORT" 2>/dev/null || semanage port -m -t http_port_t -p tcp "$NATIVE_PORT"
-  fi
+  label_port "$NATIVE_PORT"
   # Relays rendered before the guard existed (deploy.sh worker-host native / boundary native) include it from now on;
   # one nginx refuses is put back as it was, with a warning, rather than stopping the release.
   PATCHED_RELAYS=""
@@ -334,13 +358,10 @@ if [ -n "${PREVIEW_DOMAIN:-}" ]; then
   render_preview "$TARGET/deploy/nginx/kirocrew-preview.conf" /etc/kirocrew-on/origin-secret "$PREVIEW_PORT" "$API_PORT" \
     > /etc/nginx/conf.d/kirocrew-preview.conf.new
   umask 022
-  chown root:nginx /etc/nginx/conf.d/kirocrew-preview.conf.new
+  chown "root:$NGINX_GROUP" /etc/nginx/conf.d/kirocrew-preview.conf.new
   chmod 0640 /etc/nginx/conf.d/kirocrew-preview.conf.new
   mv -f /etc/nginx/conf.d/kirocrew-preview.conf.new /etc/nginx/conf.d/kirocrew-preview.conf
-  if command -v getenforce >/dev/null 2>&1 && [ "$(getenforce)" = Enforcing ]; then
-    setsebool -P httpd_can_network_connect 1
-    semanage port -a -t http_port_t -p tcp "$PREVIEW_PORT" 2>/dev/null || semanage port -m -t http_port_t -p tcp "$PREVIEW_PORT"
-  fi
+  label_port "$PREVIEW_PORT"
   if ! nginx -t -q; then   # never leave a configuration nginx rejects for its next restart
     rm -f /etc/nginx/conf.d/kirocrew-preview.conf
     echo "远程预览的 nginx 配置未通过 nginx -t，已移除" >&2
@@ -366,6 +387,7 @@ done
 log "切换到已通过检查的发布 $RELEASE 与 KiroCrew $KIROCREW_VERSION"
 ln -sfn "$TARGET" /opt/kirocrew-on/current
 ln -sfn "$KC" /opt/kirocrew/current
+install -m 0755 "$TARGET/deploy/install/kirocrew-on" /usr/local/bin/kirocrew-on   # the CLI of the release now current
 
 if [ -z "$WORKER_HOST" ]; then
   # platform:begin
@@ -430,13 +452,10 @@ if [ -n "$WORKER_HOST" ] && [ -n "${WORKER_PREVIEW_TLS_PORT:-}" ] && [ -s "$BASE
   ( umask 077; render_worker_preview "$TARGET/deploy/nginx/kirocrew-worker-preview.conf" "$BASE/worker.token" \
       "$WORKER_PREVIEW_TLS_PORT" > /etc/kirocrew-on/nginx-worker-preview.conf.new )
   mv -f /etc/kirocrew-on/nginx-worker-preview.conf.new /etc/kirocrew-on/nginx-worker-preview.conf
-  if command -v getenforce >/dev/null 2>&1 && [ "$(getenforce)" = Enforcing ]; then
-    semanage port -a -t http_port_t -p tcp "$WORKER_PREVIEW_TLS_PORT" 2>/dev/null ||
-      semanage port -m -t http_port_t -p tcp "$WORKER_PREVIEW_TLS_PORT"
-  fi
+  label_port "$WORKER_PREVIEW_TLS_PORT"
   # Loaded once deploy.sh worker-host tls has installed the certificate (it installs this file too).
   if [ -s /etc/kirocrew-on/worker-tls.crt ]; then
-    install -m 0640 -o root -g nginx /etc/kirocrew-on/nginx-worker-preview.conf /etc/nginx/conf.d/kirocrew-worker-preview.conf
+    install -m 0640 -o root -g "$NGINX_GROUP" /etc/kirocrew-on/nginx-worker-preview.conf /etc/nginx/conf.d/kirocrew-worker-preview.conf
     if ! nginx -t -q; then
       rm -f /etc/nginx/conf.d/kirocrew-worker-preview.conf
       echo "远程预览的 nginx 配置未通过 nginx -t，已移除" >&2
@@ -447,11 +466,25 @@ if [ -n "$WORKER_HOST" ] && [ -n "${WORKER_PREVIEW_TLS_PORT:-}" ] && [ -s "$BASE
 fi
 if [ -z "$WORKER_HOST" ]; then
   # platform:begin
+if [ -n "${SINGLE_NODE:-}" ]; then
+  # MVP 0.2.0 P2 Task 6 (S30): 「新建边界」 from the console. The API (NoNewPrivileges) only leaves a name and a user name
+  # in its own directory; a root oneshot started by this path unit checks them again and runs boundary.sh with them.
+  install -d -m 0700 -o octopus -g octopus /var/lib/octopus/platform/boundary-requests
+  install -d -m 2750 -o root -g octopus /var/lib/octopus/boundary-provision
+  printf 'AWS_REGION=%s\n' "$REGION" > /etc/kirocrew-on/provision.env
+  install -m 0644 /opt/kirocrew-on/current/deploy/systemd/octopus-boundary-provision.path /etc/systemd/system/
+  systemctl daemon-reload
+  systemctl enable --now octopus-boundary-provision.path >/dev/null
+  toml_set /etc/kirocrew-on/platform.toml boundary_provisioning true
+fi
 systemctl enable octopus-api >/dev/null
 systemctl restart octopus-api
 log "注册执行边界 Worker（已注册时跳过）"
 WORKER_PORT="$(grep -E '^worker_port' "$BOUNDARY_TOML" | grep -oE '[0-9]+')"
-(cd /opt/kirocrew-on/current && OCTOPUS_ADMIN_PASSWORD="$ADMIN_PASSWORD" PYTHONPATH=/opt/kirocrew-on/current \
+# As the administrator with a short-lived token minted here (review 2026-10-28: the console may have changed the password)
+ADMIN_TOKEN="$(cd /opt/kirocrew-on/current && runuser -u octopus -- env PYTHONPATH=/opt/kirocrew-on/current "${OCTO[@]}" \
+  local-token --label "install $BOUNDARY" --ttl 900)"
+(cd /opt/kirocrew-on/current && OCTOPUS_ADMIN_TOKEN="$ADMIN_TOKEN" PYTHONPATH=/opt/kirocrew-on/current \
   "${OCTO[@]}" bootstrap-worker --worker-url "http://127.0.0.1:$WORKER_PORT" \
   --token-file "$BASE/worker.token" --name "$BOUNDARY")
   # platform:end
@@ -463,6 +496,7 @@ FAILED_BOUNDARIES=""
 for OTHER in $(other_boundaries "$BOUNDARY"); do
   systemctl is-enabled --quiet "octopus-worker@$OTHER" || { log "边界 ${OTHER}：已停用（systemctl disable），不重启"; continue; }
   log "边界 ${OTHER}：升级"
+  kiro_login_settings "/etc/kirocrew-on/boundary-$OTHER.toml"
   boundary_env "$OTHER"
   boundary_codex "$OTHER"   # settings an existing boundary's Codex lacks (web search off), read by its next task
   systemctl enable "octopus-gateway@$OTHER" "octopus-worker@$OTHER" >/dev/null

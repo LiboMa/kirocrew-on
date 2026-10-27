@@ -56,6 +56,13 @@ def build_parser(settings, environ=None):
     worker.add_argument("--routing-log", default=str(settings.routing_log))
     worker.add_argument("--isolation", choices=["dedicated", "trusted-local"], default=settings.worker_isolation)
     worker.add_argument("--approval-mode", choices=["", "auto", "interactive"], default=settings.approval_mode)
+    # N §3: `octopus worker enroll` registers this Worker with a one-time code (read from OCTOPUS_ENROLL_CODE or stdin)
+    worker.add_argument("action", nargs="?", choices=["enroll"])
+    worker.add_argument("--platform", help="worker enroll：控制台地址，如 https://kirocrew.example.com")
+    worker.add_argument("--url", help="worker enroll：平台访问本 Worker 的地址，如 https://10.0.1.20:8943")
+    worker.add_argument("--code-stdin", action="store_true", help="worker enroll：从标准输入读接入码")
+    worker.add_argument("--check", action="store_true", help="worker enroll：只核对，不登记")
+    worker.add_argument("--code", help=argparse.SUPPRESS)   # refused: it would show in ps and the shell history
     link = sub.add_parser("connect", help="让 Claude Code / Kiro CLI / Codex / Kiro IDE 经 MCP 连接 KiroCrew ON（写入 MCP 配置与使用说明）")
     link.add_argument("client", choices=["claude", "kiro", "codex", "kiro-ide"])
     link.add_argument("--url", required=True, help="平台地址，如 https://<分发>.cloudfront.net 或 http://127.0.0.1:8918")
@@ -88,13 +95,22 @@ def build_parser(settings, environ=None):
     boot.add_argument("--owner", help="其专属执行环境的平台用户名（D49：每人一个边界；默认管理员本人）")
     boot.add_argument("--check-only", action="store_true", help="只核对 --owner（存在、尚无自己的执行环境），不登记")
     boot.add_argument("--spare", action="store_true", help="登记为空闲专属执行环境，由管理员在控制台分配给 Team")
+    boot.add_argument("--allocate", action="store_true", help="MVP 0.2.0：由平台为新边界分配 boundary_id 与全局 UID（需 --owner）")
+    boot.add_argument("--issue-code", action="store_true",
+                      help="MVP 0.2.0：签发一次性接入码供该 Worker 用 worker enroll 自行登记；已登记的返回 registered")
     backup_cmd = sub.add_parser("backup", help="平台数据库一致性备份")
     backup_cmd.add_argument("--dest", required=True)
+    backup_cmd.add_argument("--source", help="另一份数据库文件（如 litestream restore -o 的产物）；默认平台的数据库")
     archive = sub.add_parser("archive", help="目录归档（Worker 数据、执行边界）")
     archive.add_argument("source")
     archive.add_argument("--dest", required=True)
     archive.add_argument("--name", required=True)
     archive.add_argument("--exclude", action="append", default=[])
+    local = sub.add_parser("local-token", help="部署脚本用：在本机为管理员签发一个短期 Token（以平台用户运行，它能写平台数据库）")
+    local.add_argument("--label", required=True)
+    local.add_argument("--ttl", type=int, default=900, help="秒，60–3600")
+    sub.add_parser("single", help="单机版的部署套件（在你的电脑或 CloudShell 上用管理员凭证运行）：native、backup、up；kirocrew-on single -h")
+    sub.add_parser("setup", help="pip 渠道：在本机完成单机版的系统级安装（预检、依赖、边界与服务；需要 root）")
     verify = sub.add_parser("restore-verify", help="在独立目录恢复并校验备份")
     verify.add_argument("manifest")
     verify.add_argument("--into", required=True)
@@ -113,11 +129,39 @@ def build_parser(settings, environ=None):
     return parser
 
 
+def enroll_worker(args):
+    """Register this Worker with a one-time enrollment code (N §3): the code from OCTOPUS_ENROLL_CODE or standard input,
+    never an argument; the token from this boundary's own token file, so it never passes through a person."""
+    from . import client as api
+    if args.code is not None:
+        raise SystemExit("接入码不从命令行参数读取（会留在 ps 与 shell 历史里）：用环境变量 OCTOPUS_ENROLL_CODE 或 --code-stdin")
+    if not args.platform or not args.url:
+        raise SystemExit("worker enroll 需要 --platform <控制台地址> 与 --url <平台访问本 Worker 的地址>")
+    pasted = lambda: getpass.getpass("接入码：") if sys.stdin.isatty() else sys.stdin.readline()
+    code = (pasted() if args.code_stdin else os.environ.get("OCTOPUS_ENROLL_CODE", "")).strip()
+    if not code:
+        raise SystemExit("没有接入码：设置环境变量 OCTOPUS_ENROLL_CODE，或用 --code-stdin 从标准输入传入")
+    token_path = Path(args.token_file)
+    if not token_path.exists():
+        raise SystemExit(f"Worker Token 文件不存在（{token_path}）：先启动一次本边界的 Worker，它会生成 Token")
+    body = {"code": code, "url": args.url, "token": token_path.read_text().strip()}
+    if args.check:
+        body["check"] = True
+    try:
+        result = api.Client(args.platform, "").request("POST", "/v1/workers/enroll", body)
+    except (api.ApiError, ValueError) as exc:
+        raise SystemExit(f"登记失败：{exc}") from None
+    print(json.dumps(result, ensure_ascii=False))
+
+
 def main(argv=None):
     from . import cli
     words = sys.argv[1:] if argv is None else argv
     if words and words[0] in cli.COMMANDS:   # D58: the user's commands (login, submit, status …), not the operations ones
         return cli.main(list(words))
+    if words and words[0] == "single":   # MVP 0.2.0 P2: the single-node edition's deployment kit, run off the host
+        from .single import main as kit
+        return kit(list(words[1:]))
     settings, _ = settings_from_argv(argv)
     args = build_parser(settings).parse_args(argv)
     if args.command == "init":
@@ -143,9 +187,13 @@ def main(argv=None):
             print(f"警告：worker_ca_file {ca} 不存在；HTTPS Worker 只按系统证书库校验", file=sys.stderr)
             ca = None
         transport.configure(ca)
+        provisioning = None
+        if settings.boundary_provisioning:   # the single-node edition's root service is installed (al2023.sh SINGLE_NODE)
+            from .provision import REQUESTS, Provisions
+            provisioning = Provisions(settings.data_dir / REQUESTS)
         httpd = server(db, args.port, args.host, allowed_hosts=settings.allowed_hosts, origin_secret=secret,
                        preview_url=settings.preview_url, preview_domain=settings.preview_domain, credentials_key_file=settings.credentials_key_file,
-                       credentials_private_hosts=settings.credentials_private_hosts)
+                       credentials_private_hosts=settings.credentials_private_hosts, provisioning=provisioning)
         signal.signal(signal.SIGTERM, lambda *_: threading.Thread(target=httpd.shutdown, daemon=True).start())
         engine.start()
 
@@ -162,6 +210,16 @@ def main(argv=None):
                 except Exception as exc:
                     print(f"KiroCrew ON API: 远程预览回收失败（{type(exc).__name__}）", file=sys.stderr, flush=True)
         threading.Thread(target=sweep, daemon=True, name="octopus-app-sweep").start()
+
+        def measure():   # MVP 0.2.0 (design §12.1): one EMF line a minute for the host's CloudWatch agent
+            from . import metrics
+            settings.log_dir.mkdir(parents=True, exist_ok=True)
+            while not engine.stopping.wait(60):
+                try:
+                    metrics.publish(db, settings.log_dir / "metrics.emf.log", time.time())
+                except Exception as exc:
+                    logging.error("Octopus metrics failed (%s)", type(exc).__name__)
+        threading.Thread(target=measure, daemon=True, name="octopus-metrics").start()
         print(f"KiroCrew ON API: http://{args.host}:{httpd.server_address[1]}", flush=True)
         try:
             httpd.serve_forever()
@@ -172,6 +230,8 @@ def main(argv=None):
                 # Worker calls can block for minutes; their outcome is reconciled from durable state on restart.
                 print("KiroCrew ON API: 在途推进未在宽限期内结束；状态已持久化，重启后核对", flush=True)
                 os._exit(0)
+    elif args.command == "worker" and args.action == "enroll":
+        return enroll_worker(args)
     elif args.command == "worker":
         from .worker import Worker, discovery_loop, serve
         token_path = Path(args.token_file)
@@ -184,7 +244,9 @@ def main(argv=None):
                       kiro_cli=settings.tools.get("kiro_cli"), path_prepend=settings.path_prepend,
                       tool_paths=settings.tools, adapters_dir=settings.adapters_dir,
                       preview_tls_port=settings.preview_tls_port, preview_tls_name=settings.preview_tls_name,
-                      disabled_tools=settings.disabled_tools, crew_yolo=settings.crew_yolo)
+                      disabled_tools=settings.disabled_tools, crew_yolo=settings.crew_yolo, boundary_id=settings.boundary_id,
+                      kiro_license=settings.kiro_license, kiro_identity_provider=settings.kiro_identity_provider,
+                      kiro_idc_region=settings.kiro_idc_region)
         httpd = serve(node, args.port, args.host)
         signal.signal(signal.SIGTERM, lambda *_: threading.Thread(target=httpd.shutdown, daemon=True).start())
         # D51: each Coding tool's models are found without anyone asking (owner 2026-10-20)
@@ -220,14 +282,39 @@ def main(argv=None):
     elif args.command == "bootstrap-worker":
         from .bootstrap import register_boundary_worker
         url = f"http://{probe_host(settings.api_host)}:{settings.api_port}"
+        if args.allocate:   # MVP 0.2.0 (S9): a new boundary's identity and OS user id, before it exists on the host
+            from .bootstrap import allocate_boundary
+            if not args.owner:
+                raise SystemExit("--allocate 需要 --owner")
+            print(dumps(allocate_boundary(url, args.username, os.environ.get(args.password_env, ""), args.owner, args.name)))
+            return
+        if args.issue_code:   # N §3: the Worker registers itself with it; its token never leaves its host
+            from .bootstrap import issue_enrollment
+            print(dumps(issue_enrollment(url, args.username, os.environ.get(args.password_env, ""), args.name, spare=args.spare,
+                                         owner=args.owner)))
+            return
         if not args.check_only and not (args.worker_url and args.token_file):
             raise SystemExit("bootstrap-worker 需要 --worker-url 与 --token-file（只核对用户时用 --check-only）")
-        print(dumps(register_boundary_worker(url, args.username, os.environ[args.password_env], args.worker_url,
+        print(dumps(register_boundary_worker(url, args.username, os.environ.get(args.password_env, ""), args.worker_url,
                                              Path(args.token_file).read_text().strip() if args.token_file else None,
                                              args.name, spare=args.spare, owner=args.owner, check_only=args.check_only)))
+    elif args.command == "local-token":
+        # Review 2026-10-28: boundary.sh and install reruns act as the administrator with this, not the initial password
+        from .security import issue_token
+        db = Database(settings.data_dir)
+        with db.transaction() as conn:
+            row = conn.execute("SELECT id FROM users WHERE admin=1 AND active=1 ORDER BY created LIMIT 1").fetchone()
+            if row is None:
+                raise SystemExit("平台上没有可用的管理员")
+            print(issue_token(conn, row["id"], ["read", "execute", "manage", "admin"], label=args.label,
+                              ttl=min(max(args.ttl, 60), 3600))["token"])
+    elif args.command == "setup":
+        from .installer import setup
+        setup()
     elif args.command == "backup":
         from .backup import backup_database
-        print(dumps(backup_database(settings.data_dir / "octopus.sqlite3", Path(args.dest))))
+        print(dumps(backup_database(Path(args.source) if args.source else settings.data_dir / "octopus.sqlite3",
+                                    Path(args.dest))))
     elif args.command == "archive":
         from .backup import archive_directory
         print(dumps(archive_directory(Path(args.source), Path(args.dest), args.name, tuple(args.exclude))))

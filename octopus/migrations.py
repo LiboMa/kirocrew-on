@@ -208,6 +208,40 @@ CREATE TABLE IF NOT EXISTS public_shares(
 CREATE INDEX IF NOT EXISTS public_shares_run ON public_shares(run_id);
 """
 
+# MVP 0.2.0 (S9): every new boundary's identity and OS user id from the control plane; numbers are never reused, a
+# released boundary's name may be.
+BOUNDARIES = """
+CREATE TABLE IF NOT EXISTS boundaries(
+ id TEXT PRIMARY KEY, seq INTEGER NOT NULL UNIQUE, uid INTEGER NOT NULL UNIQUE, name TEXT NOT NULL,
+ user_id TEXT REFERENCES users(id), state TEXT NOT NULL DEFAULT 'allocated' CHECK(state IN ('allocated','ready','released')),
+ created REAL NOT NULL);
+CREATE UNIQUE INDEX IF NOT EXISTS boundaries_name ON boundaries(name) WHERE state != 'released';
+"""
+
+# MVP 0.2.0 (N §5, S6): one-time Worker enrollment codes; only the code's SHA-256 is kept.
+WORKER_ENROLLMENTS = """
+CREATE TABLE IF NOT EXISTS worker_enrollments(
+ id TEXT PRIMARY KEY, code_hash TEXT NOT NULL UNIQUE, name TEXT NOT NULL,
+ binding_kind TEXT NOT NULL CHECK(binding_kind IN ('user','team','spare')), binding_id TEXT,
+ created_by TEXT NOT NULL REFERENCES users(id), created REAL NOT NULL, expires REAL NOT NULL, used REAL,
+ used_by_worker TEXT, failures INTEGER NOT NULL DEFAULT 0, revoked REAL);
+"""
+
+# Peer review 2026-10-27: how a token was issued — 'login' only from POST /v1/login, 'api' for every other way (tokens from
+# before this are 'api': nothing proves they came from a login). Account management needs a login token.
+TOKEN_KIND = """
+ALTER TABLE tokens ADD COLUMN kind TEXT NOT NULL DEFAULT 'api' CHECK(kind IN ('login','api'));
+"""
+
+# MVP 0.2.0 P2 Task 7 (S29): the AWS changes waiting for the deployment kit (kirocrew-on single), which runs off the host
+# with the administrator's credentials and reports back; the parameters hold names only, never a secret.
+AWS_REQUESTS = """
+CREATE TABLE IF NOT EXISTS aws_requests(
+ id TEXT PRIMARY KEY, kind TEXT NOT NULL CHECK(kind IN ('native','backup','up')), params TEXT NOT NULL,
+ state TEXT NOT NULL DEFAULT 'pending' CHECK(state IN ('pending','done','failed')),
+ created_by TEXT NOT NULL REFERENCES users(id), created REAL NOT NULL, finished REAL, result TEXT);
+"""
+
 EXECUTOR = """
 ALTER TABLE runs ADD COLUMN executor_id TEXT REFERENCES users(id);
 """
@@ -216,7 +250,9 @@ MIGRATIONS = [(1, "baseline", BASELINE), (2, "environments", ENVIRONMENTS), (3, 
               (4, "teams_workers", TEAMS_WORKERS), (5, "apps", APPS), (6, "credentials", CREDENTIALS),
               (7, "knowledge", KNOWLEDGE), (8, "knowledge_kept", KNOWLEDGE_KEPT),
               (9, "requests_policies", REQUESTS_POLICIES), (10, "quotas", QUOTAS), (12, "shares", SHARES), (13, "marks", MARKS),
-              (14, "executor", EXECUTOR), (15, "public_shares", PUBLIC_SHARES)]   # 11: D57's (another branch)
+              (14, "executor", EXECUTOR), (15, "public_shares", PUBLIC_SHARES),
+              (16, "boundaries", BOUNDARIES), (17, "worker_enrollments", WORKER_ENROLLMENTS),
+              (18, "token_kind", TOKEN_KIND), (19, "aws_requests", AWS_REQUESTS)]   # 11: D57's (another branch)
 
 
 def _statements(script):

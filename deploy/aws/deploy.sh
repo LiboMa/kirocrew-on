@@ -18,6 +18,8 @@ set -euo pipefail
 cd "$(dirname "$0")/../.."
 # shellcheck source=stack.env
 source deploy/aws/stack.env
+# shellcheck source=../install/arch-lib.sh
+source deploy/install/arch-lib.sh
 TEMPLATE=deploy/aws/kirocrew-on-ec2.yaml
 WORKER_TEMPLATE=deploy/aws/kirocrew-on-worker.yaml
 NATIVE_TEMPLATE=deploy/aws/kirocrew-on-native.yaml
@@ -188,6 +190,17 @@ PY
   echo "$arn"
 }
 
+instance_archs() {  # instance_archs TYPE: the CPU architectures an instance type supports ("x86_64 i386", "arm64")
+  query "x86_64" ec2 describe-instance-types --instance-types "$1" \
+    --query 'InstanceTypes[0].ProcessorInfo.SupportedArchitectures' --output text
+}
+
+latest_image() {  # latest_image TYPE: the latest AL2023 AMI for the instance type's architecture (MVP 0.2.0 P1: Graviton too)
+  local parameter
+  parameter="$(ami_parameter "$(instance_archs "$1" | tr '\t' ' ')")" || return 1
+  query ami-dryrun ssm get-parameter --name "$parameter" --query Parameter.Value --output text
+}
+
 up() {
   run cloudformation validate-template --template-body "file://$TEMPLATE" >/dev/null
   local status prefix_list zone="${AVAILABILITY_ZONE:-}" image="${IMAGE_ID:-}" current origin type
@@ -206,8 +219,7 @@ up() {
   [ -n "$zone" ] || zone="$(query us-east-1a ec2 describe-instance-type-offerings --location-type availability-zone \
     --filters "Name=instance-type,Values=$INSTANCE_TYPE" --query 'sort(InstanceTypeOfferings[].Location)[0]' --output text)"
   [ -n "$zone" ] && [ "$zone" != "None" ] || { echo "$REGION 没有提供 $INSTANCE_TYPE 的可用区" >&2; exit 2; }
-  [ -n "$image" ] || image="$(query ami-dryrun ssm get-parameter \
-    --name /aws/service/ami-amazon-linux-latest/al2023-ami-kernel-default-x86_64 --query Parameter.Value --output text)"
+  [ -n "$image" ] || image="$(latest_image "$INSTANCE_TYPE")" || exit 2
   [ -n "$status" ] || echo "首次创建：可用区 ${zone}，AMI ${image}；创建后写入 deploy/aws/stack.env 的 AVAILABILITY_ZONE 与 IMAGE_ID" >&2
   # The console's own domain (optional): its zone and certificate are looked up, never kept in the repository.
   local console="${CONSOLE_DOMAIN:-}" console_zone_id="" console_certificate_arn=""
@@ -255,15 +267,19 @@ push() {
   git archive --format=tar.gz --prefix="kirocrew-on-$sha/" -o "$archive" HEAD
   run s3 cp "$archive" "s3://$bucket/releases/$sha.tar.gz" --only-show-errors
   python3 - "$sha" "$bucket" "$domain" "$PARAMS" "$REGION" "$BOUNDARY" "$native" "$NATIVE_PORT" "$console" "$preview" \
-    "$PREVIEW_PORT" "$session" > "$WORK/commands.json" <<'PY'
-import json, sys
-sha, bucket, domain, params, region, boundary, native, native_port, console, preview, preview_port, session = sys.argv[1:]
+    "$PREVIEW_PORT" "$session" "${KIRO_LICENSE:-}" "${KIRO_IDC_START_URL:-}" "${KIRO_IDC_REGION:-}" > "$WORK/commands.json" <<'PY'
+import json, shlex, sys
+(sha, bucket, domain, params, region, boundary, native, native_port, console, preview, preview_port, session,
+ kiro_license, kiro_start, kiro_region) = sys.argv[1:]
+kiro_license, kiro_start, kiro_region = (shlex.quote(v) for v in (kiro_license, kiro_start, kiro_region))
 d = "/opt/kirocrew-on/incoming"
 script = (f"set -euo pipefail; mkdir -p {d}; aws s3 cp s3://{bucket}/releases/{sha}.tar.gz {d}/{sha}.tar.gz "
           f"--region {region} --only-show-errors; rm -rf {d}/kirocrew-on-{sha}; tar -xzf {d}/{sha}.tar.gz -C {d}; "
           f"KIROCREW_ON_RELEASE={sha} CF_DOMAIN={domain} CONSOLE_DOMAIN={console} NATIVE_DOMAIN={native} "
           f"NATIVE_PORT={native_port} PREVIEW_DOMAIN={preview} PREVIEW_PORT={preview_port} "
           f"PREVIEW_SESSION_DOMAIN={session} "
+          # MVP 0.2.0 (§6.4): how kiro-cli signs in when the console starts its device-code login
+          f"KIRO_LICENSE={kiro_license} KIRO_IDC_START_URL={kiro_start} KIRO_IDC_REGION={kiro_region} "
           f"ORIGIN_SECRET_PARAM={params}/origin-secret "
           f"AWS_REGION={region} "
           f"bash {d}/kirocrew-on-{sha}/deploy/install/al2023.sh {boundary}")
@@ -440,6 +456,17 @@ worker_up() {  # the Worker host stack in the platform's VPC and subnet, admitte
     --output text 2>/dev/null || true)"
   type=UPDATE
   [ -n "$status" ] || type=CREATE
+  # The host's image: WORKER_IMAGE_ID, else the stack's own (a different one would replace the host), else the
+  # platform's when the architectures match, else the latest AL2023 for this instance type (a Graviton Worker host).
+  local wtype="${WORKER_INSTANCE_TYPE:-$INSTANCE_TYPE}" image="${WORKER_IMAGE_ID:-}"
+  [ -n "$image" ] || [ -z "$status" ] || image="$(stack_parameter "$stack" ImageId)"
+  [ -n "$image" ] && [ "$image" != None ] || {
+    if [ "$(ami_parameter "$(instance_archs "$wtype" | tr '\t' ' ')")" = "$(ami_parameter "$(instance_archs "$INSTANCE_TYPE" | tr '\t' ' ')")" ]; then
+      image="${IMAGE_ID:-$(output ImageId)}"
+    else
+      image="$(latest_image "$wtype")" || exit 2
+    fi
+  }
   relay="$(relay_port "$stack")"
   domain="$(output HostOriginDomain)"
   [ -n "$DRY" ] || [[ "$domain" == ec2-* ]] || { echo "平台栈没有输出 HostOriginDomain：先执行 deploy.sh up" >&2; exit 2; }
@@ -448,7 +475,7 @@ worker_up() {  # the Worker host stack in the platform's VPC and subnet, admitte
   [[ "$origin" =~ ^[A-Za-z0-9_-]{32,}$ ]] || {
     echo "源站密钥格式不符：平台主机的中转只接受 32 位以上的字母、数字、- 或 _（与 kirocrew-native.conf 相同）" >&2; exit 2; }
   (umask 077; ORIGIN_VALUE="$origin" python3 - "$(output VpcId)" "$(output SubnetId)" "$(output HostSecurityGroupId)" \
-    "${IMAGE_ID:-$(output ImageId)}" "${WORKER_INSTANCE_TYPE:-$INSTANCE_TYPE}" "${WORKER_VOLUME_SIZE_GIB:-$VOLUME_SIZE_GIB}" \
+    "$image" "$wtype" "${WORKER_VOLUME_SIZE_GIB:-$VOLUME_SIZE_GIB}" \
     "$(output ArtifactBucket)" "$WORKER_TLS_PORT" "$STACK_NAME" "$WORKER_GATEWAY_TLS_PORT" "$relay" "$domain" \
     "$WORKER_PREVIEW_TLS_PORT" > "$WORK/worker-parameters.json" <<'PY'
 import json, os, sys
@@ -476,14 +503,16 @@ worker_push() {  # the committed HEAD, installed in Worker host mode (WORKER_HOS
   git archive --format=tar.gz --prefix="kirocrew-on-$sha/" -o "$archive" HEAD
   run s3 cp "$archive" "s3://$bucket/releases/$sha.tar.gz" --only-show-errors
   python3 - "$sha" "$bucket" "$REGION" "$name" "$WORKER_TLS_PORT" "$WORKER_GATEWAY_TLS_PORT" "$native" \
-    "$WORKER_PREVIEW_TLS_PORT" > "$WORK/commands.json" <<'PY'
-import json, sys
-sha, bucket, region, name, port, gateway_port, native, preview_port = sys.argv[1:]
+    "$WORKER_PREVIEW_TLS_PORT" "${KIRO_LICENSE:-}" "${KIRO_IDC_START_URL:-}" "${KIRO_IDC_REGION:-}" > "$WORK/commands.json" <<'PY'
+import json, shlex, sys
+sha, bucket, region, name, port, gateway_port, native, preview_port, kiro_license, kiro_start, kiro_region = sys.argv[1:]
+kiro_license, kiro_start, kiro_region = (shlex.quote(v) for v in (kiro_license, kiro_start, kiro_region))
 d = "/opt/kirocrew-on/incoming"
 script = (f"set -euo pipefail; mkdir -p {d}; aws s3 cp s3://{bucket}/releases/{sha}.tar.gz {d}/{sha}.tar.gz "
           f"--region {region} --only-show-errors; rm -rf {d}/kirocrew-on-{sha}; tar -xzf {d}/{sha}.tar.gz -C {d}; "
           f"WORKER_HOST=1 WORKER_TLS_PORT={port} GATEWAY_TLS_PORT={gateway_port} NATIVE_DOMAIN={native} "
           f"WORKER_PREVIEW_TLS_PORT={preview_port} "
+          f"KIRO_LICENSE={kiro_license} KIRO_IDC_START_URL={kiro_start} KIRO_IDC_REGION={kiro_region} "
           f"KIROCREW_ON_RELEASE={sha} AWS_REGION={region} "
           f"bash {d}/kirocrew-on-{sha}/deploy/install/al2023.sh {name}")
 print(json.dumps({"commands": [script], "executionTimeout": ["3600"]}))
@@ -582,14 +611,30 @@ worker_native() {  # the platform host relays the Worker host's native distribut
 }
 
 worker_register() {  # register the Worker host as a spare execution environment; an admin assigns it to a Team (D28)
-  local name=$1 stack=$2 worker platform ip token="dry-run-token" script
+  local name=$1 stack=$2 worker platform ip domain console issued code="dry-run-code" token="dry-run-token" script
   worker="$(output InstanceId "$stack")"; platform="$(output InstanceId)"; ip="$(output PrivateIp "$stack")"
+  domain="$(output CloudFrontDomain)"; console="$(output ConsoleDomain)"
+  [ "$console" != "None" ] && [ -n "$console" ] || console="$domain"
   [ -n "$DRY" ] || [[ "$ip" =~ ^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$ ]] || { echo "无法取得 Worker 主机私网地址：$ip" >&2; exit 1; }
-  # The token travels in an SSM command, so it stays in the SSM command history (same trade-off as admin-password).
-  [ -n "$DRY" ] || token="$(remote "$worker" "cat /var/lib/octopus/boundaries/$name/worker.token" | tr -d '[:space:]')"
-  [ -n "$DRY" ] || [[ "$token" =~ ^[A-Za-z0-9_-]{32,}$ ]] || { echo "未读到有效的 Worker Token" >&2; exit 1; }
-  script="set -euo pipefail; T=\$(mktemp); trap 'rm -f \$T' EXIT; printf '%s' '$token' > \$T; cd /opt/kirocrew-on/current; OCTOPUS_ADMIN_PASSWORD=\"\$(cat /etc/kirocrew-on/admin-password)\" PYTHONPATH=/opt/kirocrew-on/current /opt/kirocrew-on/venv/bin/python -m octopus --config /etc/kirocrew-on/platform.toml bootstrap-worker --spare --worker-url https://$ip:$WORKER_TLS_PORT --token-file \$T --name $name"
-  if [ -n "$DRY" ]; then printf '%s\n' "${script//$token/****}"; return; fi
+  local admin="cd /opt/kirocrew-on/current; OCTOPUS_ADMIN_PASSWORD=\"\$(cat /etc/kirocrew-on/admin-password)\" PYTHONPATH=/opt/kirocrew-on/current /opt/kirocrew-on/venv/bin/python -m octopus --config /etc/kirocrew-on/platform.toml bootstrap-worker --spare"
+  # MVP 0.2.0 (N §3): a one-time code issued on the platform host; the Worker host registers itself with it through the
+  # console's address, its token read from its own file. Only the code, used once within 30 minutes, is in the SSM
+  # command history, no longer the token.
+  script="set -euo pipefail; $admin --issue-code --name $name"
+  if [ -n "$DRY" ]; then printf '%s\n' "$script"; issued='{"code": "dry-run-code"}'; else issued="$(remote "$platform" "$script")"; fi
+  code="$(printf '%s' "$issued" | python3 -c 'import json,sys; print(json.loads(sys.stdin.read().strip().splitlines()[-1]).get("code", ""))')"
+  if [ -n "$code" ]; then
+    [ -n "$DRY" ] || [[ "$code" =~ ^kce_[A-Za-z0-9_-]{32,}$ ]] || { echo "未取得有效的接入码" >&2; exit 1; }
+    script="set -euo pipefail; cd /opt/kirocrew-on/current; OCTOPUS_ENROLL_CODE='$code' PYTHONPATH=/opt/kirocrew-on/current /opt/kirocrew-on/venv/bin/python -m octopus --config /etc/kirocrew-on/boundary-$name.toml worker enroll --platform https://$console --url https://$ip:$WORKER_TLS_PORT --token-file /var/lib/octopus/boundaries/$name/worker.token"
+    if [ -n "$DRY" ]; then printf '%s\n' "${script//$code/****}"; return; fi
+    remote "$worker" "$script"
+    return
+  fi
+  # Registered before (a re-run after the host was replaced): its connection is refreshed with its new token, which
+  # then travels in an SSM command as before this change.
+  token="$(remote "$worker" "cat /var/lib/octopus/boundaries/$name/worker.token" | tr -d '[:space:]')"
+  [[ "$token" =~ ^[A-Za-z0-9_-]{32,}$ ]] || { echo "未读到有效的 Worker Token" >&2; exit 1; }
+  script="set -euo pipefail; T=\$(mktemp); trap 'rm -f \$T' EXIT; printf '%s' '$token' > \$T; $admin --worker-url https://$ip:$WORKER_TLS_PORT --token-file \$T --name $name"
   remote "$platform" "$script"
 }
 

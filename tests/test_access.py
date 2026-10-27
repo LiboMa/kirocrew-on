@@ -31,6 +31,8 @@ class AccessCase(unittest.TestCase):
                 user = create_user(db, name, PASSWORD, admin=name == "alice")
                 self.tokens[name] = issue_token(db, user["id"])["token"]
                 self.users[name] = authenticate(db, self.tokens[name])
+            # alice signed in at the console: account management needs a login token (peer review 2026-10-27)
+            self.tokens["alice-console"] = issue_token(db, self.users["alice"]["id"], label="Web login", kind="login")["token"]
         self.a, self.b, self.e = (self.users[k] for k in ("alice", "bob", "eve"))
 
     def tearDown(self):
@@ -265,10 +267,10 @@ class UserLifecycleTests(AccessCase):
     def test_admin_resets_a_password_and_every_token_of_that_user_stops(self):
         with self.http() as call:
             self.assertEqual(call("POST", f"/v1/users/{self.b['id']}/password", self.tokens["eve"], {"password": self.NEW})[0], 403)
-            self.assertEqual(call("POST", f"/v1/users/{self.b['id']}/password", self.tokens["alice"], {"password": self.NEW})[0], 200)
+            self.assertEqual(call("POST", f"/v1/users/{self.b['id']}/password", self.tokens["alice-console"], {"password": self.NEW})[0], 200)
             self.assertEqual(call("GET", "/v1/me", self.tokens["bob"])[0], 401)
             self.assertEqual(self.login(call, "bob", self.NEW)[0], 200)
-            self.assertEqual(call("POST", "/v1/users/user-missing/password", self.tokens["alice"], {"password": self.NEW})[0], 404)
+            self.assertEqual(call("POST", "/v1/users/user-missing/password", self.tokens["alice-console"], {"password": self.NEW})[0], 404)
         self.assertEqual([(e["action"], e["target"]) for e in self.service.audit_log(self.a)],
                          [("user.reset_password", self.b["id"])])
 
@@ -283,7 +285,7 @@ class UserLifecycleTests(AccessCase):
             self.assertEqual(call("POST", f"/v1/runs/{rid}/stop", self.tokens["alice"],
                                   {"request_id": "stop-0000000003", "expected_version": 1})[0], 200)
             self.assertNotIn("bob", {u["username"] for u in call("GET", "/v1/users", self.tokens["eve"])[1]})
-            self.assertEqual(call("POST", f"/v1/users/{self.b['id']}/active", self.tokens["alice"], {"active": True})[0], 200)
+            self.assertEqual(call("POST", f"/v1/users/{self.b['id']}/active", self.tokens["alice-console"], {"active": True})[0], 200)
             self.assertEqual(self.login(call, "bob")[0], 200)
 
     def test_last_active_owner_and_last_admin_are_protected(self):
@@ -298,7 +300,7 @@ class UserLifecycleTests(AccessCase):
             self.assertEqual((status, result["code"]), (409, "last_admin"))
             status, result = call("POST", f"/v1/users/{self.a['id']}/active", self.tokens["alice"], {"active": False})
             self.assertEqual((status, result["code"]), (409, "last_admin"))
-            self.assertEqual(call("POST", f"/v1/users/{self.e['id']}/admin", self.tokens["alice"], {"admin": True})[0], 200)
+            self.assertEqual(call("POST", f"/v1/users/{self.e['id']}/admin", self.tokens["alice-console"], {"admin": True})[0], 200)
             self.assertEqual(call("POST", f"/v1/users/{self.a['id']}/admin", self.tokens["alice"], {"admin": False})[0], 200)
             # The demoted admin's token still carries the admin scope, but elevation needs the account to be admin.
             self.assertEqual(call("GET", "/v1/admin/users", self.tokens["alice"])[0], 403)
@@ -306,7 +308,7 @@ class UserLifecycleTests(AccessCase):
     def test_user_creation_is_audited_and_new_routes_are_documented(self):
         from octopus.schema import openapi
         with self.http() as call:
-            status, created = call("POST", "/v1/users", self.tokens["alice"], {"username": "carol", "password": PASSWORD})
+            status, created = call("POST", "/v1/users", self.tokens["alice-console"], {"username": "carol", "password": PASSWORD})
             self.assertEqual(status, 201)
         self.assertEqual([(e["action"], e["target"]) for e in self.service.audit_log(self.a)], [("user.create", created["id"])])
         paths = openapi()["paths"]
@@ -567,7 +569,8 @@ class PermissionMatrixTests(AccessCase):
             ("POST", f"/v1/runs/{self.bob_run}/crew-entry", {}, (403, 404, 404, 403, 404)),
             ("GET", "/v1/admin/users", None, (200, 403, 403, 403, 403)),
             ("GET", "/v1/admin/audit", None, (200, 403, 403, 403, 403)),
-            ("POST", f"/v1/users/{self.b['id']}/active", {"active": True}, (200, 403, 403, 403, 403)),
+            # restoring an account grants access: a console login only, never a token (peer review 2026-10-27)
+            ("POST", f"/v1/users/{self.b['id']}/active", {"active": True}, (403, 403, 403, 403, 403)),
             ("POST", "/v1/teams/team-m/members", {"username": "eve", "role": "bogus"}, (400, 404, 400, 403, 404)),
             ("PATCH", "/v1/teams/team-m", {"name": ""}, (400, 404, 400, 403, 404)),
             ("POST", "/v1/teams/team-m/archive", {"archived": "x"}, (400, 403, 403, 403, 403)),

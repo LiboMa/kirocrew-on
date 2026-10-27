@@ -109,7 +109,7 @@ describe("管理 › 执行环境", () => {
     const shared = await rowOf(list, "personal");
     expect(within(shared).getByRole("button", { name: "编辑：personal" })).toBeInTheDocument();
     expect(within(shared).getByRole("button", { name: "分配到空间：personal" })).toBeInTheDocument();
-    expect(await menuItems(shared, "personal")).toEqual(["刷新模型", "停用…", "退役…"]);
+    expect(await menuItems(shared, "personal")).toEqual(["登录 Kiro…", "刷新模型", "停用…", "退役…"]);   // fixture-owner's own
     // A disabled one takes no spaces; it is enabled again from the menu.
     const disabled = await rowOf(list, "old-host");
     expect(within(disabled).queryByRole("button", { name: "分配到空间：old-host" })).toBeNull();
@@ -408,6 +408,169 @@ describe("管理 › 执行环境", () => {
     await userEvent.click(within(dialog).getByRole("button", { name: "登记" }));
     expect(await within(dialog).findByRole("alert")).toHaveTextContent("该 Gateway 边界已登记");
     expect(screen.getByRole("dialog", { name: "登记 Worker" })).toBeInTheDocument();
+  });
+
+  test("登记 Worker 用接入码: the code and the command are shown once; the list keeps the code's entry, not its value (N §3)", async () => {
+    const code = "kce_" + "c".repeat(43);
+    const issued = { id: "enroll-1", code, expires: Date.now() / 1000 + 7200, name: "bob-host", binding_kind: "user", binding_id: "u2",
+      command: "PYTHONPATH=/opt/kirocrew-on/current /opt/kirocrew-on/venv/bin/python -m octopus --config /etc/kirocrew-on/boundary-<边界名>.toml worker enroll --code-stdin --platform https://console.test --url https://<Worker 私网地址>:8943" };
+    let listed: unknown[] = [];
+    const calls = start({ ...ONE_WORKER, "GET /users": ENVIRONMENTS["GET /users"], "GET /workers/enrollments": () => listed,
+      "POST /workers/enrollments": () => {
+        listed = [{ id: "enroll-1", name: "bob-host", binding_kind: "user", binding_id: "u2", created_by: "u1", created: 1,
+          expires: issued.expires, used: null, used_by_worker: null, failures: 0, revoked: null, state: "unused" }];
+        return new Response(JSON.stringify(issued), { status: 201 });
+      } });
+    const list = await openSection("管理", "执行环境");
+    await userEvent.click(within(list).getByRole("button", { name: "登记 Worker" }));
+    const dialog = await screen.findByRole("dialog", { name: "登记 Worker" });
+    await userEvent.click(within(dialog).getByRole("radio", { name: "用接入码" }));
+    expect(within(dialog).queryByLabelText("Worker Token")).toBeNull();   // the Worker brings its own token
+    await userEvent.type(within(dialog).getByLabelText("名称"), "bob-host");
+    await userEvent.selectOptions(within(dialog).getByLabelText("绑定空间"), "user:u2");
+    await userEvent.selectOptions(within(dialog).getByLabelText("有效期"), "7200");
+    await userEvent.click(within(dialog).getByRole("button", { name: "签发接入码" }));
+    await waitFor(() => expect(calls.find((c) => c.method === "POST" && c.path === "/v1/workers/enrollments")?.body)
+      .toEqual({ name: "bob-host", owner_id: "u2", expires_in: 7200 }));
+    const shown = await screen.findByRole("dialog", { name: "接入码" });
+    expect(within(shown).getByText(code)).toBeInTheDocument();
+    expect(within(shown).getByText(issued.command)).toBeInTheDocument();
+    await userEvent.click(within(shown).getByRole("button", { name: "我已保存" }));
+    await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
+    expect(screen.queryByText(code)).toBeNull();   // shown once
+    const codes = await within(list).findByRole("region", { name: "接入码" });
+    expect(within(codes).getByText("bob-host")).toBeInTheDocument();
+    expect(within(codes).getByText(/个人 · dev1/)).toBeInTheDocument();
+  });
+
+  test("an unused enrollment code is revoked after confirming", async () => {
+    let listed: unknown[] = [{ id: "enroll-1", name: "bob-host", binding_kind: "spare", binding_id: null, created_by: "u1", created: 1,
+      expires: Date.now() / 1000 + 600, used: null, used_by_worker: null, failures: 0, revoked: null, state: "unused" }];
+    const calls = start({ ...ONE_WORKER, "GET /workers/enrollments": () => listed,
+      "DELETE /workers/enrollments/enroll-1": () => { listed = []; return { ok: true }; } });
+    const list = await openSection("管理", "执行环境");
+    const codes = await within(list).findByRole("region", { name: "接入码" });
+    await userEvent.click(within(codes).getByRole("button", { name: "撤销接入码：bob-host" }));
+    const dialog = await screen.findByRole("dialog", { name: "撤销接入码" });
+    await userEvent.click(within(dialog).getByRole("button", { name: "撤销" }));
+    await waitFor(() => expect(calls.some((c) => c.method === "DELETE" && c.path === "/v1/workers/enrollments/enroll-1")).toBe(true));
+    await waitFor(() => expect(within(list).queryByRole("region", { name: "接入码" })).toBeNull());
+  });
+
+  test("a code used while it was being revoked: the reason is shown and the list read again (review 2026-10-26)", async () => {
+    let listed: unknown[] = [{ id: "enroll-1", name: "bob-host", binding_kind: "spare", binding_id: null, created_by: "u1", created: 1,
+      expires: Date.now() / 1000 + 600, used: null, used_by_worker: null, failures: 0, revoked: null, state: "unused" }];
+    start({ ...ONE_WORKER, "GET /workers/enrollments": () => listed,
+      "DELETE /workers/enrollments/enroll-1": () => { listed = []; return new Response(
+        JSON.stringify({ error: "接入码不存在、已使用或已撤销", code: "not_found" }), { status: 404 }); } });
+    const list = await openSection("管理", "执行环境");
+    const codes = await within(list).findByRole("region", { name: "接入码" });
+    await userEvent.click(within(codes).getByRole("button", { name: "撤销接入码：bob-host" }));
+    const dialog = await screen.findByRole("dialog", { name: "撤销接入码" });
+    await userEvent.click(within(dialog).getByRole("button", { name: "撤销" }));
+    expect(await within(dialog).findByRole("alert")).toHaveTextContent("已使用");
+    await waitFor(() => expect(within(list).queryByRole("region", { name: "接入码" })).toBeNull());
+  });
+
+  test("a Worker that registered itself with a code lights up when it appears in the list (N §3)", async () => {
+    const made = { id: "w9", name: "bob-host", owner_id: "u1", team_id: null, enabled: true, scope: "spare", spaces: [],
+      capabilities: { isolation: "dedicated" } };
+    let listed: unknown[] = ONE_WORKER["GET /workers"];
+    start({ ...ONE_WORKER, "GET /workers": () => listed });
+    const list = await openSection("管理", "执行环境");
+    await rowOf(list, "personal");
+    listed = [...listed, made];   // registered from its host with `worker enroll`
+    await userEvent.click(within(within(list).getByRole("region", { name: "执行环境列表" })).getByRole("button", { name: "刷新" }));
+    expect(await rowOf(list, "bob-host")).toHaveAttribute("data-fresh", "true");
+  });
+
+  test("an administrator adds a boundary on this host with 新建边界 and follows it to the end (MVP 0.2.0 P2, S30)", async () => {
+    let posted = false;
+    let reads = 0;
+    const running = { id: "prv-1", name: "dev1", owner: "dev1", state: "running", started: 1_790_000_000,
+      log: ["[00:00:01] 边界 dev1：核对平台用户 dev1", "[00:00:03] 边界 dev1：OS 用户与目录"] };
+    const done = { ...running, state: "done", exit: 0, finished: 1_790_000_300,
+      next: "需要从公网打开 KiroCrew 时，请管理员在自己电脑或 CloudShell 上运行 kirocrew-on single native dev1；在此之前经本机端口转发使用。" };
+    const calls = start({ ...ENVIRONMENTS,
+      "GET /admin/boundaries/provision": () => ({ available: true, items: !posted ? [] : ++reads < 2 ? [running] : [done] }),
+      "POST /admin/boundaries/provision": () => { posted = true; return { id: "prv-1", name: "dev1", owner: "dev1", state: "queued" }; } });
+    const list = await openSection("管理", "执行环境");
+    await userEvent.click(await within(list).findByRole("button", { name: "新建边界" }));
+    const dialog = await screen.findByRole("dialog", { name: "新建边界" });
+    await userEvent.selectOptions(within(dialog).getByLabelText("属主"), "u2");
+    expect(within(dialog).getByLabelText("边界名称")).toHaveAttribute("placeholder", "dev1");   // boundary.sh's rule
+    await userEvent.click(within(dialog).getByRole("button", { name: "新建" }));
+    expect(await screen.findByText("已开始新建边界 dev1")).toBeInTheDocument();
+    expect(calls.find((c) => c.method === "POST" && c.path === "/v1/admin/boundaries/provision")?.body).toEqual({ owner_id: "u2" });
+    const section = await within(list).findByRole("region", { name: "新建边界" });
+    expect(await within(section).findByText("进行中")).toBeInTheDocument();
+    expect(within(section).getByText("[00:00:03] 边界 dev1：OS 用户与目录")).toBeInTheDocument();
+    expect(await within(section).findByText("已完成", {}, { timeout: 8000 })).toBeInTheDocument();
+    expect(within(section).getByText(/kirocrew-on single native dev1/)).toBeInTheDocument();
+  }, 15000);
+
+  test("a host without the root service offers no 新建边界", async () => {
+    start({ ...ENVIRONMENTS, "GET /admin/boundaries/provision": { available: false, items: [] } });
+    const list = await openSection("管理", "执行环境");
+    await within(list).findByRole("button", { name: "登记 Worker" });
+    expect(within(list).queryByRole("button", { name: "新建边界" })).toBeNull();
+  });
+
+  test("a failed boundary says how and offers to run it again", async () => {
+    const calls = start({ ...ENVIRONMENTS, "GET /admin/boundaries/provision": { available: true, items: [
+      { id: "prv-2", name: "dev1", owner: "dev1", state: "failed", exit: 3, started: 1_790_000_000, finished: 1_790_000_100,
+        log: ["平台分配的 UID 70001 已被本机其他用户或组占用：请检查主机后重试"] }] },
+      "POST /admin/boundaries/provision": { id: "prv-3", name: "dev1", owner: "dev1", state: "queued" } });
+    const list = await openSection("管理", "执行环境");
+    const section = await within(list).findByRole("region", { name: "新建边界" });
+    expect(within(section).getByText("没有完成（退出码 3）")).toBeInTheDocument();
+    await userEvent.click(within(section).getByRole("button", { name: "再试一次：dev1" }));
+    await waitFor(() => expect(calls.find((c) => c.method === "POST" && c.path === "/v1/admin/boundaries/provision")?.body)
+      .toEqual({ owner_id: "u2", name: "dev1" }));
+  });
+
+  test("the owner signs the environment's Kiro in with a device code from 我的设置 (MVP 0.2.0, §6.4)", async () => {
+    let polls = 0;
+    const calls = start({ ...ONE_WORKER, "GET /me": { id: "u1", username: "fixture-owner", admin: 0, scopes: ["read", "execute", "manage"] },
+      "POST /workers/w1/kiro-sign-in": { state: "waiting", url: "https://device.example/activate", code: "ABCD-EFGH",
+        expires: Date.now() / 1000 + 600 },
+      "GET /workers/w1/kiro-sign-in": () => (++polls < 2 ? { state: "waiting", url: "https://device.example/activate",
+        code: "ABCD-EFGH", expires: Date.now() / 1000 + 600 } : { state: "done" }) });
+    const mine = await openSection("我的设置", "执行环境");
+    const row = (await within(mine).findByText("personal")).closest("tr") as HTMLElement;
+    await userEvent.click(within(row).getByRole("button", { name: "登录 Kiro：personal" }));
+    const dialog = await screen.findByRole("dialog", { name: "登录 Kiro" });
+    expect(await within(dialog).findByText("ABCD-EFGH")).toBeInTheDocument();
+    const link = within(dialog).getByRole("link", { name: /device\.example/ });
+    expect(link).toHaveAttribute("href", "https://device.example/activate");
+    expect(link).toHaveAttribute("rel", expect.stringContaining("noopener"));
+    await waitFor(() => expect(screen.queryByRole("dialog", { name: "登录 Kiro" })).toBeNull(), { timeout: 8000 });
+    expect(await screen.findByText("已登录 Kiro：personal")).toBeInTheDocument();
+    expect(calls.filter((c) => c.path === "/v1/workers/w1/kiro-sign-in" && c.method === "POST")).toHaveLength(1);
+  }, 15000);
+
+  test("an administrator signs their own environment's Kiro in from 管理 › 执行环境 (they have no 我的设置 › 执行环境)", async () => {
+    const calls = start({ ...ENVIRONMENTS, "POST /workers/w1/kiro-sign-in": { state: "done" } });
+    const list = await openSection("管理", "执行环境");
+    const row = await rowOf(list, "personal");
+    expect(await menuItems(row, "personal")).toContain("登录 Kiro…");
+    expect(await menuItems(await rowOf(list, "old-host"), "old-host")).not.toContain("登录 Kiro…");   // u1's too, but 停用
+    await fromMenu(row, "personal", "登录 Kiro");
+    expect(await screen.findByText("已登录 Kiro：personal")).toBeInTheDocument();
+    expect(calls.filter((c) => c.path === "/v1/workers/w1/kiro-sign-in" && c.method === "POST")).toHaveLength(1);
+  });
+
+  test("an administrator gets no Kiro login for an environment someone else owns", async () => {
+    start({ ...ENVIRONMENTS, "GET /workers": ENVIRONMENTS["GET /workers"].map((w) => ({ ...w, owner_id: "u2" })) });
+    const list = await openSection("管理", "执行环境");
+    expect(await menuItems(await rowOf(list, "personal"), "personal")).not.toContain("登录 Kiro…");
+  });
+
+  test("an environment someone else owns offers no Kiro login", async () => {
+    start({ ...ONE_WORKER, "GET /me": { id: "u2", username: "dev1", admin: 0, scopes: ["read", "execute", "manage"] } });
+    const mine = await openSection("我的设置", "执行环境");
+    const row = (await within(mine).findByText("personal")).closest("tr") as HTMLElement;
+    expect(within(row).queryByRole("button", { name: /^登录 Kiro/ })).toBeNull();
   });
 
   test("a member refreshes models in 我的设置 but cannot edit, assign, disable or retire a Worker", async () => {

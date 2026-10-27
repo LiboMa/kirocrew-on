@@ -103,7 +103,8 @@ class JournalTests(unittest.TestCase):
 
     def test_clients_from_token_labels(self):
         self.assertEqual([journal.client(x) for x in ("Web login", "claude MCP", "kiro MCP", "API", None)],
-                         ["console", "mcp", "mcp", "api", "api"])
+                         ["api", "mcp", "mcp", "api", "api"])   # the label alone never makes the console (2026-10-27)
+        self.assertEqual(journal.client("Web login", "login"), "console")   # a token from a login does
         with self.db.transaction() as db:
             token = issue_token(db, self.user["id"], label="claude MCP")["token"]
             self.assertEqual(authenticate(db, token)["client"], "mcp")

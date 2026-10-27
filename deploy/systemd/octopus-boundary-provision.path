@@ -1,0 +1,8 @@
+[Unit]
+Description=KiroCrew ON: boundaries the console asked for on this host (MVP 0.2.0 P2, single-node edition)
+
+[Path]
+DirectoryNotEmpty=/var/lib/octopus/platform/boundary-requests
+
+[Install]
+WantedBy=multi-user.target

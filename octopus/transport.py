@@ -10,6 +10,17 @@ from .security import Error, require
 
 
 _context = None
+HEALTH_LIMIT = 1 << 20   # bytes: a health answer is small; a Worker URL is not a way to make the platform read a stream
+
+
+class _NoRedirect(urllib.request.HTTPRedirectHandler):
+    """Workers never redirect: following one would carry the Worker token to another address (review 2026-10-26)."""
+    def redirect_request(self, *args, **kwargs):
+        return None
+
+
+def _open(request, timeout):
+    return urllib.request.build_opener(_NoRedirect, urllib.request.HTTPSHandler(context=_context)).open(request, timeout=timeout)
 
 
 def configure(ca_file):
@@ -69,7 +80,7 @@ def worker_stream(config, path, body, timeout=60):
     request = urllib.request.Request(config["url"].rstrip("/") + path, data=dumps(body).encode(),
                                      headers={"Authorization": "Bearer " + config["token"], "Content-Type": "application/json"})
     try:
-        return urllib.request.urlopen(request, timeout=timeout, context=_context)
+        return _open(request, timeout)
     except urllib.error.HTTPError as exc:
         with exc:
             try:
@@ -88,7 +99,7 @@ def worker_upload(config, path, data, headers, timeout=120):
                                      headers={"Authorization": "Bearer " + config["token"],
                                               "Content-Type": "application/octet-stream", **headers})
     try:
-        with urllib.request.urlopen(request, timeout=timeout, context=_context) as response:
+        with _open(request, timeout) as response:
             return json.load(response)
     except urllib.error.HTTPError as exc:
         with exc:
@@ -101,15 +112,20 @@ def worker_upload(config, path, data, headers, timeout=120):
         raise Error(503, "worker_unavailable", "Worker 未返回可核实回执") from exc
 
 
-def worker_request(config, path, body=None, timeout=35):
+def worker_request(config, path, body=None, timeout=35, limit=None):
     config = connection(config)
     url = config["url"].rstrip("/") + path
     request = urllib.request.Request(url, data=dumps(body).encode() if body is not None else None,
                                      headers={"Authorization": "Bearer " + config["token"],
                                               "Content-Type": "application/json"})
     try:
-        with urllib.request.urlopen(request, timeout=timeout, context=_context) as response:
-            return json.load(response)
+        with _open(request, timeout) as response:
+            if limit is None:
+                return json.load(response)
+            data = response.read(limit + 1)
+            if len(data) > limit:
+                raise ValueError("answer over the size limit")
+            return json.loads(data)
     except urllib.error.HTTPError as exc:
         with exc:
             try:
@@ -124,12 +140,19 @@ def worker_request(config, path, body=None, timeout=35):
         raise Error(503, "worker_unavailable", "Worker 未返回可核实回执") from exc
 
 
-def validate_worker(config):
+def check_connection(config):
+    """A Worker connection's form, before anything is sent: HTTPS (HTTP only to this machine), a bare origin, a token."""
     require(isinstance(config, dict) and set(config) == {"url", "token"}, "Worker 仅接受 URL 和访问 Token")
+    require(isinstance(config["url"], str) and len(config["url"]) <= 2048, "Worker URL 无效")
     parts = urlsplit(config["url"])
     require(parts.scheme == "https" or parts.scheme == "http" and parts.hostname in {"127.0.0.1", "localhost", "::1"},
             "远程 Worker 必须使用 HTTPS；HTTP 仅限本机")
     require(parts.hostname and not parts.username and not parts.password and parts.path in {"", "/"}
             and not parts.query and not parts.fragment, "Worker URL 无效")
     require(isinstance(config["token"], str) and len(config["token"]) >= 32, "Worker Token 至少 32 字符")
-    return worker_request(config, "/health")
+    return parts
+
+
+def validate_worker(config):
+    check_connection(config)
+    return worker_request(config, "/health", limit=HEALTH_LIMIT)

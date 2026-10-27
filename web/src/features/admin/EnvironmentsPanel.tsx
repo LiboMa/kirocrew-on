@@ -1,10 +1,10 @@
-import { useState, type ReactNode } from "react";
+import { useEffect, useRef, useState, type ReactNode } from "react";
 import { useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
-import { Archive, Network, Pencil, Plus, Power, PowerOff, RefreshCw, SquarePlus, Undo2, X } from "lucide-react";
+import { Archive, Check, Copy, KeyRound, Network, Pencil, Plus, Power, PowerOff, RefreshCw, SquarePlus, Undo2, X } from "lucide-react";
 import { api } from "@/api/client";
-import { keys, useEnvironments } from "@/api/hooks";
-import type { Environment, Tool, Worker } from "@/api/types";
+import { keys, useEnrollments, useEnvironments, useProvisions } from "@/api/hooks";
+import type { Enrollment, Environment, IssuedEnrollment, Provision, Tool, Worker } from "@/api/types";
 import { FormDialog } from "@/components/FormDialog";
 import { ListCard, ListEmpty, RowActions, type Action } from "@/components/ListCard";
 import { NativeSelect } from "@/components/NativeSelect";
@@ -27,7 +27,7 @@ export function healthText(environment: Environment) {
   if (!h.reachable) return `不可达：${h.error}`;
   let origin = "";
   try { origin = h.crew_origin ? " · 原生入口 " + new URL(h.crew_origin).host : ""; } catch { /* not a URL: omitted */ }
-  const login = h.tool_auth?.kiro === "expired" ? " · kiro-cli 登录已过期（deploy.sh kiro-login）" : "";
+  const login = h.tool_auth?.kiro === "expired" ? " · kiro-cli 登录已过期（由执行环境的主人点「登录 Kiro」重新登录）" : "";
   return `可达${h.version ? " · v" + h.version : ""}${origin} · 进行中会话 ${active}${login}`;
 }
 
@@ -35,7 +35,7 @@ export const scopeLabel = (w: Pick<Worker, "scope" | "capabilities">) =>
   w.scope === "shared" ? "共享" : w.scope === "spare" ? "空闲专属" : w.capabilities.isolation === "dedicated" ? "专属" : "个人本机";
 
 type Status = "ok" | "down" | "disabled" | "unknown";
-type Tone = "ok" | "down" | "muted";
+type Tone = "ok" | "info" | "down" | "muted";
 const STATUS: Record<Status, { text: string; tone: Tone }> = {
   ok: { text: "可达", tone: "ok" },
   down: { text: "不可达", tone: "down" },
@@ -73,6 +73,7 @@ export const troubled = (worker: Worker, environment: Environment | undefined) =
 
 const TONES: Record<Tone, string> = {
   ok: "bg-success/10 text-success",
+  info: "bg-info/10 text-info",
   down: "bg-destructive/10 text-destructive",
   muted: "bg-muted text-muted-foreground",
 };
@@ -95,20 +96,31 @@ type Space = { team_id?: string; user_id?: string };
 type Open = { kind: "register" }
   | { kind: "edit" | "assign" | "share" | "dedicate" | "disable" | "retire"; worker: Worker }
   | { kind: "remove"; worker: Worker; space: Space }
+  | { kind: "revoke-code"; code: Enrollment }
+  | { kind: "provision" }
+  | { kind: "kiro"; worker: Worker }
   | null;
 
 /** 管理 › 执行环境 (D28; PRD 2026-10-23, 管理 / 我的设置 in dialogs): every environment with its live status, the chosen
  * one's detail below. The page only lists and shows; registering, editing, assigning, sharing and every dangerous step
  * (停用, 退役, taking a space away) happen in a dialog opened from 「登记 Worker」 or the row. */
 export function EnvironmentsPanel() {
-  const { workers, allTeams: teams, users } = useConsole();
+  const { workers, allTeams: teams, users, me } = useConsole();
   const client = useQueryClient();
   const query = useEnvironments(true);
+  const provisions = useProvisions(true);
   const environments = new Map((query.data ?? []).map((e) => [e.id, e]));
   const [picked, setPicked] = useState("");
   const [dialog, setDialog] = useState<Open>(null);
   const [search, setSearch] = useState("");
   const motion = useRowMotion();
+  // A Worker that registered itself from its host (用接入码, N §3) lights up when it first appears in the list.
+  const seen = useRef<Set<string> | null>(null);
+  useEffect(() => {
+    const ids = new Set(workers.map((w) => w.id));
+    if (seen.current) for (const id of ids) if (!seen.current.has(id)) motion.flash(id);
+    if (workers.length || seen.current) seen.current = ids;
+  }, [workers, motion]);
   const term = search.trim().toLowerCase();
   const shown = term ? workers.filter((w) => w.name.toLowerCase().includes(term)) : workers;
   // An environment that needs attention is shown first; otherwise the first one.
@@ -141,6 +153,9 @@ export function EnvironmentsPanel() {
         ? [{ icon: SquarePlus, label: "分配到空间", name: "分配到空间：" + w.name, onSelect: open("assign") }] : []),
     ];
     const more: Action[] = [
+      // an administrator has no 我的设置 › 执行环境: the environments they own sign Kiro in here (§6.4, owner only)
+      ...(enabled && w.owner_id === me.id
+        ? [{ icon: KeyRound, label: "登录 Kiro", name: "登录 Kiro：" + w.name, onSelect: () => setDialog({ kind: "kiro", worker: w }) }] : []),
       { icon: RefreshCw, label: "刷新模型", name: "刷新模型：" + w.name, direct: true,
         onSelect: direct(w, () => api("/workers/" + w.id + "/capabilities", "POST", {}), `已重新读取 ${w.name} 的模型目录`) },
       ...(w.scope === "dedicated" && enabled ? [{ icon: Network, label: "设为共享环境", name: "设为共享环境：" + w.name, onSelect: open("share") }] : []),
@@ -157,7 +172,12 @@ export function EnvironmentsPanel() {
   return (
     <Panel title="执行环境"
       description="每个 Worker 对应一个 KiroCrew Gateway。状态每 30 秒自动读取一次，列表上方的刷新按钮可立即刷新状态；isolation 字段是部署声明，不能替代实际操作系统隔离。"
-      actions={<Button type="button" onClick={() => setDialog({ kind: "register" })}><Plus />登记 Worker</Button>}>
+      actions={<>
+        {provisions.data?.available && (
+          <Button type="button" variant="outline" onClick={() => setDialog({ kind: "provision" })}><Plus />新建边界</Button>
+        )}
+        <Button type="button" onClick={() => setDialog({ kind: "register" })}><Plus />登记 Worker</Button>
+      </>}>
       {query.error && <p className="text-sm text-destructive">状态读取失败：{query.error.message}</p>}
       <ListCard label="执行环境列表" search={search} onSearch={setSearch} searchLabel="搜索执行环境名称"
         onRefresh={() => void refresh()} refreshing={query.isFetching} summary={`共 ${workers.length} 个`}>
@@ -210,9 +230,29 @@ export function EnvironmentsPanel() {
           </Table>
         )}
       </ListCard>
+      <EnrollmentCodes spaceName={spaceName} onRevoke={(code) => setDialog({ kind: "revoke-code", code })} />
+      <ProvisionList items={provisions.data?.items ?? []} />
       {chosen && (
         <EnvironmentDetail key={chosen.id} worker={chosen} environment={environments.get(chosen.id)} spaceName={spaceName}
           onRemove={(space) => setDialog({ kind: "remove", worker: chosen, space })} />
+      )}
+      {dialog?.kind === "provision" && <ProvisionDialog onClose={() => setDialog(null)} />}
+      {dialog?.kind === "kiro" && (
+        <KiroLoginDialog worker={dialog.worker} onClose={(done) => {
+          const signed = dialog.worker;
+          setDialog(null);
+          if (done) void changed(signed.id, "已登录 Kiro：" + signed.name);
+        }} />
+      )}
+      {dialog?.kind === "revoke-code" && (
+        <FormDialog title="撤销接入码" destructive submitLabel="撤销" onClose={() => setDialog(null)}
+          description={<>撤销后，接入码「{dialog.code.name}」不能再用来登记 Worker。已经登记的执行环境不受影响。</>}
+          onSubmit={async () => {
+            await api("/workers/enrollments/" + dialog.code.id, "DELETE", {});
+            await client.invalidateQueries({ queryKey: keys.enrollments });
+            setDialog(null);
+            toast.success("已撤销接入码 " + dialog.code.name);
+          }} />
       )}
       {dialog?.kind === "register" && (
         <RegisterDialog refresh={refresh} onClose={(made) => {
@@ -360,23 +400,49 @@ function Fields({ title, note, children }: { title: string; note?: ReactNode; ch
   );
 }
 
-/** 登记 Worker: a Gateway already started on a host, bound to a person, a Team or kept spare for a Team. The Worker
- * Token comes from that host and is typed in here: the platform issues no secret, so there is nothing to show once. */
+/** How long a new enrollment code lasts (N §4: 30 minutes by default, a day at most). */
+const CODE_LIFETIMES: [number, string][] = [[1800, "30 分钟"], [7200, "2 小时"], [86400, "24 小时"]];
+
+/** 登记 Worker: a Gateway already started on a host, bound to a person, a Team or kept spare for a Team — either with
+ * its address and token typed in here, or (用接入码, N §3) with a one-time code the Worker host uses to register itself,
+ * so its token never passes through a person. The code is shown once, on the dialog's second screen. */
 function RegisterDialog({ refresh, onClose }: { refresh: () => Promise<unknown>; onClose: (made?: { id: string; name: string }) => void }) {
   const { allTeams: teams, users, me } = useConsole();
-  const [form, setForm] = useState({ name: "", owner: "user:" + me.id, url: "", token: "" });
+  const client = useQueryClient();
+  const [form, setForm] = useState({ name: "", owner: "user:" + me.id, url: "", token: "", lifetime: "1800" });
+  const [method, setMethod] = useState<"connection" | "code">("connection");
+  const [issued, setIssued] = useState<IssuedEnrollment | null>(null);
+  const [opener] = useState(() => document.activeElement as HTMLElement | null);   // through both screens
+  if (issued) return <IssuedCodeDialog issued={issued} returnTo={opener} onClose={() => onClose()} />;
   return (
-    <FormDialog title="登记 Worker" submitLabel="登记" onClose={() => onClose()}
+    <FormDialog title="登记 Worker" submitLabel={method === "code" ? "签发接入码" : "登记"} onClose={() => onClose()}
       description="把已在主机上启动的 KiroCrew Gateway 登记为执行环境。Worker 连接凭据由管理员填写，普通用户不会获得；Gateway 与 Coding 工具的认证保留在 Worker 内。"
       onSubmit={async () => {
         const [kind, id] = form.owner.split(":");
         const name = form.name.trim();
-        const connection = { url: form.url.trim(), token: form.token };
-        const made = await api<{ id: string }>("/workers", "POST", kind === "spare" ? { name, spare: true, connection }
-          : { name, [kind === "team" ? "team_id" : "owner_id"]: id, connection });
+        const binding = kind === "spare" ? { spare: true } : { [kind === "team" ? "team_id" : "owner_id"]: id };
+        if (method === "code") {
+          setIssued(await api<IssuedEnrollment>("/workers/enrollments", "POST", { name, ...binding, expires_in: Number(form.lifetime) }));
+          await client.invalidateQueries({ queryKey: keys.enrollments });
+          return;
+        }
+        const made = await api<{ id: string }>("/workers", "POST", { name, ...binding, connection: { url: form.url.trim(), token: form.token } });
         await refresh();
         onClose({ id: made.id, name });
       }}>
+      <div className="grid gap-3 sm:grid-cols-2" role="radiogroup" aria-label="登记方式">
+        {([["connection", "填写连接", "填 Worker 的地址与访问 Token"],
+          ["code", "用接入码", "签发一次性接入码，Worker 主机凭它自己登记，Token 不经人手"]] as const).map(([value, title, detail]) => (
+          <label key={value}
+            className={cn("flex cursor-pointer flex-col gap-1 rounded-md border p-3 has-[:focus-visible]:ring-2 has-[:focus-visible]:ring-ring",
+              method === value ? "border-primary bg-primary/5" : "hover:bg-accent")}>
+            <input type="radio" name="register-method" value={value} checked={method === value} className="sr-only"
+              aria-label={title} onChange={() => setMethod(value)} />
+            <strong className="text-sm">{title}</strong>
+            <small className="text-xs text-muted-foreground">{detail}</small>
+          </label>
+        ))}
+      </div>
       <Fields title="环境">
         <div className="grid gap-3 sm:grid-cols-2">
           <div className="space-y-1.5">
@@ -394,6 +460,16 @@ function RegisterDialog({ refresh, onClose }: { refresh: () => Promise<unknown>;
           </div>
         </div>
       </Fields>
+      {method === "code" ? (
+        <Fields title="接入码" note="接入码只用一次，只显示一次；Worker 用它登记时，平台照样核验它的执行边界与隔离声明。">
+          <div className="space-y-1.5 sm:w-1/2">
+            <Label htmlFor="worker-code-lifetime">有效期</Label>
+            <NativeSelect id="worker-code-lifetime" value={form.lifetime} onChange={(e) => setForm({ ...form, lifetime: e.target.value })}>
+              {CODE_LIFETIMES.map(([value, label]) => <option key={value} value={String(value)}>{label}</option>)}
+            </NativeSelect>
+          </div>
+        </Fields>
+      ) : (
       <Fields title="连接" note="主机上 Worker 的地址与它的访问 Token；登记时平台会核验它的执行边界与隔离声明。">
         <div className="grid gap-3 sm:grid-cols-2">
           <div className="space-y-1.5">
@@ -407,7 +483,146 @@ function RegisterDialog({ refresh, onClose }: { refresh: () => Promise<unknown>;
           </div>
         </div>
       </Fields>
+      )}
     </FormDialog>
+  );
+}
+
+/** A new enrollment code and the command to run on the Worker host, shown this once (N §3). */
+function IssuedCodeDialog({ issued, returnTo, onClose }: { issued: IssuedEnrollment; returnTo: HTMLElement | null; onClose: () => void }) {
+  const [copied, setCopied] = useState("");
+  const copy = (what: string, value: string) => () => navigator.clipboard?.writeText(value).then(() => { setCopied(what); toast.success("已复制"); });
+  const line = (what: string, value: string, label: string) => (
+    <div className="space-y-1.5">
+      <p className="text-xs font-medium text-muted-foreground">{label}</p>
+      <div className="flex items-center gap-2 rounded-md border bg-muted/50 p-3">
+        <code className="secret min-w-0 flex-1 font-mono text-xs break-all">{value}</code>
+        <Button type="button" size="sm" variant={copied === what ? "secondary" : "outline"} aria-label={"复制" + label} onClick={copy(what, value)}>
+          {copied === what ? <Check /> : <Copy />}{copied === what ? "已复制" : "复制"}
+        </Button>
+      </div>
+    </div>
+  );
+  return (
+    <FormDialog title="接入码" closeLabel="我已保存" onClose={onClose} returnTo={returnTo}
+      description={<>接入码只显示这一次，用一次即失效，{formatTime(issued.expires)} 前有效。Worker「{issued.name}」登记后会出现在列表里。</>}>
+      {line("code", issued.code, "接入码")}
+      {line("command", issued.command, "在 Worker 主机上以 root 运行")}
+      <p className="text-xs text-muted-foreground">命令运行后粘贴接入码并回车；接入码不写在命令里，不会留在 shell 历史中。</p>
+    </FormDialog>
+  );
+}
+
+/** The unused enrollment codes (N §5), each revocable; the codes themselves are never shown again. */
+function EnrollmentCodes({ spaceName, onRevoke }: { spaceName: (space: Space) => string; onRevoke: (code: Enrollment) => void }) {
+  const query = useEnrollments(true);
+  const unused = (query.data ?? []).filter((e) => e.state === "unused");
+  if (!unused.length) return null;
+  const where = (e: Enrollment) => e.binding_kind === "spare" ? "空闲专属环境"
+    : spaceName(e.binding_kind === "team" ? { team_id: e.binding_id ?? "" } : { user_id: e.binding_id ?? "" });
+  return (
+    <section aria-label="接入码" className="space-y-2 rounded-md border p-4">
+      <h3 className="text-sm font-medium">接入码<span className="ml-2 text-xs font-normal text-muted-foreground">未使用 {unused.length} 个</span></h3>
+      <ul className="divide-y">
+        {unused.map((e) => (
+          <li key={e.id} className="flex items-center gap-3 py-2 text-sm">
+            <span className="font-medium">{e.name}</span>
+            <span className="text-xs text-muted-foreground">{where(e)}</span>
+            <span className="ml-auto text-xs text-muted-foreground tabular-nums">{formatTime(e.expires)} 前有效</span>
+            <Button type="button" size="sm" variant="outline" aria-label={"撤销接入码：" + e.name} onClick={() => onRevoke(e)}>
+              <X />撤销
+            </Button>
+          </li>
+        ))}
+      </ul>
+    </section>
+  );
+}
+
+/** The name boundary.sh gives a person's boundary by default (octopus/provision.py boundary_name), or "". */
+export function boundaryName(username: string) {
+  const name = username.toLowerCase().replace(/[^a-z0-9-]/g, "-").replace(/-{2,}/g, "-").replace(/^-+|-+$/g, "")
+    .replace(/^[^a-z]+/, "").slice(0, 20).replace(/-+$/, "");
+  return /^[a-z][a-z0-9-]{1,19}$/.test(name) && name !== "personal" ? name : "";
+}
+
+/** 新建边界 (MVP 0.2.0 P2, S30): a boundary on this host for one person — its own OS user, Gateway and Worker — made by
+ * the host's root service and registered as that person's own environment. */
+function ProvisionDialog({ onClose }: { onClose: () => void }) {
+  const { users, workers } = useConsole();
+  const client = useQueryClient();
+  const owns = (id: string) => workers.some((w) => w.owner_id === id && !w.team_id && w.scope === "dedicated" && w.enabled);
+  const [owner, setOwner] = useState(() => users.find((u) => !owns(u.id))?.id ?? users[0]?.id ?? "");
+  const [title, setTitle] = useState("");
+  const suggested = boundaryName(users.find((u) => u.id === owner)?.username ?? "");
+  return (
+    <FormDialog title="新建边界" submitLabel="新建" onClose={onClose}
+      description="在这台主机上为所选用户新建一个执行边界：独立的系统账号、KiroCrew Gateway 与 Worker，完成后登记为其专属执行环境。需要几分钟；原生入口先只经本机端口转发打开。"
+      onSubmit={async () => {
+        const made = await api<Provision>("/admin/boundaries/provision", "POST", { owner_id: owner, ...(title.trim() ? { name: title.trim() } : {}) });
+        await client.invalidateQueries({ queryKey: keys.provisions });
+        onClose();
+        toast.success("已开始新建边界 " + made.name);
+      }}>
+      <Fields title="属主" note="每人一个边界；已有专属执行环境的用户不能再建。">
+        <NativeSelect id="provision-owner" aria-label="属主" value={owner} onChange={(e) => setOwner(e.target.value)}>
+          {users.map((u) => <option key={u.id} value={u.id}>{u.username}{owns(u.id) ? "（已有专属执行环境）" : ""}</option>)}
+        </NativeSelect>
+      </Fields>
+      <Fields title="边界名称" note="小写字母开头的 2–20 位小写字母、数字或连字符；留空用属主的用户名。">
+        <Input aria-label="边界名称" value={title} placeholder={suggested} onChange={(e) => setTitle(e.target.value)} />
+      </Fields>
+    </FormDialog>
+  );
+}
+
+const PROVISION_STATE = { queued: ["info", "排队中"], running: ["info", "进行中"], done: ["ok", "已完成"], failed: ["down", "没有完成"] } as const;
+
+/** What 新建边界 asked for on this host, newest first: its state, the script's latest output and what comes next. */
+function ProvisionList({ items }: { items: Provision[] }) {
+  const { users } = useConsole();
+  const client = useQueryClient();
+  if (!items.length) return null;
+  const again = (p: Provision) => () => {
+    const owner = users.find((u) => u.username.toLowerCase() === p.owner)?.id;
+    if (!owner) return void toast.error(`找不到用户 ${p.owner}`);
+    void api<Provision>("/admin/boundaries/provision", "POST", { owner_id: owner, name: p.name })
+      .then(() => client.invalidateQueries({ queryKey: keys.provisions })).then(() => toast.success("已重新开始新建边界 " + p.name))
+      .catch((e: Error) => toast.error(e.message));
+  };
+  return (
+    <section aria-label="新建边界" className="space-y-2 rounded-md border p-4">
+      <h3 className="text-sm font-medium">新建边界</h3>
+      <ul className="divide-y">
+        {items.slice(0, 5).map((p) => {
+          const [tone, text] = PROVISION_STATE[p.state];
+          return (
+            <li key={p.id} className="space-y-1.5 py-2 text-sm">
+              <div className="flex items-center gap-3">
+                <span className="font-medium">{p.name}</span>
+                <span className="text-xs text-muted-foreground">{p.owner}</span>
+                <Pill tone={tone}>{p.state === "failed" && p.exit != null ? `${text}（退出码 ${p.exit}）` : text}</Pill>
+                {p.started && <span className="ml-auto text-xs text-muted-foreground tabular-nums">{formatTime(p.started)}</span>}
+                {p.state === "failed" && (
+                  <Button type="button" size="sm" variant="outline" aria-label={"再试一次：" + p.name} onClick={again(p)}>
+                    <RefreshCw />再试一次
+                  </Button>
+                )}
+              </div>
+              {p.error && <p className="text-xs text-destructive">{p.error}</p>}
+              {p.state === "running" && p.log.length > 0 && <p className="text-xs text-muted-foreground">{p.log[p.log.length - 1]}</p>}
+              {p.state === "done" && p.next && <p className="text-xs text-muted-foreground">{p.next}</p>}
+              {p.log.length > 0 && (
+                <details className="text-xs">
+                  <summary className="cursor-pointer text-muted-foreground">输出（{p.log.length} 行）</summary>
+                  <pre className="mt-1 max-h-48 overflow-auto rounded-sm bg-muted/50 p-2 whitespace-pre-wrap">{p.log.join("\n")}</pre>
+                </details>
+              )}
+            </li>
+          );
+        })}
+      </ul>
+    </section>
   );
 }
 
@@ -498,8 +713,53 @@ function AssignDialog({ worker: w, onAssign, onClose }: {
 
 /** 我的设置 › 执行环境 for someone who is not an administrator: the environments serving them, read-only; anyone served
  * may refresh an environment's model catalogue (spec §6.1). */
+/** Kiro signed in from the console with a device code (MVP 0.2.0, §6.4): the environment's owner opens the address, enters
+ * the code, and the dialog sees the login finish. The code is shown here only and nowhere kept. */
+function KiroLoginDialog({ worker, onClose }: { worker: Worker; onClose: (done?: boolean) => void }) {
+  type Login = { state: "idle" | "starting" | "waiting" | "done" | "failed"; url?: string; code?: string; expires?: number };
+  const [login, setLogin] = useState<Login | null>(null);
+  const [error, setError] = useState("");
+  const [copied, setCopied] = useState(false);
+  const path = "/workers/" + worker.id + "/kiro-sign-in";
+  useEffect(() => {
+    let live = true;
+    let timer: number | undefined;
+    const settle = (next: Login) => {
+      if (!live) return;
+      if (next.state === "done") return onClose(true);
+      setLogin(next);
+      if (next.state === "waiting" || next.state === "starting") timer = window.setTimeout(poll, 3000);
+    };
+    const poll = () => void api<Login>(path).then(settle).catch((e: Error) => live && setError(e.message));
+    void api<Login>(path, "POST", {}).then(settle).catch((e: Error) => live && setError(e.message));
+    return () => { live = false; window.clearTimeout(timer); };
+  }, []);   // once per dialog: a second login request would only report the same code
+  return (
+    <FormDialog title="登录 Kiro" onClose={() => onClose()}
+      description={<>为执行环境「{worker.name}」登录 kiro-cli。在浏览器里打开下面的地址、输入设备码；完成后这里会自动确认。</>}>
+      {error && <p role="alert" className="text-sm text-destructive">{error}</p>}
+      {!error && !login && <p className="text-sm text-muted-foreground">正在取得设备码…</p>}
+      {login?.state === "waiting" && login.url && login.code && (
+        <div className="space-y-3">
+          <a href={login.url} target="_blank" rel="noopener noreferrer" className="block text-sm break-all text-primary underline">{login.url}</a>
+          <div className="flex items-center gap-2 rounded-md border bg-muted/50 p-3">
+            <code className="min-w-0 flex-1 font-mono text-lg tracking-widest">{login.code}</code>
+            <Button type="button" size="sm" variant={copied ? "secondary" : "outline"} aria-label="复制设备码"
+              onClick={() => navigator.clipboard?.writeText(login.code ?? "").then(() => setCopied(true))}>
+              {copied ? <Check /> : <Copy />}{copied ? "已复制" : "复制"}
+            </Button>
+          </div>
+          {login.expires && <p className="text-xs text-muted-foreground">设备码在 {formatTime(login.expires)} 前有效。</p>}
+        </div>
+      )}
+      {login?.state === "failed" && <p role="alert" className="text-sm text-destructive">登录没有完成（设备码过期或被拒绝），关闭后可以再试一次。</p>}
+    </FormDialog>
+  );
+}
+
 export function MyEnvironmentsPanel() {
-  const { workers, allTeams: teams, users } = useConsole();
+  const { workers, allTeams: teams, users, me } = useConsole();
+  const [signing, setSigning] = useState<Worker | null>(null);
   const client = useQueryClient();
   const motion = useRowMotion();
   const refresh = (w: Worker) => api("/workers/" + w.id + "/capabilities", "POST", {})
@@ -538,6 +798,9 @@ export function MyEnvironmentsPanel() {
                     <TableCell className="pr-4 text-right">
                       <RowActions menu={"执行环境操作：" + w.name} actions={[
                         { icon: RefreshCw, label: "刷新模型", name: "刷新模型：" + w.name, onSelect: () => void refresh(w) },
+                        // only its owner: the code signs the environment in as whoever enters it (§6.4)
+                        ...(w.owner_id === me.id ? [{ icon: KeyRound, label: "登录 Kiro", name: "登录 Kiro：" + w.name,
+                          onSelect: () => setSigning(w) }] : []),
                       ]} />
                     </TableCell>
                   </TableRow>
@@ -547,6 +810,14 @@ export function MyEnvironmentsPanel() {
           </Table>
         )}
       </ListCard>
+      {signing && <KiroLoginDialog worker={signing} onClose={(done) => {
+        setSigning(null);
+        if (done) {
+          void client.invalidateQueries({ queryKey: keys.workers });
+          motion.flash(signing.id);
+          toast.success("已登录 Kiro：" + signing.name);
+        }
+      }} />}
     </Panel>
   );
 }

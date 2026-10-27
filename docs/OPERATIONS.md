@@ -1,6 +1,7 @@
 # KiroCrew ON 运维手册
 
 适用范围：M1 单机部署（EC2 Amazon Linux 2023 x86_64，一个个人执行边界 `personal`）与本机 macOS 端到端环境。
+安装脚本自 MVP 0.2.0 P1 起也支持 aarch64（Graviton）：`al2023.sh` 按 `uname -m` 选 Node 与 kiro-cli 的构建（`deploy/install/arch-lib.sh`），其他架构在改动主机前停止；`deploy.sh up` 与 `worker-host up` 按机型的 CPU 架构（`describe-instance-types`）选 AL2023 AMI，已有主机保持原 AMI。arm64 主机的实机验收与 P0 一起做。
 §2–§8、§12 的 EC2 命令已于 2026-10-11 在 us-east-1 实测，结果见 `docs/handover/M1-EC2-EVIDENCE.md`。
 本地端到端（macOS）的步骤见 §14。
 
@@ -64,6 +65,23 @@ deploy/aws/deploy.sh admin-password  # 经 SSM 读取主机上的 /etc/kirocrew-
 注册 Worker（管理员 token 登录后）：`POST /v1/workers`，body 为
 `{"name":"personal","owner_id":"<用户 ID>","connection":{"url":"http://127.0.0.1:8928","token":"<worker.token 内容>"}}`。
 平台用户 `octopus` 与执行用户 `crew-personal` 不同，Worker 可登记给普通用户。
+
+**用一次性接入码登记（MVP 0.2.0 P1，N §3–§5）**：Token 不经人手，也不进命令历史。
+
+- **签发**：控制台「管理 › 执行环境 › 登记 Worker」选「用接入码」，填名称、绑定空间（某人 / 某个 Team / 空闲专属环境）与有效期（30 分钟、2 小时、24 小时；
+  API 为 `POST /v1/workers/enrollments {name, owner_id | team_id | spare, expires_in}`，60–86400 秒，默认 1800）。
+  接入码（`kce_` 开头）与要运行的命令只显示这一次；库里只存 SHA-256。
+- **登记**：在 Worker 主机上以 root 运行 `PYTHONPATH=/opt/kirocrew-on/current /opt/kirocrew-on/venv/bin/python -m octopus --config /etc/kirocrew-on/boundary-<边界名>.toml worker enroll --code-stdin --platform https://<控制台域名> --url https://<私网地址>:8943`（它要读 `worker.token`），
+  粘贴接入码后回车（脚本用环境变量 `OCTOPUS_ENROLL_CODE`；`--code` 参数被拒绝，避免出现在 `ps` 与 shell 历史里；`--check` 只核对不登记）。
+  Worker 读本边界的 `worker.token`，与地址一起交给 `POST /v1/workers/enroll`（不需登录）。平台照旧带 Token 调 `/health` 核实，
+  按 `POST /v1/workers` 的全部规则校验，审计 `worker.enroll`（记签发人、接入码编号与绑定，不记地址与 Token）。
+- **规则**：接入码只能用一次（同时使用也只有一个成功）；错误、过期、已用或已撤销的码一律 404 `enrollment_invalid`，不会去调 Worker；
+  每个来源每分钟最多 10 次（429）。登记失败（Worker 不可达、规则拒绝）时码保持未用，可修正后重试；失败 5 次即作废，并记审计 `worker.enrollment_retired`。
+  签发人被停用或不再是管理员时，他签的码立即失效。回环地址（`127.0.0.1` 等）的 Worker 只能由平台主机本机发起登记（`boundary add`），
+  经控制台域名来的请求不能让平台去访问它自己的回环端口；平台对 Worker 的请求一律不跟随重定向，`/health` 响应最多 1 MB。
+- **撤销**：执行环境页的「接入码」小节列出未用的码，可撤销（`DELETE /v1/workers/enrollments/<id>`）；`GET /v1/workers/enrollments` 不含码本身。
+- **脚本**：`deploy.sh boundary add` 与 `worker-host register` 的**首次**登记改用接入码（`bootstrap-worker --issue-code` 签发，Worker 自己 `worker enroll`），
+  `worker-host register` 不再经 SSM 读取 Token，SSM 命令历史里只剩一次性的接入码。已登记过的（重跑、换主机）仍由 `bootstrap-worker` 更新连接。
 
 ## 3．访问
 
@@ -143,7 +161,10 @@ deploy/aws/deploy.sh boundary native alice         # 对外开通它的原生入
   Worker 9001–9100 中第一个空闲端口；`worker_isolation = "dedicated"`；`crew_url` 为本机回环，经 `tunnel --boundary` 打开）、资源上限
   （`octopus-gateway@alice.service.d/limits.conf`：`MemoryHigh` = ¾ × `MemoryMax`、`CPUQuota`、`TasksMax=4096`；Worker `MemoryMax=4G`，
   它也运行会话预览；两者 `OOMPolicy=continue`：超限时只结束那个进程，不停掉整个服务）、原生契约检查、启动两个服务，最后
-  `bootstrap-worker --owner alice` 登记为 alice 的专属 Worker。**开通前先核对用户**（存在、尚无自己的执行环境；`--check-only`），不符时主机上什么也不留下。
+  登记为 alice 的专属 Worker（MVP 0.2.0：首次用一次性接入码，Worker 自己 `worker enroll`；重跑时 `bootstrap-worker --owner alice` 更新连接）。**开通前先核对用户**（存在、尚无自己的执行环境；`--check-only`），不符时主机上什么也不留下。
+  新边界的 OS 用户 ID 与身份由平台分配（MVP 0.2.0 P1，S9）：`bootstrap-worker --allocate` 经 `POST /v1/admin/boundaries`
+  取得 `boundary_id` 与 UID = GID = 70000 + 序号（至多 99999，永不复用），`groupadd --system -g` / `useradd --system -u` 用它（系统账号不分从属 ID；这个 UID 若落在 `/etc/subuid`、`/etc/subgid` 某段内则停止），`boundary_id` 写在 toml 第一行。分配可重复：重跑时平台返回同一身份，上次停在写配置之前的，重跑会补上 `boundary_id`；
+  本机该 UID 已被占用时停止并说明。此前建的边界保留主机分配的 UID，P5 搬到用户卷时一次性改属主。
   不重启平台 API；重复执行只补缺（端口与配置不变；未给 `--memory` / `--cpu` 时资源上限沿用现有值）。`--owner` 按小写匹配平台用户。主机须已 `push` 过含 `boundary.sh` 的发布。登记后此人的会话即落到新边界：先完成 `kiro-login --boundary`。
 - `boundary native <名称>`（D49 第 3 期，2026-10-21）：建栈 `<平台栈>-native-<名称>`（`kirocrew-on-native.yaml`，只有一个 CloudFront 分发，带源站密钥），中转端口与 Worker 主机共用 `NativePort + 1`–`NativeRelayEnd`（安全组只放行 CloudFront）；在平台主机渲染
   `/etc/nginx/conf.d/kirocrew-relay-boundary-<名称>.conf`（只转发带源站密钥的请求到该边界的回环 Gateway），把边界的 `crew_url` 改为该分发，排空后重启它的 Gateway 与 Worker（Gateway 只信任 `crew_url` 这个来源）。
@@ -189,11 +210,11 @@ deploy/aws/deploy.sh worker-host add w1     # up → push → tls → native →
 
 | 步骤 | 作用 |
 |---|---|
-| `worker-host up <名称>` | 栈 `<平台栈>-worker-<名称>`：实例、安全组（仅平台安全组可访问 8943 / 8944）、该主机的原生入口 CloudFront 分发（源站 = 平台主机的中转端口，注入同一个源站密钥）。中转端口在平台的 `NativePort + 1`–`NATIVE_RELAY_END`（`stack.env`，默认 8920–8929）中分配，已有栈保持原端口 |
+| `worker-host up <名称>` | 栈 `<平台栈>-worker-<名称>`（机型 `WORKER_INSTANCE_TYPE`；AMI：`WORKER_IMAGE_ID`，否则沿用栈自己的，否则与平台同架构时用平台的，否则取该架构最新的 AL2023，如 Graviton 机型）：实例、安全组（仅平台安全组可访问 8943 / 8944）、该主机的原生入口 CloudFront 分发（源站 = 平台主机的中转端口，注入同一个源站密钥）。中转端口在平台的 `NativePort + 1`–`NATIVE_RELAY_END`（`stack.env`，默认 8920–8929）中分配，已有栈保持原端口 |
 | `worker-host push <名称>` | 安装已提交的 HEAD（Worker 主机模式）；写入 `crew_url = https://<该主机的分发域名>` 与 nginx 配置 |
 | `worker-host tls <名称>` | 私钥留在 Worker 主机，平台私有 CA 签发证书（SAN：私网 IP 与 `<名称>.worker.kirocrew-on`）。旧证书没有 DNS 名称时重跑本步（私钥不变） |
 | `worker-host native <名称>` | 在平台主机写入 `/etc/nginx/conf.d/kirocrew-relay-<名称>.conf`（0640 root:nginx，密钥只从主机上的文件读取），`nginx -t` 失败即撤回；最后经中转实测一次 |
-| `worker-host register <名称>` | 登记为空闲执行环境；已登记时更新连接（重新核验健康与隔离） |
+| `worker-host register <名称>` | 登记为空闲执行环境：平台主机签发一次性接入码，Worker 主机经控制台域名 `worker enroll` 自行登记（MVP 0.2.0，Token 不经 SSM）；已登记时更新连接（重新核验健康与隔离） |
 | `kiro-login --host <名称>` | `crew-<名称>` 的 kiro-cli 设备码登录；看到 “Logged in successfully” 即结束本次登录，以 `kiro-cli whoami` 为准 |
 
 原生入口链路：浏览器 → 该主机的 CloudFront 分发 → 平台主机 nginx `:<中转端口>`（校验 `X-Origin-Verify`，规则与 8919 相同）
@@ -301,9 +322,22 @@ cat /var/lib/octopus/boundaries/personal/gateway-runtime.json                   
 
 API 访问日志不记录 token、请求体或查询串；Engine 只记录异常类名。
 
+**平台指标（MVP 0.2.0 P1，设计 §12.1）**：API 每分钟向 `/var/log/kirocrew-on/metrics.emf.log` 追加一行 CloudWatch EMF（命名空间 `KiroCrewOn`，维度 `Service=kirocrew-on`，单位 Count）。
+
+- 指标：`sessions_running`、`sessions_waiting_worker`、`sessions_quota_wait`、`attempts_running`、`workers_enabled`、`workers_unhealthy`（健康信息 15 分钟以上未更新）、`apps_running`、`takeovers_moving`、`public_shares_active`。
+- 文件超过 10 MB 时改名为 `.1`，只保留一代。
+- 管理员可以读 `GET /v1/admin/metrics`，内容相同。
+- 由主机上的 CloudWatch Agent 收这个文件；平台进程不调 AWS API，主机角色因此不需要 `PutMetricData`。告警（SNS）随 P3 的数据面栈一起做。
+
 ## 8．认证与过期
 
 - Claude Code 与 Codex 经实例角色使用 Bedrock：实例角色需要 `bedrock:InvokeModel*`（Claude）与 `bedrock-mantle:CreateInference`（Codex 的 amazon-bedrock 提供方）。
+- **在控制台登录 Kiro（MVP 0.2.0，设计 §6.4）**：执行环境的主人在「我的设置 › 执行环境」该行点「登录 Kiro」（管理员没有这一页，在「管理 › 执行环境」自己那一行的菜单里），对话框显示验证地址与设备码，在浏览器完成授权后自动确认（设备码 15 分钟内有效）。
+  - Worker 本就以边界用户运行，自己在一个伪终端里执行 `kiro-cli login --use-device-flow`，不需要 root；同一时间每个边界只有一个登录，再点一次显示同一个码；已登录时直接返回。
+  - 只有该执行环境的主人（`workers.owner_id`）能发起和看到设备码，管理员也不行；地址与设备码只在内存里，不写审计和日志，审计 `worker.kiro_login` 只记发起。
+  - 接口：`POST` / `GET /v1/workers/<id>/kiro-sign-in`（Worker 侧 `/kiro/login`、`/kiro/login/status`）。
+  - 登录方式取自边界配置的 `kiro_license`、`kiro_identity_provider`、`kiro_idc_region`；`deploy.sh push` 与 `worker-host push` 把 `stack.env` 的 `KIRO_LICENSE`、`KIRO_IDC_START_URL`、`KIRO_IDC_REGION` 写进主机上每个边界的配置；`boundary add` 新建的边界沿用同机其他边界的这三项。
+  - 下面的 `deploy.sh kiro-login` 仍然可用。
 - Kiro CLI：`deploy/aws/deploy.sh kiro-login` 经 SSM Run Command 在主机上以 crew-personal 运行 `kiro-cli login --use-device-flow`（带 `stack.env` 中的 `KIRO_LICENSE`、`KIRO_IDC_START_URL`、`KIRO_IDC_REGION`）。kiro-cli 即使给齐参数仍有交互提示、无终端时失败，因此在 `script(1)` 伪终端中运行并自动回车；脚本打印验证地址与设备码，在浏览器完成授权后自动确认（设备码 15 分钟内有效，过期重新执行）。日志：`/var/lib/octopus/boundaries/personal/logs/kiro-login.log`。不需要本机安装 session-manager-plugin。
 
 ### 控制台自定义域名
@@ -734,6 +768,7 @@ CloudFront 只使用 us-east-1 的证书）：分发加上别名与证书（SNI�
 - **健康检查**：平台每 10 分钟读取一次各已启用 Worker 的 `/health`（有会话在等 Kiro 登录的 Worker 每分钟一次），执行边界未变时保存为执行环境能力
   （工具、检查命令、Kiro 登录、模型；「执行环境」中显示「最近检查」）。升级 Worker 后不必再手动「刷新模型」，最多 10 分钟内生效；急用时仍可手动刷新。
   边界、宿主账号或隔离方式变了不保存（日志「another execution boundary」），由管理员核查。
+- **容量**（MVP 0.2.0 P1）：`/health` 的 `capacity` 报主机内存（`mem_total_mb`、`mem_available_mb`）、`cpus`、`load1`、本边界运行中的尝试数与 KiroCrew 的 `max_subagents`；读不到的为 null，不影响健康检查。控制面用它放置与扩容（P3）。
 - **条件满足后自动继续**（不计入、也不重置会话预算；时间线「条件满足，自动继续」）：
   - Kiro 任务因登录过期失败：「等待 Kiro 登录恢复」——管理员执行 `deploy.sh kiro-login`；平台在失败后先看到登录过期、再看到恢复时重跑该任务。
     只认原生错误中的登录过期（Agent 自己报告的权限、额度问题不算）；失败后检查到登录正常（未见过期，或检查前已恢复）时提示改为
@@ -1061,6 +1096,9 @@ Draft PR（GitHub）/ Draft MR（GitLab）。
     设置的上级域 Cookie 不经过 nginx，会被浏览器发给 `tinyboat.blog` 的其他站点（如 `keycloak.tinyboat.blog`）。控制台的 Token
     存在 `sessionStorage`，不受影响。负责人 2026-10-14 选择沿用 `tinyboat.blog`；改用专用域名只需改 `PREVIEW_SESSION_DOMAIN`
     并重新 `up`、`push`。
+  - **不另购域名**（负责人 2026-10-14 已定，2026-10-27 重申；0.2.0 的原生入口也沿用 `tinyboat.blog`，隔离按设计 §8.2a）。
+    Cookie 被灌满时，这个浏览器打开 `tinyboat.blog` 下的页面会失败（请求超过 CloudFront 的大小上限）。
+    恢复：在浏览器设置里清除 `tinyboat.blog` 的站点数据，或用无痕窗口，再重新登录控制台。读不到、也改不了任何人的数据。
 - **同源防护**（共用的 cloudfront.net 预览域：所有会话的应用同源）：
   - nginx 拒绝 Service Worker 脚本请求（`Service-Worker` 头），所以应用无法注册 Service Worker。
   - 代理的响应一律为 `Cache-Control: no-cache`，并忽略应用发出的 `X-Accel-*`。
@@ -1177,6 +1215,14 @@ Draft PR（GitHub）/ Draft MR（GitLab）。
 - **用户**：控制台「管理 › 用户」是一张表（用户名与管理员标记、状态、所在 Team、执行环境、最近登录、进行中的会话），工具栏可按用户名或 Team 搜索；「新建用户」在对话框里只填用户名与初始密码（可同时为个人空间分配共享环境）；每行「重设密码」「加入 Team」在行内，「⋯」里有改执行环境、Token（查看与撤销）、设为 / 取消管理员、停用 / 启用，每项都在对话框里完成并先说明后果（2026-10-24 改版，见 docs/design/2026-10-24-qingyan.md）；停用与重设密码立即撤销该用户全部 Token，
   会话照常执行；至少保留一位有效管理员，Team 唯一的有效 owner 不能被停用。「我的设置 › 修改密码」（账户菜单也可进入）后，本人其他登录与 Token 失效。
   API：`POST /v1/me/password`、`POST /v1/users/<id>/password|active|admin`、`GET /v1/admin/users`、`GET|DELETE /v1/admin/users/<id>/tokens[/<tid>]`。
+- **给出权限的账号操作只认控制台登录（2026-10-27）**：
+  - 每枚 Token 记下签发方式（`tokens.kind`）：只有 `POST /v1/login` 发出的是 `login`，其余都是 `api`，包括 `octopus connect`、控制台「API 与 Coding Agent 接入」与 `octopus login`。
+  - 新建账号（`POST /v1/users`）、重设密码（`POST /v1/users/<id>/password`）、设为管理员（`…/admin {"admin": true}`）、恢复已停用的账号（`…/active {"active": true}`）用 `api` Token 调用时返回 403 `console_login_required`。原因：Agent 持有的管理员 Token 原本能借此新建一个自己知道密码的管理员、改掉别人的密码后登录，或把别人掌握密码的账号提为管理员。
+  - 重设自己的密码只能走「我的设置 › 修改密码」（`/v1/me/password`，要输入原密码），否则返回 400 `use_me_password`。
+  - 收回权限的操作仍可经 API：停用、取消管理员、撤销他人 Token。出事时用 Agent 或脚本也能及时收权。MCP 的 `octopus_admin_users` 因此只保留列出、停用、取消管理员。
+  - 用 `api` Token 重新生成一枚 `login` Token，得到的是 `api` Token。
+  - 控制台里的「来自控制台」也按签发方式判断，不再看 Token 名称；名称「Web login」保留给登录，签发时会被拒绝（400 `label_reserved`）。
+  - **部署后需要重新登录一次控制台**：此前的登录 Token 没有记录签发方式，一律算作 `api`。
 - **管理员越权**：可查看并操作全部会话（控制台侧栏「全部会话」，`GET /v1/runs?all=1`），原生 KiroCrew 入口不因管理员身份开放；
   越权操作与用户管理写入审计（`GET /v1/admin/audit`）。
 - **Token 有效期（D62）**：签发时选 7 天、30 天、365 天或永不过期——控制台「API 与 Coding Agent 接入」的「有效期」（默认 30 天）、
@@ -1241,6 +1287,25 @@ $P restore-verify /var/lib/octopus/platform/backups/octopus-<时间>.json --into
 `restore-verify` 只接受空的独立目录，校验 sha256、完整性与各表行数。
 未覆盖：各 Coding 工具私有会话目录的语义一致性、远端仓库状态、原生 Gateway 内存中的任务。
 
+### 平台数据的持续备份与恢复（集群版控制面，MVP 0.2.0 P1）
+
+只用于集群版控制面主机（不跑任何边界）；单机版与 m1 不跑 Litestream（S31）：Litestream 要持续写 S3，而跑 Agent 的主机，其实例角色同机进程都能用。
+
+- **状态栈** `deploy/aws/kirocrew-on-state.yaml`：状态桶（版本控制、KMS 加密、只允许 TLS、禁止公开），`db/` 放数据库副本，P5 起 `escrow/` 放托管的密钥材料；托管策略 `ControlPlaneStateAccess` 只给控制面主机的角色，栈本身不附加给任何角色。
+- **安装**：`STATE_BUCKET=<StateBucketName> bash deploy/install/litestream.sh`（root）。主机上有任何执行边界（`/etc/kirocrew-on/boundary-*.toml`）时拒绝执行；`al2023.sh` 不装 Litestream。它装上 Litestream（`deploy/versions.env` 固定版本，按 checksums 校验），写 `/etc/kirocrew-on/litestream.yml`（模板 `deploy/litestream/litestream.yml.template`：只复制 `/var/lib/octopus/platform/octopus.sqlite3`，`sync-interval: 1s`，快照每日一次，保留 72 h），启用 `octopus-litestream.service`（以 `octopus` 身份运行）。
+- **看复制**：`journalctl -u octopus-litestream`；`litestream ltx -config /etc/kirocrew-on/litestream.yml /var/lib/octopus/platform/octopus.sqlite3` 列出副本里的 LTX 文件。
+- **恢复**（新主机或温备上，先停 `octopus-api`）：
+
+```bash
+sudo -u octopus litestream restore -config /etc/kirocrew-on/litestream.yml -o /var/lib/octopus/restore/octopus.sqlite3 \
+  /var/lib/octopus/platform/octopus.sqlite3
+$P backup --source /var/lib/octopus/restore/octopus.sqlite3 --dest /var/lib/octopus/restore/check
+$P restore-verify /var/lib/octopus/restore/check/octopus-<时间>.json --into /var/lib/octopus/restore/verified
+# 校验通过后：把 verified/octopus.sqlite3 放到 /var/lib/octopus/platform/（属主 octopus，0600），再启动 octopus-api
+```
+
+云上验证（2026-10-26，临时 arm64 主机，没有 Agent）：每 20 ms 写一行，主机 `sysrq` 宕机后在另一台主机上恢复，用时 4.4 s，`restore-verify` 通过，RPO 0.69 s（`docs/research/2026-10-26-p0-results.md` 第 4 节）。
+
 ## 13．批准模式
 
 无人值守的执行边界在 `boundary-<边界>.toml` 中设置 `approval_mode = "auto"`（D14）：Worker 只对平台派发的 spawn 请求原生
@@ -1282,3 +1347,95 @@ npm --prefix web run test:browser       # 浏览器回归：React 与 /classic/ 
 ```
 
 浏览器回归只使用 `tests/mvp_browser_fixture.py` 的临时 HTTP/SQLite 数据，不连接 Worker、不调用 Coding 工具。
+
+## 15．发布物（MVP 0.2.0 P1、P2）
+
+`npm --prefix web run build && python3 tools/build_release.py --out dist/release [--sign-key <PEM 私钥>] [--channel preview]`
+只用标准库生成：
+
+- `kirocrew_on-<版本>-py3-none-any.whl`：`octopus`、`composition`、控制台构建 `octopus/ui/dist`，以及放在 `octopus/_release/` 下的 `deploy/` 与 `skills/`（只打包 git 跟踪的文件，不带本部署自己的 `deploy/aws/stack.env`；代码经 `octopus.release.path()` 找到它们：检出里用检出的，装了 wheel 用 wheel 里的）。命令为 `kirocrew-on`（即 `python -m octopus`）；没有运行依赖。文件顺序与时间戳固定，同一提交构建出同一个哈希。
+- `manifest.json`（结构见 `deploy/release/manifest.schema.json`）：版本、频道、wheel 的 sha256，以及这一版测过的组合，取自 `deploy/versions.env`：KiroCrew 的提交与版本、Node 版本及 x64 / arm64 包的 sha256（从 nodejs.org 的 `SHASUMS256.txt` 读，可用 `--node-sums` 指定文件）、kiro-cli、Claude Code、Codex、OpenCode。
+- `SHA256SUMS`；给了 `--sign-key` 时另有 `manifest.sig`，用 `openssl dgst -sha256 -verify <公钥> -signature manifest.sig manifest.json` 验证。
+
+频道（MVP 0.2.0 P2）：再加 `--index <feed 目录> --downloads https://<下载域名>/releases --feed https://<更新域名>/feed`（必须同时给 `--sign-key`），另出：
+
+- `<feed>/<频道>/latest.json`（install.sh 不带 `--version` 时读它）与 `versions.json`；
+- `<feed>/<频道>/simple/kirocrew-on/index.html`：PEP 503 索引，链接带 `#sha256=`（pip 渠道：`pip install --pre kirocrew-on --index-url https://<更新域名>/feed/<频道>/simple/`；不要用 `--extra-index-url`，否则 PyPI 上同名的更高版本会胜出）；
+- 版本目录里的 `install.sh`：写入了两个地址与签名公钥的那一份；wheel 里带的也是这一份（`kirocrew-on setup` 运行它）。仓库里的 `deploy/install/install.sh` 没有，只能 `--check` 或 `--source`。
+- wheel 另带 `tests/native` 与 `tests/kirocrew_contract.json`：每次安装在切换前跑的原生契约检查要用。
+
+目录布局：`<根>/releases/<版本>/`（字节，签过名）与 `<根>/feed/<频道>/`（可变的指针）。托管（S3 + CloudFront）与 KMS 签名随 CI 一起做；在那之前只发内部 `preview` 频道（设计 §17 #9 的默认）。
+
+## 16．单机版（MVP 0.2.0 P2，设计 §4.2）
+
+### 一行安装
+
+在一台 EC2 上（推荐 Graviton、AL2023 arm64、根卷 ≥ 50 GiB）：
+
+```
+curl -fsSL https://<下载域名>/install.sh | sudo sh                        # stable 频道的最新版
+curl -fsSL https://<下载域名>/install.sh | sudo sh -s -- --channel preview  # 或 --version 0.2.0rc1
+curl -fsSL https://<下载域名>/install.sh | sudo sh -s -- --check            # 只做预检
+```
+
+- **预检**（`install.sh` 本身，POSIX sh，经管道运行时 Ubuntu 上是 dash）：
+  - 支持 AL2023 与 Ubuntu 22.04 / 24.04，aarch64 或 x86_64；x86_64 照装，开头和结尾各提示一次推荐 ARM64；
+  - 其他系统列出受支持的系统后以退出码 2 结束；
+  - 一次列出所有不满足的项（root、systemd、空闲磁盘 ≥ 40 GiB——已装过的主机重跑只要 5 GiB、内存 ≥ 7.5 GiB、IMDSv2 可达），退出码 2，什么也不改。
+- **取发布物**：先用内嵌公钥验 `manifest.sig`（没有签名不装），再核对清单里的版本与 wheel 的 sha256；任何一项不符都以退出码 3 停在改动之前。验过的 wheel 展开在 `/opt/kirocrew-on/incoming/<版本>/`，然后执行同一套安装步骤（`al2023.sh`，按 `os-lib.sh` 分 dnf / apt；Ubuntu 22.04 的 Python 3.12 由 uv 管理）。
+- **CloudFront**：默认建小栈 `kirocrew-on-single`（`deploy/install/single-stack.sh up`），包括：
+  - Elastic IP；
+  - 主机安全组上一条只放行 CloudFront 源站前缀列表的规则；
+  - 控制台、原生、预览三个分发，以及给更多边界用的 9 个原生槽位；
+  - DLM 每日快照，按实例标签 `Backup=kirocrew-on-single`。
+  - 源站密钥在主机上生成，只写本机 `/etc/kirocrew-on/origin-secret`，重跑不换。
+  - `--no-cloudfront` 不建栈：API 只监听本机回环、不要求源站密钥，控制台只经 SSM 端口转发打开（`portNumber=8918`，`http://localhost:8918`）。之后去掉这个选项再运行一次，就建栈并改为监听 CloudFront。
+  - 关联 Elastic IP 会换掉这台主机原来的公网 IP：经 SSH 运行时脚本先提示，连接断开后从 EC2 控制台查到新 IP、重新连上再运行一次即可（只补缺）；经 SSM 会话运行不受影响。结尾打印新的公网 IP。
+  - 重跑时栈在任何状态都有出路：上次没执行的首个变更集重新创建，正在变更的等它结束，`ROLLBACK_COMPLETE` 删掉重建，`*_FAILED` 说明要在 CloudFormation 控制台处理后再运行（退出码 5）。
+- **安装用的权限**：给实例角色临时加上 `deploy/aws/kirocrew-on-single-install-policy.json`，或用有这些权限的 AK/SK（`sudo -E sh` 或 `sudo AWS_ACCESS_KEY_ID=… AWS_SECRET_ACCESS_KEY=… sh`）。AK/SK 只给建栈与核对角色的步骤用，安装步骤（npm、pip、契约检查）看不到，也不写盘。缺权限时脚本列出需要的操作后以退出码 4 结束。策略里的 IAM 权限只够建 DLM 的服务角色：只能挂 DLM 的服务策略、只能交给 `dlm.amazonaws.com`，也包括失败回滚时删除已建资源的权限。
+- **装完核对主机角色**（`single-stack.sh check-role`，S29）：用 `iam:SimulatePrincipalPolicy` 查角色是否还有写权限；有则打印要卸下的策略（保留 Bedrock 调用与 `AmazonSSMManagedInstanceCore`）。安装照常完成，结尾提示「主机角色的核对没有通过」；结果记在 `/etc/kirocrew-on/host-role.json`，「管理 › 部署」一直标红（没能核对、没有角色时标黄），直到某次运行核对通过。
+- **Kiro 的登录方式**：`--kiro-license free|pro`、`--kiro-identity-provider https://<IAM Identity Center 起始地址>`、`--kiro-region <区域>` 写进每个边界的配置，控制台「登录 Kiro」按它登录；不给时沿用上次的设置。
+- **管理员密码改了以后**：安装重跑、新建边界、Docker 重启都不再用 `/etc/kirocrew-on/admin-password`，而是由平台用户在本机签发一个最长 1 小时的管理员 Token（`octopus local-token`），用完即注销；那个文件只在首次安装时用来建管理员。
+- **结尾**打印控制台地址、管理员 `admin`、初始密码（只打印这一次，另存在 root 0600 的 `/etc/kirocrew-on/admin-password`）与下一步：在「管理 › 执行环境」该行的菜单里点「登录 Kiro」。
+- **重跑**：每一步只补缺；栈没有变化时不执行变更集，含资源替换的变更集一律拒绝。
+- **pip 渠道**：`pip install --pre kirocrew-on --index-url https://<更新域名>/feed/<频道>/simple/` 后 `sudo kirocrew-on setup`：运行 wheel 里带的、写有发布公钥的 `install.sh`，安装这个版本，即同样下载、验签、再执行同一套步骤。不是从发布频道装的包没有公钥，什么也不装。
+- 主机上的 `kirocrew-on` 命令（`/usr/local/bin/kirocrew-on`）运行当前发布（不会先从当前目录导入），例如 `sudo kirocrew-on --config /etc/kirocrew-on/platform.toml backup --dest <目录>`。
+
+### 新建边界（控制台）
+
+「管理 › 执行环境」右上角的「新建边界」（只在单机版上出现，需要控制台登录的管理员）：选属主，名称留空时用属主的用户名。
+
+- 平台 API 以 `NoNewPrivileges` 运行，从不提权：它校验属主（存在、未停用、还没有自己的专属执行环境）与名称（同 `boundary.sh`），只把名称与用户名写进 `/var/lib/octopus/platform/boundary-requests/`。
+- `octopus-boundary-provision.path` 发现请求后启动 root 的一次性服务（`deploy/install/boundary-provision.py`）：
+  - 不跟随链接，只读 octopus 用户的普通文件；
+  - 按 `boundary.sh` 的规则再校验一遍，只以这两个参数运行 `boundary.sh`，一次一个；
+  - 进度写进 `/var/lib/octopus/boundary-provision/`（root 所有、octopus 组只读），像令牌的字符串先遮掉。
+- 控制台显示排队 / 进行中 / 已完成 / 没有完成、脚本输出与下一步；失败的「再试一次」只补缺。服务重启或超时打断的，下次启动时记为「中断」，可以再试。新边界的原生入口先只经本机端口转发；要公网入口时运行下面的 `kirocrew-on single native <边界>`。
+- 审计：`boundary.provision`（名称与属主）。
+
+### 部署套件（`kirocrew-on single`，在你的电脑或 CloudShell 上运行）
+
+装完后主机角色只留 Bedrock 调用权限，之后要改 AWS 的事由管理员在主机外用自己的凭证（aws CLI 的）执行；要在主机上做的经 SSM，管理员凭证不去主机。
+
+| 命令 | 做什么 |
+|---|---|
+| `kirocrew-on single native <边界>` | 在栈里给该边界开一个原生分发（槽位 1–9，中转端口 8920–8928，源站密钥沿用栈里的值），再经 SSM 让主机渲染中转、改写 `crew_url` 并重启该边界（`deploy/install/boundary-native.sh`） |
+| `kirocrew-on single backup --bucket <桶>` | 本机为一个对象签一条 15 分钟内有效的 PUT 预签名 URL，经 SSM 让主机以平台用户做一致性备份并上传到 `s3://<桶>/kirocrew-on/backups/<实例>/<时间>.tar.gz`（`deploy/install/backup-upload.sh`，URL 只经标准输入给 curl）；用 `kirocrew-on restore-verify` 在别处核对 |
+| `kirocrew-on single up` | 按这个版本的模板更新栈，保留栈里所有值 |
+
+公共参数：`--region`（或 `AWS_REGION`）、`--stack`（默认 `kirocrew-on-single`）。「管理 › 部署」记下待执行的变更（`aws_requests`，参数里只有名称）并给出要运行的命令；命令带 `--request <编号> --platform <控制台地址> --token-file <管理员 API Token 文件>` 时，执行完回报，控制台不再显示命令。
+
+### Docker 渠道（试用：一个容器、一个边界）
+
+```
+docker build -t kirocrew-on:<版本> --build-arg VERSION=<版本> .
+docker run -d --name kirocrew-on -p 127.0.0.1:8918:8918 -v kirocrew-on:/var/lib/octopus -e AWS_REGION=us-east-1 \
+  --cap-add SYS_ADMIN --security-opt apparmor=unconfined kirocrew-on:<版本>
+```
+
+- 依赖与主机相同，全部来自 `deploy/versions.env`、每个下载都校验；
+- API 以 octopus 运行，Gateway、Worker 与所有 Agent 以 crew-personal 运行；
+- 配置与数据在卷里，首次启动在 `docker logs` 打印一次管理员密码；
+- Claude Code 与 Codex 经 Bedrock，需要给容器 AWS 凭证（EC2 上把实例元数据的跳数设为 2）；
+- 原生 KiroCrew 入口不从容器里提供；
+- 多架构镜像由 CI 构建。

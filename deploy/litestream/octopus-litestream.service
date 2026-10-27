@@ -1,0 +1,22 @@
+[Unit]
+Description=Litestream: the KiroCrew ON platform database replicated to the state bucket (cluster control plane)
+Documentation=file:///opt/kirocrew-on/current/docs/OPERATIONS.md
+After=network-online.target octopus-api.service
+Wants=network-online.target
+
+[Service]
+Type=simple
+# The database's owner: Litestream keeps its own files beside the database and holds a read transaction on it.
+User=octopus
+Group=octopus
+ExecStart=/usr/local/bin/litestream replicate -config /etc/kirocrew-on/litestream.yml
+Restart=always
+RestartSec=5
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+ReadWritePaths=/var/lib/octopus/platform
+
+[Install]
+WantedBy=multi-user.target

@@ -1,6 +1,6 @@
 {
   "_comment": "进度看板与 docs/PROGRESS.md 的唯一数据源：任务状态在这里维护；提交记录由 tools/progress.py 从 git 生成（负责人 2026-10-20）。",
-  "checks": "1861 后端 + 92 + 281 控制台 + 7 个浏览器测试；EC2 运行 12fbd9f；本地 main 已合并（fe49f81），MVP-0.1.1 在 feat/mvp-0.1.1",
+  "checks": "2168 后端 + 92 + 354 控制台测试；EC2 运行 9b587ec（MVP 0.2.0 P2，PR #15）",
   "status": {
     "accepted": {
       "label": "已验收",
@@ -335,6 +335,13 @@
           "more": "去掉左侧导航；顶栏中间是开发空间与「会话 / 工作流」，工作流升为一级页面（表格：任务链、版本、归属，行内新建开发 / 编辑 / 共享）；管理与我的设置是顶栏右侧的文字入口，页面里用自己的分区导航和「返回工作台」；深色模式在账户菜单。"
         },
         {
+          "id": "m3-worker-enroll",
+          "name": "Worker 自助接入：一次性接入码、worker enroll、本地全栈自动登记",
+          "status": "todo",
+          "ref": "spec 2026-10-24-worker-enrollment-design · 负责人 2026-10-24：放到 MVP 0.2.0",
+          "more": "管理员签发一次性接入码（登记到哪里签发时定死），Worker 主机执行 worker enroll 自行登记；平台照旧带 Token 核实 /health；Token 不经人手、不进 SSM 命令历史。负责人 2026-10-24 决定放到 MVP 0.2.0，与 0.2.0 的「Worker 自助申请」（集群版后台自动开 Worker、登记与管理）一起设计，第 7 节的三个待定点届时再定。"
+        },
+        {
           "id": "m3-011-continue-hint",
           "name": "MVP-0.1.1 续作对话框提醒对话中的改动",
           "status": "accepted",
@@ -394,6 +401,150 @@
         {
           "id": "m5",
           "title": "M5 仓库闭环（GitHub Connector）"
+        }
+      ]
+    },
+    {
+      "id": "mvp020",
+      "title": "MVP 0.2.0 部署模式、自助 Worker 与 Worker 池",
+      "scope": "round",
+      "desc": "统一设计 2026-10-25；路线图与 P1 计划 2026-10-26。分支 feat/mvp-0.2.0。",
+      "items": [
+        {
+          "id": "v020-plan",
+          "name": "0.2.0 规划：统一设计并入集成分支、路线图与 P1 计划、版本文档与 Presentation",
+          "status": "deployed",
+          "ref": "feat/mvp-0.2.0"
+        },
+        {
+          "id": "v020-p0",
+          "name": "P0 实测（13 项，≤ $20）",
+          "status": "doing",
+          "ref": "设计 §16",
+          "more": "T1–T4、T7、T9、T10 完成，T8 进行中；T5/T6/T11/T13 待 arm64 上的 KiroCrew ON 与负责人登录"
+        },
+        {
+          "id": "v020-p1-1",
+          "name": "P1-1 登记时边界唯一性看全部 Worker（CE9）",
+          "status": "deployed",
+          "ref": "P1 Task 1 · EC2 45d3087"
+        },
+        {
+          "id": "v020-p1-2",
+          "name": "P1-2 boundary_id 进入 Worker 配置与健康信息（S8、CE3）",
+          "status": "deployed",
+          "ref": "P1 Task 2 · EC2 45d3087"
+        },
+        {
+          "id": "v020-p1-3",
+          "name": "P1-3 全局 UID 分配器（S9）",
+          "status": "deployed",
+          "ref": "P1 Task 3 · EC2 45d3087"
+        },
+        {
+          "id": "v020-p1-4",
+          "name": "P1-4 健康信息补容量字段",
+          "status": "deployed",
+          "ref": "P1 Task 4 · EC2 45d3087"
+        },
+        {
+          "id": "v020-p1-5",
+          "name": "P1-5 Engine 租约接口",
+          "status": "deployed",
+          "ref": "P1 Task 5 · EC2 45d3087"
+        },
+        {
+          "id": "v020-p1-6",
+          "name": "P1-6 接入码第 1 期（N）",
+          "status": "deployed",
+          "ref": "P1 Task 6 · EC2 45d3087",
+          "more": "EC2 2026-10-27：deploy.sh boundary add 用接入码登记临时边界 e2e-enroll——UID 70001 系统账号、无从属 ID、toml 首行 boundary_id、Worker 归测试用户且 Token 已密封、接入码已用并关联该 Worker、审计不含地址与 Token；重跑走更新连接；验收后停用、退役、停服务、停用测试用户。主机检查 13/13"
+        },
+        {
+          "id": "v020-p1-7",
+          "name": "P1-7 有副作用的 GET 审计（CE12）",
+          "status": "deployed",
+          "ref": "P1 Task 7 · EC2 45d3087"
+        },
+        {
+          "id": "v020-p1-8",
+          "name": "P1-8 安装脚本支持 ARM64",
+          "status": "deployed",
+          "ref": "P1 Task 8 · EC2 45d3087",
+          "more": "arm64 实机验收随 P0b"
+        },
+        {
+          "id": "v020-p1-9",
+          "name": "P1-9 打包：wheel、清单、签名",
+          "status": "deployed",
+          "ref": "P1 Task 9 · EC2 45d3087",
+          "more": "可复现 wheel，版本 0.2.0rc1"
+        },
+        {
+          "id": "v020-p1-10",
+          "name": "P1-10 状态栈与 Litestream",
+          "status": "deployed",
+          "ref": "P1 Task 10 · EC2 45d3087",
+          "more": "云上验证：宕机恢复 4.4 s，restore-verify 通过，RPO 0.69 s"
+        },
+        {
+          "id": "v020-p1-11",
+          "name": "P1-11 平台指标（EMF）",
+          "status": "deployed",
+          "ref": "P1 Task 11 · EC2 45d3087"
+        },
+        {
+          "id": "v020-sec-1027",
+          "name": "安全修复：Token 记签发方式、给权的账号操作只认控制台登录、签发后立即可用",
+          "status": "deployed",
+          "ref": "EC2 45d3087",
+          "more": "另一会话 2026-10-27 发现；EC2 安全检查 12/12、签发后立即使用 0/10 失败；部署后需重新登录一次控制台"
+        },
+        {
+          "id": "v020-p1-12",
+          "name": "P1-12 KiroCrew 升到正式版 v0.10.0（拆为 P1b）",
+          "status": "blocked",
+          "ref": "P1 Task 12",
+          "more": "会改变原生页面的体验（Dashboard 默认出现、「重启 Gateway」按钮等）；待负责人确认这些变化与「重启 Gateway」的处理方式（docs/research/2026-10-26-kirocrew-upgrade.md）"
+        },
+        {
+          "id": "v020-p2-plan",
+          "name": "P2 实施计划（9 项）",
+          "status": "deployed",
+          "ref": "EC2 9b587ec"
+        },
+        {
+          "id": "v020-p2",
+          "name": "P2 单机版一键安装",
+          "status": "deployed",
+          "ref": "EC2 9b587ec",
+          "more": "P2 Task 1–8 已部署 EC2（2026-10-28）：install.sh 预检与验签安装、dnf / apt 分支、CloudFront 小栈与主机角色核对、控制台登录 Kiro、控制台新建边界（root 服务经 systemd path 单元）、部署套件 kirocrew-on single native / backup / up 与「管理 › 部署」、Docker 渠道。终审 3 严重 11 重要已修；回归 92 + 354 + 2168 通过；EC2 主机 17/17、浏览器 8/8。一行安装的验收见下一项。"
+        },
+        {
+          "id": "v020-p2-acceptance",
+          "name": "P2 验收：4 台新 EC2 各装一次（第 9 项）",
+          "status": "blocked",
+          "ref": "P2 计划 Task 9",
+          "more": "需负责人批准新开 4 台 EC2（约 $3，做完删除）"
+        },
+        {
+          "id": "v020-p3",
+          "name": "P3 集群版底座（只开放给管理员）",
+          "status": "todo",
+          "ref": "设计 §15",
+          "more": "待 P0（T5、T6、T13）。不另购域名（负责人 2026-10-27）：原生入口 *.native.tinyboat.blog，按设计 §8.2a 在源站一级隔离"
+        },
+        {
+          "id": "v020-p4",
+          "name": "P4 自助申请与切换",
+          "status": "todo",
+          "ref": "设计 §15"
+        },
+        {
+          "id": "v020-p5",
+          "name": "P5 迁移现有部署与平台温备",
+          "status": "todo",
+          "ref": "设计 §15"
         }
       ]
     },
@@ -724,9 +875,9 @@
         },
         {
           "id": "confirm",
-          "name": "负责人确认推送",
-          "status": "todo",
-          "ref": "负责人",
+          "name": "负责人确认推送与合并",
+          "status": "accepted",
+          "ref": "负责人 2026-10-24：PR #5、#6、#7 已合并；之后开发完即推送、开 PR、部署 EC2（合并仍由负责人）",
           "deps": [
             "acc-route",
             "acc-p5",
@@ -738,12 +889,13 @@
         },
         {
           "id": "push",
-          "name": "推送 60 个提交（--no-verify）并更新 PR #4",
-          "status": "todo",
+          "name": "推送到 main（经 PR）",
+          "status": "accepted",
           "deps": [
             "confirm",
             "scan"
-          ]
+          ],
+          "ref": "PR #4 → main 8477234；PR #5–#7 → main b2b8986（2026-10-24 改写历史后）"
         }
       ]
     },
@@ -834,19 +986,19 @@
   "next": [
     {
       "who": "owner",
-      "text": "D52 EC2 验收：指定一个可写入的测试仓库与写凭证（会在其上开 octopus/knowledge-… 分支与 Draft PR）"
+      "text": "合并 PR #8：MVP 0.2.0 输入（两种部署模式、Worker 自助申请、每人一块 EBS、认证随卷、缩容待评估），Worker 自助接入并入 0.2.0"
     },
     {
       "who": "owner",
-      "text": "可选：建一个测试成员账号（我不经 MCP 建用户），以便在 EC2 实测 D49 第 2 期的成员回退与 R10"
+      "text": "0.2.0 的设计合并（worker-pool 与 mvp-020-ha 两份草案并成一份设计 + 计划）完成后，定开工顺序"
     },
     {
       "who": "owner",
-      "text": "规划质量：默认 admission 改为 confirm（计划先给人看），和 / 或在规划后加一个不同工具的计划审查"
+      "text": "下一个大项的先后：M5 仓库闭环（CONN-01…05）、M3-6 移除 /classic/、M4-3 原生入口单 Session 票据（K03）、D49 第 3 期"
     },
     {
       "who": "owner",
-      "text": "下一个大项的先后：M2 剩余、M3 剩余、M4 剩余、M5 仓库闭环、D49 第 3 期、返工自动附技能（skills-next）"
+      "text": "确认后删除本机备份分支 backup/main-before-rewrite（改写前的 main）"
     }
   ]
 }

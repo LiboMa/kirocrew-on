@@ -150,6 +150,8 @@ elif "describe-managed-prefix-lists" in args:
     print("pl-fake")
 elif "describe-instance-type-offerings" in args:
     print("us-east-1c")
+elif "describe-instance-types" in args:
+    print(os.environ.get("FAKE_ARCHS", "x86_64\ti386"))
 elif "describe-instances" in args:
     print("ami-0running0000000\tus-east-1b")
 elif "get-parameter" in args:
@@ -192,6 +194,8 @@ class DeployUpTests(unittest.TestCase):
             (root / "deploy/aws").mkdir(parents=True)
             for name in ("deploy.sh", "kirocrew-on-ec2.yaml", "stack.env"):
                 shutil.copy(ROOT / "deploy/aws" / name, root / "deploy/aws" / name)
+            (root / "deploy/install").mkdir(parents=True)   # deploy.sh picks the AMI by architecture with it (MVP 0.2.0)
+            shutil.copy(ROOT / "deploy/install/arch-lib.sh", root / "deploy/install/arch-lib.sh")
             if stack_env is not None:
                 env = (root / "deploy/aws/stack.env").read_text()
                 for key, value in stack_env.items():
@@ -232,6 +236,15 @@ class DeployUpTests(unittest.TestCase):
         self.assertIn("UPDATE", created["args"])
         self.assertTrue(self.made(calls, "execute-change-set"))
         self.assertNotIn("o" * 48, result.stdout + result.stderr + json.dumps([c["args"] for c in calls]))
+
+    def test_a_new_stack_takes_the_latest_image_of_its_instance_types_architecture(self):   # MVP 0.2.0 (Graviton)
+        for archs, image in (("x86_64\ti386", "x86_64"), ("arm64", "arm64")):
+            with self.subTest(archs):
+                result, calls = self.up(stack_env={"IMAGE_ID": "", "AVAILABILITY_ZONE": ""}, stack="none", archs=archs)
+                self.assertEqual(result.returncode, 0, result.stderr)
+                asked = [c["args"][c["args"].index("--name") + 1] for c in self.made(calls, "get-parameter")
+                         if c["args"][c["args"].index("--name") + 1].startswith("/aws/service/")]
+                self.assertEqual(asked, [f"/aws/service/ami-amazon-linux-latest/al2023-ami-kernel-default-{image}"])
 
     def test_an_existing_stack_without_pins_keeps_the_running_image_and_zone(self):
         result, calls = self.up(stack_env={"IMAGE_ID": "", "AVAILABILITY_ZONE": ""})

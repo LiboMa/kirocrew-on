@@ -233,9 +233,10 @@ TOOLS += [
      "inputSchema": object_schema({"run_id": STRING, "action": {"type": "string", "enum": ["start", "status", "open", "stop"]}},
                                   ["run_id", "action"])},
     {"name": "octopus_admin_users",
-     "description": "平台管理员（需含 admin 的 Token）：列出用户，或按用户名停用 / 恢复、设为 / 取消管理员。"
-                    "不创建用户、不设置密码（请在控制台「用户管理」操作）；停用会立即吊销该用户的全部 Token。",
-     "inputSchema": object_schema({"action": {"type": "string", "enum": ["list", "deactivate", "activate", "promote", "demote"]},
+     "description": "平台管理员（需含 admin 的 Token）：列出用户，或按用户名停用、取消管理员。"
+                    "新建用户、设置密码、设为管理员、恢复已停用的账号只能在控制台登录后操作（「管理 › 用户」）；"
+                    "停用会立即吊销该用户的全部 Token。",
+     "inputSchema": object_schema({"action": {"type": "string", "enum": ["list", "deactivate", "demote"]},
                                    "username": STRING}, ["action"]), "annotations": {"destructiveHint": True}},
     {"name": "octopus_admin_teams",
      "description": "平台管理员（需含 admin 的 Token）：列出、创建（name、owner 用户名、worker_id）、改名、归档 / 恢复 Team，"
@@ -337,15 +338,16 @@ def need(args, *keys):
         raise ValueError("缺少参数：" + "、".join(missing))
 
 
-USER_ACTIONS = {"deactivate": ("active", {"active": False}), "activate": ("active", {"active": True}),
-                "promote": ("admin", {"admin": True}), "demote": ("admin", {"admin": False})}
+# What takes access away only: granting it (activate, promote) needs a console login (peer review 2026-10-27)
+USER_ACTIONS = {"deactivate": ("active", {"active": False}), "demote": ("admin", {"admin": False})}
 
 
 def admin_users(client, args):
-    """List users, or deactivate / restore / promote / demote one by username (never create users or set passwords, B7)."""
+    """List users, or deactivate / demote one by username (never create, set passwords, promote or restore: B7, peer
+    review 2026-10-27)."""
     action = args.get("action")
     if action != "list" and action not in USER_ACTIONS:
-        raise ValueError("不支持的用户操作（list / deactivate / activate / promote / demote）")
+        raise ValueError("不支持的用户操作（list / deactivate / demote）；设为管理员、恢复账号请在控制台登录后操作")
     users = client.request("GET", "/v1/admin/users")
     if action == "list":
         return {"users": users}
