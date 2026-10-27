@@ -60,18 +60,21 @@ def revoke(db, eid, now=None):
 
 
 def live(db, code, now=None):
-    """The unused, unexpired, unrevoked code ``code`` names; else 404 ``enrollment_invalid`` — the same answer whatever
-    is wrong, so a guess learns nothing."""
-    row = db.execute("SELECT * FROM worker_enrollments WHERE code_hash=?",
-                     (digest(code) if isinstance(code, str) and code.startswith(PREFIX) else "",)).fetchone()
+    """The unused, unexpired, unrevoked code ``code`` names, issued by an administrator who still is one; else 404
+    ``enrollment_invalid`` — the same answer whatever is wrong, so a guess learns nothing."""
+    # The issuer must still be an active administrator: a code dies with the rights it was issued under.
+    row = db.execute("SELECT e.* FROM worker_enrollments e JOIN users u ON u.id=e.created_by AND u.active=1 AND u.admin=1 "
+                     "WHERE e.code_hash=?", (digest(code) if isinstance(code, str) and code.startswith(PREFIX) else "",)).fetchone()
     require(row is not None and state(row, now or time.time()) == "unused", "接入码无效、已过期或已使用", 404,
             "enrollment_invalid")
     return row
 
 
 def failed(db, eid):
-    """A registration with the code failed; the fifth retires it."""
+    """A registration with the code failed; the fifth retires it (True then). A code is used once, so its failures are
+    always consecutive (N §3)."""
     db.execute("UPDATE worker_enrollments SET failures=failures+1 WHERE id=?", (eid,))
+    return db.execute("SELECT failures FROM worker_enrollments WHERE id=?", (eid,)).fetchone()[0] == RETIRE_AFTER
 
 
 def consume(db, eid, now=None):

@@ -204,3 +204,72 @@ class LimiterTests(EnrollmentCase):
             sources.allow(f"10.0.{n // 250}.{n % 250}", 1000.0 + n * 0.01)
         sources.allow("1.1.1.1", 2000.0)   # well past a minute after the earliest ones
         self.assertLess(len(sources.seen), 30000)
+
+
+class HardeningTests(EnrollmentCase):   # review 2026-10-26 (BACKLOG「MVP 0.2.0 P1 打底的终审延后项」)
+    def enroll_raising(self, call, code, error):
+        with mock.patch("octopus.server.validate_worker", side_effect=error):
+            return call("POST", "/v1/workers/enroll", None, {"code": code, **WORKER})
+
+    def test_a_worker_answering_like_the_platform_still_counts_as_a_failure(self):
+        _, issued = self.issue()
+        with self.http() as call:
+            for _ in range(5):   # a "Worker" whose /health answers 404 enrollment_invalid
+                status, answer = self.enroll_raising(call, issued["code"], Error(404, "enrollment_invalid", "x"))
+                self.assertEqual((status, answer["code"]), (503, "worker_unavailable"))
+            (status, _), checked = self.enroll(call, issued["code"])
+        self.assertEqual(status, 404)   # five failures retired it
+        checked.assert_not_called()
+
+    def test_health_that_is_not_an_object_is_a_counted_failure(self):
+        _, issued = self.issue()
+        with self.http() as call:
+            (status, answer), _ = self.enroll(call, issued["code"], health=["not", "an", "object"])
+        self.assertEqual((status, answer["code"]), (503, "worker_unavailable"))
+        with self.db.read() as db:
+            self.assertEqual(db.execute("SELECT failures FROM worker_enrollments WHERE id=?", (issued["id"],)).fetchone()[0], 1)
+
+    def test_check_must_be_a_boolean(self):
+        _, issued = self.issue()
+        with self.http() as call:
+            (status, _), checked = self.enroll(call, issued["code"], check=1)
+        self.assertEqual(status, 400)
+        checked.assert_not_called()
+
+    def test_a_code_dies_with_its_issuers_admin_rights(self):
+        _, issued = self.issue()
+        with self.db.transaction() as db:
+            db.execute("UPDATE users SET active=0 WHERE id=?", (self.a["id"],))
+        with self.http() as call:
+            (status, answer), checked = self.enroll(call, issued["code"])
+        self.assertEqual((status, answer["code"]), (404, "enrollment_invalid"))
+        checked.assert_not_called()
+
+    def test_a_loopback_worker_url_is_only_for_a_request_from_this_machine(self):   # no probing of the platform host
+        import http.client
+        import json as jsonlib
+        import threading
+        from octopus.server import server
+        _, issued = self.issue()
+        app = server(self.db, 0, allowed_hosts=("kirocrew-on.example",))   # as behind the console's own domain
+        threading.Thread(target=app.serve_forever, daemon=True).start()
+        self.addCleanup(app.server_close)
+        self.addCleanup(app.shutdown)
+
+        def post(host):
+            conn = http.client.HTTPConnection("127.0.0.1", app.server_address[1], timeout=10)
+            body = jsonlib.dumps({"code": issued["code"], "url": "http://127.0.0.1:9002", "token": "w" * 40, "check": True})
+            conn.request("POST", "/v1/workers/enroll", body=body, headers={"Host": host, "Content-Type": "application/json"})
+            response = conn.getresponse()
+            return response.status, jsonlib.loads(response.read() or b"{}")
+        with mock.patch("octopus.server.validate_worker", return_value=HEALTH) as checked:
+            status, answer = post("kirocrew-on.example")
+            self.assertEqual((status, answer["code"]), (400, "loopback_worker"))
+            checked.assert_not_called()
+            self.assertEqual(post(f"127.0.0.1:{app.server_address[1]}")[0], 200)   # boundary add on the platform host
+
+    def test_a_spoofed_viewer_address_does_not_split_the_limit(self):
+        with self.http() as call:
+            statuses = [call("POST", "/v1/workers/enroll", None, {"code": "kce_" + str(n % 10) * 43, **WORKER},
+                             headers={"CloudFront-Viewer-Address": f"198.51.100.{n}:443"})[0] for n in range(11)]
+        self.assertEqual(statuses[10], 429)   # an unverified request's header is not believed

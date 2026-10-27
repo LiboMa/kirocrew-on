@@ -168,17 +168,18 @@
 
 ## MVP 0.2.0 P1 打底的终审延后项（2026-10-26）
 
-终审的严重与重要项已修（全局 UID 改 70000 + 序号、系统账号、分配可重复、找回 D49 主机测试、Litestream 改独立脚本、限流开销、wheel 内容、接入码命令）。以下为次要项：
+终审的严重与重要项已在 P1 修完。次要项 2026-10-27 处理如下：
 
-- **接入码失败计数可被绕开**：`worker_request` 原样转出 Worker 回的错误码，自称 `enrollment_invalid` 的「Worker」不计失败；`/health` 回列表或 `url` 非字符串时变成 500 也不计。改为按异常来源计数，Worker 的错误映射成固定码，并要求 health 为对象。
-- **接入码的 Worker URL**：持码人可填平台主机的回环地址探测本机端口；urllib 跟随重定向并带上 Authorization；`/health` 响应没有大小上限。非本机发起时拒绝回环 URL、关掉重定向、限制响应大小。
-- **`check` 的类型**：`in (True, False)` 也接受 1 / 0，改用 `isinstance(…, bool)`。
-- **签发人失效**：签发人被停用或不再是管理员后，他签的接入码仍可用；失败尝试与作废没有审计。
-- **N 要求「连续」失败 5 次作废**：现在是累计 5 次。
-- **Worker 容量的 `running_attempts`**：停止、失败或没写成结果的 Attempt 永远没有 `result-note.json`，计数只增不减；每次 `/health` 都 glob 全部历史 run。
-- **控制台接入码列表**：不轮询，Worker 登记后不刷新，用掉的码仍显示「未使用」；撤销遇 404（刚被用掉）时不刷新；N 里「新行高亮」没做。
-- **测试覆盖**：`test_get_side_effects` 不比 `audit` 表，文档列了但没请求到的路由直接放过，`/bundle`、`/archive` 未覆盖；限流测试没覆盖 `CloudFront-Viewer-Address`；没有控制台构建时 `test_release_build` 整组跳过（`regress.sh` 会先构建）。
-- **其他**：`kirocrew-on-worker-pool.yaml:44` 仍引用状态栈已删的输出 `WorkerPackagesReadPolicyArn`；wheel 用户不给配置时，指标日志写到当前目录下的 `state/logs`。
+- ~~接入码失败计数可被绕开~~：Worker 回的任何错误都映射成 503 `worker_unavailable` 并计数，只有「被别的请求抢先用掉」不计；`/health` 不是对象时也计数。
+- ~~Worker URL 的回环、重定向与大小~~：回环地址只在平台主机本机发起的登记中允许；平台对 Worker 的请求一律不跟随重定向；`/health` 响应最多 1 MB；URL 不是字符串时返回 400。
+- ~~`check` 的类型~~：必须是布尔值。
+- ~~签发人失效~~：签发人停用或不再是管理员，他签的码立即失效；码因失败 5 次作废时记审计 `worker.enrollment_retired`。
+- **N 的「连续」失败 5 次**：不用改。码只能用一次，成功即用掉，所以它的失败一定是连续的。
+- ~~Worker 容量的 `running_attempts`~~：只计 24 小时内派发、还没有结果的尝试，结果缓存 30 秒。
+- ~~控制台接入码列表~~：每 30 秒重新读一次；用接入码自行登记的 Worker 出现在列表里时会高亮；撤销时码恰好被用掉，会显示原因并刷新列表。
+- ~~测试覆盖~~：GET 审计的固定清单里，每条路由要么在本测试里请求，要么明确记为由预览网关的测试覆盖；伪造的 `CloudFront-Viewer-Address` 拆不开限流，有测试。
+- ~~`kirocrew-on-worker-pool.yaml` 引用已删的输出~~：说明已改，池模板在 P3 重做。
+- **不改**：wheel 用户不给配置时，指标日志写到当前目录下的 `state/logs`，这与其他日志的默认目录一致（`log_dir` 可配）。
 
 ## D74 接手共享来的会话的延后项（2026-10-26）
 

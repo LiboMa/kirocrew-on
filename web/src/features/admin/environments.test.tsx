@@ -457,6 +457,33 @@ describe("管理 › 执行环境", () => {
     await waitFor(() => expect(within(list).queryByRole("region", { name: "接入码" })).toBeNull());
   });
 
+  test("a code used while it was being revoked: the reason is shown and the list read again (review 2026-10-26)", async () => {
+    let listed: unknown[] = [{ id: "enroll-1", name: "bob-host", binding_kind: "spare", binding_id: null, created_by: "u1", created: 1,
+      expires: Date.now() / 1000 + 600, used: null, used_by_worker: null, failures: 0, revoked: null, state: "unused" }];
+    start({ ...ONE_WORKER, "GET /workers/enrollments": () => listed,
+      "DELETE /workers/enrollments/enroll-1": () => { listed = []; return new Response(
+        JSON.stringify({ error: "接入码不存在、已使用或已撤销", code: "not_found" }), { status: 404 }); } });
+    const list = await openSection("管理", "执行环境");
+    const codes = await within(list).findByRole("region", { name: "接入码" });
+    await userEvent.click(within(codes).getByRole("button", { name: "撤销接入码：bob-host" }));
+    const dialog = await screen.findByRole("dialog", { name: "撤销接入码" });
+    await userEvent.click(within(dialog).getByRole("button", { name: "撤销" }));
+    expect(await within(dialog).findByRole("alert")).toHaveTextContent("已使用");
+    await waitFor(() => expect(within(list).queryByRole("region", { name: "接入码" })).toBeNull());
+  });
+
+  test("a Worker that registered itself with a code lights up when it appears in the list (N §3)", async () => {
+    const made = { id: "w9", name: "bob-host", owner_id: "u1", team_id: null, enabled: true, scope: "spare", spaces: [],
+      capabilities: { isolation: "dedicated" } };
+    let listed: unknown[] = ONE_WORKER["GET /workers"];
+    start({ ...ONE_WORKER, "GET /workers": () => listed });
+    const list = await openSection("管理", "执行环境");
+    await rowOf(list, "personal");
+    listed = [...listed, made];   // registered from its host with `worker enroll`
+    await userEvent.click(within(within(list).getByRole("region", { name: "执行环境列表" })).getByRole("button", { name: "刷新" }));
+    expect(await rowOf(list, "bob-host")).toHaveAttribute("data-fresh", "true");
+  });
+
   test("a member refreshes models in 我的设置 but cannot edit, assign, disable or retire a Worker", async () => {
     const calls = start({ ...ONE_WORKER, "GET /me": { id: "u1", username: "fixture-owner", admin: 0, scopes: ["read", "execute", "manage"] },
       "POST /workers/w1/capabilities": { models: {} } });

@@ -1223,6 +1223,25 @@ class Worker:
 
     MEMINFO = Path("/proc/meminfo")
 
+    RUNNING_HORIZON = 86400   # an attempt dispatched longer ago than this without a result was stopped or failed
+
+    def _running_attempts(self, now=None):
+        """Attempts dispatched within RUNNING_HORIZON that have no result yet (stopped or failed ones never get one, so
+        older ones are not counted); read at most every 30 s, the history of every run is not walked on each /health."""
+        now = time.time() if now is None else now
+        cached = getattr(self, "_capacity_cache", None)
+        if cached and now - cached[0] < 30:
+            return cached[1]
+        count = 0
+        for dispatched in self.root.glob("run-*/attempts/attempt-*/dispatch.json"):
+            try:
+                recent = now - dispatched.stat().st_mtime < self.RUNNING_HORIZON
+            except OSError:
+                continue
+            count += recent and not (dispatched.parent / "result-note.json").exists()
+        self._capacity_cache = (now, count)
+        return count
+
     def capacity(self):
         """How much room the host has and how much work this boundary runs (MVP 0.2.0, H §6.2), for the control plane to
         place and scale by; what cannot be read is None — never an error in the health answer."""
@@ -1238,8 +1257,7 @@ class Worker:
             load1 = round(os.getloadavg()[0], 2)
         except OSError:
             load1 = None
-        running = sum(1 for d in self.root.glob("run-*/attempts/attempt-*/dispatch.json")
-                      if not (d.parent / "result-note.json").exists())
+        running = self._running_attempts()
         try:
             subagents = json.loads((self.home / "config.json").read_text())["agent"]["max_subagents"]
             subagents = subagents if isinstance(subagents, int) and not isinstance(subagents, bool) else None

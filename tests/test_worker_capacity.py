@@ -36,6 +36,17 @@ class CapacityTests(unittest.TestCase):
         self.assertEqual(capacity["running_attempts"], 1)   # dispatched, no result yet
         self.assertEqual(capacity["max_subagents"], 3)
 
+    def test_an_attempt_dispatched_long_ago_is_not_counted_as_running(self):   # review 2026-10-26
+        import os
+        import time
+        stale = Path(self.tmp.name) / "worker" / ("run-" + "2" * 32) / "attempts" / ("attempt-" + "c" * 32)
+        stale.mkdir(parents=True)
+        (stale / "dispatch.json").write_text("{}")   # stopped or failed: it never gets a result note
+        old = time.time() - self.node.RUNNING_HORIZON - 60
+        os.utime(stale / "dispatch.json", (old, old))
+        self.node._capacity_cache = None
+        self.assertEqual(self.node.health()["capacity"]["running_attempts"], 1)
+
     def test_capacity_never_breaks_health(self):
         self.node.MEMINFO = Path(self.tmp.name) / "missing"
         (Path(self.tmp.name) / "crew" / "config.json").write_text("not json")

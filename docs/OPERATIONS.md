@@ -76,7 +76,9 @@ deploy/aws/deploy.sh admin-password  # 经 SSM 读取主机上的 /etc/kirocrew-
   Worker 读本边界的 `worker.token`，与地址一起交给 `POST /v1/workers/enroll`（不需登录）。平台照旧带 Token 调 `/health` 核实，
   按 `POST /v1/workers` 的全部规则校验，审计 `worker.enroll`（记签发人、接入码编号与绑定，不记地址与 Token）。
 - **规则**：接入码只能用一次（同时使用也只有一个成功）；错误、过期、已用或已撤销的码一律 404 `enrollment_invalid`，不会去调 Worker；
-  每个来源每分钟最多 10 次（429）。登记失败（Worker 不可达、规则拒绝）时码保持未用，可修正后重试；失败 5 次即作废。
+  每个来源每分钟最多 10 次（429）。登记失败（Worker 不可达、规则拒绝）时码保持未用，可修正后重试；失败 5 次即作废，并记审计 `worker.enrollment_retired`。
+  签发人被停用或不再是管理员时，他签的码立即失效。回环地址（`127.0.0.1` 等）的 Worker 只能由平台主机本机发起登记（`boundary add`），
+  经控制台域名来的请求不能让平台去访问它自己的回环端口；平台对 Worker 的请求一律不跟随重定向，`/health` 响应最多 1 MB。
 - **撤销**：执行环境页的「接入码」小节列出未用的码，可撤销（`DELETE /v1/workers/enrollments/<id>`）；`GET /v1/workers/enrollments` 不含码本身。
 - **脚本**：`deploy.sh boundary add` 与 `worker-host register` 的**首次**登记改用接入码（`bootstrap-worker --issue-code` 签发，Worker 自己 `worker enroll`），
   `worker-host register` 不再经 SSM 读取 Token，SSM 命令历史里只剩一次性的接入码。已登记过的（重跑、换主机）仍由 `bootstrap-worker` 更新连接。

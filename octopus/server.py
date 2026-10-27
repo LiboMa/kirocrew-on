@@ -25,6 +25,7 @@ from .db import dumps, uid
 from .domain import Service, audit, name, team_environment
 from .security import (Error, authenticate, check_password, create_user, elevated, expiry, issue_token, regenerate_token, require,
                        scope)
+from . import transport
 from .transport import validate_worker, worker_request
 from .schema import openapi
 
@@ -585,14 +586,28 @@ def server(database, port=8918, host="127.0.0.1", allowed_hosts=(), origin_secre
 
             class Checked(Exception):
                 pass
+            raced = False   # another request used the code first: not this code's failure
             try:
-                require(set(body) <= {"code", "url", "token", "check"} and body.get("check", False) in (True, False),
-                        "请求体为 {code, url, token}，可选 check")
+                require(set(body) <= {"code", "url", "token", "check"} and isinstance(body.get("check", False), bool),
+                        "请求体为 {code, url, token}，可选 check（布尔值）")
                 connection = {"url": body.get("url"), "token": body.get("token")}
-                health = validate_worker(connection)
+                parts = transport.check_connection(connection)
+                # A Worker on this machine registers from this machine (boundary add): no one else may point the
+                # platform at its own loopback ports (review 2026-10-26).
+                require(parts.hostname not in {"127.0.0.1", "localhost", "::1"} or self.local,
+                        "回环地址的 Worker 只能在平台主机上登记", 400, "loopback_worker")
+                try:
+                    health = validate_worker(connection)
+                except Error as exc:   # whatever the Worker answered, it is the Worker's failure, never one of our codes
+                    raise Error(503, "worker_unavailable", "Worker 无法访问或未返回有效的健康信息") from exc
+                require(isinstance(health, dict), "Worker 无法访问或未返回有效的健康信息", 503, "worker_unavailable")
                 workers.check_binding(health, team, user, spare)
                 with database.transaction() as db:
-                    enrollments.consume(db, code["id"])   # first: a code another request used meanwhile is 404, not 409
+                    try:
+                        enrollments.consume(db, code["id"])   # first: a code another request used meanwhile is 404, not 409
+                    except Error:
+                        raced = True
+                        raise
                     wid = workers.register(db, code["created_by"], code["name"], team, user, spare, connection, health,
                                            service.credentials.key)
                     if body.get("check"):
@@ -603,10 +618,12 @@ def server(database, port=8918, host="127.0.0.1", allowed_hosts=(), origin_secre
                            "scope": "spare" if spare else "dedicated"})
             except Checked:
                 return self.respond({"ok": True, "name": code["name"], "scope": "spare" if spare else "dedicated"})
-            except Error as exc:
-                if exc.code != "enrollment_invalid":
+            except Error:
+                if not raced:
                     with database.transaction() as db:
-                        enrollments.failed(db, code["id"])
+                        if enrollments.failed(db, code["id"]):   # the fifth: it is retired, and that is recorded
+                            audit(db, {"id": code["created_by"]}, "worker.enrollment_retired", "enrollment", code["id"],
+                                  {"failures": enrollments.RETIRE_AFTER})
                 raise
             return self.respond({"id": wid, "name": code["name"], "scope": "spare" if spare else "dedicated"}, 201)
 
@@ -660,7 +677,7 @@ def server(database, port=8918, host="127.0.0.1", allowed_hosts=(), origin_secre
                 self.origin_verified = bool(origin_secret) and hmac.compare_digest(supplied, origin_secret)
                 # Behind CloudFront only requests carrying the origin secret are served; local operations and SSM
                 # tunnels (loopback peer AND an allowed Host naming this machine) are exempt.
-                local = self.client_address[0] in LOOPBACK and loopback_host(self.headers.get("Host", ""))
+                local = self.local = self.client_address[0] in LOOPBACK and loopback_host(self.headers.get("Host", ""))
                 require(not origin_secret or self.origin_verified or local, "请求未经 CloudFront 源站认证",
                         403, "origin_unverified")
                 url = urlsplit(self.path)

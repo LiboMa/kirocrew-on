@@ -17,6 +17,8 @@ from tests.test_public_share_http import HttpCase
 ROOT = Path(__file__).resolve().parents[1]
 AUDIT = ROOT / "docs/research/2026-10-26-get-side-effects-audit.md"
 KEPT = {"events", "audit"}   # records of the read itself (journal and admin oversight), on purpose
+# Only the preview domain's nginx reaches these (loopback, X-Preview-Gate); their apps writes are pinned by these tests.
+BEHIND_THE_GATE = {"/v1/preview-auth": "tests/test_remote_preview.py", "/_kirocrew/enter/{ticket}": "tests/test_remote_preview.py"}
 
 
 def listed():
@@ -117,4 +119,7 @@ class GetSideEffectTests(HttpCase):
                     seen[route] = changed
         exercised = {route for route, _ in self.routes()} | {"/_kirocrew/s/{token}", "/_kirocrew/s/{token}/{file}"}
         self.assertEqual(seen, {route: tables for route, tables in expected.items() if route in exercised})
+        # Every route the audit lists is requested here or behind the preview gate's own tests: none passes unseen
+        # (review 2026-10-26).
+        self.assertEqual(set(expected) - exercised, set(BEHIND_THE_GATE))
         self.assertIn("/app", self.calls)   # the fake Worker was reached, so the writes behind its answers ran

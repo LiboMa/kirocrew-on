@@ -82,7 +82,9 @@ export function useEnvironments(enabled: boolean) {
 
 /** The Worker enrollment codes (administrators, N §5): unused ones and those of the last week, never the code itself. */
 export function useEnrollments(enabled: boolean) {
-  return useQuery({ queryKey: keys.enrollments, queryFn: () => api<Enrollment[]>("/workers/enrollments"), enabled, retry: false });
+  // read again every 30 s, as the Workers are: a code used from its host leaves the list (review 2026-10-26)
+  return useQuery({ queryKey: keys.enrollments, queryFn: () => api<Enrollment[]>("/workers/enrollments"), enabled, retry: false,
+    ...every(30_000) });
 }
 
 /** The newest `limit` messages of a run's native Session; refreshed every 5 s while the run is active. */

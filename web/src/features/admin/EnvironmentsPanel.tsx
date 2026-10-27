@@ -1,4 +1,4 @@
-import { useState, type ReactNode } from "react";
+import { useEffect, useRef, useState, type ReactNode } from "react";
 import { useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
 import { Archive, Check, Copy, Network, Pencil, Plus, Power, PowerOff, RefreshCw, SquarePlus, Undo2, X } from "lucide-react";
@@ -110,6 +110,13 @@ export function EnvironmentsPanel() {
   const [dialog, setDialog] = useState<Open>(null);
   const [search, setSearch] = useState("");
   const motion = useRowMotion();
+  // A Worker that registered itself from its host (用接入码, N §3) lights up when it first appears in the list.
+  const seen = useRef<Set<string> | null>(null);
+  useEffect(() => {
+    const ids = new Set(workers.map((w) => w.id));
+    if (seen.current) for (const id of ids) if (!seen.current.has(id)) motion.flash(id);
+    if (workers.length || seen.current) seen.current = ids;
+  }, [workers, motion]);
   const term = search.trim().toLowerCase();
   const shown = term ? workers.filter((w) => w.name.toLowerCase().includes(term)) : workers;
   // An environment that needs attention is shown first; otherwise the first one.

@@ -44,7 +44,9 @@ Parameters:
   WorkerPackagesReadPolicyArn:
     Type: String
     Default: ""
-    Description: kirocrew-on-state.yaml output WorkerPackagesReadPolicyArn (empty until that stack exists)
+    Description: >-
+      A managed policy for reading packages (CodeArtifact), empty for none. MVP 0.2.0's state stack no longer has
+      CodeArtifact (kirocrew-on-state.yaml); this draft of the pool is reworked in P3
   WorkerPort:
     Type: Number
     Default: 8943
