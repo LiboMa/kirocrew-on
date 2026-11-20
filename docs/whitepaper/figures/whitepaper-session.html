@@ -1,0 +1,13 @@
+<figure>
+<ol class="flow" aria-label="一个会话的一生">
+  <li><b>1 提交</b>一句话需求；平台核对权限与空间，选执行环境</li>
+  <li class="chat"><b>2 准备</b>Worker 克隆或新建工作区、固定 commit，建原生父会话</li>
+  <li class="chat"><b>3 规划</b>KiroCrew Agent 补全需求，拆成 1–7 个任务并选 Agent 与角色</li>
+  <li class="chat"><b>4 执行</b>按依赖派发；每次写交接与结论，提交候选</li>
+  <li><b>5 判定</b>门禁 → 检查命令 → 审查 → Evaluator，由平台判</li>
+  <li><b>6 纠错</b>诊断后重试、换工具、返工上游或重新规划，受预算约束</li>
+  <li class="keep"><b>7 交付</b>预览、下载源码、报告、Draft PR / MR、沉淀知识</li>
+  <li class="keep"><b>8 续作</b>同一会话与工作区，只重跑受影响的任务</li>
+</ol>
+<figcaption>紫色由平台完成，青色在执行边界内由 KiroCrew 与各 Agent 完成，灰色是交付与之后的迭代。第 5、6 步可以循环多轮。</figcaption>
+</figure>

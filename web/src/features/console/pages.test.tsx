@@ -43,7 +43,7 @@ describe("the workbench first; 管理 and 我的设置 behind quiet entries (own
     start();
     await userEvent.click(await screen.findByRole("button", { name: "管理" }));
     const nav = await screen.findByRole("navigation", { name: "管理" });
-    expect(links(nav)).toEqual(["概览", "执行环境", "用户", "Team", "接入与凭证", "并发上限"]);
+    expect(links(nav)).toEqual(["概览", "执行环境", "用户", "Team", "接入与凭证", "并发上限", "部署"]);
     expect(await panel("概览")).toBeInTheDocument();
     expect(screen.getByRole("heading", { level: 1, name: "管理" })).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "管理" })).toHaveAttribute("aria-current", "page");

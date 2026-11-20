@@ -37,7 +37,8 @@ KiroCrew ON 在远端执行开发任务：KiroCrew 的 Kiro Agent 先识别意�
    - 命令会提示输入密码。不便交互时，用户可先在控制台顶栏的「我的设置 › API 与 Coding Agent 接入」创建 Token，
      设为环境变量 `OCTOPUS_API_TOKEN` 后再执行，命令直接使用该 Token。
    - 平台管理员需要经 Agent 管理用户、Team 或执行环境时，可加 `--admin`：Token 额外含 admin、7 天有效。
-     这枚 Token 能停用用户、更换 Team 的执行环境，只在本人设备上使用；不需要管理时用普通连接。
+     这枚 Token 能停用用户、更换 Team 的执行环境，只在本人设备上使用。日常建议用普通连接，需要管理时再单独连一个，用完撤销。
+     新建账号、重设密码、设为管理员、恢复已停用的账号只能在控制台登录后进行，Agent 做不了，不要尝试。
    - 在 Claude Code 中，可以建议用户输入 `! <命令>` 在当前会话里运行。
    - Codex、OpenCode、Kiro IDE 或其他 MCP 客户端：按 `{{KIROCREW_ON_REPO}}/docs/CONNECT.md` 手动配置。
 3. 连接后要**新开一个会话（或重启客户端）**才会加载这些工具；告诉用户这一点，不要假装已经可以调用。
@@ -91,6 +92,7 @@ KiroCrew ON 在远端执行开发任务：KiroCrew 的 Kiro Agent 先识别意�
 - `octopus_quotas` 只读：用户与其 Team 同时运行的任务数上限与占用。「需要处理」写「排队：已达到并发上限」时无需重新提交：有任务结束后按排队先后自动开始；上限由平台管理员或 Team owner 在控制台设置，不要替用户改。
 - `octopus_changes`（传 `run_id`）列出会话的变更记录：谁（用户与客户端，或 Engine / Worker / KiroCrew / 协调者）在什么时候改了什么、
   前后值与原因；`who: "user"` 只看人的操作。用户问“谁停止了这个会话”“上一轮改了什么设置”时用它。
+- 用户要把会话的页面或演示给**没有平台账号的人**看（「公开分享」「发给客户看」）时：告诉他在控制台会话页「预览产出」旁的下拉菜单里点「公开分享…」，选页面或运行中的演示、是否需要四位授权码与有效期，生成链接后发给对方。Coding Agent 没有公开分享的工具（与共享会话一样，由人在控制台操作）。
 - `octopus_revisions`（传 `run_id`）列出修订历史（创建、规划、续作、自动纠错、平台追加的 Evaluator / Knowledge 任务）；加 `to`（以及可选的 `from`）返回两版之间需求与各任务的变化：工具、模型等字段的前后值，以及 Prompt 新增（+）与删除（-）的行。用户问“上一轮改了什么”时用它。
 - `octopus_observe`（传 `run_id`）读取原生 KiroCrew 会话里协调者与子 Agent 的最近对话（默认 20 条，单条超过 4000 字截断；`has_more` 为 true 时传 `before: next_before` 读更早的），用来向用户说明 Agent 正在做什么；不需要打开 KiroCrew。
 

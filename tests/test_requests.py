@@ -35,7 +35,8 @@ class RequestTests(ConfirmationCase):
             self.assertEqual(db.execute("SELECT count(*) FROM requests").fetchone()[0], 1)
 
     def test_the_client_is_the_tokens(self):
-        self.assertEqual(requests.client_of("Web login"), "console")
+        self.assertEqual(requests.client_of("Web login", "login"), "console")   # by how the token was issued
+        self.assertEqual(requests.client_of("Web login"), "api")   # never by its label (peer review 2026-10-27)
         self.assertEqual(requests.client_of("codex MCP"), "codex")
         self.assertEqual(requests.client_of("claude MCP admin"), "claude")
         self.assertEqual(requests.client_of("kiro-ide MCP"), "kiro-ide")

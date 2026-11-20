@@ -4,7 +4,11 @@
 
 Handles what the docs use: headings, paragraphs, **bold**, `code`, fenced code, tables, and lists nested by indentation
 (a list item may hold a table or another list); `<br>` breaks a line in a table cell. ``<!-- html: path -->`` on its own line includes a raw HTML fragment
-(a figure), resolved beside the Markdown file. Lines of a paragraph are joined without a space between Chinese text,
+(a figure), resolved beside the Markdown file; a ```mermaid diagram is left to the Markdown (the HTML has no renderer: such a
+document includes a figure beside it), and ``> `` lines are a note (the whitepaper's 解读). An image on a line of its own
+(``![说明](img/x.webp)``) is a figure, two in a row sit side by side, and a line right after them starting with 图 is their
+caption. ``--book`` lays a long document out as a book: a table of contents beside it from its ## and ### headings,
+the part before the first ## as its cover, and A4 pages when printed (the whitepaper). Lines of a paragraph are joined without a space between Chinese text,
 with one elsewhere, as a reader expects."""
 import html
 from pathlib import Path
@@ -47,6 +51,9 @@ STYLE = """
   .flow li b { display: block; font-size: 13px; color: var(--c, var(--brand)); margin-bottom: 2px; }
   .flow .chat { --c: var(--native); } .flow .keep { --c: var(--poc); }
   figcaption { font-size: 13px; color: var(--muted); margin-top: 8px; }
+  .note { margin: 16px 0 20px; max-width: 46em; background: var(--brand-soft); border-left: 4px solid var(--brand);
+          border-radius: 0 8px 8px 0; padding: 12px 16px; font-size: 15px; }
+  .note p:last-child, .note ul:last-child { margin-bottom: 0; }
   a:focus-visible { outline: 3px solid var(--brand); outline-offset: 2px; }
   @media (max-width: 760px) { main { padding: 32px 18px 72px; } h1 { font-size: 26px; } }
   @media print { body { background: #fff; } .table, .flow li { break-inside: avoid; } }
@@ -54,6 +61,52 @@ STYLE = """
 
 
 LINK = re.compile(r"\[([^\]]+)\]\(([^)\s]+)\)")
+IMAGE = re.compile(r"^!\[([^\]]*)\]\(([^)\s]+)\)\s*$")
+
+BOOK_STYLE = """
+  :root { --serif: "Songti SC", "STSong", "Source Han Serif SC", "Noto Serif SC", "Noto Serif CJK SC", serif; }
+  body { background: #fff; font-size: 16.5px; line-height: 1.8; -webkit-font-smoothing: antialiased; }
+  .wrap { display: grid; grid-template-columns: 280px minmax(0, 1fr); }
+  nav.toc { position: sticky; top: 0; height: 100vh; overflow: auto; border-right: 1px solid var(--line); padding: 30px 22px 40px;
+            font-size: 14px; line-height: 1.6; background: #fbfbfc; }
+  nav.toc .brand { font-family: var(--serif); font-size: 19px; font-weight: 600; margin-bottom: 18px; }
+  nav.toc ol { list-style: none; margin: 0; padding: 0; }
+  nav.toc li { margin: 0 0 6px; }
+  nav.toc li.sub { padding-left: 16px; font-size: 13px; }
+  nav.toc a { color: var(--muted); text-decoration: none; }
+  nav.toc a:hover { color: var(--brand); }
+  main { max-width: 980px; margin: 0; padding: 56px 64px 120px; }
+  h1, h2, h3, h4 { font-family: var(--serif); font-weight: 600; }
+  h2 { font-size: 28px; margin: 72px 0 18px; padding-top: 16px; border-top: 2px solid var(--ink); scroll-margin-top: 12px; }
+  h3 { font-size: 20px; margin: 36px 0 10px; scroll-margin-top: 12px; }
+  .cover { padding: 20px 0 8px; }
+  .cover h1 { font-size: 42px; margin: 6px 0 18px; }
+  figure.shot img, figure.pair img { display: block; width: 100%; height: auto; border: 1px solid var(--line); border-radius: 10px; background: #fff; }
+  figure.pair { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; align-items: start; }
+  figure.pair figcaption { grid-column: 1 / -1; }
+  @media screen and (max-width: 1000px) {
+    .wrap { display: block; } nav.toc { position: static; height: auto; border-right: 0; border-bottom: 1px solid var(--line); }
+    main { padding: 32px 20px 80px; } figure.pair { grid-template-columns: 1fr; } }
+  @media print {
+    @page { size: A4; margin: 15mm 14mm 16mm; }
+    body { font-size: 10.5pt; line-height: 1.7; }
+    nav.toc { display: none; } .wrap { display: block; } main { max-width: none; padding: 0; }
+    h2 { break-before: page; margin-top: 0; } h3, h4 { break-after: avoid; }
+    figure, pre, .note, tr { break-inside: avoid; }
+    a { color: inherit; } pre { white-space: pre-wrap; }
+    header.cover { break-after: page; } .cover figure img { max-height: 95mm; width: auto; max-width: 100%; margin: 0 auto; }
+    figcaption { font-size: 9pt; } }
+"""
+
+
+def safe(target):
+    """Relative and http(s) targets only: javascript: and the like are not followed."""
+    return not re.match(r"^[a-z][a-z0-9+.-]*:", target, re.I) or bool(re.match(r"^https?://", target, re.I))
+
+
+def image(line):
+    found = IMAGE.match(line.strip())
+    return found if found and safe(found.group(2)) else None
 
 
 def inline(text):
@@ -61,7 +114,7 @@ def inline(text):
     out, at = [], 0
     for match in LINK.finditer(text):
         label, target = match.groups()
-        if re.match(r"^[a-z][a-z0-9+.-]*:", target, re.I) and not re.match(r"^https?://", target, re.I):
+        if not safe(target):
             continue   # javascript: and the like stay text
         out.append(spans(text[at:match.start()]))
         out.append(f'<a href="{html.escape(target)}">{spans(label)}</a>')
@@ -103,7 +156,7 @@ def table(lines):
 
 
 def starts_block(line):
-    return line.startswith(("```", "#", "|", "<!--")) or bool(LIST.match(line))
+    return line.startswith(("```", "#", "|", "<!--", ">")) or bool(LIST.match(line)) or bool(image(line))
 
 
 def blocks(lines, base):
@@ -114,8 +167,29 @@ def blocks(lines, base):
             i += 1
         elif line.lstrip().startswith("```"):
             end = next(j for j in range(i + 1, len(lines)) if lines[j].lstrip().startswith("```"))
+            if line.strip() == "```mermaid":
+                i = end + 1
+                continue
             out.append("<pre><code>" + html.escape("\n".join(l[len(line) - len(line.lstrip()):] for l in lines[i + 1:end])) + "</code></pre>")
             i = end + 1
+        elif line.startswith(">"):
+            end = i
+            while end < len(lines) and lines[end].startswith(">"):
+                end += 1
+            inner = [l[2:] if l.startswith("> ") else l[1:] for l in lines[i:end]]
+            out.append(f'<aside class="note">{blocks(inner, base)}</aside>')
+            i = end
+        elif image(line):
+            end, shots = i, []
+            while end < len(lines) and image(lines[end]):
+                alt, src = image(lines[end]).groups()
+                shots.append(f'<img src="{html.escape(src)}" alt="{html.escape(alt)}" loading="lazy">')
+                end += 1
+            caption = ""
+            if end < len(lines) and lines[end].startswith("图"):
+                caption, end = f"<figcaption>{inline(lines[end].strip())}</figcaption>", end + 1
+            out.append(f'<figure class="{"pair" if len(shots) == 2 else "shot"}">' + "".join(shots) + caption + "</figure>")
+            i = end
         elif re.match(r"#{1,6} ", line):
             level = len(line) - len(line.lstrip("#"))
             out.append(f"<h{level}>{inline(line[level:].strip())}</h{level}>")
@@ -180,10 +254,40 @@ def listing(lines, i, out, base):
     return i
 
 
-def convert(source, target):
+def anchored(body):
+    """The book's ## and ### headings with anchors, and its table of contents."""
+    items, numbers = [], [0, 0]
+
+    def anchor(match):
+        level, inner = match.group(1), match.group(2)
+        if level == "h2":
+            numbers[0], numbers[1] = numbers[0] + 1, 0
+            ident = f"s{numbers[0]}"
+            items.append(f'<li><a href="#{ident}">{inner}</a></li>')
+        else:
+            numbers[1] += 1
+            ident = f"s{numbers[0]}-{numbers[1]}"
+            items.append(f'<li class="sub"><a href="#{ident}">{inner}</a></li>')
+        return f'<{level} id="{ident}">{inner}</{level}>'
+
+    return re.sub(r"<(h[23])>(.*?)</\1>", anchor, body), "".join(items)
+
+
+def convert(source, target, book=False):
     text = Path(source).read_text()
     title = next((l[2:].strip() for l in text.splitlines() if l.startswith("# ")), Path(source).stem)
     body = blocks(text.splitlines(), Path(source).parent)
+    style = STYLE
+    if book:
+        body, toc = anchored(body)
+        at = body.find("<h2")
+        cover, rest = (body[:at], body[at:]) if at >= 0 else (body, "")
+        brand = html.escape(title.split("：")[0])
+        body = (f'<div class="wrap">\n<nav class="toc" aria-label="目录"><div class="brand">{brand}</div><ol>{toc}</ol></nav>\n'
+                f'<main>\n<header class="cover">{cover.strip()}</header>\n{rest}\n</main>\n</div>')
+        style = STYLE + BOOK_STYLE
+    else:
+        body = f"<main>\n{body}\n</main>"
     Path(target).write_text(f"""<!doctype html>
 <html lang="zh-CN">
 <head>
@@ -191,16 +295,15 @@ def convert(source, target):
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>{html.escape(title)}</title>
 <!-- Generated from {Path(source).name} by tools/md_to_html.py; edit the Markdown, then regenerate. -->
-<style>{STYLE}</style>
+<style>{style}</style>
 </head>
 <body>
-<main>
 {body}
-</main>
 </body>
 </html>
 """)
 
 
 if __name__ == "__main__":
-    convert(sys.argv[1], sys.argv[2])
+    args = [a for a in sys.argv[1:] if a != "--book"]
+    convert(args[0], args[1], book="--book" in sys.argv[1:])

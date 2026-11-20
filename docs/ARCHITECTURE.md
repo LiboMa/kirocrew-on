@@ -44,7 +44,7 @@ flowchart LR
 
 | 层 | 是什么 | 负责 | 不负责 |
 |---|---|---|---|
-| **Octopus 平台**（API + Service + Engine） | 平台进程，OS 用户 `octopus` | 身份、角色与权限；空间与执行环境（每次派发前核对会话的 Worker 仍服务其空间）；会话状态机与版本、每次写入的变更记录；按 Session 并发调度；质量判定（交接、outcome、规划校验）；纠错决定的应用；事件与审计 | 不运行 Agent；不直接访问任何 Gateway |
+| **Octopus 平台**（API + Service + Engine） | 平台进程，OS 用户 `octopus` | 身份、角色与权限；空间与执行环境（每次派发前核对会话的 Worker 仍服务其空间）；会话状态机与版本、每次写入的变更记录；按 Session 并发调度（同一时间只有一个 Engine：经 `octopus/lease.py` 的租约接口，现为数据目录里 `engine.lock` 的文件锁，MVP 0.2.0 温备时换成跨主机的租约）；质量判定（交接、outcome、规划校验）；纠错决定的应用；事件与审计 | 不运行 Agent；不直接访问任何 Gateway |
 | **Worker** | 平台派驻在每个执行边界内的代理 | 源码准备；会话 ↔ 原生父会话的绑定；把平台操作翻译成 Gateway 调用；派发幂等与核对；收集证据（原生状态、路由日志、交接文件）；预览文件、观察、原生入口链接 | 不做权限判断（信任平台的 Worker Token 调用）；不保存平台数据 |
 | **KiroCrew Gateway** | KiroCrew 原生后端，每个边界一个 | 原生会话（slot）与协调者 `poc-coordinator`；派生子 Agent（`poc-kiro` / `poc-claude` / `poc-codex` / `poc-opencode` / `poc-diagnose`）；批准、记忆、ACP 路由（composition 的 `PocProviderRegistry`） | 不知道 Octopus 的用户、Team 与权限；**从不调用 Octopus API** |
 | **Agents** | Gateway 派生的 Coding Agent 进程 | 在源码目录开发与验证；写交接文件 `handoff.md` 与结论 `outcome.json` | 不读平台凭据；不派生其他子任务（指令约束） |
@@ -70,7 +70,9 @@ flowchart LR
 | 观察原生会话 | `GET /v1/runs/<id>/observe` | `/observe` | `GET /api/chat/slots/<slot>?limit=&before=` |
 | 在 KiroCrew 中打开 | `POST /v1/runs/<id>/crew-entry` | `/crew-entry` | `GET /api/chat/slots/<slot>`；`/api/token/local` 换取一次性链接 |
 | 预览产出 | `POST /v1/runs/<id>/preview` | `/files` | — |
-| 登记、健康与管理 | `/v1/workers*`、`/v1/admin/environments` | `GET /health` | — |
+| 登记、健康与管理 | `/v1/workers*`、`/v1/admin/environments` | `GET /health`（含 `boundary_id` 与容量，MVP 0.2.0） | — |
+| 用接入码登记（MVP 0.2.0） | 管理员 `POST /v1/workers/enrollments`；Worker 凭码 `POST /v1/workers/enroll`（`octopus worker enroll`） | 平台带 Worker 自报的 Token 回调 `GET /health` 核实 | — |
+| 平台指标（MVP 0.2.0） | `GET /v1/admin/metrics`；API 每分钟写一行 EMF 到 `metrics.emf.log` | — | — |
 
 ## 5．时序
 
@@ -148,10 +150,19 @@ sequenceDiagram
 | 连接 | 凭据 | 说明 |
 |---|---|---|
 | 客户端 → Octopus | 用户 Token（`read` / `execute` / `manage` / `admin`；平台管理需管理员账号且 Token 含 `admin`） | 登录 24 小时；`octopus connect` 签发 30 天 Token；CloudFront 注入源站密钥，平台只服务带该头的请求 |
+| Worker → Octopus（只在登记时一次，MVP 0.2.0） | 一次性接入码（`kce_…`，库里只存 SHA-256；30 分钟到 24 小时有效，用一次即失效） | 唯一的反向调用：Worker 用它把自己的地址与 Token 交给平台，平台照旧回调 `/health` 核实；错误的码一律 404，每个来源每分钟 10 次 |
 | Octopus → Worker | Worker Token（Bearer） | 平台主机上为回环 HTTP；Worker 主机为私网 TLS，只信任平台私有 CA；Worker 不做用户级权限判断 |
 | Worker → Gateway | 本边界 `.local_secret` → 短期原生 token | 只在回环；Worker 与 Gateway 同一 OS 用户 |
 | 浏览器 → Gateway | 一次性入口链接 → Gateway 登录 Cookie（1 小时） | 覆盖整个 Gateway（K03），所以只发给有权使用整个边界的人 |
 | Gateway → Agents | 同一 OS 用户的子进程（ACP） | Bedrock 经实例角色；kiro-cli 经设备码登录 |
+
+**同一个域名下的隔离**（负责人 2026-10-27：不另购域名）：控制台、会话预览（`<run>.preview.<域名>`）与将来的原生入口同属一个可注册域名，隔离按源站做，不靠「不同站」。
+- 平台的 Cookie 一律 `__Host-`；
+- 凭 Cookie 的写入必须来自控制台自己的 Origin，凭 Cookie 的子资源请求按 Fetch Metadata 拒绝；
+- 没有替用户做主动操作的 GET（`docs/research/2026-10-26-get-side-effects-audit.md`）；
+- 「预览产出」以 sandbox 下发。
+
+详见 0.2.0 设计 §8.2a。
 
 权限只在 Octopus 判定：Worker 信任持 Worker Token 的平台，Gateway 不知道平台用户。因此用户、Team、角色与 scope 的规则全部落在 Octopus 的 API 与 Service 层
 （`docs/superpowers/specs/2026-10-12-access-management-design.md`）。

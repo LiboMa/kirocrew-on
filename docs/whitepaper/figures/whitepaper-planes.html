@@ -1,0 +1,26 @@
+<figure>
+<style>
+  .wp-planes { display: grid; grid-template-columns: 1fr 1.4fr; gap: 14px; }
+  .wp-plane { background: var(--card); border: 1px solid var(--line); border-radius: 10px; padding: 12px 14px; border-top: 4px solid var(--c); }
+  .wp-plane h4 { margin: 0 0 6px; font-size: 15px; color: var(--c); }
+  .wp-plane ul { margin: 0; padding-left: 1.2em; font-size: 13.5px; line-height: 1.6; }
+  .wp-hosts { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 10px; }
+  .wp-host { flex: 1 1 120px; border: 1px dashed var(--line); border-radius: 8px; padding: 6px 8px; font-size: 12.5px; line-height: 1.5; }
+  .wp-host i { font-style: normal; display: inline-block; margin: 2px 3px 0 0; padding: 0 6px; border-radius: 4px; background: var(--native-soft); color: var(--native); }
+  @media (max-width: 760px) { .wp-planes { grid-template-columns: 1fr; } }
+</style>
+<div class="wp-planes" role="img" aria-label="MVP 0.2.0 集群版：控制面与数据面">
+  <div class="wp-plane" style="--c: var(--brand)"><h4>控制面（不跑 Agent）</h4>
+    <ul><li>API · Engine（租约保证同一时间只有一个）</li><li>SQLite + Litestream 持续备份（RPO ≤ 5 s）</li>
+      <li>另一可用区温备（RTO ≤ 15 min）</li><li>放置与扩容：按 CPU、内存、剩余挂载位</li><li>平台指标（CloudWatch EMF）</li></ul></div>
+  <div class="wp-plane" style="--c: var(--native)"><h4>数据面（Graviton 主机池）</h4>
+    <ul><li>主机无状态：主机代理负责挂卷、起边界</li><li>每人一块加密 EBS 卷：工作区、各 Agent 的登录状态、KiroCrew 记忆</li>
+      <li>换主机 = 改挂这块卷（同可用区 p50 16.7 s）</li></ul>
+    <div class="wp-hosts">
+      <div class="wp-host">共享主机<br><i>alice 卷</i><i>bob 卷</i><i>carol 卷</i></div>
+      <div class="wp-host">专用主机<br><i>dave 卷</i></div>
+      <div class="wp-host">空主机<br>只回收它，不搬用户</div>
+    </div></div>
+</div>
+<figcaption>集群版是 0.2.0 的 P3–P5，尚未上线；图中的时延来自 P0 实测（200 次同可用区搬卷 0 失败）。</figcaption>
+</figure>

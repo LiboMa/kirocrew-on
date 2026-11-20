@@ -899,6 +899,52 @@ describe("session detail", () => {
     expect(screen.getByText(/本会话用量：5 credits（fixture-owner：3 credits；bob：2 credits）/)).toBeInTheDocument();
   });
 
+  test("a public link with a four-digit code is made, listed and revoked (D75)", async () => {
+    const run = makeRun({ id: "run-pub", status: "completed", worker_id: "w1",
+      permissions: { operate: true, delete: true, native: true, publish: true, direct: true, share: true } } as Partial<Run>);
+    const share = { id: "pshare-1", run_id: "run-pub", token: "t".repeat(24), kind: "pages", mode: "code", code: "4821", entry: null,
+      url: "https://run-pub.preview.test/_kirocrew/s/" + "t".repeat(24), created: 1, created_by: "u1", expires: 2_000_000_000,
+      views: 3, last_viewed: null, locked_until: null };
+    let listed: unknown[] = [];
+    const calls = open(run, {
+      "GET /runs/run-pub/public-shares": () => ({ shares: listed, available: true }),
+      "POST /runs/run-pub/public-shares": () => { listed = [share]; return share; },
+      "DELETE /runs/run-pub/public-shares/pshare-1": () => { listed = []; return { id: "pshare-1", deleted: true }; },
+    });
+    expect(screen.queryByRole("button", { name: /公开分享/ })).toBeNull();   // under 预览产出, not a toolbar button of its own
+    await userEvent.click(await screen.findByRole("button", { name: "选择预览页面" }));
+    await userEvent.click(await screen.findByRole("menuitem", { name: /公开分享/ }));
+    const dialog = await screen.findByRole("dialog");
+    expect(dialog).toHaveTextContent("还没有公开分享");
+    await userEvent.selectOptions(within(dialog).getByLabelText("有效期"), "30d");
+    await userEvent.click(within(dialog).getByRole("button", { name: "生成链接" }));
+    await waitFor(() => expect(calls.find((c) => c.method === "POST" && c.path === "/v1/runs/run-pub/public-shares")?.body)
+      .toMatchObject({ kind: "pages", mode: "code", expires: "30d" }));
+    expect(await within(dialog).findByText("4821")).toBeInTheDocument();
+    expect(dialog).toHaveTextContent("打开 3 次");
+    expect(dialog).toHaveTextContent("不含源码、配置与数据库");
+    await userEvent.click(within(dialog).getByRole("button", { name: "撤销" }));
+    await waitFor(() => expect(calls.some((c) => c.method === "DELETE" && c.path === "/v1/runs/run-pub/public-shares/pshare-1")).toBe(true));
+    expect(await within(dialog).findByText("还没有公开分享。")).toBeInTheDocument();
+  });
+
+  test("only those who may share see it among the preview's pages (D75)", async () => {
+    open(makeRun({ id: "run-ro", status: "completed", worker_id: "w1", permissions: { operate: true, delete: false, share: false } } as Partial<Run>),
+      { "POST /runs/run-ro/preview": { url: "/preview/t/index.html", entry: "index.html", pages: [] } });
+    await userEvent.click(await screen.findByRole("button", { name: "选择预览页面" }));
+    await screen.findByText("本会话产出的页面");
+    expect(screen.queryByRole("menuitem", { name: /公开分享/ })).toBeNull();
+  });
+
+  test("without a preview domain a public link cannot be made (D75)", async () => {
+    const run = makeRun({ id: "run-nopub", status: "completed", worker_id: "w1",
+      permissions: { operate: true, delete: true, share: true } } as Partial<Run>);
+    open(run, { "GET /runs/run-nopub/public-shares": { shares: [], available: false } });
+    await userEvent.click(await screen.findByRole("button", { name: "选择预览页面" }));
+    await userEvent.click(await screen.findByRole("menuitem", { name: /公开分享/ }));
+    expect(await screen.findByRole("alert")).toHaveTextContent("平台尚未配置预览域名");
+  });
+
   test("only its creator is offered their own boundary for a waiting Session (D49 R10)", async () => {
     const waiting = makeRun({ id: "run-w2", status: "waiting_worker", version: 1, team_id: "team-1", owner_id: "u2" });
     open(waiting, { "GET /placement": { space: "team-1", hint: null, default: null,

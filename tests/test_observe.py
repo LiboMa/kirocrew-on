@@ -59,7 +59,7 @@ class WorkerObserveTests(unittest.TestCase):
         self.assertTrue(node.health()["observe"])
         # The Worker reports the platform's release number (MVP 0.1.1), not a constant of its own.
         import octopus
-        self.assertEqual((octopus.__version__, node.health()["version"]), ("0.1.1", "0.1.1"))
+        self.assertEqual((octopus.__version__, node.health()["version"]), ("0.2.0rc1", "0.2.0rc1"))
 
     def test_the_worker_masks_secrets_and_its_own_token(self):
         # D57 §3.3: the Worker's own token too (no rule knows it); masked before the 20 000-character cut

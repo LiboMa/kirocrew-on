@@ -6,7 +6,8 @@ import threading
 import unittest
 from unittest.mock import patch
 
-from octopus.bootstrap import register_boundary_worker
+from octopus.bootstrap import issue_enrollment, register_boundary_worker
+from octopus.client import Client
 from octopus.db import Database
 from octopus.security import create_user
 from octopus.server import server
@@ -94,6 +95,23 @@ class BootstrapTests(unittest.TestCase):
         with self.db.read() as c:
             self.assertEqual(json.loads(c.execute("SELECT config FROM workers WHERE id=?", (local["id"],)).fetchone()[0])
                              ["url"], self.worker_url)
+
+    def test_a_new_worker_enrolls_itself_with_a_code_and_a_registered_one_is_refreshed_instead(self):
+        # MVP 0.2.0 (N §3): the scripts issue a code and the Worker registers itself, its token read from its own file;
+        # a Worker already registered under that name keeps the bootstrap path (its connection refreshed).
+        issued = issue_enrollment(self.api_url, "admin", PASSWORD, "personal")
+        self.assertTrue(issued["code"].startswith("kce_"))
+        self.assertEqual(issued["platform"], self.api_url)
+        made = Client(self.api_url, "").request("POST", "/v1/workers/enroll",   # the real Worker's /health, no mock
+                                                {"code": issued["code"], "url": self.worker_url, "token": self.token})
+        self.assertEqual((made["name"], made["scope"]), ("personal", "dedicated"))
+        self.assertEqual(issue_enrollment(self.api_url, "admin", PASSWORD, "personal"), {"registered": made["id"]})
+        with patch("octopus.server.validate_worker", return_value={"isolation": "dedicated", "boundary": "b-s",
+                                                                   "host_principal": "elsewhere"}):
+            spare = register_boundary_worker(self.api_url, "admin", PASSWORD, "https://10.0.0.9:8943", "s" * 40, "w1",
+                                             spare=True)
+        self.assertEqual(issue_enrollment(self.api_url, "admin", PASSWORD, "w1", spare=True), {"registered": spare["id"]})
+        self.assertIn("code", issue_enrollment(self.api_url, "admin", PASSWORD, "w2", spare=True))
 
     def test_wrong_password_fails_loudly(self):
         with self.assertRaises(RuntimeError):

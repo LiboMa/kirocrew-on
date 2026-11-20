@@ -54,6 +54,8 @@ def openapi():
         "AdminFlag": obj({"admin": {"type": "boolean"}}, ["admin"]),
         "ConnectionUpdate": obj({"connection": ref("Connection")}, ["connection"]),
         "Share": obj({"confirm": {"const": True}}, ["confirm"]),
+        "PublicShare": obj({"kind": {"type": "string", "enum": ["pages", "app"]}, "mode": {"type": "string", "enum": ["code", "open"]},
+                            "expires": {"type": "string", "enum": ["1d", "7d", "30d", "never"]}, "entry": text}),
         "Space": obj({"team_id": text, "user_id": text}),
         "Rename": obj({"name": text}, ["name"]),
         "AppAction": obj({"action": {"type": "string", "enum": ["start", "stop"]}}, ["action"]),
@@ -119,6 +121,14 @@ def openapi():
         "Recover": obj({**command, "rediagnose": {"type": "boolean", "deprecated": True}}, ["request_id", "expected_version"]),
         "AssignWorker": obj({**command, "worker_id": text}, ["request_id", "expected_version", "worker_id"]),
         "Empty": obj({}), "Error": obj({"error": text, "code": text}, ["error", "code"]),
+        # MVP 0.2.0 (N §5): a one-time enrollment code, and the Worker registering itself with it
+        "ProvisionBoundary": obj({"owner_id": text, "name": text}, ["owner_id"]),
+        "AwsRequest": obj({"kind": {"enum": ["native", "backup", "up"]}, "params": {"type": "object"}}, ["kind"]),
+        "AwsReport": obj({"state": {"enum": ["done", "failed"]}, "result": {"type": "object"}}, ["state"]),
+        "Enrollment": obj({"name": text, "owner_id": text, "team_id": text, "spare": {"type": "boolean"},
+                           "expires_in": {"type": "integer", "minimum": 60, "maximum": 86400, "default": 1800}}, ["name"]),
+        "Enroll": obj({"code": text, "url": text, "token": {"type": "string", "minLength": 32},
+                       "check": {"type": "boolean", "default": False}}, ["code", "url", "token"]),
     }
     schemas["Recover"]["description"] = ("Execute scope. Starts a Coordinator diagnosis of the Session's failed task, every time "
                                          "it is asked (D71: no hold after earlier waits; rediagnose is accepted and not needed).")
@@ -132,6 +142,14 @@ def openapi():
     schemas["User"]["description"] = "Administrator only. worker_id: optional shared execution environment for the user's personal space."
     schemas["Share"]["description"] = "Every Session's agents in a shared environment run as one OS account and can read each other's sources, tool logins and memory."
     schemas["ConnectionUpdate"]["description"] = "Administrator only. A replaced Worker host keeps serving its spaces; the new endpoint is re-validated like a registration (same isolation, boundary not used by another Worker)."
+    schemas["Enrollment"]["description"] = ("Administrator only. A one-time code that registers one Worker under name, bound "
+                                            "to exactly one owner_id / team_id, or spare=true. The code (kce_…) is returned "
+                                            "only once; only its SHA-256 is kept. Lasts expires_in seconds (default 30 min, "
+                                            "at most a day); five failed registrations retire it.")
+    schemas["Enroll"]["description"] = ("No login: the code is the authority (octopus worker enroll). The platform checks "
+                                        "the Worker's /health with its token and applies every rule of POST /v1/workers. A "
+                                        "wrong, expired, used or revoked code is 404 enrollment_invalid; 10 requests a "
+                                        "minute per source. check=true verifies everything and registers nothing.")
     schemas["Space"]["description"] = "Exactly one of team_id or user_id. A spare environment can only be given to a Team."
     schemas["Rename"]["description"] = "A Team: its owners or an administrator. A Worker: administrator only."
     schemas["TeamArchive"]["description"] = "Administrator only. An archived Team takes no new Sessions or members; its Sessions stay readable and stoppable; its execution environment is kept."
@@ -150,8 +168,12 @@ def openapi():
         "/v1/workflows/{id}/shares": {"post": "Grant", "delete": "Grant"},
         "/v1/workflows/{id}/archive": {"post": "Archive"},
         "/v1/workers": {"get": None, "post": "Worker"},
+        "/v1/admin/boundaries/provision": {"get": None, "post": "ProvisionBoundary"},
+        "/v1/admin/aws-requests": {"get": None, "post": "AwsRequest"}, "/v1/admin/aws-requests/{id}/done": {"post": "AwsReport"},
+        "/v1/workers/enrollments": {"get": None, "post": "Enrollment"}, "/v1/workers/enrollments/{id}": {"delete": "Empty"},
+        "/v1/workers/enroll": {"post": "Enroll"},
         "/v1/placement": {"get": None},
-        "/v1/admin/environments": {"get": None}, "/v1/admin/audit": {"get": None},
+        "/v1/admin/environments": {"get": None}, "/v1/admin/audit": {"get": None}, "/v1/admin/metrics": {"get": None},
         "/v1/me/password": {"post": "PasswordChange"}, "/v1/users/{id}/password": {"post": "PasswordReset"},
         "/v1/users/{id}/active": {"post": "Active"}, "/v1/users/{id}/admin": {"post": "AdminFlag"},
         "/v1/admin/users": {"get": None}, "/v1/admin/users/{id}/tokens": {"get": None},
@@ -162,6 +184,7 @@ def openapi():
         "/v1/workers/{id}/dedicate": {"post": "Empty"},
         "/v1/workers/{id}": {"patch": "Rename"}, "/v1/workers/{id}/retire": {"post": "Empty"},
         "/v1/workers/{id}/capabilities": {"post": None},
+        "/v1/workers/{id}/kiro-sign-in": {"get": None, "post": "Empty"},
         "/v1/runs/{id}/takeover": {"post": None},
         "/v1/tokens": {"get": None, "post": "Token"}, "/v1/tokens/{id}": {"delete": "Empty"}, "/v1/tokens/{id}/regenerate": {"post": None},
         "/v1/credentials": {"get": None, "post": "Credential"},
@@ -174,6 +197,8 @@ def openapi():
         "/v1/quotas": {"get": None, "post": "Quota"},
         "/v1/runs/{id}/marks": {"post": "Marks"},
         "/v1/runs/{id}/shares": {"get": None, "post": "Share"}, "/v1/runs/{id}/shares/{share}": {"delete": "Empty"},
+        "/v1/runs/{id}/public-shares": {"get": None, "post": "PublicShare"},
+        "/v1/runs/{id}/public-shares/{share}": {"delete": "Empty"}, "/v1/runs/{id}/public-shares/{share}/code": {"post": "Empty"},
         "/v1/runs/{id}/events": {"get": None}, "/v1/runs/{id}/export": {"get": None},
         "/v1/runs/{id}/crew-entry": {"post": "Empty"}, "/v1/runs/{id}/preview": {"post": "Empty"},
         "/v1/runs/{id}/observe": {"get": None}, "/v1/runs/{id}/chat-changes": {"get": None},
@@ -200,7 +225,10 @@ def openapi():
              ("/v1/workers/{id}/share", "post"), ("/v1/workers/{id}/spaces", "post"),
              ("/v1/workers/{id}/spaces", "delete"), ("/v1/workers/{id}/connection", "post"),
              ("/v1/workers/{id}/dedicate", "post"), ("/v1/teams", "post"), ("/v1/teams/{id}/archive", "post"),
-             ("/v1/teams/{id}/environment", "post"), ("/v1/workers/{id}", "patch"), ("/v1/workers/{id}/retire", "post")}
+             ("/v1/teams/{id}/environment", "post"), ("/v1/workers/{id}", "patch"), ("/v1/workers/{id}/retire", "post"),
+             ("/v1/workers/enrollments", "get"), ("/v1/workers/enrollments", "post"), ("/v1/workers/enrollments/{id}", "delete"),
+             ("/v1/admin/boundaries/provision", "get"), ("/v1/admin/boundaries/provision", "post"),
+             ("/v1/admin/aws-requests", "get"), ("/v1/admin/aws-requests", "post"), ("/v1/admin/aws-requests/{id}/done", "post")}
     users_admin = {("/v1/users/{id}/password", "post"), ("/v1/users/{id}/active", "post"), ("/v1/users/{id}/admin", "post"),
                    ("/v1/admin/users", "get"), ("/v1/admin/users/{id}/tokens", "get")}
     paths = {}
@@ -218,7 +246,7 @@ def openapi():
                 op["parameters"] = [{"in": "path", "name": "id", "required": True, "schema": text}]
             if schema:
                 op["requestBody"] = {"required": True, "content": {"application/json": {"schema": ref(schema)}}}
-            if path == "/v1/login":
+            if path in ("/v1/login", "/v1/workers/enroll"):
                 op["security"] = []
             if (path, method) in admin:
                 op["tags"] = ["执行环境（管理员）"]
@@ -226,6 +254,11 @@ def openapi():
                 op["tags"] = ["用户与权限（管理员）"]
                 op["description"] = ("Administrator only (admin scope). Deactivating or resetting a user revokes all of "
                                      "their tokens; the last active admin and a Team's only active owner are protected.")
+            if path == "/v1/admin/metrics":
+                op["description"] = ("Administrator only. The platform's counts now (Sessions running, waiting for a Worker or "
+                                     "a quota, Attempts running, Workers enabled and unhealthy, demos running, takeovers "
+                                     "moving, public shares active), as the API's EMF log line carries them every minute "
+                                     "(namespace KiroCrewOn).")
             if path == "/v1/admin/environments":
                 op["description"] = "Administrator only. Every execution environment with its scope, owner, Team or shared spaces (with names), enabled, active_runs and live health (reachable=false when its Worker does not answer within a few seconds; never fails the listing). No tokens."
             if path.endswith("/crew-entry"):
@@ -348,6 +381,19 @@ def openapi():
                                      "the branch, worker_outdated for an older Worker.")
                 op["parameters"].append({"in": "path", "name": "attempt", "required": True, "schema": text})
                 op["operationId"] = "get_v1_runs_id_attempts_attempt_diff"
+            if path.startswith("/v1/runs/{id}/public-shares"):   # D75
+                op["description"] = {
+                    ("/v1/runs/{id}/public-shares", "get"): "Read scope. The Session's public links (D75) — with their access codes "
+                    "— for its creator, a Team owner or an administrator; available is false without a preview domain.",
+                    ("/v1/runs/{id}/public-shares", "post"): "Execute scope. A link anyone on the Internet can open, on the Session's "
+                    "own preview origin: its pages (kind pages; entry, else the first page) or its running demo (kind app), with a "
+                    "four-digit access code (mode code) or open; expires 1d, 7d (default), 30d or never. Answers the link (url) and "
+                    "code. Wrong codes: 5 per visitor in 10 minutes, 30 per share in an hour locks it for an hour. Audited.",
+                    ("/v1/runs/{id}/public-shares/{share}", "delete"): "Execute scope. Revoke a public link: it ends at once. Audited.",
+                    ("/v1/runs/{id}/public-shares/{share}/code", "post"): "Execute scope. A new access code: what the old one opened asks "
+                    "again, and a lock ends. Audited."}[(path, method)]
+                if "{share}" in path:
+                    op["parameters"].append({"in": "path", "name": "share", "required": True, "schema": text})
             if path.startswith("/v1/runs/{id}/shares"):   # D64
                 op["description"] = {
                     ("/v1/runs/{id}/shares", "get"): "Read scope. Who the Session is shared with — for its creator, a Team owner or an administrator.",
