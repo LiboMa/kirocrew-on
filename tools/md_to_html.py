@@ -4,7 +4,8 @@
 
 Handles what the docs use: headings, paragraphs, **bold**, `code`, fenced code, tables, and lists nested by indentation
 (a list item may hold a table or another list); `<br>` breaks a line in a table cell. ``<!-- html: path -->`` on its own line includes a raw HTML fragment
-(a figure), resolved beside the Markdown file. Lines of a paragraph are joined without a space between Chinese text,
+(a figure), resolved beside the Markdown file; a ```mermaid diagram is left to the Markdown (the HTML has no renderer: such a
+document includes a figure beside it), and ``> `` lines are a note (the whitepaper's 解读). Lines of a paragraph are joined without a space between Chinese text,
 with one elsewhere, as a reader expects."""
 import html
 from pathlib import Path
@@ -47,6 +48,9 @@ STYLE = """
   .flow li b { display: block; font-size: 13px; color: var(--c, var(--brand)); margin-bottom: 2px; }
   .flow .chat { --c: var(--native); } .flow .keep { --c: var(--poc); }
   figcaption { font-size: 13px; color: var(--muted); margin-top: 8px; }
+  .note { margin: 16px 0 20px; max-width: 46em; background: var(--brand-soft); border-left: 4px solid var(--brand);
+          border-radius: 0 8px 8px 0; padding: 12px 16px; font-size: 15px; }
+  .note p:last-child, .note ul:last-child { margin-bottom: 0; }
   a:focus-visible { outline: 3px solid var(--brand); outline-offset: 2px; }
   @media (max-width: 760px) { main { padding: 32px 18px 72px; } h1 { font-size: 26px; } }
   @media print { body { background: #fff; } .table, .flow li { break-inside: avoid; } }
@@ -103,7 +107,7 @@ def table(lines):
 
 
 def starts_block(line):
-    return line.startswith(("```", "#", "|", "<!--")) or bool(LIST.match(line))
+    return line.startswith(("```", "#", "|", "<!--", ">")) or bool(LIST.match(line))
 
 
 def blocks(lines, base):
@@ -114,8 +118,18 @@ def blocks(lines, base):
             i += 1
         elif line.lstrip().startswith("```"):
             end = next(j for j in range(i + 1, len(lines)) if lines[j].lstrip().startswith("```"))
+            if line.strip() == "```mermaid":
+                i = end + 1
+                continue
             out.append("<pre><code>" + html.escape("\n".join(l[len(line) - len(line.lstrip()):] for l in lines[i + 1:end])) + "</code></pre>")
             i = end + 1
+        elif line.startswith(">"):
+            end = i
+            while end < len(lines) and lines[end].startswith(">"):
+                end += 1
+            inner = [l[2:] if l.startswith("> ") else l[1:] for l in lines[i:end]]
+            out.append(f'<aside class="note">{blocks(inner, base)}</aside>')
+            i = end
         elif re.match(r"#{1,6} ", line):
             level = len(line) - len(line.lstrip("#"))
             out.append(f"<h{level}>{inline(line[level:].strip())}</h{level}>")
