@@ -83,6 +83,73 @@ export interface Worker {
   capabilities: WorkerCapabilities;
 }
 
+/** GET /v1/workers/enrollments (administrators, N §5): a one-time Worker enrollment code, without the code. */
+/** 「新建边界」 on this host (MVP 0.2.0 P2, S30): a request the root service takes, and what it recorded. */
+export interface Provision {
+  id: string;
+  name: string;
+  owner: string;
+  state: "queued" | "running" | "done" | "failed";
+  exit?: number | null;
+  error?: string | null;
+  started: number | null;
+  finished?: number | null;
+  log: string[];
+  next?: string;
+}
+
+export interface Provisions {
+  available: boolean;
+  items: Provision[];
+}
+
+/** An AWS change the deployment kit (kirocrew-on single) is to make off the host (MVP 0.2.0 P2, S29). */
+export interface AwsRequest {
+  id: string;
+  kind: "native" | "backup" | "up";
+  params: Record<string, string>;
+  state: "pending" | "done" | "failed";
+  created: number;
+  finished: number | null;
+  result: Record<string, string | number> | null;
+  command: string;
+}
+
+/** install.sh's check of the host role (MVP 0.2.0 P2, S29), as 管理 › 部署 shows it. */
+export interface HostRole {
+  state: "ok" | "writes" | "unchecked" | "none";
+  role: string;
+  allowed: string[];
+  commands: string[];
+  checked: number;
+}
+
+export interface Enrollment {
+  id: string;
+  name: string;
+  binding_kind: "user" | "team" | "spare";
+  binding_id: string | null;
+  created_by: string;
+  created: number;
+  expires: number;
+  used: number | null;
+  used_by_worker: string | null;
+  failures: number;
+  revoked: number | null;
+  state: "unused" | "used" | "revoked" | "retired" | "expired";
+}
+
+/** POST /v1/workers/enrollments: the code and the command to run on the Worker host, returned only this once. */
+export interface IssuedEnrollment {
+  id: string;
+  code: string;
+  expires: number;
+  name: string;
+  binding_kind: Enrollment["binding_kind"];
+  binding_id: string | null;
+  command: string;
+}
+
 /** GET /v1/admin/environments (administrators, D28): one execution environment with its bindings, load and live health. */
 export interface Environment {
   id: string;

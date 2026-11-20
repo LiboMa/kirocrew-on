@@ -1,0 +1,100 @@
+{
+  "Version": "2012-10-17",
+  "Statement": [
+    {
+      "Sid": "TheSingleNodeStack",
+      "Effect": "Allow",
+      "Action": [
+        "cloudformation:CreateChangeSet",
+        "cloudformation:DescribeChangeSet",
+        "cloudformation:ExecuteChangeSet",
+        "cloudformation:DeleteChangeSet",
+        "cloudformation:DescribeStacks",
+        "cloudformation:DeleteStack"
+      ],
+      "Resource": "arn:aws:cloudformation:*:*:stack/kirocrew-on-single/*"
+    },
+    {
+      "Sid": "WhatTheStackMakes",
+      "Effect": "Allow",
+      "Action": [
+        "cloudfront:CreateDistribution",
+        "cloudfront:CreateDistributionWithTags",
+        "cloudfront:UpdateDistribution",
+        "cloudfront:GetDistribution",
+        "cloudfront:GetDistributionConfig",
+        "cloudfront:TagResource",
+        "ec2:DescribeManagedPrefixLists",
+        "ec2:DescribeInstances",
+        "ec2:DescribeSecurityGroups",
+        "ec2:DescribeSecurityGroupRules",
+        "ec2:AuthorizeSecurityGroupIngress",
+        "ec2:AllocateAddress",
+        "ec2:AssociateAddress",
+        "ec2:DescribeAddresses",
+        "ec2:CreateTags",
+        "dlm:CreateLifecyclePolicy",
+        "dlm:GetLifecyclePolicy",
+        "dlm:UpdateLifecyclePolicy",
+        "dlm:TagResource",
+        "cloudfront:DeleteDistribution",
+        "ec2:DisassociateAddress",
+        "ec2:ReleaseAddress",
+        "ec2:RevokeSecurityGroupIngress",
+        "dlm:DeleteLifecyclePolicy"
+      ],
+      "Resource": "*"
+    },
+    {
+      "Sid": "DlmServiceRole",
+      "Effect": "Allow",
+      "Action": [
+        "iam:CreateRole",
+        "iam:GetRole",
+        "iam:TagRole",
+        "iam:DeleteRole"
+      ],
+      "Resource": "arn:aws:iam::*:role/kirocrew-on-single-*"
+    },
+    {
+      "Sid": "DlmServiceRolePolicyOnly",
+      "Effect": "Allow",
+      "Action": [
+        "iam:AttachRolePolicy",
+        "iam:DetachRolePolicy"
+      ],
+      "Resource": "arn:aws:iam::*:role/kirocrew-on-single-*",
+      "Condition": {
+        "ArnEquals": {
+          "iam:PolicyARN": [
+            "arn:aws:iam::aws:policy/service-role/AWSDataLifecycleManagerServiceRole"
+          ]
+        }
+      }
+    },
+    {
+      "Sid": "DlmServiceRoleToDlmOnly",
+      "Effect": "Allow",
+      "Action": [
+        "iam:PassRole"
+      ],
+      "Resource": "arn:aws:iam::*:role/kirocrew-on-single-*",
+      "Condition": {
+        "StringEquals": {
+          "iam:PassedToService": "dlm.amazonaws.com"
+        }
+      }
+    },
+    {
+      "Sid": "CheckTheHostRoleAfterwards",
+      "Effect": "Allow",
+      "Action": [
+        "iam:SimulatePrincipalPolicy",
+        "iam:GetRole",
+        "iam:ListAttachedRolePolicies",
+        "iam:ListRolePolicies"
+      ],
+      "Resource": "*"
+    }
+  ]
+}

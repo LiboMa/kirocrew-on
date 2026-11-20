@@ -1,6 +1,5 @@
 """Durable stage progression. Native task execution stays with KiroCrew."""
 from concurrent.futures import ThreadPoolExecutor, wait as wait_futures
-import fcntl
 import json
 import logging
 import re
@@ -189,7 +188,7 @@ def refused(resumed):
 
 class Engine:
     def __init__(self, database, request=worker_request, workers=1, retry_unavailable=0.0, clock=time.monotonic,
-                 credentials_key_file=None, credentials_private_hosts=(), wall=time.time, poll_backoff=False):
+                 credentials_key_file=None, credentials_private_hosts=(), wall=time.time, poll_backoff=False, lease=None):
         self.db, self.request = database, request
         # A running Attempt is looked at less often the longer it runs (D40): not every second for an hour-long task.
         self.poll_backoff, self.due = poll_backoff, {}
@@ -203,9 +202,10 @@ class Engine:
         self.retry_unavailable, self.clock, self.backoff = retry_unavailable, clock, {}
         self.turns, self.turn = {}, 0  # last submission order per Session, for round-robin fairness
         self.probed = {}   # Worker id → when its health was last read (D43)
+        from .lease import FileLease
+        self.lease = lease or FileLease(database.root / "engine.lock")   # one Engine at a time (MVP 0.2.0: an interface)
     def start(self):
-        self.lease = (self.db.root / "engine.lock").open("a")
-        fcntl.flock(self.lease, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        self.lease.acquire()
         thread = threading.Thread(target=self.loop, daemon=True, name="octopus-engine")
         thread.start()
         # Health checks wait on the network: their own thread, so a slow Worker never holds up the Sessions' cycle.

@@ -20,11 +20,12 @@ import sqlite3
 import struct
 from urllib.parse import parse_qs, quote, unquote, urlsplit
 
-from . import __version__, public_shares, remote_preview, workers
+from . import __version__, enrollments, public_shares, remote_preview, workers
 from .db import dumps, uid
 from .domain import Service, audit, name, team_environment
-from .security import (Error, authenticate, check_password, create_user, elevated, expiry, issue_token, regenerate_token, require,
+from .security import (Error, authenticate, check_password, console_login, create_user, elevated, expiry, issue_token, regenerate_token, require,
                        scope)
+from . import transport
 from .transport import validate_worker, worker_request
 from .schema import openapi
 
@@ -202,7 +203,10 @@ def required_scope(method, path):
     # Refreshing an environment's model catalogue is open to the spaces it serves (spec §6.1): a read, made a POST only
     # so a same-site page cannot trigger it with the console's cookie (2026-10-25).
     refresh = segments[:2] == ["v1", "workers"] and len(segments) == 4 and segments[3] == "capabilities"
-    if path.startswith("/v1/admin/") or (segments[:2] == ["v1", "workers"] and method != "GET" and not refresh) or \
+    if segments[:2] == ["v1", "workers"] and len(segments) == 4 and segments[3] == "kiro-sign-in":
+        return "read" if method == "GET" else "manage"   # one's own boundary's sign-in, not platform administration
+    if path.startswith(("/v1/admin/", "/v1/workers/enrollments")) or \
+            (segments[:2] == ["v1", "workers"] and method != "GET" and not refresh) or \
             (segments[:2] == ["v1", "credentials"] and len(segments) == 4 and segments[3] == "grants") or \
             (segments[:2] == ["v1", "users"] and (method != "GET" or len(segments) > 2)) or \
             (path == "/v1/teams" and method == "POST") or \
@@ -272,16 +276,16 @@ SHARE_PAGE = ("<!doctype html><html lang=\"zh-CN\"><head><meta charset=\"utf-8\"
 
 
 def server(database, port=8918, host="127.0.0.1", allowed_hosts=(), origin_secret=None, preview_url="", preview_domain="",
-           credentials_key_file=None, credentials_private_hosts=()):
+           credentials_key_file=None, credentials_private_hosts=(), provisioning=None):
     if origin_secret is not None and len(origin_secret) < 32:
         # An empty or truncated secret file must fail closed instead of turning origin enforcement off.
         raise ValueError("源站密钥为空或过短（至少 32 个字符）；检查 origin_secret_file")
     service = Service(database)
     service.credentials.configured = credentials_key_file
+    service.provisioning = provisioning
     # D75: public links live on the Session's own preview origin, else the shared one; none without a preview domain
     service.public_base = lambda rid: (remote_preview.session_url(preview_domain, rid) if preview_domain
                                        else preview_url.rstrip("/") if preview_url else None)
-    from . import transport
     try:   # D59: Worker tokens are stored sealed with the D35 key
         key = service.credentials.key
     except Error as exc:   # fail closed without taking the API down (as worker_ca_file): sealed tokens answer worker_secret
@@ -297,6 +301,7 @@ def server(database, port=8918, host="127.0.0.1", allowed_hosts=(), origin_secre
     signing_key = preview_key(database.root)
     hosts, local_hosts = set(), set()
     failures, limiter_lock = {}, threading.Lock()
+    enroll_sources = enrollments.Sources()   # N §4: enroll requests per source, right or wrong
 
     shared = remote_preview.plain_host(urlsplit(preview_url).hostname) if preview_url else ""   # the preview distribution's own name
 
@@ -569,6 +574,61 @@ def server(database, port=8918, host="127.0.0.1", allowed_hosts=(), origin_secre
                 self.close_connection = True
                 logging.error("Download of %s not recorded (%s)", rid, type(exc).__name__)
 
+        def enroll(self, body):
+            """A Worker registering itself with a one-time code (N §3–§4): a wrong, late or used code is a cheap 404 before
+            anything else; then the Worker's /health is checked with its own token (outside any transaction), and every
+            rule of POST /v1/workers applies. A failed registration counts against the code; ``check`` only verifies."""
+            require(enroll_sources.allow(client_ip(self, self.origin_verified), time.time()), "请求过于频繁，请稍后再试",
+                    429, "rate_limited")
+            require(isinstance(body, dict), "请求体须为 JSON 对象")
+            with database.read() as db:
+                code = enrollments.live(db, body.get("code"))
+            kind, binding = code["binding_kind"], code["binding_id"]
+            team, user, spare = (binding if kind == "team" else None), (binding if kind == "user" else None), kind == "spare"
+
+            class Checked(Exception):
+                pass
+            raced = False   # another request used the code first: not this code's failure
+            try:
+                require(set(body) <= {"code", "url", "token", "check"} and isinstance(body.get("check", False), bool),
+                        "请求体为 {code, url, token}，可选 check（布尔值）")
+                connection = {"url": body.get("url"), "token": body.get("token")}
+                parts = transport.check_connection(connection)
+                # A Worker on this machine registers from this machine (boundary add): no one else may point the
+                # platform at its own loopback ports (review 2026-10-26).
+                require(parts.hostname not in {"127.0.0.1", "localhost", "::1"} or self.local,
+                        "回环地址的 Worker 只能在平台主机上登记", 400, "loopback_worker")
+                try:
+                    health = validate_worker(connection)
+                except Error as exc:   # whatever the Worker answered, it is the Worker's failure, never one of our codes
+                    raise Error(503, "worker_unavailable", "Worker 无法访问或未返回有效的健康信息") from exc
+                require(isinstance(health, dict), "Worker 无法访问或未返回有效的健康信息", 503, "worker_unavailable")
+                workers.check_binding(health, team, user, spare)
+                with database.transaction() as db:
+                    try:
+                        enrollments.consume(db, code["id"])   # first: a code another request used meanwhile is 404, not 409
+                    except Error:
+                        raced = True
+                        raise
+                    wid = workers.register(db, code["created_by"], code["name"], team, user, spare, connection, health,
+                                           service.credentials.key)
+                    if body.get("check"):
+                        raise Checked()   # every rule passed: roll back, the code stays unused
+                    enrollments.registered(db, code["id"], wid)
+                    audit(db, {"id": code["created_by"]}, "worker.enroll", "worker", wid,
+                          {"enrollment": code["id"], "binding_kind": kind, "binding_id": binding,
+                           "scope": "spare" if spare else "dedicated"})
+            except Checked:
+                return self.respond({"ok": True, "name": code["name"], "scope": "spare" if spare else "dedicated"})
+            except Error:
+                if not raced:
+                    with database.transaction() as db:
+                        if enrollments.failed(db, code["id"]):   # the fifth: it is retired, and that is recorded
+                            audit(db, {"id": code["created_by"]}, "worker.enrollment_retired", "enrollment", code["id"],
+                                  {"failures": enrollments.RETIRE_AFTER})
+                raise
+            return self.respond({"id": wid, "name": code["name"], "scope": "spare" if spare else "dedicated"}, 201)
+
         def identity(self, method):
             # The Authorization header comes first (API clients, the CLI, a console without the cookie); else the
             # session cookie (D67), whose writes must also say they come from this console: a browser sends Origin
@@ -619,7 +679,7 @@ def server(database, port=8918, host="127.0.0.1", allowed_hosts=(), origin_secre
                 self.origin_verified = bool(origin_secret) and hmac.compare_digest(supplied, origin_secret)
                 # Behind CloudFront only requests carrying the origin secret are served; local operations and SSM
                 # tunnels (loopback peer AND an allowed Host naming this machine) are exempt.
-                local = self.client_address[0] in LOOPBACK and loopback_host(self.headers.get("Host", ""))
+                local = self.local = self.client_address[0] in LOOPBACK and loopback_host(self.headers.get("Host", ""))
                 require(not origin_secret or self.origin_verified or local, "请求未经 CloudFront 源站认证",
                         403, "origin_unverified")
                 url = urlsplit(self.path)
@@ -702,13 +762,16 @@ def server(database, port=8918, host="127.0.0.1", allowed_hosts=(), origin_secre
                                           (str(body.get("username", "")).lower(),)).fetchone()
                         require(user is not None and check_password(body.get("password"), user["password"]),
                                 "用户名或密码错误", 401, "unauthorized")
-                        token = issue_token(db, user["id"], label="Web login", ttl=REMEMBER if remember else 86400)
+                        token = issue_token(db, user["id"], label="Web login", ttl=REMEMBER if remember else 86400, kind="login")
                         db.execute("UPDATE users SET last_login=? WHERE id=?", (time.time(), user["id"]))
                         db.execute("DELETE FROM tokens WHERE expires<?", (time.time(),))
                     with limiter_lock:
                         failures.pop(address, None)
                     return self.respond(token, headers=[("Set-Cookie", session_cookie(token["token"],
                                                                                       REMEMBER if remember else None))])
+
+                if method == "POST" and path == "/v1/workers/enroll":   # N §3: no login; the one-time code is the authority
+                    return self.enroll(body)
 
                 actor = self.identity(method)
                 if path == "/v1/logout" and method == "POST":
@@ -721,9 +784,10 @@ def server(database, port=8918, host="127.0.0.1", allowed_hosts=(), origin_secre
                     require(method == "GET", "Method not allowed", 405)
                     return self.respond({k: v for k, v in actor.items() if k not in {"token_id", "last_used"}})
                 if path == "/v1/users":
-                    with database.transaction() as db:
+                    with database.transaction() as db:   # answered after the commit (test_respond_after_commit)
                         if method == "POST":
                             require(elevated(actor), "需要平台管理员", 403, "forbidden")
+                            console_login(actor)   # an account an Agent's token made would be one it can sign in as
                             created = create_user(db, body.get("username"), body.get("password"), body.get("admin", False))
                             audit(db, actor, "user.create", "user", created["id"], {"admin": created["admin"]})
                             if body.get("worker_id"):
@@ -733,9 +797,11 @@ def server(database, port=8918, host="127.0.0.1", allowed_hosts=(), origin_secre
                                 require(shared is not None, "只能分配共享执行环境", 409, "worker_unavailable")
                                 db.execute("INSERT INTO worker_spaces(worker_id,user_id) VALUES(?,?)",
                                            (body["worker_id"], created["id"]))
-                            return self.respond(created, 201)
-                        require(method == "GET", "Method not allowed", 405)
-                        return self.respond([dict(r) for r in db.execute("SELECT id,username FROM users WHERE active=1 ORDER BY username")])
+                            answer = (created, 201)
+                        else:
+                            require(method == "GET", "Method not allowed", 405)
+                            answer = ([dict(r) for r in db.execute("SELECT id,username FROM users WHERE active=1 ORDER BY username")], 200)
+                    return self.respond(*answer)
                 if segments[:2] == ["v1", "credentials"]:
                     store = service.credentials
                     if len(segments) == 2:
@@ -759,17 +825,24 @@ def server(database, port=8918, host="127.0.0.1", allowed_hosts=(), origin_secre
                         if method == "POST":
                             requested = body.get("scopes", actor["scopes"])
                             require(isinstance(requested, list) and set(requested) <= set(actor["scopes"]), "不能扩大 Token scope", 403, "forbidden")
-                            return self.respond(issue_token(db, actor["id"], requested, body.get("label", "API"),
-                                                            body.get("ttl", 86400), body.get("expires_in")), 201)
-                        return self.respond([{**dict(r), "expires": expiry(r["expires"]), "current": r["id"] == actor.get("token_id")}
-                                             for r in db.execute("SELECT id,label,scopes,expires,last_used FROM tokens WHERE user_id=? "
-                                                                 "AND expires>? ORDER BY expires DESC", (actor["id"], time.time()))])
+                            # The label says where its holder's actions come from (journal, Requests): the console's
+                            # login name is the login's alone (peer review 2026-10-27).
+                            require(str(body.get("label", "API")).strip().lower() != "web login",
+                                    "「Web login」保留给控制台登录，请换一个名称", 400, "label_reserved")
+                            answer = (issue_token(db, actor["id"], requested, body.get("label", "API"),
+                                                  body.get("ttl", 86400), body.get("expires_in")), 201)
+                        else:
+                            answer = ([{**dict(r), "expires": expiry(r["expires"]), "current": r["id"] == actor.get("token_id")}
+                                       for r in db.execute("SELECT id,label,scopes,expires,last_used FROM tokens WHERE user_id=? "
+                                                           "AND expires>? ORDER BY expires DESC", (actor["id"], time.time()))], 200)
+                    return self.respond(*answer)   # after the commit: a token handed out can be used at once
                 if len(segments) == 4 and segments[:2] == ["v1", "tokens"] and segments[3] == "regenerate":
                     require(method == "POST", "Method not allowed", 405)
                     require(isinstance(body, dict) and set(body) <= {"expires_in"}, "只接受 expires_in")
                     with database.transaction() as db:
-                        return self.respond(regenerate_token(db, actor["id"], segments[2], body.get("expires_in"),
-                                                             actor.get("token_id"), actor["scopes"]))
+                        fresh = regenerate_token(db, actor["id"], segments[2], body.get("expires_in"), actor.get("token_id"),
+                                                 actor["scopes"], actor.get("token_kind", "api"))
+                    return self.respond(fresh)
                 if len(segments) == 3 and segments[:2] == ["v1", "tokens"] and method == "DELETE":
                     with database.transaction() as db:
                         db.execute("DELETE FROM tokens WHERE id=? AND user_id=?", (segments[2], actor["id"]))
@@ -890,6 +963,9 @@ def server(database, port=8918, host="127.0.0.1", allowed_hosts=(), origin_secre
                 if path == "/v1/admin/users":
                     require(method == "GET", "Method not allowed", 405)
                     return self.respond(service.admin_users(actor))
+                if path == "/v1/admin/boundaries":   # MVP 0.2.0 (S9): a new boundary's identity and OS user id
+                    require(method == "POST", "Method not allowed", 405)
+                    return self.respond(service.allocate_boundary(actor, body), 201)
                 if len(segments) in {5, 6} and segments[:3] == ["v1", "admin", "users"] and segments[4] == "tokens":
                     if len(segments) == 5:
                         require(method == "GET", "Method not allowed", 405)
@@ -904,12 +980,43 @@ def server(database, port=8918, host="127.0.0.1", allowed_hosts=(), origin_secre
                             require(query[key][0].isdigit(), f"{key} 须为非负整数")
                             paging[key] = int(query[key][0])
                     return self.respond(service.audit_log(actor, **paging))
+                if path == "/v1/admin/metrics":   # MVP 0.2.0 (design §12.1): the counts the EMF log carries
+                    require(method == "GET", "Method not allowed", 405)
+                    return self.respond(service.metrics(actor))
                 if path == "/v1/admin/environments":
                     require(method == "GET", "Method not allowed", 405)
                     return self.respond(service.environments(actor))
+                if path == "/v1/admin/aws-requests":   # MVP 0.2.0 P2 Task 7 (S29): what the deployment kit is to do
+                    require(method in {"GET", "POST"}, "Method not allowed", 405)
+                    origin = self.headers.get("Origin") or ""
+                    console = origin if origin.startswith("https://") else "https://<控制台地址>"
+                    if method == "GET":
+                        return self.respond(service.aws_requests(actor, console))
+                    return self.respond(service.request_aws_change(actor, body, console), 201)
+                if len(segments) == 5 and segments[:3] == ["v1", "admin", "aws-requests"] and segments[4] == "done":
+                    require(method == "POST", "Method not allowed", 405)
+                    return self.respond(service.report_aws_request(actor, segments[3], body))
+                if path == "/v1/admin/boundaries/provision":   # MVP 0.2.0 P2 Task 6: 「新建边界」 on this host
+                    require(method in {"GET", "POST"}, "Method not allowed", 405)
+                    if method == "GET":
+                        return self.respond(service.provisions(actor))
+                    return self.respond(service.provision_boundary(actor, body), 202)
+                if path == "/v1/workers/enrollments":   # N §5: one-time enrollment codes, an administrator's
+                    require(method in {"GET", "POST"}, "Method not allowed", 405)
+                    if method == "GET":
+                        return self.respond(service.enrollments(actor))
+                    origin = self.headers.get("Origin") or ""   # dispatch refused a foreign one: the console's address
+                    return self.respond(service.issue_enrollment(actor, body, origin if origin.startswith("https://")
+                                                                 else "https://<控制台域名>"), 201)
+                if len(segments) == 4 and segments[:3] == ["v1", "workers", "enrollments"]:
+                    require(method == "DELETE", "Method not allowed", 405)
+                    return self.respond(service.revoke_enrollment(actor, segments[3]))
                 if len(segments) == 3 and segments[:2] == ["v1", "workers"]:
                     require(method == "PATCH", "Method not allowed", 405)
                     return self.respond(service.rename_worker(actor, segments[2], body))
+                if len(segments) == 4 and segments[:2] == ["v1", "workers"] and segments[3] == "kiro-sign-in":
+                    require(method in {"GET", "POST"}, "Method not allowed", 405)   # MVP 0.2.0 (§6.4): the owner's
+                    return self.respond(service.kiro_login(actor, segments[2], method == "POST"))
                 if len(segments) == 4 and segments[:2] == ["v1", "workers"] and segments[3] == "retire":
                     require(method == "POST", "Method not allowed", 405)
                     return self.respond(service.retire_worker(actor, segments[2]))
@@ -989,41 +1096,10 @@ def server(database, port=8918, host="127.0.0.1", allowed_hosts=(), origin_secre
                     team, user = body.get("team_id"), body.get("owner_id")
                     # A spare execution environment belongs to no space until an admin assigns it to a Team (D28, T4).
                     spare = body.get("spare") is True
-                    if spare:
-                        require(not team and not user, "空闲执行环境不绑定 Team 或 User")
-                        require(health.get("isolation") == "dedicated",
-                                "空闲执行环境须为专属隔离（dedicated）", 409, "isolation_required")
-                    else:
-                        require(bool(team) != bool(user), "Worker 必须唯一绑定 Team 或 User")
-                        require(not team or health.get("isolation") == "dedicated",
-                                "Team 执行需要专属 Worker；trusted-local 仅允许个人开发空间", 409, "isolation_required")
-                    config = {**config, "capabilities": health}
+                    workers.check_binding(health, team, user, spare)
                     with database.transaction() as db:
-                        if not spare:
-                            require(db.execute("SELECT 1 FROM teams WHERE id=?", (team,)).fetchone() if team else
-                                    db.execute("SELECT 1 FROM users WHERE id=?", (user,)).fetchone(),
-                                    "执行空间不存在", 404, "not_found")
-                            require(not team or team_environment(db, team) is None,
-                                    "该 Team 已有执行环境（含已停用的）", 409, "team_has_environment")
-                        local_principal = hashlib.sha256(f"{socket.gethostname()}:{os.getuid()}".encode()).hexdigest()
-                        if health.get("host_principal") == local_principal:
-                            owner = db.execute("SELECT admin FROM users WHERE id=?", (user,)).fetchone() if user else None
-                            require(owner and owner["admin"] and health.get("isolation") == "trusted-local",
-                                    "平台宿主账号仅用于管理员本机验证；Team 和普通用户须使用独立执行账号/容器/主机",
-                                    409, "isolation_required")
-                        # A spare boundary must never have been registered, not even on a disabled Worker (T4).
-                        others = "SELECT config,team_id,owner_id FROM workers" + ("" if spare else " WHERE enabled=1")
-                        for row in db.execute(others):
-                            previous = json.loads(row["config"])["capabilities"]
-                            require(previous.get("boundary") != health.get("boundary"), "该 Gateway 边界已登记", 409, "worker_conflict")
-                            if spare or (team, user) != (row["team_id"], row["owner_id"]):
-                                require(previous.get("host_principal") != health.get("host_principal"),
-                                        "不同执行空间不能复用同一宿主账户；请使用独立账号/容器/主机", 409, "isolation_required")
-                        wid = uid("worker")
-                        db.execute("INSERT INTO workers(id,name,owner_id,team_id,config,scope) VALUES(?,?,?,?,?,?)",
-                                   (wid, name(body.get("name")), actor["id"] if spare else user, team,
-                                    dumps(workers.seal(config, service.credentials.key)),   # D59: never plaintext
-                                    "spare" if spare else "dedicated"))
+                        wid = workers.register(db, actor["id"], name(body.get("name")), team, user, spare, config, health,
+                                               service.credentials.key)
                         audit(db, actor, "worker.register", "worker", wid, {"scope": "spare" if spare else "dedicated",
                                                                             "team_id": team, "owner_id": None if spare else user})
                     return self.respond({"id": wid, "name": body["name"], "scope": "spare" if spare else "dedicated",

@@ -14,7 +14,7 @@ import unicodedata
 
 from . import journal, policies, quotas, remote_preview, requests as submissions
 from .db import dumps, uid
-from .security import Error, check_password, elevated, expiry, password_hash, require
+from .security import Error, check_password, console_login, elevated, expiry, password_hash, require
 
 TOOLS = ("kiro", "claude", "codex", "opencode")
 ROLES = {"viewer": 1, "runner": 2, "editor": 3, "owner": 4}
@@ -668,6 +668,7 @@ class Service:
         self._share_views = {}   # D75: share → (views not yet written, when last written)
         from .credentials import CredentialStore
         self.credentials = CredentialStore(database)   # D35; the server sets its key file
+        self.provisioning = None   # MVP 0.2.0 P2 Task 6: octopus.provision.Provisions where the root service is installed
 
     def teams(self, actor):
         """The actor's Teams; an admin sees every Team (role None where not a member). Each carries its environment."""
@@ -2291,6 +2292,181 @@ class Service:
         require(worker is not None and not worker["retired"], "页面暂不可用", 404, "not_found")
         return worker_request(json.loads(worker["config"]), "/files", {"run_id": share["run_id"], "path": relative})
 
+    def allocate_boundary(self, actor, body):
+        """A new boundary's identity and OS user id (MVP 0.2.0, S9), for ``deploy.sh boundary add``: an administrator's."""
+        from . import boundaries
+        require(elevated(actor), "只有平台管理员可以分配执行边界", 403, "forbidden")
+        require(isinstance(body, dict) and set(body) <= {"owner", "name"} and isinstance(body.get("owner"), str),
+                "需要 owner（平台用户名），可选 name")
+        with self.db.transaction() as db:
+            user = db.execute("SELECT id FROM users WHERE username=?", (body["owner"].lower(),)).fetchone()
+            require(user is not None, f"平台上没有用户 {body['owner']}", 404, "not_found")
+            row = boundaries.allocate(db, user["id"], body.get("name"))
+            audit(db, actor, "boundary.allocate", "boundary", row["id"], {"uid": row["uid"], "name": row["name"],
+                                                                           "owner": user["id"]})
+        return row
+
+    def issue_enrollment(self, actor, body, platform):
+        """A one-time code that registers one Worker where the administrator binds it (N §3–§5); the code and the command
+        to run on the Worker host are shown only in this answer."""
+        from . import enrollments
+        require(elevated(actor), "只有平台管理员可以签发接入码", 403, "forbidden")
+        require(isinstance(body, dict) and set(body) <= {"name", "owner_id", "team_id", "spare", "expires_in"},
+                "需要 name，以及 owner_id、team_id、spare 三者之一，可选 expires_in")
+        spare = body.get("spare") is True
+        require(sum((bool(body.get("owner_id")), bool(body.get("team_id")), spare)) == 1,
+                "接入码须唯一绑定一个用户、一个 Team，或空闲执行环境（spare）")
+        kind, binding = ("spare", None) if spare else ("team", body["team_id"]) if body.get("team_id") else ("user", body["owner_id"])
+        worker_name = name(body.get("name"))
+        with self.db.transaction() as db:
+            if kind == "user":
+                require(db.execute("SELECT 1 FROM users WHERE id=? AND active=1", (binding,)).fetchone(), "用户不存在", 404,
+                        "not_found")
+            elif kind == "team":
+                require(db.execute("SELECT 1 FROM teams WHERE id=?", (binding,)).fetchone(), "Team 不存在", 404, "not_found")
+                require(team_environment(db, binding) is None, "该 Team 已有执行环境（含已停用的）", 409, "team_has_environment")
+            issued = enrollments.issue(db, actor["id"], worker_name, kind, binding, body.get("expires_in"))
+            audit(db, actor, "worker.enrollment", "enrollment", issued["id"], {"binding_kind": kind, "binding_id": binding,
+                                                                               "name": worker_name, "expires": issued["expires"]})
+        # The code is pasted at the prompt, so it stays out of ps and the shell history (scripts set OCTOPUS_ENROLL_CODE)
+        command = ("PYTHONPATH=/opt/kirocrew-on/current /opt/kirocrew-on/venv/bin/python -m octopus "
+                   f"--config /etc/kirocrew-on/boundary-<边界名>.toml worker enroll --code-stdin --platform {platform} "
+                   "--url https://<Worker 私网地址>:8943")   # as installed on a host, run as root (it reads the token file); D53: no sudo in code text
+        return {**issued, "name": worker_name, "binding_kind": kind, "binding_id": binding, "command": command}
+
+    def provision_boundary(self, actor, body):
+        """「新建边界」 on this host (design §4.2.5, S30): checked here, carried out by the root service; a rerun only fills
+        in what is missing, as boundary.sh does."""
+        from .provision import boundary_name, valid_name
+        require(elevated(actor), "只有平台管理员可以新建边界", 403, "forbidden")
+        console_login(actor)   # it runs a root step on the host: never an Agent's or an API token's to start
+        require(self.provisioning is not None, "这台主机没有开启控制台新建边界（单机版提供；集群版由部署套件新建）", 409,
+                "provisioning_unavailable")
+        require(isinstance(body, dict) and set(body) <= {"owner_id", "name"} and isinstance(body.get("owner_id"), str),
+                "需要 owner_id，可选 name")
+        with self.db.read() as db:
+            person = db.execute("SELECT id,username FROM users WHERE id=? AND active=1", (body["owner_id"],)).fetchone()
+            require(person is not None, "用户不存在或已停用", 404, "not_found")
+            title = body.get("name") or boundary_name(person["username"])
+            require(valid_name(title), "边界名称为小写字母开头的 2–20 位小写字母、数字或连字符，不能是 personal", 400)
+            require(not db.execute("SELECT 1 FROM workers WHERE owner_id=? AND team_id IS NULL AND scope='dedicated' AND enabled=1 "
+                                   "AND retired=0 AND name!=?", (person["id"], title)).fetchone(),
+                    f"{person['username']} 已有自己的执行环境：每人一个边界", 409, "has_own_environment")
+            require(not db.execute("SELECT 1 FROM workers WHERE name=? AND retired=0 AND (owner_id IS NULL OR owner_id!=?)",
+                                   (title, person["id"])).fetchone(), f"名称 {title} 已被其他执行环境使用", 409, "name_taken")
+        require(not self.provisioning.busy(title), f"边界 {title} 正在新建", 409, "provision_in_progress")
+        owner = person["username"].lower()   # boundary.sh and the platform keep user names in lower case
+        item = self.provisioning.submit(title, owner)
+        with self.db.transaction() as db:
+            audit(db, actor, "boundary.provision", "boundary", item["id"], {"name": title, "owner": owner})
+        return item
+
+    def provisions(self, actor):
+        require(elevated(actor), "只有平台管理员可以查看新建边界的进度", 403, "forbidden")
+        if self.provisioning is None:
+            return {"available": False, "items": []}
+        return {"available": True, "items": self.provisioning.items()}
+
+    AWS_KINDS = {"native": {"boundary"}, "backup": {"bucket"}, "up": set()}
+    # install.sh's check of the host role (single-stack.sh check-role, S29): 管理 › 部署 shows it until it passes
+    HOST_ROLE = Path("/etc/kirocrew-on/host-role.json")
+
+    def request_aws_change(self, actor, body, platform):
+        """An AWS change the deployment kit is to make (S29): the platform never calls an AWS write API on the
+        single-node edition; it keeps what is waiting and the command an administrator runs off the host."""
+        from .provision import valid_name
+        require(elevated(actor), "只有平台管理员可以记录待执行的 AWS 变更", 403, "forbidden")
+        require(isinstance(body, dict) and set(body) <= {"kind", "params"} and body.get("kind") in self.AWS_KINDS,
+                "kind 只能是 native、backup 或 up")
+        kind, params = body["kind"], body.get("params") or {}
+        require(isinstance(params, dict) and set(params) == self.AWS_KINDS[kind], "参数不对：native 要 boundary，backup 要 bucket")
+        if kind == "native":
+            require(valid_name(params["boundary"]), "边界名称不对")
+        if kind == "backup":
+            require(isinstance(params["bucket"], str) and re.fullmatch(r"[a-z0-9][a-z0-9.-]{1,61}[a-z0-9]", params["bucket"]),
+                    "S3 桶名不对")
+        rid = uid("awr")
+        with self.db.transaction() as db:
+            db.execute("INSERT INTO aws_requests(id,kind,params,created_by,created) VALUES(?,?,?,?,?)",
+                       (rid, kind, dumps(params), actor["id"], time.time()))
+            audit(db, actor, "aws_request.create", "aws_request", rid, {"kind": kind, **params})
+            row = db.execute("SELECT * FROM aws_requests WHERE id=?", (rid,)).fetchone()
+        return self._aws_request(row, platform)
+
+    @staticmethod
+    def _aws_request(row, platform):
+        params = json.loads(row["params"])
+        words = {"native": [params.get("boundary", "")], "backup": ["--bucket", params.get("bucket", "")], "up": []}[row["kind"]]
+        command = " ".join(["kirocrew-on", "single", row["kind"], *words, "--request", row["id"], "--platform", platform,
+                            "--token-file", "<管理员 API Token 文件>"])
+        return {"id": row["id"], "kind": row["kind"], "params": params, "state": row["state"], "created": row["created"],
+                "finished": row["finished"], "result": json.loads(row["result"]) if row["result"] else None, "command": command}
+
+    def aws_requests(self, actor, platform):
+        require(elevated(actor), "只有平台管理员可以查看待执行的 AWS 变更", 403, "forbidden")
+        with self.db.read() as db:
+            rows = db.execute("SELECT * FROM aws_requests ORDER BY state!='pending', created DESC LIMIT 50").fetchall()
+        try:
+            role = json.loads(self.HOST_ROLE.read_text())
+            role = {key: role.get(key) for key in ("state", "role", "allowed", "commands", "checked")}
+        except (OSError, ValueError, AttributeError):
+            role = None
+        return {"items": [self._aws_request(row, platform) for row in rows], "host_role": role}
+
+    def report_aws_request(self, actor, rid, body):
+        """The kit's report: done or failed, with what it made (a domain, an object key; never a credential)."""
+        require(elevated(actor), "只有平台管理员可以回报 AWS 变更", 403, "forbidden")
+        require(isinstance(body, dict) and body.get("state") in ("done", "failed") and isinstance(body.get("result", {}), dict),
+                "需要 state（done 或 failed）与可选的 result")
+        result = {k: v for k, v in body.get("result", {}).items() if isinstance(v, (str, int)) and len(str(v)) <= 500}
+        with self.db.transaction() as db:
+            row = db.execute("SELECT state FROM aws_requests WHERE id=?", (rid,)).fetchone()
+            require(row is not None, "没有这一项", 404, "not_found")
+            db.execute("UPDATE aws_requests SET state=?,finished=?,result=? WHERE id=?",
+                       (body["state"], time.time(), dumps(result), rid))
+            audit(db, actor, "aws_request.report", "aws_request", rid, {"state": body["state"]})
+        return {"id": rid, "state": body["state"]}
+
+    def enrollments(self, actor):
+        from . import enrollments
+        require(elevated(actor), "只有平台管理员可以查看接入码", 403, "forbidden")
+        with self.db.read() as db:
+            return enrollments.listed(db)
+
+    def revoke_enrollment(self, actor, eid):
+        from . import enrollments
+        require(elevated(actor), "只有平台管理员可以撤销接入码", 403, "forbidden")
+        with self.db.transaction() as db:
+            enrollments.revoke(db, eid)
+            audit(db, actor, "worker.enrollment_revoke", "enrollment", eid)
+        return {"ok": True}
+
+    def metrics(self, actor):
+        """The platform's counts now (MVP 0.2.0, design §12.1), as each minute's EMF line carries them."""
+        from . import metrics
+        require(elevated(actor), "只有平台管理员可以查看平台指标", 403, "forbidden")
+        now = time.time()
+        with self.db.read() as db:
+            return {**metrics.snapshot(db, now), "at": now}
+
+    def kiro_login(self, actor, wid, start):
+        """Sign a boundary's kiro-cli in with a device code from the console (MVP 0.2.0, §6.4): its owner only — not an
+        administrator either: the code signs the boundary in as whoever enters it. The address and code pass through
+        and are kept nowhere; the audit records that a login was started, not what it showed."""
+        from . import transport
+        with self.db.read() as db:
+            row = db.execute("SELECT id, owner_id, config FROM workers WHERE id=? AND retired=0", (wid,)).fetchone()
+        require(row is not None and row["owner_id"] == actor["id"], "执行环境不存在或不是你的", 404, "not_found")
+        answer = transport.worker_request(json.loads(row["config"]), "/kiro/login" if start else "/kiro/login/status", {},
+                                          timeout=20)
+        require(isinstance(answer, dict) and answer.get("state") in ("idle", "starting", "waiting", "done", "failed"),
+                "执行环境未返回登录状态", 503, "worker_unavailable")
+        if start:
+            with self.db.transaction() as db:
+                audit(db, actor, "worker.kiro_login", "worker", wid, {"state": answer["state"]})
+        keep = ("state", "url", "code", "expires") if answer["state"] == "waiting" else ("state",)
+        return {key: answer[key] for key in keep if key in answer}
+
     def quotas(self, actor):
         """The actor's limit on running tasks and their Teams' (D61); an administrator also sees the default and each person's."""
         with self.db.read() as db:
@@ -2720,7 +2896,7 @@ class Service:
                 action = ("失败后检查到 Kiro 登录正常（未见过期，或检查前已恢复），平台不会自动重跑：确认后在该任务上「配置并续作」。")
             else:   # the platform reads Kiro's login and continues on its own (D43)
                 title = "等待 Kiro 登录恢复"
-                action = ("请平台管理员发起 kiro 重新登录；在你自己的执行边界上时，由你用自己的账号授权管理员给出的设备码。"
+                action = ("请执行环境的主人点「登录 Kiro」：在「我的设置 › 执行环境」（管理员在「管理 › 执行环境」该行的菜单里），用自己的账号授权页面给出的设备码。"
                           "登录恢复后自动继续（平台每分钟检查一次）。")
         elif failure in {"auth", "model"}:
             title = "等待处理认证、权限或模型配置"
@@ -3058,6 +3234,11 @@ class Service:
         return row
 
     def reset_password(self, actor, uid, body):
+        """An administrator sets someone else's password, from a console login only: through an Agent's or the API's
+        token it would hand the account to whatever holds that token (peer review 2026-10-27)."""
+        require(elevated(actor), "需要平台管理员", 403, "forbidden")
+        console_login(actor)
+        require(uid != actor["id"], "改自己的密码请在「我的设置」里进行，需要输入原密码", 400, "use_me_password")
         with self.db.transaction() as db:
             self._target(db, actor, uid)
             db.execute("UPDATE users SET password=? WHERE id=?", (password_hash(body.get("password")), uid))
@@ -3067,6 +3248,9 @@ class Service:
 
     def set_active(self, actor, uid, body):
         require(isinstance(body.get("active"), bool), "active 必须为布尔值")
+        if body["active"]:   # giving access back needs a console login, as granting it does; taking it away does not
+            require(elevated(actor), "需要平台管理员", 403, "forbidden")
+            console_login(actor)
         with self.db.transaction() as db:
             row = self._target(db, actor, uid)
             if not body["active"] and row["active"]:
@@ -3084,6 +3268,9 @@ class Service:
 
     def set_admin(self, actor, uid, body):
         require(isinstance(body.get("admin"), bool), "admin 必须为布尔值")
+        if body["admin"]:   # granting needs a console login; taking it away stays open to tokens, for incident response
+            require(elevated(actor), "需要平台管理员", 403, "forbidden")
+            console_login(actor)
         with self.db.transaction() as db:
             row = self._target(db, actor, uid)
             if not body["admin"] and row["admin"] and row["active"]:

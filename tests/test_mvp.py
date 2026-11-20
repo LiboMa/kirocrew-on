@@ -42,6 +42,8 @@ class MVPTests(unittest.TestCase):
                 user = create_user(db, name, "Test-password-123!", admin=name == "alice")
                 token = issue_token(db, user["id"])["token"]
                 self.users[name], self.tokens[name] = authenticate(db, token), token
+            # alice signed in at the console: account management needs a login token (peer review 2026-10-27)
+            self.tokens["alice-console"] = issue_token(db, self.users["alice"]["id"], label="Web login", kind="login")["token"]
         self.a, self.b, self.e = (self.users[k] for k in ["alice", "bob", "eve"])
         self.flow = self.service.save_workflow(self.a, {"name": "研发流程", "steps": SPEC})
 
@@ -701,7 +703,7 @@ class MVPTests(unittest.TestCase):
             self.assertEqual(call("POST","/v1/tokens",body={"scopes":[]})[0],400)
             self.assertEqual(call("DELETE","/v1/teams",body={"name":"must-not-create"})[0],405)
             self.assertEqual(call("POST","/v1/me",body={})[0],405)
-            self.assertEqual(call("POST","/v1/users",body={"username":"new-user","password":"long-password-test","admin":"false"})[0],400)
+            self.assertEqual(call("POST","/v1/users","alice-console",{"username":"new-user","password":"long-password-test","admin":"false"})[0],400)
             self.assertEqual(call("POST","/v1/logout",body={})[0],200)
             self.assertEqual(call("GET","/v1/me")[0],401)
 
@@ -1092,7 +1094,7 @@ class EnvironmentTests(unittest.TestCase):
         from octopus.domain import space_workers
         wid = self.shared()
         with self.http() as (_, call):
-            status, user = call("POST", "/v1/users", "alice",
+            status, user = call("POST", "/v1/users", "alice-console",
                                 {"username": "carol", "password": "Test-password-123!", "worker_id": wid})
         self.assertEqual(status, 201)
         with self.db.read() as db:

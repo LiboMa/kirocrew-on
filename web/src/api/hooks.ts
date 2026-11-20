@@ -2,7 +2,7 @@ import { useEffect, useState } from "react";
 import { useInfiniteQuery, useQuery, useQueryClient } from "@tanstack/react-query";
 import { api } from "@/api/client";
 import { followRunEvents, type StreamState } from "@/api/events";
-import type { ApprovalList, AppPreview, AttemptDiff, ChangeEntry, Credential, Environment, Me, Observation, Placement, Policy, RevisionDiff, RevisionEntry, Run, RunEvent, RunPage, Team, Template, User, Worker, Workflow, Quotas } from "@/api/types";
+import type { ApprovalList, AwsRequest, HostRole, AppPreview, AttemptDiff, ChangeEntry, Credential, Enrollment, Environment, Me, Observation, Placement, Policy, Provisions, RevisionDiff, RevisionEntry, Run, RunEvent, RunPage, Team, Template, User, Worker, Workflow, Quotas } from "@/api/types";
 
 export const keys = {
   me: ["me"] as const,
@@ -14,6 +14,9 @@ export const keys = {
   templates: ["templates"] as const,
   tokens: ["tokens"] as const,
   environments: ["admin", "environments"] as const,
+  enrollments: ["workers", "enrollments"] as const,
+  provisions: ["admin", "provisions"] as const,
+  awsRequests: ["admin", "aws-requests"] as const,
   run: (id: string) => ["run", id] as const,
   observe: (id: string) => ["observe", id] as const,
   app: (id: string) => ["app", id] as const,
@@ -77,6 +80,26 @@ export function useRunCount(params: string, allSessions: boolean) {
 export function useEnvironments(enabled: boolean) {
   return useQuery({ queryKey: keys.environments, queryFn: () => api<Environment[]>("/admin/environments"), enabled,
     retry: false, ...every(30_000) });
+}
+
+/** The Worker enrollment codes (administrators, N §5): unused ones and those of the last week, never the code itself. */
+export function useEnrollments(enabled: boolean) {
+  // read again every 30 s, as the Workers are: a code used from its host leaves the list (review 2026-10-26)
+  return useQuery({ queryKey: keys.enrollments, queryFn: () => api<Enrollment[]>("/workers/enrollments"), enabled, retry: false,
+    ...every(30_000) });
+}
+
+/** 管理 › 部署: the AWS changes waiting for the deployment kit, read again every 30 s (the kit reports back). */
+export function useAwsRequests(enabled: boolean) {
+  return useQuery({ queryKey: keys.awsRequests, queryFn: () => api<{ items: AwsRequest[]; host_role: HostRole | null }>("/admin/aws-requests"), enabled,
+    retry: false, ...every(30_000) });
+}
+
+/** 「新建边界」 on this host: every 3 s while one waits or runs, else every 30 s. */
+export function useProvisions(enabled: boolean) {
+  return useQuery({ queryKey: keys.provisions, queryFn: () => api<Provisions>("/admin/boundaries/provision"), enabled, retry: false,
+    refetchInterval: (query) => (query.state.data?.items.some((i) => i.state === "queued" || i.state === "running") ? 3000 : 30_000),
+    refetchIntervalInBackground: false });
 }
 
 /** The newest `limit` messages of a run's native Session; refreshed every 5 s while the run is active. */

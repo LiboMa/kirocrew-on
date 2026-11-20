@@ -1,0 +1,125 @@
+AWSTemplateFormatVersion: "2010-09-09"
+Description: >-
+  KiroCrew ON state for the cluster's control plane (MVP 0.2.0, design §10, P §5.1, S31): the state bucket that holds
+  the platform database replica (db/, Litestream) and, from P5, the escrowed platform key material (escrow/, CE7), with
+  its KMS key, and the managed policy the control-plane host's role attaches. Only a control-plane host may use it: it
+  runs no boundary, so no Agent can use its role. Hosts that run Agents (m1, a single-node host, Worker and pool hosts)
+  are never given it; this stack attaches the policy to no role itself.
+
+Parameters:
+  DatabaseNoncurrentVersionDays:
+    Type: Number
+    Default: 7
+    MinValue: 1
+    Description: Days an old Litestream object version under db/ is kept (Litestream keeps its own retention as well)
+
+Resources:
+  StateKey:
+    Type: AWS::KMS::Key
+    Properties:
+      Description: KiroCrew ON control-plane state (the platform database replica, escrowed key material)
+      EnableKeyRotation: true
+      KeyPolicy:
+        Version: "2012-10-17"
+        Statement:
+          # Use is granted through IAM (the managed policy below); the key policy only delegates to the account.
+          - Sid: AccountDelegatesToIam
+            Effect: Allow
+            Principal: {AWS: !Sub "arn:${AWS::Partition}:iam::${AWS::AccountId}:root"}
+            Action: "kms:*"
+            Resource: "*"
+      Tags: [{Key: Project, Value: kirocrew-on}]
+
+  StateKeyAlias:
+    Type: AWS::KMS::Alias
+    Properties:
+      AliasName: !Sub "alias/${AWS::StackName}"
+      TargetKeyId: !Ref StateKey
+
+  StateBucket:
+    Type: AWS::S3::Bucket
+    DeletionPolicy: Retain
+    UpdateReplacePolicy: Retain
+    Properties:
+      VersioningConfiguration: {Status: Enabled}
+      BucketEncryption:
+        ServerSideEncryptionConfiguration:
+          - ServerSideEncryptionByDefault:
+              SSEAlgorithm: aws:kms
+              KMSMasterKeyID: !GetAtt StateKey.Arn
+            BucketKeyEnabled: true
+      PublicAccessBlockConfiguration:
+        BlockPublicAcls: true
+        BlockPublicPolicy: true
+        IgnorePublicAcls: true
+        RestrictPublicBuckets: true
+      OwnershipControls:
+        Rules: [{ObjectOwnership: BucketOwnerEnforced}]
+      LifecycleConfiguration:
+        Rules:
+          - Id: database-replica
+            Status: Enabled
+            Prefix: db/
+            NoncurrentVersionExpiration:
+              NoncurrentDays: !Ref DatabaseNoncurrentVersionDays
+          - Id: incomplete-uploads
+            Status: Enabled
+            AbortIncompleteMultipartUpload:
+              DaysAfterInitiation: 7
+      Tags: [{Key: Project, Value: kirocrew-on}]
+
+  StateBucketPolicy:
+    Type: AWS::S3::BucketPolicy
+    Properties:
+      Bucket: !Ref StateBucket
+      PolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Sid: TlsOnly
+            Effect: Deny
+            Principal: "*"
+            Action: "s3:*"
+            Resource:
+              - !GetAtt StateBucket.Arn
+              - !Sub "${StateBucket.Arn}/*"
+            Condition:
+              Bool: {"aws:SecureTransport": "false"}
+
+  # For the cluster control-plane host's role only (it runs no boundary). Attached when the control plane is set up
+  # (`kirocrew-on cluster init control-plane`, P3), never here and never to a host that runs Agents (S29, S31).
+  ControlPlaneStateAccess:
+    Type: AWS::IAM::ManagedPolicy
+    Properties:
+      Description: KiroCrew ON control plane - the platform database replica (Litestream); no host that runs Agents
+      PolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Sid: ListDatabaseReplica
+            Effect: Allow
+            Action: [s3:ListBucket]
+            Resource: !GetAtt StateBucket.Arn
+            Condition:
+              StringLike: {"s3:prefix": ["db/*", "db/"]}
+          - Sid: BucketLocation
+            Effect: Allow
+            Action: [s3:GetBucketLocation]
+            Resource: !GetAtt StateBucket.Arn
+          - Sid: ReadWriteDatabaseReplica
+            Effect: Allow
+            Action: [s3:GetObject, s3:PutObject, s3:DeleteObject, s3:AbortMultipartUpload]
+            Resource: !Sub "${StateBucket.Arn}/db/*"
+          - Sid: UseStateKey
+            Effect: Allow
+            Action: [kms:Encrypt, kms:Decrypt, kms:GenerateDataKey, kms:DescribeKey]
+            Resource: !GetAtt StateKey.Arn
+
+Outputs:
+  StateBucketName:
+    Value: !Ref StateBucket
+  StateBucketArn:
+    Value: !GetAtt StateBucket.Arn
+  StateKeyArn:
+    Value: !GetAtt StateKey.Arn
+  ControlPlaneStateAccessPolicyArn:
+    Description: Attach to the cluster control-plane host's role only (no boundaries, no Agents)
+    Value: !Ref ControlPlaneStateAccess

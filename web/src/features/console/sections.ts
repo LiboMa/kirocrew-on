@@ -1,4 +1,4 @@
-import { FolderGit2, Gauge, KeyRound, LayoutDashboard, Lock, Server, Shuffle, Users, UsersRound, type LucideIcon } from "lucide-react";
+import { CloudCog, FolderGit2, Gauge, KeyRound, LayoutDashboard, Lock, Server, Shuffle, Users, UsersRound, type LucideIcon } from "lucide-react";
 import type { Me, Team } from "@/api/types";
 import { elevated } from "@/lib/access";
 
@@ -16,6 +16,7 @@ export const ADMIN_SECTIONS: PageSection[] = [
   { id: "teams", label: "Team", icon: UsersRound },
   { id: "access", label: "接入与凭证", icon: KeyRound },
   { id: "quotas", label: "并发上限", icon: Gauge },
+  { id: "deploy", label: "部署", icon: CloudCog },
 ];
 
 /** 我的设置: one's own access, credentials, preferences and password; someone who is not an administrator also finds here

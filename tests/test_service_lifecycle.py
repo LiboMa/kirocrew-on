@@ -104,7 +104,11 @@ class UnitFileTests(unittest.TestCase):
             service = unit["Service"]
             names[name] = service["User"]
             command = service["ExecStart"]
-            if "-m octopus" in command:
+            if name == "octopus-boundary-provision.service":   # MVP 0.2.0 P2 Task 6: root, the release's processor only
+                self.assertEqual(service["User"], "root")
+                self.assertIn("-I /opt/kirocrew-on/current/deploy/install/boundary-provision.py", command)
+                self.assertTrue((ROOT / "deploy/install/boundary-provision.py").is_file())
+            elif "-m octopus" in command:
                 self.assertIn(command.split()[-1], subcommands)
             else:
                 self.assertIn("-m composition.gateway", command)
@@ -116,6 +120,7 @@ class UnitFileTests(unittest.TestCase):
         self.assertEqual(names["octopus-api.service"], "octopus")
         self.assertEqual(names["octopus-worker@.service"], "crew-%i")
         self.assertEqual(names["octopus-gateway@.service"], "crew-%i")
+        self.assertEqual(names["octopus-boundary-provision.service"], "root")
 
 
 class WaitReadyCommandTests(unittest.TestCase):

@@ -1,0 +1,513 @@
+AWSTemplateFormatVersion: "2010-09-09"
+Description: >-
+  KiroCrew ON Worker pool (stateless Worker pool design, docs/superpowers/specs/2026-10-23-stateless-worker-pool-design.md):
+  Worker hosts from one launch template in an Auto Scaling Group. A new host joins by itself (lifecycle hook ->
+  EventBridge -> SSM Automation: install the platform's current release, TLS from the platform's private CA, admit as a
+  spare execution environment) and leaves only after it is drained. Hosts keep no session state worth keeping: what
+  outlives a host is in the platform database and the session-state bucket (kirocrew-on-state.yaml), which no Worker
+  role can reach. Desired capacity defaults to 0, so creating the stack starts no host. The join and drain steps call
+  deploy/install/pool-host.sh (on the host) and "python -m octopus pool" (on the platform host): both are P1b
+  implementation items of the design; until they exist a launched host fails its join and is abandoned.
+
+Parameters:
+  VpcId:
+    Type: AWS::EC2::VPC::Id
+  SubnetIds:
+    Type: List<AWS::EC2::Subnet::Id>
+    Description: The platform's subnet(s); Worker traffic stays on the private network
+  PlatformSecurityGroupId:
+    Type: AWS::EC2::SecurityGroup::Id
+    Description: The platform host's security group; the only source admitted to the Worker ports
+  PlatformInstanceId:
+    Type: AWS::EC2::Instance::Id
+    Description: The platform host, where the join signs the TLS request and admits the Worker, and the drain waits
+  ImageParameterName:
+    Type: String
+    Default: /aws/service/ami-amazon-linux-latest/al2023-ami-kernel-default-arm64
+    AllowedValues:
+      - /aws/service/ami-amazon-linux-latest/al2023-ami-kernel-default-arm64
+      - /aws/service/ami-amazon-linux-latest/al2023-ami-kernel-default-x86_64
+    Description: >-
+      Amazon Linux 2023 image by architecture; it must match InstanceType (arm64 for Graviton). Resolved when the stack
+      is created or updated, so running hosts keep their image until the next stack update and instance refresh.
+  InstanceType:
+    Type: String
+    Default: m8g.4xlarge
+    Description: m8g.4xlarge (16 vCPU, 64 GiB, Graviton4); m8gd.4xlarge adds 950 GB NVMe once checkpoints are in use
+  VolumeSizeGiB:
+    Type: Number
+    Default: 200
+    MinValue: 30
+  ArtifactBucket:
+    Type: String
+    Description: The platform stack's artifact bucket (releases are installed from it)
+  WorkerPackagesReadPolicyArn:
+    Type: String
+    Default: ""
+    Description: >-
+      A managed policy for reading packages (CodeArtifact), empty for none. MVP 0.2.0's state stack no longer has
+      CodeArtifact (kirocrew-on-state.yaml); this draft of the pool is reworked in P3
+  WorkerPort:
+    Type: Number
+    Default: 8943
+  GatewayTlsPort:
+    Type: Number
+    Default: 8944
+  PreviewTlsPort:
+    Type: Number
+    Default: 8945
+  MinSize:
+    Type: Number
+    Default: 0
+    MinValue: 0
+  MaxSize:
+    Type: Number
+    Default: 4
+    MinValue: 0
+    MaxValue: 20
+    Description: >-
+      Upper bound of the pool. Pool hosts get no native chat entry until it is shared by the pool (design 5.4); raise
+      this once that and the Kiro login question (design 5.5) are settled.
+  DesiredCapacity:
+    Type: Number
+    Default: 0
+    MinValue: 0
+  JoinTimeoutSeconds:
+    Type: Number
+    Default: 3600
+    MinValue: 600
+    MaxValue: 7200
+    Description: How long a new host may take to install and join before it is abandoned
+  DrainTimeoutSeconds:
+    Type: Number
+    Default: 7200
+    MinValue: 300
+    MaxValue: 7200
+    Description: How long a leaving host waits for its Sessions to settle (or, with mobility, to move) per heartbeat
+
+Conditions:
+  HasPackagesPolicy: !Not [!Equals [!Ref WorkerPackagesReadPolicyArn, ""]]
+
+Resources:
+  PoolSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: KiroCrew ON Worker pool - TLS Worker ports only from the platform host; admin via SSM
+      VpcId: !Ref VpcId
+      SecurityGroupIngress:
+        - IpProtocol: tcp
+          FromPort: !Ref WorkerPort
+          ToPort: !Ref WorkerPort
+          SourceSecurityGroupId: !Ref PlatformSecurityGroupId
+          Description: Platform to Worker (TLS, private CA, Bearer Worker token)
+        - IpProtocol: tcp
+          FromPort: !Ref GatewayTlsPort
+          ToPort: !Ref GatewayTlsPort
+          SourceSecurityGroupId: !Ref PlatformSecurityGroupId
+          Description: Platform relay to the native KiroCrew Gateway (TLS, private CA; Gateway token login)
+        - IpProtocol: tcp
+          FromPort: !Ref PreviewTlsPort
+          ToPort: !Ref PreviewTlsPort
+          SourceSecurityGroupId: !Ref PlatformSecurityGroupId
+          Description: Platform preview proxy to the apps (TLS, private CA; check header from the Worker token)
+      SecurityGroupEgress:
+        - IpProtocol: "-1"
+          CidrIp: 0.0.0.0/0
+          Description: Outbound for SSM, Bedrock, CodeArtifact, package sources and git
+      Tags: [{Key: Name, Value: !Sub "${AWS::StackName}"}]
+
+  PoolRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal: {Service: ec2.amazonaws.com}
+            Action: sts:AssumeRole
+      ManagedPolicyArns:
+        - !Sub "arn:${AWS::Partition}:iam::aws:policy/AmazonSSMManagedInstanceCore"
+        - !If [HasPackagesPolicy, !Ref WorkerPackagesReadPolicyArn, !Ref AWS::NoValue]
+      Policies:
+        - PolicyName: kirocrew-on-worker-pool
+          PolicyDocument:
+            Version: "2012-10-17"
+            # As a fixed Worker host's role: every process on the host, the agents included, can use it. No platform
+            # secret and no session-state access (checkpoints go through the platform).
+            Statement:
+              - Sid: BedrockForCodingTools
+                Effect: Allow
+                Action:
+                  - bedrock:InvokeModel
+                  - bedrock:InvokeModelWithResponseStream
+                  - bedrock:GetInferenceProfile
+                  - bedrock:ListInferenceProfiles
+                  - bedrock:GetFoundationModel
+                  - bedrock:ListFoundationModels
+                Resource: "*"
+              - Sid: BedrockMantleForCodex
+                Effect: Allow
+                Action: [bedrock-mantle:CreateInference]
+                Resource: !Sub "arn:${AWS::Partition}:bedrock-mantle:${AWS::Region}:${AWS::AccountId}:project/*"
+              - Sid: ReadReleases
+                Effect: Allow
+                Action: [s3:GetObject]
+                Resource: !Sub "arn:${AWS::Partition}:s3:::${ArtifactBucket}/releases/*"
+
+  PoolProfile:
+    Type: AWS::IAM::InstanceProfile
+    Properties:
+      Roles: [!Ref PoolRole]
+
+  PoolLaunchTemplate:
+    Type: AWS::EC2::LaunchTemplate
+    Properties:
+      LaunchTemplateData:
+        ImageId: !Sub "{{resolve:ssm:${ImageParameterName}}}"
+        InstanceType: !Ref InstanceType
+        IamInstanceProfile: {Arn: !GetAtt PoolProfile.Arn}
+        SecurityGroupIds: [!Ref PoolSecurityGroup]
+        MetadataOptions:
+          HttpTokens: required
+          HttpEndpoint: enabled
+        BlockDeviceMappings:
+          - DeviceName: /dev/xvda
+            Ebs:
+              VolumeType: gp3
+              VolumeSize: !Ref VolumeSizeGiB
+              Encrypted: true
+              DeleteOnTermination: true   # a pool host is disposable: what outlives it is on the platform and in S3
+        TagSpecifications:
+          - ResourceType: instance
+            Tags:
+              - {Key: Name, Value: !Sub "${AWS::StackName}-pool"}
+              - {Key: Project, Value: kirocrew-on}
+              - {Key: kirocrew-on-pool, Value: !Sub "${AWS::StackName}-pool"}   # what the automation may run commands on
+          - ResourceType: volume
+            Tags:
+              - {Key: Name, Value: !Sub "${AWS::StackName}-pool"}
+              - {Key: Project, Value: kirocrew-on}
+        UserData:
+          Fn::Base64: |
+            #!/bin/bash
+            # Minimal bootstrap; the join automation (lifecycle hook) installs the release through SSM Run Command.
+            dnf install -y git tar gzip jq unzip
+
+  PoolGroup:
+    Type: AWS::AutoScaling::AutoScalingGroup
+    Properties:
+      AutoScalingGroupName: !Sub "${AWS::StackName}-pool"
+      VPCZoneIdentifier: !Ref SubnetIds
+      LaunchTemplate:
+        LaunchTemplateId: !Ref PoolLaunchTemplate
+        Version: !GetAtt PoolLaunchTemplate.LatestVersionNumber
+      MinSize: !Ref MinSize
+      MaxSize: !Ref MaxSize
+      DesiredCapacity: !Ref DesiredCapacity
+      HealthCheckType: EC2
+      HealthCheckGracePeriod: 900
+      LifecycleHookSpecificationList:
+        - LifecycleHookName: join
+          LifecycleTransition: autoscaling:EC2_INSTANCE_LAUNCHING
+          DefaultResult: ABANDON
+          HeartbeatTimeout: !Ref JoinTimeoutSeconds
+        - LifecycleHookName: drain
+          LifecycleTransition: autoscaling:EC2_INSTANCE_TERMINATING
+          DefaultResult: CONTINUE
+          HeartbeatTimeout: !Ref DrainTimeoutSeconds
+      Tags:
+        - {Key: Project, Value: kirocrew-on, PropagateAtLaunch: true}
+
+  # SSM Automation runs the join and the drain: on the new host and on the platform host, never from an operator's
+  # machine. Commands only carry identifiers; certificates go through step outputs as deploy.sh worker-host tls does,
+  # and the Worker token is handed over by the scripts themselves, never through an Automation output.
+  AutomationRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal: {Service: ssm.amazonaws.com}
+            Action: sts:AssumeRole
+      Policies:
+        - PolicyName: kirocrew-on-worker-pool-automation
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Sid: RunOnThePlatformHost
+                Effect: Allow
+                Action: [ssm:SendCommand]
+                Resource:
+                  - !Sub "arn:${AWS::Partition}:ec2:${AWS::Region}:${AWS::AccountId}:instance/${PlatformInstanceId}"
+                  - !Sub "arn:${AWS::Partition}:ssm:${AWS::Region}::document/AWS-RunShellScript"
+              - Sid: RunOnPoolHosts
+                Effect: Allow
+                Action: [ssm:SendCommand]
+                Resource: !Sub "arn:${AWS::Partition}:ec2:${AWS::Region}:${AWS::AccountId}:instance/*"
+                Condition:
+                  StringEquals: {"ssm:resourceTag/kirocrew-on-pool": !Sub "${AWS::StackName}-pool"}
+              - Sid: ReadCommandsAndInstances
+                Effect: Allow
+                Action:
+                  - ssm:ListCommands
+                  - ssm:ListCommandInvocations
+                  - ssm:GetCommandInvocation
+                  - ssm:DescribeInstanceInformation
+                  - ec2:DescribeInstances
+                Resource: "*"
+              - Sid: CompleteLifecycle
+                Effect: Allow
+                Action: [autoscaling:CompleteLifecycleAction, autoscaling:RecordLifecycleActionHeartbeat]
+                Resource: !Sub "arn:${AWS::Partition}:autoscaling:${AWS::Region}:${AWS::AccountId}:autoScalingGroup:*:autoScalingGroupName/${AWS::StackName}-pool"
+
+  JoinDocument:
+    Type: AWS::SSM::Document
+    Properties:
+      DocumentType: Automation
+      Content:
+        schemaVersion: "0.3"
+        description: KiroCrew ON Worker pool - a new host installs the platform's release, gets TLS and joins as spare
+        assumeRole: "{{ AutomationAssumeRole }}"
+        parameters:
+          AutomationAssumeRole: {type: String, default: !GetAtt AutomationRole.Arn}
+          InstanceId: {type: String}
+          LifecycleActionToken: {type: String}
+          LifecycleHookName: {type: String, default: join}
+          AutoScalingGroupName: {type: String}
+        mainSteps:
+          - name: WaitForSsm
+            action: aws:waitForAwsResourceProperty
+            timeoutSeconds: 900
+            onFailure: step:Abandon
+            inputs:
+              Service: ssm
+              Api: DescribeInstanceInformation
+              InstanceInformationFilterList: [{key: InstanceIds, valueSet: ["{{ InstanceId }}"]}]
+              PropertySelector: "$.InstanceInformationList[0].PingStatus"
+              DesiredValues: [Online]
+          - name: DescribeHost
+            action: aws:executeAwsApi
+            onFailure: step:Abandon
+            inputs:
+              Service: ec2
+              Api: DescribeInstances
+              InstanceIds: ["{{ InstanceId }}"]
+            outputs:
+              - {Name: PrivateIp, Selector: "$.Reservations[0].Instances[0].PrivateIpAddress", Type: String}
+          - name: CurrentRelease
+            action: aws:runCommand
+            onFailure: step:Abandon
+            inputs:
+              DocumentName: AWS-RunShellScript
+              InstanceIds: [!Ref PlatformInstanceId]
+              Parameters:
+                commands: ["printf '%s' \"$(basename \"$(readlink -f /opt/kirocrew-on/current)\")\""]
+          - name: Install
+            action: aws:runCommand
+            timeoutSeconds: 3600
+            onFailure: step:Abandon
+            inputs:
+              DocumentName: AWS-RunShellScript
+              InstanceIds: ["{{ InstanceId }}"]
+              Parameters:
+                executionTimeout: ["3600"]
+                commands:
+                  - set -euo pipefail
+                  - D=/opt/kirocrew-on/incoming; R="{{ CurrentRelease.Output }}"; mkdir -p "$D"
+                  - !Sub "aws s3 cp s3://${ArtifactBucket}/releases/$R.tar.gz $D/$R.tar.gz --region ${AWS::Region} --only-show-errors"
+                  - rm -rf "$D/kirocrew-on-$R"; tar -xzf "$D/$R.tar.gz" -C "$D"
+                  - !Sub "WORKER_TLS_PORT=${WorkerPort} GATEWAY_TLS_PORT=${GatewayTlsPort} WORKER_PREVIEW_TLS_PORT=${PreviewTlsPort} bash $D/kirocrew-on-$R/deploy/install/pool-host.sh join \"$R\" \"{{ InstanceId }}\""
+          - name: TlsRequest
+            action: aws:runCommand
+            onFailure: step:Abandon
+            inputs:
+              DocumentName: AWS-RunShellScript
+              InstanceIds: ["{{ InstanceId }}"]
+              Parameters:
+                commands: ["bash /opt/kirocrew-on/current/deploy/install/pool-host.sh csr \"{{ InstanceId }}\""]
+          - name: TlsSign
+            action: aws:runCommand
+            onFailure: step:Abandon
+            inputs:
+              DocumentName: AWS-RunShellScript
+              InstanceIds: [!Ref PlatformInstanceId]
+              Parameters:
+                commands:
+                  - "cd /opt/kirocrew-on/current && /opt/kirocrew-on/venv/bin/python -m octopus --config /etc/kirocrew-on/platform.toml pool sign --instance \"{{ InstanceId }}\" --ip \"{{ DescribeHost.PrivateIp }}\" <<'PEM_END'"
+                  - "{{ TlsRequest.Output }}"
+                  - PEM_END
+          - name: TlsInstall
+            action: aws:runCommand
+            onFailure: step:Abandon
+            inputs:
+              DocumentName: AWS-RunShellScript
+              InstanceIds: ["{{ InstanceId }}"]
+              Parameters:
+                commands:
+                  - "bash /opt/kirocrew-on/current/deploy/install/pool-host.sh install-cert <<'PEM_END'"
+                  - "{{ TlsSign.Output }}"
+                  - PEM_END
+          - name: Admit
+            action: aws:runCommand
+            onFailure: step:Abandon
+            inputs:
+              DocumentName: AWS-RunShellScript
+              InstanceIds: [!Ref PlatformInstanceId]
+              Parameters:
+                commands:
+                  - !Sub "cd /opt/kirocrew-on/current && /opt/kirocrew-on/venv/bin/python -m octopus --config /etc/kirocrew-on/platform.toml pool admit --instance \"{{ InstanceId }}\" --url \"https://{{ DescribeHost.PrivateIp }}:${WorkerPort}\""
+          - name: Continue
+            action: aws:executeAwsApi
+            isEnd: true
+            inputs:
+              Service: autoscaling
+              Api: CompleteLifecycleAction
+              AutoScalingGroupName: "{{ AutoScalingGroupName }}"
+              LifecycleHookName: "{{ LifecycleHookName }}"
+              LifecycleActionToken: "{{ LifecycleActionToken }}"
+              InstanceId: "{{ InstanceId }}"
+              LifecycleActionResult: CONTINUE
+          - name: Abandon
+            action: aws:executeAwsApi
+            isEnd: true
+            inputs:
+              Service: autoscaling
+              Api: CompleteLifecycleAction
+              AutoScalingGroupName: "{{ AutoScalingGroupName }}"
+              LifecycleHookName: "{{ LifecycleHookName }}"
+              LifecycleActionToken: "{{ LifecycleActionToken }}"
+              InstanceId: "{{ InstanceId }}"
+              LifecycleActionResult: ABANDON
+      Tags: [{Key: Project, Value: kirocrew-on}]
+
+  DrainDocument:
+    Type: AWS::SSM::Document
+    Properties:
+      DocumentType: Automation
+      Content:
+        schemaVersion: "0.3"
+        description: KiroCrew ON Worker pool - a leaving host takes no new work, waits for its Sessions, then retires
+        assumeRole: "{{ AutomationAssumeRole }}"
+        parameters:
+          AutomationAssumeRole: {type: String, default: !GetAtt AutomationRole.Arn}
+          InstanceId: {type: String}
+          LifecycleActionToken: {type: String}
+          LifecycleHookName: {type: String, default: drain}
+          AutoScalingGroupName: {type: String}
+        mainSteps:
+          - name: Drain
+            action: aws:runCommand
+            timeoutSeconds: 7200   # the drain hook's longest heartbeat; a longer drain records heartbeats (design 5.3)
+            onFailure: step:Retire
+            inputs:
+              DocumentName: AWS-RunShellScript
+              InstanceIds: [!Ref PlatformInstanceId]
+              Parameters:
+                executionTimeout: [!Ref DrainTimeoutSeconds]
+                commands:
+                  - "cd /opt/kirocrew-on/current && /opt/kirocrew-on/venv/bin/python -m octopus --config /etc/kirocrew-on/platform.toml pool drain --instance \"{{ InstanceId }}\""
+          - name: Retire
+            action: aws:runCommand
+            onFailure: step:Continue
+            inputs:
+              DocumentName: AWS-RunShellScript
+              InstanceIds: [!Ref PlatformInstanceId]
+              Parameters:
+                commands:
+                  - "cd /opt/kirocrew-on/current && /opt/kirocrew-on/venv/bin/python -m octopus --config /etc/kirocrew-on/platform.toml pool retire --instance \"{{ InstanceId }}\""
+          - name: Continue
+            action: aws:executeAwsApi
+            isEnd: true
+            inputs:
+              Service: autoscaling
+              Api: CompleteLifecycleAction
+              AutoScalingGroupName: "{{ AutoScalingGroupName }}"
+              LifecycleHookName: "{{ LifecycleHookName }}"
+              LifecycleActionToken: "{{ LifecycleActionToken }}"
+              InstanceId: "{{ InstanceId }}"
+              LifecycleActionResult: CONTINUE
+      Tags: [{Key: Project, Value: kirocrew-on}]
+
+  EventsRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal: {Service: events.amazonaws.com}
+            Action: sts:AssumeRole
+      Policies:
+        - PolicyName: kirocrew-on-worker-pool-events
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Sid: StartJoinAndDrain
+                Effect: Allow
+                Action: [ssm:StartAutomationExecution]
+                Resource:
+                  - !Sub "arn:${AWS::Partition}:ssm:${AWS::Region}:${AWS::AccountId}:automation-definition/${JoinDocument}:*"
+                  - !Sub "arn:${AWS::Partition}:ssm:${AWS::Region}:${AWS::AccountId}:automation-definition/${DrainDocument}:*"
+              - Sid: PassAutomationRole
+                Effect: Allow
+                Action: [iam:PassRole]
+                Resource: !GetAtt AutomationRole.Arn
+
+  JoinRule:
+    Type: AWS::Events::Rule
+    Properties:
+      Description: KiroCrew ON Worker pool - a launching host runs the join automation
+      EventPattern:
+        source: [aws.autoscaling]
+        detail-type: [EC2 Instance-launch Lifecycle Action]
+        detail:
+          AutoScalingGroupName: [!Sub "${AWS::StackName}-pool"]
+      Targets:
+        - Id: join
+          Arn: !Sub "arn:${AWS::Partition}:ssm:${AWS::Region}:${AWS::AccountId}:automation-definition/${JoinDocument}:$DEFAULT"
+          RoleArn: !GetAtt EventsRole.Arn
+          InputTransformer:
+            InputPathsMap:
+              instance: $.detail.EC2InstanceId
+              token: $.detail.LifecycleActionToken
+              hook: $.detail.LifecycleHookName
+              group: $.detail.AutoScalingGroupName
+            InputTemplate: >-
+              {"InstanceId":["<instance>"],"LifecycleActionToken":["<token>"],"LifecycleHookName":["<hook>"],"AutoScalingGroupName":["<group>"]}
+
+  DrainRule:
+    Type: AWS::Events::Rule
+    Properties:
+      Description: KiroCrew ON Worker pool - a terminating host runs the drain automation
+      EventPattern:
+        source: [aws.autoscaling]
+        detail-type: [EC2 Instance-terminate Lifecycle Action]
+        detail:
+          AutoScalingGroupName: [!Sub "${AWS::StackName}-pool"]
+      Targets:
+        - Id: drain
+          Arn: !Sub "arn:${AWS::Partition}:ssm:${AWS::Region}:${AWS::AccountId}:automation-definition/${DrainDocument}:$DEFAULT"
+          RoleArn: !GetAtt EventsRole.Arn
+          InputTransformer:
+            InputPathsMap:
+              instance: $.detail.EC2InstanceId
+              token: $.detail.LifecycleActionToken
+              hook: $.detail.LifecycleHookName
+              group: $.detail.AutoScalingGroupName
+            InputTemplate: >-
+              {"InstanceId":["<instance>"],"LifecycleActionToken":["<token>"],"LifecycleHookName":["<hook>"],"AutoScalingGroupName":["<group>"]}
+
+Outputs:
+  AutoScalingGroupName:
+    Value: !Ref PoolGroup
+  LaunchTemplateId:
+    Value: !Ref PoolLaunchTemplate
+  PoolSecurityGroupId:
+    Value: !Ref PoolSecurityGroup
+  PoolRoleArn:
+    Value: !GetAtt PoolRole.Arn
+  JoinDocumentName:
+    Value: !Ref JoinDocument
+  DrainDocumentName:
+    Value: !Ref DrainDocument
