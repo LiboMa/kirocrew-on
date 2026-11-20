@@ -1,9 +1,9 @@
 # 进度与完成记录
 
-> 由 `tools/progress.py` 生成（2026-11-20 10:58 CST）：任务状态取自 `docs/progress.json`，提交记录取自 git。看板：`docs/progress-dashboard.html`；实时看板：`python3 tools/progress.py --serve --ec2`（http://127.0.0.1:8765/）。
+> 由 `tools/progress.py` 生成（2026-11-20 11:10 CST）：任务状态取自 `docs/progress.json`，提交记录取自 git。看板：`docs/progress-dashboard.html`；实时看板：`python3 tools/progress.py --serve --ec2`（http://127.0.0.1:8765/）。
 
 - **本轮完成度**：80%　**MVP 完成度**：73%
-- **分支**：HEAD `e3026bd`；自 `origin/main` 起 102 个提交——已推送 99、已部署 EC2 3、仅本机 0；EC2 运行 `e3026bd`
+- **分支**：HEAD `807de70`；自 `origin/main` 起 103 个提交——已推送 99、已部署 EC2 3、仅本机 1；EC2 运行 `e3026bd`
 - **回归**：2174 后端 + 92 + 354 控制台测试；EC2 运行 e3026bd（MVP 0.2.0 P2 + 控制台登录 Kiro 修复）
 
 ## 模块
@@ -83,8 +83,9 @@
 
 - `df72489` 2026-10-24 〔已推送〕 docs(design): Worker 自助接入——管理员签发一次性接入码（定好登记到哪里），Worker 主机执行 worker enroll 自行登记，平台照旧带 Token 核实 /health；Token 不经人手、不进 SSM 命令历史；本地全栈自动登记；待负责人确认三点。BACKLOG 记录登记的两处不一致、K10 已由 D59 完成
 
-### 未标记 · 文档（35 个提交：已推送 33、已部署 EC2 2）
+### 未标记 · 文档（36 个提交：已推送 33、已部署 EC2 2、仅本机 1）
 
+- `807de70` 2026-11-20 〔仅本机〕 docs: 控制台登录 Kiro 的修复已部署 EC2（e3026bd）——回归 92 + 354 + 2174，EC2 浏览器检查 11/11；进度看板
 - `e3026bd` 2026-11-20 〔已部署 EC2〕 docs: KiroCrew ON 白皮书（Markdown + HTML）——背景、定位、设计原则、架构、会话的一生、质量与可靠性、协作、安全、部署、接入、现状、路线图、限制，每章附「解读」，第 14 章整体解读；附录为 Kiro 登录地址故障的复盘
 - `2c5c137` 2026-11-20 〔已部署 EC2〕 docs(tools): md_to_html 支持「> 」注释框（白皮书的「解读」），mermaid 图留给 Markdown
 - `9af037b` 2026-10-28 〔已推送〕 docs: MVP 0.2.0 P2 已部署 EC2（9b587ec）——验证结果、计划勾选与进度看板

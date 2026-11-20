@@ -529,10 +529,10 @@
         },
         {
           "id": "whitepaper",
-          "name": "KiroCrew ON 白皮书（Markdown + HTML，含解读）",
+          "name": "KiroCrew ON 白皮书（Markdown、网页版与 PDF，含解读）",
           "status": "local",
-          "ref": "docs/WHITEPAPER.md",
-          "more": "待负责人审阅。背景、定位、设计原则、架构、会话的一生、质量与可靠性、协作、安全、部署、接入、现状、路线图、限制，每章附「解读」，第 14 章整体解读"
+          "ref": "docs/whitepaper/",
+          "more": "待负责人审阅。合并 kirocrew-octopus 的白皮书（2026-11-19：使用流程与 24 张截图、场景、run-44dc 案例、140 个会话的运行数据、快速上手）与设计原则、恢复阶梯、协作与安全模型、集群版、各章「解读」与第 18 章整体解读；按 2026-11-20 的代码订正"
         },
         {
           "id": "v020-p2-acceptance",

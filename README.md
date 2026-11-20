@@ -5,7 +5,7 @@
 不绑定任何工具或模型，几乎没有学习成本。
 
 > **MVP 0.1.0**（2026-10-12）：下文“能做什么”已在 AWS us-east-1 的部署上实测；Roadmap 为规划。
-> 白皮书（含解读）：[`docs/WHITEPAPER.md`](docs/WHITEPAPER.md)（[HTML](docs/KiroCrew-ON-Whitepaper.html)）
+> 白皮书（使用流程、场景、原理与解读）：[`docs/whitepaper/`](docs/whitepaper/WHITEPAPER.md)（[HTML](docs/whitepaper/index.html) · PDF）
 > 图文介绍：[`docs/KiroCrew-ON-MVP-0.1.0.html`](docs/KiroCrew-ON-MVP-0.1.0.html)　·　详细说明：[`docs/MVP-0.1.0.md`](docs/MVP-0.1.0.md)　·　0.1.1 版本说明：[`docs/MVP-0.1.1.md`](docs/MVP-0.1.1.md)（[HTML](docs/KiroCrew-ON-MVP-0.1.1.html)）
 > **MVP 0.2.0**（实施中，预览版 `0.2.0rc1` 已部署 EC2）：部署模式、自助 Worker 与 Worker 池；说明与进度见 [`docs/MVP-0.2.0.md`](docs/MVP-0.2.0.md)（[HTML](docs/KiroCrew-ON-MVP-0.2.0.html)）
 
@@ -73,7 +73,7 @@ KiroCrew ON 平台：身份与权限 · 个人 / Team 空间 · 会话 · 工作
 
 | 文档 | 内容 |
 |---|---|
-| [`docs/WHITEPAPER.md`](docs/WHITEPAPER.md)（[HTML](docs/KiroCrew-ON-Whitepaper.html)） | 白皮书：背景、定位、设计原则、架构、会话的一生、质量与可靠性、协作、安全、部署、路线图，每章附「解读」 |
+| [`docs/whitepaper/`](docs/whitepaper/WHITEPAPER.md)（[HTML](docs/whitepaper/index.html) · PDF） | 白皮书：产品与概念、设计原则、架构、使用流程（附截图）、质量与可靠性、协作、安全、管理、部署、场景、案例、运行数据、路线图，每章附「解读」 |
 | [`docs/MVP-0.1.0.md`](docs/MVP-0.1.0.md) | 产品定义、工作流程、能力清单、架构、原则、限制、Roadmap |
 | [`docs/MVP-0.1.1.md`](docs/MVP-0.1.1.md) | 0.1.1 版本说明：前端优化、Token 重新生成、聊天协作与门禁补充、列表瘦身、升级须知 |
 | [`docs/MVP-0.2.0.md`](docs/MVP-0.2.0.md) | 0.2.0：目标、分期与进度；P1 打底（接入码、全局 UID、ARM64、打包、Litestream、平台指标）的版本说明、升级须知与验证；P0 实测结论 |
