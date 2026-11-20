@@ -541,8 +541,9 @@ describe("管理 › 执行环境", () => {
     await userEvent.click(within(row).getByRole("button", { name: "登录 Kiro：personal" }));
     const dialog = await screen.findByRole("dialog", { name: "登录 Kiro" });
     expect(await within(dialog).findByText("ABCD-EFGH")).toBeInTheDocument();
-    const link = within(dialog).getByRole("link", { name: /device\.example/ });
-    expect(link).toHaveAttribute("href", "https://device.example/activate");
+    const link = within(dialog).getByRole("link", { name: "打开登录页面（device.example）" });
+    expect(link).toHaveAttribute("href", "https://device.example/activate");   // the whole one-time address
+    expect(link).toHaveAttribute("title", "https://device.example/activate");
     expect(link).toHaveAttribute("rel", expect.stringContaining("noopener"));
     await waitFor(() => expect(screen.queryByRole("dialog", { name: "登录 Kiro" })).toBeNull(), { timeout: 8000 });
     expect(await screen.findByText("已登录 Kiro：personal")).toBeInTheDocument();

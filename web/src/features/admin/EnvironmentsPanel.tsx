@@ -715,6 +715,10 @@ function AssignDialog({ worker: w, onAssign, onClose }: {
  * may refresh an environment's model catalogue (spec §6.1). */
 /** Kiro signed in from the console with a device code (MVP 0.2.0, §6.4): the environment's owner opens the address, enters
  * the code, and the dialog sees the login finish. The code is shown here only and nowhere kept. */
+function hostOf(url: string): string {
+  try { return new URL(url).host; } catch { return url; }
+}
+
 function KiroLoginDialog({ worker, onClose }: { worker: Worker; onClose: (done?: boolean) => void }) {
   type Login = { state: "idle" | "starting" | "waiting" | "done" | "failed"; url?: string; code?: string; expires?: number };
   const [login, setLogin] = useState<Login | null>(null);
@@ -736,12 +740,14 @@ function KiroLoginDialog({ worker, onClose }: { worker: Worker; onClose: (done?:
   }, []);   // once per dialog: a second login request would only report the same code
   return (
     <FormDialog title="登录 Kiro" onClose={() => onClose()}
-      description={<>为执行环境「{worker.name}」登录 kiro-cli。在浏览器里打开下面的地址、输入设备码；完成后这里会自动确认。</>}>
+      description={<>为执行环境「{worker.name}」登录 kiro-cli。打开下面的登录页面，核对页面上的设备码与这里的一致后确认（页面要求输入时粘贴设备码）；完成后这里会自动确认。</>}>
       {error && <p role="alert" className="text-sm text-destructive">{error}</p>}
       {!error && !login && <p className="text-sm text-muted-foreground">正在取得设备码…</p>}
       {login?.state === "waiting" && login.url && login.code && (
         <div className="space-y-3">
-          <a href={login.url} target="_blank" rel="noopener noreferrer" className="block text-sm break-all text-primary underline">{login.url}</a>
+          {/* the address is one-time and can run to some 900 characters (kiro-cli 3.x): the link names its host only */}
+          <a href={login.url} target="_blank" rel="noopener noreferrer" title={login.url}
+            className="block text-sm break-all text-primary underline">打开登录页面（{hostOf(login.url)}）</a>
           <div className="flex items-center gap-2 rounded-md border bg-muted/50 p-3">
             <code className="min-w-0 flex-1 font-mono text-lg tracking-widest">{login.code}</code>
             <Button type="button" size="sm" variant={copied ? "secondary" : "outline"} aria-label="复制设备码"

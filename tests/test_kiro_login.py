@@ -23,9 +23,22 @@ if sys.argv[1:] == ["whoami"]:
     print("Not logged in"); sys.exit(1)
 with open(os.path.join(here, "argv"), "a") as log:
     log.write(" ".join(sys.argv[1:]) + "\n")
+mode = open(os.path.join(here, "mode")).read().strip() if os.path.exists(os.path.join(here, "mode")) else ""
+if mode == "idc-prompts":   # kiro-cli 2.29.1 with IAM Identity Center (EC2): it echoes the Start URL it was given first
+    print("\x1b[35m?\x1b[0m \x1b[1mEnter Start URL\x1b[0m \x1b[38;5;8m\u203a\x1b[0m https://d-9067e1d68a.awsapps.com/start"
+          "\r\x1b[2K\x1b[32m\u2714\x1b[0m \x1b[1mEnter Start URL\x1b[0m \x1b[38;5;8m\u00b7\x1b[0m "
+          "\x1b[32mhttps://d-9067e1d68a.awsapps.com/start\x1b[0m\r", flush=True)
+    print("\x1b[35m?\x1b[0m \x1b[1mEnter Region\x1b[0m us-east-1\r\x1b[2K\x1b[32m\u2714\x1b[0m Enter Region us-east-1\r", flush=True)
 print("\x1b[1mConfirm the following code in the browser\x1b[0m", flush=True)
-print("Code: ABCD-EFGH", flush=True)
-print("Open this URL: https://device.example/activate?user_code=ABCD-EFGH", flush=True)
+print("Code: \x1b[38;5;252mABCD-EFGH\x1b[0m", flush=True)
+if mode == "idc-prompts":
+    print("Open this URL: https://d-9067e1d68a.awsapps.com/start/#/device?user_code=ABCD-EFGH", flush=True)
+elif mode == "split":   # kiro-cli 3.x: a one-time address of some 900 characters, here arriving in two reads
+    print("Open this URL: https://us-east-1.signin.aws/platform/authorize?request_uri=urn%3A", end="", flush=True)
+    time.sleep(0.6)
+    print("A" * 800 + "&identitystore_id=d-9067e1d68a", flush=True)
+else:
+    print("Open this URL: https://device.example/activate?user_code=ABCD-EFGH", flush=True)
 for _ in range(400):
     if os.path.exists(os.path.join(here, "approve")):
         open(os.path.join(here, "logged-in"), "w").close()
@@ -71,6 +84,21 @@ class WorkerLoginTests(unittest.TestCase):
         (self.bin / "approve").touch()
         self.assertEqual(self.wait("done")["state"], "done")
         self.assertEqual(self.node.tool_auth(), "ok")   # the cached login state is read again
+
+    def test_the_device_address_is_the_one_after_the_code_not_the_start_url_echoed_before_it(self):
+        # EC2 2026-11: kiro-cli 2.29.1 echoes "Enter Start URL › https://…/start" before the code; the console showed
+        # that fixed portal address instead of the device page, and nobody could finish the login
+        (self.bin / "mode").write_text("idc-prompts")
+        answer = self.node.kiro_login_start({})
+        self.assertEqual((answer["state"], answer["code"]), ("waiting", "ABCD-EFGH"))
+        self.assertEqual(answer["url"], "https://d-9067e1d68a.awsapps.com/start/#/device?user_code=ABCD-EFGH")
+
+    def test_a_long_one_time_address_is_read_whole_even_when_it_arrives_in_parts(self):
+        (self.bin / "mode").write_text("split")
+        answer = self.node.kiro_login_start({})
+        self.assertEqual(answer["state"], "waiting")
+        self.assertEqual(answer["url"], "https://us-east-1.signin.aws/platform/authorize?request_uri=urn%3A" + "A" * 800
+                         + "&identitystore_id=d-9067e1d68a")
 
     def test_asking_again_while_it_waits_gives_the_same_code_and_one_process(self):
         first = self.node.kiro_login_start({})

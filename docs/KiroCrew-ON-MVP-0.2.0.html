@@ -38,6 +38,9 @@
   .flow li b { display: block; font-size: 13px; color: var(--c, var(--brand)); margin-bottom: 2px; }
   .flow .chat { --c: var(--native); } .flow .keep { --c: var(--poc); }
   figcaption { font-size: 13px; color: var(--muted); margin-top: 8px; }
+  .note { margin: 16px 0 20px; max-width: 46em; background: var(--brand-soft); border-left: 4px solid var(--brand);
+          border-radius: 0 8px 8px 0; padding: 12px 16px; font-size: 15px; }
+  .note p:last-child, .note ul:last-child { margin-bottom: 0; }
   a:focus-visible { outline: 3px solid var(--brand); outline-offset: 2px; }
   @media (max-width: 760px) { main { padding: 32px 18px 72px; } h1 { font-size: 26px; } }
   @media print { body { background: #fff; } .table, .flow li { break-inside: avoid; } }
@@ -74,9 +77,10 @@
 <ul><li><strong>全量回归</strong>（<code>tools/regress.sh</code>）：旧版测试 92 个、控制台 342 个、后端 2036 个，全部通过。</li><li><strong>独立代码审查</strong>：1 项严重、6 项重要都已修复，每项都先有失败的测试；次要项见 BACKLOG「MVP 0.2.0 P1 打底的终审延后项」。</li><li><strong>EC2</strong>（2026-10-26/27，<code>c80dae6</code>）：
 <ul><li>主机检查 13/13：版本、迁移、平台指标，以及接入码的签发、列表不含码、错码 404、失败计数、撤销；</li><li>控制台浏览器检查 13/13；</li><li>原生页面没有循环刷新；</li><li>用 <code>deploy.sh boundary add</code> 以接入码登记了一个临时边界，身份、UID、Token 密封、审计都核对通过，重跑时更新连接，验收后已退役。</li></ul></li><li><strong>安全修复</strong>（2026-10-27，<code>45d3087</code>）：EC2 上的检查 12/12——新签发的是 <code>api</code> Token；它新建账号、重设密码、设为管理员、恢复账号都被拒；控制台登录可以；名称「Web login」保留。另修好一个原有的问题：新签发的 Token 立即使用，原来 10 次失败 10 次，现在 0 次。</li><li><strong>云上</strong>：
 <ul><li>Litestream 在宕机后恢复，用时 4.4 s，<code>restore-verify</code> 通过，RPO 0.69 s；</li><li>这一版的 wheel 在 arm64 的 AL2023 上直接安装运行。</li></ul></li><li><strong>P2</strong>（2026-10-28，<code>9b587ec</code>）：
-<ul><li>全量回归（干净检出）：旧版测试 92、控制台 354、后端 2168，全部通过；</li><li>独立代码审查：3 项严重、11 项重要都已修复，每项都先有失败的测试；次要项见 BACKLOG「MVP 0.2.0 P2 单机版的终审延后项」；</li><li>EC2 主机检查 17/17：迁移到 19，「在控制台登录 Kiro」的新接口（旧路径 404），这台不是单机版所以没有「新建边界」，部署套件的待执行项接口，本机签发的短期管理员 Token 能用、注销即失效；部署本身的 Worker 登记也已改用这种 Token；</li><li>EC2 控制台浏览器检查 8/8：「管理 › 部署」，管理员自己那一行的「登录 Kiro」，管理员的「我的设置」里没有执行环境；</li><li>在控制台登录 Kiro 已在 EC2 上用真实 kiro-cli 核对过输出的解析；一行安装在新机器上的验收是第 9 项。</li></ul></li></ul>
+<ul><li>全量回归（干净检出）：旧版测试 92、控制台 354、后端 2168，全部通过；</li><li>独立代码审查：3 项严重、11 项重要都已修复，每项都先有失败的测试；次要项见 BACKLOG「MVP 0.2.0 P2 单机版的终审延后项」；</li><li>EC2 主机检查 17/17：迁移到 19，「在控制台登录 Kiro」的新接口（旧路径 404），这台不是单机版所以没有「新建边界」，部署套件的待执行项接口，本机签发的短期管理员 Token 能用、注销即失效；部署本身的 Worker 登记也已改用这种 Token；</li><li>EC2 控制台浏览器检查 8/8：「管理 › 部署」，管理员自己那一行的「登录 Kiro」，管理员的「我的设置」里没有执行环境；</li><li>在控制台登录 Kiro 当时按 EC2 的登录日志核对过输出的解析，但漏了一处：kiro-cli 2.29.1 用 Identity Center 时先回显 Start URL，对话框取了这个固定的门户地址，登录不了。2026-11-20 修复为取设备码之后、整行输出完的一次性地址，在 EC2 的 kiro-cli 2.29.1 与本机 3.4.0 上用真实输出核对（见第 8 节）；一行安装在新机器上的验收是第 9 项。</li></ul></li></ul>
 <h2>8．已知问题与后续</h2>
-<ul><li><strong>P1b</strong>：KiroCrew 升到正式版 v0.10.0 会改变原生页面的体验，等负责人确认（见第 9 节）。</li><li><strong>P0b</strong>：T5、T6、T11、T13 要在 arm64 上装好 KiroCrew ON 后做；T5 需负责人用设备码登录。</li><li><strong>接入码的次要项</strong>：失败计数可被绕开、Worker URL 的回环与重定向、签发人失效后码仍有效、控制台列表不自动刷新等，记在 BACKLOG。</li><li><strong>P2 的后续</strong>：
+<ul><li><strong>在控制台登录 Kiro 拿到的是固定地址（2026-11-20 已修复）</strong>：
+<ul><li>现象：对话框里的验证地址每次都是 <code>https://d-9067e1d68a.awsapps.com/start</code>，打开后进不了设备确认页，执行环境登录不了 Kiro；EC2 上三个边界当时都是「Not logged in」。</li><li>原因：kiro-cli 2.29.1 用 IAM Identity Center 登录时，先把 Start URL 回显在提示行里，Worker 取了输出中的第一个地址。测试里模拟的 kiro-cli 不回显提示，所以没测出来。</li><li>修复：取设备码之后、整行输出完的地址，长地址分几次读到也不会截断（<code>octopus/kiro_login.py</code>）；<code>deploy.sh kiro-login</code> 也不再打印回显的 Start URL。对话框的链接显示为「打开登录页面（主机名）」。</li><li>核对：在 EC2 上用部署中的解析复现出 <code>…/start✔</code>（39 字符），修复后取到 604 字符的一次性地址（<code>signin.aws/platform/authorize?request_uri=…</code>）；本机 kiro-cli 3.4.0 的 free 与 pro 两种登录也都取到完整地址。</li></ul></li><li><strong>P1b</strong>：KiroCrew 升到正式版 v0.10.0 会改变原生页面的体验，等负责人确认（见第 9 节）。</li><li><strong>P0b</strong>：T5、T6、T11、T13 要在 arm64 上装好 KiroCrew ON 后做；T5 需负责人用设备码登录。</li><li><strong>接入码的次要项</strong>：失败计数可被绕开、Worker URL 的回环与重定向、签发人失效后码仍有效、控制台列表不自动刷新等，记在 BACKLOG。</li><li><strong>P2 的后续</strong>：
 <ul><li>Docker 镜像本机未构建，由 CI 构建并试跑；</li><li>安装用的 AK/SK 只从环境变量读，不提供交互输入；</li><li>改动更新域名的 <code>latest.json</code> 可以让安装回到较旧的已签名版本（版本号与签名仍须相符）；</li><li>终审的次要项见 BACKLOG「MVP 0.2.0 P2 单机版的终审延后项」。</li></ul></li><li><strong>同一域名下的残余风险</strong>：Agent 做的演示页可以把 <code>tinyboat.blog</code> 的 Cookie 写满，让这个浏览器暂时打不开（读不到、也改不了任何人的数据）。清除该域名的站点数据即可恢复（OPERATIONS「会话独立预览域名」）。</li></ul>
 <h2>9．需要负责人决定的</h2>
 <p><strong>负责人 2026-10-27 已定</strong>：不另购域名。原生入口与预览都沿用 <code>tinyboat.blog</code>，同站带来的问题由设计在源站一级解决（设计 §8.2a）：</p>

@@ -3,6 +3,7 @@ so it can run `kiro-cli login --use-device-flow` itself — in a terminal of its
 without one (as `deploy.sh kiro-login` found on EC2) — and read the address and code it shows. They are kept in memory
 only, for the boundary's owner to see; one login runs at a time, and it ends when kiro-cli says so, exits, or the code
 expires."""
+import codecs
 import os
 import pty
 import re
@@ -13,8 +14,12 @@ import threading
 import time
 
 ANSI = re.compile(r"\x1b\[[0-9;?]*[ -/]*[@-~]|\x1b\][^\x07]*\x07")
-URL = re.compile(r"https://[^\s\x1b]+")
 CODE = re.compile(r"\bCode:\s*([A-Z0-9]{4}-[A-Z0-9]{4})\b")
+# The device address is the first whole line's address after the code. kiro-cli 2.29.1 with IAM Identity Center first
+# echoes the Start URL it was given ("Enter Start URL › https://…/start", EC2 2026-11): that fixed portal address is not
+# where a code is entered. kiro-cli 3.x shows a one-time address of some 900 characters that can arrive in more than one
+# read, so only an address its line has ended counts.
+LINK = re.compile(r"https://[^\s\x1b]+(?=[ \t]*\n)")
 DONE = "Logged in successfully"
 LIFETIME = 900          # seconds a device code lasts
 PROMPTS = (3.0, 5.0)    # kiro-cli still asks with every flag given: Enter accepts each remaining prompt
@@ -61,7 +66,8 @@ class DeviceLogin:
                 pass
 
     def _follow(self, proc, master):
-        started, text, pressed = time.time(), "", 0
+        started, raw, text, pressed = time.time(), "", "", 0
+        decoder = codecs.getincrementaldecoder("utf-8")(errors="replace")   # a character may span two reads
         try:
             while True:
                 now = time.time()
@@ -79,7 +85,9 @@ class DeviceLogin:
                         chunk = b""
                     if not chunk:
                         break
-                    text = (text + ANSI.sub("", chunk.decode(errors="replace")).replace("\r", ""))[-KEEP:]
+                    # escapes are taken out of the whole output: one can span two reads as well
+                    raw = (raw + decoder.decode(chunk))[-KEEP:]
+                    text = ANSI.sub("", raw).replace("\r", "")
                     self._read(text)
                     if DONE in text:
                         break
@@ -105,8 +113,9 @@ class DeviceLogin:
                 self.on_done()
 
     def _read(self, text):
-        url, code = URL.search(text), CODE.search(text)
-        if url and code:
+        code = CODE.search(text)
+        url = code and LINK.search(text, code.end())
+        if url:
             with self.lock:
                 if self.state == "starting":
                     self.url, self.code, self.state = url.group(0), code.group(1), "waiting"

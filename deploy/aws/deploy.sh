@@ -697,7 +697,8 @@ PY
   [ -n "$DRY" ] && return
   for _ in $(seq 1 12); do
     sleep 5
-    shown="$(remote "$instance" "grep -aE 'Code:|https://' $log 2>/dev/null | sed 's/\x1b\[[0-9;?]*[a-zA-Z]//g' | tr -d '\r' || true")"
+    # the code and the address after it: kiro-cli echoes the Start URL it was given before them (2.29.1 with Identity Center)
+    shown="$(remote "$instance" "grep -aA3 'Code:' $log 2>/dev/null | grep -aE 'Code:|https://' | head -2 | sed 's/\x1b\[[0-9;?]*[a-zA-Z]//g' | tr -d '\r' || true")"
     [ -z "$shown" ] || break
   done
   [ -n "$shown" ] || { echo "未在 $log 中看到设备码" >&2; exit 1; }
