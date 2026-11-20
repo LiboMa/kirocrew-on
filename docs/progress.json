@@ -1,6 +1,6 @@
 {
   "_comment": "进度看板与 docs/PROGRESS.md 的唯一数据源：任务状态在这里维护；提交记录由 tools/progress.py 从 git 生成（负责人 2026-10-20）。",
-  "checks": "2168 后端 + 92 + 354 控制台测试；EC2 运行 9b587ec（MVP 0.2.0 P2，PR #15）",
+  "checks": "2174 后端 + 92 + 354 控制台测试；EC2 运行 e3026bd（MVP 0.2.0 P2 + 控制台登录 Kiro 修复）",
   "status": {
     "accepted": {
       "label": "已验收",
@@ -519,6 +519,20 @@
           "status": "deployed",
           "ref": "EC2 9b587ec",
           "more": "P2 Task 1–8 已部署 EC2（2026-10-28）：install.sh 预检与验签安装、dnf / apt 分支、CloudFront 小栈与主机角色核对、控制台登录 Kiro、控制台新建边界（root 服务经 systemd path 单元）、部署套件 kirocrew-on single native / backup / up 与「管理 › 部署」、Docker 渠道。终审 3 严重 11 重要已修；回归 92 + 354 + 2168 通过；EC2 主机 17/17、浏览器 8/8。一行安装的验收见下一项。"
+        },
+        {
+          "id": "v020-kiro-sign-in-fix",
+          "name": "修复：控制台登录 Kiro 拿到的是固定的 Start URL，登录不了",
+          "status": "deployed",
+          "ref": "EC2 e3026bd",
+          "more": "kiro-cli 2.29.1 用 Identity Center 时先回显 Start URL，Worker 取了第一个地址；改为取设备码之后、整行输出完的一次性地址（kiro-cli 3.x 的 600–900 字符地址分段读到也不截断），deploy.sh kiro-login 同步；对话框链接显示为「打开登录页面（主机名）」。回归 92 + 354 + 2174 通过；EC2 浏览器检查 11/11（us-east-1.signin.aws，604 字符，request_uri）。待负责人用自己的 IdC 账号完成一次真实登录后验收"
+        },
+        {
+          "id": "whitepaper",
+          "name": "KiroCrew ON 白皮书（Markdown + HTML，含解读）",
+          "status": "local",
+          "ref": "docs/WHITEPAPER.md",
+          "more": "待负责人审阅。背景、定位、设计原则、架构、会话的一生、质量与可靠性、协作、安全、部署、接入、现状、路线图、限制，每章附「解读」，第 14 章整体解读"
         },
         {
           "id": "v020-p2-acceptance",
