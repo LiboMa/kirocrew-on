@@ -1,0 +1,223 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>KiroCrew ON 白皮书：7×24 在线的多 Agent 研发协作空间</title>
+<!-- Generated from WHITEPAPER.md by tools/md_to_html.py; edit the Markdown, then regenerate. -->
+<style>
+  :root { --ink: #172033; --muted: #5b6577; --line: #e3e7ef; --bg: #f6f8fb; --card: #ffffff; --brand: #5b4bdb; --brand-soft: #eeebff;
+          --native: #0e6f86; --native-soft: #e2f3f7; --poc: #4a5568; --poc-soft: #edf0f5;
+          --sans: -apple-system, BlinkMacSystemFont, "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", "Noto Sans CJK SC", sans-serif;
+          --mono: "SF Mono", Menlo, Consolas, monospace; }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--bg); color: var(--ink); font: 16px/1.75 var(--sans); }
+  main { max-width: 1040px; margin: 0 auto; padding: 56px 28px 96px; }
+  main > p, main > ul, main > ol, li > p { max-width: 44em; }
+  h1 { font-size: 32px; line-height: 1.3; margin: 0 0 16px; }
+  h2 { font-size: 23px; margin: 56px 0 10px; padding-top: 20px; border-top: 1px solid var(--line); }
+  h3 { font-size: 18px; margin: 28px 0 8px; }
+  p { margin: 0 0 14px; }
+  ul, ol { padding-left: 1.5em; margin: 0 0 14px; }
+  li { margin: 5px 0; }
+  li > ul, li > ol { margin: 6px 0 4px; }
+  code { font-family: var(--mono); font-size: 0.86em; background: #eef1f6; padding: 1px 5px; border-radius: 4px; }
+  pre { font-family: var(--mono); font-size: 13px; line-height: 1.6; background: #101828; color: #e7ecf5; padding: 16px 18px;
+        border-radius: 8px; overflow-x: auto; margin: 0 0 18px; }
+  pre code { background: none; padding: 0; color: inherit; font-size: inherit; }
+  .table { overflow-x: auto; margin: 14px 0 18px; background: var(--card); border: 1px solid var(--line); border-radius: 10px; }
+  table { border-collapse: collapse; width: 100%; font-size: 14px; line-height: 1.65; }
+  th, td { text-align: left; vertical-align: top; padding: 10px 14px; border-bottom: 1px solid var(--line); }
+  tr:last-child td { border-bottom: none; }
+  thead th { background: #f0f3f8; font-weight: 600; white-space: nowrap; }
+  strong { font-weight: 650; }
+  figure { margin: 18px 0 24px; }
+  .flow { display: flex; flex-wrap: wrap; align-items: stretch; gap: 10px 8px; list-style: none; padding: 0; margin: 0; }
+  .flow li { margin: 0; flex: 1 1 150px; background: var(--card); border: 1px solid var(--line); border-top: 3px solid var(--c, var(--brand));
+             border-radius: 8px; padding: 10px 12px; font-size: 14px; line-height: 1.5; }
+  .flow li b { display: block; font-size: 13px; color: var(--c, var(--brand)); margin-bottom: 2px; }
+  .flow .chat { --c: var(--native); } .flow .keep { --c: var(--poc); }
+  figcaption { font-size: 13px; color: var(--muted); margin-top: 8px; }
+  .note { margin: 16px 0 20px; max-width: 46em; background: var(--brand-soft); border-left: 4px solid var(--brand);
+          border-radius: 0 8px 8px 0; padding: 12px 16px; font-size: 15px; }
+  .note p:last-child, .note ul:last-child { margin-bottom: 0; }
+  a:focus-visible { outline: 3px solid var(--brand); outline-offset: 2px; }
+  @media (max-width: 760px) { main { padding: 32px 18px 72px; } h1 { font-size: 26px; } }
+  @media print { body { background: #fff; } .table, .flow li { break-inside: avoid; } }
+</style>
+</head>
+<body>
+<main>
+<h1>KiroCrew ON 白皮书：7×24 在线的多 Agent 研发协作空间</h1>
+<p>版本：基于 MVP 0.2.0 预览版 <code>0.2.0rc1</code>（代码线 <code>feat/mvp-0.2.0</code>，EC2 运行 <code>9b587ec</code>）　·　日期：2026-11-20　·　HTML 版：<a href="KiroCrew-ON-Whitepaper.html"><code>docs/KiroCrew-ON-Whitepaper.html</code></a></p>
+<p><strong>怎么读</strong>：每章正文写「是什么、怎么做」，章末的「解读」写「为什么这样做、代价是什么」。第 14 章是整体解读。凡写「已上线」的，都已在 AWS us-east-1 的部署上实测；规划中的内容会注明。细节以各章引用的文档为准。</p>
+<h2>摘要</h2>
+<p><strong>问题。</strong> Coding Agent 已经能写出可运行的代码，但它们的工作方式仍是「一个人、一台电脑、一个 Agent」：电脑一关任务就停，「完成了」靠 Agent 自己说，规划、实现、审查往往是同一个模型，成果和经验也很难在团队里共享。</p>
+<p><strong>方案。</strong> KiroCrew ON 是一个自托管、7×24 在线的研发协作空间。你在自己习惯的 Coding Agent（Claude Code、Kiro CLI、Codex 等）里用一句话交代任务；后台由 KiroCrew Agent 规划，Kiro、Claude Code、Codex 分工实现、互审；交接与结论由平台亲自判定，不通过时自动诊断并返工。个人、Team 与全公司在同一个空间里共享会话、工作流与成果。平台不绑定工具与模型，接入只靠一份 Skill 加一个 MCP 服务器。</p>
+<p><strong>现状。</strong> 2026-10-10 立项，0.1.0（10-12）跑通协作闭环，0.1.1（10-24）完成控制台改版，0.2.0 预览版（10-26 起）在做单机版一键安装、自助执行环境与集群版底座。后端约 2.1 万行 Python，控制台约 1.1 万行 TypeScript，回归测试超过 2,500 项，留下 60 余项编号决策（D01–D75）。</p>
+<p><strong>一句话解读。</strong> KiroCrew ON 把「信任」从 Agent 身上移到了平台上：让 Agent 在隔离的边界里自由发挥，再由代码在边界外验收。</p>
+<h2>1．背景：Coding Agent 普及之后，缺的是什么</h2>
+<div class="table"><table><thead><tr><th>缺口</th><th>今天的表现</th><th>KiroCrew ON 的回答</th></tr></thead><tbody><tr><td><strong>任务绑在个人电脑上</strong></td><td>合上电脑、断网，任务就停；进度散在对话里，换台电脑接不上</td><td>任务在服务器的执行边界里持续执行；会话的状态、版本与证据都存在平台上，随时回来查看、续作</td></tr><tr><td><strong>「完成了」靠 Agent 自己说</strong></td><td>Agent 倾向于报告成功：测试没跑、改动没审、验收项没对照</td><td>平台按命名门禁判定，亲自运行检查命令；独立的 Evaluator 逐条对照验收项。实现者自报的通过不作数</td></tr><tr><td><strong>一个 Agent 包打天下</strong></td><td>规划、实现、审查都是同一个模型，等于自己审自己</td><td>多 Agent 分工：Kiro 规划，Claude Code / Codex 实现与审查；审查任务不能用改动作者的那个工具</td></tr><tr><td><strong>个人工具，团队用不上</strong></td><td>会话、工作流、经验各在各人手里，交接靠复制粘贴</td><td>个人 / Team 空间；会话可共享、接手、公开分享；工作流有版本、可共享、可推荐；项目知识自动沉淀</td></tr><tr><td><strong>工具与模型锁定</strong></td><td>换一个 Agent，就要换一套流程和习惯</td><td>接入只是一层薄协议（Skill + MCP）；工具与模型按任务选，规划时可指定，也可由 KiroCrew Agent 推荐</td></tr></tbody></table></div>
+<aside class="note"><p><strong>解读</strong>：这五个缺口有同一个根源：Coding Agent 是按「个人助手」设计的，没有「组织里的工作」所需要的三样东西——持续运行的地方、可核实的结果、可共享的记录。KiroCrew ON 不去做一个更好的 Agent，而是给现有的 Agent 补上这三样东西。</p></aside>
+<h2>2．定位：它是什么，不是什么</h2>
+<div class="table"><table><thead><tr><th>它是</th><th>它不是</th></tr></thead><tbody><tr><td><strong>后台协作空间</strong>：任务交出去后在服务器上持续执行，随时回来查看、续作</td><td>新的 IDE 或新的 Coding Agent：你继续用自己的工具</td></tr><tr><td><strong>多 Agent 编排</strong>：KiroCrew Agent 识别意图、补全需求、拆分任务、为每个任务选 Agent；各 Agent 分工执行与互审</td><td>模型或模型网关：模型由各工具原生配置（EC2 上经 Amazon Bedrock 与 Kiro）</td></tr><tr><td><strong>共享空间</strong>：个人空间、Team 空间；会话、产出与工作流按需共享</td><td>绑定某个工具或模型的系统</td></tr><tr><td><strong>质量由平台把关</strong>：交接与结论经平台校验才算完成，失败时自动诊断并返工</td><td>CI/CD 或自动发布：默认不合并、不部署生产，结果先给人看、由人决定</td></tr><tr><td><strong>自托管</strong>：部署在你自己的 AWS 账号；执行环境按人 / Team 隔离</td><td>托管 SaaS 或聊天机器人：对话只是入口，会话、任务、证据都有结构化记录</td></tr></tbody></table></div>
+<aside class="note"><p><strong>解读</strong>：关键词是「空间」而不是「工具」。工具解决「怎么做」，空间解决「在哪做、谁能看、做到什么算完」。因此 KiroCrew ON 的大部分代码不在 Agent 怎么写代码上，而在会话状态机、权限、证据与判定上。</p></aside>
+<h2>3．设计原则</h2>
+<ol><li><strong>单向驱动</strong>：平台 → Worker → KiroCrew。KiroCrew 从不调用平台；结果由 Worker 轮询 Gateway、读取交接文件后交回平台。</li><li><strong>平台是状态的唯一来源</strong>：会话、任务、尝试（Attempt）、版本、权限都在平台数据库里；原生会话只是执行与对话的记录，平台不以它判定完成。</li><li><strong>代码负责确定性，Agent 负责判断</strong>：
+<div class="table"><table><thead><tr><th>由代码负责</th><th>由 Agent 负责</th></tr></thead><tbody><tr><td>会话登记、幂等、状态机、版本、权限</td><td>意图识别、需求补全、任务拆分与 Agent 映射</td></tr><tr><td>规划结果的校验与规范化</td><td>编码与真实验证</td></tr><tr><td>交接与结论的校验、派发幂等、重启核对</td><td>审查判断、失败诊断与返工建议</td></tr><tr><td>执行环境选择、预览、观察、原生入口的授权</td><td>面向用户的进度说明</td></tr></tbody></table></div></li><li><strong>质量由平台判定</strong>：Agent 写的交接文件 <code>handoff.md</code> 与结论 <code>outcome.json</code> 是证据，不是判决。</li><li><strong>薄接入，厚平台</strong>：任何支持 MCP 的 Coding Agent 都能接入；复杂度留在平台。</li><li><strong>边界即隔离</strong>：一个执行边界是一个独立的 OS 用户（或独立主机，0.2.0 起还有自己的加密卷），带自己的 Gateway 与 Worker。</li><li><strong>权限不靠 Prompt</strong>：技能、权限、认证都用各工具与 KiroCrew 的原生机制；Prompt 不能冒充权限控制。用户 Token、Worker Token、Gateway 原生凭据分开。</li><li><strong>管理与使用分开</strong>（D53）：使用者不需要了解运维步骤；需要管理员处理时，提示写明原因并指向管理员。</li><li><strong>默认一路跑完</strong>（D70、D71）：规划完直接开始；只有缺凭证、缺只有用户才能给的输入时才停下等人。任何新增的拦截、等待或确认，都须先经负责人同意。</li><li><strong>如实报告</strong>：状态、模型、测试与部署结论如实写；未知就写未知，不把目标写成已上线。</li></ol>
+<aside class="note"><p><strong>解读</strong>：这十条针对的是 LLM Agent 的两类典型问题：<strong>能力强但不可靠</strong>（会自报成功、会越界、会忘记上下文），以及<strong>会话短暂、彼此不通</strong>。第 1–4 条把 Agent 当成「能干但需要验收的承包人」：边界内给足自由，边界外由代码验收。第 5–7 条把各方的职责切干净，任何一方都可以替换。第 9 条是产品立场：系统宁可继续推进、把问题记成提示，也不轻易让用户等。</p></aside>
+<h2>4．系统架构</h2>
+<h3>4.1　五层</h3>
+<figure>
+<style>
+  .wp-stack { display: grid; gap: 6px; }
+  .wp-row { display: grid; grid-template-columns: 8.5em 1fr; gap: 12px; align-items: stretch; }
+  .wp-row > b { display: flex; flex-direction: column; justify-content: center; font-size: 14px; color: var(--c); line-height: 1.4; }
+  .wp-row > b small { font-weight: 400; color: var(--muted); font-size: 12px; }
+  .wp-cells { display: flex; flex-wrap: wrap; gap: 8px; }
+  .wp-cells span { flex: 1 1 150px; background: var(--card); border: 1px solid var(--line); border-top: 3px solid var(--c);
+                   border-radius: 8px; padding: 8px 11px; font-size: 13.5px; line-height: 1.5; }
+  .wp-link { margin-left: 8.5em; padding-left: 12px; font-size: 12.5px; color: var(--muted); }
+  .wp-link::before { content: "↓ "; color: var(--c, var(--muted)); }
+  @media (max-width: 640px) { .wp-row { grid-template-columns: 1fr; } .wp-link { margin-left: 0; padding-left: 0; } }
+</style>
+<div class="wp-stack" role="img" aria-label="KiroCrew ON 的五层：接入层、调度层、执行层、Agent 层、模型层">
+  <div class="wp-row" style="--c: var(--brand)"><b>接入层<small>你习惯的工具</small></b>
+    <div class="wp-cells"><span>Claude Code · Kiro CLI · Codex …<br>同一份 Skill + MCP（40 个工具）</span><span>Web 控制台（React）</span><span>REST <code>/v1</code> · 命令行 <code>octopus</code></span></div></div>
+  <div class="wp-link">HTTPS · 用户 Token（read / execute / manage / admin）</div>
+  <div class="wp-row" style="--c: var(--brand)"><b>调度层<small>KiroCrew ON 平台</small></b>
+    <div class="wp-cells"><span>身份与权限 · 个人 / Team 空间</span><span>会话状态机 · 版本 · 修订 · 审计</span><span>工作流库 · 质量判定 · 自动纠错</span><span>排队 · 并发上限 · 用量</span></div></div>
+  <div class="wp-link">Worker Token · 单向驱动（平台 → Worker）</div>
+  <div class="wp-row" style="--c: var(--native)"><b>执行层<small>执行边界</small></b>
+    <div class="wp-cells"><span>Worker：准备源码、派发、收集证据、预览</span><span>每人一个边界：独立 OS 用户、HOME、Gateway</span><span>Team 专属主机：私网 TLS，平台私有 CA</span></div></div>
+  <div class="wp-link">回环 · 本边界 <code>.local_secret</code> 换短期原生 token</div>
+  <div class="wp-row" style="--c: var(--native)"><b>Agent 层<small>KiroCrew 原生</small></b>
+    <div class="wp-cells"><span>协调者 <code>poc-coordinator</code>（原生父会话）</span><span>子 Agent：Kiro · Claude Code · Codex</span><span>诊断 <code>poc-diagnose</code>（不能再派生）</span></div></div>
+  <div class="wp-link">各工具的原生配置</div>
+  <div class="wp-row" style="--c: var(--poc)"><b>模型层<small>可替换</small></b>
+    <div class="wp-cells"><span>Amazon Bedrock（Claude Code、Codex 经实例角色）</span><span>Kiro（kiro-cli 设备码登录，Kiro Credit 按人计）</span></div></div>
+</div>
+<figcaption>平台不运行 Agent、不绑定模型；KiroCrew 从不调用平台。用户、Team 与权限的规则全部落在调度层。</figcaption>
+</figure>
+
+<div class="table"><table><thead><tr><th>层</th><th>是什么</th><th>负责</th><th>不负责</th></tr></thead><tbody><tr><td><strong>平台</strong>（API + Service + Engine）</td><td>平台进程，OS 用户 <code>octopus</code></td><td>身份、角色与权限；空间与执行环境；会话状态机与版本、每次写入的变更记录；调度（同一时间只有一个 Engine，经租约接口）；质量判定；纠错决定的应用；事件与审计</td><td>不运行 Agent；不直接访问任何 Gateway</td></tr><tr><td><strong>Worker</strong></td><td>平台派驻在每个执行边界里的代理</td><td>准备源码；会话与原生父会话的绑定；把平台操作翻译成 Gateway 调用；派发幂等与核对；收集证据；预览、观察、原生入口链接</td><td>不做权限判断（只信任持 Worker Token 的平台）；不保存平台数据</td></tr><tr><td><strong>KiroCrew Gateway</strong></td><td>KiroCrew 原生后端，每个边界一个</td><td>原生会话与协调者；派生子 Agent；批准、记忆、ACP 路由</td><td>不知道平台的用户、Team 与权限；从不调用平台</td></tr><tr><td><strong>Agents</strong></td><td>Gateway 派生的 Coding Agent 进程</td><td>在源码目录开发与验证；写交接文件与结论</td><td>不读平台凭据；不派生其他子任务</td></tr></tbody></table></div>
+<h3>4.2　部署拓扑（现状）</h3>
+<ul><li><strong>入口</strong>：浏览器与 Coding Agent 经 CloudFront 访问平台。安全组只放行 CloudFront 的源站网段，平台只服务带源站密钥头的请求。</li><li><strong>平台主机</strong>（EC2）：API 与 Engine、SQLite、nginx；同一台主机上有多个执行边界，每人一个（D49）。</li><li><strong>Worker 主机</strong>：Team 的专属执行环境可以是独立主机，与平台同一 VPC，只接受平台访问；平台与它之间是平台私有 CA 签发的 TLS。</li><li><strong>原生入口</strong>：每个边界的 KiroCrew 原生页面经各自的 CloudFront 分发与平台 nginx 中转，凭一次性链接登录，登录 1 小时有效。</li></ul>
+<h3>4.3　平台与 KiroCrew 的接口</h3>
+<div class="table"><table><thead><tr><th>用户可见的操作</th><th>平台 <code>/v1</code></th><th>Worker</th><th>KiroCrew Gateway（回环）</th></tr></thead><tbody><tr><td>提交需求</td><td><code>POST /v1/runs</code></td><td><code>/prepare</code></td><td>建立原生父会话 <code>octopus-&lt;run&gt;</code>（协调者）</td></tr><tr><td>规划与执行任务</td><td>Engine（没有用户接口）</td><td><code>/dispatch</code></td><td><code>POST /api/spawn</code>（<code>poc-&lt;工具&gt;</code>、模型、effort、cwd）</td></tr><tr><td>查看进度与证据</td><td><code>GET /v1/runs/&lt;id&gt;</code>、<code>/events</code></td><td><code>/inspect</code></td><td>读子任务状态、路由日志、交接文件；把结果摘要写回父会话</td></tr><tr><td>自动纠错</td><td>Engine</td><td><code>/dispatch</code></td><td><code>POST /api/spawn</code>（<code>poc-diagnose</code>，不能再派生）</td></tr><tr><td>停止 / 关闭 / 重开 / 删除</td><td><code>POST /v1/runs/&lt;id&gt;/stop</code> 等</td><td><code>/control</code></td><td>停止、导出备份、删除或恢复原生会话</td></tr><tr><td>观察原生对话</td><td><code>GET /v1/runs/&lt;id&gt;/observe</code></td><td><code>/observe</code></td><td>分页读原生会话</td></tr><tr><td>在 KiroCrew 中打开</td><td><code>POST /v1/runs/&lt;id&gt;/crew-entry</code></td><td><code>/crew-entry</code></td><td>换取一次性入口链接</td></tr></tbody></table></div>
+<aside class="note"><p><strong>解读</strong>：Worker 这一层是整个架构的关键。它让平台<strong>永远不直接碰 Gateway</strong>，Gateway 也<strong>永远不知道平台的用户是谁</strong>。于是所有权限规则只落在一个地方，KiroCrew 的升级也只影响 Worker 这一层翻译。代价有两个：一是进度靠轮询，有秒级延迟；二是依赖 KiroCrew 原生接口的契约，所以 KiroCrew 按 commit 锁定版本，新版本要先通过原生契约检查才接受（D18）。</p></aside>
+<h2>5．一个会话的一生</h2>
+<p><strong>会话</strong>（Session，接口里叫 run）是 KiroCrew ON 的核心对象：一次需求从提交到交付、再到之后每次续作的全部历史。</p>
+<figure>
+<ol class="flow" aria-label="一个会话的一生">
+  <li><b>1 提交</b>一句话需求；平台核对权限与空间，选执行环境</li>
+  <li class="chat"><b>2 准备</b>Worker 克隆或新建工作区、固定 commit，建原生父会话</li>
+  <li class="chat"><b>3 规划</b>KiroCrew Agent 补全需求，拆成 1–7 个任务并选 Agent 与角色</li>
+  <li class="chat"><b>4 执行</b>按依赖派发；每次写交接与结论，提交候选</li>
+  <li><b>5 判定</b>门禁 → 检查命令 → 审查 → Evaluator，由平台判</li>
+  <li><b>6 纠错</b>诊断后重试、换工具、返工上游或重新规划，受预算约束</li>
+  <li class="keep"><b>7 交付</b>预览、下载源码、报告、Draft PR / MR、沉淀知识</li>
+  <li class="keep"><b>8 续作</b>同一会话与工作区，只重跑受影响的任务</li>
+</ol>
+<figcaption>紫色由平台完成，青色在执行边界内由 KiroCrew 与各 Agent 完成，灰色是交付与之后的迭代。第 5、6 步可以循环多轮。</figcaption>
+</figure>
+
+<div class="table"><table><thead><tr><th>#</th><th>你做什么</th><th>平台在后台做什么</th></tr></thead><tbody><tr><td>1</td><td><strong>连接一次</strong>：<code>octopus connect claude</code> 或 <code>octopus connect kiro</code></td><td>写入 MCP 配置与 Skill，签发你的 Token</td></tr><tr><td>2</td><td><strong>说需求</strong>：「用 KiroCrew ON 做一个番茄钟，Codex 审查」</td><td>登记会话；核对权限与空间；选执行环境（只有一个可用时自动选）</td></tr><tr><td>3</td><td>去做别的事</td><td>KiroCrew Agent 识别意图、补全需求、拆成 1–7 个任务，给每个任务选 Agent 与角色（Spec、SDE、集成测试、安全测试、Challenge、Evaluator）；平台校验后直接开始</td></tr><tr><td>4</td><td>偶尔问一句「现在做到哪了？」</td><td>按依赖派发任务；每次尝试都提交候选、运行检查、核对交接；不通过时自动诊断并返工</td></tr><tr><td>5</td><td><strong>看结果</strong>：「给我预览」</td><td>生成隔离的预览链接，或在执行环境里运行应用（开发服务器、前后端两个进程）供远程预览；也可下载源码到本机运行</td></tr><tr><td>6</td><td><strong>继续改</strong>：「把 12 小时制改成补零」</td><td>在同一会话、同一工作区续作，只重跑受影响的任务，下游的审查自动重做；每次修订都留下快照，可对比 Prompt 的逐行变化</td></tr><tr><td>7</td><td><strong>交付</strong></td><td>发布到仓库：推送 <code>octopus/&lt;run&gt;</code> 分支并创建 Draft PR / MR（默认由人确认，也可设为自动）；会话结束前沉淀项目知识</td></tr></tbody></table></div>
+<aside class="note"><p><strong>解读</strong>：会话与「聊天记录」最大的不同在于，它是<strong>可审计的工程对象</strong>：有版本号（防止基于过时的页面续作）、有修订历史、有每次写入的变更记录（谁、从哪个客户端、改了什么、为什么）、有每次尝试的证据。正因为如此，它才能被共享、被接手、被另一个人从中途接着做下去。</p></aside>
+<h2>6．质量与可靠性</h2>
+<h3>6.1　质量：层层不信任</h3>
+<p>每次尝试都由一组<strong>命名门禁</strong>判定，结果逐条写进证据，在控制台与 MCP 里都看得到。门禁有四种状态：通过、提示（记录但不拦）、失败（拦下并进入纠错）、跳过。</p>
+<div class="table"><table><thead><tr><th>门禁</th><th>判什么</th></tr></thead><tbody><tr><td><code>native_completed</code>、<code>identity_match</code></td><td>原生任务确实跑完；实际的后端与模型和配置一致</td></tr><tr><td><code>handoff_present</code>、<code>outcome_valid</code>、<code>outcome_pass</code></td><td>交接文件存在；结论格式正确且为通过</td></tr><tr><td><code>no_secrets</code></td><td>候选提交里没有疑似凭证或 <code>.env</code>。<strong>安全底线，任何阶段都拦</strong></td></tr><tr><td><code>diff_present</code></td><td>实现类任务确实有改动</td></tr><tr><td><code>checks_pass</code></td><td>平台以执行用户亲自运行任务声明的验证命令：每条 10 分钟、合计 20 分钟，记录退出码、耗时与输出末尾（凭证已隐去）</td></tr><tr><td><code>review_bound</code></td><td>审查对准的是当前候选；审查者没有改代码（改了由平台撤回）</td></tr><tr><td><code>evaluated</code></td><td>独立的 Evaluator 对每条验收项给出 pass / fail / pending 与证据</td></tr></tbody></table></div>
+<p>几条规则让这些门禁难以绕过：</p>
+<ul><li><strong>审查独立</strong>：安全测试、Challenge、Evaluator 不能使用被审查改动的作者工具。</li><li><strong>改代码就要经过 Evaluator</strong>：规划里没安排时，平台在会话完成前自动追加「Evaluator 验收」。</li><li><strong>只发布已验证的候选</strong>：会话分支当前所在、自身门禁全部通过、并且在最后一次代码改动之后有通过的审查。</li><li><strong>按阶段把关</strong>（D69）：发散（调研、头脑风暴）与设计中途的任务，部分失败只记提示、不拦；安全底线、登录失效、产出归属不可核实、必过检查、Evaluator 判不通过，在任何阶段都拦。</li></ul>
+<h3>6.2　可靠性：先保证完成</h3>
+<p>D10 定下的次序是「先保证每个任务完成，其次提升完成质量」。为此有一组逐级升高的恢复手段：</p>
+<div class="table"><table><thead><tr><th>层级</th><th>机制</th><th>默认</th></tr></thead><tbody><tr><td>派发</td><td>幂等：Worker 先写 <code>dispatch.json</code> 再派发；回执丢失时只核对、不重发</td><td>—</td></tr><tr><td>瞬时失败</td><td>自动重试；排队一直没轮到的自动重新派发，不占次数</td><td>与看门狗重试合计 4 次</td></tr><tr><td>卡住</td><td>看门狗：安静太久或总时长太长，就停止原生任务并重试一次</td><td>安静 30 分钟 / 总长 170 分钟</td></tr><tr><td>做错</td><td>协调者诊断 → 重试、换工具、返工上游；返工尽量在原对话上续接，保留上下文</td><td>2 轮</td></tr><tr><td>计划不对</td><td>重新规划</td><td>每个会话 1 次</td></tr><tr><td>总量</td><td>会话预算：轮数、重试次数、时长</td><td>2 轮 / 4 次 / 720 分钟</td></tr><tr><td>环境</td><td>等待与自动恢复：Kiro 登录恢复、Worker 重新启用、凭证恢复后自动继续，等待时间不计入预算</td><td>—</td></tr><tr><td>资源</td><td>排队（执行环境内存不足、负载过高时）与并发上限（个人 / Team / 默认）</td><td>默认不设上限</td></tr><tr><td>平台</td><td>重启后核对进行中的派发；备份与恢复；0.2.0 起 Litestream 持续备份</td><td>—</td></tr></tbody></table></div>
+<aside class="note"><p><strong>解读</strong>：这里有一个有意为之的取舍。D71（2026-10-22 关卡检讨）之后，系统<strong>几乎不再停下等人</strong>：Evaluator 的「待人判断」项自动通过并记为提示，协调者的大部分拒绝改为按建议重试。这样会话不会卡在半夜无人确认的关卡上，代价是「通过」里可能带着提示。补偿在交付端：发布默认要人确认，而且只推已验证的候选；提示在会话页、报告与 MCP 里都会列出来。一句话：<strong>执行端偏向自动，出口端偏向保守。</strong></p></aside>
+<h2>7．协作模型</h2>
+<ul><li><strong>空间</strong>：会话属于个人空间或 Team 空间（成员是 owner 或 member）。</li><li><strong>执行边界</strong>：每人一个（D49）。KiroCrew 是个人助手，一个 Gateway 对应一个主人、一份记忆、一个 Kiro 登录（Kiro Credit 按人计）。Team 会话运行在提交者自己的边界上。在别人的边界上，只有边界的主人能下达指令（R10）。</li><li><strong>会话共享</strong>（D64）：可共享给某个人、某个 Team 或全公司。查看者能看详情、时间线、观察原生对话、修订、报告、远程预览；协作者还能续作、停止、请求诊断。全公司只能查看。删除、发布、改派执行环境、更换凭证、原生入口不对共享开放。</li><li><strong>接手</strong>（D74）：协作者或 Team 成员可以把共享来的会话接手到自己的执行环境，提交历史不变，此后用自己的身份、凭证与用量续作；创建者可以接回。</li><li><strong>公开分享</strong>（D75）：把会话的页面或运行中的演示发给没有账号的人，可选四位授权码，有效期 1 天到永久，链接在会话自己的预览域名上。</li><li><strong>工作流库</strong>：参考模板、KiroCrew 推荐、导入 Agent 预先生成的工作流；改动形成新版本，已在跑的会话不受影响；可共享给个人或 Team。</li><li><strong>在 KiroCrew 聊天里直接对话</strong>（D73）：可以在原生页面里和协调者直接聊；聊天里改过的文件在续作前提交为候选，并提醒你同步修改需求。运行中的 Kiro 任务还可以「补充说明」，插入正在运行的这一轮。</li><li><strong>知识沉淀</strong>（D46）：改代码的会话完成前，平台追加一个只读的「Knowledge 沉淀」任务，最多写 5 条项目规则，此后同一空间、同一仓库的会话自动注入。团队层知识经仓库 PR 共享（D52）。</li><li><strong>用量</strong>：每次尝试记录 Kiro Credit、token、费用与时长，按会话汇总。</li></ul>
+<aside class="note"><p><strong>解读</strong>：协作模型里最重要的一句话是「<strong>共享会话、共享执行环境、共享凭证是三件事，互不隐式授权</strong>」。把会话共享给你，不等于你能在我的边界上跑命令，也不等于你能用我的仓库凭证。这就是为什么需要「接手」：想在别人的会话上继续干活，就把它搬到你自己的边界上，用你自己的身份和凭证。这个设计让「协作」和「责任归属」始终对得上。</p></aside>
+<h2>8．安全与信任</h2>
+<h3>8.1　凭据各管一段</h3>
+<div class="table"><table><thead><tr><th>连接</th><th>凭据</th><th>说明</th></tr></thead><tbody><tr><td>客户端 → 平台</td><td>用户 Token（<code>read</code> / <code>execute</code> / <code>manage</code> / <code>admin</code>）</td><td>控制台登录 24 小时；<code>octopus connect</code> 签发 30 天 Token；新建账号、重设密码、设为管理员只认控制台登录</td></tr><tr><td>Worker → 平台</td><td>一次性接入码（只用于登记）</td><td>唯一的反向调用；库里只存 SHA-256；30 分钟到 24 小时有效，用一次即失效</td></tr><tr><td>平台 → Worker</td><td>Worker Token</td><td>同主机走回环；独立主机走私网 TLS，只信任平台私有 CA；Token 已移出数据库（D59）</td></tr><tr><td>Worker → Gateway</td><td>本边界的 <code>.local_secret</code> → 短期原生 token</td><td>只走回环；Worker 与 Gateway 是同一个 OS 用户</td></tr><tr><td>浏览器 → Gateway</td><td>一次性入口链接 → 1 小时的登录 Cookie</td><td>原生登录覆盖整个 Gateway（K03），所以只发给有权使用整个边界的人</td></tr><tr><td>Gateway → Agents</td><td>同一 OS 用户的子进程</td><td>Bedrock 经实例角色；kiro-cli 经设备码登录</td></tr></tbody></table></div>
+<h3>8.2　权限只在平台判定</h3>
+<ul><li>看不到的返回 404，看得到但不能做的返回 403 并说明原因。</li><li>管理员能查看与操作全部会话，越权操作写入审计；原生入口仍只给边界主人。</li><li>用户与 Team 只停用、不删除。</li><li>仓库凭证分个人、Team、平台三级，秘密只写、加密存储；会话固定使用哪一份凭证，并显示是谁的。</li><li>Agent 没有仓库写凭证，推送与建 PR 只由平台在发布时做。</li></ul>
+<h3>8.3　浏览器一侧</h3>
+<p>不另购域名（负责人 2026-10-27），控制台、会话预览与原生入口同属一个可注册域名，隔离按源站做：</p>
+<ul><li>Cookie 一律 <code>__Host-</code>；</li><li>凭 Cookie 的写入必须来自控制台自己的 Origin，凭 Cookie 的子资源请求按 Fetch Metadata 拒绝；</li><li>没有一条 GET 会替用户做主动操作（逐条审计过）；</li><li>预览以 sandbox 下发，链接 10 分钟有效，每次取文件都复核权限；</li><li>会话观察与检查输出里的密钥由平台打码（D57）。</li></ul>
+<aside class="note"><p><strong>解读</strong>：安全上的总体立场是「<strong>底线，而不是关卡</strong>」：少数不可让步的规则（秘密扫描、认证、产出归属核实、权限只在平台）任何时候都拦；其余尽量不打断用户。真正的隔离靠操作系统和网络（OS 用户、主机、私网 TLS、源站校验），不靠 Agent 的自觉。残余风险也写在明处：例如 Agent 做的演示页可以把这个域名的 Cookie 写满，让该浏览器暂时打不开；它读不到、也改不了任何人的数据，清除站点数据即可恢复。</p></aside>
+<h2>9．部署与运维</h2>
+<h3>9.1　0.1.x：自己的 EC2</h3>
+<p>CloudFormation 加 <code>deploy/aws/deploy.sh</code>，部署在 us-east-1、Amazon Linux 2023：<code>deploy.sh up &amp;&amp; deploy.sh push</code>。<code>worker-host add &lt;名称&gt;</code> 一条命令加一台 Worker 主机，<code>boundary add &lt;名称&gt; --owner &lt;用户&gt;</code> 为一个人开一个边界。</p>
+<h3>9.2　0.2.0 单机版（P2，已部署 EC2）</h3>
+<ul><li><strong>一行安装</strong>：<code>curl -fsSL https://&lt;下载域名&gt;/install.sh | sudo sh</code>。先预检（系统、架构、root、systemd、磁盘、内存、实例元数据），不满足的一次列全，什么也不改。</li><li><strong>支持的组合</strong>：AL2023、Ubuntu 22.04 / 24.04；x86_64 与 ARM64（推荐 Graviton）；另有 pip（<code>pip install kirocrew-on</code> 后 <code>sudo kirocrew-on setup</code>）与 Docker（一个容器、一个边界，用于试用）。</li><li><strong>验签</strong>：先用内嵌公钥验清单签名（没有签名不装），再核对版本与 wheel 的 sha256。</li><li><strong>CloudFront 小栈</strong>：Elastic IP、只放行 CloudFront 的入站规则、控制台 / 原生 / 预览三个分发、每日快照；装完核对主机角色只剩 Bedrock 调用与 SSM。</li><li><strong>控制台里的运维</strong>：「新建边界」「登录 Kiro」（设备码）「管理 › 部署」；需要管理员凭证的变更由部署套件 <code>kirocrew-on single …</code> 在管理员自己的电脑上执行，主机上不留凭证。</li></ul>
+<h3>9.3　0.2.0 集群版（P3–P5，规划中）</h3>
+<figure>
+<style>
+  .wp-planes { display: grid; grid-template-columns: 1fr 1.4fr; gap: 14px; }
+  .wp-plane { background: var(--card); border: 1px solid var(--line); border-radius: 10px; padding: 12px 14px; border-top: 4px solid var(--c); }
+  .wp-plane h4 { margin: 0 0 6px; font-size: 15px; color: var(--c); }
+  .wp-plane ul { margin: 0; padding-left: 1.2em; font-size: 13.5px; line-height: 1.6; }
+  .wp-hosts { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 10px; }
+  .wp-host { flex: 1 1 120px; border: 1px dashed var(--line); border-radius: 8px; padding: 6px 8px; font-size: 12.5px; line-height: 1.5; }
+  .wp-host i { font-style: normal; display: inline-block; margin: 2px 3px 0 0; padding: 0 6px; border-radius: 4px; background: var(--native-soft); color: var(--native); }
+  @media (max-width: 760px) { .wp-planes { grid-template-columns: 1fr; } }
+</style>
+<div class="wp-planes" role="img" aria-label="MVP 0.2.0 集群版：控制面与数据面">
+  <div class="wp-plane" style="--c: var(--brand)"><h4>控制面（不跑 Agent）</h4>
+    <ul><li>API · Engine（租约保证同一时间只有一个）</li><li>SQLite + Litestream 持续备份（RPO ≤ 5 s）</li>
+      <li>另一可用区温备（RTO ≤ 15 min）</li><li>放置与扩容：按 CPU、内存、剩余挂载位</li><li>平台指标（CloudWatch EMF）</li></ul></div>
+  <div class="wp-plane" style="--c: var(--native)"><h4>数据面（Graviton 主机池）</h4>
+    <ul><li>主机无状态：主机代理负责挂卷、起边界</li><li>每人一块加密 EBS 卷：工作区、各 Agent 的登录状态、KiroCrew 记忆</li>
+      <li>换主机 = 改挂这块卷（同可用区 p50 16.7 s）</li></ul>
+    <div class="wp-hosts">
+      <div class="wp-host">共享主机<br><i>alice 卷</i><i>bob 卷</i><i>carol 卷</i></div>
+      <div class="wp-host">专用主机<br><i>dave 卷</i></div>
+      <div class="wp-host">空主机<br>只回收它，不搬用户</div>
+    </div></div>
+</div>
+<figcaption>集群版是 0.2.0 的 P3–P5，尚未上线；图中的时延来自 P0 实测（200 次同可用区搬卷 0 失败）。</figcaption>
+</figure>
+
+<ul><li><strong>用户的数据跟着卷走</strong>：每人一块加密的 EBS 卷，放工作区、各 Agent 的登录状态和 KiroCrew 记忆。换主机就是改挂这块卷。</li><li><strong>P0 实测</strong>（设计前先测）：同可用区搬卷 200 次 0 失败，用户等待 p50 16.7 秒、p95 19.3 秒；m8g.large 一台能挂 31 块数据卷；30 块卷同时搬，40 秒内全部完成；跨可用区从快照恢复必须设预置初始化速率，否则 5 GiB 要 11 分钟。</li><li><strong>扩缩</strong>：按 CPU、内存、剩余挂载位扩容；尽可能不缩容、不搬用户，只回收空主机。</li><li><strong>可用性</strong>：目标 99.5%（负责人 2026-10-26 定）。Litestream 每秒同步，RPO ≤ 5 秒（实测 0.69 秒，恢复 4.4 秒）；另一可用区温备，RTO ≤ 15 分钟。温备所需的平台密钥材料由 KMS 托管。</li><li><strong>可观测</strong>：每分钟一行 CloudWatch EMF（进行中、等 Worker、等配额的会话，失联的 Worker 等）；Worker 的 <code>/health</code> 报告内存、CPU、负载与子 Agent 上限，供放置使用。</li></ul>
+<aside class="note"><p><strong>解读</strong>：集群版的单位是「<strong>人的卷</strong>」，不是「主机」，也不是「容器」。Agent 需要一个完整的用户环境（登录状态、记忆、工具链），这些状态天然属于人；把它们放进一块随人走的卷，主机就成了无状态、可替换的算力。这也解释了为什么不直接上容器编排：Agent 进程的状态模型更像「一个人的工作站」，而不是「一个无状态服务」。另一个值得注意的做法是<strong>先实测、再定设计</strong>：P0 用不超过 20 美元的一次性资源，把卸挂时延、挂卷上限、跨区恢复这些会推翻设计的数字先测出来。</p></aside>
+<h2>10．接入与生态</h2>
+<div class="table"><table><thead><tr><th>方面</th><th>现状</th></tr></thead><tbody><tr><td>Coding Agent</td><td>Claude Code、Kiro CLI 一条命令接入（<code>octopus connect</code>）；Codex 等任何支持 MCP 的客户端按 <code>docs/CONNECT.md</code> 手动接入</td></tr><tr><td>MCP 工具</td><td>40 个：会话（提交、状态、续作、控制、观察、修订、补充说明、接手…）、工作流（匹配、推荐、解析、保存、共享）、交付（预览、运行应用、下载、发布）、本地联动（关联、拉回、同步）、管理（只接受 admin Token）</td></tr><tr><td>REST API</td><td><code>/v1</code> 下 100 余个路径，附 OpenAPI 描述</td></tr><tr><td>命令行</td><td><code>octopus</code>（connect、login、pull、sync、worker enroll…）；<code>kirocrew-on</code>（setup、single…）</td></tr><tr><td>执行的 Agent</td><td>Kiro（kiro-cli）、Claude Code、Codex；OpenCode 已停用（K01，未通过执行核实）</td></tr><tr><td>模型</td><td>Claude Code 与 Codex 经 Amazon Bedrock（实例角色）；Kiro 经各人的设备码登录</td></tr><tr><td>KiroCrew</td><td>开源的 KiroCrew Gateway，按 commit 锁定；平台用它的原生会话、派生、批准、记忆与 lessons</td></tr></tbody></table></div>
+<aside class="note"><p><strong>解读</strong>：接入层刻意做得很薄：一份 Skill 告诉 Agent「什么时候、怎么用这些工具」，MCP 提供工具本身。好处是几乎没有学习成本，用户在自己的 Agent 里说一句话就行；代价是体验受各客户端的 MCP 支持程度约束。项目在这里押的是「<strong>MCP 会成为 Agent 之间的通用插口</strong>」。</p></aside>
+<h2>11．现状与数据</h2>
+<div class="table"><table><thead><tr><th>时间</th><th>版本</th><th>要点</th></tr></thead><tbody><tr><td>2026-10-10</td><td>立项</td><td>迁入新旧两版资产，建立回归基线（D01、D05）</td></tr><tr><td>2026-10-12</td><td><strong>MVP 0.1.0</strong></td><td>跑通协作闭环：连接 → 提交 → 规划 → 多 Agent 执行与互审 → 观察 → 预览 → 续作；Team 执行环境</td></tr><tr><td>2026-10-13 至 23</td><td>0.1.x 迭代</td><td>访问管理、仓库凭证、候选提交与命名门禁、发布 Draft PR / MR、恢复阶梯、角色卡片与 Evaluator、Knowledge、每人一个边界、排队与并发上限、会话共享、聊天协作</td></tr><tr><td>2026-10-24</td><td><strong>MVP 0.1.1</strong></td><td>控制台改版、Token 重新生成、列表瘦身（gzip 后约少 70%）</td></tr><tr><td>2026-10-25 / 26</td><td>0.1.x 补充</td><td>接手（D74）、公开分享（D75）</td></tr><tr><td>2026-10-26 至 28</td><td><strong>0.2.0rc1</strong></td><td>P1 打底（接入码、全局 UID、ARM64、打包、Litestream、平台指标）；P2 单机版一键安装、控制台登录 Kiro</td></tr><tr><td>2026-11-20</td><td>修复</td><td>控制台登录 Kiro 拿到的是固定地址，登录不了（见附录 A）</td></tr></tbody></table></div>
+<div class="table"><table><thead><tr><th>工程指标</th><th>数值</th></tr></thead><tbody><tr><td>后端</td><td><code>octopus/</code> 70 个模块，约 2.1 万行 Python</td></tr><tr><td>控制台</td><td>Vite + React + TypeScript，约 1.1 万行（不含测试）</td></tr><tr><td>测试</td><td>后端 2,168 项、控制台 354 项、旧版 92 项（P2 的全量回归，干净检出）</td></tr><tr><td>数据库</td><td>SQLite，迁移到 19</td></tr><tr><td>决策记录</td><td>D01–D75，60 余项，每项写明负责人何时定的</td></tr><tr><td>工程纪律</td><td>每个修复先有失败的测试；独立代码审查；部署前干净克隆做密钥扫描；EC2 上逐项实测并把结果写进文档</td></tr></tbody></table></div>
+<aside class="note"><p><strong>解读</strong>：两周多从立项走到预览版，速度很快，原因之一是这个项目本身就大量用 Coding Agent 开发。但更值得看的是<strong>密度</strong>：60 余项决策、每次修复先写失败的测试、每个功能都有 EC2 实测记录。对 Agent 驱动的开发来说，这种「把判断写下来、把证据留下来」的纪律，正是 KiroCrew ON 想替用户自动化的那部分工作。</p></aside>
+<h2>12．路线图</h2>
+<p><strong>0.2.0 余下的部分</strong></p>
+<div class="table"><table><thead><tr><th>期</th><th>内容</th><th>状态</th></tr></thead><tbody><tr><td>P1b</td><td>KiroCrew 升到正式版 v0.10.0（原生页面会有变化）</td><td>待负责人确认</td></tr><tr><td>P2 第 9 项</td><td>新开 4 台 EC2，各用一条命令装通并跑一个真实会话</td><td>待负责人批准（约 3 美元）</td></tr><tr><td>P3</td><td>集群版底座：主机代理、用户卷、按 Host 路由的原生入口、迁移编排；先只开放给管理员</td><td>待 P0 余项</td></tr><tr><td>P4</td><td>普通用户自助申请共享 / 专用主机，双向切换</td><td>待 P3</td></tr><tr><td>P5</td><td>迁移现有部署与温备演练</td><td>待 P4</td></tr></tbody></table></div>
+<p><strong>之后的主题</strong>：组织层与跨 Team 治理；Issue、Webhook 与定时触发；按费用的预算与用量上限；服务端分页与全文检索；更多客户端一键接入。</p>
+<p><strong>目标驱动的自我迭代</strong>（D76 设计稿，待负责人评审）：新增「目标」对象——一句话陈述、锁定的完成标准、预算与授权策略；一个目标跨多次迭代（规划 → 执行 → 平台亲自验证 → 差距评估 → 决定）。完成与否由代码规则决定；推送、生产部署、对外发布一律需负责人本人当场再认证后点头；迭代上限、费用、连续无进展等任一触发即停下，写清卡在哪。设计稿的出发点是「在 KiroCrew ON 上迭代 KiroCrew ON」。</p>
+<aside class="note"><p><strong>解读</strong>：从路线图能看出产品的重心在移动：0.1 解决「一个会话能不能可靠地跑完」，0.2 解决「谁来装、在哪跑、怎么扩」，D76 要解决的是「<strong>跨会话的目标</strong>」——让系统自己决定下一个会话做什么，人只在关键点点头。这一步一旦走通，KiroCrew ON 就从「执行请求的后台」变成「追求目标的后台」。设计稿里最审慎的部分恰恰是「点头」：它承认现在的控制台登录证明不了操作者是本人，所以要求当场再认证。</p></aside>
+<h2>13．已知限制与风险</h2>
+<div class="table"><table><thead><tr><th>限制或风险</th><th>影响</th><th>现在的处理</th></tr></thead><tbody><tr><td>原生登录覆盖整个 Gateway（K03）</td><td>原生入口只能给边界主人</td><td>其他人用「KiroCrew 会话」面板观察；登录 1 小时到期，刷新凭据被拦下</td></tr><tr><td>OpenCode 未通过执行核实（K01）</td><td>不能选 OpenCode</td><td>已停用</td></tr><tr><td>平台仍是单台主机</td><td>主机故障期间不可用</td><td>每日快照与备份恢复；温备在 P5</td></tr><tr><td>Kiro 登录要人用设备码完成</td><td>边界的 Kiro 登录过期时，相关任务等待</td><td>控制台「登录 Kiro」；登录恢复后自动继续</td></tr><tr><td>补充说明只支持 Kiro</td><td>Claude Code、Codex 的运行中任务不能插话</td><td>KiroCrew 的限制，等上游</td></tr><tr><td>Knowledge 只在专属执行环境沉淀</td><td>共享环境的会话不积累项目知识</td><td>KiroCrew 的 lessons 不能按空间隔离</td></tr><tr><td>同一域名下的 Cookie 写满</td><td>该浏览器暂时打不开控制台</td><td>读不到也改不了数据；清除站点数据即可恢复</td></tr><tr><td>依赖 KiroCrew 的原生接口</td><td>上游变化会影响 Worker</td><td>按 commit 锁定；原生契约检查通过才接受新版本</td></tr><tr><td>自动通过的提示</td><td>「通过」里可能带待人判断的项</td><td>发布默认要人确认；提示在会话页、报告、MCP 中列出</td></tr></tbody></table></div>
+<h2>14．解读：KiroCrew ON 在押注什么</h2>
+<h3>14.1　一句话</h3>
+<p>把「<strong>一个人 + 一个 Coding Agent + 一台电脑</strong>」的工作方式，变成「<strong>一个组织 + 多个 Agent + 一组后台执行环境</strong>」的研发后台，而入口仍是每个人自己习惯的那个 Agent。</p>
+<h3>14.2　三个押注</h3>
+<div class="table"><table><thead><tr><th>押注</th><th>依据</th><th>代价</th></tr></thead><tbody><tr><td><strong>信任放在平台，不放在 Agent</strong></td><td>Agent 会自报成功。所以门禁由代码判，检查由平台亲自跑，Evaluator 独立于作者，发布只推已验证的候选</td><td>平台要理解每种任务的「完成」长什么样：门禁、阶段、契约的设计成本很高，D57、D69、D71 都是在调这里的松紧</td></tr><tr><td><strong>薄接入、厚平台</strong></td><td>用户不想换工具。一份 Skill 加 MCP，任何 Agent 都能接；复杂度集中在平台</td><td>体验受各客户端约束；平台必须把所有状态讲清楚（精简状态、观察、报告），因为用户只通过 Agent 的转述看它</td></tr><tr><td><strong>边界即隔离</strong></td><td>隔离交给操作系统、主机和卷，而不是 Prompt 或 Agent 的自觉；一人一个边界，与 KiroCrew 的「个人助手」模型对齐</td><td>运维更复杂：用户、端口、登录、卷都要按人管理。0.2.0 的大部分工作（接入码、全局 UID、自助申请、用户卷）就是在偿还这笔账</td></tr></tbody></table></div>
+<h3>14.3　与常见做法的对照</h3>
+<div class="table"><table><thead><tr><th>做法</th><th>擅长</th><th>KiroCrew ON 补上的</th></tr></thead><tbody><tr><td>本机 Coding Agent</td><td>交互快、上手零成本</td><td>后台持续执行、可核实的结果、团队共享</td></tr><tr><td>云端托管的单 Agent</td><td>不占本机、可异步</td><td>多 Agent 分工与互审、自托管、按人 / Team 隔离、不锁定工具</td></tr><tr><td>CI/CD 流水线</td><td>确定性、可重复</td><td>需求理解、任务拆分、失败诊断与返工这些需要判断的部分</td></tr><tr><td>通用多 Agent 框架</td><td>编排灵活</td><td>开箱即用的权限、会话状态机、证据、预览、发布与运维</td></tr></tbody></table></div>
+<p>KiroCrew ON 不和这些做法竞争谁更强，而是把它们拼起来：用 Agent 做判断，用流水线式的代码做验收，用协作空间管归属。</p>
+<h3>14.4　几处有意为之的取舍</h3>
+<ul><li><strong>自动与人控</strong>：执行端偏向自动（不停下等人），出口端偏向保守（发布默认要人确认，D76 要求本人再认证）。</li><li><strong>共享与隔离</strong>：会话可以广泛共享，执行环境和凭证不随之共享；要动手就先「接手」。</li><li><strong>实时与解耦</strong>：单向驱动加轮询，换来平台与 KiroCrew 的彻底解耦，接受秒级的进度延迟。</li><li><strong>复用与掌控</strong>：大量复用 KiroCrew 原生能力（会话、派生、批准、记忆），但判定、权限、状态从不交给它。</li></ul>
+<h3>14.5　给不同读者</h3>
+<ul><li><strong>开发者</strong>：你不需要学新工具。把它当成「可以把任务丢过去、明早回来看结果的同事」：说需求、问进度、要预览、继续改，都在你自己的 Agent 里完成。</li><li><strong>Team 负责人</strong>：会话、工作流、知识都能在 Team 里共享，接手让交接不必从头讲起；并发上限与用量让成本看得见。</li><li><strong>平台管理员与安全</strong>：自托管在自己的 AWS 账号；凭据分段、权限只在平台判定、审计齐全；隔离靠 OS 用户、主机与私网 TLS；安装包验签。</li><li><strong>决策者</strong>：它是把 Coding Agent 从「个人效率工具」升级为「组织研发能力」的一层基础设施。现在是 MVP 阶段：单区域、单台控制面主机，集群版与温备还在路上。</li></ul>
+<h3>14.6　成熟度判断</h3>
+<ul><li><strong>已经扎实的</strong>：会话闭环、质量判定与恢复阶梯、权限与审计、共享与接手、单机版安装。这些都经过 EC2 实测，有回归测试保护。</li><li><strong>还在路上的</strong>：集群版与温备（P3–P5）、KiroCrew 正式版升级（P1b）、组织层、目标驱动的迭代（D76）。</li><li><strong>要持续盯的</strong>：对上游 KiroCrew 原生接口的依赖；「自动通过」带来的提示积累；单台主机的可用性。</li></ul>
+<h2>附录 A．一次真实故障：控制台登录 Kiro 拿到的是固定地址（2026-11-20）</h2>
+<p>这个故障很小，但它把第 3 章「如实报告、证据先行」的工作方式演示了一遍。</p>
+<ul><li><strong>现象</strong>：在控制台点「登录 Kiro」，对话框里的验证地址每次都一样（<code>https://d-9067e1d68a.awsapps.com/start</code>），打开后进不了设备确认页，执行环境登录不了 Kiro。当时 EC2 上三个边界都是「Not logged in」。</li><li><strong>证据</strong>：取 EC2 上一次真实的登录日志看——kiro-cli 2.29.1 用 IAM Identity Center 登录时，先把给它的 Start URL 回显在提示行里，然后才输出设备码和真正的一次性地址。Worker 取的是输出中的<strong>第一个</strong>地址。</li><li><strong>为什么测试没发现</strong>：测试里模拟的 kiro-cli 不回显提示。</li><li><strong>修复</strong>：先补两个会失败的测试（模拟提示回显、模拟长地址分两次读到），再改为取「设备码之后、整行输出完的那个地址」。</li><li><strong>核对</strong>：在 EC2 的 kiro-cli 2.29.1 上，旧的解析复现出 <code>…/start✔</code>（39 字符）；新的解析取到 604 字符的一次性地址（AWS 现在给的是 <code>signin.aws/platform/authorize?request_uri=…</code>）。本机 kiro-cli 3.4.0 的 free 与 pro 两种登录也都取到完整地址。</li></ul>
+<aside class="note"><p><strong>解读</strong>：模拟的输出永远比真实的干净。所以这类问题要回到真实的命令、真实的环境上核对，而不是只看测试通过与否。</p></aside>
+<h2>附录 B．术语</h2>
+<div class="table"><table><thead><tr><th>术语</th><th>含义</th></tr></thead><tbody><tr><td>会话（Session / run）</td><td>一次需求从提交到交付、再到之后每次续作的全部历史</td></tr><tr><td>任务（Task）</td><td>会话里的一个步骤，有类别、角色、工具、模型、验收项与验证命令</td></tr><tr><td>尝试（Attempt）</td><td>一个任务的一次执行，对应一个原生子任务</td></tr><tr><td>候选（Candidate）</td><td>一次尝试之后，Worker 在会话分支上做的提交</td></tr><tr><td>门禁（Gate）</td><td>对一次尝试的命名判定：通过、提示、失败、跳过</td></tr><tr><td>执行边界（Boundary）</td><td>一个 OS 用户及其 HOME，加上其中的 KiroCrew Gateway 与 Worker</td></tr><tr><td>Worker</td><td>平台派驻在执行边界里的代理</td></tr><tr><td>KiroCrew Gateway</td><td>KiroCrew 的原生后端，派生并管理 Coding Agent</td></tr><tr><td>协调者</td><td>原生父会话里的 <code>poc-coordinator</code>，负责诊断与向用户解释进度</td></tr><tr><td>Evaluator</td><td>独立的验收角色，逐条对照验收项给出结论与证据</td></tr><tr><td>空间</td><td>会话的归属：个人空间或 Team 空间</td></tr></tbody></table></div>
+<h2>附录 C．文档索引</h2>
+<div class="table"><table><thead><tr><th>文档</th><th>内容</th></tr></thead><tbody><tr><td><a href="../README.md"><code>README.md</code></a></td><td>简介与上手</td></tr><tr><td><a href="MVP-0.1.0.md"><code>docs/MVP-0.1.0.md</code></a> · <a href="MVP-0.1.1.md"><code>MVP-0.1.1.md</code></a> · <a href="MVP-0.2.0.md"><code>MVP-0.2.0.md</code></a></td><td>各版本的产品说明、版本说明与验证</td></tr><tr><td><a href="ARCHITECTURE.md"><code>docs/ARCHITECTURE.md</code></a></td><td>架构：拓扑、逐层交互、时序、信任边界</td></tr><tr><td><a href="WORKERS.md"><code>docs/WORKERS.md</code></a></td><td>开发空间、Worker 与执行边界</td></tr><tr><td><a href="CONNECT.md"><code>docs/CONNECT.md</code></a> · <a href="CONTINUE.md"><code>docs/CONTINUE.md</code></a></td><td>客户端接入 · 续作</td></tr><tr><td><a href="OPERATIONS.md"><code>docs/OPERATIONS.md</code></a></td><td>部署与运维（门禁、恢复、共享、安全等各项行为的权威说明）</td></tr><tr><td><a href="MVP-RELEASE.md"><code>docs/MVP-RELEASE.md</code></a> · <a href="BACKLOG.md"><code>docs/BACKLOG.md</code></a></td><td>里程碑与决策 · 后续排期</td></tr><tr><td><code>docs/superpowers/specs/</code>、<code>docs/superpowers/plans/</code></td><td>各项设计与实施计划</td></tr></tbody></table></div>
+</main>
+</body>
+</html>
