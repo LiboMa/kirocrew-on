@@ -1,4 +1,5 @@
 """A worker colocated with ONE trusted execution boundary and its native Crew Gateway."""
+import base64
 from datetime import datetime
 import hashlib
 import gzip
@@ -81,6 +82,7 @@ KNOWLEDGE_FILE = ".octopus/knowledge.md"   # the repository's knowledge (D52)
 ENV_KEPT = workspace.ENV_KEPT
 PUBLISH_LIMIT = 100 * 1024 * 1024   # D35 §5.2: one bundle (as publish.LIMIT on the platform)
 SYNC_LIMIT = 20 * 1024 * 1024   # D58: the local commits one sync brings in
+ADOPT_LIMIT = PUBLISH_LIMIT + 20 * 1024 * 1024   # D74: a taken-over Session's branch and its attempt files
 
 
 # What each kind of work is told at the end of its instructions (D46): planning, design and diagnosis are not development.
@@ -252,10 +254,11 @@ class Worker:
     def __init__(self, root, token, gateway_port=5476, crew_home=None, isolation="trusted-local", routing_log=None,
                  crew_url=None, approval_mode="", crew_entry_ttl="8h", kiro_cli=None, path_prepend=(),
                  tool_paths=None, adapters_dir=None, preview_tls_port=0, preview_tls_name="", disabled_tools=("opencode",),
-                 crew_yolo=True):
+                 crew_yolo=True, boundary_id="", kiro_license="", kiro_identity_provider="", kiro_idc_region=""):
         self.root = Path(root).resolve()
         self.disabled_tools = frozenset(disabled_tools)   # reported unavailable, so nothing plans, switches to or runs them
         self.crew_yolo = crew_yolo   # the boundary's standing YOLO: without it a continuation cannot ask for auto approval
+        self.boundary_id = boundary_id   # MVP 0.2.0 (S8): the control plane's name for this boundary, from its configuration
         self.root.mkdir(parents=True, exist_ok=True, mode=0o700)
         self.token, self.port = token, gateway_port
         self._sync_guard, self._sync_locks = threading.Lock(), {}   # D58: one sync at a time per Session
@@ -274,6 +277,12 @@ class Worker:
         # "auto": this unattended boundary asks KiroCrew for native auto approval on platform spawns (D14).
         self.approval_mode = approval_mode
         self.kiro_cli, self._login = kiro_cli, (0.0, None)
+        # MVP 0.2.0 (§6.4): the device-code login run from the console, with the deployment's license and IAM Identity
+        # Center settings (deploy/aws/stack.env's KIRO_*); one at a time, kept in memory
+        self.kiro_login_flags = ([*(["--license", kiro_license] if kiro_license else []),
+                                  *(["--identity-provider", kiro_identity_provider] if kiro_identity_provider else []),
+                                  *(["--region", kiro_idc_region] if kiro_identity_provider and kiro_idc_region else [])])
+        self._device_login = None
         self.tool_paths = {**(tool_paths or {}), **({"kiro_cli": kiro_cli} if kiro_cli else {})}
         self.search = [*([adapters_dir] if adapters_dir else []), *path_prepend]
         from .apps import Apps
@@ -301,7 +310,7 @@ class Worker:
         now = time.monotonic()
         if self._login[1] is not None and now - self._login[0] < 60:
             return self._login[1]
-        binary = self.kiro_cli or shutil.which("kiro-cli") or shutil.which("kiro-cli", path=str(Path.home() / ".local/bin"))
+        binary = self._kiro_binary()
         state = "unknown"
         if binary:
             try:
@@ -317,6 +326,36 @@ class Worker:
                 state = "unknown"
         self._login = (now, state)
         return state
+
+    def _kiro_binary(self):
+        return self.kiro_cli or shutil.which("kiro-cli") or shutil.which("kiro-cli", path=str(Path.home() / ".local/bin"))
+
+    def kiro_login_start(self, body):
+        """Start kiro-cli's device-code login, or report the one in progress (§6.4): {state, url, code, expires} while
+        it waits for the person; done when this boundary is already signed in."""
+        from .kiro_login import DeviceLogin
+        self._login = (0.0, None)   # read the login state afresh
+        if self.tool_auth() == "ok":
+            return {"state": "done"}
+        binary = self._kiro_binary()
+        require(binary, "这个执行环境没有安装 kiro-cli", 409, "kiro_cli_missing")
+        if self._device_login is None or self._device_login.view()["state"] in ("done", "failed", "idle"):
+            self._device_login = DeviceLogin([str(binary), "login", "--use-device-flow", *self.kiro_login_flags],
+                                             on_done=lambda: setattr(self, "_login", (0.0, None)))
+        return self._device_login.start()
+
+    def kiro_login_status(self, body):
+        if self._device_login is not None:
+            state = self._device_login.view()
+            if state["state"] != "idle":
+                return state
+        self._login = (0.0, None)
+        return {"state": "done" if self.tool_auth() == "ok" else "idle"}
+
+    def kiro_login_stop(self, body=None):
+        if self._device_login is not None:
+            self._device_login.stop()
+        return {"ok": True}
 
     def tools(self):
         """Whether each Coding tool can be started on this boundary (D38 §3.1): its configured path, else its command on
@@ -858,9 +897,9 @@ class Worker:
 
     def pull_bundle(self, plan):
         """The bundle file of a pull: the branch since the baseline (a local clone of the repository has it), or its
-        whole history (``full``: a new project, or a clone without the baseline). The caller streams and removes it."""
-        bundle = plan["run"] / ".pull.bundle"
-        bundle.unlink(missing_ok=True)
+        whole history (``full``: a new project, or a clone without the baseline). The caller streams and removes it. Each
+        pull has a file of its own: a takeover (D74) and a person's pull may run at once."""
+        bundle = plan["run"] / f".pull-{secrets.token_hex(6)}.bundle"
         ref = "refs/heads/" + plan["branch"]
         try:
             workspace._git(plan["project"], "bundle", "create", "-q", str(bundle), ref, *([] if plan["full"] else ["^" + plan["base"]]))
@@ -874,6 +913,77 @@ class Worker:
             bundle.unlink(missing_ok=True)
             raise
         return bundle
+
+    def pull_attempts(self, body):
+        """The files of this Session's attempts the next tasks read (D74 takeover): its handoffs, outcomes, decisions,
+        instructions and contexts — not the old Gateway's ids. Read only."""
+        from . import takeover
+        rid = body.get("run_id")
+        require(isinstance(rid, str) and re.fullmatch(r"run-[a-f0-9]{32}", rid), "Run ID 无效")
+        run = self.path(rid)
+        try:   # what the new boundary is to rebuild: the kind, the source and the baseline this Worker prepared
+            record = workspace.read_record(run)
+        except ValueError as exc:
+            raise Error(409, "workspace_missing", workspace.scrub(exc)) from None
+        root, files, total = run / "attempts", {}, 0
+        for attempt in sorted(root.iterdir()) if root.is_dir() and not root.is_symlink() else ():
+            if not takeover.ATTEMPT.fullmatch(attempt.name) or attempt.is_symlink() or not attempt.is_dir():
+                continue
+            for name in takeover.FILES:
+                item = attempt / name
+                if item.is_file() and not item.is_symlink():
+                    text = item.read_text(errors="replace")
+                    total += len(text.encode())
+                    require(total <= takeover.LIMIT, f"尝试记录超过 {takeover.LIMIT // 1048576} MB，无法接手", 413, "attempts_too_large")
+                    files[f"{attempt.name}/{name}"] = text
+        return {"files": files, "project": record}
+
+    def adopt(self, body, data):
+        """A Session taken over to this boundary (D74): its branch from the bundle as the same workspace (the commits,
+        branch and baseline the platform recorded), the attempt files the next tasks read, and a native parent of its
+        own. A workspace this boundary held before (the Session coming back) is kept aside, not overwritten."""
+        from . import takeover
+        self.taking_work()
+        require(len(data) <= ADOPT_LIMIT, f"接手的内容超过 {ADOPT_LIMIT // 1048576} MB", 413, "adopt_too_large")
+        rid = body.get("run_id")
+        require(isinstance(rid, str) and re.fullmatch(r"run-[a-f0-9]{32}", rid), "Run ID 无效")
+        try:
+            bundle, files = takeover.unpack(data)
+        except ValueError as exc:
+            raise Error(409, "adopt_invalid", str(exc)) from None
+        run = self.path(rid)
+        with self.lock:
+            aside = None
+            if run.exists():
+                aside = run.with_name(f"{rid}.before-{int(time.time())}-{secrets.token_hex(3)}")
+                os.replace(run, aside)
+            scratch = run.parent / f".adopt-{rid}-{secrets.token_hex(4)}.bundle"
+            try:
+                run.mkdir()
+                write(run / "workflow-run.json", {"id": rid})
+                scratch.write_bytes(bundle)
+                try:
+                    record = workspace.adopt_project(run, body.get("project"), scratch)
+                except ValueError as exc:
+                    raise Error(409, "adopt_invalid", str(exc)) from None
+                for name, content in files.items():
+                    target = run / "attempts" / name
+                    target.parent.mkdir(parents=True, exist_ok=True)
+                    target.write_bytes(content)
+                project = workspace.project_dir(run)
+                if body.get("knowledge_scope") is not None:
+                    self._mark(project, body["knowledge_scope"])
+                self._seen(run)   # D73: what is untracked now is the platform's to know, not the chat's
+                slot = self._native_parent(rid, run)
+            except BaseException:
+                shutil.rmtree(run, ignore_errors=True)
+                if aside is not None:
+                    os.replace(aside, run)   # nothing was taken over: the boundary keeps what it had
+                raise
+            finally:
+                scratch.unlink(missing_ok=True)
+            handoffs = {name.split("/")[0]: str(run / "attempts" / name) for name in files if name.endswith("/handoff.md")}
+            return {"native_parent": slot, "workspace": str(project), "project": record, "handoffs": handoffs}
 
     def sync(self, body, data):
         """A local fast-forward of the Session's branch, brought in from a bundle (D58 §6). The bundle is untrusted: its
@@ -1147,9 +1257,55 @@ class Worker:
         record_file = self.root / "model-discovery.json"
         return json.loads(record_file.read_text()) if record_file.is_file() else {}
 
+    MEMINFO = Path("/proc/meminfo")
+
+    RUNNING_HORIZON = 86400   # an attempt dispatched longer ago than this without a result was stopped or failed
+
+    def _running_attempts(self, now=None):
+        """Attempts dispatched within RUNNING_HORIZON that have no result yet (stopped or failed ones never get one, so
+        older ones are not counted); read at most every 30 s, the history of every run is not walked on each /health."""
+        now = time.time() if now is None else now
+        cached = getattr(self, "_capacity_cache", None)
+        if cached and now - cached[0] < 30:
+            return cached[1]
+        count = 0
+        for dispatched in self.root.glob("run-*/attempts/attempt-*/dispatch.json"):
+            try:
+                recent = now - dispatched.stat().st_mtime < self.RUNNING_HORIZON
+            except OSError:
+                continue
+            count += recent and not (dispatched.parent / "result-note.json").exists()
+        self._capacity_cache = (now, count)
+        return count
+
+    def capacity(self):
+        """How much room the host has and how much work this boundary runs (MVP 0.2.0, H §6.2), for the control plane to
+        place and scale by; what cannot be read is None — never an error in the health answer."""
+        memory = {}
+        try:
+            for line in self.MEMINFO.read_text().splitlines():
+                key, _, value = line.partition(":")
+                if key in ("MemTotal", "MemAvailable"):
+                    memory[key] = int(value.split()[0]) // 1024
+        except (OSError, ValueError, IndexError):
+            pass
+        try:
+            load1 = round(os.getloadavg()[0], 2)
+        except OSError:
+            load1 = None
+        running = self._running_attempts()
+        try:
+            subagents = json.loads((self.home / "config.json").read_text())["agent"]["max_subagents"]
+            subagents = subagents if isinstance(subagents, int) and not isinstance(subagents, bool) else None
+        except (OSError, ValueError, KeyError, TypeError):
+            subagents = None
+        return {"mem_total_mb": memory.get("MemTotal"), "mem_available_mb": memory.get("MemAvailable"),
+                "cpus": os.cpu_count(), "load1": load1, "running_attempts": running, "max_subagents": subagents}
+
     def health(self):
-        # Descriptive boundary, not cryptographic proof of OS isolation.
-        boundary = f"{socket.gethostname()}:{os.getuid()}:{self.home}"
+        # Descriptive boundary, not cryptographic proof of OS isolation. Given a boundary_id (MVP 0.2.0, S8), the boundary
+        # is the same on any host its volume moves to; without one it is derived from the host, as before.
+        boundary = f"{self.boundary_id}:{os.getuid()}" if self.boundary_id else f"{socket.gethostname()}:{os.getuid()}:{self.home}"
         advertised = self.advertised()
         return {"version": __version__, "isolation": self.isolation, "workflow_design": True,
                 "spawn_approval": "auto" if self.approval_mode == "auto" else "interactive",
@@ -1162,6 +1318,8 @@ class Worker:
                 "steer": True,        # D46 P5b: a running task may be given a note
                 "skills": list(pack.CATALOG),   # D50: the skill pack it carries
                 "boundary": hashlib.sha256(boundary.encode()).hexdigest(),
+                **({"boundary_id": self.boundary_id} if self.boundary_id else {}),
+                "capacity": self.capacity(),   # MVP 0.2.0 (H §6.2)
                 "host_principal": hashlib.sha256(f"{socket.gethostname()}:{os.getuid()}".encode()).hexdigest(),
                 "routing_evidence": bool(self.routing_log and self.routing_log.is_file()),
                 "model_source": "KiroCrew provider_models.json; ACP session/new advertised cache",
@@ -1210,34 +1368,40 @@ class Worker:
                 raise Error(409, "source_failed", str(exc)) from None
             if body.get("knowledge_scope") is not None:
                 self._mark(workspace.project_dir(run), body["knowledge_scope"])
-            slot = "octopus-" + rid
-            parent_file = run / "parent.json"
-            if not parent_file.exists():
-                try:
-                    present = self.native("/api/chat/slots/" + slot)
-                except crew_api.GatewayError as exc:
-                    if exc.status != 404:
-                        raise
-                    present = self.native("/api/chat/slots", {
-                        "name": slot, "agent": "poc-coordinator", "agent_kind": "template", "model": "auto",
-                        # KiroCrew exports only a persistent slot (session_export.py:380), and close / delete need that
-                        # backup; incognito still reads memory, and a mode is only ever tightened. Memory is kept apart
-                        # by giving each person or Team its own Worker (owner, 2026-10-17), not per Session.
-                        "memory_mode": "persistent"})
-                    require(present.get("key", present.get("slot")) == slot, "原生父 Session 身份不一致")
-                self.native("/api/chat/slots/" + slot + "/context", {
-                    "content": OBSERVER_CONTEXT,
-                    "source": "octopus-mvp-1.0.0", "ephemeral": True})
-                write(parent_file, {"slot": slot, "parent": "dashboard:" + slot})
-            if not (run / "parent-note.json").exists():
-                result = self.native("/api/chat/slots/" + slot + "/note", {
-                    "content": f"KiroCrew ON 已建立研发运行 {rid}。源码工作区：{workspace.project_dir(run)}。"
-                               "任务由平台 API 串行调度，进度与交接会回写此对话。",
-                    "source": "octopus-run", "ephemeral": True})
-                require(result.get("ok"), "原生会话记录未确认", 409, "native_unavailable")
-                write(run / "parent-note.json", {"recorded": True})
+            slot = self._native_parent(rid, run)
             return {"native_parent": slot, "workspace": str(workspace.project_dir(run)),
                     "project": workspace.read_record(run)}
+
+    def _native_parent(self, rid, run):
+        """The Session's native parent on this boundary's Gateway — created once, with the observer's context and a note
+        of where its workspace is (prepare, and a takeover's adopt, D74)."""
+        slot = "octopus-" + rid
+        parent_file = run / "parent.json"
+        if not parent_file.exists():
+            try:
+                present = self.native("/api/chat/slots/" + slot)
+            except crew_api.GatewayError as exc:
+                if exc.status != 404:
+                    raise
+                present = self.native("/api/chat/slots", {
+                    "name": slot, "agent": "poc-coordinator", "agent_kind": "template", "model": "auto",
+                    # KiroCrew exports only a persistent slot (session_export.py:380), and close / delete need that
+                    # backup; incognito still reads memory, and a mode is only ever tightened. Memory is kept apart
+                    # by giving each person or Team its own Worker (owner, 2026-10-17), not per Session.
+                    "memory_mode": "persistent"})
+                require(present.get("key", present.get("slot")) == slot, "原生父 Session 身份不一致")
+            self.native("/api/chat/slots/" + slot + "/context", {
+                "content": OBSERVER_CONTEXT,
+                "source": "octopus-mvp-1.0.0", "ephemeral": True})
+            write(parent_file, {"slot": slot, "parent": "dashboard:" + slot})
+        if not (run / "parent-note.json").exists():
+            result = self.native("/api/chat/slots/" + slot + "/note", {
+                "content": f"KiroCrew ON 已建立研发运行 {rid}。源码工作区：{workspace.project_dir(run)}。"
+                           "任务由平台 API 串行调度，进度与交接会回写此对话。",
+                "source": "octopus-run", "ephemeral": True})
+            require(result.get("ok"), "原生会话记录未确认", 409, "native_unavailable")
+            write(run / "parent-note.json", {"recorded": True})
+        return slot
 
     def _repository_knowledge(self, run):
         """The repository's knowledge file, as the cloned baseline holds it (D52 R5): never on a new project, never one an
@@ -1332,7 +1496,7 @@ class Worker:
                 return self.reconcile(run, parent, attempt, value)
             if login == "expired":
                 # Refused before anything is recorded or spawned: the platform dispatches this Attempt again later.
-                raise Error(503, "tool_auth_expired", "Worker 上 kiro-cli 登录已过期：请平台管理员发起 kiro 重新登录")
+                raise Error(503, "tool_auth_expired", "Worker 上 kiro-cli 登录已过期：请执行环境的主人点「登录 Kiro」（「我的设置 › 执行环境」（管理员在「管理 › 执行环境」该行的菜单里））")
             folder.mkdir(parents=True, exist_ok=True)
             handoff = folder / "handoff.md"
             context = {"input": body["input"], "task": spec, "upstream": body.get("upstream", []),
@@ -2012,7 +2176,16 @@ def serve(worker, port=8928, host="127.0.0.1"):
                     finally:
                         bundle.unlink(missing_ok=True)
                     return
-                if self.command == "POST" and self.path == "/sync":   # D58: local commits, as a git bundle
+                if self.command == "POST" and self.path == "/adopt":   # D74: a taken-over Session, as one tar
+                    size = int(self.headers.get("Content-Length", "0"))
+                    require(0 < size <= ADOPT_LIMIT, f"接手的内容须为 1 字节到 {ADOPT_LIMIT // 1048576} MB", 413, "adopt_too_large")
+                    try:
+                        body = json.loads(base64.b64decode(self.headers.get("X-Octopus-Adopt", "")))
+                    except ValueError:
+                        raise Error(400, "invalid_request", "X-Octopus-Adopt 无效") from None
+                    require(isinstance(body, dict), "X-Octopus-Adopt 无效")
+                    result = worker.adopt(body, self.rfile.read(size))
+                elif self.command == "POST" and self.path == "/sync":   # D58: local commits, as a git bundle
                     size = int(self.headers.get("Content-Length", "0"))
                     require(0 < size <= SYNC_LIMIT, f"同步的内容须为 1 字节到 {SYNC_LIMIT // 1048576} MB", 413, "sync_too_large")
                     body = {"run_id": self.headers.get("X-Octopus-Run"), "old": self.headers.get("X-Octopus-Old"),
@@ -2032,7 +2205,8 @@ def serve(worker, port=8928, host="127.0.0.1"):
                                "/verify/status": worker.verify_status, "/approvals": worker.approvals,
                                "/approvals/answer": worker.approvals_answer, "/attempt/stop": worker.attempt_stop,
                                "/knowledge/write": worker.knowledge_write, "/knowledge/forget": worker.knowledge_forget,
-                               "/steer": worker.steer}
+                               "/steer": worker.steer, "/pull/attempts": worker.pull_attempts,
+                               "/kiro/login": worker.kiro_login_start, "/kiro/login/status": worker.kiro_login_status}
                     require(self.path in methods and self.command == "POST", "接口不存在", 404, "not_found")
                     result = methods[self.path](body)
                 status = 200

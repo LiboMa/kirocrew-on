@@ -157,3 +157,38 @@ export function ControlDialog({ run, action }: { run: Run; action: "close" | "re
     </FormDialog>
   );
 }
+
+/** D74 (owner 2026-10-25, 方案一): the one confirmation before a Session moves to the actor's own boundary. */
+export function TakeoverDialog({ run }: { run: Run }) {
+  const { close } = useConsole();
+  const refresh = useRefreshRun();
+  const holder = run.executed_by?.username ?? run.created_by?.username ?? "创建者";
+  // What a chat left in the old workspace is committed before it moves (D73): named here, as the continue dialog does
+  const chat = useQuery({ queryKey: ["chat-changes", run.id], retry: false, staleTime: 0,
+    queryFn: () => api<{ files: string[]; count: number; commits: boolean }>("/runs/" + run.id + "/chat-changes") });
+  return (
+    <FormDialog title="接手到我的执行环境" kicker="TAKE OVER" onClose={close} submitLabel="接手"
+      description={`此会话在 ${holder} 的执行环境上。接手后它搬到你自己的执行环境，由你续作。`}
+      onSubmit={async () => {
+        await command("/runs/" + run.id + "/takeover", { expected_version: run.version });
+        close();
+        await refresh(run.id);
+        toast.success("已开始接手；搬完后即可续作。");
+      }}>
+      <ul className="list-disc space-y-1.5 pl-5 text-sm leading-6" id="takeover-terms">
+        <li>会话分支连同完整历史搬到你的执行环境：提交、任务、修订与时间线不变。</li>
+        <li>之后以你的身份运行：你的系统用户、Kiro 登录与仓库凭证，用量算在你名下。</li>
+        <li>原生 KiroCrew 聊天的上下文不跟过去，从平台记录的最新状态继续。</li>
+        <li>创建者随时可以接回；原执行环境里的工作区保留不删。</li>
+      </ul>
+      {!!chat.data?.count && (
+        <div role="note" aria-label="对话中的改动"
+          className="rounded-lg border border-amber-300 bg-amber-50 px-3 py-2 text-sm text-amber-900 dark:border-amber-700 dark:bg-amber-950/40 dark:text-amber-200">
+          原执行环境里有对话中的改动（{chat.data.count} 个文件：{chat.data.files.slice(0, 5).join("、")}{chat.data.count > 5 ? " 等" : ""}）。
+          接手时会先把它们提交为新的候选，再一起搬过去。
+        </div>
+      )}
+    </FormDialog>
+  );
+}
+

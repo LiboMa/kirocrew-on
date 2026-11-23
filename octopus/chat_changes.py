@@ -27,10 +27,12 @@ def latest(db, rid):
     return None
 
 
-def _settled(service, actor, rid, version=None):
+def _settled(service, actor, rid, version=None, directing=True):
     """The run, its tasks, its Worker's connection and its branch's candidate when the workspace may hold what a chat
-    changed; None when the command would be refused anyway (its own checks then say why) or there is nothing to compare."""
-    from .domain import SETTLED, active_team, directs, run_access, unserved
+    changed; None when the command would be refused anyway (its own checks then say why) or there is nothing to compare.
+    ``directing=False``: only to look — a takeover's dialog (D74) shows it to someone the boundary does not take
+    instructions from."""
+    from .domain import SETTLED, active_team, directs, moving, run_access, unserved
     with service.db.read() as db:
         try:
             run = run_access(db, actor, rid)
@@ -40,7 +42,9 @@ def _settled(service, actor, rid, version=None):
             return None
         # the continue's own checks (operate): one it would refuse never reaches the Worker
         if (version is not None and version != run["version"]) or run["lifecycle"] != "open" or run["status"] not in SETTLED \
-                or not run["worker_id"] or not run["workspace"] or unserved(db, run) or directs(db, actor, run) is not None \
+                or moving(run) \
+                or not run["worker_id"] or not run["workspace"] or unserved(db, run) \
+                or (directing and directs(db, actor, run) is not None) \
                 or json.loads(run["snapshot"]).get("purpose") == "workflow_design":
             return None
         head = latest(db, rid)
@@ -126,7 +130,9 @@ def apply(db, actor, rid, chat):
     candidate, files = chat["candidate"], chat["candidate"].get("files") or 0
     records = [gates.record("native_completed", "skip", "对话中的改动（原生聊天）"),
                gates.record("diff_present", "pass", f"{files} 个文件"), gates.record("no_secrets", "pass")]
-    if chat["rerun"]:
+    if chat.get("unchecked"):   # D74: committed as the Session moved to another boundary
+        records.append(gates.record("checks_pass", "skip", "接手前提交，没有运行检查"))
+    elif chat["rerun"]:
         records.append(gates.record("checks_pass", "skip", "任务将重新执行"))
     elif not chat["commands"]:
         records.append(gates.record("checks_pass", "skip", "任务没有检查命令"))
@@ -157,9 +163,9 @@ def apply(db, actor, rid, chat):
 
 
 def pending(service, actor, rid):
-    """The continue dialog's reminder (owner 2026-10-23: 只提醒、不拦截): the files the workspace holds that the branch's
-    candidate has not, and whether commits were made on it. It only looks; nothing when it cannot say."""
-    state = _settled(service, actor, rid)
+    """The continue and takeover dialogs' reminder (owner 2026-10-23: 只提醒、不拦截): the files the workspace holds that the
+    branch's candidate has not, and whether commits were made on it. It only looks; nothing when it cannot say."""
+    state = _settled(service, actor, rid, directing=False)
     found = _check(state["config"], rid, state["head"]) if state else None
     files = (found or {}).get("files") or []
     return {"files": files[:FILES], "count": len(files), "commits": bool(found and found["commits"])}

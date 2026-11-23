@@ -1,0 +1,31 @@
+<figure>
+<style>
+  .wp-stack { display: grid; gap: 6px; }
+  .wp-row { display: grid; grid-template-columns: 8.5em 1fr; gap: 12px; align-items: stretch; }
+  .wp-row > b { display: flex; flex-direction: column; justify-content: center; font-size: 14px; color: var(--c); line-height: 1.4; }
+  .wp-row > b small { font-weight: 400; color: var(--muted); font-size: 12px; }
+  .wp-cells { display: flex; flex-wrap: wrap; gap: 8px; }
+  .wp-cells span { flex: 1 1 150px; background: var(--card); border: 1px solid var(--line); border-top: 3px solid var(--c);
+                   border-radius: 8px; padding: 8px 11px; font-size: 13.5px; line-height: 1.5; }
+  .wp-link { margin-left: 8.5em; padding-left: 12px; font-size: 12.5px; color: var(--muted); }
+  .wp-link::before { content: "↓ "; color: var(--c, var(--muted)); }
+  @media (max-width: 640px) { .wp-row { grid-template-columns: 1fr; } .wp-link { margin-left: 0; padding-left: 0; } }
+</style>
+<div class="wp-stack" role="img" aria-label="KiroCrew ON 的五层：接入层、调度层、执行层、Agent 层、模型层">
+  <div class="wp-row" style="--c: var(--brand)"><b>接入层<small>你习惯的工具</small></b>
+    <div class="wp-cells"><span>Claude Code · Kiro CLI · Codex …<br>同一份 Skill + MCP（40 个工具）</span><span>Web 控制台（React）</span><span>REST <code>/v1</code> · 命令行 <code>octopus</code></span></div></div>
+  <div class="wp-link">HTTPS · 用户 Token（read / execute / manage / admin）</div>
+  <div class="wp-row" style="--c: var(--brand)"><b>调度层<small>KiroCrew ON 平台</small></b>
+    <div class="wp-cells"><span>身份与权限 · 个人 / Team 空间</span><span>会话状态机 · 版本 · 修订 · 审计</span><span>工作流库 · 质量判定 · 自动纠错</span><span>排队 · 并发上限 · 用量</span></div></div>
+  <div class="wp-link">Worker Token · 单向驱动（平台 → Worker）</div>
+  <div class="wp-row" style="--c: var(--native)"><b>执行层<small>执行边界</small></b>
+    <div class="wp-cells"><span>Worker：准备源码、派发、收集证据、预览</span><span>每人一个边界：独立 OS 用户、HOME、Gateway</span><span>Team 专属主机：私网 TLS，平台私有 CA</span></div></div>
+  <div class="wp-link">回环 · 本边界 <code>.local_secret</code> 换短期原生 token</div>
+  <div class="wp-row" style="--c: var(--native)"><b>Agent 层<small>KiroCrew 原生</small></b>
+    <div class="wp-cells"><span>协调者 <code>poc-coordinator</code>（原生父会话）</span><span>子 Agent：Kiro · Claude Code · Codex</span><span>诊断 <code>poc-diagnose</code>（不能再派生）</span></div></div>
+  <div class="wp-link">各工具的原生配置</div>
+  <div class="wp-row" style="--c: var(--poc)"><b>模型层<small>可替换</small></b>
+    <div class="wp-cells"><span>Amazon Bedrock（Claude Code、Codex 经实例角色）</span><span>Kiro（kiro-cli 设备码登录，Kiro Credit 按人计）</span></div></div>
+</div>
+<figcaption>平台不运行 Agent、不绑定模型；KiroCrew 从不调用平台。用户、Team 与权限的规则全部落在调度层。</figcaption>
+</figure>

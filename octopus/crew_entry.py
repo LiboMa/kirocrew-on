@@ -3,7 +3,7 @@ import json
 from urllib.parse import parse_qs, urlsplit
 
 from . import journal, sources
-from .domain import audit, run_access
+from .domain import audit, executor_of, run_access
 from .security import Error, elevated, require
 from .transport import worker_request, worker_token
 
@@ -77,8 +77,11 @@ def observe(service, actor, rid, before=None, limit=50):
 
 def create(service, actor, rid):
     with service.db.read() as db:
+        row = db.execute("SELECT owner_id, executor_id FROM runs WHERE id=?", (rid,)).fetchone()
+        mine = row is not None and executor_of(row) == actor["id"]
         try:
-            run = run_access(db, actor, rid, admin=False, shares=False)   # D64: never through a share (K03)
+            # D64: never through a share (K03) — unless the actor took the Session over and it runs on their boundary (D74)
+            run = run_access(db, actor, rid, admin=False, shares=mine)
         except Error as exc:
             # An admin can see the Session through oversight, but the native login would cover its whole Gateway.
             if exc.status == 404 and elevated(actor) and db.execute("SELECT 1 FROM runs WHERE id=?", (rid,)).fetchone():

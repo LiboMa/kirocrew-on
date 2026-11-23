@@ -179,6 +179,29 @@ class SyncRouteTests(AccessCase):
         self.assertEqual((status, body["head"]), (200, NEW))
         self.assertEqual(upload.call_args.args[2], b"\\x00bundle-bytes")
 
+    def test_an_unauthenticated_sync_is_refused_before_its_body_is_read(self):   # D58 final review: 20 MB before auth
+        import socket
+        with self.http() as call:
+            host, port = call.base.removeprefix("http://").split(":")
+            with socket.create_connection((host, int(port)), timeout=5) as conn:
+                conn.sendall(f"POST /v1/runs/{self.rid}/sync?request_id=sync-noauth-01&expected_version=1&head={NEW}&old={OLD} HTTP/1.1\r\n"
+                             f"Host: 127.0.0.1:{port}\r\nContent-Type: application/octet-stream\r\nContent-Length: 1048576\r\n\r\n".encode())
+                answer = conn.recv(4096).decode(errors="replace")   # no body sent: a server reading it first would wait
+        self.assertTrue(answer.startswith("HTTP/1.0 401") or answer.startswith("HTTP/1.1 401"), answer[:80])
+
+    def test_a_sync_that_brings_nothing_is_refused(self):
+        version = self.service.run(self.b, self.rid)["version"]
+        with mock.patch.object(sync, "worker_upload") as upload:
+            with self.assertRaises(Error) as caught:
+                self.service.sync(self.b, self.rid, b"bundle", OLD, "sync-nothing-01", version, old=OLD)
+        self.assertEqual(caught.exception.code, "nothing_to_sync")
+        upload.assert_not_called()
+
+    def test_pulling_needs_only_read(self):   # D64: a viewer pulls; a read-only token may too
+        from octopus.server import required_scope
+        self.assertEqual(required_scope("POST", f"/v1/runs/{self.rid}/bundle"), "read")
+        self.assertEqual(required_scope("POST", f"/v1/runs/{self.rid}/sync"), "execute")
+
     def test_an_administrator_syncing_someone_elses_session_is_audited(self):   # A2, as for a continue (final review)
         with self.db.transaction() as db:
             # a shared environment serving bob, not his own boundary (D49 R10 leaves it to whoever may operate)

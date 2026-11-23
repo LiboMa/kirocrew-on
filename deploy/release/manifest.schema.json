@@ -1,0 +1,30 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "KiroCrew ON release manifest (MVP 0.2.0, S1)",
+  "description": "What a release is and what it was tested with; tools/build_release.py writes it. install.sh checks manifest.sig first (an unsigned release is refused), then the wheel against it.",
+  "type": "object",
+  "required": ["version", "channel", "wheel", "pins"],
+  "additionalProperties": false,
+  "properties": {
+    "version": {"type": "string"},
+    "channel": {"enum": ["preview", "stable"]},
+    "wheel": {"type": "object", "required": ["name", "sha256"], "additionalProperties": false,
+              "properties": {"name": {"type": "string"}, "sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"}}},
+    "pins": {
+      "type": "object",
+      "required": ["kirocrew", "node", "kiro_cli", "claude_code", "codex"],
+      "properties": {
+        "kirocrew": {"type": "object", "required": ["version"],
+                     "properties": {"source": {"enum": ["git", "wheel"]}, "git_ref": {"type": "string"}, "wheel_sha256": {"type": "string"}, "version": {"type": "string"}}},
+        "node": {"type": "object", "required": ["version", "sha256"],
+                 "properties": {"version": {"type": "string"},
+                                "sha256": {"type": "object", "required": ["x64", "arm64"],
+                                           "properties": {"x64": {"type": "string"}, "arm64": {"type": "string"}}}}},
+        "kiro_cli": {"type": "string", "description": "a version, or latest (the official manifest's, sha256-checked at install)"},
+        "claude_code": {"type": "string"},
+        "codex": {"type": "string"},
+        "opencode": {"type": "string"}
+      }
+    }
+  }
+}

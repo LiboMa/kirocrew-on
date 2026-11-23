@@ -9,15 +9,26 @@ const resumable = (run: Run) => run.permissions?.resume !== false;
 const directed = (run: Run) => run.permissions?.direct !== false;
 /** D64: a viewer (a share) reads the Session and operates nothing. */
 const operable = (run: Run) => run.permissions?.operate !== false;
+/** D74: while a takeover moves it, nothing else runs it. */
+export const moving = (run: Run) => run.takeover?.state === "moving";
 
-/** Why continuing, diagnosing, confirming, notes and approvals are not offered: another member's boundary (D49 R10). */
+/** Why continuing, diagnosing, confirming, notes and approvals are not offered: another member's boundary (D49 R10),
+ * and what one may do about it — take it over to one's own (D74). */
 export function directReason(run: Run): string {
-  return directed(run) ? "" : run.permissions?.direct_reason ?? "只有执行边界的主人能在上面下达指令。";
+  if (directed(run)) return "";
+  const reason = run.permissions?.direct_reason ?? "只有执行边界的主人能在上面下达指令。";
+  return canTakeOver(run) ? reason + "你可以把它接手到自己的执行环境后续作。" : reason;
 }
 
 
 export function canContinue(run: Run): boolean {
-  return !ACTIVE_STATES.has(run.status) && open(run) && !design(run) && resumable(run) && directed(run) && operable(run);
+  return !ACTIVE_STATES.has(run.status) && open(run) && !design(run) && resumable(run) && directed(run) && operable(run)
+    && !moving(run);
+}
+
+/** D74: a Session on someone else's own boundary, offered to take over to one's own (the server decides who may). */
+export function canTakeOver(run: Run): boolean {
+  return run.permissions?.takeover === true && !moving(run);
 }
 
 /** D46 P3: not passing what the Evaluator left to a person reworks the change it reviewed, with the open items in hand. */
@@ -62,12 +73,13 @@ export function canRetryTask(run: Run, index: number): boolean {
 
 export function canRecover(run: Run): boolean {
   return !design(run) && !ACTIVE_STATES.has(run.status) && open(run) && resumable(run) && directed(run) && operable(run) &&
+    !moving(run) &&
     ["blocked", "failed", "stopped"].includes(run.status) && !!run.native_parent &&
     run.tasks.some((task) => task.status !== "accepted" && (task.attempts?.length ?? 0) > 0);
 }
 
 export function canStop(run: Run): boolean {
-  return open(run) && run.status !== "stopped" && run.status !== "stopping" && operable(run);
+  return open(run) && run.status !== "stopped" && run.status !== "stopping" && operable(run) && !moving(run);
 }
 
 export function closeAction(run: Run): { action: "close" | "reopen"; label: string; disabled: boolean } {

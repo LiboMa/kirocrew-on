@@ -83,6 +83,73 @@ export interface Worker {
   capabilities: WorkerCapabilities;
 }
 
+/** GET /v1/workers/enrollments (administrators, N §5): a one-time Worker enrollment code, without the code. */
+/** 「新建边界」 on this host (MVP 0.2.0 P2, S30): a request the root service takes, and what it recorded. */
+export interface Provision {
+  id: string;
+  name: string;
+  owner: string;
+  state: "queued" | "running" | "done" | "failed";
+  exit?: number | null;
+  error?: string | null;
+  started: number | null;
+  finished?: number | null;
+  log: string[];
+  next?: string;
+}
+
+export interface Provisions {
+  available: boolean;
+  items: Provision[];
+}
+
+/** An AWS change the deployment kit (kirocrew-on single) is to make off the host (MVP 0.2.0 P2, S29). */
+export interface AwsRequest {
+  id: string;
+  kind: "native" | "backup" | "up";
+  params: Record<string, string>;
+  state: "pending" | "done" | "failed";
+  created: number;
+  finished: number | null;
+  result: Record<string, string | number> | null;
+  command: string;
+}
+
+/** install.sh's check of the host role (MVP 0.2.0 P2, S29), as 管理 › 部署 shows it. */
+export interface HostRole {
+  state: "ok" | "writes" | "unchecked" | "none";
+  role: string;
+  allowed: string[];
+  commands: string[];
+  checked: number;
+}
+
+export interface Enrollment {
+  id: string;
+  name: string;
+  binding_kind: "user" | "team" | "spare";
+  binding_id: string | null;
+  created_by: string;
+  created: number;
+  expires: number;
+  used: number | null;
+  used_by_worker: string | null;
+  failures: number;
+  revoked: number | null;
+  state: "unused" | "used" | "revoked" | "retired" | "expired";
+}
+
+/** POST /v1/workers/enrollments: the code and the command to run on the Worker host, returned only this once. */
+export interface IssuedEnrollment {
+  id: string;
+  code: string;
+  expires: number;
+  name: string;
+  binding_kind: Enrollment["binding_kind"];
+  binding_id: string | null;
+  command: string;
+}
+
 /** GET /v1/admin/environments (administrators, D28): one execution environment with its bindings, load and live health. */
 export interface Environment {
   id: string;
@@ -282,7 +349,7 @@ export interface KnowledgeItem {
 }
 
 /** D49: where a new Session would run, or where a Session may move (GET /v1/placement). */
-export type PlacementKind = "own" | "team" | "only" | "requested";
+export type PlacementKind = "own" | "team" | "only" | "requested" | "taken_over";
 
 /** D56: one page of GET /v1/runs?page=1 — the matching Sessions after the cursor, the next cursor and how many match. */
 export interface RunPage {
@@ -343,12 +410,26 @@ export interface KnowledgeProposal {
   reason?: string;
 }
 
+/** D75: a public link of a Session — its pages or its running demo, with a four-digit code or open. */
+export interface PublicShare {
+  id: string; run_id: string; token: string; kind: "pages" | "app"; mode: "code" | "open"; code: string | null;
+  entry: string | null; url: string | null; created: number; created_by: string; expires: number | null;
+  views: number; last_viewed: number | null; locked_until: number | null;
+  /** Wrong codes reached the limit: the code no longer opens it until a new one is made. */
+  code_retired?: boolean;
+}
+
 export interface Run {
   /** D55: the submission this Session came from; none for a Session from before. */
   request?: { id: string; client: RequestClient } | null;
   admission_basis?: AdmissionBasis | null;
   /** D49: where it runs and, on a Team's environment for want of one's own boundary, why. */
-  placement?: { kind: PlacementKind; hint?: string } | null;
+  placement?: { kind: PlacementKind; hint?: string; from?: string; by?: string; by_name?: string } | null;
+  /** D74: a takeover being carried out (moving) or one that did not happen (failed), with why. */
+  takeover?: { state: "moving" | "failed"; to: string; from: string; by: string; by_name: string; requested_at: number;
+    reason?: string; code?: string } | null;
+  /** D74: the person it runs as when not its creator (taken over). */
+  executed_by?: { id: string; username?: string | null };
   /** D46 P6a: what the Session's Attempts used in total. */
   usage?: import("@/lib/usage").Usage | null;
   /** D46 P4: this Session's 「本次沉淀的知识」, and why a shared environment gathers none. */
@@ -407,7 +488,9 @@ export interface Run {
     /** D49 R10: whether the actor may continue, diagnose, confirm, add a note or answer an approval, and why not. */
     direct?: boolean; direct_reason?: string;
     /** D64: who may share it (its creator, a Team owner, an admin) and move it to another environment (never a share). */
-    share?: boolean; assign?: boolean };
+    share?: boolean; assign?: boolean;
+    /** D74: whether the actor may take it over to their own boundary, and why not. */
+    takeover?: boolean; takeover_reason?: string | null };
   /** D64: how the user reaches it — their own, their Team's, a share (viewer / collaborator) or an admin's oversight. */
   access?: { via: "owner" | "team" | "share" | "admin"; role?: string; by?: string | null };
   /** KiroCrew Agent planning: intent recognition, requirement enrichment and the generated tasks. */

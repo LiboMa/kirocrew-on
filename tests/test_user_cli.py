@@ -53,6 +53,21 @@ def run(args, api, cwd):
     return out.getvalue()
 
 
+class ReportAndHelpTests(unittest.TestCase):   # D58 final review: report --json printed text; octopus -h hid these commands
+    def test_report_as_json_carries_the_report(self):
+        with tempfile.TemporaryDirectory() as cwd:
+            out = run(["report", "--run", RID, "--json"], Api(), cwd)
+        self.assertEqual(json.loads(out), {"run_id": RID, "format": "md", "report": "# 报告\n"})
+
+    def test_the_top_level_help_names_the_users_commands(self):
+        from octopus import __main__ as entry
+        out = io.StringIO()
+        with redirect_stdout(out), self.assertRaises(SystemExit):
+            entry.main(["-h"])
+        for name in ("login", "submit", "status", "pull", "sync"):
+            self.assertIn(name, out.getvalue())
+
+
 class LoginTests(unittest.TestCase):
     def test_login_keeps_a_cli_token_only_for_its_owner(self):
         with tempfile.TemporaryDirectory() as home:
@@ -65,6 +80,31 @@ class LoginTests(unittest.TestCase):
             issued = next(c for c in api.calls if c[1] == "/v1/tokens")
             self.assertEqual(issued[2]["label"], "octopus CLI")
             self.assertIn(("DELETE", "/v1/tokens/token-login", None), [c[:3] for c in api.calls])   # the login token is not kept
+
+    def test_the_token_never_sits_in_a_file_others_may_read(self):   # D58 final review: written, then chmod
+        with tempfile.TemporaryDirectory() as home:
+            saved = Path(home) / ".config/kirocrew-on/cli.json"
+            saved.parent.mkdir(parents=True)
+            saved.write_text("{}")
+            saved.chmod(0o644)   # an earlier file, readable by others
+            modes, dump = [], json.dump
+            def watched(value, file, **kwargs):
+                modes.append(stat.S_IMODE(saved.stat().st_mode))
+                return dump(value, file, **kwargs)
+            with mock.patch.object(cli, "Client", return_value=Api()), mock.patch.object(cli.json, "dump", watched):
+                cli.login("https://k.example", "bob", "Fixture-password-123!", Path(home))
+            self.assertEqual(modes, [0o600])
+
+    def test_a_login_token_that_cannot_be_revoked_still_leaves_the_cli_token_saved(self):
+        class Refusing(Api):
+            def request(self, method, path, body=None, timeout=40):
+                if method == "DELETE":
+                    raise OSError("network down")
+                return super().request(method, path, body, timeout)
+        with tempfile.TemporaryDirectory() as home:
+            with mock.patch.object(cli, "Client", return_value=Refusing()):
+                cli.login("https://k.example", "bob", "Fixture-password-123!", Path(home))
+            self.assertEqual(json.loads((Path(home) / ".config/kirocrew-on/cli.json").read_text())["token"], "oct_cli")
 
     def test_a_saved_token_goes_only_to_its_platform(self):   # final review: --url sent it anywhere
         with tempfile.TemporaryDirectory() as home:

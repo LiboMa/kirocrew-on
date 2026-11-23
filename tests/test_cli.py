@@ -70,6 +70,28 @@ class BackupCommandTests(unittest.TestCase):
                       str(root / "backups" / (Path(manifest["file"]).stem + ".json")), "--into", str(root / "restore")])
             self.assertTrue(json.loads(out.getvalue())["ok"])
 
+    def test_a_restored_copy_is_checked_the_same_way(self):
+        # MVP 0.2.0 (P §5.2): after `litestream restore -o <file>`, that file is backed up and verified like the live one
+        import contextlib
+        import io
+        import json
+        import shutil
+        from octopus.__main__ import main
+        from octopus.db import Database
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            config = root / "c.toml"
+            config.write_text(f'data_dir = "{root}/platform"\n')
+            Database(root / "elsewhere")
+            restored = root / "restored.sqlite3"
+            shutil.copy2(root / "elsewhere" / "octopus.sqlite3", restored)
+            out = io.StringIO()
+            with contextlib.redirect_stdout(out):
+                main(["--config", str(config), "backup", "--source", str(restored), "--dest", str(root / "check")])
+            manifest = json.loads(out.getvalue())
+            self.assertEqual((manifest["integrity"], manifest["source"]), ("ok", str(restored)))
+            self.assertFalse((root / "platform").exists())   # the live database is not touched
+
 
 if __name__ == "__main__":
     unittest.main()

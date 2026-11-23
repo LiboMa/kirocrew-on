@@ -142,6 +142,12 @@ TOOLS = [
     {"name": "octopus_recover", "description": "在原 Session 和 Workspace 启动 KiroCrew Coordinator 诊断，按实际失败证据重试、退回上游返工并复审；只在缺少仓库凭证或需求信息时停下说明。异步执行，以状态与纠错记录确认结果。",
      "inputSchema": object_schema({"run_id": STRING, "request_id": STRING, "expected_version": {"type": "integer"}},
                                  ["run_id", "request_id", "expected_version"])},
+    {"name": "octopus_takeover", "description": "把跑在别人个人执行环境上的会话接手到用户自己的执行环境（D74）：同一个会话连同提交历史"
+                                                "搬过去，之后以用户自己的身份、凭证和用量运行；原生聊天的上下文不跟过去，创建者可以接回。"
+                                                "只在 octopus_status 的 permissions.takeover 为真时使用，调用前先征得用户同意。"
+                                                "异步：返回 takeover.state=moving，用 octopus_status 等它消失（成功）或变为 failed（看 reason）。",
+     "inputSchema": object_schema({"run_id": STRING, "request_id": STRING, "expected_version": {"type": "integer"}},
+                                 ["run_id", "request_id", "expected_version"])},
     {"name": "octopus_control", "description": "停止、关闭、重新打开 Session；删除要求完整 Session ID 确认，并先备份。",
      "inputSchema": object_schema({"run_id": STRING, "request_id": STRING, "expected_version": {"type": "integer"},
                                   "action": {"enum": ["stop", "close", "reopen", "delete"]}, "confirmation": STRING},
@@ -227,9 +233,10 @@ TOOLS += [
      "inputSchema": object_schema({"run_id": STRING, "action": {"type": "string", "enum": ["start", "status", "open", "stop"]}},
                                   ["run_id", "action"])},
     {"name": "octopus_admin_users",
-     "description": "平台管理员（需含 admin 的 Token）：列出用户，或按用户名停用 / 恢复、设为 / 取消管理员。"
-                    "不创建用户、不设置密码（请在控制台「用户管理」操作）；停用会立即吊销该用户的全部 Token。",
-     "inputSchema": object_schema({"action": {"type": "string", "enum": ["list", "deactivate", "activate", "promote", "demote"]},
+     "description": "平台管理员（需含 admin 的 Token）：列出用户，或按用户名停用、取消管理员。"
+                    "新建用户、设置密码、设为管理员、恢复已停用的账号只能在控制台登录后操作（「管理 › 用户」）；"
+                    "停用会立即吊销该用户的全部 Token。",
+     "inputSchema": object_schema({"action": {"type": "string", "enum": ["list", "deactivate", "demote"]},
                                    "username": STRING}, ["action"]), "annotations": {"destructiveHint": True}},
     {"name": "octopus_admin_teams",
      "description": "平台管理员（需含 admin 的 Token）：列出、创建（name、owner 用户名、worker_id）、改名、归档 / 恢复 Team，"
@@ -331,15 +338,16 @@ def need(args, *keys):
         raise ValueError("缺少参数：" + "、".join(missing))
 
 
-USER_ACTIONS = {"deactivate": ("active", {"active": False}), "activate": ("active", {"active": True}),
-                "promote": ("admin", {"admin": True}), "demote": ("admin", {"admin": False})}
+# What takes access away only: granting it (activate, promote) needs a console login (peer review 2026-10-27)
+USER_ACTIONS = {"deactivate": ("active", {"active": False}), "demote": ("admin", {"admin": False})}
 
 
 def admin_users(client, args):
-    """List users, or deactivate / restore / promote / demote one by username (never create users or set passwords, B7)."""
+    """List users, or deactivate / demote one by username (never create, set passwords, promote or restore: B7, peer
+    review 2026-10-27)."""
     action = args.get("action")
     if action != "list" and action not in USER_ACTIONS:
-        raise ValueError("不支持的用户操作（list / deactivate / activate / promote / demote）")
+        raise ValueError("不支持的用户操作（list / deactivate / demote）；设为管理员、恢复账号请在控制台登录后操作")
     users = client.request("GET", "/v1/admin/users")
     if action == "list":
         return {"users": users}
@@ -405,7 +413,8 @@ def admin_environments(client, args):
 SESSION_FIELDS = ("id", "name", "status", "desired", "lifecycle", "version", "error", "attention", "progress", "input",
                   "planning", "team_id", "worker_id", "workflow_name", "match_mode", "created", "updated", "kept", "verified",
                   "request",   # D55: the submission it came from (admission is gone, D70)
-                  "access")   # D64: the user's own, their Team's, a share (viewer / collaborator) or an admin's oversight
+                  "access",   # D64: the user's own, their Team's, a share (viewer / collaborator) or an admin's oversight
+                  "executed_by", "takeover")   # D74: who runs it when not its creator; a takeover moving or failed
 
 
 def compact_status(session, events):
@@ -454,6 +463,9 @@ def compact_status(session, events):
     for key in ("publish_policy", "publish_auto", "publish_target", "publish_suggestion"):   # D47, D48
         if session.get(key):
             view[key] = session[key]
+    if session.get("permissions"):   # D49 R10 / D74: whether the user may direct it here, or take it over to their own
+        view["permissions"] = {k: session["permissions"].get(k) for k in ("direct", "direct_reason", "takeover", "takeover_reason")
+                               if k in session["permissions"]}
     if session.get("placement"):   # D49: where it runs and, on a Team's environment for want of one's own boundary, why
         view["placement"] = session["placement"]
     if session.get("usage"):   # D46 P6a: what its Attempts used
@@ -669,6 +681,9 @@ def call(client, name, args):
     if name == "octopus_publish_policy":   # D47
         return client.request("POST", "/v1/runs/" + quote(args["run_id"], safe="") + "/publish-policy",
                               {k: args[k] for k in ("auto", "repository", "credential") if k in args})
+    if name == "octopus_takeover":   # D74
+        return client.request("POST", "/v1/runs/" + quote(args["run_id"], safe="") + "/takeover",
+                              {"request_id": args["request_id"], "expected_version": args["expected_version"]})
     if name in {"octopus_continue", "octopus_recover", "octopus_control"}:
         rid = args.pop("run_id")
         if name == "octopus_continue" and "credentials" in args:

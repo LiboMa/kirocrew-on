@@ -30,7 +30,8 @@ def limits(db, owner_id, team_id):
 
 def usage(db, *, owner_id=None, team_id=None):
     """Running tasks of a person (every Session they submitted, a Team's too) or of a Team."""
-    column, value = ("r.owner_id", owner_id) if owner_id else ("r.team_id", team_id)
+    # D74: a person's tasks are those they run — their own Sessions and those they took over
+    column, value = ("COALESCE(r.executor_id, r.owner_id)", owner_id) if owner_id else ("r.team_id", team_id)
     where = (f"{column}=? AND r.desired='active' AND r.lifecycle='open' AND r.status NOT IN ({','.join('?' * len(SETTLED))})"
              f" AND x.status IN ({','.join('?' * len(RUNNING))})")
     params = (value, *SETTLED, *RUNNING)
@@ -43,8 +44,9 @@ def usage(db, *, owner_id=None, team_id=None):
 
 def full(db, run):
     """The first scope that has no room for one more task of ``run`` — the person's, then the Team's — or None."""
-    limit = limits(db, run["owner_id"], run["team_id"])
-    if limit["user"] is not None and (used := usage(db, owner_id=run["owner_id"])) >= limit["user"]:
+    person = run["executor_id"] or run["owner_id"] if "executor_id" in run.keys() else run["owner_id"]   # D74
+    limit = limits(db, person, run["team_id"])
+    if limit["user"] is not None and (used := usage(db, owner_id=person)) >= limit["user"]:
         return {"scope": "user", "limit": limit["user"], "used": used}
     if limit["team"] is not None and (used := usage(db, team_id=run["team_id"])) >= limit["team"]:
         team = db.execute("SELECT name FROM teams WHERE id=?", (run["team_id"],)).fetchone()
@@ -63,7 +65,9 @@ def ahead(db, run, since, now):
     """Another Session of the same person or Team waited longer than ``since``, is still waiting and has room now: it goes
     first (the Engine advances Sessions on several threads, in no order of their waits)."""
     for other in db.execute("SELECT * FROM runs WHERE id!=? AND status='ready' AND desired='active' AND lifecycle='open' "
-                            "AND (owner_id=? OR team_id=?)", (run["id"], run["owner_id"], run["team_id"] or "")):
+                            "AND (COALESCE(executor_id, owner_id)=? OR team_id=?)",
+                            (run["id"], run["executor_id"] or run["owner_id"] if "executor_id" in run.keys() else run["owner_id"],
+                             run["team_id"] or "")):
         mark = waiting(json.loads(other["snapshot"]), other)
         if mark and mark["since"] < since and now - mark.get("seen", 0) <= SEEN and full(db, other) is None:
             return True

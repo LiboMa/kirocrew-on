@@ -130,14 +130,16 @@ def bound_usable(db, row, run):
     one for that Team's Sessions; a platform one while it is granted to the Session's Team or creator."""
     if row is None or row["disabled"]:
         return False
+    # D74: the person the Session runs as — its creator, unless taken over; a personal token never follows it to another
+    person = (run["executor_id"] if "executor_id" in run.keys() else None) or run["owner_id"]
     if row["scope"] == "user":
         owner = db.execute("SELECT active FROM users WHERE id=?", (row["owner_id"],)).fetchone()
-        if owner is None or not owner["active"]:
+        if owner is None or not owner["active"] or (person != run["owner_id"] and row["owner_id"] != person):
             return False
-        return _member_role(db, row["owner_id"], run["team_id"]) is not None if run["team_id"] else row["owner_id"] == run["owner_id"]
+        return _member_role(db, row["owner_id"], run["team_id"]) is not None if run["team_id"] else True
     if row["scope"] == "team":
         return row["owner_id"] == run["team_id"]
-    return any((g["team_id"] and g["team_id"] == run["team_id"]) or (g["user_id"] and g["user_id"] == run["owner_id"])
+    return any((g["team_id"] and g["team_id"] == run["team_id"]) or (g["user_id"] and g["user_id"] == person)
                for g in db.execute("SELECT team_id,user_id FROM credential_grants WHERE credential_id=?", (row["id"],)))
 
 
@@ -318,7 +320,7 @@ class CredentialStore:
     def material(self, run):
         """The bound credential, opened at the moment of a clone (spec §5.1): ``git_auth`` for the Worker, or None
         without a binding. A disabled, deleted or no longer matching credential is refused; each use is audited, with
-        the Session's creator as the one on whose behalf it is used."""
+        the person the Session runs as (its creator unless taken over, D74) as the one on whose behalf it is used."""
         from .domain import audit
         pinned = json.loads(run["snapshot"]).get("credentials") or {}
         bound = pinned.get("source")
@@ -341,7 +343,8 @@ class CredentialStore:
         secret = self.secret(row["id"])
         with self.db.transaction() as db:
             db.execute("UPDATE credentials SET last_used=? WHERE id=?", (time.time(), row["id"]))
-            audit(db, {"id": run["owner_id"]}, "credential.use", "credential", row["id"],
+            audit(db, {"id": (run["executor_id"] if "executor_id" in run.keys() else None) or run["owner_id"]},
+                  "credential.use", "credential", row["id"],
                   {"run_id": run["id"], "repo": path, "access": "read"})
         return {"kind": row["kind"], "host": row["host"], "username": username(row["kind"]), "secret": secret}
 

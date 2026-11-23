@@ -1,0 +1,11 @@
+.git
+.venv
+.worktrees
+.superpowers
+node_modules
+web/node_modules
+octopus/ui/dist
+deploy/aws/stack.env
+remote-kiro-spaces
+dist
+**/__pycache__

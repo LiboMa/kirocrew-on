@@ -59,6 +59,15 @@ class LocalRemoteWorkerTests(unittest.TestCase):
         self.assertEqual(plan["head"], self.head)
         self.assertIn(self.head, git(self.project, "bundle", "list-heads", str(bundle)))
 
+    def test_two_pulls_at_once_do_not_share_a_file(self):
+        # A takeover (D74) and a person's octopus pull may bring the branch back at the same time
+        _, first = self.pull()
+        _, second = self.pull()
+        self.assertNotEqual(first, second)
+        for bundle in (first, second):
+            self.assertIn(self.head, git(self.project, "bundle", "list-heads", str(bundle)))
+            bundle.unlink()
+
     def test_a_branch_with_a_secret_is_not_pulled(self):
         (self.project / ".env").write_text("SECRET=1\n")
         git(self.project, "add", "-f", ".env")
