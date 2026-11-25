@@ -535,6 +535,13 @@
           "more": "待负责人审阅。合并 kirocrew-octopus 的白皮书（2026-11-19：使用流程与 24 张截图、场景、run-44dc 案例、140 个会话的运行数据、快速上手）与设计原则、恢复阶梯、协作与安全模型、集群版、各章「解读」与第 18 章整体解读；按 2026-11-20 的代码订正"
         },
         {
+          "id": "promo-video",
+          "name": "宣传片（根据白皮书，约 105 秒）",
+          "status": "local",
+          "ref": "docs/whitepaper/video/",
+          "more": "待负责人审看。主线是「一夜」：时钟从 18:40 走到次日 09:30，用 run-44dc 的真实修订时间线；1080p30，Tingting 中文配音，字幕画在画面里，附 SRT；script.json 是唯一脚本，render.mjs 逐帧渲染（macOS say、Chrome、ffmpeg）"
+        },
+        {
           "id": "v020-p2-acceptance",
           "name": "P2 验收：4 台新 EC2 各装一次（第 9 项）",
           "status": "blocked",
