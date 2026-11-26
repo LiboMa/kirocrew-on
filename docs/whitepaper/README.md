@@ -9,6 +9,7 @@
 | `KiroCrew-ON-白皮书.pdf` | PDF 版，由 `index.html` 打印生成 |
 | `img/` | 截图（WebP），来自线上实例 https://kirocrew-on.tinyboat.blog，2026-11-17 与 11-19 截取 |
 | `figures/` | 网页版的架构图、会话流程图与集群版示意图（Markdown 版用 mermaid） |
+| `video/` | 根据白皮书做的宣传片（约 105 秒，中文配音与字幕）及其脚本与渲染工具，见 [`video/README.md`](video/README.md) |
 
 ## 重新生成
 

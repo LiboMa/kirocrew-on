@@ -1,0 +1,432 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<title>KiroCrew ON 宣传片</title>
+<!-- 宣传片的画面：每个场景的 CSS 动画都暂停，由 seek(t) 定位到第 t 秒，render.mjs 逐帧截图。时间线（各场景的开始、时长、时钟与字幕）由 render.mjs 按配音时长算好后经 init() 传入。 -->
+<style>
+  :root {
+    --teal: #14B8A6; --teal-deep: #0F7D6D; --teal-pale: #5EEAD4; --slate: #334155;
+    --amber: #C9891A; --red: #C2412D; --paper: #F7F9FA;
+    --fg: #EEF2F8; --fg2: rgba(238, 242, 248, .62); --line: rgba(238, 242, 248, .22); --sky-mid: #1A2550;
+    --serif: "Songti SC", "STSong", "Noto Serif CJK SC", serif;
+    --sans: "PingFang SC", "Hiragino Sans GB", "Noto Sans CJK SC", sans-serif;
+    --mono: "SF Mono", Menlo, monospace;
+  }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  html, body { width: 1920px; height: 1080px; overflow: hidden; background: #000; }
+  #stage { position: relative; width: 1920px; height: 1080px; overflow: hidden; font-family: var(--sans); color: var(--fg); }
+  #sky, #stars { position: absolute; inset: 0; }
+  #stars i { position: absolute; width: 3px; height: 3px; border-radius: 50%; background: #fff; }
+
+  /* the one memorable thing: the night passing, top right */
+  #clock { position: absolute; top: 46px; right: 72px; text-align: right; font-family: var(--serif); font-variant-numeric: tabular-nums; }
+  #clock .day { font-family: var(--sans); font-size: 26px; color: var(--fg2); margin-right: 14px; vertical-align: 14px; }
+  #clock .time { font-size: 76px; letter-spacing: .02em; }
+  #brand { position: absolute; top: 58px; left: 72px; display: flex; align-items: center; gap: 14px; font-size: 26px; font-weight: 600; }
+
+  #caption { position: absolute; left: 0; right: 0; bottom: 64px; display: flex; justify-content: center; pointer-events: none; }
+  #caption p { max-width: 1560px; padding: 14px 34px; border-radius: 12px; background: rgba(8, 14, 30, .62); color: #fff;
+               font-size: 38px; font-weight: 500; line-height: 1.4; text-align: center; }
+  #caption p:empty { display: none; }
+
+  .scene { position: absolute; inset: 0; opacity: 0; }
+  h1, h2 { font-family: var(--serif); font-weight: 600; line-height: 1.22; letter-spacing: .01em; }
+  .left { position: absolute; left: 160px; top: 260px; width: 780px; }
+  .left h1 { font-size: 92px; }
+  .left h2 { font-size: 66px; }
+  .sub { margin-top: 34px; font-size: 34px; line-height: 1.6; color: var(--fg2); }
+  .note { position: absolute; left: 160px; bottom: 196px; font-size: 22px; color: var(--fg2); }
+  .mono { font-family: var(--mono); }
+
+  @keyframes rise { from { opacity: 0; transform: translateY(28px); } to { opacity: 1; transform: none; } }
+  @keyframes appear { from { opacity: 0; } to { opacity: 1; } }
+  @keyframes dim { from { opacity: 1; } to { opacity: .28; } }
+  @keyframes vanish { from { opacity: 1; } to { opacity: 0; } }
+  .rise { animation: rise .8s var(--d, 0s) both; }
+  .appear { animation: appear .6s var(--d, 0s) both; }
+
+  /* 1 close the lid */
+  .laptop { position: absolute; left: 1010px; top: 250px; width: 640px; height: 460px; perspective: 1400px; transform: scale(1.22); transform-origin: left top; }
+  .laptop .lid { position: absolute; left: 60px; bottom: 26px; width: 520px; height: 330px; border-radius: 14px 14px 4px 4px;
+                 background: #1B2133; border: 2px solid #2C3550; transform-origin: 50% 100%; animation: shut 1.3s 2.2s ease-in both; }
+  .laptop .screen { position: absolute; inset: 14px; border-radius: 6px; background: #0B1222; padding: 22px 24px; font: 20px/1.7 var(--mono);
+                    color: #9FB3C8; animation: vanish .5s 2.9s both; }
+  .laptop .screen b { color: var(--teal-pale); font-weight: 400; }
+  .laptop .base { position: absolute; left: 0; bottom: 0; width: 640px; height: 26px; border-radius: 4px 4px 16px 16px; background: #AEB6C4; }
+  @keyframes shut { from { transform: rotateX(0deg); } to { transform: rotateX(-86deg); } }
+
+  /* 2 frictions: each line arrives, the one before it steps back */
+  .frictions { position: absolute; left: 160px; top: 210px; }
+  .frictions li { list-style: none; font-family: var(--serif); font-size: 84px; font-weight: 600; line-height: 1.5;
+                  animation: rise .7s var(--d) both, dim .6s var(--d2) forwards; }
+  .frictions li:last-child { animation: rise .7s var(--d) both; }
+
+  /* 3 the mark */
+  .mark { position: absolute; left: 160px; top: 300px; width: 230px; height: 230px; overflow: visible; }
+  .mark rect, .mark polygon { transform-box: fill-box; transform-origin: center; }
+  .mark .s1 { animation: fly1 1s .2s both; } .mark .s2 { animation: fly2 1s .35s both; } .mark .s3 { animation: fly3 1s .5s both; } .mark .s4 { animation: fly4 1s .65s both; }
+  .mark .cut { fill: var(--sky-mid); animation: appear .4s 1.5s both; }
+  @keyframes fly1 { from { opacity: 0; transform: translate(-60%, -60%) rotate(-30deg); } to { opacity: 1; transform: none; } }
+  @keyframes fly2 { from { opacity: 0; transform: translate(70%, -50%) rotate(25deg); } to { opacity: 1; transform: none; } }
+  @keyframes fly3 { from { opacity: 0; transform: translate(-70%, 60%) rotate(20deg); } to { opacity: 1; transform: none; } }
+  @keyframes fly4 { from { opacity: 0; transform: translate(60%, 70%) rotate(-25deg); } to { opacity: 1; transform: none; } }
+  .intro-name { position: absolute; left: 160px; top: 590px; font-size: 128px; font-weight: 600; letter-spacing: .01em; }
+  .intro-line { position: absolute; left: 160px; top: 760px; font-family: var(--serif); font-size: 58px; font-weight: 600; }
+
+  /* 4 one sentence */
+  .term { position: absolute; left: 980px; top: 250px; width: 800px; height: 470px; border-radius: 16px; background: #0E1424;
+          border: 1px solid rgba(255, 255, 255, .1); box-shadow: 0 30px 80px rgba(0, 0, 0, .35); overflow: hidden; }
+  .term .bar { position: relative; height: 58px; border-bottom: 1px solid rgba(255, 255, 255, .08); }
+  .term .bar span { position: absolute; left: 28px; top: 13px; font-size: 24px; color: #C9D4E3; }
+  .term .bar span:nth-child(1) { animation: appear .3s 0s both, vanish .4s 4.6s forwards; }
+  .term .bar span:nth-child(2) { animation: appear .4s 4.6s both, vanish .4s 5.6s forwards; }
+  .term .bar span:nth-child(3) { animation: appear .4s 5.6s both; }
+  .term .body { padding: 30px 32px; font: 26px/1.75 var(--mono); color: #DCE4EF; }
+  .term .body .you { color: #fff; }
+  .term .body .tool { color: var(--teal-pale); }
+  .term .body .dimmed { color: #8EA0B6; }
+  .cursor { display: inline-block; width: 13px; height: 30px; vertical-align: -5px; background: #DCE4EF; margin-left: 2px; }
+
+  /* 5 the crew */
+  .crew-title { position: absolute; left: 160px; top: 220px; }
+  .crew-title h2 { font-size: 66px; }
+  .pipe { position: absolute; left: 160px; right: 160px; top: 470px; height: 300px; }
+  .pipe .wire { position: absolute; top: 66px; height: 2px; background: var(--line); }
+  .node { position: absolute; top: 0; width: 300px; text-align: center; }
+  .node .box { width: 134px; height: 134px; margin: 0 auto; border-radius: 22px; border: 2px solid var(--teal);
+               display: flex; align-items: center; justify-content: center; font-size: 30px; font-weight: 600;
+               animation: lit .5s var(--d) both; }
+  .node .who { margin-top: 22px; font-size: 32px; font-weight: 600; }
+  .node .role { margin-top: 4px; font-size: 26px; color: var(--fg2); }
+  @keyframes lit { from { background: transparent; color: var(--fg); } to { background: var(--teal); color: #06231F; } }
+  .chip { position: absolute; top: 46px; padding: 6px 14px; border-radius: 8px; background: var(--paper); color: #13233A;
+          font: 22px/1.4 var(--mono); white-space: nowrap; animation: hand 1.1s var(--d) both; }
+  @keyframes hand { 0% { opacity: 0; transform: translateX(0); } 15% { opacity: 1; } 85% { opacity: 1; } 100% { opacity: 0; transform: translateX(var(--run)); } }
+
+  /* 6 gates */
+  .card { position: absolute; left: 1020px; top: 200px; width: 760px; padding: 34px 40px 30px; border-radius: 18px; background: var(--paper);
+          color: #13233A; box-shadow: 0 30px 80px rgba(0, 0, 0, .35); }
+  .card h3 { font-size: 30px; font-weight: 600; margin-bottom: 18px; }
+  .card h3 small { font-size: 24px; font-weight: 400; color: #5B6577; margin-left: 12px; }
+  .card li { list-style: none; display: flex; justify-content: space-between; align-items: baseline; padding: 11px 0;
+             border-top: 1px solid #E3E7EF; font-size: 30px; }
+  .card li em { font-style: normal; font-weight: 600; animation: appear .3s var(--d) both; }
+  .card li .ok { color: var(--teal-deep); }
+  .card li .no { color: var(--red); }
+  .card.first { animation: appear .5s .4s both, vanish .5s 6.6s forwards; }
+  .card.second { animation: appear .5s 6.6s both; }
+  .verdict { position: absolute; left: 1020px; top: 770px; width: 760px; padding: 18px 26px; border-radius: 12px; border: 2px solid var(--teal);
+             font-size: 28px; line-height: 1.5; animation: rise .6s 4.4s both, vanish .4s 6.6s forwards; }
+  .stamp { position: absolute; left: 1580px; top: 712px; padding: 10px 26px; border: 4px solid var(--teal-deep); border-radius: 12px;
+           color: var(--teal-deep); font-family: var(--serif); font-size: 52px; font-weight: 700; transform: rotate(-8deg); animation: stamp .45s 8s both; }
+  @keyframes stamp { from { opacity: 0; transform: rotate(-8deg) scale(1.6); } to { opacity: 1; transform: rotate(-8deg) scale(1); } }
+
+  /* 7 overnight: the real session */
+  .dawn { position: absolute; left: 120px; right: 120px; top: 190px; height: 690px; border-radius: 22px; background: rgba(247, 249, 250, .94);
+          box-shadow: 0 30px 80px rgba(0, 0, 0, .3); color: #13233A; --fg: #13233A; --fg2: rgba(19,35,58,.62); --line: rgba(19,35,58,.2); --sky-mid: #F7F9FA; }
+  .dawn .crew-title { left: 60px; top: 46px; }
+  .tl { position: absolute; left: 160px; right: 160px; top: 300px; height: 8px; }
+  .tl .rail { position: absolute; inset: 0; border-radius: 4px; background: var(--line); }
+  .tl .night { position: absolute; top: -2px; height: 12px; border-radius: 6px; background: repeating-linear-gradient(90deg, var(--line) 0 10px, transparent 10px 20px); }
+  .tl .head { position: absolute; top: -9px; width: 26px; height: 26px; margin-left: -13px; border-radius: 50%; background: var(--fg); }
+  .ev { position: absolute; top: -8px; width: 0; }
+  .ev i { position: absolute; left: -12px; top: 0; width: 24px; height: 24px; border-radius: 50%; border: 3px solid var(--fg); background: var(--sky-mid); }
+  .ev b { position: absolute; left: -60px; width: 120px; text-align: center; top: -58px; font: 600 26px var(--serif); font-variant-numeric: tabular-nums; }
+  .ev span { position: absolute; left: 0; top: 40px; transform: translateX(-50%); white-space: nowrap; font-size: 24px; color: var(--fg2); }
+  .ev.bad i { border-color: var(--red); background: var(--red); }
+  .ev.good i { border-color: var(--teal); background: var(--teal); }
+  .faults { position: absolute; left: 60px; top: 470px; width: 1560px; display: grid; grid-template-columns: 1fr 1fr; gap: 10px 60px; }
+  .faults p { font-size: 28px; line-height: 1.4; }
+  .faults p b { font-family: var(--mono); font-weight: 600; color: var(--red); margin-right: 14px; }
+  .faults p.platform b { color: var(--amber); }
+
+  /* 8 morning: the console */
+  .labels { position: absolute; left: 160px; top: 430px; }
+  .labels li { list-style: none; font-size: 40px; line-height: 1.75; padding-left: 26px; border-left: 4px solid transparent; color: var(--fg2); }
+  .labels li.on { color: var(--fg); border-left-color: var(--teal-deep); font-weight: 600; }
+  .shots { position: absolute; left: 700px; top: 190px; width: 1080px; height: 640px; border-radius: 16px; overflow: hidden; background: #fff;
+           border: 1px solid rgba(19, 35, 58, .12); box-shadow: 0 34px 90px rgba(25, 45, 70, .28); }
+  .shots img { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: cover; object-position: top left; opacity: 0; }
+
+  /* 9 together */
+  .acct { position: absolute; left: 980px; top: 230px; width: 800px; height: 560px; border: 3px dashed var(--teal-deep); border-radius: 22px; }
+  .acct > h4 { position: absolute; left: 30px; top: 22px; font-size: 28px; font-weight: 600; }
+  .bnd { position: absolute; top: 110px; width: 232px; height: 300px; border-radius: 16px; background: var(--paper); color: #13233A;
+         padding: 22px 20px; box-shadow: 0 18px 50px rgba(25, 45, 70, .18); animation: rise .6s var(--d) both; }
+  .bnd h5 { font-size: 26px; font-weight: 600; margin-bottom: 16px; }
+  .bnd p { font-size: 22px; line-height: 1.9; color: #5B6577; }
+  .run { position: absolute; top: 452px; left: 50px; padding: 12px 18px; border-radius: 12px; background: var(--teal-deep); color: #fff;
+         font-size: 24px; font-weight: 600; animation: rise .5s 2.2s both, carry 1.4s 3.6s ease-in-out both; }
+  @keyframes carry { from { transform: none; } to { transform: translateX(258px); } }
+  .handoff { position: absolute; top: 518px; left: 54px; font-size: 24px; color: var(--teal-deep); font-weight: 600; animation: appear .4s 4.8s both; }
+
+  /* 10 numbers */
+  .figs { position: absolute; left: 160px; top: 380px; display: grid; grid-template-columns: 760px 760px; gap: 30px 80px; }
+  .figs div { font-size: 40px; font-weight: 500; animation: rise .7s var(--d) both; }
+  .figs b { font-family: var(--serif); font-size: 150px; font-weight: 600; line-height: 1; margin-right: 18px; color: var(--teal-deep);
+            font-variant-numeric: tabular-nums; }
+
+  /* 11 close */
+  .closing { position: absolute; left: 160px; top: 270px; }
+  .closing h1 { font-size: 104px; }
+  .sign { position: absolute; left: 160px; top: 640px; display: flex; align-items: center; gap: 28px; animation: rise .8s 2s both; }
+  .sign strong { font-size: 72px; font-weight: 600; }
+  .sign span { display: block; font-size: 28px; color: var(--fg2); margin-top: 6px; font-weight: 400; }
+</style>
+</head>
+<body>
+<div id="stage">
+  <div id="sky"></div>
+  <div id="stars"></div>
+  <div id="brand"><svg width="40" height="40" viewBox="0 0 30 30" aria-hidden="true"><rect width="14" height="14" fill="#14B8A6"/><rect x="16" width="14" height="14" fill="#334155"/><rect y="16" width="14" height="14" fill="#14B8A6"/><rect x="16" y="16" width="14" height="14" fill="#5EEAD4"/><polygon class="brand-cut" points="16,14 30,0 30,6 22,14"/><polygon class="brand-cut" points="16,16 22,16 30,24 30,30"/></svg>KiroCrew ON</div>
+  <div id="clock"><span class="day"></span><span class="time"></span></div>
+
+  <section class="scene" data-id="close-lid">
+    <div class="left"><h1 class="rise" style="--d:.3s">合上电脑，<br>任务就停了。</h1>
+      <p class="sub rise" style="--d:3.6s">它说做完了、测过了，<br>只是自述，不是证据。</p></div>
+    <div class="laptop"><div class="lid"><div class="screen">› 实现第 3 个任务<br><b>● 正在运行测试…</b><br>tests/test_timer.py ....</div></div><div class="base"></div></div>
+  </section>
+
+  <section class="scene" data-id="frictions">
+    <ul class="frictions">
+      <li style="--d:.2s; --d2:1.5s">人得守着</li>
+      <li style="--d:1.5s; --d2:2.8s">自己批改自己</li>
+      <li style="--d:2.8s; --d2:4.1s">失败了要人接</li>
+      <li style="--d:4.1s">成果困在一台电脑上</li>
+    </ul>
+  </section>
+
+  <section class="scene" data-id="intro">
+    <svg class="mark" viewBox="0 0 30 30" aria-hidden="true">
+      <rect class="s1" width="14" height="14" fill="#14B8A6"/><rect class="s2" x="16" width="14" height="14" fill="#334155"/>
+      <rect class="s3" y="16" width="14" height="14" fill="#14B8A6"/><rect class="s4" x="16" y="16" width="14" height="14" fill="#5EEAD4"/>
+      <polygon class="cut" points="16,14 30,0 30,6 22,14"/><polygon class="cut" points="16,16 22,16 30,24 30,30"/>
+    </svg>
+    <div class="intro-name rise" style="--d:1.4s">KiroCrew ON</div>
+    <div class="intro-line rise" style="--d:2.1s">7×24 在线的多 Agent 研发协作空间</div>
+  </section>
+
+  <section class="scene" data-id="one-sentence">
+    <div class="left"><h2 class="rise" style="--d:.2s">在你习惯的工具里，<br>说一句话。</h2>
+      <p class="sub rise" style="--d:1s">Claude Code、Kiro CLI、Kiro IDE、Codex<br>同一份 Skill 与 MCP 工具</p></div>
+    <div class="term appear" style="--d:.1s">
+      <div class="bar"><span>Claude Code</span><span>Kiro CLI</span><span>Codex</span></div>
+      <div class="body">
+        <div class="you">› <span data-type="用 KiroCrew ON 做一个番茄钟网页，Codex 审查" data-at=".6" data-cps="11"></span><i class="cursor" data-blink></i></div>
+        <div class="tool rise" style="--d:3.2s">● octopus_start</div>
+        <div class="rise" style="--d:3.7s">　会话 run-7a3f2c 已提交，正在规划</div>
+        <div class="dimmed rise" style="--d:4.2s">　关上终端也没关系，任务在后台继续</div>
+      </div>
+    </div>
+  </section>
+
+  <section class="scene" data-id="crew">
+    <div class="crew-title"><h2 class="rise" style="--d:.2s">分工、互审，每一步都留下交接。</h2></div>
+    <div class="pipe">
+      <div class="wire" style="left:150px; width:1300px"></div>
+      <div class="node" style="left:0"><div class="box" style="--d:.8s">规划</div><div class="who">Kiro</div><div class="role">补全需求，拆成任务</div></div>
+      <div class="node" style="left:433px"><div class="box" style="--d:2.7s">实现</div><div class="who">Claude Code</div><div class="role">写代码、跑测试</div></div>
+      <div class="node" style="left:866px"><div class="box" style="--d:4.6s">审查</div><div class="who">Codex</div><div class="role">换一个工具来审</div></div>
+      <div class="node" style="left:1300px"><div class="box" style="--d:6.5s">验收</div><div class="who">Evaluator</div><div class="role">逐条核对验收项</div></div>
+      <div class="chip" style="left:228px; --run:130px; --d:1.5s">handoff.md</div>
+      <div class="chip" style="left:662px; --run:60px; --d:3.4s">outcome.json</div>
+      <div class="chip" style="left:1094px; --run:130px; --d:5.3s">handoff.md</div>
+    </div>
+  </section>
+
+  <section class="scene" data-id="gates">
+    <div class="left"><h2 class="rise" style="--d:.2s">完成，<br>由平台判定。</h2>
+      <p class="sub rise" style="--d:1s">不采信 Agent 的自述：<br>平台逐项核对，亲自运行验证命令。</p></div>
+    <div class="card first"><h3>审查任务<small>第 1 次执行</small></h3><ul>
+      <li>原生执行<em class="ok" style="--d:1s">✓</em></li><li>实际工具与模型<em class="ok" style="--d:1.4s">✓</em></li>
+      <li>交接与结论<em class="ok" style="--d:1.8s">✓</em></li><li>安全底线<em class="ok" style="--d:2.2s">✓</em></li>
+      <li>验证命令<em class="ok" style="--d:2.6s">✓</em></li><li>Evaluator<em class="no" style="--d:3.2s">✗ 3 处问题</em></li></ul></div>
+    <div class="verdict">协调者读证据：退回撰写报告的任务，按出处逐条修正，下游自动重跑。</div>
+    <div class="card second"><h3>审查任务<small>第 2 次执行</small></h3><ul>
+      <li>原生执行<em class="ok" style="--d:6.9s">✓</em></li><li>实际工具与模型<em class="ok" style="--d:7.05s">✓</em></li>
+      <li>交接与结论<em class="ok" style="--d:7.2s">✓</em></li><li>安全底线<em class="ok" style="--d:7.35s">✓</em></li>
+      <li>验证命令<em class="ok" style="--d:7.5s">✓</em></li><li>Evaluator<em class="ok" style="--d:7.65s">✓ 6 项全部通过</em></li></ul></div>
+    <div class="stamp">通过</div>
+  </section>
+
+  <section class="scene" data-id="overnight">
+    <div class="dawn appear" style="--d:.1s">
+    <div class="crew-title"><h2 class="rise" style="--d:.2s">一夜之间，5 处错误被逐条打回。</h2></div>
+    <div class="tl" data-playhead data-from=".33" data-clockmap=".33=21:24,.37=22:00,.64=+08:30,.68=+08:57,.78=+09:01,.88=+09:10,1=+09:11">
+      <div class="rail"></div>
+      <div class="night" style="left:37%; width:27%"></div>
+      <div class="ev" style="left:0%"><b>20:55</b><i></i><span>创建会话</span></div>
+      <div class="ev" style="left:9%"><b>20:58</b><i></i><span>规划完成</span></div>
+      <div class="ev bad" style="left:18%"><b>21:10</b><i></i><span>打回 F1–F3</span></div>
+      <div class="ev bad" style="left:33%"><b>21:24</b><i></i><span>F2、F3 再次打回</span></div>
+      <div class="ev" style="left:68%" data-reveal=".68"><b>08:57</b><i></i><span>在原会话续作</span></div>
+      <div class="ev bad" style="left:78%" data-reveal=".78"><b>09:01</b><i></i><span>打回 F5</span></div>
+      <div class="ev" style="left:88%" data-reveal=".88"><b>09:10</b><i></i><span>F4 归因平台</span></div>
+      <div class="ev good" style="left:100%" data-reveal=".995"><b>09:11</b><i></i><span>全部通过</span></div>
+      <div class="head"></div>
+    </div>
+    <div class="faults">
+      <p><b>F1</b>HTML 里三个术语被 NUL 占位符替换</p>
+      <p><b>F2</b>引用行号漂移：写 188–205，实际在 167–178</p>
+      <p><b>F3</b>表述过强：「全链路确定性」不成立</p>
+      <p data-reveal=".78"><b>F5</b>结论与 kb_search.sql 的限流逻辑不符</p>
+      <p class="platform" data-reveal=".88"><b>F4</b>平台配置混进候选：判为平台的问题，不归责作者</p>
+    </div>
+    <p class="note" style="left:60px; bottom:34px">会话 run-44dc，2026-11-03 至 11-04，线上实例的修订记录</p>
+    </div>
+  </section>
+
+  <section class="scene" data-id="morning">
+    <div class="left" style="top:200px"><h2 class="rise" style="--d:.2s">回来，<br>一切都在。</h2></div>
+    <ul class="labels" data-slots>
+      <li>规划</li><li>执行轨迹</li><li>每次执行的证据</li><li>预览产出</li><li>报告</li><li>在原会话续作</li>
+    </ul>
+    <div class="shots" data-slots>
+      <img src="../img/planning.webp" alt=""><img src="../img/tasks.webp" alt=""><img src="../img/attempt.webp" alt="">
+      <img src="../img/preview-output.webp" alt=""><img src="../img/report.webp" alt=""><img src="../img/continue.webp" alt="">
+    </div>
+  </section>
+
+  <section class="scene" data-id="together">
+    <div class="left"><h2 class="rise" style="--d:.2s">在 Team 里接力，<br>在你的账号里运行。</h2>
+      <p class="sub rise" style="--d:1s">会话、工作流和成果可以共享、接手；<br>每人一个执行边界，凭证各管一段。</p></div>
+    <div class="acct appear" style="--d:.4s"><h4>你的 AWS 账号</h4>
+      <div class="bnd" style="left:30px; --d:.8s"><h5>alice 的边界</h5><p>Worker<br>KiroCrew Gateway<br>Kiro · Claude Code · Codex</p></div>
+      <div class="bnd" style="left:284px; --d:1.1s"><h5>bob 的边界</h5><p>Worker<br>KiroCrew Gateway<br>Kiro · Claude Code · Codex</p></div>
+      <div class="bnd" style="left:538px; --d:1.4s"><h5>Team 专属主机</h5><p>Worker<br>KiroCrew Gateway<br>私网 TLS</p></div>
+      <div class="run">会话 run-44dc</div>
+      <div class="handoff">共享给 bob，bob 接手续作</div>
+    </div>
+  </section>
+
+  <section class="scene" data-id="numbers">
+    <div class="left" style="top:230px"><h2 class="rise" style="--d:.2s">上线一个月。</h2></div>
+    <div class="figs">
+      <div style="--d:.6s"><b data-count="140" data-at=".6">0</b>个会话</div>
+      <div style="--d:1.2s"><b data-count="411" data-at="1.2">0</b>个任务</div>
+      <div style="--d:1.8s"><b data-count="81" data-at="1.8" data-suffix="%">0</b>已完成</div>
+      <div style="--d:2.4s"><b data-count="80" data-at="2.4">0</b>个会话多 Agent 协作</div>
+    </div>
+    <p class="note">线上实例 2026-10-11 至 11-11 的全部会话，含平台自身的验收会话</p>
+  </section>
+
+  <section class="scene" data-id="close">
+    <div class="closing"><h1 class="rise" style="--d:.3s">把信任交给平台，</h1><h1 class="rise" style="--d:1.1s">让 Agent 放手去做。</h1></div>
+    <div class="sign"><svg width="110" height="110" viewBox="0 0 30 30" aria-hidden="true"><rect width="14" height="14" fill="#14B8A6"/><rect x="16" width="14" height="14" fill="#334155"/><rect y="16" width="14" height="14" fill="#14B8A6"/><rect x="16" y="16" width="14" height="14" fill="#5EEAD4"/><polygon class="brand-cut" points="16,14 30,0 30,6 22,14"/><polygon class="brand-cut" points="16,16 22,16 30,24 30,30"/></svg>
+      <div><strong>KiroCrew ON</strong><span>7×24 在线的多 Agent 研发协作空间，自托管在你的 AWS 账号</span></div></div>
+  </section>
+
+  <div id="caption"><p></p></div>
+</div>
+<script>
+(() => {
+  const $ = (s, el = document) => [...el.querySelectorAll(s)];
+  const clamp = (v, a, b) => Math.min(b, Math.max(a, v));
+  const smooth = (e0, e1, x) => { const t = clamp((x - e0) / (e1 - e0), 0, 1); return t * t * (3 - 2 * t); };
+  const mix = (a, b, k) => a.map((v, i) => v + (b[i] - v) * k);
+  const hex = (h) => [1, 3, 5].map((i) => parseInt(h.slice(i, i + 2), 16));
+  const rgb = (c) => `rgb(${c.map(Math.round).join(",")})`;
+
+  // the sky through one night: minutes since midnight of the first day → top and bottom colours
+  const SKY = [[1120, "#263361", "#5C4D6B"], [1170, "#1C284F", "#3C4570"], [1260, "#0E1630", "#1A2550"], [1700, "#0E1630", "#1C2A55"],
+               [1830, "#3D5C88", "#C9A98C"], [1945, "#A7C3D3", "#E7E2D6"], [1985, "#CFE0E8", "#F2F5F6"], [2100, "#CFE0E8", "#F2F5F6"]];
+  function skyAt(m) {
+    let i = SKY.findIndex(([at]) => at > m); if (i <= 0) i = i === 0 ? 1 : SKY.length - 1;
+    const [a0, t0, b0] = SKY[i - 1], [a1, t1, b1] = SKY[i], k = smooth(a0, a1, m);
+    return [mix(hex(t0), hex(t1), k), mix(hex(b0), hex(b1), k)];
+  }
+  const lum = (c) => (0.2126 * c[0] + 0.7152 * c[1] + 0.0722 * c[2]) / 255;
+
+  // stars, placed by a fixed seed so every render is the same
+  let seed = 7; const rnd = () => (seed = (seed * 16807) % 2147483647) / 2147483647;
+  const stars = document.getElementById("stars");
+  for (let i = 0; i < 90; i++) { const s = document.createElement("i"); s.style.left = rnd() * 1920 + "px"; s.style.top = rnd() * 620 + "px";
+    s.dataset.p = rnd() * 6.28; s.dataset.s = 0.4 + rnd() * 0.6; stars.appendChild(s); }
+
+  let T = null, anims = [];
+  const minutes = (s) => { const day = s.startsWith("+") ? 1440 : 0; const [h, m] = s.replace("+", "").split(":").map(Number); return day + h * 60 + m; };
+
+  window.init = (timeline) => {
+    T = timeline;
+    T.scenes.forEach((s) => { s.el = document.querySelector(`.scene[data-id="${s.id}"]`); s.m0 = minutes(s.clock[0]); s.m1 = minutes(s.clock[1]); });
+    anims = document.getAnimations();
+    anims.forEach((a) => { a.pause(); const scene = a.effect.target.closest(".scene"); a._start = scene ? T.scenes.find((s) => s.el === scene).start : 0; });
+  };
+
+  window.seek = (t) => {
+    // scenes cross-fade into one another; the clock runs through each scene's span
+    let clockMin = T.scenes[0].m0;
+    T.scenes.forEach((s, i) => {
+      const end = s.start + s.dur, local = t - s.start;
+      const o = (i === 0 ? 1 : smooth(s.start - .35, s.start + .35, t)) * (i === T.scenes.length - 1 ? 1 : 1 - smooth(end - .35, end + .35, t));
+      s.el.style.opacity = o; s.el.style.visibility = o > 0.001 ? "visible" : "hidden";
+      if (t >= s.start) clockMin = s.m0 + (s.m1 - s.m0) * clamp(local / Math.max(s.dur - .6, .1), 0, 1);
+      const mapped = scenePass(s, local);
+      if (t >= s.start && mapped !== undefined) clockMin = mapped;
+    });
+    anims.forEach((a) => { a.currentTime = Math.max(0, t - a._start) * 1000; });
+
+    const [top, bottom] = skyAt(clockMin), mid = mix(top, bottom, .55), day = smooth(.36, .44, lum(mid));
+    const ink = mix(hex("#EEF2F8"), hex("#13233A"), day), inkA = (a) => `rgba(${ink.map(Math.round).join(",")},${a})`;
+    document.getElementById("sky").style.background = `linear-gradient(180deg, ${rgb(top)}, ${rgb(bottom)})`;
+    const root = document.documentElement.style;
+    root.setProperty("--sky-mid", rgb(mid));
+    root.setProperty("--fg", rgb(ink));
+    root.setProperty("--fg2", inkA(.62));
+    root.setProperty("--line", inkA(.22));
+    $(".brand-cut").forEach((p) => p.setAttribute("fill", rgb(mid)));
+    const night = 1 - smooth(.18, .32, lum(mid));
+    $("#stars i").forEach((s) => { s.style.opacity = night * (0.35 + 0.65 * (0.5 + 0.5 * Math.sin(t * 1.3 + +s.dataset.p))) * s.dataset.s; });
+
+    const m = Math.round(clockMin) % 2880, hh = Math.floor((m % 1440) / 60), mm = m % 60;
+    document.querySelector("#clock .time").textContent = `${String(hh).padStart(2, "0")}:${String(mm).padStart(2, "0")}`;
+    document.querySelector("#clock .day").textContent = clockMin >= 1440 ? "次日" : "";
+    const intro = T.scenes.find((s) => s.id === "intro");
+    const last = T.scenes[T.scenes.length - 1];
+    document.getElementById("brand").style.opacity = smooth(intro.start + intro.dur - .3, intro.start + intro.dur + .5, t) * (1 - smooth(last.start, last.start + .6, t));
+
+    const cap = T.captions.find((c) => t >= c.start && t < c.end);
+    document.querySelector("#caption p").textContent = cap ? cap.text : "";
+  };
+
+  function scenePass(s, local) {
+    $("[data-type]", s.el).forEach((el) => {
+      const n = clamp(Math.floor((local - +el.dataset.at) * +el.dataset.cps), 0, el.dataset.type.length);
+      el.textContent = el.dataset.type.slice(0, n);
+    });
+    $("[data-blink]", s.el).forEach((el) => { el.style.opacity = Math.floor(local * 2) % 2 ? 0 : 1; });
+    $("[data-count]", s.el).forEach((el) => {
+      const k = smooth(+el.dataset.at, +el.dataset.at + 1.3, local);
+      el.textContent = Math.round(+el.dataset.count * k) + (el.dataset.suffix || "");
+    });
+    let mapped;
+    const tl = s.el.querySelector("[data-playhead]");
+    if (tl) {
+      const from = +(tl.dataset.from || 0), p = from + (1 - from) * clamp((local - .6) / Math.max(s.dur - 1.6, 1), 0, 1);
+      tl.querySelector(".head").style.left = p * 100 + "%";
+      $("[data-reveal]", s.el).forEach((el) => { el.style.opacity = smooth(+el.dataset.reveal - .02, +el.dataset.reveal + .005, p); });
+      if (tl.dataset.clockmap) {
+        const pts = tl.dataset.clockmap.split(",").map((kv) => { const [k, v] = kv.split("="); return [+k, minutes(v)]; });
+        let j = pts.findIndex(([k]) => k >= p); if (j <= 0) j = 1;
+        const [k0, m0] = pts[j - 1], [k1, m1] = pts[j];
+        mapped = m0 + (m1 - m0) * clamp((p - k0) / (k1 - k0), 0, 1);
+      }
+    }
+    $("[data-slots]", s.el).forEach((group) => {
+      const items = [...group.children], span = Math.max(s.dur - 1.2, 1) / items.length;
+      const at = clamp(Math.floor((local - .6) / span), 0, items.length - 1);
+      items.forEach((el, i) => {
+        if (el.tagName === "IMG") {
+          const u = (local - .6 - i * span) / span;
+          el.style.opacity = i === at ? smooth(0, .12, u) : (i === at - 1 ? 1 - smooth(0, .12, u - 1) : 0);
+          el.style.transform = `scale(${1.0 + 0.05 * clamp(u, 0, 1)})`;
+        } else el.classList.toggle("on", i === at && local > .6);
+      });
+    });
+    return mapped;
+  }
+})();
+</script>
+</body>
+</html>

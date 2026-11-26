@@ -5,7 +5,7 @@
 不绑定任何工具或模型，几乎没有学习成本。
 
 > **MVP 0.1.0**（2026-10-12）：下文“能做什么”已在 AWS us-east-1 的部署上实测；Roadmap 为规划。
-> 白皮书（使用流程、场景、原理与解读）：[`docs/whitepaper/`](docs/whitepaper/WHITEPAPER.md)（[HTML](docs/whitepaper/index.html) · PDF）
+> 白皮书（使用流程、场景、原理与解读）：[`docs/whitepaper/`](docs/whitepaper/WHITEPAPER.md)（[HTML](docs/whitepaper/index.html) · PDF）　·　宣传片：[`docs/whitepaper/video/`](docs/whitepaper/video/README.md)
 > 图文介绍：[`docs/KiroCrew-ON-MVP-0.1.0.html`](docs/KiroCrew-ON-MVP-0.1.0.html)　·　详细说明：[`docs/MVP-0.1.0.md`](docs/MVP-0.1.0.md)　·　0.1.1 版本说明：[`docs/MVP-0.1.1.md`](docs/MVP-0.1.1.md)（[HTML](docs/KiroCrew-ON-MVP-0.1.1.html)）
 > **MVP 0.2.0**（实施中，预览版 `0.2.0rc1` 已部署 EC2）：部署模式、自助 Worker 与 Worker 池；说明与进度见 [`docs/MVP-0.2.0.md`](docs/MVP-0.2.0.md)（[HTML](docs/KiroCrew-ON-MVP-0.2.0.html)）
 
